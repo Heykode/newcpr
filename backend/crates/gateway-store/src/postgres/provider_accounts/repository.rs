@@ -222,7 +222,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         require_nonempty(ENTITY, "name", &account.name)?;
         let result = sqlx::query(
             "update provider_accounts
-             set name = $2, email = $3, plan_type = $4, updated_at = now()
+             set name = $2, email = $3, plan_type = $4, updated_at = greatest(now(), updated_at)
              where id = $1",
         )
         .bind(account.id)
@@ -269,7 +269,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                  has_refresh_token = $4,
                  access_token_expires_at = $5,
                  next_refresh_at = $6,
-                 updated_at = now()
+                 updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
              returning credential_revision",
         )
@@ -318,7 +318,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                      when enabled and upstream_user_id is not null then $6
                      else last_error_message
                  end,
-                 updated_at = case when enabled then greatest(now(), $4) else updated_at end
+                 updated_at = case when enabled then greatest(now(), updated_at, $4) else updated_at end
              where id = $1 and credential_revision = $2
                and (credential_observed_at is null or credential_observed_at <= $4)",
         )
@@ -345,7 +345,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                  credential_observed_at = $4,
                  last_error_reason = $5,
                  last_error_message = $6,
-                 updated_at = greatest(now(), $4)
+                 updated_at = greatest(now(), updated_at, $4)
              where id = $1 and credential_revision = $2
                and upstream_user_id is not null
                and (credential_observed_at is null or credential_observed_at <= $4)",
@@ -371,7 +371,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             .map_err(|_| postgres_unavailable("begin provider account enabled state"))?;
         lock_account_egress_in_transaction(&mut transaction).await?;
         let result = sqlx::query(
-            "update provider_accounts set enabled = $2, updated_at = now() where id = $1",
+            "update provider_accounts set enabled = $2, updated_at = greatest(now(), updated_at) where id = $1",
         )
         .bind(id)
         .bind(enabled)
@@ -417,7 +417,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                    when $7::timestamptz is not null
                      and (quota_access_observed_at is null or quota_access_observed_at <= $7)
                    then $8 else quota_reset_at end,
-                 updated_at = greatest(now(), $4)
+                 updated_at = greatest(now(), updated_at, $4, $7)
              where id = $1 and credential_revision = $2
                and (quota_observed_at is null or quota_observed_at <= $4)",
         )
@@ -451,7 +451,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             "update provider_accounts
              set quota_access_observed_at = $3, quota_access_state = $4,
                  quota_evidence = $5, quota_reset_at = $6,
-                 updated_at = greatest(now(), $3)
+                 updated_at = greatest(now(), updated_at, $3)
              where id = $1 and credential_revision = $2
                and (quota_access_observed_at is null or quota_access_observed_at <= $3)",
         )
@@ -476,7 +476,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         require_nonempty(ENTITY, "account_id", account_id)?;
         let result = sqlx::query(
             "update provider_accounts
-             set quota_observed_at = $3, updated_at = greatest(now(), $3)
+             set quota_observed_at = $3, updated_at = greatest(now(), updated_at, $3)
              where id = $1 and credential_revision = $2
                and provider_quota_json is not null
                and (quota_observed_at is null or quota_observed_at <= $3)",
@@ -827,7 +827,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                      quota_reset_at = null,
                      last_error_reason = null,
                      last_error_message = null,
-                     updated_at = now()
+                     updated_at = greatest(now(), updated_at)
                  where id = $1
                  returning id",
             )
@@ -1066,7 +1066,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              end,
              last_error_reason = case when enabled then null else last_error_reason end,
              last_error_message = case when enabled then null else last_error_message end,
-             updated_at = now()
+             updated_at = greatest(now(), updated_at)
          where id = $1 and provider_kind = $2
            and credential_revision = $3
          returning credential_revision",

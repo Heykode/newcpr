@@ -37,7 +37,7 @@ export function resolveAccountCreatePresentation(input: AccountCreatePresentatio
     oauth: resolveOAuth(provider, oauthAuthUrl),
     importInput: resolveImportInput(form, provider),
     canSubmit: canSubmit(input, provider, oauthAuthUrl),
-    submitLabel: resolveSubmitLabel(input, provider),
+    submitLabel: resolveSubmitLabel(input),
   }
 }
 
@@ -150,15 +150,12 @@ function resolveImportInput(
 
 function resolveSubmitLabel(
   input: AccountCreatePresentationInput,
-  provider: AccountCreateProvider | undefined,
 ) {
   if (input.reauthorizing)
     return '完成重新授权'
   if (input.form.mode === 'oauth')
     return '完成导入'
-  if (provider === 'batch')
-    return '批量导入'
-  return '导入账号'
+  return '创建导入任务'
 }
 
 function canSubmit(

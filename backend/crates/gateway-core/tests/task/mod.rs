@@ -29,6 +29,24 @@ impl DaemonTask for NoopDaemonTask {
 }
 
 #[test]
+fn account_import_is_a_required_kind_with_a_stable_worker_identity() {
+    assert_eq!(
+        WorkerKind::ALL
+            .iter()
+            .filter(|kind| **kind == WorkerKind::AccountImport)
+            .count(),
+        1
+    );
+    assert_eq!(WorkerKind::AccountImport.as_str(), "account_import");
+    assert_eq!(
+        WorkerId::try_new(WorkerKind::AccountImport, "admin")
+            .unwrap()
+            .to_string(),
+        "account_import:admin"
+    );
+}
+
+#[test]
 fn schedule_rejects_every_invalid_duration_boundary() {
     let one = Duration::from_nanos(1);
     let two = Duration::from_nanos(2);

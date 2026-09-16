@@ -19,7 +19,7 @@ impl AccountProvider {
 }
 
 /// 导入统一设置，复用编辑账号的调度和分组约束。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
     pub enabled: bool,
@@ -50,7 +50,8 @@ impl AccountImportSettingsRequest {
 }
 
 /// Provider-owned 账号导入请求；公共 API 不解释 `data` 内部字段。
-#[derive(Deserialize)]
+/// Serialize is used only to fingerprint a background submission.
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportRequest {
     pub outbound_proxy_id: Option<String>,

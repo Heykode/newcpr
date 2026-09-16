@@ -18,6 +18,10 @@ pub(super) struct QuotaRecovery {
     // 绑定本次耗尽事实，避免真实推理成功后再次耗尽时复用上次的恢复进度。
     exhausted_at_micros: i64,
     pending: BTreeMap<String, Option<DateTime<Utc>>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    candidates: BTreeMap<String, ()>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_observed_at_micros: Option<i64>,
 }
 
 impl QuotaRecovery {
@@ -59,23 +63,57 @@ impl QuotaRecovery {
         Self {
             exhausted_at_micros: exhaustion_time(state),
             pending,
+            candidates: BTreeMap::new(),
+            last_observed_at_micros: None,
         }
     }
 
-    fn observe(&mut self, refreshed: &CodexAccountQuotaSnapshot) -> bool {
+    fn observe(
+        &mut self,
+        refreshed: &CodexAccountQuotaSnapshot,
+        previous_observed_at: Option<SystemTime>,
+    ) -> bool {
+        let observed_at_micros = DateTime::<Utc>::from(refreshed.observed_at()).timestamp_micros();
+        // 与持久化时间精度一致；乱序、重复及耗尽前的观测不能推进恢复证据。
+        let latest_observed_at_micros = previous_observed_at
+            .map(|time| DateTime::<Utc>::from(time).timestamp_micros())
+            .into_iter()
+            .chain(self.last_observed_at_micros)
+            .fold(self.exhausted_at_micros, i64::max);
+        if observed_at_micros <= latest_observed_at_micros {
+            return false;
+        }
+        if self.last_observed_at_micros.is_none() {
+            // 没有时间来源的旧候选不能充当第一次有效观测。
+            self.candidates.clear();
+        }
+        self.last_observed_at_micros = Some(observed_at_micros);
         let had_baseline = !self.pending.is_empty();
+        let mut candidates = BTreeMap::new();
         for window in refreshed.windows().iter().filter(|w| w.is_account_wide()) {
-            if let Some(previous_reset) = self.pending.get_mut(window.key()) {
-                if window_reset_recovered(window, *previous_reset) {
-                    self.pending.remove(window.key());
+            let key = window.key();
+            if let Some(previous_reset) = self.pending.get(key).copied() {
+                if window_reset_recovered(window, previous_reset) {
+                    self.pending.remove(key);
                 } else if previous_reset.is_none() {
-                    *previous_reset = window.reset_at();
+                    // 首次获知 reset 只建立基准，不算恢复证据。
+                    self.pending.insert(key.to_owned(), window.reset_at());
+                } else if window.reset_at() == previous_reset
+                    && window.used_percent().is_some()
+                    && !window.limit_reached()
+                {
+                    if self.candidates.contains_key(key) {
+                        self.pending.remove(key);
+                    } else {
+                        candidates.insert(key.to_owned(), ());
+                    }
                 }
             } else if window.limit_reached() {
-                self.pending
-                    .insert(window.key().to_owned(), window.reset_at());
+                self.pending.insert(key.to_owned(), window.reset_at());
             }
         }
+        // 窗口缺失、再次触顶或 reset 不匹配都会中断该窗口的连续证据。
+        self.candidates = candidates;
         had_baseline && self.pending.is_empty()
     }
 }
@@ -93,7 +131,8 @@ fn window_reset_recovered(window: &CodexQuotaWindow, previous: Option<DateTime<U
             .is_some_and(|used| used < RESET_RECOVERY_MAX_USED_PERCENT)
 }
 
-/// 统一手动刷新和 worker 的恢复规则；上游 allowed 不参与已耗尽窗口的解除判断。
+/// 统一手动刷新和 worker 的恢复规则：reset 推进且低用量，或同窗口两次新鲜
+/// 观测确认未触顶。上游 allowed 不参与已耗尽窗口的解除判断。
 pub(super) fn reconcile_refresh(
     current: QuotaState,
     refreshed: &mut CodexAccountQuotaSnapshot,
@@ -117,7 +156,12 @@ pub(super) fn reconcile_refresh(
     if recovery.pending.is_empty() {
         recovery = QuotaRecovery::new(state, refreshed);
     }
-    if current.is_exhausted() && recovery.observe(refreshed) {
+    if current.is_exhausted()
+        && recovery.observe(
+            refreshed,
+            previous.map(CodexAccountQuotaSnapshot::observed_at),
+        )
+    {
         return Ok(QuotaState::allowed(refreshed.observed_at()));
     }
     let reset_at = recovery

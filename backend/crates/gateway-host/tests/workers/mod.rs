@@ -17,7 +17,7 @@ use gateway_core::task::{
 use gateway_host::workers::{WorkerStartError, WorkerSupervisor};
 use tokio::sync::Notify;
 
-const ACTIVE_KINDS: [WorkerKind; 7] = [
+const ACTIVE_KINDS: [WorkerKind; 8] = [
     WorkerKind::OAuthRefresh,
     WorkerKind::QuotaCatalogHealth,
     WorkerKind::RuntimeSnapshotReconciliation,
@@ -25,6 +25,7 @@ const ACTIVE_KINDS: [WorkerKind; 7] = [
     WorkerKind::StaleModelRequestRecovery,
     WorkerKind::Retention,
     WorkerKind::Backup,
+    WorkerKind::AccountImport,
 ];
 
 #[derive(Clone)]
@@ -382,15 +383,17 @@ async fn only_database_fact_reasons_can_disable_nonexistent_workers() {
 
 #[tokio::test]
 async fn registry_refuses_start_when_any_real_owner_kind_is_missing() {
-    let plan = complete_plan(Vec::new())
-        .into_iter()
-        .filter(|item| item.kind() != WorkerKind::Retention)
-        .collect();
+    for required in [WorkerKind::Retention, WorkerKind::AccountImport] {
+        let plan = complete_plan(Vec::new())
+            .into_iter()
+            .filter(|item| item.kind() != required)
+            .collect();
 
-    assert!(matches!(
-        supervisor().start(plan, Arc::new(FakeLeasePort::default())),
-        Err(WorkerStartError::Missing(missing)) if missing == vec![WorkerKind::Retention]
-    ));
+        assert!(matches!(
+            supervisor().start(plan, Arc::new(FakeLeasePort::default())),
+            Err(WorkerStartError::Missing(missing)) if missing == vec![required]
+        ));
+    }
 }
 
 #[tokio::test]

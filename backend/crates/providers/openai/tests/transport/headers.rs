@@ -24,6 +24,14 @@ const DOWNSTREAM_TRANSPORT_HEADERS: &[(&str, &str)] = &[
     ("x-forwarded-prefix", "/gateway"),
     ("accept-encoding", "br, gzip"),
     ("content-encoding", "downstream-encoding"),
+    ("X-Stainless-Runtime", "node"),
+    ("x-stainless-future-field", "synthetic-sdk"),
+    ("Origin", "https://client.example"),
+    ("Referer", "https://client.example/chat"),
+    ("Sec-Ch-Ua", "synthetic-browser"),
+    ("sec-ch-ua-platform", "synthetic-platform"),
+    ("Sec-Fetch-Site", "cross-site"),
+    ("sec-fetch-future-field", "synthetic-context"),
 ];
 
 fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
@@ -56,6 +64,13 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                 ["bad header name", STANDARD.encode(b"ignored")],
                 ["x-invalid-base64", "%%%"],
                 ["x-still-valid", STANDARD.encode(b"after-invalid")],
+                ["traceparent", STANDARD.encode(b"synthetic-trace")],
+                ["tracestate", STANDARD.encode(b"synthetic-state")],
+                ["session_id", STANDARD.encode(b"untrusted-raw-alias")],
+                [
+                    "session-id",
+                    STANDARD.encode(b"untrusted-canonical-session")
+                ],
                 ["authorization", STANDARD.encode(b"Bearer client-secret")],
                 [
                     "X-OpenAI-Actor-Authorization",
@@ -72,6 +87,7 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
             ]),
         ),
         ("turn_state".to_owned(), json!("typed-turn-state")),
+        ("session_id".to_owned(), json!("explicit-session-anchor")),
     ]);
     context
         .get_mut("opaque_request_headers")
@@ -97,6 +113,8 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
         &Default::default(),
     )
     .expect("opaque request headers");
+    // The Provider supplies this trusted key after decoding protocol context.
+    request.client_api_key_id = Some("trusted-client-key".to_owned());
     request.use_websocket = use_websocket;
     request.force_http_sse = !use_websocket;
     request
@@ -394,6 +412,10 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         request
     });
     let request = request_with_opaque_headers(false);
+    assert_eq!(
+        request.client_session_id.as_deref(),
+        Some("explicit-session-anchor")
+    );
     let profile = test_wire_profile();
     let profile_snapshot = profile.snapshot();
     let expected_user_agent = profile_snapshot.user_agent();
@@ -430,6 +452,15 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
             "unexpected downstream transport header {name}"
         );
     }
+    let sessions = raw_header_values(&raw, "session-id");
+    assert_eq!(
+        sessions.len(),
+        1,
+        "QX must regenerate one canonical session"
+    );
+    assert!(!sessions[0].is_empty());
+    assert_eq!(raw_header_values(&raw, "session_id"), sessions);
+    assert_ne!(sessions[0].as_slice(), b"explicit-session-anchor");
     assert_eq!(
         raw_header_values(&raw, "x-openai-future-mode"),
         vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
@@ -446,6 +477,8 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         ("authorization", b"Bearer lease-token".as_slice()),
         ("chatgpt-account-id", b"lease-account".as_slice()),
         ("x-codex-installation-id", b"lease-installation".as_slice()),
+        ("traceparent", b"synthetic-trace".as_slice()),
+        ("tracestate", b"synthetic-state".as_slice()),
     ] {
         assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
     }
@@ -478,6 +511,8 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         b"client-secret".as_slice(),
         b"client-account",
         b"client-installation",
+        b"untrusted-raw-alias",
+        b"untrusted-canonical-session",
     ] {
         assert!(!raw.windows(secret.len()).any(|window| window == secret));
     }
@@ -522,6 +557,10 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
             .expect("send opaque terminal event");
     });
     let request = request_with_opaque_headers(true);
+    assert_eq!(
+        request.client_session_id.as_deref(),
+        Some("explicit-session-anchor")
+    );
     let client = CodexBackendClient::new(
         reqwest::Client::builder()
             .no_proxy()
@@ -606,6 +645,29 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         vec![b"lease-installation".to_vec()]
     );
     assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
+    assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
+    assert_eq!(values("tracestate"), vec![b"synthetic-state".to_vec()]);
+    let sessions = values("session-id");
+    assert_eq!(
+        sessions.len(),
+        1,
+        "QX must regenerate one canonical session"
+    );
+    assert!(!sessions[0].is_empty());
+    assert_eq!(values("session_id"), sessions);
+    assert_ne!(sessions[0].as_slice(), b"explicit-session-anchor");
+    for secret in [
+        b"untrusted-raw-alias".as_slice(),
+        b"untrusted-canonical-session",
+        b"client-installation",
+    ] {
+        assert!(received.values().all(|value| {
+            !value
+                .as_bytes()
+                .windows(secret.len())
+                .any(|part| part == secret)
+        }));
+    }
 }
 
 #[tokio::test]

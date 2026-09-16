@@ -1,5 +1,37 @@
 [
   {
+    "path": ".trellis/spec/backend/client-continuity.md",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 488,
+    "file_sha256": "07c7fb686f0afd39a4d6947da0499ff8170396880e51fbd178c31da9f698728e",
+    "line_sha256": "a9fdc16760660f57b4c9be59b1899df03c1a43a7d1a3e526f2d314ead033da69",
+    "reason": "Independently re-reviewed unchanged Rust TLS regression function reference after adding diagnostic and quota contracts; not a credential."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1603,
+    "file_sha256": "017eb9e56803fb5529685240d80cc1753678bb7901461618b0cec0e4a5db1bbf",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Independently re-reviewed unchanged synthetic loopback proxy fixture after registering timestamp regressions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1629,
+    "file_sha256": "017eb9e56803fb5529685240d80cc1753678bb7901461618b0cec0e4a5db1bbf",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Independently re-reviewed unchanged normalized synthetic loopback proxy assertion; audit redaction remains separately asserted."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/headers.rs",
+    "rule": "non-example-ip",
+    "line": 14,
+    "file_sha256": "430c71a45495a7b4aa7615a509495d52fdc009313d90fc6600f3b3b3407e7789",
+    "line_sha256": "588cd1db9d80d264c927db295a3eba023dbb7a8a1addbc5c814ed3ce29390a15",
+    "reason": "Independently re-reviewed unchanged synthetic forwarding-header fixture; HTTP and WS tests require stripping it, not connecting to it."
+  },
+  {
     "path": ".github/workflows/_quality.yml",
     "rule": "authenticated-url",
     "line": 38,

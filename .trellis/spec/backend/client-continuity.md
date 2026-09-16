@@ -1,5 +1,22 @@
 # Client Continuity Contracts
 
+## Diagnostic Selection and Quota Evidence
+
+- Production provider lists exclude disabled accounts. An explicit administrator
+  diagnostic may recover only its pinned account through a direct repository
+  read, followed by the existing provider/exclusion/lease checks. Ordinary
+  required-account requests must not use that bypass. In-memory test stores
+  must reproduce the production enabled-only list behavior.
+- Diagnostic selection never enables an account. Preserve existing per-provider
+  feedback rules; OpenAI diagnostic health updates are not equivalent to enabling.
+- Same-window quota recovery requires two consecutive fresh observations of a
+  known account-wide reset with known non-exhausted usage. Persist candidate
+  evidence with the exhaustion fact and a microsecond observation watermark.
+  Missing windows, unknown usage, renewed limits or mismatched reset interrupt
+  evidence; old/duplicate/pre-exhaustion observations cannot advance it.
+  New exhaustion invalidates prior evidence, and legacy documents need fresh
+  evidence. Keep existing reset-advance recovery and credential/enabled state.
+
 ## 1. Scope / Trigger
 
 Apply to OpenAI outbound identity, account import/rotation/deletion, IPv6 policy,

@@ -183,7 +183,7 @@ impl ProviderAccountStore for MemoryAccountStore {
             .lock()
             .expect("account store lock")
             .values()
-            .filter(|stored| stored.account.provider() == provider)
+            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
             .map(|stored| stored.account.clone())
             .collect())
     }

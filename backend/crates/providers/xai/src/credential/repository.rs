@@ -504,6 +504,16 @@ impl GrokCredentialRepository {
         Ok(loaded)
     }
 
+    pub(crate) async fn account_by_id(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<Option<ProviderAccount>, GrokCredentialRepositoryError> {
+        self.store
+            .get_account(account_id)
+            .await
+            .map_err(map_store_error)
+    }
+
     pub(crate) async fn list_accounts_for_provider(
         &self,
     ) -> Result<Vec<ProviderAccount>, GrokCredentialRepositoryError> {

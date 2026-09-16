@@ -25,6 +25,7 @@ multer = "3.1.0"
 secrecy = "0.10"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["arbitrary_precision", "preserve_order"] }
+sha2 = "0.11"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt", "sync", "time"] }
 tower-http = { version = "0.7.0", features = ["cors", "fs", "request-id", "timeout", "trace"] }

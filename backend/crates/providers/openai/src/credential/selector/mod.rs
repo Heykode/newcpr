@@ -375,7 +375,20 @@ impl CodexCredentialSelector {
                 )
                 .await;
         }
-        let accounts = self.repository.list_for_provider().await?;
+        let mut accounts = self.repository.list_for_provider().await?;
+        // Normal scheduling excludes disabled rows; only the pinned diagnostic may restore one.
+        if diagnostic
+            && let Some(required) = request.attempt.required_account()
+            && !accounts.iter().any(|account| account.id() == required)
+            && let Some(account) = self
+                .repository
+                .store()
+                .get_account(required)
+                .await
+                .map_err(|_| CredentialSelectionError::Store)?
+        {
+            accounts.push(account);
+        }
         let accounts = accounts
             .into_iter()
             .filter(|account| {

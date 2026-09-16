@@ -23,6 +23,7 @@ mod use_case;
 mod workers;
 
 pub use use_case::group_monitor::GroupMonitorService;
+pub use use_case::import_tasks::ImportTasksService;
 pub use use_case::relogin::{ReloginBatchResult, ReloginList, ReloginService, ReloginView};
 pub use use_case::user_agent::OutboundUserAgentService;
 pub use use_case::{
@@ -170,10 +171,16 @@ pub struct AdminServices {
     system: Arc<dyn SystemService>,
     openai: Arc<dyn OpenAiService>,
     xai: Arc<dyn XaiService>,
+    import_tasks: Arc<dyn ImportTasksService>,
     backups: Arc<dyn BackupService>,
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn import_tasks(&self) -> &dyn ImportTasksService {
+        self.import_tasks.as_ref()
+    }
+
     #[must_use]
     pub fn group_monitor(&self) -> &dyn GroupMonitorService {
         self.group_monitor.as_ref()
@@ -353,6 +360,17 @@ pub async fn initialize(
         openai_service.clone(),
         snapshot.clone(),
     ));
+    let xai_service = Arc::new(DefaultXaiService::new(
+        xai,
+        store.accounts(),
+        store.proxies(),
+        snapshot.clone(),
+    ));
+    let import_tasks = use_case::import_tasks::DefaultImportTasksService::new(
+        openai_service.clone(),
+        xai_service.clone(),
+    );
+    let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
     let services = AdminServices {
         group_monitor: group_monitor.clone(),
         relogin: relogin.clone(),
@@ -392,15 +410,24 @@ pub async fn initialize(
         )),
         system: Arc::new(DefaultSystemService::new(system)),
         openai: openai_service,
-        xai: Arc::new(DefaultXaiService::new(
-            xai,
-            store.accounts(),
-            store.proxies(),
-            snapshot.clone(),
-        )),
+        xai: xai_service,
+        import_tasks,
         backups,
     };
     let mut worker_contributions = backup_worker_contribution(backup_task)?;
+    let id = WorkerId::try_new(WorkerKind::AccountImport, "admin")
+        .map_err(|_| AdminError::internal("Import worker ID is invalid"))?;
+    let restart = DaemonRestartPolicy::try_new(Duration::from_secs(1), Duration::from_secs(60))
+        .map_err(|_| AdminError::internal("Import worker restart policy is invalid"))?;
+    let registration = WorkerRegistration::try_new(
+        id,
+        WorkerRunnable::Daemon {
+            restart,
+            task: Box::new(import_task),
+        },
+    )
+    .map_err(|_| AdminError::internal("Import worker registration is invalid"))?;
+    worker_contributions.push(WorkerContribution::Registration(registration));
     if store.relogin().is_some() {
         worker_contributions.push(use_case::relogin::contribution(relogin)?);
     }

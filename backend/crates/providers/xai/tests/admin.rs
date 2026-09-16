@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -16,7 +17,7 @@ use gateway_admin::model::provider_credentials::{
     ProviderQuotaRequest,
 };
 use gateway_admin::model::{MutationActor, MutationContext, Revision};
-use gateway_admin::ports::provider::ProviderAdminErrorKind;
+use gateway_admin::ports::provider::{ProviderAdminError, ProviderAdminErrorKind};
 use gateway_core::account::{
     AccountRuntimeSignals, CredentialRevision, OpaqueProviderData, ProviderAccount,
     ProviderAccountId, ProviderAccountStore,
@@ -38,7 +39,10 @@ use gateway_core::task::{
     WorkerContribution, WorkerCycleContext, WorkerKind, WorkerRunnable, WorkerTaskError,
 };
 use provider_xai::{
-    DiscoveryDocument, GrokOAuthConfig, PendingAuthorization, RedirectUriAllowlist,
+    DiscoveryDocument, FailClosedTokenVerifier, FailureClass, GrokOAuthClient, GrokOAuthConfig,
+    GrokOAuthImportCandidate, GrokOAuthImportMetadata, GrokOAuthImportTokens, HttpMethod,
+    OAuthHttpRequest, OAuthHttpResponse, OAuthHttpTransport, PendingAuthorization,
+    RedirectUriAllowlist, SecretValue, TransportFailure, TransportFailureKind, TransportFuture,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -409,6 +413,225 @@ async fn xai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
         .await
         .expect_err("missing refresh target");
     assert_eq!(refresh_error.kind(), ProviderAdminErrorKind::NotFound);
+}
+
+struct FailedImportTransport {
+    failure: TransportFailureKind,
+    calls: AtomicUsize,
+}
+
+impl OAuthHttpTransport for FailedImportTransport {
+    fn execute(&self, request: OAuthHttpRequest) -> TransportFuture<'_> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let response = if call == 0 {
+            assert_eq!(request.method(), HttpMethod::Get);
+            Ok(OAuthHttpResponse::new(
+                200,
+                include_bytes!("credential/fixtures/discovery.json").to_vec(),
+            ))
+        } else {
+            assert_eq!(call, 1, "uncertain RT exchange must not be retried");
+            assert_eq!(request.method(), HttpMethod::Post);
+            Err(TransportFailure::new(self.failure))
+        };
+        Box::pin(std::future::ready(response))
+    }
+}
+
+#[tokio::test]
+async fn xai_import_transport_failures_preserve_admin_ambiguity_without_retry_or_secrets() {
+    for (failure, expected) in [
+        (
+            TransportFailureKind::Timeout,
+            ProviderAdminErrorKind::Ambiguous,
+        ),
+        (
+            TransportFailureKind::Ambiguous,
+            ProviderAdminErrorKind::Ambiguous,
+        ),
+        (
+            TransportFailureKind::NotSent,
+            ProviderAdminErrorKind::Unavailable,
+        ),
+        (
+            TransportFailureKind::Tls,
+            ProviderAdminErrorKind::Unavailable,
+        ),
+    ] {
+        let transport = Arc::new(FailedImportTransport {
+            failure,
+            calls: AtomicUsize::new(0),
+        });
+        let oauth = GrokOAuthClient::new(
+            GrokOAuthConfig::official().expect("official config"),
+            crate::support::xai_wire_profile(),
+            transport.clone(),
+            Arc::new(FailClosedTokenVerifier),
+        );
+        let discovery = oauth.discover().await.expect("discovery fixture");
+        let now = Utc::now();
+        let error = oauth
+            .verify_imported_credential(
+                &discovery,
+                GrokOAuthImportCandidate::new(
+                    GrokOAuthImportTokens::without_id_token(
+                        SecretValue::new("fixture-admin-access-token".to_owned()),
+                        SecretValue::new("fixture-admin-refresh-token".to_owned()),
+                    ),
+                    GrokOAuthImportMetadata::new(
+                        "Bearer".to_owned(),
+                        provider_xai::OFFICIAL_CLIENT_ID.to_owned(),
+                        "openid offline_access grok-cli:access api:access".to_owned(),
+                        provider_xai::GROK_CLI_BASE_URL.to_owned(),
+                        now - chrono::Duration::hours(2),
+                        now - chrono::Duration::seconds(1),
+                    ),
+                ),
+            )
+            .await
+            .expect_err("failed RT exchange must not reach identity verification");
+        let admin_error = ProviderAdminError::from(error.class());
+
+        assert_eq!(admin_error.kind(), expected);
+        assert_eq!(admin_error.message(), None);
+        assert_eq!(admin_error.public_message(), None);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
+        let diagnostics = format!("{error:?} {admin_error:?} {admin_error}");
+        for secret in ["fixture-admin-access-token", "fixture-admin-refresh-token"] {
+            assert!(
+                !diagnostics.contains(secret),
+                "diagnostics leaked credential material"
+            );
+        }
+    }
+}
+
+#[test]
+fn xai_admin_failure_class_mapping_preserves_non_ambiguous_errors() {
+    for (class, expected) in [
+        (FailureClass::Transient, ProviderAdminErrorKind::Unavailable),
+        (FailureClass::Ambiguous, ProviderAdminErrorKind::Ambiguous),
+        (
+            FailureClass::CredentialPermanent,
+            ProviderAdminErrorKind::Invalid,
+        ),
+        (
+            FailureClass::ConfigurationPermanent,
+            ProviderAdminErrorKind::Invalid,
+        ),
+        (
+            FailureClass::UserActionRequired,
+            ProviderAdminErrorKind::Invalid,
+        ),
+        (FailureClass::Security, ProviderAdminErrorKind::Invalid),
+        (
+            FailureClass::Unsupported,
+            ProviderAdminErrorKind::Unsupported,
+        ),
+    ] {
+        let error = ProviderAdminError::from(class);
+        assert_eq!(error.kind(), expected);
+        assert_eq!(error.message(), None);
+    }
+}
+
+#[tokio::test]
+async fn xai_admin_provider_preserves_conflict_for_changed_account_identity() {
+    let store = Arc::new(MemoryProviderAccountStore::default());
+    let input = create_input("admin_conflict", "subject-admin-conflict");
+    seed_input(&store, &input).await.expect("create account");
+    let account = store.account(&input.account_id).expect("stored account");
+    let mut record = account_record(&account);
+    record.upstream_user_id = Some("subject-admin-stale".to_owned());
+    let bundle = provider_xai::initialize(
+        xai_config(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("xAI bundle");
+    let admin = bundle.admin_provider();
+
+    let rotation = admin
+        .prepare_rotation(PrepareCredentialRotation {
+            account: record.clone(),
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
+        })
+        .await
+        .expect_err("changed identity must conflict before any OAuth request");
+    assert_eq!(rotation.kind(), ProviderAdminErrorKind::Conflict);
+    assert_eq!(rotation.message(), None);
+    let refresh = admin
+        .prepare_refresh(PrepareCredentialRefresh { account: record })
+        .await
+        .expect_err("changed identity must conflict before any OAuth request");
+    assert_eq!(refresh.kind(), ProviderAdminErrorKind::Conflict);
+    assert_eq!(refresh.message(), None);
+}
+
+#[tokio::test]
+async fn xai_admin_provider_preserves_conflict_for_in_progress_authorization() {
+    let pending = Arc::new(TestOAuthPending::default());
+    let flow_id = "pending-in-progress";
+    let owner_ref = admin_session_owner_ref("admin-owner");
+    pending.insert(
+        flow_id,
+        owner_ref.clone(),
+        pending_payload(flow_id, &owner_ref),
+    );
+    let provider_kind = ProviderKind::new("xai").expect("provider kind");
+    let flow = OAuthPendingBinding::try_new(flow_id).expect("flow");
+    let owner = OAuthPendingBinding::try_new(owner_ref).expect("owner");
+    let claim = OAuthPendingBinding::try_new("existing-claim").expect("claim");
+    assert!(matches!(
+        pending
+            .claim_if_owner(
+                &provider_kind,
+                &flow,
+                &owner,
+                &claim,
+                Duration::from_secs(90)
+            )
+            .await
+            .expect("initial claim"),
+        OAuthPendingClaimOutcome::Claimed(_)
+    ));
+    let bundle = provider_xai::initialize(
+        xai_config(),
+        provider_ports_with(
+            Arc::new(MemoryProviderAccountStore::default()),
+            pending.clone(),
+        ),
+    )
+    .await
+    .expect("xAI bundle");
+
+    let error = bundle
+        .admin_provider()
+        .complete_authorization(CompleteAuthorization {
+            settings: None,
+            context: MutationContext {
+                actor: MutationActor::AdminSession {
+                    admin_user_id: "admin-owner".to_owned(),
+                },
+                request_id: "request-concurrent".to_owned(),
+            },
+            flow_id: flow_id.to_owned(),
+            callback_url: format!(
+                "{}?code=unused&state=unused",
+                provider_xai::OFFICIAL_REDIRECT_URI
+            ),
+        })
+        .await
+        .expect_err("existing claim must remain a conflict");
+    assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
+    assert_eq!(error.message(), None);
+    assert_eq!(
+        pending
+            .release_claim(&provider_kind, &flow, &owner, &claim)
+            .await
+            .unwrap(),
+        OAuthPendingReleaseOutcome::Released
+    );
 }
 
 fn pending_payload(flow_id: &str, owner_ref: &str) -> OpaqueProviderData {

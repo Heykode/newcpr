@@ -1,5 +1,20 @@
 # Protocol Compatibility Contracts
 
+## Downstream Environment and WS Error Projection
+
+- Strip downstream `x-stainless-*`, `sec-ch-ua*`, `sec-fetch-*`, Origin and
+  Referer at the existing ingress/provider passthrough boundaries. Do not
+  broaden this to unknown business headers, traceparent/tracestate or bodies.
+- Extract `session_id` alias semantics before dropping its raw passthrough.
+  The selected account/Key projection remains the sole owner of generated
+  session/thread/installation headers, including the regenerated QX aliases.
+- Native WS bare errors may become `response.failed` for delivery, using the
+  observed response snapshot. Preserve consumable status errors and special
+  continuation/connection-limit control codes. Do not change canonical
+  failure, billing, finish-gate or SSE semantics.
+- Cover real HTTP/WS outbound headers, repeated downstream WS frames, opaque
+  business bytes, unchanged identity and single terminal failure delivery.
+
 ## Scope
 
 Apply when modifying Chat conversion, Responses HTTP delivery, explicit compaction

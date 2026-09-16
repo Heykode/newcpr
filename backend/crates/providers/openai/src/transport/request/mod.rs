@@ -945,6 +945,9 @@ fn provider_managed_header(name: &str) -> bool {
     is_transport_managed_request_header(name)
         || name.starts_with("x-grok-")
         || name.starts_with("x-xai-")
+        || name.starts_with("x-stainless-")
+        || name.starts_with("sec-ch-ua")
+        || name.starts_with("sec-fetch-")
         || matches!(
             name,
             "authorization"
@@ -961,6 +964,10 @@ fn provider_managed_header(name: &str) -> bool {
                 | "x-openai-organization"
                 | "x-openai-project"
                 | "x-codex-installation-id"
+                | "origin"
+                | "referer"
+                // The semantic alias is already decoded; the lease projects upstream IDs.
+                | "session_id"
         )
 }
 

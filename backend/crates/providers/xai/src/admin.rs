@@ -1349,15 +1349,21 @@ fn build_connection_test_operation(
 }
 
 fn map_failure_class(class: FailureClass) -> ProviderAdminError {
-    provider_error(match class {
-        FailureClass::Transient => ProviderAdminErrorKind::Unavailable,
-        FailureClass::Ambiguous => ProviderAdminErrorKind::Conflict,
-        FailureClass::CredentialPermanent
-        | FailureClass::ConfigurationPermanent
-        | FailureClass::UserActionRequired
-        | FailureClass::Security => ProviderAdminErrorKind::Invalid,
-        FailureClass::Unsupported => ProviderAdminErrorKind::Unsupported,
-    })
+    class.into()
+}
+
+impl From<FailureClass> for ProviderAdminError {
+    fn from(class: FailureClass) -> Self {
+        provider_error(match class {
+            FailureClass::Transient => ProviderAdminErrorKind::Unavailable,
+            FailureClass::Ambiguous => ProviderAdminErrorKind::Ambiguous,
+            FailureClass::CredentialPermanent
+            | FailureClass::ConfigurationPermanent
+            | FailureClass::UserActionRequired
+            | FailureClass::Security => ProviderAdminErrorKind::Invalid,
+            FailureClass::Unsupported => ProviderAdminErrorKind::Unsupported,
+        })
+    }
 }
 
 fn map_oauth_error(error: OAuthError) -> ProviderAdminError {

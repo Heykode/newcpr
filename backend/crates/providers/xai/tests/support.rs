@@ -294,7 +294,7 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
         }
         Ok(lock(&self.accounts)
             .values()
-            .filter(|stored| stored.account.provider() == provider)
+            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
             .map(|stored| stored.account.clone())
             .collect())
     }

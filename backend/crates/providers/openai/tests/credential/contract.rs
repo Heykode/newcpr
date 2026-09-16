@@ -834,6 +834,59 @@ fn unavailable_required_account_never_falls_back() {
     ));
 }
 
+#[tokio::test]
+async fn diagnostic_required_account_boundaries_never_select_an_enabled_alternative() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    create_account(&store, "acct_available", "at-available");
+    let disabled = ProviderAccountId::new("acct_primary").expect("disabled account");
+    store.set_enabled(&disabled, false).await.expect("disable");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector(&store, Arc::clone(&leases));
+    let diagnostic = |required, excluded| {
+        AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_diagnostic_boundary").expect("request"),
+                ClientApiKeyId::new("key_codex_contract").expect("key"),
+            ),
+            NonZeroU32::MIN,
+            SystemTime::now() + Duration::from_secs(30),
+            account_policy(),
+            AccountAttemptContext::diagnostic(excluded, required, None),
+            None,
+            CancellationToken::new(),
+        )
+    };
+    let cases = [
+        (
+            "missing diagnostic account",
+            diagnostic(
+                ProviderAccountId::new("acct_missing").expect("missing account"),
+                BTreeSet::new(),
+            ),
+        ),
+        (
+            "excluded diagnostic account",
+            diagnostic(disabled.clone(), BTreeSet::from([disabled.clone()])),
+        ),
+        (
+            "ordinary required disabled account",
+            attempt_with_required(BTreeSet::new(), Some(disabled.clone())),
+        ),
+    ];
+    for (case, attempt) in cases {
+        assert!(
+            matches!(
+                capacity_select(&selector, &attempt, None).await,
+                Err(CredentialSelectionError::NoEligibleCredential)
+            ),
+            "{case}"
+        );
+        assert!(leases.requests.lock().expect("leases").is_empty(), "{case}");
+    }
+    assert!(!store.account(disabled.as_str()).expect("account").enabled());
+}
+
 #[test]
 fn selector_returns_capacity_error_when_every_redis_lease_is_busy() {
     let store = Arc::new(MemoryAccountStore::default());

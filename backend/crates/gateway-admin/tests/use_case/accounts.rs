@@ -77,6 +77,7 @@ pub(super) struct FakeProviderAdmin {
     retry_authorization_after_abort: Mutex<bool>,
     export_inputs: Mutex<Vec<ProviderExportCredentialInput>>,
     import_account_ids: Mutex<Vec<String>>,
+    import_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     quota_requests: Mutex<Vec<ProviderQuotaRequest>>,
     quota: Mutex<ProviderQuota>,
     quota_refresh_account: Mutex<Option<(Arc<FakeAccountStore>, AccountRecord)>>,
@@ -103,6 +104,7 @@ impl FakeProviderAdmin {
             retry_authorization_after_abort: Mutex::new(false),
             export_inputs: Mutex::new(Vec::new()),
             import_account_ids: Mutex::new(vec!["acct_prepared".to_owned()]),
+            import_gate: Mutex::new(None),
             quota_requests: Mutex::new(Vec::new()),
             quota: Mutex::new(empty_quota()),
             quota_refresh_account: Mutex::new(None),
@@ -119,6 +121,12 @@ impl FakeProviderAdmin {
         })
     }
 
+    pub(super) fn block_imports(&self) -> Arc<tokio::sync::Semaphore> {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        *self.import_gate.lock().expect("import gate") = Some(gate.clone());
+        gate
+    }
+
     pub(super) fn fail_next(&self, kind: ProviderAdminErrorKind) {
         *self.failure.lock().expect("provider failure") = Some(ProviderAdminError::new(kind));
     }
@@ -131,7 +139,7 @@ impl FakeProviderAdmin {
         }
     }
 
-    fn fail_next_with_message(&self, kind: ProviderAdminErrorKind, message: &str) {
+    pub(super) fn fail_next_with_message(&self, kind: ProviderAdminErrorKind, message: &str) {
         *self.failure.lock().expect("provider failure") =
             Some(ProviderAdminError::new(kind).with_message(message));
     }
@@ -354,6 +362,10 @@ impl ProviderAdmin for FakeProviderAdmin {
         _command: PrepareCredentialImport,
     ) -> Result<PreparedCredentialImport, ProviderAdminError> {
         self.record("provider.prepare_import");
+        let gate = self.import_gate.lock().expect("import gate").clone();
+        if let Some(gate) = gate {
+            gate.acquire().await.expect("import permit").forget();
+        }
         self.require_available()?;
         let account_ids = self
             .import_account_ids

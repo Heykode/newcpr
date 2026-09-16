@@ -3,6 +3,7 @@ mod accounts;
 mod auth;
 mod backup;
 mod client_keys;
+mod import_tasks;
 mod observability;
 mod openai;
 mod proxies;

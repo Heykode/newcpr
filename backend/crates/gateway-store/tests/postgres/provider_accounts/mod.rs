@@ -49,6 +49,7 @@ use super::{TestDatabase, admin_account_store};
 
 mod cumulative_costs;
 mod devices;
+mod timestamps;
 
 #[tokio::test]
 async fn explicit_quota_plan_is_fenced_and_survives_token_only_refreshes() {

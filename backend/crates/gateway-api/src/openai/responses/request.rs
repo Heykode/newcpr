@@ -576,6 +576,9 @@ fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
         || is_transport_managed_request_header(name)
         || name.starts_with("x-grok-")
         || name.starts_with("x-xai-")
+        || name.starts_with("x-stainless-")
+        || name.starts_with("sec-ch-ua")
+        || name.starts_with("sec-fetch-")
     {
         return false;
     }
@@ -609,6 +612,10 @@ fn passthrough_header_name(name: &str, connection_headers: &[String]) -> bool {
             | "x-oai-attestation"
             | "x-oai-is"
             | "x-oai-is-update"
+            // Preserve locally observed environment and parsed session semantics, not raw aliases.
+            | "origin"
+            | "referer"
+            | "session_id"
     )
 }
 

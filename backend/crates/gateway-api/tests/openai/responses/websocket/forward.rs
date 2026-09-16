@@ -5,12 +5,14 @@ use std::time::Duration;
 use axum::http::{StatusCode, header::AUTHORIZATION};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
+use gateway_api::openai::responses::{OpenAiResponsesEncoder, ResponseEncodeError};
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ProviderError, ProviderErrorKind,
 };
 use gateway_core::event::{ProtocolWireEvent, ProviderEvent, ProviderResponseHeader};
 use gateway_core::upstream::{OpaqueUpstreamValue, UpstreamSendState};
+use gateway_protocol::openai::sse::parse_sse_events;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -420,6 +422,26 @@ async fn deliverable_business_failures_are_not_rewritten_or_followed_by_a_second
             },
             "future": {"keep": true},
         }),
+        json!({
+            "type": "error",
+            "status_code": 503,
+            "error": {"message": "synthetic unavailable", "code": "server_is_overloaded"},
+            "future": {"keep": true},
+        }),
+        json!({
+            "type": "error",
+            "error": {
+                "message": "synthetic connection limit",
+                "code": "websocket_connection_limit_reached",
+            },
+        }),
+        json!({
+            "type": "error",
+            "error": {
+                "message": "synthetic missing response",
+                "code": "previous_response_not_found",
+            },
+        }),
     ] {
         let event = ProviderEvent::wire(
             ProtocolWireEvent::json(
@@ -446,4 +468,215 @@ async fn deliverable_business_failures_are_not_rewritten_or_followed_by_a_second
         assert_eq!(trace.next_calls.load(Ordering::Acquire), 2);
         socket.close(None).await.unwrap();
     }
+}
+
+fn wire_event(event_type: Option<&str>, data: Value) -> ProviderEvent {
+    ProviderEvent::wire(
+        ProtocolWireEvent::json("openai", event_type.map(str::to_owned), data)
+            .expect("synthetic OpenAI wire"),
+    )
+}
+
+#[test]
+fn websocket_bare_errors_preserve_snapshot_and_metadata_without_success() {
+    for event_type in [Some("error"), None] {
+        for status in [
+            json!({}),
+            json!({"status": 200}),
+            json!({"status": 204}),
+            json!({"status": 299}),
+            json!({"status_code": 200}),
+        ] {
+            let mut encoder = OpenAiResponsesEncoder::new();
+            let snapshot = json!({
+                "id": "resp_bare",
+                "status": "in_progress",
+                "model": "model-a",
+                "output": [],
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+                "future": {"keep": true},
+            });
+            let started = wire_event(
+                Some("response.created"),
+                json!({"type": "response.created", "response": snapshot}),
+            );
+            encoder.push_websocket(&started);
+            let mut raw = json!({
+                "type": "error",
+                "error": {
+                    "code": "server_is_overloaded",
+                    "type": "service_unavailable_error",
+                    "message": "synthetic overloaded",
+                    "future": {"keep": true},
+                },
+                "sequence_number": 2,
+                "headers": {"x-request-id": "req_bare"},
+                "future": ["opaque"],
+            });
+            raw.as_object_mut()
+                .unwrap()
+                .extend(status.as_object().unwrap().clone());
+            let event = wire_event(event_type, raw.clone());
+            let messages = encoder.push_websocket(&event);
+            let mut expected_response = snapshot;
+            expected_response["status"] = json!("failed");
+            expected_response["error"] = raw["error"].clone();
+            let mut expected = raw.clone();
+            expected.as_object_mut().unwrap().remove("error");
+            expected["type"] = json!("response.failed");
+            expected["response"] = expected_response;
+
+            assert_eq!(messages, vec![expected.to_string()]);
+            assert!(encoder.has_wire_failure());
+            assert!(!encoder.is_completed());
+            assert_eq!(encoder.response_id(), Some("resp_bare"));
+            assert_eq!(
+                encoder.finish().unwrap_err(),
+                ResponseEncodeError::MissingWireTerminal
+            );
+            assert_eq!(event.wire_event().unwrap().data(), &raw);
+            assert!(event.canonical_facts().is_empty());
+        }
+    }
+}
+
+#[test]
+fn websocket_error_projection_keeps_existing_sse_policy() {
+    for extra in [
+        json!({}),
+        json!({"status": 429}),
+        json!({"status_code": 503}),
+        json!({"error": {"code": "previous_response_not_found", "message": "synthetic"}}),
+        json!({"error": {"code": "websocket_connection_limit_reached", "message": "synthetic"}}),
+    ] {
+        let started = wire_event(
+            Some("response.created"),
+            json!({"type": "response.created", "response": {"id": "resp_sse_policy"}}),
+        );
+        let mut raw = json!({
+            "type": "error",
+            "error": {"code": "server_is_overloaded", "message": "synthetic"},
+        });
+        raw.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let event = wire_event(Some("error"), raw.clone());
+        let mut websocket = OpenAiResponsesEncoder::new();
+        let mut sse = OpenAiResponsesEncoder::new();
+        websocket.push_websocket(&started);
+        sse.push_sse(&started);
+        let messages = websocket.push_websocket(&event);
+        let frames = sse.push_sse(&event);
+        let parsed = parse_sse_events(std::str::from_utf8(&frames[0]).unwrap()).unwrap();
+        assert_eq!(parsed.len(), 1);
+        let projected: Value = serde_json::from_str(&parsed[0].data).unwrap();
+        assert_eq!(projected["type"], "response.failed");
+        assert_eq!(projected["response"]["error"], raw["error"]);
+        if extra.as_object().unwrap().is_empty() {
+            assert_eq!(messages, vec![projected.to_string()]);
+        } else {
+            assert_eq!(messages, vec![raw.to_string()]);
+        }
+        assert!(sse.has_wire_failure());
+        assert!(!sse.is_completed());
+    }
+}
+
+#[test]
+fn websocket_unprojectable_errors_stay_opaque() {
+    for raw in [
+        json!({"type": "error", "message": "synthetic flat error"}),
+        json!({"type": "error", "error": "synthetic opaque error"}),
+        json!({"type": "error", "error": null}),
+    ] {
+        let event = wire_event(Some("error"), raw.clone());
+        let mut encoder = OpenAiResponsesEncoder::new();
+        assert_eq!(encoder.push_websocket(&event), vec![raw.to_string()]);
+        assert!(encoder.has_wire_failure());
+        assert!(!encoder.is_completed());
+    }
+}
+
+#[tokio::test]
+async fn websocket_bare_errors_are_projected_once_and_finalize_as_failures() {
+    for with_snapshot in [false, true] {
+        let mut events = Vec::new();
+        if with_snapshot {
+            events.push(wire_event(
+                Some("response.created"),
+                json!({"type": "response.created", "response": {
+                    "id": "resp_bare_route", "status": "in_progress",
+                }}),
+            ));
+        }
+        let raw = json!({
+            "type": "error",
+            "error": {"code": "server_is_overloaded", "message": "synthetic overloaded"},
+            "sequence_number": 2,
+        });
+        events.push(wire_event(Some("error"), raw.clone()));
+        let trace = Arc::new(AtomicFailureTrace {
+            first_batch: Mutex::new(Some(
+                CoordinatedEvent::try_batch(events, CommitRequirement::CommitBeforeDelivery)
+                    .unwrap(),
+            )),
+            ..AtomicFailureTrace::default()
+        });
+        let (mut socket, _server) = connect(Arc::clone(&trace), Vec::new()).await;
+        send_request(&mut socket).await;
+        assert_eq!(next_event(&mut socket).await["type"], "response.metadata");
+        if with_snapshot {
+            assert_eq!(next_event(&mut socket).await["type"], "response.created");
+        }
+        let projected = next_event(&mut socket).await;
+        assert_eq!(projected["type"], "response.failed");
+        assert_eq!(projected["response"]["status"], "failed");
+        assert_eq!(projected["response"]["error"], raw["error"]);
+        assert_eq!(projected["sequence_number"], 2);
+        if with_snapshot {
+            assert_eq!(projected["response"]["id"], "resp_bare_route");
+        } else {
+            assert!(
+                projected["response"]["id"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("resp_proxy_")
+            );
+        }
+        assert_no_duplicate_failure(&mut socket).await;
+        assert!(trace.committed.load(Ordering::Acquire));
+        assert!(trace.finalized.load(Ordering::Acquire));
+        assert_eq!(trace.next_calls.load(Ordering::Acquire), 2);
+        socket.close(None).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn websocket_success_terminal_still_requires_execution_finalization() {
+    let event = wire_event(
+        Some("response.completed"),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_unsettled", "status": "completed", "output": [],
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }}),
+    );
+    // The existing session fixture fails during finalization after its first batch.
+    let trace = Arc::new(AtomicFailureTrace {
+        first_batch: Mutex::new(Some(
+            CoordinatedEvent::try_batch(vec![event], CommitRequirement::CommitBeforeDelivery)
+                .unwrap(),
+        )),
+        ..AtomicFailureTrace::default()
+    });
+    let (mut socket, _server) = connect(Arc::clone(&trace), Vec::new()).await;
+    send_request(&mut socket).await;
+    let error = next_error(&mut socket).await;
+    assert_ne!(error["type"], "response.completed");
+    assert!(error.get("response").is_none());
+    assert!(error.get("usage").is_none());
+    assert_no_duplicate_failure(&mut socket).await;
+    assert!(trace.committed.load(Ordering::Acquire));
+    assert!(trace.finalized.load(Ordering::Acquire));
+    assert_eq!(trace.next_calls.load(Ordering::Acquire), 2);
+    socket.close(None).await.unwrap();
 }
