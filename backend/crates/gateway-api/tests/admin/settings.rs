@@ -64,6 +64,7 @@ fn update_body() -> Value {
             "websocketFailureOpenDurationMs": 45000,
             "rateLimitCooldownSeconds": 60,
             "openaiLocationOverrideEnabled": false,
+            "openaiRequestLocation": null,
             "maxWaitingPerKey": 0,
             "keyConcurrencyWaitTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
@@ -179,6 +180,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         ops_event_retention_days: 31,
         audit_retention_days: 91,
         request_tuning: RequestTuningOverrides {
+            openai_request_location: None,
             max_account_switches: Some(7),
             max_request_attempts: Some(8),
             websocket_max_retries: Some(9),
@@ -236,6 +238,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
                 "websocketFailureOpenDurationMs": 45000,
                 "rateLimitCooldownSeconds": 60,
                 "openaiLocationOverrideEnabled": true,
+                "openaiRequestLocation": null,
                 "maxWaitingPerKey": 8,
                 "keyConcurrencyWaitTimeoutSeconds": 30,
                 "accountBusyWaitEnabled": true,
@@ -447,6 +450,11 @@ async fn location_and_key_wait_settings_round_trip_without_changing_account_wait
     for (enabled, waiting, timeout) in [(true, 8, 45), (false, 0, 45)] {
         let mut body = update_body();
         body["requestTuning"]["openaiLocationOverrideEnabled"] = json!(enabled);
+        body["requestTuning"]["openaiRequestLocation"] = if enabled {
+            json!({"country":"JP","region":"Tokyo","city":"Tokyo","timezone":"Asia/Tokyo"})
+        } else {
+            serde_json::Value::Null
+        };
         body["requestTuning"]["maxWaitingPerKey"] = json!(waiting);
         body["requestTuning"]["keyConcurrencyWaitTimeoutSeconds"] = json!(timeout);
         let response = app(fixture.state())
@@ -466,6 +474,47 @@ async fn location_and_key_wait_settings_round_trip_without_changing_account_wait
         assert_eq!(data["requestTuning"], body["requestTuning"]);
         assert_eq!(data["rotationStrategy"], body["rotationStrategy"]);
     }
+}
+
+#[tokio::test]
+async fn custom_location_settings_reject_invalid_values_without_mutation() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    let original = response_json(response).await["data"].clone();
+    for (field, invalid, expected) in [
+        ("country", json!("us"), StatusCode::BAD_REQUEST),
+        ("city", json!(""), StatusCode::BAD_REQUEST),
+        ("region", json!("bad\nvalue"), StatusCode::BAD_REQUEST),
+        (
+            "timezone",
+            json!("Invalid/Zone"),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let mut body = update_body();
+        let mut location =
+            json!({"country":"JP","region":"Tokyo","city":"Tokyo","timezone":"Asia/Tokyo"});
+        location[field] = invalid;
+        body["requestTuning"]["openaiRequestLocation"] = location;
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{field}");
+    }
+    let response = app(fixture.state())
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(response_json(response).await["data"], original);
 }
 
 #[tokio::test]

@@ -180,6 +180,7 @@ impl ProxiesService for DefaultProxiesService {
         context: &MutationContext,
     ) -> Result<ProxyMutation, AdminError> {
         command.name = validate_name(&command.name)?;
+        validate_location(command.request_location.as_ref())?;
         let result = self
             .store
             .create(command, context)
@@ -195,6 +196,7 @@ impl ProxiesService for DefaultProxiesService {
         context: &MutationContext,
     ) -> Result<ProxyMutation, AdminError> {
         command.name = validate_name(&command.name)?;
+        validate_location(command.request_location.as_ref().and_then(Option::as_ref))?;
         let result = self
             .store
             .update(command, context)
@@ -257,4 +259,13 @@ fn validate_name(value: &str) -> Result<String, AdminError> {
         return Err(AdminError::invalid("代理名称需要 1 至 100 个字符"));
     }
     Ok(value.to_owned())
+}
+
+fn validate_location(
+    location: Option<&gateway_core::account::RequestLocation>,
+) -> Result<(), AdminError> {
+    if location.is_some_and(|value| !value.validate()) {
+        return Err(AdminError::invalid("请求地区格式不合法"));
+    }
+    Ok(())
 }

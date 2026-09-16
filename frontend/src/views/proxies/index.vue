@@ -4,6 +4,7 @@ import { LockKeyhole, Pencil, Plus, RefreshCw, Search, Trash2, Users, Wifi } fro
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { createProxy, deleteProxy, getProxies, probeProxy, testProxy, updateProxy } from '@/api'
+import { defaultRequestLocation } from '@/api/modules/proxies'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -37,7 +38,7 @@ const columns = defineTableColumns<OutboundProxyRecord>([
 ])
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
-const form = reactive({ name: '', proxyUrl: '' })
+const form = reactive({ name: '', proxyUrl: '', locationEnabled: false, location: defaultRequestLocation() })
 const saveAction = useAsyncAction()
 const { loading: saving } = saveAction
 const deleteAction = useAsyncAction()
@@ -54,6 +55,8 @@ function openForm(proxy: OutboundProxyRecord | null = null) {
   editing.value = proxy
   form.name = proxy?.name ?? ''
   form.proxyUrl = ''
+  form.locationEnabled = Boolean(proxy?.requestLocation)
+  form.location = proxy?.requestLocation ? { ...proxy.requestLocation } : defaultRequestLocation()
   showForm.value = true
 }
 
@@ -106,10 +109,11 @@ async function save() {
     return
   }
   await saveAction.run(async () => {
+    const requestLocation = form.locationEnabled ? { ...form.location } : null
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
     await (editing.value
-      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined })
-      : createProxy({ name, proxyUrl }))
+      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, requestLocation })
+      : createProxy({ name, proxyUrl, requestLocation }))
     showForm.value = false
     form.proxyUrl = ''
     toast.success('代理已保存')
@@ -238,6 +242,8 @@ onMounted(() => void query.execute())
       v-model="showForm"
       v-model:name="form.name"
       v-model:proxy-url="form.proxyUrl"
+      v-model:location-enabled="form.locationEnabled"
+      v-model:location="form.location"
       :proxy="editing"
       :saving="saving"
       :testing="testingForm"

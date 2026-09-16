@@ -5,6 +5,7 @@ use serde_json::json;
 #[test]
 fn request_tuning_overrides_round_trip_all_live_fields() {
     let overrides = RequestTuningOverrides {
+        openai_request_location: None,
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),
@@ -26,7 +27,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         account_busy_wait_fallback_timeout_seconds: Some(31),
     };
     assert!(overrides.validate());
-    let value = serde_json::to_value(overrides).expect("serialize overrides");
+    let value = serde_json::to_value(&overrides).expect("serialize overrides");
     assert_eq!(
         value,
         json!({
@@ -42,6 +43,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "websocketFailureOpenDurationMs": 45000,
             "rateLimitCooldownSeconds": 60,
             "openaiLocationOverrideEnabled": true,
+            "openaiRequestLocation": null,
             "maxWaitingPerKey": 8,
             "keyConcurrencyWaitTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
@@ -190,7 +192,7 @@ fn request_tuning_overrides_discard_only_the_legacy_global_opening_limit() {
         websocket_http_fallback_enabled: Some(false),
         ..Default::default()
     };
-    let serialized = serde_json::to_value(expected).expect("serialize live overrides");
+    let serialized = serde_json::to_value(&expected).expect("serialize live overrides");
     for legacy in [
         json!(4),
         json!(null),
@@ -221,7 +223,7 @@ fn request_tuning_overrides_preserve_inheritance_for_empty_and_legacy_only_input
         let decoded: RequestTuningOverrides =
             serde_json::from_value(value).expect("decode inherited overrides");
         assert_eq!(decoded, RequestTuningOverrides::default());
-        let serialized = serde_json::to_value(decoded).expect("serialize inherited overrides");
+        let serialized = serde_json::to_value(&decoded).expect("serialize inherited overrides");
         assert!(serialized.get("websocketMaxConnecting").is_none());
         assert_eq!(
             serde_json::from_value::<RequestTuningOverrides>(serialized)

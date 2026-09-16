@@ -13,7 +13,7 @@ use super::Revision;
 pub type ModelMappings = BTreeMap<PublicModelId, UpstreamModelId>;
 
 /// 管理员明确保存的请求调优覆盖值；`None` 表示继承启动配置或代码默认值。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestTuningOverrides {
     pub max_account_switches: Option<u32>,
@@ -28,6 +28,7 @@ pub struct RequestTuningOverrides {
     pub websocket_failure_open_duration_ms: Option<u64>,
     pub rate_limit_cooldown_seconds: Option<u64>,
     pub openai_location_override_enabled: Option<bool>,
+    pub openai_request_location: Option<gateway_core::account::RequestLocation>,
     pub max_waiting_per_key: Option<u32>,
     pub key_concurrency_wait_timeout_seconds: Option<u64>,
     pub account_busy_wait_enabled: Option<bool>,
@@ -60,6 +61,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_open_duration_ms: Option<u64>,
             rate_limit_cooldown_seconds: Option<u64>,
             openai_location_override_enabled: Option<bool>,
+            openai_request_location: Option<gateway_core::account::RequestLocation>,
             max_waiting_per_key: Option<u32>,
             key_concurrency_wait_timeout_seconds: Option<u64>,
             account_busy_wait_enabled: Option<bool>,
@@ -83,6 +85,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_open_duration_ms: wire.websocket_failure_open_duration_ms,
             rate_limit_cooldown_seconds: wire.rate_limit_cooldown_seconds,
             openai_location_override_enabled: wire.openai_location_override_enabled,
+            openai_request_location: wire.openai_request_location,
             max_waiting_per_key: wire.max_waiting_per_key,
             key_concurrency_wait_timeout_seconds: wire.key_concurrency_wait_timeout_seconds,
             account_busy_wait_enabled: wire.account_busy_wait_enabled,
@@ -110,7 +113,10 @@ impl RequestTuningOverrides {
     pub const MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS: u64 = 600;
 
     pub fn validate(&self) -> bool {
-        self.max_waiting_per_key.is_none_or(|value| value <= 1024)
+        self.openai_request_location
+            .as_ref()
+            .is_none_or(|value| value.validate())
+            && self.max_waiting_per_key.is_none_or(|value| value <= 1024)
             && self
                 .key_concurrency_wait_timeout_seconds
                 .is_none_or(|value| (1..=600).contains(&value))

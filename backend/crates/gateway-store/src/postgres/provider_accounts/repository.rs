@@ -128,7 +128,9 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         include_disabled: bool,
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let rows = sqlx::query(
-            "select outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
+            "select
+                    (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+                    outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,

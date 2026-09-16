@@ -65,6 +65,7 @@ pub struct ProxyTestResult {
 
 #[derive(Debug, Clone)]
 pub struct ProxyRecord {
+    pub request_location: Option<gateway_core::account::RequestLocation>,
     pub id: String,
     pub name: String,
     pub proxy: OutboundProxy,
@@ -86,12 +87,15 @@ pub struct ProxyPage {
 
 #[derive(Debug, Clone)]
 pub struct NewProxy {
+    pub request_location: Option<gateway_core::account::RequestLocation>,
     pub name: String,
     pub proxy: OutboundProxy,
 }
 
 #[derive(Debug, Clone)]
 pub struct UpdateProxy {
+    /// Missing preserves the value; explicit null clears the override.
+    pub request_location: Option<Option<gateway_core::account::RequestLocation>>,
     pub id: String,
     pub revision: Revision,
     pub name: String,

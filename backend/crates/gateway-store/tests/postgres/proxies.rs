@@ -46,6 +46,140 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
 }
 
 #[tokio::test]
+async fn proxy_location_updates_preserve_credentials_and_scheduling() {
+    use gateway_core::account::RequestLocation;
+    let Some(database) = TestDatabase::create("proxy_location").await else {
+        return;
+    };
+    let store = PgProxyRepository::new(database.pool.clone());
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    let context = context();
+    let location = RequestLocation::default();
+    let saved = store
+        .create(
+            NewProxy {
+                name: "Location fixture".into(),
+                proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
+                request_location: Some(location.clone()),
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    let mut candidate = account("acct_proxy_location", "user_proxy_location");
+    candidate.outbound_proxy = Some(saved.proxy.clone());
+    accounts.insert_provider_account(candidate).await.unwrap();
+    let before: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(a) from provider_accounts a where id = 'acct_proxy_location'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        accounts
+            .load_provider_account("acct_proxy_location")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .request_location,
+        Some(location.clone())
+    );
+    assert!(
+        accounts
+            .list_provider_accounts(None, true)
+            .await
+            .unwrap()
+            .iter()
+            .any(|account| account.id == "acct_proxy_location"
+                && account.request_location == Some(location.clone()))
+    );
+
+    let renamed = store
+        .update(
+            UpdateProxy {
+                id: saved.id.clone(),
+                revision: saved.revision,
+                name: "Renamed fixture".into(),
+                proxy: None,
+                request_location: None,
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    assert_eq!(renamed.request_location, Some(location));
+    let changed_location = RequestLocation {
+        country: "JP".into(),
+        region: "Tokyo".into(),
+        city: "Tokyo".into(),
+        timezone: "Asia/Tokyo".parse().unwrap(),
+    };
+    let changed = store
+        .update(
+            UpdateProxy {
+                id: saved.id.clone(),
+                revision: renamed.revision,
+                name: renamed.name,
+                proxy: None,
+                request_location: Some(Some(changed_location.clone())),
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    assert_eq!(
+        accounts
+            .load_provider_account("acct_proxy_location")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .request_location,
+        Some(changed_location)
+    );
+    let cleared = store
+        .update(
+            UpdateProxy {
+                id: saved.id,
+                revision: changed.revision,
+                name: changed.name,
+                proxy: None,
+                request_location: Some(None),
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    assert_eq!(cleared.request_location, None);
+    assert_eq!(
+        accounts
+            .load_provider_account("acct_proxy_location")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .request_location,
+        None
+    );
+    let after: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(a) from provider_accounts a where id = 'acct_proxy_location'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        before, after,
+        "location-only changes must not rewrite the account"
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_scheduling() {
     let Some(database) = TestDatabase::create("proxy_partial_batch").await else {
         return;
@@ -92,6 +226,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
     let proxy = store
         .create(
             NewProxy {
+                request_location: None,
                 name: "Authenticated proxy".to_owned(),
                 proxy: OutboundProxy::parse("http://user:secret@127.0.0.1:8080").unwrap(),
             },
@@ -195,6 +330,7 @@ async fn proxy_account_removal_preserves_settings_and_rejects_changed_bindings()
     let saved = store
         .create(
             NewProxy {
+                request_location: None,
                 name: "解绑测试".to_owned(),
                 proxy: OutboundProxy::parse("http://user:secret@127.0.0.1:17890").unwrap(),
             },
@@ -339,6 +475,7 @@ async fn proxy_accounts_paginate_thousands_of_accounts_and_search_without_loadin
     let saved = store
         .create(
             NewProxy {
+                request_location: None,
                 name: "分页测试".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:17890").unwrap(),
             },
@@ -350,6 +487,7 @@ async fn proxy_accounts_paginate_thousands_of_accounts_and_search_without_loadin
     let empty = store
         .create(
             NewProxy {
+                request_location: None,
                 name: "无关联账号".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:17891").unwrap(),
             },
@@ -491,6 +629,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
     let saved = store
         .create(
             NewProxy {
+                request_location: None,
                 name: "导入出口".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
             },
@@ -506,6 +645,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
         .unwrap();
     let reservation = store.reserve_import(&saved.id).await.unwrap();
     let replacement = UpdateProxy {
+        request_location: None,
         id: saved.id.clone(),
         revision: saved.revision,
         name: saved.name,
@@ -603,6 +743,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let created = store
         .create(
             NewProxy {
+                request_location: None,
                 name: "Office".to_owned(),
                 proxy: old_proxy.clone(),
             },
@@ -616,6 +757,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
         store
             .create(
                 NewProxy {
+                    request_location: None,
                     name: "Duplicate".to_owned(),
                     proxy: old_proxy.clone()
                 },
@@ -673,6 +815,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let renamed = store
         .update(
             UpdateProxy {
+                request_location: None,
                 id: created.id.clone(),
                 revision: created.revision,
                 name: "Renamed".to_owned(),
@@ -690,6 +833,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let edited = store
         .update(
             UpdateProxy {
+                request_location: None,
                 id: created.id.clone(),
                 revision: renamed.revision,
                 name: renamed.name,

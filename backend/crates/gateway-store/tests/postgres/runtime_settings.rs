@@ -120,6 +120,7 @@ async fn request_tuning_overrides_should_round_trip() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let mut update = settings_with_margin(3_600);
     update.request_tuning = RequestTuningOverrides {
+        openai_request_location: Some(gateway_core::account::RequestLocation::default()),
         openai_location_override_enabled: Some(true),
         max_waiting_per_key: Some(8),
         key_concurrency_wait_timeout_seconds: Some(30),
@@ -140,7 +141,7 @@ async fn request_tuning_overrides_should_round_trip() {
         account_busy_wait_fallback_max_waiting: Some(101),
         account_busy_wait_fallback_timeout_seconds: Some(31),
     };
-    let expected = update.request_tuning;
+    let expected = update.request_tuning.clone();
 
     repository
         .update_runtime_settings(update)
@@ -159,7 +160,7 @@ async fn request_tuning_overrides_should_round_trip() {
             .expect("load persisted tuning JSON");
     assert_eq!(
         persisted.0,
-        serde_json::to_value(expected).expect("serialize live overrides")
+        serde_json::to_value(&expected).expect("serialize live overrides")
     );
     assert!(persisted.0.get("websocketMaxConnecting").is_none());
 
@@ -168,7 +169,7 @@ async fn request_tuning_overrides_should_round_trip() {
         account_busy_wait_enabled: Some(false),
         ..expected
     };
-    let expected_disabled = disabled.request_tuning;
+    let expected_disabled = disabled.request_tuning.clone();
     repository
         .update_runtime_settings(disabled)
         .await
@@ -243,7 +244,7 @@ async fn legacy_request_tuning_should_load_in_settings_and_snapshot_and_disappea
                 .expect("load rewritten tuning JSON");
         assert_eq!(
             persisted.0,
-            serde_json::to_value(expected).expect("serialize live overrides")
+            serde_json::to_value(&expected).expect("serialize live overrides")
         );
         assert!(persisted.0.get("websocketMaxConnecting").is_none());
         assert_eq!(

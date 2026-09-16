@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import type { RequestLocation } from './proxies'
 import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
@@ -16,6 +17,7 @@ export interface RequestTuning {
   websocketFailureOpenDurationMs: number
   rateLimitCooldownSeconds: number
   openaiLocationOverrideEnabled: boolean
+  openaiRequestLocation: RequestLocation | null
   maxWaitingPerKey: number
   keyConcurrencyWaitTimeoutSeconds: number
   accountBusyWaitEnabled: boolean

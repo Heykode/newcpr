@@ -47,6 +47,7 @@ struct RemoveAccountRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateRequest {
+    request_location: Option<gateway_core::account::RequestLocation>,
     name: String,
     proxy_url: AccountProxyUpdate,
 }
@@ -54,6 +55,8 @@ struct CreateRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateRequest {
+    #[serde(default, deserialize_with = "optional_location")]
+    request_location: Option<Option<gateway_core::account::RequestLocation>>,
     id: String,
     revision: u64,
     name: String,
@@ -110,6 +113,7 @@ struct ProxyAccountView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyView {
+    request_location: Option<gateway_core::account::RequestLocation>,
     id: String,
     name: String,
     endpoint: String,
@@ -127,6 +131,7 @@ impl From<ProxyRecord> for ProxyView {
         let endpoint = record.proxy.endpoint();
         Self {
             id: record.id,
+            request_location: record.request_location,
             name: record.name,
             has_authentication: record.proxy.expose_url() != endpoint,
             endpoint,
@@ -184,6 +189,15 @@ where
         .route("/api/admin/proxies/delete", post(delete::<S>))
         .route("/api/admin/proxies/test", post(test::<S>))
         .route("/api/admin/proxies/probe", post(probe::<S>))
+}
+
+fn optional_location<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<gateway_core::account::RequestLocation>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer).map(Some)
 }
 
 fn revision(value: u64) -> Result<Revision, AdminError> {
@@ -306,6 +320,7 @@ where
         .proxies()
         .create(
             NewProxy {
+                request_location: request.request_location,
                 name: request.name,
                 proxy,
             },
@@ -364,6 +379,7 @@ where
         .proxies()
         .update(
             UpdateProxy {
+                request_location: request.request_location,
                 id: request.id,
                 revision: revision(request.revision)?,
                 name: request.name,

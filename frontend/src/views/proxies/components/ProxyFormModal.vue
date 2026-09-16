@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord } from '@/api'
+import type { RequestLocation } from '@/api/modules/proxies'
 import { Eye, EyeOff, Save, Wifi } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -8,6 +9,8 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import RequestLocationFields from '@/components/RequestLocationFields.vue'
 
 const props = defineProps<{
   proxy: OutboundProxyRecord | null
@@ -21,6 +24,8 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ required: true })
 const name = defineModel<string>('name', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const locationEnabled = defineModel<boolean>('locationEnabled', { required: true })
+const location = defineModel<RequestLocation>('location', { required: true })
 const showSecret = shallowRef(false)
 const busy = computed(() => props.saving || props.testing)
 const title = computed(() => props.proxy ? '编辑代理' : '新增代理')
@@ -59,6 +64,8 @@ watch(open, () => {
       <p v-if="proxy?.accountCount && proxyUrl.trim()" class="m-0 text-cp-sm text-cp-warning-text">
         将更新 {{ proxy.accountCount }} 个关联账号的出口。
       </p>
+      <BaseSwitch v-model="locationEnabled" label="代理独立地区（地区总开关开启时生效）" show-label :disabled="busy" />
+      <RequestLocationFields v-if="locationEnabled" v-model="location" :disabled="busy" />
     </BaseForm>
     <template #footer>
       <BaseButton variant="secondary" :disabled="busy" @click="open = false">

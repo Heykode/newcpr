@@ -151,6 +151,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.min_codex_desktop_version,
                 data.settings.min_codex_cli_version,
             )
+            .with_request_location(data.settings.request_tuning.openai_request_location.clone())
             .with_request_tuning(to_core_request_tuning(data.settings.request_tuning));
             let client_policies = data
                 .client_api_keys

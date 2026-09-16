@@ -2,6 +2,17 @@ import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
 import request from '../request'
 
+export interface RequestLocation {
+  country: string
+  region: string
+  city: string
+  timezone: string
+}
+
+export function defaultRequestLocation(): RequestLocation {
+  return { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' }
+}
+
 export interface OutboundProxyTest {
   success: boolean
   latencyMs: number
@@ -10,6 +21,7 @@ export interface OutboundProxyTest {
 }
 
 export interface OutboundProxyRecord {
+  requestLocation?: RequestLocation | null
   id: string
   name: string
   endpoint: string
@@ -76,7 +88,7 @@ export function getProxies(params: { page: number, pageSize: number, search?: st
   })
 }
 
-export function createProxy(data: { name: string, proxyUrl: string }, options: RequestOptions = {}) {
+export function createProxy(data: { name: string, proxyUrl: string, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/create',
     method: 'POST',
@@ -85,7 +97,7 @@ export function createProxy(data: { name: string, proxyUrl: string }, options: R
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string }, options: RequestOptions = {}) {
+export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     method: 'POST',

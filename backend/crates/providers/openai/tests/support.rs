@@ -53,6 +53,18 @@ pub(crate) struct MemoryAccountStore {
 }
 
 impl MemoryAccountStore {
+    pub(crate) fn set_request_location(
+        &self,
+        id: &str,
+        location: Option<gateway_core::account::RequestLocation>,
+    ) {
+        let mut accounts = self.accounts.lock().unwrap();
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .unwrap();
+        stored.account = stored.account.clone().with_request_location(location);
+    }
+
     pub(crate) fn repository(self: &Arc<Self>) -> CodexCredentialRepository {
         CodexCredentialRepository::new(self.clone())
     }

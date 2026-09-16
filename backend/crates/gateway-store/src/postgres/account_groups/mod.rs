@@ -368,6 +368,7 @@ async fn load_member_facts<'e>(
         "select membership.account_group_id,
                 account.id, account.provider_kind, account.name, account.email,
                 account.upstream_user_id, account.upstream_account_id, account.plan_type,
+                (select request_location_json from outbound_proxies where outbound_proxies.id = account.outbound_proxy_id) as request_location_json,
                 account.authentication_kind, account.credential_revision, account.outbound_proxy_url,
                 account.has_refresh_token, account.access_token_expires_at,
                 account.next_refresh_at, account.enabled, account.concurrency_limit,

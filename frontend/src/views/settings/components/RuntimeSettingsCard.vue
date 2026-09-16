@@ -2,11 +2,13 @@
 import type { RequestTuning } from '@/api/modules/settings'
 import { ChevronDown, Gauge, Timer, Zap } from '@lucide/vue'
 import { computed, ref } from 'vue'
+import { defaultRequestLocation } from '@/api/modules/proxies'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import RequestLocationFields from '@/components/RequestLocationFields.vue'
 
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
@@ -14,6 +16,16 @@ const refreshConcurrency = defineModel<string>('refreshConcurrency', { required:
 const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
+const customLocation = computed({
+  get: () => requestTuning.value.openaiRequestLocation !== null,
+  set: (enabled: boolean) => {
+    requestTuning.value.openaiRequestLocation = enabled ? defaultRequestLocation() : null
+  },
+})
+const location = computed({
+  get: () => requestTuning.value.openaiRequestLocation ?? defaultRequestLocation(),
+  set: (value) => { requestTuning.value.openaiRequestLocation = value },
+})
 type NumericTuningKey = {
   [Key in keyof RequestTuning]: RequestTuning[Key] extends number ? Key : never
 }[keyof RequestTuning]
@@ -120,6 +132,10 @@ const tuningValues = {
           OpenAI 搜索地区与时区覆盖
         </h3>
         <BaseSwitch v-model="requestTuning.openaiLocationOverrideEnabled" label="OpenAI 搜索地区与时区覆盖" />
+      </div>
+      <div v-if="requestTuning.openaiLocationOverrideEnabled" class="mt-4 grid gap-4">
+        <BaseSwitch v-model="customLocation" label="自定义全局地区（关闭时沿用启动配置）" show-label />
+        <RequestLocationFields v-if="customLocation" v-model="location" />
       </div>
     </div>
 

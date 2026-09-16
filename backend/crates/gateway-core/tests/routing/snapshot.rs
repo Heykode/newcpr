@@ -126,6 +126,48 @@ fn compiler_should_reject_revision_changed_during_consistent_read() {
 }
 
 #[test]
+fn request_location_is_frozen_in_snapshot_and_routing_plan() {
+    use gateway_core::account::RequestLocation;
+
+    let location = RequestLocation::default();
+    let make_facts = |revision_number, location| {
+        SnapshotFacts::new(
+            revision(revision_number),
+            revision(revision_number),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_request_location(location),
+            Vec::new(),
+            Vec::new(),
+            vec![SnapshotProviderAccountFacts::new(
+                ProviderAccountId::new("acct_location").unwrap(),
+                "alpha",
+            )],
+            Vec::new(),
+        )
+    };
+    let store = Arc::new(TestSnapshotStore::new(Ok(make_facts(
+        1,
+        Some(location.clone()),
+    ))));
+    let compiler = RuntimeSnapshotCompiler::new(store.clone(), Arc::new(TestCatalog::Unavailable));
+    let first = block_on(compiler.compile()).expect("first snapshot");
+    let plan = first
+        .plan(
+            &PublicModelId::new("test-model").unwrap(),
+            &super::operation(),
+            first.all_account_scope(),
+            &gateway_core::routing::RoutingContext::default(),
+        )
+        .expect("routing plan");
+    *store.facts.lock().unwrap() = Ok(make_facts(2, None));
+    *store.current_revision.lock().unwrap() = Ok(revision(2));
+    let second = block_on(compiler.compile()).expect("updated snapshot");
+    assert_eq!(second.request_location(), None);
+    assert_eq!(first.request_location(), Some(&location));
+    assert_eq!(plan.request_location(), Some(&location));
+}
+
+#[test]
 fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
     let compiler = RuntimeSnapshotCompiler::new(
         Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))),

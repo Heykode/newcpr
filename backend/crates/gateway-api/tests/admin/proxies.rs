@@ -98,6 +98,7 @@ impl ProxyStore for MemoryProxies {
         _: &MutationContext,
     ) -> AdminStoreResult<ProxyMutation> {
         let record = ProxyRecord {
+            request_location: command.request_location,
             id: "proxy_test".to_owned(),
             name: command.name,
             proxy: command.proxy,
@@ -122,6 +123,9 @@ impl ProxyStore for MemoryProxies {
         let mut stored = self.0.lock().unwrap();
         let record = stored.as_mut().ok_or_else(missing)?;
         record.name = command.name;
+        if let Some(location) = command.request_location {
+            record.request_location = location;
+        }
         if let Some(proxy) = command.proxy {
             record.proxy = proxy;
         }
@@ -156,6 +160,60 @@ impl ProxyStore for MemoryProxies {
 }
 
 pub(super) struct SuccessfulProbe;
+
+#[tokio::test]
+async fn proxy_location_api_preserves_omitted_and_clears_explicit_null() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let location = json!({"country":"JP","region":"Tokyo","city":"Tokyo","timezone":"Asia/Tokyo"});
+    let (status, created) = request(&fixture, "/api/admin/proxies/create",
+        Some(json!({"name":"location","proxyUrl":"http://127.0.0.1:8080","requestLocation":location})), true).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["data"]["record"]["requestLocation"], location);
+    let (status, renamed) = request(
+        &fixture,
+        "/api/admin/proxies/update",
+        Some(json!({"id":"proxy_test","revision":1,"name":"renamed"})),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["data"]["record"]["requestLocation"], location);
+    let (status, cleared) = request(
+        &fixture,
+        "/api/admin/proxies/update",
+        Some(json!({"id":"proxy_test","revision":2,"name":"renamed","requestLocation":null})),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(cleared["data"]["record"]["requestLocation"].is_null());
+    for (invalid, expected_status) in [
+        (
+            json!({"country":"us","region":"Tokyo","city":"Tokyo","timezone":"Asia/Tokyo"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"country":"JP","region":"Tokyo","city":"","timezone":"Asia/Tokyo"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"country":"JP","region":"Tokyo","city":"Tokyo","timezone":"Invalid/Zone"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let (status, _) = request(
+            &fixture,
+            "/api/admin/proxies/update",
+            Some(
+                json!({"id":"proxy_test","revision":3,"name":"renamed","requestLocation":invalid}),
+            ),
+            true,
+        )
+        .await;
+        assert_eq!(status, expected_status);
+    }
+}
 
 #[async_trait]
 impl ProxyProbe for SuccessfulProbe {

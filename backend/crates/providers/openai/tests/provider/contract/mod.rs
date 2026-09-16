@@ -3778,9 +3778,9 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
         body.get("installation_id"),
         body.pointer("/client_metadata/installation_id")
     );
-    assert!(
-        body.pointer("/client_metadata/x-codex-installation-id")
-            .is_none()
+    assert_eq!(
+        body.pointer("/client_metadata/x-codex-installation-id"),
+        body.pointer("/client_metadata/installation_id")
     );
     assert_eq!(
         captured_header_values(&request, "x-codex-installation-id"),

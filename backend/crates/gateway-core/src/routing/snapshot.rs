@@ -28,6 +28,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    request_location: Option<crate::account::RequestLocation>,
     max_concurrent_per_account: u32,
     request_interval_ms: u64,
     rotation_strategy: String,
@@ -39,6 +40,15 @@ pub struct SnapshotSettingsFacts {
 
 impl SnapshotSettingsFacts {
     #[must_use]
+    pub fn with_request_location(
+        mut self,
+        location: Option<crate::account::RequestLocation>,
+    ) -> Self {
+        self.request_location = location;
+        self
+    }
+
+    #[must_use]
     pub fn new(
         max_concurrent_per_account: u32,
         request_interval_ms: u64,
@@ -49,6 +59,7 @@ impl SnapshotSettingsFacts {
     ) -> Self {
         Self {
             max_concurrent_per_account,
+            request_location: None,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
             model_mappings,
@@ -446,6 +457,7 @@ async fn compile_runtime_snapshot(
             .with_known_provider_catalogs(known_provider_catalogs)
             .with_min_codex_client_versions(min_client_versions)
             .with_request_tuning(request_tuning)
+            .with_request_location(facts.settings.request_location)
             .with_account_concurrency_limits(account_limits)
     })
 }
@@ -453,6 +465,7 @@ async fn compile_runtime_snapshot(
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    request_location: Option<crate::account::RequestLocation>,
     revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     providers: Arc<BTreeSet<ProviderKind>>,
@@ -470,6 +483,20 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub fn request_location(&self) -> Option<&crate::account::RequestLocation> {
+        self.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub fn with_request_location(
+        mut self,
+        location: Option<crate::account::RequestLocation>,
+    ) -> Self {
+        self.request_location = location;
+        self
+    }
+
     /// 校验 Provider、实时模型目录和 Client API Key，并构建快照。
     pub fn new(
         revision: ConfigRevision,
@@ -539,6 +566,7 @@ impl RuntimeSnapshot {
 
         Ok(Self {
             revision,
+            request_location: None,
             account_selection_policy,
             providers: Arc::new(provider_set),
             provider_models: Arc::new(model_map),
@@ -865,6 +893,7 @@ impl RuntimeSnapshot {
             operation: operation.kind(),
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
+            request_location: self.request_location.clone(),
             account_scope,
             candidates: Arc::from(candidates),
         })
@@ -906,6 +935,7 @@ impl RuntimeSnapshot {
             operation: operation.kind(),
             max_attempts: self.request_tuning.max_attempts(),
             request_tuning: self.request_tuning,
+            request_location: self.request_location.clone(),
             account_scope,
             candidates: Arc::from([candidate]),
         })

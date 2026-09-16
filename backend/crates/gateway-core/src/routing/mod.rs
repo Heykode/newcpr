@@ -633,6 +633,7 @@ impl ProviderCandidate {
 /// 一次请求冻结的 Provider 尝试顺序。
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
+    request_location: Option<crate::account::RequestLocation>,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
     operation: OperationKind,
@@ -643,6 +644,11 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub fn request_location(&self) -> Option<&crate::account::RequestLocation> {
+        self.request_location.as_ref()
+    }
+
     #[must_use]
     pub const fn config_revision(&self) -> ConfigRevision {
         self.config_revision

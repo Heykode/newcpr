@@ -857,6 +857,7 @@ where
         }));
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_request_location(self.plan.request_location().cloned())
                 .with_timing_started_at(self.observation.timing_started_at)
                 .with_trace(self.trace.clone()),
             next_attempt,

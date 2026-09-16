@@ -176,6 +176,8 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     let compiler = RuntimeSnapshotCompiler::new(repository, Arc::new(providers));
     let defaults = compiler.compile().await.expect("compile old settings");
     assert_eq!(defaults.request_tuning(), RequestTuning::default());
+    assert_eq!(defaults.request_location(), None);
+    let location = gateway_core::account::RequestLocation::default();
     let expected = RequestTuning {
         account_busy_wait_enabled: true,
         account_busy_wait_sticky_max_waiting: 7,
@@ -188,6 +190,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         ..RequestTuning::default()
     };
     let overrides = RequestTuningOverrides {
+        openai_request_location: Some(location.clone()),
         account_busy_wait_enabled: Some(expected.account_busy_wait_enabled),
         account_busy_wait_sticky_max_waiting: Some(expected.account_busy_wait_sticky_max_waiting),
         account_busy_wait_sticky_timeout_seconds: Some(
@@ -209,7 +212,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     sqlx::query(
         "update runtime_settings set request_tuning_json = $1, config_revision = config_revision + 1 where id = 1",
     )
-    .bind(sqlx::types::Json(overrides))
+    .bind(sqlx::types::Json(&overrides))
     .execute(&database.pool)
     .await
     .expect("persist wait overrides");
@@ -218,11 +221,13 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         .await
         .expect("compile enabled wait settings");
     assert_eq!(enabled.request_tuning(), expected);
+    assert_eq!(enabled.request_location(), Some(&location));
 
     sqlx::query(
         "update runtime_settings set request_tuning_json = $1, config_revision = config_revision + 1 where id = 1",
     )
     .bind(sqlx::types::Json(RequestTuningOverrides {
+        openai_request_location: None,
         account_busy_wait_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(0),
         ..overrides
@@ -243,6 +248,8 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         }
     );
     assert_eq!(enabled.request_tuning(), expected);
+    assert_eq!(disabled.request_location(), None);
+    assert_eq!(enabled.request_location(), Some(&location));
     assert_eq!(defaults.request_tuning(), RequestTuning::default());
 
     for inherited in [

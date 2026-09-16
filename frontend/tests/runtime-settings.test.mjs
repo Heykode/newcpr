@@ -73,6 +73,31 @@ function settings() {
   }
 }
 
+test('location remains opt-in and custom location round trips without changing other tuning', async () => {
+  const query = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    assert.equal(query.state.form.requestTuning.openaiLocationOverrideEnabled, false)
+    assert.equal(query.state.form.requestTuning.openaiRequestLocation, null)
+    const location = { country: 'JP', region: 'Tokyo', city: 'Tokyo', timezone: 'Asia/Tokyo' }
+    query.state.form.requestTuning.openaiRequestLocation = location
+    query.state.form.requestTuning.openaiLocationOverrideEnabled = true
+    await query.state.saveSettings()
+    assert.deepEqual(query.requests.at(-1).requestTuning.openaiRequestLocation, location)
+    query.state.form.requestTuning.openaiLocationOverrideEnabled = false
+    await query.state.saveSettings()
+    assert.deepEqual(query.requests.at(-1).requestTuning.openaiRequestLocation, location)
+    assert.equal(query.requests.at(-1).requestTuning.accountBusyWaitEnabled, false)
+    assert.equal(query.requests.at(-1).rotationStrategy, 'smart')
+    query.state.form.requestTuning.openaiRequestLocation = null
+    await query.state.saveSettings()
+    assert.equal(query.requests.at(-1).requestTuning.openaiRequestLocation, null)
+  }
+  finally {
+    query.stop()
+  }
+})
+
 test('large request threshold inherits defaults and round trips zero and custom bytes', async () => {
   for (const [overrides, defaults, expected] of [
     [{}, {}, 15 * 1024 * 1024],
@@ -209,6 +234,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       websocketFailureOpenDurationMs: 30_000,
       rateLimitCooldownSeconds: 60,
       openaiLocationOverrideEnabled: false,
+      openaiRequestLocation: null,
       maxWaitingPerKey: 0,
       keyConcurrencyWaitTimeoutSeconds: 30,
       accountBusyWaitEnabled: false,

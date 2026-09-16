@@ -686,6 +686,7 @@ pub struct ProviderAccount {
     next_refresh_at: Option<SystemTime>,
     has_refresh_token: bool,
     outbound_proxy: Option<super::OutboundProxy>,
+    request_location: Option<super::RequestLocation>,
 }
 
 impl ProviderAccount {
@@ -721,6 +722,7 @@ impl ProviderAccount {
             next_refresh_at: None,
             has_refresh_token: false,
             outbound_proxy: None,
+            request_location: None,
         }
     }
 
@@ -746,6 +748,17 @@ impl ProviderAccount {
     #[must_use]
     pub const fn outbound_proxy(&self) -> Option<&super::OutboundProxy> {
         self.outbound_proxy.as_ref()
+    }
+
+    #[must_use]
+    pub fn with_request_location(mut self, location: Option<super::RequestLocation>) -> Self {
+        self.request_location = location;
+        self
+    }
+
+    #[must_use]
+    pub fn request_location(&self) -> Option<&super::RequestLocation> {
+        self.request_location.as_ref()
     }
 
     #[must_use]

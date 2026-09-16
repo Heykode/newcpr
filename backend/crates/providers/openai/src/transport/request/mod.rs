@@ -37,6 +37,7 @@ const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] = &[
     "top_p",
     "frequency_penalty",
     "presence_penalty",
+    "prompt_cache_retention",
 ];
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
@@ -159,7 +160,7 @@ fn adapt_codex_responses_body(
     }
 }
 
-fn align_structured_location_fields(
+pub(crate) fn align_structured_location_fields(
     body: &mut Map<String, Value>,
     now: DateTime<Utc>,
     location: &CodexRequestLocation,
@@ -711,10 +712,9 @@ pub(crate) fn scope_request_to_account(
                 "installation_id".to_owned(),
                 Value::String(installation_id.to_owned()),
             );
-            replace_existing_metadata_field(
-                &mut metadata,
-                "x-codex-installation-id",
-                Some(installation_id),
+            metadata.insert(
+                "x-codex-installation-id".to_owned(),
+                Value::String(installation_id.to_owned()),
             );
             replace_existing_metadata_field(&mut metadata, "installationId", Some(installation_id));
             replace_metadata_field(

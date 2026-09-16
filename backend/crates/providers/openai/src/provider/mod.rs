@@ -579,6 +579,20 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
+        // Preserve the established identity/affinity inputs above. Only the
+        // selected account's outbound copy receives the effective location.
+        if context.request_tuning().openai_location_override_enabled {
+            let location = lease
+                .account()
+                .request_location()
+                .or(context.request_location())
+                .unwrap_or(&self.location);
+            crate::transport::request::align_structured_location_fields(
+                upstream_request.body_mut(),
+                chrono::Utc::now(),
+                location,
+            );
+        }
         let requirement = transport_requirement(&upstream_request);
         let requested_transport = selected_transport(&upstream_request);
         let session_http_fallback = requirement.allows_pre_send_http_fallback()

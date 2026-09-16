@@ -28,6 +28,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [账号容量等待](./account-capacity-wait.md) | 单一权威、冻结候选与实时容量、共享截止及取消所有权 | 实现合同；专项验收待完成 |
 | [Native Model Catalog](./native-model-catalog.md) | 完整原生对象、冻结账号权限、有界缓存与账号出口 | v3.6.1 本地适配 |
 | [Account Relogin](./account-relogin.md) | Login library, create-only import, cancellation and ambiguous push fencing | Local tests; one live Free login passed |
+| [Request Location](./request-location.md) | Default-off global and proxy locations without changing account identity | HTTP/WS payload and persistence contracts |
 
 ---
 

@@ -23,6 +23,7 @@ const requestTuningFallbacks: RequestTuning = {
   websocketFailureOpenDurationMs: 30_000,
   rateLimitCooldownSeconds: 60,
   openaiLocationOverrideEnabled: false,
+  openaiRequestLocation: null,
   maxWaitingPerKey: 0,
   keyConcurrencyWaitTimeoutSeconds: 30,
   accountBusyWaitEnabled: false,
@@ -196,7 +197,12 @@ export function useSettingsForm() {
         usageRetentionDays: form.usageRetentionDays,
         opsEventRetentionDays: form.opsEventRetentionDays,
         auditRetentionDays: form.auditRetentionDays,
-        requestTuning: { ...form.requestTuning },
+        requestTuning: {
+          ...form.requestTuning,
+          openaiRequestLocation: form.requestTuning.openaiRequestLocation
+            ? { ...form.requestTuning.openaiRequestLocation }
+            : null,
+        },
       })
       applySettings(result)
       toast.success('设置已保存')

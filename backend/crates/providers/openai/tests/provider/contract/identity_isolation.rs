@@ -101,6 +101,126 @@ fn scoped_context(request_id: &str, client_key: &str, account: &str) -> AttemptC
     )
 }
 
+#[tokio::test]
+async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() {
+    use gateway_core::account::RequestLocation;
+    const ACCOUNT: &str = "acct_proxy_location";
+    let global = RequestLocation {
+        country: "US".into(),
+        region: "California".into(),
+        city: "Los Angeles".into(),
+        timezone: chrono_tz::America::Los_Angeles,
+    };
+    let proxy = RequestLocation {
+        country: "JP".into(),
+        region: "Tokyo".into(),
+        city: "Tokyo".into(),
+        timezone: chrono_tz::Asia::Tokyo,
+    };
+    for websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, ACCOUNT).await;
+        let mut identities = Vec::new();
+        for (enabled, proxy_location, global_location, expected) in [
+            (false, Some(proxy.clone()), Some(global.clone()), "London"),
+            (true, None, None, "Auckland"),
+            (true, None, Some(global.clone()), "Los Angeles"),
+            (true, Some(proxy.clone()), Some(global.clone()), "Tokyo"),
+        ] {
+            store.set_request_location(ACCOUNT, proxy_location);
+            let http = MockServer::start().await;
+            let (url, ws_server) = if websocket {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut socket = accept_codex_test_websocket(socket).await;
+                    let frame = socket.next().await.unwrap().unwrap();
+                    let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                    super::generate_compat::send_completion(&mut socket, "resp_location").await;
+                    body
+                });
+                (url, Some(server))
+            } else {
+                Mock::given(method("POST"))
+                    .and(path("/codex/responses"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .insert_header("content-type", "text/event-stream")
+                            .set_body_string(CAPTURE_COMPLETED_SSE),
+                    )
+                    .expect(1)
+                    .mount(&http)
+                    .await;
+                (http.uri(), None)
+            };
+            // No explicit thread/cache key: exercise CPR's content fallback.
+            let body = json!({
+                "model":"gpt-5.4", "input":"same unmarked question",
+                "prompt_cache_retention":"24h",
+                "tools":[{"type":"web_search","user_location":{"city":"London","timezone":"Europe/London"}}]
+            });
+            let request = GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(Map::from_iter([("use_websocket".into(), json!(websocket))])),
+            );
+            let request_context = RequestAttemptContext::new(
+                ModelRequestId::new("req_proxy_location").unwrap(),
+                ClientApiKeyId::new("key-proxy-location").unwrap(),
+            )
+            .with_request_location(global_location);
+            let context = AttemptContext::new(
+                request_context,
+                NonZeroU32::new(1).unwrap(),
+                SystemTime::now() + Duration::from_secs(30),
+                account_policy(),
+                AccountAttemptContext::diagnostic(
+                    BTreeSet::new(),
+                    ProviderAccountId::new(ACCOUNT).unwrap(),
+                    None,
+                ),
+                None,
+                CancellationToken::new(),
+            )
+            .with_request_tuning(gateway_core::routing::RequestTuning {
+                openai_location_override_enabled: enabled,
+                ..Default::default()
+            });
+            consume_identity_request(&qx_provider(&store, url), request, context).await;
+            let captured = if let Some(server) = ws_server {
+                timeout(Duration::from_secs(5), server)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            } else {
+                let requests = http.received_requests().await.unwrap();
+                let body = captured_request_body(&requests[0]);
+                assert_eq!(
+                    body["client_metadata"]["x-codex-installation-id"],
+                    requests[0].headers["x-codex-installation-id"]
+                        .to_str()
+                        .unwrap()
+                );
+                body
+            };
+            assert_eq!(captured["tools"][0]["user_location"]["city"], expected);
+            assert!(captured.get("prompt_cache_retention").is_none());
+            assert_eq!(
+                captured["client_metadata"]["x-codex-installation-id"],
+                captured["client_metadata"]["installation_id"]
+            );
+            assert!(captured["client_metadata"]["installation_id"].is_string());
+            if enabled {
+                identities.push(captured["prompt_cache_key"].clone());
+            }
+        }
+        // Enabling the pre-existing overwrite policy may change an unmarked key;
+        // new runtime and proxy overrides must not introduce further changes.
+        assert!(identities.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+}
+
 fn qx_provider(store: &Arc<MemoryAccountStore>, url: String) -> CodexProvider {
     let selected = wire_profile().snapshot();
     provider_and_quota_with_profile(

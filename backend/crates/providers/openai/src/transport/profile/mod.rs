@@ -41,26 +41,7 @@ pub enum CodexResidency {
     Us,
 }
 
-/// 环境上下文与 Web Search 共用的请求地区画像。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CodexRequestLocation {
-    pub country: String,
-    pub region: String,
-    pub city: String,
-    pub timezone: chrono_tz::Tz,
-}
-
-impl Default for CodexRequestLocation {
-    fn default() -> Self {
-        Self {
-            country: "US".to_owned(),
-            region: "Ohio".to_owned(),
-            city: "Piketon".to_owned(),
-            timezone: chrono_tz::America::New_York,
-        }
-    }
-}
+pub use gateway_core::account::RequestLocation as CodexRequestLocation;
 
 /// Codex 上游请求身份。
 ///

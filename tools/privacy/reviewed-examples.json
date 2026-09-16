@@ -1,5 +1,101 @@
 [
   {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 223,
+    "file_sha256": "6672c5871bc1261f211d1a9be07ecf93f370a659af6f34a36a33e5ac052e60e4",
+    "line_sha256": "a64a4ebd4745816bca847998941cb69d613488075fddc35523e9618944445362",
+    "reason": "Re-reviewed unchanged synthetic proxy probe fixture after adding request location API contracts; line content matches the previously reviewed fixture."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 274,
+    "file_sha256": "6672c5871bc1261f211d1a9be07ecf93f370a659af6f34a36a33e5ac052e60e4",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Re-reviewed unchanged synthetic credential preservation and redaction fixture; request location tests only moved its position."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 473,
+    "file_sha256": "6672c5871bc1261f211d1a9be07ecf93f370a659af6f34a36a33e5ac052e60e4",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed unchanged synthetic unsaved proxy probe fixture; no real network endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 506,
+    "file_sha256": "6672c5871bc1261f211d1a9be07ecf93f370a659af6f34a36a33e5ac052e60e4",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed unchanged synthetic probe fixture asserting saved connection isolation; line content matches the prior review."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1731,
+    "file_sha256": "415704afb867b254689ad8b59fd277f604477589494901f6119730454dfca35a",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Re-reviewed unchanged synthetic loopback proxy fixture after adding optional location fields to test setup."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1757,
+    "file_sha256": "415704afb867b254689ad8b59fd277f604477589494901f6119730454dfca35a",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Re-reviewed unchanged normalized loopback proxy assertion; credential preservation and audit redaction assertions remain unchanged."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 231,
+    "file_sha256": "6c345330866f3823ed56fae1e6f261f9c3f7cf89de3edf36c221a00f99f353d2",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Re-reviewed unchanged synthetic batch-update proxy fixture after adding isolated location persistence tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 335,
+    "file_sha256": "6c345330866f3823ed56fae1e6f261f9c3f7cf89de3edf36c221a00f99f353d2",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Re-reviewed unchanged synthetic account removal proxy fixture; no actual deployment connection."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 742,
+    "file_sha256": "6c345330866f3823ed56fae1e6f261f9c3f7cf89de3edf36c221a00f99f353d2",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Re-reviewed unchanged managed proxy fixture using synthetic credentials; location additions changed only the surrounding file."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 899,
+    "file_sha256": "6c345330866f3823ed56fae1e6f261f9c3f7cf89de3edf36c221a00f99f353d2",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Re-reviewed unchanged synthetic legacy proxy import fixture; original line hash remains identical."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 967,
+    "file_sha256": "6c345330866f3823ed56fae1e6f261f9c3f7cf89de3edf36c221a00f99f353d2",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Re-reviewed unchanged synthetic migration backfill credential assertion; original migration and fixture values remain unchanged."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4041,
+    "file_sha256": "afae3e4617806a221ba8c017a8940160a101541406d34f49d72d6fb3aad8f344",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Re-reviewed unchanged synthetic Windows Unicode workspace fixture for ASCII WebSocket metadata preservation; installation ID assertions changed elsewhere."
+  },
+  {
     "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
     "rule": "authenticated-url",
     "line": 1731,
