@@ -24,6 +24,11 @@ TOKEN = "gh" + "p_" + ("aB9qX4vN8rT2mK7sP5wE1yH6uC3dF0jL9zR2")
 
 
 class ContentTests(unittest.TestCase):
+    def test_github_merge_identity_is_public_but_other_mailboxes_are_not(self):
+        self.assertEqual(guard.identity_findings("commit", "GitHub <noreply@github.com>"), [])
+        self.assertTrue(guard.identity_findings("commit", "User <person@github.com>"))
+        self.assertTrue(guard.identity_findings("commit", "User <noreply@notgithub.com>"))
+
     def reviewed(self, data, rule="authenticated-url"):
         return [{
             "path": "README.md", "line": 1, "rule": rule,

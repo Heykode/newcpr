@@ -197,7 +197,11 @@ def tree_entries(ref):
 
 def identity_findings(label, value):
     addresses = EMAIL.findall(value)
-    if not addresses or any(a.rpartition("@")[2].lower() not in POLICY["public_email_domains"] for a in addresses):
+    if not addresses or any(
+        a.lower() != "noreply@github.com"
+        and a.rpartition("@")[2].lower() not in POLICY["public_email_domains"]
+        for a in addresses
+    ):
         return [Finding(label, 0, "non-public-git-email")]
     return []
 
