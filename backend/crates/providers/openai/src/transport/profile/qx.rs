@@ -1,8 +1,6 @@
-//! Explicit CLI identity for the QX v1.1.26 compatibility transport.
+//! Supported CLI UA grammar, independent of transport.
 
-use super::{
-    CodexApplicationProfile, CodexTlsProfile, CodexWireProfile, CodexWireProfileError, safe_token,
-};
+use super::{CodexWireProfile, CodexWireProfileError, safe_token};
 
 pub const DEFAULT_USER_AGENT: &str = "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color";
 
@@ -69,8 +67,6 @@ pub(super) fn parse(
         return Err(CodexWireProfileError::Incoherent);
     }
     Ok(CodexWireProfile {
-        tls_profile: CodexTlsProfile::QxCompatible,
-        application_profile: CodexApplicationProfile::QxCompatible,
         raw_user_agent: Some(value.to_owned()),
         originator: originator.to_owned(),
         codex_version: version.to_owned(),

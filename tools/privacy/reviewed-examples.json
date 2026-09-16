@@ -1,5 +1,101 @@
 [
   {
+    "path": ".trellis/spec/backend/client-continuity.md",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 471,
+    "file_sha256": "d0df17ffd7dfe789eac0e76f44ed43c6ce7af9e09f24d67db1bca5553dc31445",
+    "line_sha256": "a9fdc16760660f57b4c9be59b1899df03c1a43a7d1a3e526f2d314ead033da69",
+    "reason": "Unchanged reviewed Rust test identifier reference after the unified profile documentation update."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 72,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "e08f3e5adfbd37e055a284d9e81db7a0ca0b59c809eb7c60cd2f91ebc8cb95f9",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 382,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "866aaa0977c3b9fa9b43fe03981074ea2d58b2b0eefb046ffd37628fb4fe5f05",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 417,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "9de12eaf8ba8b0e4858b4328471402834f850fcf52eeb8962f910183467f1026",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 533,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4007,
+    "file_sha256": "c83935d3d9dd6dc9ced2fb3098decb57976deecdc5d4c40acab531904d02c675",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Unchanged reviewed synthetic escaped Windows Unicode path asserting exact JSON preservation."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/headers.rs",
+    "rule": "non-example-ip",
+    "line": 14,
+    "file_sha256": "b90d4c469a891848af26decb51ad331cc2dc901ca530c978110e1b178f010074",
+    "line_sha256": "588cd1db9d80d264c927db295a3eba023dbb7a8a1addbc5c814ed3ce29390a15",
+    "reason": "Unchanged reviewed synthetic forwarding-header fixture, not a deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/native_http.rs",
+    "rule": "authenticated-url",
+    "line": 316,
+    "file_sha256": "f3bc9ef24f9b4114f29d404f474fe190dfdafac9987b6096f0f90a47a522b856",
+    "line_sha256": "d5cc4ba3c169b4bdc4ae0ec5e3282cfd72911982fd699b7966866794bae482c1",
+    "reason": "Unchanged reviewed synthetic proxy credentials for an isolated local proxy fixture."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/qx_profile.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 545,
+    "file_sha256": "95dd7bde1f67544cf3cdc42fa744b6223932922b2b47293f3854ecc97fe71e4f",
+    "line_sha256": "16b6bf8f4b891653b34ba0e09099c50c327b08529312b5a079a93b518bc73c77",
+    "reason": "Unchanged reviewed Rust test function identifier, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 147,
+    "file_sha256": "02af9156f47600ed5ea787f77492cad39c01e29904ee1cf0ea5fb3a2fb5ad2fe",
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "reason": "Unchanged reviewed Rust test function identifier, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 250,
+    "file_sha256": "02af9156f47600ed5ea787f77492cad39c01e29904ee1cf0ea5fb3a2fb5ad2fe",
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "reason": "Unchanged reviewed synthetic proxy URL in isolated TLS fixture."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 431,
+    "file_sha256": "02af9156f47600ed5ea787f77492cad39c01e29904ee1cf0ea5fb3a2fb5ad2fe",
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "reason": "Unchanged reviewed Rust test function identifier, not a CPR credential."
+  },
+  {
     "path": ".github/actions/verify-container/action.yml",
     "rule": "non-example-ip",
     "line": 25,

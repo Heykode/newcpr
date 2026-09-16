@@ -10,8 +10,8 @@ fn qx_profile() -> provider_openai::transport::profile::CodexWireProfileState {
     let profile = provider_openai::OpenAiConfig::default().wire_profile_state();
     profile
         .apply_user_agent_override(
-            &gateway_core::provider_ports::ProviderUserAgentOverride::QxCompatible {
-                user_agent: None,
+            &gateway_core::provider_ports::ProviderUserAgentOverride::Custom {
+                user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
             },
         )
         .expect("QX-compatible profile");
@@ -23,11 +23,13 @@ fn native_client(
     profile: provider_openai::transport::profile::CodexWireProfileState,
 ) -> OpenAiTokenClient {
     OpenAiTokenClient::new(
-        reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap(),
+        provider_openai::transport::tls::build_reqwest_native_client_with_custom_ca(
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(30)),
+        )
+        .unwrap(),
         TokenClientConfig {
             client_id: "test-public-client".to_owned(),
             token_endpoint: endpoint,
@@ -58,7 +60,7 @@ fn code_grant() -> AuthorizationCodeGrant {
 }
 
 #[tokio::test]
-async fn native_token_routes_keep_explicit_proxies_and_qx_auth_headers() {
+async fn unified_token_routes_keep_proxies_and_bare_authorization_code_form() {
     let origin = MockServer::start().await;
     let profile = qx_profile();
     let client = native_client(format!("{}/oauth/token", origin.uri()), profile.clone());
@@ -109,7 +111,7 @@ async fn native_token_routes_keep_explicit_proxies_and_qx_auth_headers() {
             3,
             "PAT must not trigger an extra token refresh"
         );
-        for index in [0, 1, 2] {
+        for index in [0, 2] {
             assert_eq!(
                 requests[index].headers["user-agent"],
                 profile.snapshot().user_agent()
@@ -128,7 +130,13 @@ async fn native_token_routes_keep_explicit_proxies_and_qx_auth_headers() {
             requests[1].headers["content-type"],
             "application/x-www-form-urlencoded"
         );
-        for name in ["version", "authorization", "chatgpt-account-id"] {
+        for name in [
+            "user-agent",
+            "originator",
+            "version",
+            "authorization",
+            "chatgpt-account-id",
+        ] {
             assert!(
                 !requests[1].headers.contains_key(name),
                 "QX auth exchange: {name}"
@@ -139,13 +147,14 @@ async fn native_token_routes_keep_explicit_proxies_and_qx_auth_headers() {
 }
 
 #[tokio::test]
-async fn native_selection_does_not_infer_private_reqwest_proxy_and_cpr_keeps_original_client() {
+async fn ua_selection_keeps_the_original_http_client_and_proxy() {
     let origin = MockServer::start().await;
     let legacy_proxy = MockServer::start().await;
-    for server in [&origin, &legacy_proxy] {
+    {
+        let server = &legacy_proxy;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-            .expect(1)
+            .expect(2)
             .mount(server)
             .await;
     }
@@ -163,24 +172,22 @@ async fn native_selection_does_not_infer_private_reqwest_proxy_and_cpr_keeps_ori
         profile.clone(),
     );
     client.refresh("synthetic-refresh").await.unwrap();
-    assert_eq!(origin.received_requests().await.unwrap().len(), 1);
-    assert!(legacy_proxy.received_requests().await.unwrap().is_empty());
+    assert!(origin.received_requests().await.unwrap().is_empty());
+    assert_eq!(legacy_proxy.received_requests().await.unwrap().len(), 1);
     profile
         .apply_user_agent_override(
             &gateway_core::provider_ports::ProviderUserAgentOverride::Default,
         )
         .unwrap();
     client.refresh("synthetic-refresh").await.unwrap();
-    assert_eq!(legacy_proxy.received_requests().await.unwrap().len(), 1);
+    assert_eq!(legacy_proxy.received_requests().await.unwrap().len(), 2);
+    assert!(origin.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn native_configuration_failure_is_not_a_retryable_refresh() {
     let origin = MockServer::start().await;
-    let client = native_client(
-        format!("{}/oauth/token?{}", origin.uri(), "x".repeat(8192)),
-        qx_profile(),
-    );
+    let client = native_client("invalid URL".to_owned(), qx_profile());
     let error = client.refresh("synthetic-refresh").await.unwrap_err();
     assert!(matches!(
         error,

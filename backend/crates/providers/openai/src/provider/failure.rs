@@ -720,7 +720,6 @@ pub(super) fn stream_transport_allows_pre_delivery_retry(error: &CodexClientErro
     match error {
         CodexClientError::Http(_)
         | CodexClientError::HttpJson(_)
-        | CodexClientError::NativeHttp { .. }
         | CodexClientError::ErrorBodyRead { .. }
         | CodexClientError::StreamIdleTimeout { .. } => true,
         CodexClientError::WebSocket(error) => {
@@ -849,27 +848,6 @@ pub(super) fn map_client_error(
             }
             MappedProviderFailure::plain(error)
         }
-        CodexClientError::NativeHttp { source, .. } => {
-            use crate::transport::native_tls::NativeTransportError;
-            let send_state = if matches!(
-                source,
-                NativeTransportError::Configuration { .. } | NativeTransportError::Connect { .. }
-            ) {
-                UpstreamSendState::NotSent
-            } else {
-                uncertain_state
-            };
-            MappedProviderFailure::plain(provider_error(
-                if source.is_timeout() {
-                    ProviderErrorKind::Timeout
-                } else if matches!(source, NativeTransportError::Configuration { .. }) {
-                    ProviderErrorKind::Protocol
-                } else {
-                    ProviderErrorKind::Transport
-                },
-                send_state,
-            ))
-        }
         CodexClientError::Http(error) | CodexClientError::HttpJson(error) => {
             let send_state = if error.is_connect() {
                 UpstreamSendState::NotSent
@@ -987,23 +965,6 @@ pub(super) fn map_client_error(
 /// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display。
 fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
-        CodexClientError::NativeHttp { source, .. } => {
-            use crate::transport::native_tls::NativeTransportError;
-            let (stage, code) = match source {
-                NativeTransportError::Configuration { .. } => ("prepare", "native_configuration"),
-                NativeTransportError::Connect { timeout: true, .. } => {
-                    ("connect", "native_connect_timeout")
-                }
-                NativeTransportError::Connect { .. } => ("connect", "native_connect_failed"),
-                NativeTransportError::Request { timeout: true, .. } => {
-                    ("exchange", "native_timeout")
-                }
-                NativeTransportError::Request { .. } => ("exchange", "native_request_failed"),
-            };
-            return Some(
-                ProviderDiagnostic::new(source.to_string()).with_classification(stage, code),
-            );
-        }
         CodexClientError::WebSocket(error) => return Some(websocket_diagnostic(error)),
         CodexClientError::ErrorBodyRead { status, source, .. } => {
             return Some(

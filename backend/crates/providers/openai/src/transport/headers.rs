@@ -218,9 +218,7 @@ impl CodexBackendClient {
                 headers.append(name.clone(), value.clone());
             }
         }
-        if profile.application_profile == super::profile::CodexApplicationProfile::QxCompatible {
-            super::qx_application::apply_response_headers(&mut headers, request, context)?;
-        }
+        super::qx_application::apply_response_headers(&mut headers, request, context)?;
         Ok(headers)
     }
 }

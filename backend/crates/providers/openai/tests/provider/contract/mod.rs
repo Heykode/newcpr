@@ -136,8 +136,6 @@ fn selected_account_log_fields<'events>(
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        tls_profile: provider_openai::transport::profile::CodexTlsProfile::Cpr,
-        application_profile: provider_openai::transport::profile::CodexApplicationProfile::Native,
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -973,8 +971,19 @@ async fn capture_http_request(stream: &mut TcpStream) -> Vec<u8> {
             return request;
         }
         request.extend_from_slice(&buffer[..read]);
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            return request;
+        if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            let headers = std::str::from_utf8(&request[..end]).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            if request.len() >= end + 4 + length {
+                return request;
+            }
         }
     }
 }
@@ -2377,7 +2386,7 @@ async fn websocket_fast_path_miss_uses_http_and_keeps_background_preconnect() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     let mut second = provider
         .execute(
-            planned_request("openai", operation("thread-websocket-reuse")),
+            planned_request("openai", operation("thread-http-fallback")),
             context("req_background_ws_reuse", CancellationToken::new()),
         )
         .await
@@ -3777,10 +3786,13 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
 
     assert!(body.get("authorization").is_none());
     assert!(body.get("conversation").is_none());
-    assert_eq!(
-        body.get("conversation_id"),
-        Some(&json!("client-correlation"))
-    );
+    let projected = body["conversation_id"]
+        .as_str()
+        .expect("projected conversation");
+    assert_ne!(projected, "client-correlation");
+    assert!(uuid::Uuid::parse_str(projected).is_ok());
+    assert_eq!(body["prompt_cache_key"], projected);
+    assert_eq!(request.headers["thread-id"], projected);
     assert_eq!(
         body.get("client_metadata"),
         Some(&json!(["future", "shape"]))

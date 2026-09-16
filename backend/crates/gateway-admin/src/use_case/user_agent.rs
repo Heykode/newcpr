@@ -72,8 +72,7 @@ impl DefaultOutboundUserAgentService {
             .store
             .load_user_agent_override(provider_kind)
             .await
-            .map_err(|error| map_store_error(error, "outbound user-agent"))?
-            .normalized();
+            .map_err(|error| map_store_error(error, "outbound user-agent"))?;
         if current.selection != selection {
             provider
                 .apply_outbound_user_agent(selection)
@@ -97,10 +96,9 @@ impl OutboundUserAgentService for DefaultOutboundUserAgentService {
         provider: &ProviderKind,
         selection: &ProviderUserAgentOverride,
     ) -> Result<OutboundUserAgentView, AdminError> {
-        let selection = selection.clone().normalized();
         self.providers
             .require(provider)
-            .and_then(|provider| provider.preview_outbound_user_agent(&selection))
+            .and_then(|provider| provider.preview_outbound_user_agent(selection))
             .map_err(|error| map_provider_error(error, "outbound user-agent"))
     }
 
@@ -112,7 +110,6 @@ impl OutboundUserAgentService for DefaultOutboundUserAgentService {
     ) -> Result<OutboundUserAgentView, AdminError> {
         // Serialize commit/publication so an older admin save cannot overtake a newer one.
         let _mutation = self.mutation.lock().await;
-        let selection = selection.normalized();
         let provider = self
             .providers
             .require(provider_kind)

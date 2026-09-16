@@ -101,13 +101,7 @@ impl CodexBackendClient {
         // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
         // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求。
         let mut upstream_body = upstream_request.body().clone();
-        if profile.application_profile == super::profile::CodexApplicationProfile::QxCompatible {
-            super::qx_application::project_response_body(
-                &mut upstream_body,
-                upstream_request,
-                context,
-            );
-        }
+        super::qx_application::project_response_body(&mut upstream_body, upstream_request, context);
         normalize_generate_upstream_body(&mut upstream_body);
         upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
         upstream_body
@@ -293,14 +287,11 @@ impl CodexBackendClient {
             });
         }
 
-        let mut websocket_request = websocket_upstream_request(request);
-        if self.profile.snapshot().application_profile
-            == super::profile::CodexApplicationProfile::QxCompatible
-        {
-            // Preserve the original seed for the subsequent opening-header projection too.
-            websocket_request =
-                super::qx_application::project_response_request(&websocket_request, context);
-        }
+        // Preserve the original seed for the subsequent opening-header projection too.
+        let websocket_request = super::qx_application::project_response_request(
+            &websocket_upstream_request(request),
+            context,
+        );
         let headers = self.request_headers_for_websocket_response(&websocket_request, context)?;
         let mut websocket_create = CodexWebSocketConnection::responses_create_request(
             &self.base_url,
@@ -310,7 +301,6 @@ impl CodexBackendClient {
         )
         .map_err(CodexClientError::WebSocketEncode)?;
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
-        websocket_create.connection.tls_profile = self.profile.snapshot().tls_profile;
         websocket_create.connection.egress_source =
             self.egress_route.as_ref().map(|route| route.source);
         context.trace.cloned().unwrap_or_default().headers(
@@ -334,7 +324,7 @@ impl CodexBackendClient {
                 tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
             }
         }
-        let connection_profile = websocket_connection_profile(&headers, &self.profile.snapshot());
+        let connection_profile = websocket_connection_profile(&headers);
         let pool_key =
             self.websocket_pool_key(request, context, pool_account_id, &connection_profile);
         let pool_log_context = pool_key.as_ref().map(WebSocketPoolLogContext::from_key);
@@ -483,7 +473,7 @@ impl CodexBackendClient {
             return Ok(());
         }
         let headers = self.request_headers_for_websocket_response(request, context)?;
-        let profile_key = websocket_connection_profile(&headers, &self.profile.snapshot());
+        let profile_key = websocket_connection_profile(&headers);
         let original_key = self.websocket_pool_key(request, context, pool_account_id, &profile_key);
         let exact =
             transport_requirement(request) == TransportRequirement::ExactWebSocketContinuation;
@@ -784,10 +774,7 @@ async fn read_model_catalog_body(response: ReqwestResponse) -> CodexClientResult
     Ok(body)
 }
 
-fn websocket_connection_profile(
-    headers: &HeaderMap,
-    profile: &super::profile::CodexWireProfile,
-) -> String {
+fn websocket_connection_profile(headers: &HeaderMap) -> String {
     let identity = ["originator", "user-agent", X_OPENAI_MEMGEN_REQUEST_HEADER]
         .map(|name| {
             headers
@@ -796,26 +783,17 @@ fn websocket_connection_profile(
                 .unwrap_or_default()
         })
         .join("\0");
-    let identity = match profile.tls_profile {
-        super::profile::CodexTlsProfile::Cpr => identity,
-        super::profile::CodexTlsProfile::QxCompatible => format!("qx-compatible\0{identity}"),
-    };
-    match profile.application_profile {
-        super::profile::CodexApplicationProfile::Native => identity,
-        super::profile::CodexApplicationProfile::QxCompatible => {
-            // Opening headers cannot change on a reused socket. Independent threads
-            // need their own opening; exact continuations still resolve the old owner.
-            let session = headers
-                .get("session-id")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or_default();
-            let thread = headers
-                .get("thread-id")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or_default();
-            format!("qx-session-v1\0{identity}\0{session}\0{thread}")
-        }
-    }
+    // Opening headers are immutable. Separate threads cannot share their opening;
+    // exact continuations still resolve the original owner.
+    let session = headers
+        .get("session-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let thread = headers
+        .get("thread-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    format!("qx-session-v1\0{identity}\0{session}\0{thread}")
 }
 
 fn http_sse_stream(

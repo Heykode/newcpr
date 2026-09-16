@@ -2,9 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use gateway_admin::model::user_agent::{
-    OutboundUserAgentView, ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride,
-};
+use gateway_admin::model::user_agent::{OutboundUserAgentView, ProviderUserAgentOverride};
 use gateway_api::admin::outbound_user_agent::{self, UpdateOutboundUserAgentRequest};
 use serde_json::json;
 use tower::ServiceExt;
@@ -36,48 +34,33 @@ fn outbound_ua_wire_requires_explicit_mode_and_rejects_unknown_fields() {
 }
 
 #[test]
-fn qx_wire_normalizes_absent_null_and_blank_without_inferring_mode_from_ua() {
+fn retired_modes_are_rejected_and_custom_ua_is_preserved() {
     for value in [
         json!({"mode": "qx-compatible"}),
         json!({"mode": "qx-compatible", "userAgent": null}),
         json!({"mode": "qx-compatible", "userAgent": ""}),
         json!({"mode": "qx-compatible", "userAgent": "   "}),
     ] {
-        let request: UpdateOutboundUserAgentRequest = serde_json::from_value(value).unwrap();
-        assert_eq!(
-            ProviderUserAgentOverride::from(request),
-            ProviderUserAgentOverride::QxCompatible { user_agent: None }
-        );
+        assert!(serde_json::from_value::<UpdateOutboundUserAgentRequest>(value).is_err());
     }
     let raw = "codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown";
-    for mode in ["custom", "qx-compatible"] {
-        let request: UpdateOutboundUserAgentRequest =
-            serde_json::from_value(json!({"mode": mode, "userAgent": raw})).unwrap();
-        let expected = if mode == "custom" {
-            ProviderUserAgentOverride::Custom {
-                user_agent: raw.to_owned(),
-            }
-        } else {
-            ProviderUserAgentOverride::QxCompatible {
-                user_agent: Some(raw.to_owned()),
-            }
-        };
-        assert_eq!(ProviderUserAgentOverride::from(request), expected);
-    }
+    let request: UpdateOutboundUserAgentRequest =
+        serde_json::from_value(json!({"mode": "custom", "userAgent": raw})).unwrap();
+    let expected = ProviderUserAgentOverride::Custom {
+        user_agent: raw.to_owned(),
+    };
+    assert_eq!(ProviderUserAgentOverride::from(request), expected);
 }
 
 #[test]
-fn qx_view_serializes_explicit_mode_and_optional_override() {
-    for user_agent in [None, Some("custom-cli".to_owned())] {
+fn custom_view_does_not_emit_retired_transport_choices() {
+    for user_agent in ["custom-cli".to_owned(), "custom-desktop".to_owned()] {
         let view = OutboundUserAgentView {
-            selection: ProviderUserAgentOverride::QxCompatible {
+            selection: ProviderUserAgentOverride::Custom {
                 user_agent: user_agent.clone(),
             },
             default_user_agent: "default-desktop".to_owned(),
-            qx_default_user_agent: "default-cli".to_owned(),
-            effective_user_agent: user_agent
-                .clone()
-                .unwrap_or_else(|| "default-cli".to_owned()),
+            effective_user_agent: user_agent.clone(),
             effective_desktop_user_agent: "desktop-surface".to_owned(),
             core_version: "0.146.0".to_owned(),
             desktop_version: "26.803.81509".to_owned(),
@@ -92,9 +75,11 @@ fn qx_view_serializes_explicit_mode_and_optional_override() {
             view,
         ))
         .unwrap();
-        assert_eq!(wire["mode"], "qx-compatible");
+        assert_eq!(wire["mode"], "custom");
         assert_eq!(wire["customUserAgent"], json!(user_agent));
-        assert_eq!(wire["qxDefaultUserAgent"], "default-cli");
+        for removed in ["qxDefaultUserAgent", "tlsProfile", "sessionPolicy"] {
+            assert!(wire.get(removed).is_none());
+        }
         assert_eq!(wire["effectiveDesktopUserAgent"], "desktop-surface");
         assert_eq!(wire["verified"], false);
     }
@@ -126,32 +111,20 @@ async fn outbound_ua_read_preview_and_save_require_admin_authentication() {
 }
 
 #[test]
-fn independent_wire_requires_both_choices_and_preserves_null_or_exact_custom_ua() {
+fn independent_wire_is_no_longer_a_live_configuration_mode() {
     for user_agent in [
         None,
         Some("codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color"),
     ] {
-        for tls_profile in [ProviderTlsProfile::Cpr, ProviderTlsProfile::QxCompatible] {
-            for session_policy in [
-                ProviderSessionPolicy::Native,
-                ProviderSessionPolicy::QxCompatible,
-            ] {
+        for tls_profile in ["cpr", "qx-compatible"] {
+            for session_policy in ["native", "qx-compatible"] {
                 let wire = json!({
                     "mode": "independent",
                     "userAgent": user_agent,
-                    "tlsProfile": tls_profile.as_str(),
-                    "sessionPolicy": session_policy.as_str(),
+                    "tlsProfile": tls_profile,
+                    "sessionPolicy": session_policy,
                 });
-                let decoded =
-                    serde_json::from_value::<UpdateOutboundUserAgentRequest>(wire).unwrap();
-                assert_eq!(
-                    ProviderUserAgentOverride::from(decoded),
-                    ProviderUserAgentOverride::Independent {
-                        user_agent: user_agent.map(str::to_owned),
-                        tls_profile,
-                        session_policy,
-                    }
-                );
+                assert!(serde_json::from_value::<UpdateOutboundUserAgentRequest>(wire).is_err());
             }
         }
     }
@@ -179,16 +152,15 @@ fn independent_wire_requires_both_choices_and_preserves_null_or_exact_custom_ua(
 }
 
 #[test]
-fn independent_view_includes_atomic_tls_and_session_choices_without_ua_inference() {
+fn default_and_custom_views_keep_explicit_ua_selection() {
     for user_agent in [None, Some("desktop-ua".to_owned())] {
         let view = OutboundUserAgentView {
-            selection: ProviderUserAgentOverride::Independent {
-                user_agent: user_agent.clone(),
-                tls_profile: ProviderTlsProfile::QxCompatible,
-                session_policy: ProviderSessionPolicy::Native,
-            },
+            selection: user_agent
+                .clone()
+                .map_or(ProviderUserAgentOverride::Default, |user_agent| {
+                    ProviderUserAgentOverride::Custom { user_agent }
+                }),
             default_user_agent: "default-desktop".to_owned(),
-            qx_default_user_agent: "default-cli".to_owned(),
             effective_user_agent: user_agent
                 .clone()
                 .unwrap_or_else(|| "default-desktop".to_owned()),
@@ -206,10 +178,17 @@ fn independent_view_includes_atomic_tls_and_session_choices_without_ua_inference
             view,
         ))
         .unwrap();
-        assert_eq!(wire["mode"], "independent");
+        assert_eq!(
+            wire["mode"],
+            if user_agent.is_some() {
+                "custom"
+            } else {
+                "default"
+            }
+        );
         assert_eq!(wire["customUserAgent"], json!(user_agent));
-        assert_eq!(wire["tlsProfile"], "qx-compatible");
-        assert_eq!(wire["sessionPolicy"], "native");
+        assert!(wire.get("tlsProfile").is_none());
+        assert!(wire.get("sessionPolicy").is_none());
         assert_eq!(wire["verified"], false);
     }
 }

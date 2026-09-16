@@ -563,12 +563,11 @@ OAuth start 使用：
 
 `GET/POST /api/admin/settings/openai-user-agent` 读取或保存全局出站选择；
 `POST /api/admin/settings/openai-user-agent/preview` 仅校验并预览，不持久化。
-模式为 `default`、`custom`、`qx-compatible`、`independent`。`custom` 必须提供 `userAgent`；
-`qx-compatible` 可省略自定义 UA，使用锁定参考格式。旧请求语义保持不变。
-新界面提交 `independent`，必须同时提供 `tlsProfile`（`cpr`/`qx-compatible`）和
-`sessionPolicy`（`native`/`qx-compatible`）；`userAgent=null` 使用 CPR 默认并自动更新，
+模式为 `default`、`custom`。`custom` 必须提供完整 Desktop/CLI `userAgent`；
+`default` 使用 CPR 默认并自动更新。TLS/session 统一执行，不接受旧
+`qx-compatible`、`independent` 模式及其选择字段。迁移 0018 先备份并转换已有设置，
 非空完整 UA 自动识别 Desktop/CLI，空字符串拒绝。UA、TLS、会话策略不互相推断。
-回读包含 `tlsProfile`、`sessionPolicy`，预览、保存和恢复使用同一完整选择。
+回读不再包含 `tlsProfile`、`sessionPolicy`、`qxDefaultUserAgent`。
 QX 兼容并不表示 TLS 指纹逐项等价；设备档案和精确 WS 续接身份保持原有权威。
 详细格式、分请求类型的边界与回退方式见 [QX 兼容画像](qx-compatible-profile.md)。
 

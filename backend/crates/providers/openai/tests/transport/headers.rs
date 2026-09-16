@@ -355,11 +355,13 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ("x-codex-beta-features", "feature-a"),
         ("x-responsesapi-include-timing-metrics", "true"),
         ("version", "1.2.3"),
-        ("x-codex-window-id", "cw_derived"),
+        ("x-codex-window-id", "cp_derived:0"),
         ("x-codex-parent-thread-id", "parent-456"),
         ("x-openai-subagent", "future_codex_mode"),
         ("x-openai-memgen-request", "true"),
         ("session-id", "cp_derived"),
+        ("session_id", "cp_derived"),
+        ("thread-id", "cp_derived"),
         ("x-codex-installation-id", "install-123"),
     ] {
         assert!(
@@ -373,8 +375,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         "x-openai-internal-codex-residency",
         "accept",
         "content-type",
-        "session_id",
-        "thread-id",
         "x-openai-internal-codex-responses-lite",
     ] {
         assert!(headers.iter().all(|(header, _)| header != forbidden));
@@ -793,6 +793,10 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
         Some("req_protocol_fallback")
     );
     assert_eq!(read_header_value(&raw_request, "version"), Some("1.2.3"));
+    assert_eq!(
+        read_header_value(&raw_request, "x-codex-beta-features"),
+        Some("remote_compaction_v2")
+    );
     for omitted in [
         "session-id",
         "thread-id",
@@ -800,7 +804,6 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
         "x-codex-window-id",
         "x-codex-turn-state",
         "x-codex-turn-metadata",
-        "x-codex-beta-features",
         "x-responsesapi-include-timing-metrics",
         "x-codex-parent-thread-id",
         "x-openai-subagent",

@@ -1,4 +1,4 @@
-//! Account-scoped QX application identity, independent from UA and TLS selection.
+//! Unified account-scoped QX application identity, independent from UA syntax.
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -213,7 +213,7 @@ fn nonblank(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-/// Apply after passthrough, only for the frozen QX-compatible response profile.
+/// Apply after passthrough using the frozen response identity.
 ///
 /// Account/key scoped identities require authority from the Provider. Low-level calls without
 /// that authority retain the original header projection and cannot invent an account identity.

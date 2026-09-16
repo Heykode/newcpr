@@ -133,8 +133,6 @@ impl ProviderArtifactProfileCachePort for ArtifactProfiles {
 #[test]
 fn wire_profile_should_generate_bundled_core_app_server_user_agent() {
     let profile = CodexWireProfile {
-        tls_profile: Default::default(),
-        application_profile: Default::default(),
         raw_user_agent: None,
         originator: "Codex Desktop".to_owned(),
         codex_version: "0.147.0-alpha.6.6".to_owned(),
@@ -345,8 +343,6 @@ fn service(
 
 fn wire_profile() -> CodexWireProfile {
     CodexWireProfile {
-        tls_profile: Default::default(),
-        application_profile: Default::default(),
         raw_user_agent: None,
         originator: "Codex Desktop".to_owned(),
         codex_version: "0.147.0-alpha.6.6".to_owned(),

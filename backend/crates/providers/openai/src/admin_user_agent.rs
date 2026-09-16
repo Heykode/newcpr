@@ -4,8 +4,8 @@ use gateway_admin::model::user_agent::{OutboundUserAgentView, ProviderUserAgentO
 use gateway_admin::ports::provider::{ProviderAdminError, ProviderAdminErrorKind};
 
 use crate::transport::profile::{
-    CodexApplicationProfile, CodexTlsProfile, CodexWireProfileError, CodexWireProfileOverride,
-    CodexWireProfileSettings, CodexWireProfileState,
+    CodexWireProfileError, CodexWireProfileOverride, CodexWireProfileSettings,
+    CodexWireProfileState,
 };
 
 pub(crate) fn current(profile: &CodexWireProfileState) -> OutboundUserAgentView {
@@ -39,32 +39,12 @@ fn view(settings: CodexWireProfileSettings) -> OutboundUserAgentView {
         CodexWireProfileOverride::Custom(profile) => ProviderUserAgentOverride::Custom {
             user_agent: profile.user_agent(),
         },
-        CodexWireProfileOverride::QxCompatible { user_agent, .. } => {
-            ProviderUserAgentOverride::QxCompatible { user_agent }
-        }
-        CodexWireProfileOverride::Independent {
-            profile,
-            user_agent,
-        } => ProviderUserAgentOverride::Independent {
-            user_agent,
-            tls_profile: profile.tls_profile.into(),
-            session_policy: profile.application_profile.into(),
-        },
     };
     let profile = settings.effective_profile;
     OutboundUserAgentView {
-        verified: matches!(
-            selection,
-            ProviderUserAgentOverride::Default
-                | ProviderUserAgentOverride::Independent {
-                    user_agent: None,
-                    ..
-                }
-        ) && profile.tls_profile == CodexTlsProfile::Cpr
-            && profile.application_profile == CodexApplicationProfile::Native,
+        verified: matches!(selection, ProviderUserAgentOverride::Default),
         selection,
         default_user_agent: settings.default_user_agent,
-        qx_default_user_agent: crate::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
         effective_user_agent: settings.effective_user_agent,
         effective_desktop_user_agent: settings.effective_desktop_user_agent,
         core_version: profile.codex_version,

@@ -10,7 +10,6 @@ use crate::transport::protocol::responses::{
 /// WebSocket opening 描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketConnection {
-    pub(crate) tls_profile: crate::transport::profile::CodexTlsProfile,
     pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub(crate) egress_source: Option<Ipv6Addr>,
     pub(super) endpoint: String,
@@ -115,7 +114,6 @@ impl CodexWebSocketConnection {
     /// 构造待打开的 WebSocket 连接描述。
     pub fn new(endpoint: impl Into<String>, headers: Vec<(String, String)>) -> Self {
         Self {
-            tls_profile: crate::transport::profile::CodexTlsProfile::Cpr,
             endpoint: endpoint.into(),
             headers,
             outbound_proxy: None,

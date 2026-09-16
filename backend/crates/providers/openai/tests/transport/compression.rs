@@ -1,9 +1,7 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
-use gateway_core::provider_ports::{
-    ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride,
-};
+use gateway_core::provider_ports::ProviderUserAgentOverride;
 use provider_openai::encode_generate_request;
 use provider_openai::transport::qx_application::project_response_request;
 
@@ -16,14 +14,10 @@ fn compression_context() -> CodexRequestContext<'static> {
     }
 }
 
-fn expected_http_body(request: &CodexResponsesRequest, qx: bool) -> Vec<u8> {
-    let mut body = if qx {
-        project_response_request(request, compression_context())
-            .body()
-            .clone()
-    } else {
-        request.body().clone()
-    };
+fn expected_http_body(request: &CodexResponsesRequest) -> Vec<u8> {
+    let mut body = project_response_request(request, compression_context())
+        .body()
+        .clone();
     body.insert("stream".to_owned(), json!(true));
     body.insert("store".to_owned(), json!(false));
     serde_json::to_vec(&body).unwrap()
@@ -50,10 +44,14 @@ fn compression_request(body: Map<String, Value>) -> CodexResponsesRequest {
 
 #[tokio::test]
 async fn http_compression_threshold_preserves_identity_and_bytes_across_profiles() {
-    for tls_profile in [ProviderTlsProfile::Cpr, ProviderTlsProfile::QxCompatible] {
-        for qx in [false, true] {
-            for size in [1023, 1024, 1025, 8192] {
-                let mut body =
+    for selection in [
+        ProviderUserAgentOverride::Default,
+        ProviderUserAgentOverride::Custom {
+            user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
+        },
+    ] {
+        for size in [1023, 1024, 1025, 8192] {
+            let mut body =
                     json!({
                         "model": "gpt-test",
                         "instructions": "\u{4f60}\u{597d}",
@@ -66,99 +64,84 @@ async fn http_compression_threshold_preserves_identity_and_bytes_across_profiles
                     .as_object()
                     .unwrap()
                     .clone();
-                let request = compression_request(body.clone());
-                let padding = size - expected_http_body(&request, qx).len();
-                body.insert(
-                    "instructions".to_owned(),
-                    json!(format!("\u{4f60}\u{597d}{}", "x".repeat(padding))),
-                );
-                let request = compression_request(body);
-                let expected = expected_http_body(&request, qx);
-                assert_eq!(expected.len(), size);
-                let original = request.body().clone();
+            let request = compression_request(body.clone());
+            let padding = size - expected_http_body(&request).len();
+            body.insert(
+                "instructions".to_owned(),
+                json!(format!("\u{4f60}\u{597d}{}", "x".repeat(padding))),
+            );
+            let request = compression_request(body);
+            let expected = expected_http_body(&request);
+            assert_eq!(expected.len(), size);
+            let original = request.body().clone();
 
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let address = listener.local_addr().unwrap();
-                let server = tokio::spawn(async move {
-                    let (mut stream, _) = listener.accept().await.unwrap();
-                    let raw = read_http_request_with_body(&mut stream).await;
-                    write_completed_sse_response(&mut stream).await;
-                    raw
-                });
-                let profile = test_wire_profile();
-                profile
-                    .apply_user_agent_override(&ProviderUserAgentOverride::Independent {
-                        user_agent: None,
-                        tls_profile,
-                        session_policy: if qx {
-                            ProviderSessionPolicy::QxCompatible
-                        } else {
-                            ProviderSessionPolicy::Native
-                        },
-                    })
-                    .unwrap();
-                let user_agent = profile.snapshot().user_agent();
-                let client = CodexBackendClient::new(
-                    reqwest::Client::builder().no_proxy().build().unwrap(),
-                    format!("http://{address}"),
-                    profile,
-                );
-                let response = timeout(
-                    Duration::from_secs(5),
-                    client.create_response(&request, compression_context()),
-                )
-                .await
-                .expect("bounded threshold response")
-                .expect("valid HTTP response");
-                assert_eq!(response.transport, CodexBackendTransport::HttpSse);
-                assert_eq!(request.body(), &original);
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let raw = read_http_request_with_body(&mut stream).await;
+                write_completed_sse_response(&mut stream).await;
+                raw
+            });
+            let profile = test_wire_profile();
+            profile.apply_user_agent_override(&selection).unwrap();
+            let user_agent = profile.snapshot().user_agent();
+            let client = CodexBackendClient::new(
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                format!("http://{address}"),
+                profile,
+            );
+            let response = timeout(
+                Duration::from_secs(5),
+                client.create_response(&request, compression_context()),
+            )
+            .await
+            .expect("bounded threshold response")
+            .expect("valid HTTP response");
+            assert_eq!(response.transport, CodexBackendTransport::HttpSse);
+            assert_eq!(request.body(), &original);
 
-                let raw = server.await.unwrap();
-                let separator = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
-                let head = std::str::from_utf8(&raw[..separator]).unwrap();
-                let sent = &raw[separator + 4..];
-                let compressed = size >= 1024;
-                assert_eq!(
-                    read_header_value(head, "content-encoding"),
-                    compressed.then_some("zstd"),
-                    "TLS={tls_profile:?}, QX={qx}, size={size}",
-                );
-                assert_eq!(
-                    read_header_value(head, "content-length")
-                        .unwrap()
-                        .parse::<usize>()
-                        .unwrap(),
-                    sent.len(),
-                );
-                let decoded = if compressed {
-                    zstd::stream::decode_all(sent).expect("valid ZSTD frame")
-                } else {
-                    sent.to_vec()
-                };
-                assert_eq!(decoded, expected, "only the content encoding may change");
-                assert_eq!(
-                    read_header_value(head, "user-agent"),
-                    Some(user_agent.as_str())
-                );
-                assert_eq!(
-                    read_header_value(head, "x-codex-installation-id"),
-                    compression_context().installation_id,
-                );
-                assert_eq!(
-                    read_header_value(head, "chatgpt-account-id"),
-                    compression_context().account_id,
-                );
-                let body: Value = serde_json::from_slice(&decoded).unwrap();
-                if qx {
-                    assert_eq!(
-                        body["prompt_cache_key"].as_str(),
-                        read_header_value(head, "thread-id"),
-                    );
-                    assert_ne!(body["prompt_cache_key"], "original-cache");
-                } else {
-                    assert_eq!(body["prompt_cache_key"], "original-cache");
-                }
-            }
+            let raw = server.await.unwrap();
+            let separator = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
+            let head = std::str::from_utf8(&raw[..separator]).unwrap();
+            let sent = &raw[separator + 4..];
+            let compressed = size >= 1024;
+            assert_eq!(
+                read_header_value(head, "content-encoding"),
+                compressed.then_some("zstd"),
+                "selection={selection:?}, size={size}",
+            );
+            assert_eq!(
+                read_header_value(head, "content-length")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap(),
+                sent.len(),
+            );
+            let decoded = if compressed {
+                zstd::stream::decode_all(sent).expect("valid ZSTD frame")
+            } else {
+                sent.to_vec()
+            };
+            assert_eq!(decoded, expected, "only the content encoding may change");
+            assert_eq!(
+                read_header_value(head, "user-agent"),
+                Some(user_agent.as_str())
+            );
+            assert_eq!(
+                read_header_value(head, "x-codex-installation-id"),
+                compression_context().installation_id,
+            );
+            assert_eq!(
+                read_header_value(head, "chatgpt-account-id"),
+                compression_context().account_id,
+            );
+            let body: Value = serde_json::from_slice(&decoded).unwrap();
+            assert_eq!(
+                body["prompt_cache_key"].as_str(),
+                read_header_value(head, "thread-id"),
+            );
+            assert_ne!(body["prompt_cache_key"], "original-cache");
         }
     }
 }

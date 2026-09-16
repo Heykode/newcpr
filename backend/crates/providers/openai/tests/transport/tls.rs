@@ -221,15 +221,14 @@ fn cpr_tls_rejects_plaintext_extensions_across_key_change() {
 }
 
 #[tokio::test]
-async fn cpr_and_qx_https_proxy_verify_both_tls_layers() {
+async fn native_and_rustls_helpers_verify_both_https_proxy_tls_layers() {
     use std::pin::Pin;
 
-    use gateway_core::account::OutboundProxy;
     use openssl::ssl::Ssl;
-    use provider_openai::transport::native_http::{NativeHttpClient, NativeHttpConfig};
     use tokio_openssl::SslStream;
 
-    let trusted = super::native_tls::identity();
+    let root = super::native_tls::ca_identity();
+    let trusted = super::native_tls::identity_signed_by(&root);
     let untrusted = super::native_tls::identity();
     for qx in [false, true] {
         for case in ["valid", "untrusted_proxy", "untrusted_origin"] {
@@ -302,12 +301,11 @@ async fn cpr_and_qx_https_proxy_verify_both_tls_layers() {
                 let client = async {
                     let target = "https://localhost:9443/probe";
                     if qx {
-                        let client = NativeHttpClient::with_tls(
-                            NativeHttpConfig {
-                                proxy: Some(OutboundProxy::parse(&proxy_url).unwrap()),
-                                ..Default::default()
-                            },
-                            super::native_tls::connector(&trusted),
+                        let client = provider_openai::transport::tls::build_reqwest_native_client_with_custom_ca(
+                            reqwest::Client::builder().no_proxy()
+                                .proxy(reqwest::Proxy::all(&proxy_url).unwrap())
+                                .add_root_certificate(reqwest::Certificate::from_der(
+                                    &root.cert.to_der().unwrap()).unwrap()),
                         )
                         .unwrap();
                         let result = client
@@ -316,7 +314,7 @@ async fn cpr_and_qx_https_proxy_verify_both_tls_layers() {
                         if case == "valid" {
                             assert_eq!(result.unwrap().text().await.unwrap(), "ok");
                         } else {
-                            assert!(result.is_err(), "{case}: QX must reject untrusted TLS");
+                            assert!(result.is_err(), "{case}: native HTTP must reject untrusted TLS");
                         }
                     } else {
                         let client = provider_openai::build_reqwest_client_with_custom_ca(
@@ -325,7 +323,7 @@ async fn cpr_and_qx_https_proxy_verify_both_tls_layers() {
                                 .no_proxy()
                                 .proxy(reqwest::Proxy::all(&proxy_url).unwrap())
                                 .add_root_certificate(
-                                    reqwest::Certificate::from_der(&trusted.cert.to_der().unwrap())
+                                    reqwest::Certificate::from_der(&root.cert.to_der().unwrap())
                                         .unwrap(),
                                 ),
                         )
@@ -361,10 +359,8 @@ async fn capture_tls_upgrade_matrix() {
     for route in [
         "cpr_http",
         "cpr_websocket",
-        "qx_http",
-        "qx_websocket",
         "cpr_https_proxy",
-        "qx_https_proxy",
+        "native_https_proxy",
     ] {
         for sample in 0..10 {
             let capture = timeout(Duration::from_secs(10), capture_route(route))
@@ -379,12 +375,6 @@ async fn capture_tls_upgrade_matrix() {
 }
 
 async fn capture_route(route: &str) -> CapturedClientHello {
-    use gateway_core::account::OutboundProxy;
-    use provider_openai::transport::{
-        native_http::{NativeHttpClient, NativeHttpConfig},
-        native_tls::{NativeAlpn, NativeTlsConnector},
-    };
-
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let url = format!("https://localhost:{port}/");
@@ -410,33 +400,15 @@ async fn capture_route(route: &str) -> CapturedClientHello {
                     .is_err()
                 );
             }
-            "qx_http" | "qx_https_proxy" => {
-                let proxy =
-                    (route == "qx_https_proxy").then(|| OutboundProxy::parse(&url).unwrap());
-                let client = NativeHttpClient::new(NativeHttpConfig {
-                    proxy,
-                    ..Default::default()
-                })
-                .unwrap();
-                let target = if route == "qx_https_proxy" {
-                    "http://origin.invalid/"
-                } else {
-                    &url
-                };
-                let request = reqwest::Client::new().get(target).build().unwrap();
-                assert!(client.execute(request).await.is_err());
-            }
-            "qx_websocket" => {
-                let connector = NativeTlsConnector::from_environment().unwrap();
-                let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
-                    .await
+            "native_https_proxy" => {
+                let client =
+                    provider_openai::transport::tls::build_reqwest_native_client_with_custom_ca(
+                        reqwest::Client::builder()
+                            .no_proxy()
+                            .proxy(reqwest::Proxy::all(&url).unwrap()),
+                    )
                     .unwrap();
-                assert!(
-                    connector
-                        .connect(stream, "localhost", NativeAlpn::WebSocket)
-                        .await
-                        .is_err()
-                );
+                assert!(client.get("http://origin.invalid/").send().await.is_err());
             }
             "cpr_https_proxy" => {
                 let client = provider_openai::build_reqwest_client_with_custom_ca(
@@ -579,7 +551,9 @@ async fn http_client_hello_should_match_linked_native_tls_transport() {
             .set_write_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         assert!(
-            ::native_tls::TlsConnector::new()
+            ::native_tls::TlsConnector::builder()
+                .request_alpns(&["h2", "http/1.1"])
+                .build()
                 .unwrap()
                 .connect("localhost", stream)
                 .is_err()
@@ -592,10 +566,7 @@ async fn http_client_hello_should_match_linked_native_tls_transport() {
     .expect("reference native TLS ClientHello within timeout");
     result.unwrap();
     assert_eq!(hello, expected);
-    assert!(
-        hello.alpn.is_empty(),
-        "native HTTP keeps the official no-ALPN policy"
-    );
+    assert_eq!(hello.alpn, ["h2", "http/1.1"]);
 }
 
 #[tokio::test]
@@ -646,95 +617,71 @@ async fn websocket_client_hello_should_match_official_rustls_transport() {
 }
 
 #[tokio::test]
-async fn independently_selected_tls_is_used_for_both_ua_formats_and_session_policies() {
-    use gateway_core::provider_ports::{
-        ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride,
-    };
+async fn unified_transport_keeps_tls_independent_from_custom_ua_format() {
+    use gateway_core::provider_ports::ProviderUserAgentOverride;
     let mut baselines = BTreeMap::new();
-    for tls in [ProviderTlsProfile::Cpr, ProviderTlsProfile::QxCompatible] {
-        for websocket in [false, true] {
-            for user_agent in [
-                "Codex Desktop/0.146.0 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.1)",
-                "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color",
-            ] {
-                for session in [
-                    ProviderSessionPolicy::Native,
-                    ProviderSessionPolicy::QxCompatible,
-                ] {
-                    let profile = test_wire_profile();
-                    profile
-                        .apply_user_agent_override(&ProviderUserAgentOverride::Independent {
-                            user_agent: Some(user_agent.to_owned()),
-                            tls_profile: tls,
-                            session_policy: session,
-                        })
-                        .unwrap();
-                    assert_eq!(profile.snapshot().user_agent(), user_agent);
-                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                    let client = CodexBackendClient::new(
-                        provider_openai::transport::build_reqwest_client().unwrap(),
-                        format!(
-                            "https://localhost:{}",
-                            listener.local_addr().unwrap().port()
+    for websocket in [false, true] {
+        for user_agent in [
+            "Codex Desktop/0.146.0 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.1)",
+            "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color",
+        ] {
+            let profile = test_wire_profile();
+            profile
+                .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+                    user_agent: user_agent.to_owned(),
+                })
+                .unwrap();
+            assert_eq!(profile.snapshot().user_agent(), user_agent);
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let client = CodexBackendClient::new(
+                provider_openai::transport::build_reqwest_client().unwrap(),
+                format!(
+                    "https://localhost:{}",
+                    listener.local_addr().unwrap().port()
+                ),
+                profile,
+            )
+            .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_secs(60))));
+            let mut request = CodexResponsesRequest::from_body(codex_request_body(
+                "gpt-test",
+                "test",
+                vec![json!({"role":"user","content":"hello"})],
+            ));
+            if websocket {
+                request = websocket_only_request(request);
+            } else {
+                request.force_http_sse = true;
+            }
+            let mut hello = timeout(Duration::from_secs(10), async {
+                // Stop after the opening is observed; the rejecting fixture is not a
+                // server for the product's subsequent connection-restart attempts.
+                tokio::select! {
+                    hello = read_client_hello(listener) => hello,
+                    result = client.create_response(
+                        &request, request_context("tls-matrix", Some("tls-test-account"))
+                    ) => match result {
+                        Err(CodexClientError::WebSocket(error)) => panic!(
+                            "request ended before ClientHello: ws={websocket}, {error:?}"
                         ),
-                        profile,
-                    )
-                    .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_secs(
-                        60,
-                    ))));
-                    let mut request = CodexResponsesRequest::from_body(codex_request_body(
-                        "gpt-test",
-                        "test",
-                        vec![json!({"role":"user","content":"hello"})],
-                    ));
-                    if websocket {
-                        request = websocket_only_request(request);
-                    } else {
-                        request.force_http_sse = true;
-                    }
-                    let mut hello = timeout(Duration::from_secs(10), async {
-                        // Stop after the opening is observed; the rejecting fixture is not a
-                        // server for the product's subsequent connection-restart attempts.
-                        tokio::select! {
-                            hello = read_client_hello(listener) => hello,
-                            result = client.create_response(
-                                &request, request_context("tls-matrix", Some("tls-test-account"))
-                            ) => match result {
-                                Err(CodexClientError::WebSocket(error)) => panic!(
-                                    "request ended before ClientHello: tls={tls:?}, ws={websocket}, {error:?}"
-                                ),
-                                other => panic!("request ended before ClientHello: {other:?}"),
-                            },
-                        }
-                    })
-                    .await
-                    .unwrap_or_else(|_| {
-                        panic!("ClientHello timeout: tls={tls:?}, websocket={websocket}")
-                    });
-                    if websocket && tls == ProviderTlsProfile::Cpr {
-                        hello.extensions.sort_unstable();
-                    }
-                    let key = (tls.as_str(), websocket);
-                    if let Some(expected) = baselines.get(&key) {
-                        assert_eq!(
-                            &hello, expected,
-                            "UA or session policy changed selected TLS"
-                        );
-                    } else {
-                        baselines.insert(key, hello);
-                    }
+                        other => panic!("request ended before ClientHello: {other:?}"),
+                    },
                 }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("ClientHello timeout: websocket={websocket}"));
+            if websocket {
+                hello.extensions.sort_unstable();
+            }
+            let key = websocket;
+            if let Some(expected) = baselines.get(&key) {
+                assert_eq!(&hello, expected, "UA changed unified TLS");
+            } else {
+                baselines.insert(key, hello);
             }
         }
     }
-    assert_ne!(
-        baselines[&("cpr", false)],
-        baselines[&("qx-compatible", false)]
-    );
-    assert_ne!(
-        baselines[&("cpr", true)],
-        baselines[&("qx-compatible", true)]
-    );
+    assert_eq!(baselines[&false].alpn, ["h2", "http/1.1"]);
+    assert_eq!(baselines[&true], official_websocket_hello());
 }
 
 fn official_websocket_hello() -> ClientHello {

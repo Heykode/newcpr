@@ -102,9 +102,7 @@ fn scoped_context(request_id: &str, client_key: &str, account: &str) -> AttemptC
 }
 
 fn qx_provider(store: &Arc<MemoryAccountStore>, url: String) -> CodexProvider {
-    let mut selected = wire_profile().snapshot();
-    selected.application_profile =
-        provider_openai::transport::profile::CodexApplicationProfile::QxCompatible;
+    let selected = wire_profile().snapshot();
     provider_and_quota_with_profile(
         store,
         Arc::new(MemorySessionAffinity::default()),
@@ -401,8 +399,6 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
         .await;
     let first_provider = qx_provider(&store, server.uri());
     let mut profile = wire_profile().snapshot();
-    profile.application_profile =
-        provider_openai::transport::profile::CodexApplicationProfile::QxCompatible;
     profile.location = Default::default();
     let next_provider = provider_and_quota_with_profile(
         &store,

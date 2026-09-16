@@ -196,12 +196,6 @@ pub enum CodexClientError {
     /// 非流式 JSON 请求的 Reqwest 传输失败。
     #[error("HTTP JSON transport error: {0}")]
     HttpJson(#[source] reqwest::Error),
-    #[error("native HTTP transport failed: {source}")]
-    NativeHttp {
-        #[source]
-        source: super::native_tls::NativeTransportError,
-        transport: CodexBackendTransport,
-    },
     /// 已收到错误响应头，但未能读取完整正文；不能作为可透传的 HTTP 原响应。
     #[error("upstream error response body read failed for status {status}")]
     ErrorBodyRead {
@@ -279,11 +273,6 @@ impl fmt::Debug for CodexClientError {
         match self {
             Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
             Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
-            Self::NativeHttp { source, transport } => formatter
-                .debug_struct("CodexClientError::NativeHttp")
-                .field("source", source)
-                .field("transport", transport)
-                .finish(),
             Self::ErrorBodyRead {
                 status, transport, ..
             } => formatter
@@ -345,7 +334,6 @@ impl CodexClientError {
             | Self::InvalidSse(_)
             | Self::ModelCatalog(_) => Some(CodexBackendTransport::HttpSse),
             Self::HttpJson(_) => Some(CodexBackendTransport::HttpJson),
-            Self::NativeHttp { transport, .. } => Some(*transport),
             Self::WebSocket(_) => Some(CodexBackendTransport::WebSocket),
             Self::Upstream { transport, .. } | Self::ErrorBodyRead { transport, .. } => {
                 Some(*transport)
@@ -758,72 +746,10 @@ impl CodexBackendClient {
     where
         F: FnOnce(Client) -> reqwest::RequestBuilder + Send,
     {
-        use super::{
-            native_http::{NativeHttpClient, NativeHttpConfig},
-            profile::CodexTlsProfile,
-        };
-        if profile.tls_profile == CodexTlsProfile::Cpr {
-            return build(self.request_client(profile)?)
-                .send()
-                .await
-                .map_err(|error| self.http_send_error(error, json));
-        }
-        let route = if let Some(runtime) = &self.egress_runtime {
-            if let Some(account) = &self.egress_account {
-                runtime.check_account(account.id())?;
-            }
-            let selected = match (&self.egress_route, &self.egress_account) {
-                (Some(route), _) => Some(route.clone()),
-                (None, Some(account)) if !self.attempt_pinned => runtime.select(account)?,
-                _ => None,
-            };
-            if let Some(route) = &selected {
-                runtime.check(route)?;
-                runtime.ensure_source_ready(route.source)?;
-            }
-            selected
-        } else {
-            None
-        };
-        let transport = if json {
-            CodexBackendTransport::HttpJson
-        } else {
-            CodexBackendTransport::HttpSse
-        };
-        let map_native_error = |source: super::native_tls::NativeTransportError| {
-            if let Some(error) = source.egress_error() {
-                CodexClientError::Egress(error)
-            } else if route.is_some()
-                && matches!(
-                    source,
-                    super::native_tls::NativeTransportError::Connect { .. }
-                )
-            {
-                CodexClientError::Egress(CodexEgressError::ConnectFailed)
-            } else {
-                CodexClientError::NativeHttp { source, transport }
-            }
-        };
-        let client = NativeHttpClient::cached_async(NativeHttpConfig {
-            cache_key: format!(
-                "qx-compatible:{}:{}:{}",
-                self.egress_key,
-                profile.user_agent(),
-                route
-                    .as_ref()
-                    .map_or_else(String::new, CodexEgressRoute::key),
-            ),
-            proxy: self.outbound_proxy.clone(),
-            source: route.as_ref().map(|route| route.source),
-            fresh: route.as_ref().is_some_and(|route| route.mode.is_fresh()),
-            timeout: None,
-        })
-        .await
-        .map_err(&map_native_error)?;
-        let request = build(self.client.clone())
-            .build()
-            .map_err(|error| self.http_send_error(error, json))?;
-        client.execute(request).await.map_err(map_native_error)
+        build(self.request_client(profile)?)
+            .send()
+            .await
+            .map_err(|error| self.http_send_error(error, json))
     }
 
     pub(super) fn http_send_error(&self, error: reqwest::Error, json: bool) -> CodexClientError {
