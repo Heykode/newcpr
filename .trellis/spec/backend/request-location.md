@@ -14,4 +14,6 @@
   > startup location. Do not recalculate the identity seed or clear continuation.
 - Test actual HTTP and WS payloads, unmarked cache keys, disabled overrides,
   configuration round trips and PostgreSQL account-query projections.
+- Keep location validation tests in `gateway-core/tests/account/location.rs`;
+  production source files must not contain inline test modules.
 - No capacity freezing or adaptive concurrency belongs to this change.
