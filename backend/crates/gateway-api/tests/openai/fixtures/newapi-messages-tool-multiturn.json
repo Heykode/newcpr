@@ -1,0 +1,99 @@
+{
+  "model": "gpt-5.4",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Use only synthetic records."
+    },
+    {
+      "role": "user",
+      "content": "Read alpha and beta."
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "toolu_fixture_a",
+          "type": "function",
+          "function": {
+            "name": "lookup_fixture",
+            "arguments": "{\"key\":\"alpha\"}"
+          }
+        },
+        {
+          "id": "toolu_fixture_b",
+          "type": "function",
+          "function": {
+            "name": "lookup_fixture",
+            "arguments": "{\"key\":\"beta\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "{\"value\":11}",
+      "name": "lookup_fixture",
+      "tool_call_id": "toolu_fixture_a"
+    },
+    {
+      "role": "tool",
+      "content": "{\"value\":22}",
+      "name": "lookup_fixture",
+      "tool_call_id": "toolu_fixture_b"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Now read gamma."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "toolu_fixture_c",
+          "type": "function",
+          "function": {
+            "name": "lookup_fixture",
+            "arguments": "{\"key\":\"gamma\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "[{\"type\":\"text\",\"text\":\"Synthetic record missing.\"}]",
+      "name": "lookup_fixture",
+      "tool_call_id": "toolu_fixture_c"
+    }
+  ],
+  "stream": false,
+  "max_tokens": 256,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "description": "Read a synthetic record.",
+        "name": "lookup_fixture",
+        "parameters": {
+          "properties": {
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'release/version.yaml'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      container: ${{ steps.filter.outputs.container }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Detect affected checks
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'release/version.yaml'
+              - '.github/workflows/**'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/**'
+            container:
+              - 'backend/**'
+              - 'frontend/**'
+              - 'deploy/**'
+              - '.dockerignore'
+              - 'release/version.yaml'
+              - '.github/actions/**'
+              - '.github/workflows/_container.yml'
+              - '.github/workflows/ci.yml'
+
+  quality:
+    needs: changes
+    uses: ./.github/workflows/_quality.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      run_backend: ${{ needs.changes.outputs.backend == 'true' }}
+      run_frontend: ${{ needs.changes.outputs.frontend == 'true' }}
+
+  container:
+    needs: changes
+    if: needs.changes.outputs.container == 'true'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/_container.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}

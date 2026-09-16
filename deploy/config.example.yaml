@@ -1,0 +1,114 @@
+# Codex Proxy RS 应用配置模板。
+#
+# 使用：
+#   cp deploy/config.example.yaml deploy/config.yaml
+#   sudo chown "$(id -u):10001" deploy/config.yaml
+#   chmod 640 deploy/config.yaml
+#
+# PostgreSQL 与 Redis 密码分别执行 `openssl rand -hex 24` 生成；管理员初始密码单独设置。
+
+schema_version: 1
+
+host:
+  listen:
+    # 本地 cargo run 使用；Docker 内由 CPR_SERVER_HOST/PORT 覆盖。
+    host: '127.0.0.1'
+    port: 8080
+  # OpenAI 会话身份、系统更新状态和备份暂存区的统一根目录。
+  # 相对路径以 deploy/config.yaml 所在目录为基准。
+  runtime_data_dir: '../.runtime/data'
+  logging:
+    level: 'info'
+    stdout: true
+    # 将原始 AT/RT 写入独立 OAuth 恢复文件，沿用 file 的目录、大小与保留期。
+    oauth_recovery: false
+    # 将完整请求与响应头、正文写入独立文件；包含凭据，仅排障时开启。
+    request_dump: false
+    request_dump_retention_days: 1
+    file:
+      enabled: true
+      # 相对路径以 deploy/config.yaml 所在目录为基准。
+      directory: '../.runtime/logs'
+      retention_days: 7
+      max_file_size_mb: 20
+  drain_timeout_seconds: 30
+  worker_shutdown_timeout_seconds: 30
+
+store:
+  database:
+    # Docker 内由 CPR_DATABASE_URL 覆盖；密码不要写进 URL。
+    url: 'postgres://codex_proxy@127.0.0.1:5432/codex_proxy'
+    password: &postgres_password ''
+  redis:
+    # Docker 内由 CPR_REDIS_URL 覆盖；密码不要写进 URL。
+    url: 'redis://127.0.0.1:6379/'
+    password: &redis_password ''
+  # 可选：PostgreSQL 连接池预算；下列值与当前推荐默认一致。
+  # pool:
+  #   max_connections: 20
+  #   acquire_timeout_seconds: 5
+
+admin:
+  session_ttl_minutes: 1440
+  default_username: 'admin@cpr.local'
+  # 仅首次创建管理员时使用；至少 12 个字符且不能包含 `$`。
+  default_password: ''
+
+api:
+  # Docker 内由 CPR_WEB_DIST_DIR 覆盖。
+  asset_directory: '../frontend/dist'
+  cors_allowed_origins: []
+  request_timeout_seconds: null
+  request_id_header: 'x-request-id'
+
+openai:
+  # 上游地址、WebSocket 池、额度刷新和 OAuth 使用 Provider 内置默认值；模板只保留画像启动基线。
+  wire_profile:
+    # 版本元组来自同一个官方 macOS Desktop ZIP；Provider 每 24 小时检查 appcast，
+    # 仅在包内 Core 核验和 Redis 条件覆盖都成功后原子更新。
+    originator: 'Codex Desktop'
+    codex_version: '0.153.4'
+    desktop_version: '26.901.51231'
+    desktop_build: '8109'
+    os_type: 'Mac OS'
+    os_version: '15.7.1'
+    arch: 'arm64'
+    terminal: 'unknown'
+    # 部署选择的 US residency；省略或 null 时使用官方无地域约束的默认分支。
+    residency: us
+    # 请求地区画像；省略 location 时使用以下默认值。时区同时用于环境日期，不改变 epoch 时间戳。
+    location: { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' }
+    verified_at: '2026-09-06T11:26:12.084+08:00'
+
+xai:
+  # OAuth 端点、额度与模型目录策略由 xAI Provider 固定管理；这里只声明请求画像启动基线。
+  wire_profile:
+    # Provider 每 24 小时读取官方 npm metadata，仅在进程内更新 client_version。
+    client_identifier: 'GrokShell'
+    client_version: '1.0.13'
+    client_mode: 'headless'
+    target_os: 'linux'
+    target_arch: 'x86_64'
+    verified_at: '2026-08-31T00:00:00+08:00'
+
+# Compose 凭据桥接区；密码仍只维护在 store 中。
+services:
+  postgres-credentials:
+    environment:
+      POSTGRES_PASSWORD: *postgres_password
+
+  redis-credentials:
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --requirepass
+      - *redis_password
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - --no-auth-warning
+        - -a
+        - *redis_password
+        - ping

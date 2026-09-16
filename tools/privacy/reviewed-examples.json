@@ -1,0 +1,698 @@
+[
+  {
+    "path": ".github/actions/verify-container/action.yml",
+    "rule": "non-example-ip",
+    "line": 25,
+    "file_sha256": "fbb04fb51bf8faea268b659ee37a0ae6647dca738906b1dbdec78cd9a003d29c",
+    "line_sha256": "e91b67c47dd54a91fbee8d038b3168c6e86ae25a0b667932e6d9f92888b6fa0e",
+    "reason": "Parser false positive on GitHub mask commands or Rust namespace syntax."
+  },
+  {
+    "path": ".github/actions/verify-container/action.yml",
+    "rule": "non-example-ip",
+    "line": 26,
+    "file_sha256": "fbb04fb51bf8faea268b659ee37a0ae6647dca738906b1dbdec78cd9a003d29c",
+    "line_sha256": "83ed5c600672427d1c5e544177b158115973f67919b864d561a398e636eac81d",
+    "reason": "Parser false positive on GitHub mask commands or Rust namespace syntax."
+  },
+  {
+    "path": ".github/actions/verify-container/action.yml",
+    "rule": "non-example-ip",
+    "line": 27,
+    "file_sha256": "fbb04fb51bf8faea268b659ee37a0ae6647dca738906b1dbdec78cd9a003d29c",
+    "line_sha256": "7459927009a8478c4f64506073b43fa785e74aa5027d6a920b732b324b314c12",
+    "reason": "Parser false positive on GitHub mask commands or Rust namespace syntax."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "authenticated-url",
+    "line": 38,
+    "file_sha256": "703795030fda7cd64a2d3160d22aa47be530122c5c7fafb0bcac7c870e43b089",
+    "line_sha256": "9a481ea5dd22c381fddafb18644a4004674839219b8cbf91dbd5c7195b8c4d0c",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 129,
+    "file_sha256": "703795030fda7cd64a2d3160d22aa47be530122c5c7fafb0bcac7c870e43b089",
+    "line_sha256": "3adb12c8f4bff3ffaa94d4cc790ba0695b19869b33d8216b26e08bf4d4e63692",
+    "reason": "Parser false positive on GitHub mask commands or Rust namespace syntax."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 130,
+    "file_sha256": "703795030fda7cd64a2d3160d22aa47be530122c5c7fafb0bcac7c870e43b089",
+    "line_sha256": "6818f468f5c49d8f44df010270b465f3b176549efda0b7aeec65156066df78e7",
+    "reason": "Parser false positive on GitHub mask commands or Rust namespace syntax."
+  },
+  {
+    "path": ".trellis/spec/backend/client-continuity.md",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 442,
+    "file_sha256": "b2b352b6677845da9542737a24202172e7da15ebe9f7f5bdc55e3b0c69e497ee",
+    "line_sha256": "a9fdc16760660f57b4c9be59b1899df03c1a43a7d1a3e526f2d314ead033da69",
+    "reason": "Rust test function identifier or its specification reference, not a CPR credential."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 294,
+    "file_sha256": "e6abd6bc007902ac42d8ea09e155270ab13496c6c86d09bf3052c3a12571a10d",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-admin/tests/model/provider_credentials.rs",
+    "rule": "authenticated-url",
+    "line": 228,
+    "file_sha256": "bf593c2d0549d669a6a7e8956683287a1655872db1260b678429e8eb346b173a",
+    "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/egress.rs",
+    "rule": "non-example-ip",
+    "line": 202,
+    "file_sha256": "9b239b7ac3fe75db3b4fa864aa2c2af0bb15f7e206510f780d07c7a456c8ae44",
+    "line_sha256": "0abb246bdb4de88208e34bbb02947c0d1d5041356a105b68fd4654a1f3d5ea4d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/egress.rs",
+    "rule": "non-example-ip",
+    "line": 203,
+    "file_sha256": "9b239b7ac3fe75db3b4fa864aa2c2af0bb15f7e206510f780d07c7a456c8ae44",
+    "line_sha256": "188c9ca377d2defb27c804676221f6c7aea08240f97a54c86fe374864b99ec67",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/egress.rs",
+    "rule": "non-example-ip",
+    "line": 204,
+    "file_sha256": "9b239b7ac3fe75db3b4fa864aa2c2af0bb15f7e206510f780d07c7a456c8ae44",
+    "line_sha256": "be35b5454b84ff93a2f1192afd747251aaf8106088f7472d7eef960b58522a90",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/egress.rs",
+    "rule": "non-example-ip",
+    "line": 205,
+    "file_sha256": "9b239b7ac3fe75db3b4fa864aa2c2af0bb15f7e206510f780d07c7a456c8ae44",
+    "line_sha256": "e61d7ea8179358370cd8ded001b751b26fa88b63a67b4a85bd40d8a91ad12437",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/egress.rs",
+    "rule": "non-example-ip",
+    "line": 207,
+    "file_sha256": "9b239b7ac3fe75db3b4fa864aa2c2af0bb15f7e206510f780d07c7a456c8ae44",
+    "line_sha256": "c4a05cf5e0213a58adf98a1ebfc4d7ce6107549d902110698fbd66c8b0047b02",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/egress.rs",
+    "rule": "non-example-ip",
+    "line": 462,
+    "file_sha256": "9b239b7ac3fe75db3b4fa864aa2c2af0bb15f7e206510f780d07c7a456c8ae44",
+    "line_sha256": "863dd49162e695fa997e3b0ae566ac45fb076f65fd531f70fee7346e7b38592c",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 165,
+    "file_sha256": "44cf0118d5b9a520db09779c62c3315663ba21e8686fc925a84318a974edbb4b",
+    "line_sha256": "a64a4ebd4745816bca847998941cb69d613488075fddc35523e9618944445362",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 216,
+    "file_sha256": "44cf0118d5b9a520db09779c62c3315663ba21e8686fc925a84318a974edbb4b",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 415,
+    "file_sha256": "44cf0118d5b9a520db09779c62c3315663ba21e8686fc925a84318a974edbb4b",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 448,
+    "file_sha256": "44cf0118d5b9a520db09779c62c3315663ba21e8686fc925a84318a974edbb4b",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/fixtures/newapi-chat-extensions.json",
+    "rule": "gitleaks:generic-api-key",
+    "line": 1,
+    "file_sha256": "ea02371398d216b285e3fe9bbea06dba2a10b3e7a098eddb65e746a2b014bc4a",
+    "line_sha256": "08d008d77c8ba0c0a4e041035ab04b1a2e002e2fd1a23466e6f4157cae5de5a8",
+    "reason": "Synthetic DTO fixture with local source checksums and one-pixel image; no credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 661,
+    "file_sha256": "33b1e9c3011ac50a294fa67bf463beaf7f81d8c2eddabb1499bf267b3d8d9378",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 685,
+    "file_sha256": "33b1e9c3011ac50a294fa67bf463beaf7f81d8c2eddabb1499bf267b3d8d9378",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/account/proxy.rs",
+    "rule": "authenticated-url",
+    "line": 28,
+    "file_sha256": "46889ddff48eea1194efeb9fbb21a772296e1cebb79a58bf7cd48a3b91d0eedc",
+    "line_sha256": "98cec81252c5e7b9f51418a5134140787fe33e25b531ae2c9e22be8931507634",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 108,
+    "file_sha256": "cfadde73207d98a75fb1fd2bddc9ce5458301d0359058360bc2e105089d59584",
+    "line_sha256": "05d89b4df3a4f65f2e9099ae7ccd18b0f07bc27a3581c139da0ef893ab85b149",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 109,
+    "file_sha256": "cfadde73207d98a75fb1fd2bddc9ce5458301d0359058360bc2e105089d59584",
+    "line_sha256": "126f7e34cdcf2e64e4165af6d03bceb76dc979de37bd316e3032c0b0164d7fcb",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 110,
+    "file_sha256": "cfadde73207d98a75fb1fd2bddc9ce5458301d0359058360bc2e105089d59584",
+    "line_sha256": "abf54a266f9141c37476c644e9c9a11de98856acf1241ba8b563d7d7e6b5c838",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 111,
+    "file_sha256": "cfadde73207d98a75fb1fd2bddc9ce5458301d0359058360bc2e105089d59584",
+    "line_sha256": "3205b3a46a19d6eb2fea5855b6f7792ada9cf87e5ceb7af955077f4a4b8a5e3d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 118,
+    "file_sha256": "cfadde73207d98a75fb1fd2bddc9ce5458301d0359058360bc2e105089d59584",
+    "line_sha256": "866bff72cf6ad4b537e5f863f4ded96b3cf59862650e132cbcde1167ef1d25a6",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 19,
+    "file_sha256": "82175c960d44e6cb5d1a4e64a3b385d7d904efcf844db58323f96b48b4207f67",
+    "line_sha256": "824f325abbd2dc51504cfe7b7d892ddfa563e405cb97e8739542e8164fc657c5",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/egress.rs",
+    "rule": "authenticated-url",
+    "line": 219,
+    "file_sha256": "766e431604a83af4d3de1eeb700d3f2218585c22616c09107a7041dc1304199a",
+    "line_sha256": "0f0805341a3432f87bd80c4d549c3a82c9defc34988248ef57a8fd9b66d639e0",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/egress.rs",
+    "rule": "authenticated-url",
+    "line": 298,
+    "file_sha256": "766e431604a83af4d3de1eeb700d3f2218585c22616c09107a7041dc1304199a",
+    "line_sha256": "f3966ca774477d1115617d196ad4019d91c827e845431f215d41ddc82291099d",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1502,
+    "file_sha256": "5353fc9e54455c9276ae682353731872ba1f54a75becdce097309e53c4db9bb2",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1528,
+    "file_sha256": "5353fc9e54455c9276ae682353731872ba1f54a75becdce097309e53c4db9bb2",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 96,
+    "file_sha256": "bde2d728b28b435396a3efc6e3d5a0847299c9fab949582c70deca52df3b9d84",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 199,
+    "file_sha256": "bde2d728b28b435396a3efc6e3d5a0847299c9fab949582c70deca52df3b9d84",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 602,
+    "file_sha256": "bde2d728b28b435396a3efc6e3d5a0847299c9fab949582c70deca52df3b9d84",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 755,
+    "file_sha256": "bde2d728b28b435396a3efc6e3d5a0847299c9fab949582c70deca52df3b9d84",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 823,
+    "file_sha256": "bde2d728b28b435396a3efc6e3d5a0847299c9fab949582c70deca52df3b9d84",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/src/transport/request/raw_json.rs",
+    "rule": "non-example-ip",
+    "line": 6,
+    "file_sha256": "7c9378275386407a86a247baa7429fc4377044e87490b531ba2f41615588fb55",
+    "line_sha256": "130094c77dd84df70b06f3c38e9f80a87ac0fa4ede156155a0079151939a31fa",
+    "reason": "Parser false positive on GitHub mask commands or Rust namespace syntax."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/config.rs",
+    "rule": "non-example-ip",
+    "line": 133,
+    "file_sha256": "dbd2c7281d9ee1e773f794970e62c29f3875c337bdf61588a0adb6f6a4e3a83b",
+    "line_sha256": "c7cce97562dd79d3c5f4aad42f7ef636c045565c6191a42b5df548842e5197f4",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/config.rs",
+    "rule": "authenticated-url",
+    "line": 135,
+    "file_sha256": "dbd2c7281d9ee1e773f794970e62c29f3875c337bdf61588a0adb6f6a4e3a83b",
+    "line_sha256": "814069861c50b1e716f26a23b5af8033d740a1f95e5c875d570e4a9476b9bbb5",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 314,
+    "file_sha256": "25943b9865b3a1c7fb8b221008c39db38f027097cec3f3d7e6fe550f9c66ac39",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 70,
+    "file_sha256": "70eeed8d6bdf0a364b2751e684a8bc70292e8a57c2c612fee3478de80b07482c",
+    "line_sha256": "e08f3e5adfbd37e055a284d9e81db7a0ca0b59c809eb7c60cd2f91ebc8cb95f9",
+    "reason": "Deliberately unsigned mock JWT used by MockServer token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 375,
+    "file_sha256": "70eeed8d6bdf0a364b2751e684a8bc70292e8a57c2c612fee3478de80b07482c",
+    "line_sha256": "866aaa0977c3b9fa9b43fe03981074ea2d58b2b0eefb046ffd37628fb4fe5f05",
+    "reason": "Deliberately unsigned mock JWT used by MockServer token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 410,
+    "file_sha256": "70eeed8d6bdf0a364b2751e684a8bc70292e8a57c2c612fee3478de80b07482c",
+    "line_sha256": "9de12eaf8ba8b0e4858b4328471402834f850fcf52eeb8962f910183467f1026",
+    "reason": "Deliberately unsigned mock JWT used by MockServer token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 526,
+    "file_sha256": "70eeed8d6bdf0a364b2751e684a8bc70292e8a57c2c612fee3478de80b07482c",
+    "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
+    "reason": "Deliberately unsigned mock JWT used by MockServer token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 3995,
+    "file_sha256": "b43753d87bee5f12e4e3d5a088b8fc837d86d83f1f99dbe82620bb2c4936bb56",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Synthetic escaped Windows Unicode path tests exact JSON preservation; no personal identity."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "gitleaks:generic-api-key",
+    "line": 157,
+    "file_sha256": "4492693163b9df8be00c1833a864b56c9407c17fc0d7ffb6a15184752e22ca05",
+    "line_sha256": "b694d43bcd4cf81f0a75c5b6e286b07b3f4936dc9e7e30592017b7b0b819b117",
+    "reason": "Invalid-secret test containing the standard illustrative UUID, not an actual TOTP secret."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "authenticated-url",
+    "line": 234,
+    "file_sha256": "4492693163b9df8be00c1833a864b56c9407c17fc0d7ffb6a15184752e22ca05",
+    "line_sha256": "47e73e43e21ddf5e79f265d16deb345c7d52a1cf04c0683c90e5d50b4e49aee3",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/account_proxy.rs",
+    "rule": "authenticated-url",
+    "line": 100,
+    "file_sha256": "7f25b1ea76778541588f53b5d833210909a6c3f10b9cebe41728c74ecf3338a6",
+    "line_sha256": "7ae38a2d8c3b3611074836a9d726f97308e63f6c0536fe0ea125d79c7c41b97c",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/headers.rs",
+    "rule": "non-example-ip",
+    "line": 14,
+    "file_sha256": "35ceff039c56cacb14dee65ddb9bb1423e8aa7f8ee7e4edba9a3577b6a6a6363",
+    "line_sha256": "588cd1db9d80d264c927db295a3eba023dbb7a8a1addbc5c814ed3ce29390a15",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/native_http.rs",
+    "rule": "authenticated-url",
+    "line": 241,
+    "file_sha256": "fbcdb05e5b6f16c4aee1544a74b3a154596ded7b0e8e0581ebdb8dced84a86f6",
+    "line_sha256": "d5cc4ba3c169b4bdc4ae0ec5e3282cfd72911982fd699b7966866794bae482c1",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/native_tls.rs",
+    "rule": "authenticated-url",
+    "line": 281,
+    "file_sha256": "d061841bc95cb0259320868473a0d9ec331db8812be470a6825b91fcd2b73115",
+    "line_sha256": "9ab27dc183921d0219b9960850732e716d65f1b9fb1f5d9579ad0ab430d6082e",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/profile_avatar.rs",
+    "rule": "authenticated-url",
+    "line": 121,
+    "file_sha256": "8d2e2cfd56be58100b14594492260e2b4a1d274a0ac4d0100fe55bcb5ecab494",
+    "line_sha256": "f4353a6e313c2dbdeae6c5667a6bcc2057cfc148de0390aae6d8a95869af4ab9",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/qx_profile.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 554,
+    "file_sha256": "8e01884be60ab7a6e3a6330ae37eb0181ddb04bdbbc4d9a12c4269b41634e455",
+    "line_sha256": "16b6bf8f4b891653b34ba0e09099c50c327b08529312b5a079a93b518bc73c77",
+    "reason": "Rust test function identifier or its specification reference, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 147,
+    "file_sha256": "7743d7e5257f589c19d65c0c6c2407bbec585fd1ac003e059c633a5d493276e8",
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "reason": "Rust test function identifier or its specification reference, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 224,
+    "file_sha256": "7743d7e5257f589c19d65c0c6c2407bbec585fd1ac003e059c633a5d493276e8",
+    "line_sha256": "64fc030b272ac5d2dc7bc76cd67eb8a00a857e0351a771bfbc2aa99240a59eba",
+    "reason": "Rust test function identifier or its specification reference, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 251,
+    "file_sha256": "7743d7e5257f589c19d65c0c6c2407bbec585fd1ac003e059c633a5d493276e8",
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 459,
+    "file_sha256": "7743d7e5257f589c19d65c0c6c2407bbec585fd1ac003e059c633a5d493276e8",
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "reason": "Rust test function identifier or its specification reference, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "authenticated-url",
+    "line": 36,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "db5e5704b33f31cec217e126622734c6a1da9f478dfe6bfc7944197b592719ad",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 845,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "2033d9097d789fb4eed2b21b5a01eb0145e10f75f2f8467ef1150acf7f925a5e",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 846,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "29d81e2ff628a6d92cd9d90361016d7d15585af36dafbd01c39bc9085350ed6d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 873,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 876,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "db277d270b9478e13bcedcff8464565c90b76cb95d4a3e7943c6c06d04a90c4a",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 884,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "010fed8499bcc9f73dea3feb5c20bf0e285c1ea52f15accef256b827f6aaaf4a",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 892,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "633b87faae9403ebc883cd526be3f63fcba619f14b0f199b64ecd1c77037c672",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 895,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "e3bdf4aa928b4f907700a66d215a91a8151046a067eda3d2e0f19168abcedd0e",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 896,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "005dca5fefcbc8e5d518b6c59d289c1d25f7d8ed10bfc7698b7b0bbd5e2c78f4",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 909,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "a502ee022493b5e891be27fbf87aa830b1adb35f45aa03c5220ee21214c673d5",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/network.rs",
+    "rule": "non-example-ip",
+    "line": 919,
+    "file_sha256": "abd6b19214ec525f98a58e2856f79916b2eac39162e4001e8efec8c3a5f18796",
+    "line_sha256": "9e479e1097600c03e5b02a059871972d553af67489633306a1ac5dbb3264de7c",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/request/mod.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 417,
+    "file_sha256": "d64bc25acc533cc4654ff328276c5d96311e2c4b5cd39082db05fd6097173bbe",
+    "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
+    "reason": "Prompt cache key is a synthetic conversation label, not an authentication key."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/request/mod.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 422,
+    "file_sha256": "d64bc25acc533cc4654ff328276c5d96311e2c4b5cd39082db05fd6097173bbe",
+    "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
+    "reason": "Prompt cache key is a synthetic conversation label, not an authentication key."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/request/mod.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 452,
+    "file_sha256": "d64bc25acc533cc4654ff328276c5d96311e2c4b5cd39082db05fd6097173bbe",
+    "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
+    "reason": "Prompt cache key is a synthetic conversation label, not an authentication key."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/request/mod.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 471,
+    "file_sha256": "d64bc25acc533cc4654ff328276c5d96311e2c4b5cd39082db05fd6097173bbe",
+    "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
+    "reason": "Prompt cache key is a synthetic conversation label, not an authentication key."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/request/mod.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 621,
+    "file_sha256": "d64bc25acc533cc4654ff328276c5d96311e2c4b5cd39082db05fd6097173bbe",
+    "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
+    "reason": "Prompt cache key is a synthetic conversation label, not an authentication key."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/request/mod.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 709,
+    "file_sha256": "d64bc25acc533cc4654ff328276c5d96311e2c4b5cd39082db05fd6097173bbe",
+    "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
+    "reason": "Prompt cache key is a synthetic conversation label, not an authentication key."
+  },
+  {
+    "path": "backend/crates/providers/xai/tests/transport/request/mod.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 735,
+    "file_sha256": "d64bc25acc533cc4654ff328276c5d96311e2c4b5cd39082db05fd6097173bbe",
+    "line_sha256": "38b5221cd9aa5385d7a843329e9fc2ebcdd4d9eb11ea4dbfbcb7ae90334f658d",
+    "reason": "Prompt cache key is a synthetic conversation label, not an authentication key."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 394,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "22a9edc2ec1798b0f4370c03489ec74713550fa6107fa544ab3b54d3c1f25a54",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 395,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "543be7395e9f3f640692cdfe43dcf5923bb5f50c40c00a4777fbe9ea4998a574",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 396,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "a649b1f5a355cc87ba0c9c1176f42eb6a619d76ec03a15b9d1c4b91c795d74b2",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 397,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "acc8562886b64af13820f3233051f4fdee9db0539d6aa02992b113f59028b70f",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 398,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "4cd99d26dc77e695e952ff0557c5b72ebc4e4cbaa2b0760f5b4fb2d4824402be",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 399,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "25b5a9145901ab9c4d223054a5d93c2a46332c705f9a1c64ce6e4dffdd9d33b5",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 400,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "6add8befdfda841950de19d1be394a23e57efad89eba38751020e251a02d6127",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 401,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "fd08411c930ac37fffb72a69e0ddf7c4748697f590f8d186b0b0593fb7f26965",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 402,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "19d01127d86ffe835cd117a4be9e27126c7cb3e143749432d85d6fd00fbe3d8b",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 403,
+    "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
+    "line_sha256": "1f4e54601e99cfed60e0375d1c5bc9324fa74ea5b88ebe97e8805f00df10bbf2",
+    "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  }
+]

@@ -1,0 +1,29 @@
+{
+  "model": "gpt-5.4",
+  "input": [
+    {
+      "content": "Return ready true.",
+      "role": "user"
+    }
+  ],
+  "stream": false,
+  "text": {
+    "format": {
+      "name": "fixture_status",
+      "schema": {
+        "additionalProperties": false,
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready"
+        ],
+        "type": "object"
+      },
+      "strict": true,
+      "type": "json_schema"
+    }
+  }
+}

@@ -1,0 +1,684 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, for example v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: heykode/newcpr
+
+jobs:
+  release-info:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      docker_version: ${{ steps.version.outputs.docker_version }}
+      build_time: ${{ steps.version.outputs.build_time }}
+      git_sha: ${{ steps.version.outputs.git_sha }}
+      platform_matrix: ${{ steps.version.outputs.platform_matrix }}
+      docker_matrix: ${{ steps.version.outputs.docker_matrix }}
+      non_docker_matrix: ${{ steps.version.outputs.non_docker_matrix }}
+      has_non_docker: ${{ steps.version.outputs.has_non_docker }}
+      docker_platforms: ${{ steps.version.outputs.docker_platforms }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Read release metadata
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          ruby <<'RUBY' >> "$GITHUB_OUTPUT"
+          require "json"
+          require "open3"
+          require "rubygems"
+          require "time"
+          require "yaml"
+
+          APP_NAME = "codex-proxy-rs"
+          SEMVER = /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z/
+
+          def fail(message)
+            warn(message)
+            exit(1)
+          end
+
+          def require_string(data, key, path)
+            value = data[key]
+            fail("#{path}: #{key} must be a non-empty string") unless value.is_a?(String) && !value.strip.empty?
+            value.strip
+          end
+
+          def version_sort_key(version)
+            Gem::Version.new(version.split("+", 2).first)
+          rescue ArgumentError
+            nil
+          end
+
+          version_path = "release/version.yaml"
+          platforms_path = "release/platforms.yaml"
+          version_data = YAML.load_file(version_path)
+          platforms_data = YAML.load_file(platforms_path)
+
+          version = require_string(version_data, "version", version_path).delete_prefix("v")
+          tag_prefix = "v"
+          expected_tag = "#{tag_prefix}#{version}"
+          release_tag = ENV.fetch("RELEASE_TAG")
+          fail("Release tag #{release_tag} does not match #{version_path} tag #{expected_tag}") unless release_tag == expected_tag
+          fail("#{version_path}: version #{version} is not a valid semver") unless version.match?(SEMVER)
+
+          platforms = platforms_data["platforms"]
+          fail("#{platforms_path}: platforms must be a non-empty array") unless platforms.is_a?(Array) && !platforms.empty?
+
+          required_platform_keys = %w[os arch runner target binary archive]
+          seen_platforms = {}
+          docker_platform_jobs = []
+          non_docker_platform_jobs = []
+          docker_platforms = []
+          platforms.each_with_index do |platform, index|
+            fail("#{platforms_path}: platforms[#{index}] must be a table") unless platform.is_a?(Hash)
+            required_platform_keys.each do |key|
+              require_string(platform, key, "#{platforms_path}: platforms[#{index}]")
+            end
+            archive = platform["archive"]
+            fail("#{platforms_path}: platforms[#{index}].archive must be tar.gz") unless archive == "tar.gz"
+            platform_key = "#{platform["os"]}-#{platform["arch"]}"
+            fail("#{platforms_path}: duplicate platform #{platform_key}") if seen_platforms[platform_key]
+            seen_platforms[platform_key] = true
+            platform["artifact"] = "#{APP_NAME}-#{platform_key}"
+            if platform["docker"] == true
+              docker_platform = require_string(platform, "dockerPlatform", "#{platforms_path}: platforms[#{index}]")
+              platform["dockerPlatform"] = docker_platform
+              docker_platform_jobs << platform
+              docker_platforms << docker_platform
+            else
+              non_docker_platform_jobs << platform
+            end
+          end
+
+          fail("#{platforms_path}: at least one platform must set docker = true") if docker_platforms.empty?
+
+          git_sha, status = Open3.capture2("git", "rev-parse", "HEAD")
+          fail("failed to resolve git sha") unless status.success?
+          matrix = JSON.generate({ "include" => platforms })
+          docker_matrix = JSON.generate({ "include" => docker_platform_jobs })
+          non_docker_matrix = JSON.generate({ "include" => non_docker_platform_jobs })
+          current_sort_key = version_sort_key(version)
+          tags, status = Open3.capture2("git", "tag", "--list", "#{tag_prefix}*", "--merged", "HEAD")
+          fail("failed to list git tags") unless status.success?
+          previous_tag = tags
+            .lines
+            .map(&:strip)
+            .reject(&:empty?)
+            .reject { |tag| tag == release_tag }
+            .filter_map do |tag|
+              tag_version = tag.delete_prefix(tag_prefix)
+              next unless tag_version.match?(SEMVER)
+              sort_key = version_sort_key(tag_version)
+              next unless sort_key && current_sort_key && sort_key < current_sort_key
+              [sort_key, tag]
+            end
+            .max_by(&:first)
+            &.last
+
+          puts "tag=#{release_tag}"
+          puts "version=#{version}"
+          # Docker tags forbid "+", so semver build metadata maps to "-" in image tags.
+          puts "docker_version=#{version.tr("+", "-")}"
+          puts "build_time=#{Time.now.utc.iso8601}"
+          puts "git_sha=#{git_sha.strip}"
+          puts "platform_matrix=#{matrix}"
+          puts "docker_matrix=#{docker_matrix}"
+          puts "non_docker_matrix=#{non_docker_matrix}"
+          puts "has_non_docker=#{!non_docker_platform_jobs.empty?}"
+          puts "docker_platforms=#{docker_platforms.join(",")}"
+          puts "previous_tag=#{previous_tag}"
+          puts "prerelease=#{version.split("+", 2).first.include?("-")}"
+          RUBY
+
+  quality:
+    needs: [release-info]
+    uses: ./.github/workflows/_quality.yml
+    with:
+      ref: ${{ needs.release-info.outputs.git_sha }}
+      upload_frontend: true
+
+  build-docker-binary:
+    name: build-docker-binary (${{ matrix.os }}-${{ matrix.arch }})
+    needs: release-info
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-info.outputs.git_sha }}
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}-${{ needs.release-info.outputs.git_sha }}
+          restore-keys: |
+            cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
+            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Build binary
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.cargo" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
+          docker run --rm \
+            --platform "${{ matrix.dockerPlatform }}" \
+            --user "$(id -u):$(id -g)" \
+            -e CARGO_HOME=/cargo \
+            -e HOME=/tmp \
+            -e CPR_VERSION="${CPR_VERSION}" \
+            -e CPR_GIT_SHA="${CPR_GIT_SHA}" \
+            -e CPR_BUILD_TIME="${CPR_BUILD_TIME}" \
+            -e CPR_BUILD_TYPE="${CPR_BUILD_TYPE}" \
+            -v "$HOME/.cargo:/cargo" \
+            -v "$PWD/..:/workspace" \
+            -w /workspace/backend \
+            rust:1.97-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa \
+            cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
+        working-directory: backend
+        env:
+          CPR_VERSION: ${{ needs.release-info.outputs.version }}
+          CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
+          CPR_BUILD_TYPE: release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 1
+
+  build-binary:
+    name: build-binary (${{ matrix.os }}-${{ matrix.arch }})
+    needs: release-info
+    if: ${{ needs.release-info.outputs.has_non_docker == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.release-info.outputs.non_docker_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-info.outputs.git_sha }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}-${{ needs.release-info.outputs.git_sha }}
+          restore-keys: |
+            cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
+            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Build binary
+        shell: bash
+        run: |
+          cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
+          mkdir -p "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
+        working-directory: backend
+        env:
+          CPR_VERSION: ${{ needs.release-info.outputs.version }}
+          CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
+          CPR_BUILD_TYPE: release
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 1
+
+  package-assets:
+    needs: [release-info, quality, build-docker-binary, build-binary]
+    # A deliberately absent native target is optional; failed builds are not.
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release-info.result == 'success' &&
+        needs.quality.result == 'success' &&
+        needs.build-docker-binary.result == 'success' &&
+        (
+          (needs.release-info.outputs.has_non_docker == 'false' && needs.build-binary.result == 'skipped') ||
+          (needs.release-info.outputs.has_non_docker == 'true' && needs.build-binary.result == 'success')
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-info.outputs.git_sha }}
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: frontend-dist
+          path: dist/frontend
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codex-proxy-rs-*
+          path: dist/binaries
+
+      - name: Package release assets
+        shell: bash
+        env:
+          VERSION: ${{ needs.release-info.outputs.version }}
+        run: |
+          set -euo pipefail
+          ruby <<'RUBY' > release-platforms.json
+          require "json"
+          require "yaml"
+
+          print JSON.generate(YAML.load_file("release/platforms.yaml"))
+          RUBY
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import shutil
+          import tarfile
+
+          APP_NAME = "codex-proxy-rs"
+
+          def sha256(path: pathlib.Path) -> str:
+              digest = hashlib.sha256()
+              with path.open("rb") as file:
+                  for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          version = os.environ["VERSION"]
+          platforms = json.loads(pathlib.Path("release-platforms.json").read_text())["platforms"]
+          frontend_dir = pathlib.Path("dist/frontend")
+          binary_artifacts_dir = pathlib.Path("dist/binaries")
+          release_dir = pathlib.Path("dist/release")
+          package_dir = pathlib.Path("package")
+
+          shutil.rmtree(release_dir, ignore_errors=True)
+          release_dir.mkdir(parents=True)
+          archives = []
+
+          for platform in platforms:
+              platform_name = f"{platform['os']}-{platform['arch']}"
+              artifact_name = f"{APP_NAME}-{platform_name}"
+              binary_src = binary_artifacts_dir / artifact_name / platform["binary"]
+              if not binary_src.is_file():
+                  raise SystemExit(f"Missing binary artifact: {binary_src}")
+
+              shutil.rmtree(package_dir, ignore_errors=True)
+              package_root = package_dir / APP_NAME
+              web_dist = package_root / "web" / "dist"
+              web_dist.mkdir(parents=True)
+
+              binary_dest = package_root / platform["binary"]
+              shutil.copy2(binary_src, binary_dest)
+              binary_dest.chmod(0o755)
+              shutil.copytree(frontend_dir, web_dist, dirs_exist_ok=True)
+
+              archive_name = f"{APP_NAME}_{version}_{platform['os']}_{platform['arch']}.{platform['archive']}"
+              archive_path = release_dir / archive_name
+              if platform["archive"] == "tar.gz":
+                  with tarfile.open(archive_path, "w:gz") as archive:
+                      archive.add(package_root, arcname=APP_NAME)
+              else:
+                  raise SystemExit(f"Unsupported archive format: {platform['archive']}")
+              archives.append(archive_path)
+
+          checksum_path = release_dir / "checksums.txt"
+          with checksum_path.open("w", encoding="utf-8") as file:
+              for archive in archives:
+                  file.write(f"{sha256(archive)}  {archive.name}\n")
+          PY
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: dist/release
+          if-no-files-found: error
+          retention-days: 1
+
+  build-docker-image:
+    name: build-docker-image (${{ matrix.dockerPlatform }})
+    needs: [release-info, quality, build-docker-binary]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.release-info.outputs.docker_matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    env:
+      TRIVY_QUIET: 'true'
+      TRIVY_SKIP_VERSION_CHECK: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-info.outputs.git_sha }}
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: frontend-dist
+          path: dist/docker/web/dist
+
+      - name: Download Docker binary artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/docker-artifacts/codex-proxy-rs-${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Prepare Docker prebuilt assets
+        shell: bash
+        env:
+          MATRIX_OS: ${{ matrix.os }}
+          MATRIX_ARCH: ${{ matrix.arch }}
+          MATRIX_BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import shutil
+          import os
+          import pathlib
+
+          app_name = "codex-proxy-rs"
+          platform_name = f"{os.environ['MATRIX_OS']}-{os.environ['MATRIX_ARCH']}"
+          binary_src = pathlib.Path("dist/docker-artifacts") / f"{app_name}-{platform_name}" / os.environ["MATRIX_BINARY"]
+          if not binary_src.is_file():
+              raise SystemExit(f"Missing Docker binary artifact: {binary_src}")
+
+          target_dir = pathlib.Path("dist/docker") / platform_name
+          target_dir.mkdir(parents=True, exist_ok=True)
+          binary_dest = target_dir / app_name
+          shutil.copy2(binary_src, binary_dest)
+          binary_dest.chmod(0o755)
+          PY
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push app image
+        id: build-and-push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: runtime-prebuilt
+          platforms: ${{ matrix.dockerPlatform }}
+          push: true
+          build-args: |
+            CPR_PREBUILT_DIR=dist/docker
+          no-cache-filters: |
+            runtime-base
+            runtime-prebuilt
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.os }}-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.os }}-${{ matrix.arch }},mode=min
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.title=Codex Proxy RS
+            org.opencontainers.image.version=${{ needs.release-info.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.release-info.outputs.git_sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.release-info.outputs.git_sha }}-${{ matrix.arch }}
+
+      - name: Verify exact app image digest
+        uses: ./.github/actions/verify-container
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
+          platform: ${{ matrix.dockerPlatform }}
+          artifact-name: container-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+
+      - name: Record verified image digest
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          IMAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          mkdir -p dist/digests
+          printf '%s\n' "$IMAGE_DIGEST" > "dist/digests/linux-${IMAGE_ARCH}.txt"
+
+      - name: Upload verified image digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-digest-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/digests/*.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [release-info, package-assets, build-docker-image]
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release-info.result == 'success' &&
+        needs.package-assets.result == 'success' &&
+        needs.build-docker-image.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-info.outputs.git_sha }}
+
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: dist/release
+
+      - name: Download verified image digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-digest-*
+          path: dist/digests
+          merge-multiple: true
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Login to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create app image manifest
+        id: manifest
+        shell: bash
+        env:
+          DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
+          GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          DOCKER_PLATFORMS: ${{ needs.release-info.outputs.docker_platforms }}
+          PRERELEASE: ${{ needs.release-info.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          image="${REGISTRY}/${IMAGE_NAME}"
+          sources=()
+          IFS=',' read -ra platforms <<< "${DOCKER_PLATFORMS}"
+          for platform in "${platforms[@]}"; do
+            platform="${platform//[[:space:]]/}"
+            [ -n "${platform}" ] || continue
+            arch="${platform##*/}"
+            digest="$(cat "dist/digests/linux-${arch}.txt")"
+            if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "invalid verified image digest for ${platform}" >&2
+              exit 1
+            fi
+            sources+=("${image}@${digest}")
+          done
+
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "missing Docker image sources"
+            exit 1
+          fi
+
+          target_args=(
+            -t "${image}:${DOCKER_VERSION}"
+            -t "${image}:sha-${GIT_SHA}"
+          )
+          if [ "$PRERELEASE" != true ]; then
+            target_args+=(-t "${image}:latest")
+          fi
+          docker buildx imagetools create "${target_args[@]}" "${sources[@]}"
+
+          inspect_output="$(docker buildx imagetools inspect "${image}:${DOCKER_VERSION}")"
+          platform_list="$(awk '$1 == "Platform:" { print $2 }' <<< "${inspect_output}")"
+          for platform in "${platforms[@]}"; do
+            if ! grep -Eq "^${platform}(/|$)" <<< "${platform_list}"; then
+              echo "image manifest is missing platform ${platform}"
+              echo "${inspect_output}"
+              exit 1
+            fi
+          done
+
+          digest="$(docker buildx imagetools inspect "${image}:${DOCKER_VERSION}" --format '{{ .Manifest.Digest }}')"
+          if [ -z "${digest}" ]; then
+            echo "missing image digest"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign app image
+        shell: bash
+        env:
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+          DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
+          GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+          PRERELEASE: ${{ needs.release-info.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST}" ]; then
+            echo "missing image digest"
+            exit 1
+          fi
+
+          image="${REGISTRY}/${IMAGE_NAME}"
+          tags=("${image}:${DOCKER_VERSION}" "${image}:sha-${GIT_SHA}")
+          if [ "$PRERELEASE" != true ]; then
+            tags+=("${image}:latest")
+          fi
+          images=()
+          for tag in "${tags[@]}"; do
+            images+=("${tag}@${DIGEST}")
+          done
+
+          cosign sign --yes "${images[@]}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ needs.release-info.outputs.tag }}
+          generate_release_notes: true
+          previous_tag: ${{ needs.release-info.outputs.previous_tag }}
+          prerelease: ${{ needs.release-info.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
+          body: |
+            > [!WARNING]
+            > **Upgrading across major versions?** Online upgrades across major versions are not supported. Deploy the new major fresh with a new `.runtime/` data directory, then re-import or re-authorize provider accounts and client keys. See the [upgrade notes](https://github.com/${{ github.repository }}/blob/main/deploy/README.md#镜像升级与源码构建).
+
+            ## 📥 Installation
+
+            **Docker:**
+            ```bash
+            # GitHub Container Registry
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.release-info.outputs.docker_version }}
+            ```
+
+            **Manual download:**
+            Download the appropriate archive for your platform from the assets below.
+
+            Docker images include BuildKit SBOM/provenance metadata and are signed with keyless Cosign.
+
+            ## 📚 Documentation
+
+            - [GitHub Repository](https://github.com/${{ github.repository }})
+            - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/deploy/README.md)
+          fail_on_unmatched_files: true
+          files: |
+            dist/release/*

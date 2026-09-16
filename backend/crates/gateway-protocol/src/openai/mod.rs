@@ -1,0 +1,33 @@
+//! OpenAI wire contract。
+
+/// Codex Responses Lite 的 HTTP 请求头。
+pub const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
+    "x-openai-internal-codex-responses-lite";
+/// Codex Responses Lite 在 WebSocket `client_metadata` 中的投影键。
+pub const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
+    "ws_request_header_x_openai_internal_codex_responses_lite";
+/// Codex memory consolidation 请求标记。
+pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
+
+/// Pure Chat Completions / Responses JSON conversion.
+pub mod chat;
+/// OpenAI Responses 请求中携带的 Codex 专属语义。
+pub mod codex;
+/// OpenAI/Codex 事件语义、用量与限流字段编解码。
+pub mod events;
+mod headers;
+/// Shared pure-JSON recovery for buffered Responses and Chat delivery.
+pub mod output_recovery;
+mod scheduling;
+/// Server-Sent Events 帧的解析与编码。
+pub mod sse;
+
+pub use codex::{
+    CodexResponsesRequestSemantics, codex_responses_request_semantics,
+    codex_responses_request_semantics_with_turn_metadata, codex_session_id, codex_thread_id,
+};
+pub use headers::is_transport_managed_request_header;
+pub use scheduling::{
+    OPENAI_SCHEDULING_SESSION_HINT_CONTEXT_KEY, OPENAI_SCHEDULING_SESSION_HINT_HEADERS,
+    OpenAiSchedulingSessionHint, is_openai_scheduling_session_hint_header,
+};

@@ -1,0 +1,120 @@
+name: Security Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      privacy_only:
+        description: Run only the privacy check
+        type: boolean
+        default: false
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  privacy:
+    name: Privacy Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install verified privacy scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          directory="$(mktemp -d)"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o "$directory/scanner.tar.gz"
+          printf '%s  %s\n' \
+            '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' \
+            "$directory/scanner.tar.gz" | sha256sum --check
+          tar -xzf "$directory/scanner.tar.gz" -C "$directory" gitleaks
+          printf 'PRIVACY_GITLEAKS=%s/gitleaks\n' "$directory" >> "$GITHUB_ENV"
+
+      - name: Test and scan publication history
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 -m unittest discover -s tools/privacy -p 'test_*.py' -v
+          python3 tools/privacy/check.py history HEAD
+
+  backend-security:
+    if: github.event_name != 'workflow_dispatch' || !inputs.privacy_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: backend -> target
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Run cargo audit
+        working-directory: backend
+        run: cargo audit
+
+  frontend-security:
+    if: github.event_name != 'workflow_dispatch' || !inputs.privacy_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.7.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Run pnpm audit
+        run: pnpm --dir frontend audit --prod --audit-level=high
+
+  container-security:
+    if: github.event_name == 'schedule'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/_container.yml
+    with:
+      ref: ${{ github.sha }}

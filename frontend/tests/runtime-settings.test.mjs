@@ -1,0 +1,345 @@
+/* eslint-disable test/no-import-node-test -- these regressions use Node's built-in runner. */
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { test } from 'node:test'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
+import * as vue from 'vue'
+
+const require = createRequire(import.meta.url)
+
+function loadModule(filename, dependencies = {}) {
+  const { outputText } = ts.transpileModule(readFileSync(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
+  })
+  const exports = {}
+  runInNewContext(outputText, {
+    exports,
+    require: name => dependencies[name] ?? require(name),
+  }, { filename: String(filename) })
+  return exports
+}
+
+const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
+const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
+
+function mountSettings(initial, onWarning = assert.fail) {
+  let saved = structuredClone(initial)
+  const requests = []
+  const notifications = { toast: { success: () => {}, warning: onWarning, error: assert.fail } }
+  const asyncAction = loadModule(new URL('../src/composables/useAsyncAction.ts', import.meta.url), {
+    vue,
+    '@/api/request': apiErrors,
+    '@/components/base/BaseToast': notifications,
+    '@/utils/async': asyncUtils,
+  })
+  const dependencies = {
+    vue,
+    '@/api': {
+      getSettings: async () => saved,
+      updateSettings: async (payload) => {
+        const data = structuredClone(payload)
+        requests.push(data)
+        saved = { ...data, updatedAt: initial.updatedAt }
+        return saved
+      },
+    },
+    '@/api/request': apiErrors,
+    '@/components/base/BaseToast': notifications,
+    '@/composables/useAsyncAction': asyncAction,
+    '@/utils/async': asyncUtils,
+  }
+  const module = loadModule(new URL('../src/views/settings/composables/useSettingsForm.ts', import.meta.url), dependencies)
+  const scope = vue.effectScope()
+  const state = scope.run(() => module.useSettingsForm())
+  return { state, requests, stop: () => scope.stop() }
+}
+
+function settings() {
+  return {
+    modelMappings: { 'client-model': 'upstream-model' },
+    refreshMarginSeconds: 1800,
+    refreshConcurrency: 4,
+    maxConcurrentPerAccount: 5,
+    requestIntervalMs: 25,
+    rotationStrategy: 'smart',
+    minCodexDesktopVersion: null,
+    minCodexCliVersion: null,
+    usageRetentionDays: 31,
+    opsEventRetentionDays: 30,
+    auditRetentionDays: 90,
+    updatedAt: '2026-09-12T00:00:00Z',
+  }
+}
+
+test('runtime settings load and save without a global WS opening limit', async () => {
+  for (const legacy of [false, true]) {
+    const initial = {
+      ...settings(),
+      requestTuning: { maxRequestAttempts: 8, websocketHttpFallbackEnabled: false },
+      requestTuningDefaults: { websocketMaxAgeMs: 60_000 },
+    }
+    if (legacy) {
+      initial.requestTuning.websocketMaxConnecting = 4
+      initial.requestTuningDefaults.websocketMaxConnecting = 8
+    }
+    const query = mountSettings(initial)
+    try {
+      assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxConnecting'), false)
+      await query.state.loadSettings()
+      assert.equal(query.state.form.requestTuning.maxRequestAttempts, 8)
+      assert.equal(query.state.form.requestTuning.websocketHttpFallbackEnabled, false)
+      assert.equal(query.state.form.requestTuning.websocketMaxAgeMs, 60_000)
+      assert.equal(query.state.form.requestTuning.websocketMaxRetries, 5)
+      assert.equal(Object.hasOwn(query.state.form.requestTuning, 'websocketMaxConnecting'), false)
+
+      query.state.form.requestTuning.websocketMaxRetries = 2
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 1)
+      assert.equal(Object.hasOwn(query.requests[0].requestTuning, 'websocketMaxConnecting'), false)
+      assert.equal(query.requests[0].requestTuning.websocketMaxRetries, 2)
+      assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
+      assert.deepEqual(query.requests[0].modelMappings, initial.modelMappings)
+
+      await query.state.loadSettings()
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 2)
+      assert.deepEqual(query.requests[1], query.requests[0])
+    }
+    finally {
+      query.stop()
+    }
+  }
+})
+
+test('inherited runtime defaults never add the removed global WS opening limit', async () => {
+  const query = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+    assert.deepEqual(query.requests[0].requestTuning, {
+      maxAccountSwitches: 31,
+      maxRequestAttempts: 32,
+      websocketMaxRetries: 5,
+      websocketHttpFallbackEnabled: true,
+      websocketMaxAgeMs: 55 * 60 * 1_000,
+      websocketStreamIdleTimeoutMs: 300_000,
+      websocketFailureThreshold: 3,
+      websocketFailureWindowMs: 30_000,
+      websocketFailureOpenDurationMs: 30_000,
+      rateLimitCooldownSeconds: 60,
+      accountBusyWaitEnabled: false,
+      accountBusyWaitStickyMaxWaiting: 3,
+      accountBusyWaitStickyTimeoutSeconds: 120,
+      accountBusyWaitFallbackMaxWaiting: 100,
+      accountBusyWaitFallbackTimeoutSeconds: 30,
+    })
+  }
+  finally {
+    query.stop()
+  }
+})
+
+const busyWaitDefaults = {
+  accountBusyWaitEnabled: false,
+  accountBusyWaitStickyMaxWaiting: 3,
+  accountBusyWaitStickyTimeoutSeconds: 120,
+  accountBusyWaitFallbackMaxWaiting: 100,
+  accountBusyWaitFallbackTimeoutSeconds: 30,
+}
+
+function busyWaitValues(tuning) {
+  return Object.fromEntries(Object.keys(busyWaitDefaults).map(key => [key, tuning[key]]))
+}
+
+test('account busy wait loads saved values and round trips edited settings', async () => {
+  const initialWait = {
+    accountBusyWaitEnabled: true,
+    accountBusyWaitStickyMaxWaiting: 7,
+    accountBusyWaitStickyTimeoutSeconds: 180,
+    accountBusyWaitFallbackMaxWaiting: 150,
+    accountBusyWaitFallbackTimeoutSeconds: 45,
+  }
+  const editedWait = {
+    accountBusyWaitEnabled: true,
+    accountBusyWaitStickyMaxWaiting: 9,
+    accountBusyWaitStickyTimeoutSeconds: 240,
+    accountBusyWaitFallbackMaxWaiting: 200,
+    accountBusyWaitFallbackTimeoutSeconds: 60,
+  }
+  const query = mountSettings({
+    ...settings(),
+    requestTuning: { ...initialWait, websocketMaxRetries: 2 },
+    requestTuningDefaults: busyWaitDefaults,
+  })
+  try {
+    await query.state.loadSettings()
+    assert.deepEqual(busyWaitValues(query.state.form.requestTuning), initialWait)
+    Object.assign(query.state.form.requestTuning, editedWait)
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+    assert.deepEqual(busyWaitValues(query.requests[0].requestTuning), editedWait)
+    assert.equal(query.requests[0].requestTuning.websocketMaxRetries, 2)
+    assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
+    assert.equal(query.requests[0].rotationStrategy, 'smart')
+
+    Object.assign(query.state.form.requestTuning, busyWaitDefaults)
+    await query.state.loadSettings()
+    assert.deepEqual(busyWaitValues(query.state.form.requestTuning), editedWait)
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 2)
+    assert.deepEqual(query.requests[1], query.requests[0])
+  }
+  finally {
+    query.stop()
+  }
+})
+
+test('account busy wait defaults inherit per field and preserve an explicit false', async () => {
+  const serverDefaults = {
+    accountBusyWaitEnabled: true,
+    accountBusyWaitStickyMaxWaiting: 5,
+    accountBusyWaitStickyTimeoutSeconds: 150,
+    accountBusyWaitFallbackMaxWaiting: 125,
+    accountBusyWaitFallbackTimeoutSeconds: 40,
+  }
+  for (const { defaults, tuning, expected } of [
+    { defaults: undefined, tuning: undefined, expected: busyWaitDefaults },
+    { defaults: serverDefaults, tuning: undefined, expected: serverDefaults },
+    {
+      defaults: serverDefaults,
+      tuning: { accountBusyWaitEnabled: false, accountBusyWaitStickyMaxWaiting: 8 },
+      expected: { ...serverDefaults, accountBusyWaitEnabled: false, accountBusyWaitStickyMaxWaiting: 8 },
+    },
+    {
+      defaults: { accountBusyWaitStickyTimeoutSeconds: 150 },
+      tuning: { accountBusyWaitEnabled: true, accountBusyWaitFallbackMaxWaiting: 250 },
+      expected: {
+        ...busyWaitDefaults,
+        accountBusyWaitEnabled: true,
+        accountBusyWaitStickyTimeoutSeconds: 150,
+        accountBusyWaitFallbackMaxWaiting: 250,
+      },
+    },
+  ]) {
+    const query = mountSettings({
+      ...settings(),
+      requestTuning: tuning,
+      requestTuningDefaults: defaults,
+    })
+    try {
+      assert.deepEqual(busyWaitValues(query.state.form.requestTuning), busyWaitDefaults)
+      await query.state.loadSettings()
+      assert.deepEqual(busyWaitValues(query.state.form.requestTuning), expected)
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 1)
+      assert.deepEqual(busyWaitValues(query.requests[0].requestTuning), expected)
+    }
+    finally {
+      query.stop()
+    }
+  }
+})
+
+test('disabling account busy wait preserves all numeric settings across save and reload', async () => {
+  const initialWait = {
+    accountBusyWaitEnabled: true,
+    accountBusyWaitStickyMaxWaiting: 11,
+    accountBusyWaitStickyTimeoutSeconds: 210,
+    accountBusyWaitFallbackMaxWaiting: 230,
+    accountBusyWaitFallbackTimeoutSeconds: 55,
+  }
+  const query = mountSettings({ ...settings(), requestTuning: initialWait })
+  try {
+    await query.state.loadSettings()
+    query.state.form.requestTuning.accountBusyWaitEnabled = false
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+    const disabledWait = { ...initialWait, accountBusyWaitEnabled: false }
+    assert.deepEqual(busyWaitValues(query.requests[0].requestTuning), disabledWait)
+    Object.assign(query.state.form.requestTuning, busyWaitDefaults)
+    await query.state.loadSettings()
+    assert.deepEqual(busyWaitValues(query.state.form.requestTuning), disabledWait)
+
+    query.state.form.requestTuning.accountBusyWaitEnabled = true
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 2)
+    assert.deepEqual(busyWaitValues(query.requests[1].requestTuning), initialWait)
+  }
+  finally {
+    query.stop()
+  }
+})
+
+test('account busy wait accepts inclusive numeric bounds when enabled or disabled', async () => {
+  for (const enabled of [false, true]) {
+    for (const [maxWaiting, timeoutSeconds] of [[1, 1], [1000, 600]]) {
+      const expected = {
+        accountBusyWaitEnabled: enabled,
+        accountBusyWaitStickyMaxWaiting: maxWaiting,
+        accountBusyWaitStickyTimeoutSeconds: timeoutSeconds,
+        accountBusyWaitFallbackMaxWaiting: maxWaiting,
+        accountBusyWaitFallbackTimeoutSeconds: timeoutSeconds,
+      }
+      const query = mountSettings(settings())
+      try {
+        await query.state.loadSettings()
+        Object.assign(query.state.form.requestTuning, expected)
+        await query.state.saveSettings()
+        assert.equal(query.requests.length, 1)
+        assert.deepEqual(busyWaitValues(query.requests[0].requestTuning), expected)
+      }
+      finally {
+        query.stop()
+      }
+    }
+  }
+})
+
+for (const [field, upperBound] of [
+  ['accountBusyWaitStickyMaxWaiting', 1000],
+  ['accountBusyWaitStickyTimeoutSeconds', 600],
+  ['accountBusyWaitFallbackMaxWaiting', 1000],
+  ['accountBusyWaitFallbackTimeoutSeconds', 600],
+]) {
+  for (const enabled of [false, true]) {
+    test(`account busy wait rejects invalid ${field} without saving when enabled=${enabled}`, async () => {
+      const warnings = []
+      const query = mountSettings(settings(), message => warnings.push(message))
+      try {
+        await query.state.loadSettings()
+        query.state.form.requestTuning.accountBusyWaitEnabled = enabled
+        const validValue = query.state.form.requestTuning[field]
+        const invalidValues = [0, -1, 1.5, upperBound + 1, Number.NaN, Infinity, -Infinity, '', '3', null, undefined]
+        for (const value of invalidValues) {
+          query.state.form.requestTuning[field] = value
+          await query.state.saveSettings()
+          assert.equal(query.requests.length, 0, `${field}=${String(value)} must not reach updateSettings`)
+          assert.equal(query.state.saving.value, false)
+        }
+        assert.deepEqual(warnings, invalidValues.map(() => 'OpenAI 账号忙时等待人数须为 1–1000 的整数，等待秒数须为 1–600 的整数'))
+
+        query.state.form.requestTuning[field] = validValue
+        await query.state.saveSettings()
+        assert.equal(query.requests.length, 1, 'correcting the value must allow saving again')
+        assert.equal(query.requests[0].requestTuning[field], validValue)
+        assert.equal(query.requests[0].requestTuning.accountBusyWaitEnabled, enabled)
+        assert.equal(warnings.length, invalidValues.length)
+      }
+      finally {
+        query.stop()
+      }
+    })
+  }
+}
+
+test('settings controls and API type no longer expose the global WS opening limit', () => {
+  const component = readFileSync(new URL('../src/views/settings/components/RuntimeSettingsCard.vue', import.meta.url), 'utf8')
+  const api = readFileSync(new URL('../src/api/modules/settings.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(component, /websocketMaxConnecting/)
+  assert.doesNotMatch(api, /websocketMaxConnecting/)
+  assert.match(component, /v-model="maxConcurrentPerAccount"/)
+  assert.match(component, /v-model="requestTuning\.websocketHttpFallbackEnabled"/)
+})

@@ -1,0 +1,10 @@
+{
+  "model": "gpt-5.4",
+  "input": [
+    {
+      "content": "Say fixture ready.",
+      "role": "user"
+    }
+  ],
+  "instructions": "Return a short synthetic answer."
+}

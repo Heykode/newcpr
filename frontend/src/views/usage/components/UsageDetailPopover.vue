@@ -1,0 +1,35 @@
+<script setup lang="ts">
+import { Info } from '@lucide/vue'
+
+import BasePopover from '@/components/base/BasePopover.vue'
+
+// 表格单元格的“信息点”悬浮明细：统一触发按钮与面板壳。
+defineProps<{
+  title: string
+  triggerLabel: string
+}>()
+</script>
+
+<template>
+  <BasePopover
+    trigger="hover"
+    placement="right"
+  >
+    <template #trigger>
+      <button
+        type="button"
+        class="inline-flex size-4 items-center justify-center rounded-full bg-cp-primary-container text-cp-primary-on-container outline-none hover:bg-cp-primary-container-hover focus-visible:ring-2 focus-visible:ring-cp-control-outline"
+        :aria-label="triggerLabel"
+      >
+        <Info class="size-3" />
+      </button>
+    </template>
+
+    <div class="grid w-60 gap-2 p-3 text-cp-sm leading-none">
+      <p class="m-0 font-heavy text-cp-text">
+        {{ title }}
+      </p>
+      <slot />
+    </div>
+  </BasePopover>
+</template>

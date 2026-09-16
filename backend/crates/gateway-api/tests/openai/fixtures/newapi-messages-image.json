@@ -1,0 +1,23 @@
+{
+  "model": "gpt-5.4",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Describe this synthetic pixel."
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGIyaDgACAAA//8CXAFz1fWjqwAAAABJRU5ErkJggg==",
+            "MimeType": ""
+          }
+        }
+      ]
+    }
+  ],
+  "stream": true,
+  "max_tokens": 128
+}

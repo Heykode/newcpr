@@ -1,0 +1,12 @@
+{
+  "model": "gpt-5.4",
+  "input": [
+    {
+      "content": "Count to two.",
+      "role": "user"
+    }
+  ],
+  "instructions": "Use synthetic data only.",
+  "parallel_tool_calls": false,
+  "stream": true
+}

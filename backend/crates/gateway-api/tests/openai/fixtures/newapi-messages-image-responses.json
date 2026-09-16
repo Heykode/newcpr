@@ -1,0 +1,20 @@
+{
+  "model": "gpt-5.4",
+  "input": [
+    {
+      "content": [
+        {
+          "text": "Describe this synthetic pixel.",
+          "type": "input_text"
+        },
+        {
+          "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGIyaDgACAAA//8CXAFz1fWjqwAAAABJRU5ErkJggg==",
+          "type": "input_image"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "max_output_tokens": 128,
+  "stream": true
+}

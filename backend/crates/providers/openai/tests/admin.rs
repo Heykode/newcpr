@@ -1,0 +1,2580 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::{DateTime, TimeZone as _, Utc};
+use futures::{StreamExt, future::BoxFuture};
+use gateway_admin::model::accounts::AccountRecord;
+use gateway_admin::model::observability::{
+    CurrencyCost, DesktopReleaseStatus, ProviderBillingInput,
+};
+use gateway_admin::model::provider_credentials::{
+    AuthorizationMutationTarget, AuthorizationOwnerBinding, CompleteAuthorization,
+    ConsumeProviderResetCredit, PendingAuthorizationMutation, PrepareCredentialImport,
+    PrepareCredentialRefresh, PrepareCredentialRotation, ProviderDocument,
+    ProviderExportCredentialInput, ProviderQuotaRequest, ProviderQuotaWindowRole,
+    QuotaLocalUsageAttribution,
+};
+use gateway_admin::model::{MutationActor, MutationContext, Revision};
+use gateway_admin::ports::provider::ProviderAdminErrorKind;
+use gateway_core::account::{
+    CredentialRevision, CredentialState, OpaqueProviderData, ProviderAccount, ProviderAccountId,
+    ProviderAccountStore, QuotaAccessChange, QuotaEvidence, QuotaObservation, QuotaState,
+};
+use gateway_core::engine::provider::ProviderRequest;
+use gateway_core::engine::{
+    AccountAttemptContext, AttemptContext, ModelRequestId, RequestAttemptContext,
+};
+use gateway_core::lifecycle::CancellationToken;
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_core::policy::ClientApiKeyId;
+use gateway_core::provider_ports::{
+    NewOAuthPendingFlow, OAuthPendingClaimOutcome, OAuthPendingConsumeOutcome,
+    OAuthPendingFlowPort, OAuthPendingPutOutcome, OAuthPendingReleaseOutcome,
+    ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderCatalogCacheKey,
+    ProviderCatalogCachePort, ProviderCooldown, ProviderCooldownPort, ProviderCooldownScope,
+    ProviderCredentialState, ProviderCredentialStatePort, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderScopedCooldown, ProviderStoreError, ProviderStorePorts,
+};
+use gateway_core::routing::{
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderKind,
+    ProviderModel, PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory,
+    RuntimeSnapshot, UpstreamModelId,
+};
+use gateway_core::task::{WorkerContribution, WorkerKind, WorkerRunnable};
+use provider_openai::config::{CodexWireProfileConfig, OpenAiConfig};
+use provider_openai::credential::{CodexCredentialCodec, ImportCodexOAuthCredential};
+use provider_openai::transport::profile::APPCAST_POLL_INTERVAL;
+use secrecy::SecretString;
+use serde_json::{Map, Value, json};
+use tempfile::TempDir;
+use uuid::Uuid;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+use crate::support::{
+    MemoryAccountStore, MemorySessionAffinity, MemorySessionExclusions, TestLeaseCoordinator,
+    account_policy, profile, secret,
+};
+
+const COMPLETED_SESSION_SSE: &str = concat!(
+    "event: response.completed\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_initialized_session\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+);
+
+#[tokio::test]
+async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions_once() {
+    let config = valid_config();
+    let mut bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .expect("OpenAI bundle");
+
+    assert_eq!(bundle.core_provider().name(), "openai");
+    assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
+    let contributions = bundle.take_worker_contributions();
+    assert_eq!(contributions.len(), 5);
+    assert!(
+        contributions
+            .iter()
+            .any(|item| item.kind() == WorkerKind::OAuthRefresh)
+    );
+    assert!(
+        contributions
+            .iter()
+            .any(|item| item.kind() == WorkerKind::QuotaCatalogHealth)
+    );
+    let release_worker = contributions
+        .iter()
+        .find_map(|contribution| match contribution {
+            WorkerContribution::Registration(registration)
+                if registration.id.owner() == "openai-desktop-release" =>
+            {
+                Some(registration)
+            }
+            WorkerContribution::Registration(_) | WorkerContribution::Disabled { .. } => None,
+        })
+        .expect("Desktop release worker");
+    assert_eq!(release_worker.id.kind(), WorkerKind::QuotaCatalogHealth);
+    let WorkerRunnable::Scheduled { schedule, .. } = &release_worker.runnable else {
+        panic!("Desktop release worker must be scheduled");
+    };
+    assert_eq!(schedule.interval(), APPCAST_POLL_INTERVAL);
+    for (owner, interval) in [
+        ("openai", Duration::from_secs(30)),
+        (
+            "openai-model-catalog",
+            config.config.quota_refresh_policy().interval(),
+        ),
+    ] {
+        let schedule = contributions
+            .iter()
+            .find_map(|contribution| match contribution {
+                WorkerContribution::Registration(registration)
+                    if registration.id.kind() == WorkerKind::QuotaCatalogHealth
+                        && registration.id.owner() == owner =>
+                {
+                    match &registration.runnable {
+                        WorkerRunnable::Scheduled { schedule, .. } => Some(schedule),
+                        WorkerRunnable::Daemon { .. } => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("quota/catalog scheduled worker");
+        assert_eq!(schedule.interval(), interval, "{owner}");
+    }
+    assert!(contributions.iter().any(|contribution| {
+        matches!(
+            contribution,
+            WorkerContribution::Registration(registration)
+                if registration.id.owner() == "openai-model-etag"
+                    && matches!(&registration.runnable, WorkerRunnable::Daemon { .. })
+        )
+    }));
+    assert!(bundle.take_worker_contributions().is_empty());
+}
+
+#[tokio::test]
+async fn quota_forecast_observation_reuses_protocol_parser_and_keeps_window_identity() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let provider = bundle.admin_provider();
+    let mut window = gateway_admin::model::provider_credentials::ProviderQuotaWindow {
+        key: "codex:604800s".to_owned(),
+        group: "shortTerm".to_owned(),
+        label: "周额度".to_owned(),
+        limit_id: Some("codex".to_owned()),
+        limit_name: None,
+        role: Some(ProviderQuotaWindowRole::Primary),
+        local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+        window_seconds: Some(604_800),
+        used_percent: Some(50.0),
+        reset_at: None,
+        limit_reached: false,
+        local_usage: None,
+        provider_data: None,
+    };
+    let document = ProviderDocument::new(OpaqueProviderData::new(
+        json!({
+            "requestSummary": {"ignored": true},
+            "rateLimitHeaders": [
+                ["x-codex-primary-used-percent", "32.5"],
+                ["x-codex-primary-window-minutes", "10080"],
+                ["x-codex-primary-reset-at", "1789805447"],
+                ["x-codex-secondary-used-percent", "4"],
+                ["x-codex-secondary-window-minutes", "300"],
+                ["x-codex-secondary-reset-at", "1789218647"],
+                ["x-codex-plan-type", "pro"]
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ));
+    let observed = provider
+        .quota_forecast_observation(&document, &window)
+        .unwrap();
+    assert_eq!(observed.used_percent, 32.5);
+    assert_eq!(observed.plan_type.as_deref(), Some("pro"));
+    assert_eq!(observed.reset_at.timestamp(), 1_789_805_447);
+    window.role = Some(ProviderQuotaWindowRole::Secondary);
+    assert!(
+        provider
+            .quota_forecast_observation(&document, &window)
+            .is_none()
+    );
+    window.role = Some(ProviderQuotaWindowRole::Primary);
+    window.limit_id = Some("other_bucket".to_owned());
+    assert!(
+        provider
+            .quota_forecast_observation(&document, &window)
+            .is_none()
+    );
+    let malformed = ProviderDocument::new(OpaqueProviderData::new(
+        json!({
+            "rateLimitHeaders": "not-a-header-list"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ));
+    assert!(
+        provider
+            .quota_forecast_observation(&malformed, &window)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn initialized_provider_keeps_thread_spawn_transport_conversations_distinct() {
+    let account_id = "acct_initialized_thread_spawn";
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: account_id.to_owned(),
+            secret: secret("at-initialized-thread-spawn"),
+            verified_account: profile("chatgpt-initialized-thread-spawn"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(COMPLETED_SESSION_SSE),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let mut config = valid_config();
+    config.config.api.base_url = server.uri();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("initialized OpenAI provider");
+    let provider = bundle.core_provider();
+    let thread_spawn = r#"{"subagent_kind":"thread_spawn"}"#;
+    let mut conversation_ids = Vec::new();
+
+    for (request_id, thread_id) in [
+        ("req_initialized_thread_spawn_first", "child-one"),
+        ("req_initialized_thread_spawn_second", "child-two"),
+    ] {
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            Map::from_iter([
+                ("model".to_owned(), json!("gpt-5.4")),
+                ("input".to_owned(), json!("child task")),
+                ("session_id".to_owned(), json!("parent-session")),
+                ("thread_id".to_owned(), json!(thread_id)),
+                ("turnMetadata".to_owned(), json!(thread_spawn)),
+            ]),
+        )
+        .expect("OpenAI payload")
+        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))]));
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+        let mut stream = provider
+            .execute(
+                initialized_provider_request(operation, account_id),
+                initialized_attempt_context(request_id, account_id),
+            )
+            .await
+            .expect("prepare child provider stream");
+        let mut conversation_id = None;
+        while let Some(event) = stream.next().await {
+            let event = event.expect("child provider response");
+            if let Some(update) = event.session_update() {
+                conversation_id = update
+                    .payload()
+                    .get("conversation_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+            }
+        }
+        conversation_ids.push(conversation_id.expect("child transport conversation id"));
+    }
+
+    assert_ne!(conversation_ids[0], conversation_ids[1]);
+}
+
+#[tokio::test]
+async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .expect("OpenAI bundle");
+    let admin = bundle.admin_provider();
+    let profile = admin.dashboard_wire_profile().expect("wire profile");
+    assert_eq!(profile.version, "0.102.0");
+    assert_eq!(profile.build, None);
+    assert_eq!(profile.target.os_type, "Mac OS");
+    assert_eq!(profile.target.os_version, "15.5.0");
+    assert_eq!(
+        profile.user_agent,
+        "Codex Desktop/0.102.0 (Mac OS 15.5.0; arm64) xterm-256color (Codex Desktop; 1.2026.190)"
+    );
+    assert_eq!(
+        profile
+            .attributes
+            .iter()
+            .find(|attribute| attribute.label == "客户端标识")
+            .map(|attribute| attribute.value.as_str()),
+        Some("Codex Desktop; 1.2026.190")
+    );
+    assert_eq!(
+        profile.release.as_ref().map(|release| release.status),
+        Some(DesktopReleaseStatus::Unchecked)
+    );
+    let billing = admin
+        .calculated_billing(&ProviderBillingInput {
+            upstream_model_id: "gpt-4o".to_owned(),
+            service_tier: None,
+            input_tokens: Some(1_000_000),
+            output_tokens: Some(0),
+            cached_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total: CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: "2.5".parse().expect("amount"),
+            },
+        })
+        .expect("billing")
+        .expect("known pricing");
+    assert_eq!(billing.total_amount.amount.as_str(), "2.5");
+    assert_eq!(billing.input_price_per_million.amount.as_str(), "2.5");
+
+    let fast_billing = admin
+        .calculated_billing(&ProviderBillingInput {
+            upstream_model_id: "gpt-4o".to_owned(),
+            service_tier: Some("priority".to_owned()),
+            input_tokens: Some(1_000_000),
+            output_tokens: Some(0),
+            cached_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total: CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: "4.25".parse().expect("fast amount"),
+            },
+        })
+        .expect("fast billing")
+        .expect("known fast pricing");
+    assert_eq!(fast_billing.service_tier.as_deref(), Some("priority"));
+    assert_eq!(fast_billing.multiplier_percent, 170);
+    assert_eq!(fast_billing.standard_amount.amount.as_str(), "2.5");
+    assert_eq!(fast_billing.total_amount.amount.as_str(), "4.25");
+}
+
+#[tokio::test]
+async fn reset_credit_success_with_invalid_body_should_remain_an_unknown_consume_result() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/rate-limit-reset-credits/consume"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (bundle, account_id, _config) = reset_credit_admin(&server).await;
+
+    let error = bundle
+        .admin_provider()
+        .consume_reset_credit(reset_credit_command(account_id))
+        .await
+        .expect_err("invalid success body must be ambiguous");
+
+    assert_eq!(error.kind(), ProviderAdminErrorKind::Ambiguous);
+    assert_eq!(
+        error.message(),
+        Some(
+            "OpenAI reset-credit consume result is unknown; refresh the credit list before retrying"
+        )
+    );
+}
+
+#[tokio::test]
+async fn reset_credit_explicit_http_rejection_should_preserve_the_raw_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/rate-limit-reset-credits/consume"))
+        .respond_with(ResponseTemplate::new(409).set_body_raw(
+            r#"{"code":"nothing_to_reset","detail":"window is fresh"}"#,
+            "application/json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (bundle, account_id, _config) = reset_credit_admin(&server).await;
+
+    let error = bundle
+        .admin_provider()
+        .consume_reset_credit(reset_credit_command(account_id))
+        .await
+        .expect_err("explicit upstream rejection");
+
+    assert_eq!(error.kind(), ProviderAdminErrorKind::BadGateway);
+    assert_eq!(
+        error.message(),
+        Some(
+            r#"OpenAI reset-credit upstream returned HTTP 409: {"code":"nothing_to_reset","detail":"window is fresh"}"#
+        )
+    );
+    let debug = format!("{error:?}");
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("window is fresh"));
+}
+
+#[tokio::test]
+async fn openai_core_provider_projects_codex_request_observation_without_routing_side_effects() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .expect("OpenAI bundle");
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("gpt-5.4")),
+            ("input".to_owned(), json!("summarize")),
+            ("reasoning".to_owned(), json!({"effort": "high"})),
+        ]),
+    )
+    .expect("OpenAI payload")
+    .with_context(Map::from_iter([(
+        "turn_metadata".to_owned(),
+        Value::String(r#"{"request_kind":"compaction","subagent_kind":"review"}"#.to_owned()),
+    )]));
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+
+    let client_key_id = ClientApiKeyId::new("key_openai_admin_observation").expect("client key");
+    let observation = bundle
+        .core_provider()
+        .request_observation(&operation, &client_key_id);
+
+    assert_eq!(observation.request_kind.as_deref(), Some("compaction"));
+    assert_eq!(observation.subagent_kind.as_deref(), Some("review"));
+    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值。
+    assert_eq!(observation.reasoning_preset, None);
+    assert!(observation.compact);
+}
+
+#[tokio::test]
+async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owner() {
+    let pending = Arc::new(TestOAuthPending::default());
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(
+            Arc::new(MemoryAccountStore::default()),
+            Arc::clone(&pending),
+        ),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let start_context = MutationContext {
+        actor: MutationActor::AdminSession {
+            admin_user_id: "admin-owner".to_owned(),
+        },
+        request_id: "request-start".to_owned(),
+    };
+    let started = bundle
+        .admin_provider()
+        .start_authorization(PendingAuthorizationMutation::new(
+            ProviderKind::new("openai").expect("provider"),
+            AuthorizationMutationTarget::Create {
+                name: "OAuth account".to_owned(),
+            },
+            AuthorizationOwnerBinding::from_context(&start_context),
+        ))
+        .await
+        .expect("start authorization");
+    {
+        let values = pending.values.lock().expect("OAuth pending");
+        let (_, payload, _, _) = values.values().next().expect("stored pending");
+        let mutation = payload
+            .expose_to_provider()
+            .get("mutation")
+            .and_then(Value::as_object)
+            .expect("pending mutation");
+        assert!(
+            payload
+                .expose_to_provider()
+                .get("reauthorization_credential_revision")
+                .is_none()
+        );
+        assert!(
+            payload
+                .expose_to_provider()
+                .get("installation_id")
+                .and_then(Value::as_str)
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                .is_some_and(|value| value.get_version_num() == 4)
+        );
+        assert_eq!(
+            mutation.get("schema_version").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert!(mutation.get("expected_config_revision").is_none());
+        assert!(
+            mutation
+                .get("target")
+                .and_then(Value::as_object)
+                .is_some_and(|target| target.get("expected_credential_revision").is_none())
+        );
+        assert_eq!(
+            mutation.get("started_request_id").and_then(Value::as_str),
+            Some("request-start")
+        );
+    }
+    let error = bundle
+        .admin_provider()
+        .complete_authorization(CompleteAuthorization {
+            settings: None,
+            context: MutationContext {
+                actor: MutationActor::AdminSession {
+                    admin_user_id: "different-owner".to_owned(),
+                },
+                request_id: "request-complete".to_owned(),
+            },
+            flow_id: started.flow_id,
+            callback_url: "http://localhost:1455/auth/callback?code=unused&state=unused".to_owned(),
+        })
+        .await
+        .expect_err("wrong owner");
+    assert_eq!(error.kind(), ProviderAdminErrorKind::NotFound);
+    assert_eq!(pending.values.lock().expect("OAuth pending").len(), 1);
+}
+
+#[tokio::test]
+async fn openai_reauthorization_pending_payload_reuses_the_account_installation_id() {
+    let accounts = Arc::new(MemoryAccountStore::default());
+    accounts
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_pending_reauth".to_owned(),
+            name: "pending reauthorization".to_owned(),
+            secret: secret("pending-reauth-access"),
+            verified_account: profile("chatgpt-pending-reauth"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account_id = ProviderAccountId::new("acct_pending_reauth").expect("account id");
+    let existing = accounts
+        .load_current_credential(&account_id)
+        .await
+        .expect("seeded credential");
+    let expected_installation_id = CodexCredentialCodec::decode(&existing.credential)
+        .expect("decode seeded credential")
+        .installation_id;
+    let pending = Arc::new(TestOAuthPending::default());
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(accounts, Arc::clone(&pending)),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let context = MutationContext {
+        actor: MutationActor::AdminApiKey,
+        request_id: "request-pending-reauth".to_owned(),
+    };
+
+    bundle
+        .admin_provider()
+        .start_authorization(PendingAuthorizationMutation::new(
+            ProviderKind::new("openai").expect("provider"),
+            AuthorizationMutationTarget::Reauthorize { account_id },
+            AuthorizationOwnerBinding::from_context(&context),
+        ))
+        .await
+        .expect("start reauthorization");
+
+    let values = pending.values.lock().expect("OAuth pending");
+    let (_, payload, _, _) = values.values().next().expect("stored pending");
+    let document = payload.expose_to_provider();
+    let mutation = document
+        .get("mutation")
+        .and_then(Value::as_object)
+        .expect("pending mutation");
+    let target = mutation
+        .get("target")
+        .and_then(Value::as_object)
+        .expect("pending target");
+    assert_eq!(
+        mutation.get("schema_version").and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        document
+            .get("reauthorization_account_id")
+            .and_then(Value::as_str),
+        Some("acct_pending_reauth")
+    );
+    assert_eq!(
+        document.get("installation_id").and_then(Value::as_str),
+        Some(expected_installation_id.as_str())
+    );
+    assert!(
+        document
+            .get("reauthorization_credential_revision")
+            .is_none()
+    );
+    assert_eq!(
+        target.get("kind").and_then(Value::as_str),
+        Some("reauthorize")
+    );
+    assert_eq!(
+        target.get("account_id").and_then(Value::as_str),
+        Some("acct_pending_reauth")
+    );
+    assert!(target.get("expected_credential_revision").is_none());
+}
+
+#[tokio::test]
+async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut oauth_secret = secret("admin-projection-access");
+    oauth_secret.id_token = Some(SecretString::from("header.id-token.signature"));
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_admin_projection".to_owned(),
+            name: "admin projection".to_owned(),
+            secret: oauth_secret,
+            verified_account: profile("chatgpt-admin-projection"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store
+        .account("acct_admin_projection")
+        .expect("stored account");
+    let record = account_record(&account);
+    let config = valid_config();
+    let catalog_cache = Arc::new(TestCatalogCache::default());
+    catalog_cache.seed("plan:pro", ["gpt-5.4"]);
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with_catalog(
+            Arc::clone(&store),
+            Arc::new(TestOAuthPending::default()),
+            catalog_cache,
+        ),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let admin = bundle.admin_provider();
+
+    let operation = admin
+        .connection_test_operation(
+            &UpstreamModelId::new("gpt-5.4").expect("upstream model"),
+            "Reply with exactly OK.",
+        )
+        .expect("connection test operation");
+    let Operation::Generate(request) = operation else {
+        panic!("connection test must be a generate operation");
+    };
+    let encoded =
+        provider_openai::encode_generate_request(&request, "gpt-5.4", &Default::default())
+            .expect("official OpenAI request");
+    assert_eq!(
+        encoded.body().get("model").and_then(Value::as_str),
+        Some("gpt-5.4")
+    );
+    assert_eq!(
+        encoded.body().get("stream").and_then(Value::as_bool),
+        Some(true)
+    );
+    let non_stream_operation = admin
+        .connection_test_operation_with_options(
+            &UpstreamModelId::new("gpt-5.4").expect("upstream model"),
+            "Reply with exactly OK.",
+            gateway_admin::model::accounts::ConnectionTestEndpoint::Responses,
+            false,
+        )
+        .expect("non-stream Responses connection test operation");
+    let Operation::Generate(non_stream_request) = non_stream_operation else {
+        panic!("connection test must be a generate operation");
+    };
+    let non_stream_encoded = provider_openai::encode_generate_request(
+        &non_stream_request,
+        "gpt-5.4",
+        &Default::default(),
+    )
+    .expect("official OpenAI non-stream request");
+    assert_eq!(
+        non_stream_encoded
+            .body()
+            .get("stream")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    let completions_error = admin
+        .connection_test_operation_with_options(
+            &UpstreamModelId::new("gpt-5.4").expect("upstream model"),
+            "Reply with exactly OK.",
+            gateway_admin::model::accounts::ConnectionTestEndpoint::Completions,
+            true,
+        )
+        .expect_err("OpenAI must not claim Completions support");
+    assert_eq!(
+        completions_error.kind(),
+        ProviderAdminErrorKind::Unsupported
+    );
+
+    let account_id = account.id().clone();
+    let quota = admin
+        .quota(ProviderQuotaRequest {
+            account_id: account_id.clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("cached quota");
+    assert!(quota.windows.is_empty());
+    let models = admin
+        .models(&account_id, false)
+        .await
+        .expect("cached models");
+    assert_eq!(models.models[0].id.as_str(), "gpt-5.4");
+    let loaded = store
+        .load_credential(account.id(), account.revision())
+        .await
+        .expect("loaded credential");
+    let exported = admin
+        .export_credentials(vec![ProviderExportCredentialInput {
+            account: record,
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                loaded.credential.into_inner(),
+            )),
+        }])
+        .await
+        .expect("canonical export");
+    assert_eq!(exported.account_ids, vec![account_id]);
+    let document = exported.document.expose_to_provider().expose_to_provider();
+    assert_eq!(
+        document.get("sourceFormat").and_then(Value::as_str),
+        Some("cpr")
+    );
+    let exported_account = document
+        .get("accounts")
+        .and_then(Value::as_array)
+        .and_then(|accounts| accounts.first())
+        .expect("exported OAuth account");
+    assert_eq!(
+        exported_account.get("accessToken").and_then(Value::as_str),
+        Some("admin-projection-access")
+    );
+    assert_eq!(
+        exported_account.get("idToken").and_then(Value::as_str),
+        Some("header.id-token.signature")
+    );
+    assert!(exported_account.get("token").is_none());
+}
+
+#[tokio::test]
+async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_omit_it() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut verified_account = profile("chatgpt-free-plan");
+    verified_account.plan_type = None;
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_free_plan".to_owned(),
+            name: "free plan".to_owned(),
+            secret: secret("free-plan-test-token"),
+            verified_account,
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let account = store.account("acct_free_plan").expect("stored account");
+    let observed_at = SystemTime::now();
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: OpaqueProviderData::new(
+                json!({
+                    "plan_type": "free",
+                    "rate_limit": {
+                        "allowed": true,
+                        "primary_window": {
+                            "used_percent": 0,
+                            "limit_window_seconds": 2_592_000,
+                            "reset_at": 1_900_000_000
+                        }
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            ),
+            observed_at,
+            state: QuotaState::allowed(observed_at),
+        })
+        .await
+        .expect("persist existing quota");
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let admin = bundle.admin_provider();
+    let quota = admin
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("read cached free quota");
+    assert_eq!(quota.plan_type.as_deref(), Some("free"));
+    assert_eq!(
+        admin.plan_type_display(quota.plan_type.as_deref().expect("plan")),
+        "Free"
+    );
+}
+
+#[tokio::test]
+async fn openai_admin_provider_projects_official_codex_quota_and_independent_buckets_with_chinese_labels()
+ {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_admin_canonical_quota".to_owned(),
+            name: "admin canonical quota".to_owned(),
+            secret: secret("admin-canonical-quota-access"),
+            verified_account: profile("chatgpt-admin-canonical-quota"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store
+        .account("acct_admin_canonical_quota")
+        .expect("stored account");
+    let raw = json!({
+        "active_limit": "premium",
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 91,
+                "reset_at": 1_900_000_000,
+                "limit_window_seconds": 2_592_000
+            },
+            "secondary_window": {
+                "used_percent": 88
+            }
+        },
+        "additional_rate_limits": [{
+            "limit_name": "custom_codex_label",
+            "metered_feature": "codex",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 2,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 2_592_000
+                },
+                "secondary_window": {
+                    "used_percent": 0
+                }
+            }
+        }, {
+            "limit_name": "code_review",
+            "metered_feature": "code_review",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 12,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 604_800
+                }
+            }
+        }, {
+            "limit_name": "GPT-5.3-Codex-Spark",
+            "metered_feature": "codex_bengalfox",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 0,
+                    "reset_at": 1_900_000_000,
+                    "limit_window_seconds": 604_800
+                }
+            }
+        }]
+    });
+    let observed_at = SystemTime::now();
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
+            observed_at,
+            state: QuotaState::observed_unknown(observed_at),
+        })
+        .await
+        .expect("persist quota");
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+
+    let quota = bundle
+        .admin_provider()
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("cached quota");
+    let monthly = quota
+        .windows
+        .iter()
+        .filter(|window| window.group == "monthly")
+        .collect::<Vec<_>>();
+
+    assert_eq!(monthly.len(), 1);
+    assert!(monthly.iter().any(|window| {
+        window.label == "月额度"
+            && window.limit_id.as_deref() == Some("codex")
+            && window.used_percent == Some(91.0)
+    }));
+    assert!(
+        !quota
+            .windows
+            .iter()
+            .any(|window| window.key.starts_with("additional-0-codex")),
+        "the additional codex alias should not become a second display bucket"
+    );
+    let secondary = quota
+        .windows
+        .iter()
+        .find(|window| {
+            window.limit_id.as_deref() == Some("codex")
+                && window.role == Some(ProviderQuotaWindowRole::Secondary)
+        })
+        .expect("core secondary quota");
+    assert_eq!(secondary.label, "次级额度");
+    assert_eq!(secondary.used_percent, Some(88.0));
+    let review = quota
+        .windows
+        .iter()
+        .find(|window| window.limit_id.as_deref() == Some("code_review"))
+        .expect("code review quota");
+    assert_eq!(review.label, "周额度");
+    assert_eq!(review.limit_name.as_deref(), Some("code_review"));
+    assert_eq!(review.role, Some(ProviderQuotaWindowRole::Primary));
+    let spark = quota
+        .windows
+        .iter()
+        .find(|window| window.limit_id.as_deref() == Some("codex_bengalfox"))
+        .expect("Spark quota");
+    assert_eq!(
+        (
+            monthly[0].local_usage_attribution,
+            review.local_usage_attribution,
+            spark.local_usage_attribution,
+        ),
+        (
+            QuotaLocalUsageAttribution::AccountWide,
+            QuotaLocalUsageAttribution::Unavailable,
+            QuotaLocalUsageAttribution::Unavailable,
+        ),
+    );
+}
+
+#[tokio::test]
+async fn openai_admin_keeps_confirmed_exhaustion_separate_from_raw_usage_display() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_admin_confirmed_exhaustion";
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: "admin confirmed exhaustion".to_owned(),
+            secret: secret("admin-confirmed-exhaustion-access"),
+            verified_account: profile("chatgpt-admin-confirmed-exhaustion"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store.account(account_id).expect("stored account");
+    let reset_at = 1_900_000_000_u64;
+    let observed_at = SystemTime::now();
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": true,
+                        "limit_reached": false,
+                        "primary_window": {"used_percent": 86, "reset_at": reset_at}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            ),
+            observed_at,
+            state: QuotaState::allowed(observed_at),
+        })
+        .await
+        .expect("persist raw quota");
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, SystemTime::now(), None),
+        })
+        .await
+        .expect("mark account exhausted");
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+
+    let exhausted = bundle
+        .admin_provider()
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("project exhausted quota");
+
+    assert_eq!(exhausted.windows.len(), 1);
+    assert_eq!(exhausted.windows[0].used_percent, Some(86.0));
+    let raw = store
+        .get_quotas(std::slice::from_ref(account.id()))
+        .await
+        .expect("read raw quota")
+        .pop()
+        .expect("raw quota");
+    assert_eq!(
+        raw.quota.expose_to_provider()["rate_limit"]["primary_window"]["used_percent"],
+        86
+    );
+
+    store
+        .apply_quota_access(QuotaAccessChange {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            state: QuotaState::allowed(SystemTime::now()),
+        })
+        .await
+        .expect("recover account");
+    let recovered = bundle
+        .admin_provider()
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("project recovered quota");
+
+    assert_eq!(recovered.windows[0].used_percent, Some(86.0));
+}
+
+#[tokio::test]
+async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_admin_invalid".to_owned(),
+            name: "admin invalid".to_owned(),
+            secret: secret("admin-invalid-access"),
+            verified_account: profile("chatgpt-admin-invalid"),
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store.account("acct_admin_invalid").expect("stored account");
+    let record = account_record(&account);
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+    let admin = bundle.admin_provider();
+    let import_error = admin
+        .prepare_import(PrepareCredentialImport {
+            default_outbound_proxy: None,
+            document: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
+        })
+        .await
+        .expect_err("invalid import");
+    assert_eq!(import_error.kind(), ProviderAdminErrorKind::Invalid);
+    let mut stale_record = record.clone();
+    stale_record.name = "stale name".to_owned();
+    stale_record.email = None;
+    stale_record.plan_type = None;
+    stale_record.credential_revision = Revision::new(99).expect("stale revision");
+    stale_record.has_refresh_token = false;
+    stale_record.access_token_expires_at = None;
+    stale_record.next_refresh_at = None;
+    stale_record.enabled = false;
+    stale_record.credential_state = CredentialState::Banned;
+    let rotation_error = admin
+        .prepare_rotation(PrepareCredentialRotation {
+            account: stale_record,
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(Map::new())),
+        })
+        .await
+        .expect_err("invalid rotation");
+    assert_eq!(rotation_error.kind(), ProviderAdminErrorKind::Invalid);
+    let mut missing = record;
+    missing.id = "acct_admin_missing".to_owned();
+    let refresh_error = admin
+        .prepare_refresh(PrepareCredentialRefresh { account: missing })
+        .await
+        .expect_err("missing refresh target");
+    assert_eq!(refresh_error.kind(), ProviderAdminErrorKind::NotFound);
+}
+
+#[tokio::test]
+async fn initialized_provider_reports_a_safe_pat_format_error_before_network_access() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .expect("OpenAI bundle");
+    let error = bundle
+        .admin_provider()
+        .prepare_import(PrepareCredentialImport {
+            default_outbound_proxy: None,
+            document: ProviderDocument::new(OpaqueProviderData::new(Map::from_iter([(
+                "accessToken".to_owned(),
+                json!("at-sensitive-token with whitespace"),
+            )]))),
+        })
+        .await
+        .expect_err("PAT format must be checked by the initialized provider");
+    assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+    assert_eq!(
+        error.public_message(),
+        Some("Codex PAT 格式无效：应为 at- 开头的完整令牌，不能包含空白或控制字符")
+    );
+    assert!(error.message().is_none());
+    assert!(!format!("{error:?}").contains("sensitive-token"));
+}
+
+#[tokio::test]
+async fn openai_rotation_preserves_the_new_access_token_jwt_expiration() {
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: "acct_admin_rotation_expiration".to_owned(),
+            name: "admin rotation expiration".to_owned(),
+            secret: secret("admin-rotation-access"),
+            verified_account: profile("chatgpt-admin-rotation-expiration"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .await;
+    let account = store
+        .account("acct_admin_rotation_expiration")
+        .expect("stored account");
+    let record = account_record(&account);
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+
+    let expires_at = Utc
+        .timestamp_opt(2_000_000_000, 0)
+        .single()
+        .expect("valid test timestamp");
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({
+            "exp": expires_at.timestamp(),
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": "user-chatgpt-admin-rotation-expiration",
+                "chatgpt_account_id": "chatgpt-admin-rotation-expiration"
+            }
+        }))
+        .expect("test JWT payload"),
+    );
+    let mut material = Map::new();
+    material.insert(
+        "access_token".to_owned(),
+        Value::String(format!("unverified-header.{payload}.unverified-signature")),
+    );
+    material.insert(
+        "refresh_token".to_owned(),
+        Value::String("admin-rotation-refresh".to_owned()),
+    );
+
+    let prepared = bundle
+        .admin_provider()
+        .prepare_rotation(PrepareCredentialRotation {
+            account: record,
+            provider_material: ProviderDocument::new(OpaqueProviderData::new(material)),
+        })
+        .await
+        .expect("JWT rotation should be prepared");
+
+    assert_eq!(prepared.facts().access_token_expires_at, Some(expires_at));
+}
+
+fn principal_token(user: Option<&str>, account: Option<&str>) -> String {
+    principal_jwt(json!({
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": user, "chatgpt_account_id": account
+        }
+    }))
+}
+
+fn principal_jwt(payload: Value) -> String {
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+    format!("unverified-header.{payload}.unverified-signature")
+}
+
+async fn principal_account(user: Option<&str>, workspace: Option<&str>) -> Arc<MemoryAccountStore> {
+    let store = Arc::new(MemoryAccountStore::default());
+    let mut material = secret("synthetic-old-A");
+    material.id_token = Some(SecretString::from(principal_token(
+        Some("user-A"),
+        Some("A"),
+    )));
+    let mut prepared = provider_openai::credential::CodexCredentialAdmin
+        .prepare_import(ImportCodexOAuthCredential {
+            account_id: "acct_principal".to_owned(),
+            name: "principal test".to_owned(),
+            secret: material,
+            verified_account: profile("A"),
+            next_refresh_at: None,
+            enabled: true,
+        })
+        .unwrap();
+    prepared.account = ProviderAccount::new(
+        prepared.account.id().clone(),
+        prepared.account.provider().clone(),
+        prepared.account.name().to_owned(),
+        user.map(str::to_owned),
+        prepared.account.authentication_kind().to_owned(),
+        prepared.account.revision(),
+        prepared.account.access_token_expires_at(),
+    )
+    .with_profile(
+        Some("A@example.com".to_owned()),
+        workspace.map(str::to_owned),
+        Some("pro".to_owned()),
+    )
+    .with_refresh_schedule(true, None);
+    store.create_account(prepared).await.unwrap();
+    store
+}
+
+fn principal_document(access: &str, id: Option<&str>) -> ProviderDocument {
+    ProviderDocument::new(OpaqueProviderData::new(
+        json!({
+            "access_token": access, "refresh_token": "synthetic-new-RT", "id_token": id
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    ))
+}
+
+#[tokio::test]
+async fn rotation_rejects_conflicting_principals_before_old_id_fallback() {
+    let store = principal_account(Some("user-A"), Some("A")).await;
+    let account_id = ProviderAccountId::new("acct_principal").unwrap();
+    let before = store.load_current_credential(&account_id).await.unwrap();
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    for (access, id) in [
+        (principal_token(Some("user-B"), Some("B")), None),
+        (principal_token(Some("user-B"), Some("A")), None),
+        (principal_token(Some("user-A"), Some("B")), None),
+        (principal_token(Some("user-B"), None), None),
+        (principal_token(None, Some("B")), None),
+        (
+            principal_token(Some("user-B"), Some("B")),
+            Some(principal_token(Some("user-A"), Some("A"))),
+        ),
+        (
+            principal_token(Some("user-A"), Some("A")),
+            Some(principal_token(Some("user-B"), Some("B"))),
+        ),
+        (
+            "opaque-synthetic".to_owned(),
+            Some(principal_token(Some("user-B"), Some("B"))),
+        ),
+        (
+            principal_jwt(json!({
+                "email": 123,
+                "https://api.openai.com/auth": {"chatgpt_user_id": "user-B"}
+            })),
+            None,
+        ),
+    ] {
+        let error = bundle
+            .admin_provider()
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&before.account),
+                provider_material: principal_document(&access, id.as_deref()),
+            })
+            .await
+            .expect_err("conflicting principal must not produce prepared facts");
+        assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
+        assert!(error.public_message().unwrap().contains("账号主体"));
+        assert!(!format!("{error:?}").contains(&access));
+        let after = store.load_current_credential(&account_id).await.unwrap();
+        assert_eq!(after.account, before.account);
+        assert_eq!(
+            after.credential.expose_to_provider(),
+            before.credential.expose_to_provider()
+        );
+    }
+}
+
+#[tokio::test]
+async fn rotation_requires_new_identity_and_an_existing_user_anchor() {
+    for (old_user, old_workspace, access) in [
+        (Some("user-A"), Some("A"), "opaque-synthetic".to_owned()),
+        (
+            Some("user-A"),
+            Some("A"),
+            principal_jwt(json!({"exp": 2_000_000_000_i64})),
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            principal_token(Some("user-A"), None),
+        ),
+        (Some("user-A"), Some("A"), principal_token(None, Some("A"))),
+        (
+            Some("user-A"),
+            Some("A"),
+            principal_token(Some(" "), Some("A")),
+        ),
+        (None, None, principal_token(Some("user-A"), Some("A"))),
+        (None, Some("A"), principal_token(Some("user-A"), Some("A"))),
+        (
+            Some(" "),
+            Some("A"),
+            principal_token(Some("user-A"), Some("A")),
+        ),
+    ] {
+        let store = principal_account(old_user, old_workspace).await;
+        let before = store.account("acct_principal").unwrap();
+        let config = valid_config();
+        let bundle = provider_openai::initialize(
+            config.config.clone(),
+            provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+        )
+        .await
+        .unwrap();
+        let error = bundle
+            .admin_provider()
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&before),
+                provider_material: principal_document(&access, None),
+            })
+            .await
+            .expect_err("unknown continuity cannot claim the old device");
+        assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
+        let message = error.public_message().unwrap();
+        assert!(message.contains("无法确认"));
+        assert!(message.contains("新建授权"));
+        assert!(!message.contains("无效"));
+        assert_eq!(store.account("acct_principal").unwrap(), before);
+    }
+}
+
+#[tokio::test]
+async fn rotation_same_principal_refreshes_metadata_and_preserves_the_device() {
+    for (old_workspace, opaque_access, fresh_profile) in [
+        (Some("A"), false, true),
+        (Some("A"), true, true),
+        (Some("A"), false, false),
+        (None, true, true),
+    ] {
+        let store = principal_account(Some("user-A"), old_workspace).await;
+        let id = ProviderAccountId::new("acct_principal").unwrap();
+        let before = store.load_current_credential(&id).await.unwrap();
+        let old = CodexCredentialCodec::decode_complete(&before.credential).unwrap();
+        let config = valid_config();
+        let bundle = provider_openai::initialize(
+            config.config.clone(),
+            provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+        )
+        .await
+        .unwrap();
+        let fresh = if fresh_profile {
+            principal_jwt(json!({
+                "email": "changed@example.com",
+                "https://api.openai.com/auth": {
+                    "chatgpt_user_id": "user-A", "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
+                }
+            }))
+        } else {
+            principal_token(Some("user-A"), Some("A"))
+        };
+        let (access, new_id) = if opaque_access {
+            ("opaque-synthetic", Some(fresh.as_str()))
+        } else {
+            (fresh.as_str(), None)
+        };
+        let prepared = bundle
+            .admin_provider()
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&before.account),
+                provider_material: principal_document(access, new_id),
+            })
+            .await
+            .expect("consistent trusted-admin materials remain supported");
+        let facts = prepared.facts();
+        assert_eq!(
+            facts.expected_credential_revision.get(),
+            before.account.revision().get()
+        );
+        assert_eq!(
+            facts.email.as_deref(),
+            Some(if fresh_profile {
+                "changed@example.com"
+            } else {
+                "A@example.com"
+            })
+        );
+        assert_eq!(
+            facts.plan_type.as_deref(),
+            Some(if fresh_profile { "plus" } else { "pro" })
+        );
+        let identity = facts.replacement_identity.as_ref().unwrap();
+        assert_eq!(identity.upstream_user_id(), "user-A");
+        assert_eq!(identity.upstream_account_id(), Some("A"));
+        let raw = facts
+            .provider_material
+            .clone()
+            .into_provider_data()
+            .into_inner();
+        let updated = CodexCredentialCodec::decode_complete(
+            &gateway_core::account::PlaintextCredential::new(raw),
+        )
+        .unwrap();
+        let new = updated.oauth().unwrap();
+        let old = old.oauth().unwrap();
+        assert_eq!(new.installation_id, old.installation_id);
+        assert_eq!(new.cookies, old.cookies);
+        assert_eq!(new.oauth_client_id, old.oauth_client_id);
+        assert_eq!(new.oauth_scope, old.oauth_scope);
+        assert_eq!(
+            new.principal.as_ref().unwrap().oauth_subject,
+            old.principal.as_ref().unwrap().oauth_subject
+        );
+        assert_eq!(new.access_token, access);
+        assert_eq!(new.refresh_token.as_deref(), Some("synthetic-new-RT"));
+        assert_eq!(new.id_token.as_deref(), new_id.or(old.id_token.as_deref()));
+        assert_eq!(store.account("acct_principal").unwrap(), before.account);
+    }
+}
+
+#[tokio::test]
+async fn reauthorization_entry_rejects_conflicts_and_unknown_and_releases_claim() {
+    for (old_user, old_workspace, access, id_token, message) in [
+        (
+            Some("user-A"),
+            Some("A"),
+            "opaque-new".to_owned(),
+            principal_token(Some("user-B"), Some("B")),
+            "账号主体",
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            principal_token(Some("user-B"), Some("B")),
+            principal_token(Some("user-A"), Some("A")),
+            "账号主体",
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            principal_token(Some("user-A"), Some("A")),
+            principal_token(Some("user-B"), Some("B")),
+            "账号主体",
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            "opaque-new".to_owned(),
+            principal_jwt(json!({})),
+            "无法确认",
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            "opaque-new".to_owned(),
+            "opaque-id-token".to_owned(),
+            "无法确认",
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            "opaque-new".to_owned(),
+            principal_jwt(json!({
+                "email": 123,
+                "https://api.openai.com/auth": {"chatgpt_user_id": "user-B"}
+            })),
+            "账号主体",
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            "opaque-new".to_owned(),
+            principal_token(Some("user-A"), None),
+            "无法确认",
+        ),
+        (
+            None,
+            None,
+            "opaque-new".to_owned(),
+            principal_token(Some("user-A"), Some("A")),
+            "无法确认",
+        ),
+        (
+            None,
+            Some("A"),
+            "opaque-new".to_owned(),
+            principal_token(Some("user-A"), Some("A")),
+            "无法确认",
+        ),
+    ] {
+        let store = principal_account(old_user, old_workspace).await;
+        let id = ProviderAccountId::new("acct_principal").unwrap();
+        let before = store.load_current_credential(&id).await.unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": access, "refresh_token": "synthetic-new-RT", "id_token": id_token
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let pending = Arc::new(TestOAuthPending::default());
+        let mut config = valid_config();
+        config.config.auth.oauth_token_endpoint = format!("{}/oauth/token", server.uri());
+        let bundle = provider_openai::initialize(
+            config.config.clone(),
+            provider_ports_with(store.clone(), pending.clone()),
+        )
+        .await
+        .unwrap();
+        let context = MutationContext {
+            actor: MutationActor::AdminApiKey,
+            request_id: "principal".to_owned(),
+        };
+        let started = bundle
+            .admin_provider()
+            .start_authorization(PendingAuthorizationMutation::new(
+                ProviderKind::new("openai").unwrap(),
+                AuthorizationMutationTarget::Reauthorize {
+                    account_id: id.clone(),
+                },
+                AuthorizationOwnerBinding::from_context(&context),
+            ))
+            .await
+            .unwrap();
+        let state = {
+            let values = pending.values.lock().unwrap();
+            values
+                .values()
+                .next()
+                .unwrap()
+                .1
+                .expose_to_provider()
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_owned()
+        };
+        let error = bundle
+            .admin_provider()
+            .complete_authorization(CompleteAuthorization {
+                settings: None,
+                context,
+                flow_id: started.flow_id,
+                callback_url: format!(
+                    "http://localhost:1455/auth/callback?code=synthetic&state={state}"
+                ),
+            })
+            .await
+            .expect_err("wrong or unknown principal cannot be prepared");
+        assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
+        assert!(error.public_message().unwrap().contains(message));
+        assert!(!error.public_message().unwrap().contains("无效"));
+        let after = store.load_current_credential(&id).await.unwrap();
+        assert_eq!(after.account, before.account);
+        assert_eq!(
+            after.credential.expose_to_provider(),
+            before.credential.expose_to_provider()
+        );
+        {
+            let values = pending.values.lock().unwrap();
+            assert_eq!(values.len(), 1);
+            assert!(
+                values.values().next().unwrap().3.is_none(),
+                "failed preparation releases its claim"
+            );
+        }
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn reauthorization_entry_accepts_opaque_access_and_uses_current_revision() {
+    use gateway_admin::model::provider_credentials::PreparedAuthorizationCredential;
+    for advance_revision in [false, true] {
+        let store = principal_account(Some("user-A"), Some("A")).await;
+        let id = ProviderAccountId::new("acct_principal").unwrap();
+        let before = store.load_current_credential(&id).await.unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "opaque-new",
+                "refresh_token": "synthetic-new-RT",
+                "id_token": principal_jwt(json!({
+                    "email": "fresh@example.com",
+                    "https://api.openai.com/auth": {
+                        "chatgpt_user_id": "user-A", "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
+                    }
+                }))
+            }))).expect(1).mount(&server).await;
+        let pending = Arc::new(TestOAuthPending::default());
+        let mut config = valid_config();
+        config.config.auth.oauth_token_endpoint = format!("{}/oauth/token", server.uri());
+        let bundle = provider_openai::initialize(
+            config.config.clone(),
+            provider_ports_with(store.clone(), pending.clone()),
+        )
+        .await
+        .unwrap();
+        let context = MutationContext {
+            actor: MutationActor::AdminApiKey,
+            request_id: "principal".to_owned(),
+        };
+        let started = bundle
+            .admin_provider()
+            .start_authorization(PendingAuthorizationMutation::new(
+                ProviderKind::new("openai").unwrap(),
+                AuthorizationMutationTarget::Reauthorize {
+                    account_id: id.clone(),
+                },
+                AuthorizationOwnerBinding::from_context(&context),
+            ))
+            .await
+            .unwrap();
+        if advance_revision {
+            store
+                .repository()
+                .rotate_refreshed_oauth_secret(
+                    &before.account,
+                    secret("opaque-background-refreshed"),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let current = store.load_current_credential(&id).await.unwrap();
+        let state = {
+            let values = pending.values.lock().unwrap();
+            values
+                .values()
+                .next()
+                .unwrap()
+                .1
+                .expose_to_provider()
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_owned()
+        };
+        let prepared = bundle
+            .admin_provider()
+            .complete_authorization(CompleteAuthorization {
+                settings: None,
+                context,
+                flow_id: started.flow_id,
+                callback_url: format!(
+                    "http://localhost:1455/auth/callback?code=synthetic&state={state}"
+                ),
+            })
+            .await
+            .expect("normal reauthorization");
+        let PreparedAuthorizationCredential::Reauthorize(rotation) = &prepared.credential else {
+            panic!("expected reauthorization");
+        };
+        let facts = rotation.facts();
+        assert_eq!(
+            facts.expected_credential_revision.get(),
+            current.account.revision().get()
+        );
+        assert_eq!(facts.email.as_deref(), Some("fresh@example.com"));
+        assert_eq!(facts.plan_type.as_deref(), Some("plus"));
+        assert_eq!(
+            facts
+                .replacement_identity
+                .as_ref()
+                .unwrap()
+                .upstream_user_id(),
+            "user-A"
+        );
+        let runtime =
+            CodexCredentialCodec::decode(&gateway_core::account::PlaintextCredential::new(
+                facts
+                    .provider_material
+                    .clone()
+                    .into_provider_data()
+                    .into_inner(),
+            ))
+            .unwrap();
+        assert_eq!(
+            runtime.installation_id,
+            CodexCredentialCodec::decode(&before.credential)
+                .unwrap()
+                .installation_id
+        );
+        assert_eq!(store.account("acct_principal").unwrap(), current.account);
+        assert!(
+            pending
+                .values
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .3
+                .is_some()
+        );
+        // 成功结果的 guard 由 Admin 提交边界结算，本入口测试不调用其私有接口。
+        drop(prepared);
+        server.verify().await;
+    }
+}
+
+async fn reset_credit_admin(
+    server: &MockServer,
+) -> (
+    provider_openai::ProviderBundle,
+    ProviderAccountId,
+    TestOpenAiConfig,
+) {
+    let account_id = ProviderAccountId::new("acct_reset_credit").expect("account ID");
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_string(),
+            name: "reset credit".to_owned(),
+            secret: secret("reset-credit-access"),
+            verified_account: profile("chatgpt-reset-credit"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let mut config = valid_config();
+    config.config.api.base_url = server.uri();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI reset-credit bundle");
+    (bundle, account_id, config)
+}
+
+fn reset_credit_command(account_id: ProviderAccountId) -> ConsumeProviderResetCredit {
+    ConsumeProviderResetCredit {
+        account_id,
+        credit_id: Some("credit_1".to_owned()),
+        redeem_request_id: Uuid::parse_str("8fbf302d-11df-4bd5-82e4-08e4b3df7874")
+            .expect("UUID v4"),
+    }
+}
+
+fn initialized_provider_request(operation: Operation, account_id: &str) -> ProviderRequest {
+    let provider = ProviderKind::new("openai").expect("provider");
+    let upstream_model = UpstreamModelId::new("gpt-5.4").expect("upstream model");
+    let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
+    let account_scope = initialized_account_scope(account_id);
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).expect("revision"),
+        account_policy(),
+        vec![provider.clone()],
+        vec![ProviderModel::new(
+            provider,
+            upstream_model,
+            ModelCapabilities::new(BTreeSet::from([operation.kind()]), Some(32_000))
+                .with_upstream_feature_validation(),
+        )],
+        Vec::new(),
+    )
+    .expect("runtime snapshot");
+    let plan = snapshot
+        .plan(
+            &public_model,
+            &operation,
+            account_scope,
+            &RoutingContext::default(),
+        )
+        .expect("routing plan");
+
+    ProviderRequest::new(operation, plan.candidates()[0].clone())
+}
+
+fn initialized_attempt_context(request_id: &str, account_id: &str) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_initialized").expect("client key id"),
+        ),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(initialized_account_scope(account_id)),
+        None,
+        CancellationToken::new(),
+    )
+}
+
+fn initialized_account_scope(account_id: &str) -> Arc<FrozenAccountScope> {
+    let provider = ProviderKind::new("openai").expect("provider");
+    Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new(account_id).expect("account id"),
+            RuntimeAccount::new(provider, BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ))
+}
+
+pub(super) fn provider_ports() -> ProviderStorePorts {
+    provider_ports_with(
+        Arc::new(MemoryAccountStore::default()),
+        Arc::new(TestOAuthPending::default()),
+    )
+}
+
+fn provider_ports_with(
+    accounts: Arc<MemoryAccountStore>,
+    pending: Arc<TestOAuthPending>,
+) -> ProviderStorePorts {
+    provider_ports_with_catalog(accounts, pending, Arc::new(TestCatalogCache::default()))
+}
+
+fn provider_ports_with_catalog(
+    accounts: Arc<MemoryAccountStore>,
+    pending: Arc<TestOAuthPending>,
+    catalog_cache: Arc<TestCatalogCache>,
+) -> ProviderStorePorts {
+    ProviderStorePorts::new(
+        accounts,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::new(MemorySessionAffinity::default()),
+        Arc::new(MemorySessionExclusions::default()),
+        catalog_cache,
+        Arc::new(TestArtifactProfiles),
+        Arc::new(TestCredentialState),
+        Arc::new(TestCooldown),
+        Arc::new(TestRuntimePolicy),
+        pending,
+    )
+}
+
+fn account_record(account: &ProviderAccount) -> AccountRecord {
+    let now = Utc::now();
+    AccountRecord {
+        outbound_proxy: None,
+        id: account.id().to_string(),
+        provider_kind: account.provider().clone(),
+        groups: Vec::new(),
+        name: account.name().to_owned(),
+        email: account.email().map(str::to_owned),
+        upstream_user_id: account.upstream_user_id().map(str::to_owned),
+        upstream_account_id: account.upstream_account_id().map(str::to_owned),
+        plan_type: account.plan_type().map(str::to_owned),
+        authentication_kind: account.authentication_kind().to_owned(),
+        credential_revision: Revision::new(account.revision().get()).expect("revision"),
+        relogin_count: 0,
+        last_relogin_at: None,
+        has_refresh_token: account.has_refresh_token(),
+        access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
+        next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
+        enabled: account.enabled(),
+        concurrency_limit: account.concurrency_limit(),
+        weight: account.weight(),
+        credential_state: account.credential_state(),
+        credential_observed_at: now,
+        quota: account.quota(),
+        last_error_reason: account.last_error_reason(),
+        last_error_message: None,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+pub(super) struct TestOpenAiConfig {
+    pub(super) config: OpenAiConfig,
+    _runtime: TempDir,
+}
+
+pub(super) fn valid_config() -> TestOpenAiConfig {
+    let mut config = OpenAiConfig::default();
+    config.wire_profile = CodexWireProfileConfig {
+        originator: "Codex Desktop".to_owned(),
+        codex_version: "0.102.0".to_owned(),
+        desktop_version: "1.2026.190".to_owned(),
+        desktop_build: "19012345678".to_owned(),
+        os_type: "Mac OS".to_owned(),
+        os_version: "15.5.0".to_owned(),
+        arch: "arm64".to_owned(),
+        terminal: "xterm-256color".to_owned(),
+        residency: None,
+        location: Default::default(),
+        verified_at: Utc
+            .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
+            .single()
+            .expect("valid test time"),
+    };
+    let runtime = tempfile::tempdir().expect("test runtime directory");
+    config
+        .resolve_and_validate(&runtime.path().join("deploy"))
+        .expect("valid OpenAI test configuration");
+    TestOpenAiConfig {
+        config,
+        _runtime: runtime,
+    }
+}
+
+struct TestArtifactProfiles;
+
+impl ProviderArtifactProfileCachePort for TestArtifactProfiles {
+    fn replace_if_newer(
+        &self,
+        _profile: ProviderArtifactProfile,
+        _ttl: Duration,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+    ) -> BoxFuture<'a, Result<Option<ProviderArtifactProfile>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+#[derive(Default)]
+struct TestCatalogCache {
+    values: Mutex<BTreeMap<String, OpaqueProviderData>>,
+}
+
+impl ProviderCatalogCachePort for TestCatalogCache {
+    fn replace<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+        catalog: &'a OpaqueProviderData,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.values
+                .lock()
+                .expect("catalog cache")
+                .insert(key.scope().as_str().to_owned(), catalog.clone());
+            Ok(())
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        key: &'a ProviderCatalogCacheKey,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .values
+                .lock()
+                .expect("catalog cache")
+                .get(key.scope().as_str())
+                .cloned())
+        })
+    }
+}
+
+impl TestCatalogCache {
+    fn seed(&self, scope: &str, models: impl IntoIterator<Item = &'static str>) {
+        let mut document = Map::new();
+        document.insert("version".to_owned(), Value::from(1));
+        document.insert("scope".to_owned(), Value::String(scope.to_owned()));
+        document.insert(
+            "observedAt".to_owned(),
+            Value::String(Utc::now().to_rfc3339()),
+        );
+        document.insert(
+            "models".to_owned(),
+            Value::Array(
+                models
+                    .into_iter()
+                    .map(|model| Value::String(model.to_owned()))
+                    .collect(),
+            ),
+        );
+        self.values
+            .lock()
+            .expect("catalog cache")
+            .insert(scope.to_owned(), OpaqueProviderData::new(document));
+    }
+}
+
+struct TestCredentialState;
+
+impl ProviderCredentialStatePort for TestCredentialState {
+    fn replace(
+        &self,
+        _state: ProviderCredentialState,
+    ) -> BoxFuture<'_, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCredentialState>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _window: Duration,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async { Ok(1) })
+    }
+
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct TestCooldown;
+
+impl ProviderCooldownPort for TestCooldown {
+    fn put_if_later(
+        &self,
+        _cooldown: ProviderCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn read<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn put_scoped_if_later(
+        &self,
+        _cooldown: ProviderScopedCooldown,
+    ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn read_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
+    ) -> BoxFuture<'a, Result<Option<ProviderScopedCooldown>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn clear_scoped<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _scope: &'a ProviderCooldownScope,
+        _through_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn clear_all<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+}
+
+struct TestRuntimePolicy;
+
+impl ProviderRuntimePolicyPort for TestRuntimePolicy {
+    fn load_refresh_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+        Box::pin(async {
+            ProviderRefreshPolicy::try_new(
+                Duration::from_secs(300),
+                NonZeroU32::new(4).expect("nonzero concurrency"),
+            )
+        })
+    }
+}
+
+#[derive(Default)]
+struct TestOAuthPending {
+    values: Mutex<BTreeMap<PendingKey, PendingValue>>,
+}
+
+type PendingKey = (String, String);
+type PendingValue = (String, OpaqueProviderData, SystemTime, Option<String>);
+
+impl OAuthPendingFlowPort for TestOAuthPending {
+    fn put_if_absent(
+        &self,
+        flow: NewOAuthPendingFlow,
+    ) -> BoxFuture<'_, Result<OAuthPendingPutOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                flow.provider_kind().as_str().to_owned(),
+                flow.flow().expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            if values.contains_key(&key) {
+                return Ok(OAuthPendingPutOutcome::AlreadyExists);
+            }
+            values.insert(
+                key,
+                (
+                    flow.owner().expose_to_store().to_owned(),
+                    flow.payload().clone(),
+                    SystemTime::now() + flow.ttl(),
+                    None,
+                ),
+            );
+            Ok(OAuthPendingPutOutcome::Stored)
+        })
+    }
+
+    fn claim_if_owner<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        owner: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        claim: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        _claim_ttl: Duration,
+    ) -> BoxFuture<'a, Result<OAuthPendingClaimOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                flow.expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            let Some((stored_owner, payload, expires_at, stored_claim)) = values.get_mut(&key)
+            else {
+                return Ok(OAuthPendingClaimOutcome::NotFound);
+            };
+            if *expires_at <= SystemTime::now() {
+                values.remove(&key);
+                return Ok(OAuthPendingClaimOutcome::NotFound);
+            }
+            if stored_owner != owner.expose_to_store() {
+                return Ok(OAuthPendingClaimOutcome::OwnerMismatch);
+            }
+            if stored_claim.is_some() {
+                return Ok(OAuthPendingClaimOutcome::InProgress);
+            }
+            *stored_claim = Some(claim.expose_to_store().to_owned());
+            Ok(OAuthPendingClaimOutcome::Claimed(payload.clone()))
+        })
+    }
+
+    fn release_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        owner: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        claim: &'a gateway_core::provider_ports::OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingReleaseOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                flow.expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            let Some((stored_owner, _, _, stored_claim)) = values.get_mut(&key) else {
+                return Ok(OAuthPendingReleaseOutcome::NotFound);
+            };
+            if stored_owner != owner.expose_to_store() {
+                return Ok(OAuthPendingReleaseOutcome::OwnerMismatch);
+            }
+            if stored_claim.as_deref() != Some(claim.expose_to_store()) {
+                return Ok(OAuthPendingReleaseOutcome::ClaimMismatch);
+            }
+            *stored_claim = None;
+            Ok(OAuthPendingReleaseOutcome::Released)
+        })
+    }
+
+    fn consume_claim<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        flow: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        owner: &'a gateway_core::provider_ports::OAuthPendingBinding,
+        claim: &'a gateway_core::provider_ports::OAuthPendingBinding,
+    ) -> BoxFuture<'a, Result<OAuthPendingConsumeOutcome, ProviderStoreError>> {
+        Box::pin(async move {
+            let key = (
+                provider_kind.as_str().to_owned(),
+                flow.expose_to_store().to_owned(),
+            );
+            let mut values = self.values.lock().expect("OAuth pending");
+            let Some((stored_owner, _, _, stored_claim)) = values.get(&key) else {
+                return Ok(OAuthPendingConsumeOutcome::NotFound);
+            };
+            if stored_owner != owner.expose_to_store() {
+                return Ok(OAuthPendingConsumeOutcome::OwnerMismatch);
+            }
+            if stored_claim.as_deref() != Some(claim.expose_to_store()) {
+                return Ok(OAuthPendingConsumeOutcome::ClaimMismatch);
+            }
+            values.remove(&key);
+            Ok(OAuthPendingConsumeOutcome::Consumed)
+        })
+    }
+}
+
+mod errors {
+    use gateway_admin::ports::provider::ProviderAdminErrorKind as Kind;
+    use gateway_core::provider_ports::{
+        ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingState,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn manual_refresh_preserves_banned_evidence_without_promoting_401_to_terminal() {
+        for (status, kind, message) in [
+            (400, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
+            (
+                401,
+                Kind::BadGateway,
+                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                    "error": {
+                        "message": "account has been deactivated: raw-secret-marker"
+                    }
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let (bundle, store, _config) = refresh_fixture(&server, false, true).await;
+            let before = store.account("acct_refresh_error").unwrap();
+            let error = bundle
+                .admin_provider()
+                .prepare_refresh(PrepareCredentialRefresh {
+                    account: account_record(&before),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.public_message(), Some(message));
+            assert!(!format!("{error:?} {error}").contains("raw-secret-marker"));
+            assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_reports_known_upstream_failures_without_changing_account_state() {
+        for (status, code, expected_kind, expected_message) in [
+            (
+                401,
+                "refresh_token_reused",
+                Kind::BadGateway,
+                "刷新令牌已被使用，请重新授权",
+            ),
+            (
+                401,
+                "refresh_token_expired",
+                Kind::BadGateway,
+                "刷新令牌已过期，请重新授权",
+            ),
+            (
+                401,
+                "refresh_token_invalidated",
+                Kind::BadGateway,
+                "刷新令牌已被撤销，请重新授权",
+            ),
+            (
+                401,
+                "token_expired",
+                Kind::BadGateway,
+                "刷新令牌不可用，请重新授权",
+            ),
+            (
+                401,
+                "unknown",
+                Kind::BadGateway,
+                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+            ),
+            (
+                400,
+                "refresh_token_reused",
+                Kind::Invalid,
+                "刷新令牌已被使用，请重新授权",
+            ),
+            (
+                400,
+                "refresh_token_expired",
+                Kind::Invalid,
+                "刷新令牌已过期，请重新授权",
+            ),
+            (
+                400,
+                "refresh_token_invalidated",
+                Kind::Invalid,
+                "刷新令牌已被撤销，请重新授权",
+            ),
+            (
+                400,
+                "INVALID_GRANT",
+                Kind::BadGateway,
+                "刷新令牌无效或已失效，请重新授权",
+            ),
+            (
+                429,
+                "unknown",
+                Kind::BadGateway,
+                "OpenAI 令牌刷新请求被限流，请稍后重试",
+            ),
+            (
+                503,
+                "unknown",
+                Kind::BadGateway,
+                "OpenAI 令牌刷新服务异常，请稍后重试",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/oauth/token"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                    "error": {"code": code, "message": "raw-secret-marker"}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let (bundle, store, _config) = refresh_fixture(&server, false, true).await;
+            let before = store.account("acct_refresh_error").unwrap();
+            let error = bundle
+                .admin_provider()
+                .prepare_refresh(PrepareCredentialRefresh {
+                    account: account_record(&before),
+                })
+                .await
+                .expect_err("upstream rejection");
+            assert_eq!(error.kind(), expected_kind, "HTTP {status} {code}");
+            assert_eq!(error.public_message(), Some(expected_message));
+            assert!(!format!("{error:?} {error}").contains("raw-secret-marker"));
+            assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_distinguishes_busy_missing_token_and_stale_account_before_exchange() {
+        for (busy, has_token, stale, kind, message) in [
+            (
+                true,
+                true,
+                false,
+                Kind::Conflict,
+                "令牌刷新繁忙，请等待当前刷新完成后重试",
+            ),
+            (
+                false,
+                false,
+                false,
+                Kind::Invalid,
+                "账号没有刷新令牌，请重新授权",
+            ),
+            (
+                false,
+                true,
+                true,
+                Kind::Conflict,
+                "账号凭据已被更新，请刷新账号列表后重试",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            let (bundle, store, _config) = refresh_fixture(&server, busy, has_token).await;
+            let before = store.account("acct_refresh_error").unwrap();
+            let mut account = account_record(&before);
+            if stale {
+                account.upstream_user_id = Some("previous-user".to_owned());
+            }
+            let error = bundle
+                .admin_provider()
+                .prepare_refresh(PrepareCredentialRefresh { account })
+                .await
+                .expect_err("local refresh failure");
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.public_message(), Some(message));
+            assert!(server.received_requests().await.unwrap().is_empty());
+            assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_invalid_success_and_unclassified_transport_stay_conservative() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("invalid-success-secret-marker"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (bundle, store, mut config) = refresh_fixture(&server, false, true).await;
+        let before = store.account("acct_refresh_error").unwrap();
+        let command = || PrepareCredentialRefresh {
+            account: account_record(&before),
+        };
+        let error = bundle
+            .admin_provider()
+            .prepare_refresh(command())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), Kind::Ambiguous);
+        assert_eq!(
+            error.public_message(),
+            Some("令牌刷新结果未知，请先核对账号状态，不要立即重复刷新")
+        );
+        assert!(!format!("{error:?}").contains("invalid-success-secret-marker"));
+
+        config.config.auth.oauth_token_endpoint = "http://127.0.0.1:0/oauth/token".to_owned();
+        let bundle =
+            provider_openai::initialize(config.config, refresh_ports(store.clone(), false))
+                .await
+                .unwrap();
+        let error = bundle
+            .admin_provider()
+            .prepare_refresh(command())
+            .await
+            .unwrap_err();
+        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界。
+        assert_eq!(error.kind(), Kind::Ambiguous);
+        assert_eq!(
+            error.public_message(),
+            Some("令牌刷新结果未知，请先核对账号状态，不要立即重复刷新")
+        );
+        assert_eq!(store.account("acct_refresh_error").unwrap(), before);
+    }
+
+    async fn refresh_fixture(
+        server: &MockServer,
+        busy: bool,
+        has_token: bool,
+    ) -> (
+        provider_openai::ProviderBundle,
+        Arc<MemoryAccountStore>,
+        TestOpenAiConfig,
+    ) {
+        let store = Arc::new(MemoryAccountStore::default());
+        let mut credential = secret("synthetic-refresh-access");
+        if !has_token {
+            credential.refresh_token = None;
+        }
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: "acct_refresh_error".to_owned(),
+                name: "refresh error test".to_owned(),
+                secret: credential,
+                verified_account: profile("synthetic-refresh-user"),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .await;
+        let mut config = valid_config();
+        config.config.auth.oauth_token_endpoint = format!("{}/oauth/token", server.uri());
+        let bundle =
+            provider_openai::initialize(config.config.clone(), refresh_ports(store.clone(), busy))
+                .await
+                .unwrap();
+        (bundle, store, config)
+    }
+
+    fn refresh_ports(store: Arc<MemoryAccountStore>, busy: bool) -> ProviderStorePorts {
+        ProviderStorePorts::new(
+            store,
+            Arc::new(RefreshLeases { busy }),
+            Arc::new(MemorySessionAffinity::default()),
+            Arc::new(MemorySessionExclusions::default()),
+            Arc::new(TestCatalogCache::default()),
+            Arc::new(TestArtifactProfiles),
+            Arc::new(TestCredentialState),
+            Arc::new(TestCooldown),
+            Arc::new(TestRuntimePolicy),
+            Arc::new(TestOAuthPending::default()),
+        )
+    }
+
+    struct RefreshLeases {
+        busy: bool,
+    }
+
+    impl ProviderLeasePort for RefreshLeases {
+        fn load_state<'a>(
+            &'a self,
+            _: &'a ClientApiKeyId,
+            _: &'a ProviderKind,
+            _: &'a [ProviderAccountId],
+        ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+            panic!("manual refresh does not use scheduling leases")
+        }
+
+        fn try_acquire(
+            &self,
+            request: ProviderLeaseRequest,
+        ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
+            assert!(matches!(
+                request,
+                ProviderLeaseRequest::Refresh(_) | ProviderLeaseRequest::RefreshCapacity(_)
+            ));
+            Box::pin(async move {
+                Ok(if self.busy {
+                    ProviderLeaseAcquisition::Busy { retry_after: None }
+                } else {
+                    ProviderLeaseAcquisition::Acquired(Box::new(()))
+                })
+            })
+        }
+    }
+}

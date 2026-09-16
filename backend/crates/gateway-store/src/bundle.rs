@@ -1,0 +1,249 @@
+//! 完成连接、迁移与 hydration 的 Store 能力集合与启动屏障。
+
+use gateway_core::account::ProviderAccountStore;
+use gateway_core::provider_ports::ProviderCooldownPort;
+
+use super::*;
+
+/// 已完成连接、迁移与 hydration 的 Store 能力集合。
+pub struct StoreBundle {
+    admin_ports: AdminStorePorts,
+    core_ports: CoreStorePorts,
+    provider_ports: ProviderStorePorts,
+    worker_leader_lease: Arc<dyn WorkerLeaderLeasePort>,
+    health_probes: Vec<Arc<dyn HealthProbe>>,
+    worker_contributions: Vec<WorkerContribution>,
+}
+
+impl StoreBundle {
+    #[must_use]
+    pub fn admin_ports(&self) -> AdminStorePorts {
+        self.admin_ports.clone()
+    }
+
+    #[must_use]
+    pub fn core_ports(&self) -> CoreStorePorts {
+        self.core_ports.clone()
+    }
+
+    #[must_use]
+    pub fn provider_ports(&self) -> ProviderStorePorts {
+        self.provider_ports.clone()
+    }
+
+    #[must_use]
+    pub fn worker_leader_lease(&self) -> Arc<dyn WorkerLeaderLeasePort> {
+        Arc::clone(&self.worker_leader_lease)
+    }
+
+    #[must_use]
+    pub fn health_probes(&self) -> Vec<Arc<dyn HealthProbe>> {
+        self.health_probes.clone()
+    }
+
+    pub fn take_worker_contributions(&mut self) -> Vec<WorkerContribution> {
+        std::mem::take(&mut self.worker_contributions)
+    }
+}
+
+/// 在返回 Bundle 前完成全部 Store 启动屏障。
+pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
+    const REDIS_NAMESPACE: &str = "codex-proxy-rs";
+
+    config.validate_resolved()?;
+    let pool = postgres::connect_and_migrate(&config.database_url()?, config.pool).await?;
+    let observability_query_budget = postgres::ObservabilityQueryBudget::try_new(
+        config.pool.observability_max_connections(),
+        config.pool.acquire_timeout(),
+    )?;
+    let redis_client = ::redis::Client::open(config.redis_url()?)
+        .map_err(|_| redis_unavailable("create Redis client"))?;
+    let redis_connection = redis_client
+        .get_connection_manager()
+        .await
+        .map_err(|_| redis_unavailable("connect Redis manager"))?;
+
+    let provider_accounts = Arc::new(postgres::PgProviderAccountRepository::new(pool.clone()));
+    let cooldowns = Arc::new(redis::RedisCredentialCooldownRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?);
+    let account_store: Arc<dyn ProviderAccountStore> = provider_accounts.clone();
+
+    let credential_leases =
+        redis::RedisCredentialLeaseRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?;
+    let admin_account_runtime = Arc::new(redis::RedisAdminAccountRuntimeStore::new(
+        cooldowns.as_ref().clone(),
+        credential_leases.clone(),
+    ));
+    let (provider_leases, capacity_wait_cleanup_writer) =
+        redis::RedisProviderLeaseCoordinator::new(credential_leases.clone());
+    let provider_leases = Arc::new(provider_leases);
+    let provider_session_affinity = Arc::new(redis::RedisProviderSessionAffinityRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?);
+    let credential_state = Arc::new(redis::RedisCredentialStateRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?);
+    let artifact_profiles = Arc::new(redis::RedisProviderArtifactProfileRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?);
+    let runtime_policy = Arc::new(postgres::PgRuntimeSettingsRepository::new(pool.clone()));
+    let oauth_pending = Arc::new(redis::RedisOAuthPendingFlowRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?);
+
+    let admin_ports = AdminStorePorts::new(
+        AdminAccountStorePorts::new(
+            Arc::new(postgres::PgAdminAccountStore::with_repository(
+                pool.clone(),
+                (*provider_accounts).clone(),
+                Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
+                observability_query_budget.clone(),
+            )),
+            admin_account_runtime,
+            Arc::new(postgres::PgAccountGroupRepository::new(pool.clone())),
+            Arc::new(postgres::PgProxyRepository::new(pool.clone())),
+        ),
+        Arc::new(AdminAuthStoreAdapter {
+            security: postgres::PgAdminSecurityAuditRepository::new(pool.clone()),
+            settings: postgres::PgRuntimeSettingsRepository::new(pool.clone()),
+            state: redis::RedisAdminAuthStateRepository::new(
+                redis_connection.clone(),
+                REDIS_NAMESPACE,
+            )?,
+        }),
+        Arc::new(postgres::PgAdminClientKeyStore::new(pool.clone())),
+        Arc::new(postgres::PgAdminObservabilityStore::new(
+            pool.clone(),
+            Some(credential_leases.clone()),
+            Some(Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>),
+            observability_query_budget,
+        )),
+        Arc::new(AdminSettingsStoreAdapter {
+            control_plane: postgres::PgControlPlaneRepository::new(pool.clone()),
+        }),
+        backup_ports(pool.clone(), &config)?,
+    )
+    .with_relogin(Arc::new(postgres::PgReloginStore::new(pool.clone())))
+    .with_egress(Arc::new(postgres::PgProviderEgressRepository::new(
+        pool.clone(),
+    )));
+
+    let execution_repository = Arc::new(postgres::PgExecutionStore::new(pool.clone()));
+    let (execution, execution_writer) =
+        postgres::BufferedExecutionStore::new(Arc::clone(&execution_repository));
+    let execution = Arc::new(execution);
+    let (client_key_usage, client_key_usage_writer) =
+        postgres::PgClientApiKeyUsageSink::new(pool.clone());
+    let retention = Arc::new(postgres::PgRetentionRepository::new(pool.clone()));
+    let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> = Arc::new(
+        redis::RedisClientAdmissionRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?,
+    );
+    let circuits: Arc<dyn gateway_core::engine::execution::ProviderCircuitPort> =
+        Arc::new(redis::RedisProviderCircuitRepository::new(
+            redis_connection.clone(),
+            REDIS_NAMESPACE,
+            gateway_core::engine::execution::ProviderCircuitPolicy::default(),
+        )?);
+    // Continuation affinity 是下一轮请求的路由事实，Core 必须直接等待 Redis 确认。
+    let continuation: Arc<dyn gateway_core::engine::continuation::NativeContinuationPort> =
+        Arc::new(redis::RedisNativeContinuationRepository::new(
+            redis_connection.clone(),
+            REDIS_NAMESPACE,
+        )?);
+    let (admissions, admission_release_writer) =
+        redis::BufferedClientAdmissionPort::new(admissions);
+    let (circuits, circuit_feedback_writer) = redis::BufferedProviderCircuitPort::new(circuits);
+    let core_ports = CoreStorePorts::new(
+        execution,
+        (
+            Arc::new(admissions),
+            Arc::new(postgres::PgClientAdmissionRecoveryRepository::new(
+                pool.clone(),
+            )),
+        ),
+        Arc::new(circuits),
+        continuation,
+        (
+            Arc::new(postgres::PgRuntimeSnapshotRepository::new(pool.clone())),
+            Arc::new(redis::RedisRuntimeChangeRepository::new(
+                redis_client,
+                REDIS_NAMESPACE,
+            )?),
+        ),
+        Arc::new(client_key_usage),
+    )
+    .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())));
+
+    let provider_ports = ProviderStorePorts::new(
+        account_store,
+        provider_leases,
+        provider_session_affinity,
+        Arc::new(redis::RedisProviderSessionExclusionRepository::new(
+            redis_connection.clone(),
+            REDIS_NAMESPACE,
+        )?),
+        credential_state.clone(),
+        artifact_profiles,
+        credential_state,
+        cooldowns,
+        runtime_policy,
+        oauth_pending,
+    )
+    .with_egress(Arc::new(postgres::PgProviderEgressRepository::new(
+        pool.clone(),
+    )));
+    let worker_leader_lease = Arc::new(redis::worker_lease::RedisWorkerLeaderLeasePort::new(
+        credential_leases,
+    ));
+    let health_probes: Vec<Arc<dyn HealthProbe>> = vec![
+        Arc::new(PostgresHealthProbe::new(
+            pool.clone(),
+            config.pool.max_connections,
+        )),
+        Arc::new(RedisHealthProbe {
+            connection: redis_connection,
+        }),
+    ];
+    let worker_contributions = store_worker_contributions(
+        execution_repository,
+        execution_writer,
+        client_key_usage_writer,
+        admission_release_writer,
+        circuit_feedback_writer,
+        capacity_wait_cleanup_writer,
+        retention,
+    )?;
+    Ok(StoreBundle {
+        admin_ports,
+        core_ports,
+        provider_ports,
+        worker_leader_lease,
+        health_probes,
+        worker_contributions,
+    })
+}
+
+/// 构造备份控制面的仓储、导出器与对象存储适配器。
+pub(crate) fn backup_ports(
+    pool: sqlx::PgPool,
+    config: &StoreConfig,
+) -> StoreResult<BackupStorePorts> {
+    let staging = Arc::new(backup::staging::StagingArea::open(
+        config.backup_staging_dir().to_path_buf(),
+        backup::staging::DEFAULT_MAX_ARCHIVE_BYTES,
+    )?);
+    let repository = Arc::new(postgres::PgBackupRepository::new(pool));
+    let dump = Arc::new(backup::pg_dump::PgDumpAdapter::new(
+        staging,
+        config.database.url.clone(),
+        config.database.password.clone(),
+    ));
+    let object_store = Arc::new(backup::s3::S3ObjectStoreAdapter::new());
+    Ok(BackupStorePorts::new(repository, dump, object_store))
+}

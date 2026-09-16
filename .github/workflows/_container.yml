@@ -1,0 +1,79 @@
+name: Reusable Container
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit SHA to build and validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CPR_IMAGE: codex-proxy-rs:ci-${{ inputs.ref }}
+      TRIVY_QUIET: 'true'
+      TRIVY_SKIP_VERSION_CHECK: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Cache Cargo mounts
+        id: cargo-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/container-cargo/registry
+            ${{ runner.temp }}/container-cargo/git
+          key: container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile') }}-${{ inputs.ref }}
+          restore-keys: |
+            container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile') }}-
+            container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
+
+      # The GHA layer exporter does not persist RUN --mount=type=cache contents.
+      # Keep only dependency source caches here; extracting the Rust target cache
+      # can exhaust the runner disk during the post-build hook.
+      - name: Restore Cargo mounts to BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          scratch-dir: ${{ runner.temp }}/container-cache-dance
+          cache-map: |
+            {
+              "${{ runner.temp }}/container-cargo/registry": "/usr/local/cargo/registry",
+              "${{ runner.temp }}/container-cargo/git": "/usr/local/cargo/git"
+            }
+          skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
+
+      - name: Build runtime image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: runtime
+          load: true
+          tags: ${{ env.CPR_IMAGE }}
+          no-cache-filters: |
+            runtime-base
+            runtime
+          cache-from: type=gha,scope=runtime-ci
+          cache-to: type=gha,mode=max,scope=runtime-ci
+
+      - name: Verify runtime image
+        uses: ./.github/actions/verify-container
+        with:
+          image: ${{ env.CPR_IMAGE }}
+          platform: linux/amd64
+          artifact-name: container-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-amd64

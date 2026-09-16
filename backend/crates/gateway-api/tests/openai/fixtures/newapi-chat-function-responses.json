@@ -1,0 +1,62 @@
+{
+  "model": "gpt-5.4",
+  "input": [
+    {
+      "content": "Look up alpha and beta.",
+      "role": "user"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "arguments": "{\"key\":\"alpha\"}",
+      "call_id": "call_fixture_a",
+      "name": "lookup_fixture",
+      "type": "function_call"
+    },
+    {
+      "arguments": "{\"key\":\"beta\"}",
+      "call_id": "call_fixture_b",
+      "name": "lookup_fixture",
+      "type": "function_call"
+    },
+    {
+      "call_id": "call_fixture_a",
+      "output": "{\"value\":11}",
+      "type": "function_call_output"
+    },
+    {
+      "call_id": "call_fixture_b",
+      "output": "{\"value\":22}",
+      "type": "function_call_output"
+    },
+    {
+      "content": "Report the sum.",
+      "role": "user"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "stream": false,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "Read synthetic fixture data.",
+      "name": "lookup_fixture",
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "strict": true,
+      "type": "function"
+    }
+  ]
+}

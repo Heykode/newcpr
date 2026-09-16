@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "public_roots": [
+    "backend/", "frontend/", "deploy/", "docs/", "release/", "skills/",
+    ".github/", ".codex/", ".trellis/spec/", ".trellis/scripts/",
+    ".trellis/agents/", "tools/privacy/", ".githooks/"
+  ],
+  "public_files": [
+    "AGENTS.md", "LICENSE", "README.md", ".gitignore", ".gitattributes",
+    ".trellis/.gitignore", ".trellis/.version", ".trellis/config.yaml",
+    ".trellis/workflow.md", ".trellis/.template-hashes.json"
+  ],
+  "private_roots": [
+    ".trellis/tasks/", ".trellis/workspace/", ".trellis/.runtime/",
+    "outputs/", ".runtime/", ".env/", ".ssh/", ".aws/",
+    "dist/", "backups/"
+  ],
+  "private_files": [
+    "deploy/config.yaml", ".trellis/.developer", ".env",
+    "auth.json", "credentials.json", "id_rsa", "id_ed25519"
+  ],
+  "private_components": [
+    ".runtime", ".ssh", ".aws", ".venv", ".cache", ".env", "__pycache__",
+    "node_modules", "target", "backups", "outputs", "dist"
+  ],
+  "private_suffixes": [
+    ".key", ".pem", ".p12", ".pfx", ".sqlite", ".sqlite3", ".db",
+    ".dump", ".bak", ".log", ".zip", ".tar", ".gz", ".7z"
+  ],
+  "public_email_domains": ["users.noreply.github.com"],
+  "max_file_bytes": 10485760
+}

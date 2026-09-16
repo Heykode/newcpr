@@ -1,0 +1,17 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "cpr-api-key"
+description = "CPR client key"
+regex = '''\bcpr_[A-Za-z0-9_-]{28,}'''
+
+[[rules]]
+id = "cpr-session-token"
+description = "CPR admin session"
+regex = '''\bsess_[A-Za-z0-9_-]{28,}'''
+
+[[rules]]
+id = "openai-refresh-token"
+description = "OpenAI refresh token"
+regex = '''\brt_[A-Za-z0-9_-]{40,}'''

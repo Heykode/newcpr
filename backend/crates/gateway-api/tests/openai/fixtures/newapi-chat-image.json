@@ -1,0 +1,29 @@
+{
+  "model": "gpt-5.4",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "text": "Compare these synthetic inputs.",
+          "type": "text"
+        },
+        {
+          "image_url": {
+            "detail": "low",
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGIyaDgACAAA//8CXAFz1fWjqwAAAABJRU5ErkJggg=="
+          },
+          "type": "image_url"
+        },
+        {
+          "image_url": {
+            "detail": "high",
+            "url": "https://example.invalid/synthetic.png"
+          },
+          "type": "image_url"
+        }
+      ]
+    }
+  ],
+  "stream": false
+}

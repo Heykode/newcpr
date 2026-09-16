@@ -1,0 +1,467 @@
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::{Method, Request, StatusCode, header},
+};
+use gateway_api::admin::{account_groups, group_monitor};
+use serde_json::{Value, json};
+use tower::ServiceExt as _;
+
+use super::{AdminTestFixture, AdminTestState, PRIMARY_GROUP_ID, SECONDARY_GROUP_ID};
+
+const SESSION_COOKIE: &str = "cpr_admin_session=valid-session";
+
+#[tokio::test]
+async fn list_route_should_keep_camel_case_group_and_page_wire() {
+    let fixture = authenticated_fixture().await;
+    let response = request(
+        router(&fixture),
+        Method::GET,
+        "/api/admin/account-groups?page=1&pageSize=1&search=alpha&enabled=true",
+        None,
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = response_json(response).await;
+    assert_eq!(value["data"]["page"]["page"], 1);
+    assert_eq!(value["data"]["page"]["pageSize"], 1);
+    assert_eq!(value["data"]["page"]["total"], 1);
+    assert_eq!(value["data"]["page"]["totalPages"], 1);
+    assert_eq!(value["data"]["configRevision"], 7);
+    assert_eq!(value["data"]["items"][0]["id"], PRIMARY_GROUP_ID);
+    assert_eq!(value["data"]["items"][0]["memberCount"], 2);
+    assert_eq!(value["data"]["items"][0]["providerCounts"]["openai"], 1);
+    assert_eq!(value["data"]["items"][0]["clientKeyCount"], 2);
+    assert_eq!(value["data"]["items"][0]["accountSummary"]["available"], 1);
+    assert_eq!(value["data"]["items"][0]["accountSummary"]["limited"], 1);
+    assert_eq!(value["data"]["items"][0]["accountSummary"]["total"], 2);
+    assert_eq!(value["data"]["items"][0]["capacity"]["usedSlots"], 0);
+    assert_eq!(value["data"]["items"][0]["capacity"]["totalSlots"], 1);
+    assert_eq!(value["data"]["items"][0]["usage"]["todayUsd"], "1.25");
+    assert_eq!(
+        value["data"]["items"][0]["usage"]["retainedTotalUsd"],
+        "5.5"
+    );
+    assert!(value["data"]["items"][0].get("member_count").is_none());
+}
+
+#[tokio::test]
+async fn create_route_should_create_an_empty_group() {
+    let fixture = authenticated_fixture().await;
+    let response = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/create",
+        Some(json!({
+            "name": "Gamma routing",
+            "description": "New traffic pool",
+            "color": "#a855f780"
+        })),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let value = response_json(response).await;
+    assert!(
+        value["data"]["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("grp_") && id.len() == 36)
+    );
+    assert_eq!(value["data"]["record"]["name"], "Gamma routing");
+    assert_eq!(value["data"]["record"]["memberCount"], 0);
+    assert_eq!(value["data"]["record"]["color"], "#A855F780");
+    assert_eq!(value["data"]["configRevision"], 8);
+}
+
+#[tokio::test]
+async fn update_route_should_replace_group_fields() {
+    let fixture = authenticated_fixture().await;
+    let response = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/update",
+        Some(json!({
+            "id": PRIMARY_GROUP_ID,
+            "name": "Renamed routing",
+            "description": null,
+            "color": "#F43F5ECC"
+        })),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = response_json(response).await;
+    assert_eq!(value["data"]["record"]["name"], "Renamed routing");
+    assert!(value["data"]["record"]["description"].is_null());
+    assert_eq!(value["data"]["record"]["color"], "#F43F5ECC");
+}
+
+#[tokio::test]
+async fn enable_and_disable_routes_should_set_explicit_group_state() {
+    let fixture = authenticated_fixture().await;
+    let disabled = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/disable",
+        Some(json!({ "id": PRIMARY_GROUP_ID })),
+        true,
+    )
+    .await;
+    let enabled = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/enable",
+        Some(json!({ "id": PRIMARY_GROUP_ID })),
+        true,
+    )
+    .await;
+
+    assert_eq!(disabled.status(), StatusCode::OK);
+    assert!(
+        !response_json(disabled).await["data"]["record"]["enabled"]
+            .as_bool()
+            .expect("disabled flag")
+    );
+    assert_eq!(enabled.status(), StatusCode::OK);
+    assert!(
+        response_json(enabled).await["data"]["record"]["enabled"]
+            .as_bool()
+            .expect("enabled flag")
+    );
+}
+
+#[tokio::test]
+async fn delete_route_should_return_deleted_id_without_a_live_record() {
+    let fixture = authenticated_fixture().await;
+    let response = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/delete",
+        Some(json!({ "id": PRIMARY_GROUP_ID })),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = response_json(response).await;
+    assert_eq!(value["data"]["id"], PRIMARY_GROUP_ID);
+    assert!(value["data"]["record"].is_null());
+}
+
+#[tokio::test]
+async fn list_route_should_reject_unknown_and_invalid_pagination_fields() {
+    let fixture = authenticated_fixture().await;
+    for uri in [
+        "/api/admin/account-groups?other=true",
+        "/api/admin/account-groups?page=0",
+        "/api/admin/account-groups?pageSize=0",
+        "/api/admin/account-groups?pageSize=201",
+    ] {
+        let response = request(router(&fixture), Method::GET, uri, None, true).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn mutation_route_should_reject_unknown_json_fields() {
+    let fixture = authenticated_fixture().await;
+    let response = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/create",
+        Some(json!({
+            "name": "Unknown field",
+            "description": null,
+            "color": "#2563EBFF",
+            "providerKind": "openai"
+        })),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn create_route_should_reject_six_digit_color_without_alpha() {
+    let fixture = authenticated_fixture().await;
+    let response = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/create",
+        Some(json!({
+            "name": "Opaque legacy color",
+            "description": null,
+            "color": "#2563EB"
+        })),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn account_group_routes_should_require_admin_authentication() {
+    let fixture = AdminTestFixture::new().await;
+    let get_response = request(
+        router(&fixture),
+        Method::GET,
+        "/api/admin/account-groups",
+        None,
+        false,
+    )
+    .await;
+    let post_response = request(
+        router(&fixture),
+        Method::POST,
+        "/api/admin/account-groups/create",
+        Some(json!({ "name": "Unauthorized", "description": null, "color": "#2563EBFF" })),
+        false,
+    )
+    .await;
+
+    assert_eq!(get_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(post_response.status(), StatusCode::UNAUTHORIZED);
+}
+
+async fn authenticated_fixture() -> AdminTestFixture {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    fixture
+}
+
+fn router(fixture: &AdminTestFixture) -> Router {
+    account_groups::router::<AdminTestState>()
+        .merge(group_monitor::router::<AdminTestState>())
+        .with_state(fixture.state())
+}
+
+#[tokio::test]
+async fn monitor_route_requires_auth_and_strict_page_query() {
+    let fixture = authenticated_fixture().await;
+    let uri = format!("/api/admin/account-groups/monitor?groupIds={PRIMARY_GROUP_ID}");
+    assert_eq!(
+        request(router(&fixture), Method::GET, &uri, None, false)
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for query in [
+        String::new(),
+        "groupIds=".to_owned(),
+        format!("groupIds={PRIMARY_GROUP_ID}&refresh=true"),
+        format!("groupIds={PRIMARY_GROUP_ID}&refreshForecasts=1"),
+        format!("groupIds={PRIMARY_GROUP_ID}&refreshForecasts=invalid"),
+        format!("groupIds={PRIMARY_GROUP_ID}&refreshForecasts=true&refreshForecasts=false"),
+        format!("groupIds={PRIMARY_GROUP_ID},{PRIMARY_GROUP_ID}"),
+        "groupIds=grp_00000000000000000000000000000001,grp_00000000000000000000000000000002,grp_00000000000000000000000000000003,grp_00000000000000000000000000000004".to_owned(),
+        "groupIds=grp_missing".to_owned(),
+    ] {
+        let response = request(
+            router(&fixture),
+            Method::GET,
+            &format!("/api/admin/account-groups/monitor?{query}"),
+            None,
+            true,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+    }
+    assert_eq!(
+        request(router(&fixture), Method::POST, &uri, None, true)
+            .await
+            .status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+}
+
+#[tokio::test]
+async fn monitor_manual_forecast_refresh_requires_auth_and_preserves_group_configuration() {
+    let fixture = authenticated_fixture().await;
+    let app = || gateway_api::admin::router::<AdminTestState>().with_state(fixture.state());
+    for value in ["true", "false"] {
+        let uri = format!(
+            "/api/admin/account-groups/monitor?groupIds={PRIMARY_GROUP_ID}&refreshForecasts={value}"
+        );
+        assert_eq!(
+            request(app(), Method::GET, &uri, None, false)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let response = request(app(), Method::GET, &uri, None, true).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            response_json(response).await["data"]["items"][0]["id"],
+            PRIMARY_GROUP_ID
+        );
+    }
+    let groups =
+        response_json(request(app(), Method::GET, "/api/admin/account-groups", None, true).await)
+            .await;
+    assert_eq!(groups["data"]["configRevision"], 7);
+}
+
+#[tokio::test]
+async fn monitor_page_reads_never_sample_or_relabel_a_saved_timestamp() {
+    let fixture = authenticated_fixture().await;
+    let uri = format!("/api/admin/account-groups/monitor?groupIds={PRIMARY_GROUP_ID}");
+    for _ in 0..2 {
+        assert_eq!(
+            request(router(&fixture), Method::GET, &uri, None, true)
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    fixture
+        .services
+        .group_monitor()
+        .sample()
+        .await
+        .expect("unattended sample");
+    let first = response_json(request(router(&fixture), Method::GET, &uri, None, true).await).await;
+    let second =
+        response_json(request(router(&fixture), Method::GET, &uri, None, true).await).await;
+    assert_eq!(first["data"]["generatedAt"], second["data"]["generatedAt"]);
+    let refreshed = response_json(
+        request(
+            router(&fixture),
+            Method::GET,
+            &format!("{uri}&refreshForecasts=true"),
+            None,
+            true,
+        )
+        .await,
+    )
+    .await;
+    assert_ne!(
+        first["data"]["generatedAt"],
+        refreshed["data"]["generatedAt"]
+    );
+}
+
+#[tokio::test]
+async fn monitor_route_accepts_three_distinct_groups() {
+    let fixture = authenticated_fixture().await;
+    let created = response_json(
+        request(
+            router(&fixture),
+            Method::POST,
+            "/api/admin/account-groups/create",
+            Some(
+                json!({ "name": "Third monitor group", "description": null, "color": "#2563EBFF" }),
+            ),
+            true,
+        )
+        .await,
+    )
+    .await;
+    let third = created["data"]["id"].as_str().expect("third group");
+    fixture
+        .services
+        .group_monitor()
+        .sample()
+        .await
+        .expect("background sample");
+    let response = request(router(&fixture), Method::GET,
+        &format!("/api/admin/account-groups/monitor?groupIds={PRIMARY_GROUP_ID},{SECONDARY_GROUP_ID},{third}"),
+        None, true).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(response).await["data"]["items"]
+            .as_array()
+            .expect("items")
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn monitor_route_returns_explicit_wire_and_does_not_change_group_revision() {
+    let fixture = authenticated_fixture().await;
+    fixture
+        .services
+        .group_monitor()
+        .sample()
+        .await
+        .expect("background sample");
+    let response = request(
+        router(&fixture),
+        Method::GET,
+        &format!("/api/admin/account-groups/monitor?groupIds={PRIMARY_GROUP_ID}"),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = response_json(response).await;
+    let data = &value["data"];
+    assert_eq!(data["rateWindowSeconds"], 60);
+    assert!(
+        data["viewerScope"]
+            .as_str()
+            .expect("viewer")
+            .starts_with("admin:")
+    );
+    assert!(data["generatedAt"].is_string());
+    let item = &data["items"][0];
+    assert_eq!(item["id"], PRIMARY_GROUP_ID);
+    assert_eq!(item["remainingUsd"], 0.0);
+    assert_eq!(item["remainingStatus"], "ready");
+    assert_eq!(item["consumeUsdPerMinute"], 0.0);
+    assert_eq!(item["etaStatus"], "empty");
+    assert!(item.get("remaining_usd").is_none());
+    let groups = response_json(
+        request(
+            router(&fixture),
+            Method::GET,
+            "/api/admin/account-groups",
+            None,
+            true,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(groups["data"]["configRevision"], 7);
+}
+
+async fn request(
+    router: Router,
+    method: Method,
+    uri: &str,
+    body: Option<Value>,
+    authenticated: bool,
+) -> axum::response::Response {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("x-request-id", "req_account_groups");
+    if authenticated {
+        builder = builder.header(header::COOKIE, SESSION_COOKIE);
+    }
+    let body = match body {
+        Some(value) => {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+            Body::from(serde_json::to_vec(&value).expect("serialize request body"))
+        }
+        None => Body::empty(),
+    };
+    router
+        .oneshot(builder.body(body).expect("account group request"))
+        .await
+        .expect("account group response")
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    let body = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("account group response body");
+    serde_json::from_slice(&body).expect("account group response JSON")
+}

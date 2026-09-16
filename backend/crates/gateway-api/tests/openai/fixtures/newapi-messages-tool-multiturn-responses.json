@@ -1,0 +1,81 @@
+{
+  "model": "gpt-5.4",
+  "input": [
+    {
+      "content": "Read alpha and beta.",
+      "role": "user"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "arguments": "{\"key\":\"alpha\"}",
+      "call_id": "toolu_fixture_a",
+      "name": "lookup_fixture",
+      "type": "function_call"
+    },
+    {
+      "arguments": "{\"key\":\"beta\"}",
+      "call_id": "toolu_fixture_b",
+      "name": "lookup_fixture",
+      "type": "function_call"
+    },
+    {
+      "call_id": "toolu_fixture_a",
+      "output": "{\"value\":11}",
+      "type": "function_call_output"
+    },
+    {
+      "call_id": "toolu_fixture_b",
+      "output": "{\"value\":22}",
+      "type": "function_call_output"
+    },
+    {
+      "content": [
+        {
+          "text": "Now read gamma.",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "content": "",
+      "role": "assistant"
+    },
+    {
+      "arguments": "{\"key\":\"gamma\"}",
+      "call_id": "toolu_fixture_c",
+      "name": "lookup_fixture",
+      "type": "function_call"
+    },
+    {
+      "call_id": "toolu_fixture_c",
+      "output": "[{\"type\":\"text\",\"text\":\"Synthetic record missing.\"}]",
+      "type": "function_call_output"
+    }
+  ],
+  "instructions": "Use only synthetic records.",
+  "max_output_tokens": 256,
+  "stream": false,
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "Read a synthetic record.",
+      "name": "lookup_fixture",
+      "parameters": {
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "type": "function"
+    }
+  ]
+}

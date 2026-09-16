@@ -1,0 +1,19 @@
+{
+  "model": "gpt-5.4",
+  "messages": [
+    {
+      "role": "developer",
+      "content": "Use synthetic data only."
+    },
+    {
+      "role": "user",
+      "content": "Count to two."
+    }
+  ],
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "n": 1,
+  "parallel_tool_calls": false
+}
