@@ -559,6 +559,7 @@ pub enum CodexBackendTransport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexTransportDecision {
     HttpRequired,
+    HttpLargeRequest,
     ReusedWebSocket,
     ConnectedWebSocket,
     ExactWebSocket,
@@ -572,6 +573,7 @@ impl CodexTransportDecision {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::HttpRequired => "http_required",
+            Self::HttpLargeRequest => "http_large_request",
             Self::ReusedWebSocket => "ws_reused",
             Self::ConnectedWebSocket => "ws_connected_fast",
             Self::ExactWebSocket => "ws_exact_required",

@@ -184,6 +184,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         account_busy_wait_fallback_timeout_seconds: 33,
         max_request_attempts: 8,
         websocket_http_fallback_enabled: false,
+        websocket_large_request_threshold_bytes: 4096,
         ..RequestTuning::default()
     };
     let overrides = RequestTuningOverrides {
@@ -200,6 +201,9 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         ),
         max_request_attempts: Some(expected.max_request_attempts),
         websocket_http_fallback_enabled: Some(expected.websocket_http_fallback_enabled),
+        websocket_large_request_threshold_bytes: Some(
+            expected.websocket_large_request_threshold_bytes,
+        ),
         ..Default::default()
     };
     sqlx::query(
@@ -220,6 +224,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     )
     .bind(sqlx::types::Json(RequestTuningOverrides {
         account_busy_wait_enabled: Some(false),
+        websocket_large_request_threshold_bytes: Some(0),
         ..overrides
     }))
     .execute(&database.pool)
@@ -233,6 +238,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         disabled.request_tuning(),
         RequestTuning {
             account_busy_wait_enabled: false,
+            websocket_large_request_threshold_bytes: 0,
             ..expected
         }
     );

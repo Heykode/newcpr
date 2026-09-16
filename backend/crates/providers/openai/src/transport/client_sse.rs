@@ -300,6 +300,36 @@ impl CodexBackendClient {
             &websocket_request,
         )
         .map_err(CodexClientError::WebSocketEncode)?;
+        let tuning = self.request_tuning();
+        let payload_bytes = websocket_create.payload_text().len() as u64;
+        // Only independent new chains can change transport without rebuilding history.
+        if requirement == TransportRequirement::NewChain
+            && tuning.websocket_http_fallback_enabled
+            && tuning.websocket_large_request_threshold_bytes != 0
+            && payload_bytes >= tuning.websocket_large_request_threshold_bytes
+        {
+            let decision = CodexTransportDecision::HttpLargeRequest;
+            context.trace.cloned().unwrap_or_default().record(
+                "transport.fallback",
+                serde_json::json!({
+                    "to": "http_sse",
+                    "reason": "websocket_large_request",
+                    "requirement": requirement.as_str(),
+                    "decision": decision.as_str(),
+                    "payloadBytes": payload_bytes,
+                    "thresholdBytes": tuning.websocket_large_request_threshold_bytes,
+                }),
+            );
+            return Ok(PreparedResponseTransport {
+                attempt_client: None,
+                requirement,
+                route: PreparedResponseRoute::Http,
+                metrics: CodexTransportMetrics {
+                    decision: Some(decision),
+                    ..CodexTransportMetrics::default()
+                },
+            });
+        }
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
         websocket_create.connection.egress_source =
             self.egress_route.as_ref().map(|route| route.source);

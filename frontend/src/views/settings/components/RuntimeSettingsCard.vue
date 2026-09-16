@@ -33,6 +33,7 @@ const tuningValues = {
   maxAccountSwitches: tuningNumber('maxAccountSwitches'),
   maxRequestAttempts: tuningNumber('maxRequestAttempts'),
   websocketMaxRetries: tuningNumber('websocketMaxRetries'),
+  websocketLargeRequestThresholdBytes: tuningNumber('websocketLargeRequestThresholdBytes'),
   websocketMaxAgeMs: tuningNumber('websocketMaxAgeMs'),
   websocketStreamIdleTimeoutMs: tuningNumber('websocketStreamIdleTimeoutMs'),
   websocketFailureThreshold: tuningNumber('websocketFailureThreshold'),
@@ -212,8 +213,11 @@ const tuningValues = {
         <BaseFormItem label="单个请求最多路由尝试次数" description="本次请求最多尝试的账号总次数，范围 1–32">
           <BaseInput v-model="tuningValues.maxRequestAttempts.value" aria-label="单个请求最多路由尝试次数" type="number" />
         </BaseFormItem>
-        <BaseFormItem label="WebSocket 失败后回退普通 HTTP" description="WebSocket 失败时是否尝试普通 HTTP">
+        <BaseFormItem label="允许 WebSocket 自动切换 HTTP">
           <BaseSwitch v-model="requestTuning.websocketHttpFallbackEnabled" label="允许回退" show-label />
+        </BaseFormItem>
+        <BaseFormItem label="大请求 HTTP 阈值（字节）">
+          <BaseInput v-model="tuningValues.websocketLargeRequestThresholdBytes.value" aria-label="大请求 HTTP 阈值（字节）" type="number" min="0" max="67108864" step="1" />
         </BaseFormItem>
         <BaseFormItem label="WebSocket 连接最长寿命" description="单位：毫秒">
           <BaseInput v-model="tuningValues.websocketMaxAgeMs.value" aria-label="WebSocket 连接最长寿命" type="number" />

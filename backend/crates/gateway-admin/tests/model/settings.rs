@@ -9,6 +9,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),
         websocket_http_fallback_enabled: Some(false),
+        websocket_large_request_threshold_bytes: Some(4096),
         websocket_max_age_ms: Some(60_000),
         websocket_stream_idle_timeout_ms: Some(120_000),
         websocket_failure_threshold: Some(3),
@@ -33,6 +34,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
             "websocketHttpFallbackEnabled": false,
+            "websocketLargeRequestThresholdBytes": 4096,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
             "websocketFailureThreshold": 3,
@@ -56,12 +58,51 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     let defaults =
         serde_json::to_value(RequestTuning::default()).expect("serialize runtime defaults");
     assert!(defaults.get("websocketMaxConnecting").is_none());
+    assert_eq!(
+        defaults["websocketLargeRequestThresholdBytes"],
+        15 * 1024 * 1024
+    );
     assert_eq!(defaults["openaiLocationOverrideEnabled"], false);
     assert_eq!(defaults["accountBusyWaitEnabled"], false);
     assert_eq!(defaults["accountBusyWaitStickyMaxWaiting"], 3);
     assert_eq!(defaults["accountBusyWaitStickyTimeoutSeconds"], 120);
     assert_eq!(defaults["accountBusyWaitFallbackMaxWaiting"], 100);
     assert_eq!(defaults["accountBusyWaitFallbackTimeoutSeconds"], 30);
+}
+
+#[test]
+fn large_request_threshold_preserves_inheritance_zero_and_legacy_defaults() {
+    let mut legacy = serde_json::to_value(RequestTuning::default()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("websocketLargeRequestThresholdBytes");
+    assert_eq!(
+        serde_json::from_value::<RequestTuning>(legacy).unwrap(),
+        RequestTuning::default()
+    );
+    for value in [json!(null), json!(0), json!(1), json!(64 * 1024 * 1024)] {
+        let wire = json!({"websocketLargeRequestThresholdBytes": value});
+        let overrides: RequestTuningOverrides = serde_json::from_value(wire).unwrap();
+        assert!(overrides.validate());
+        assert_eq!(
+            serde_json::to_value(overrides).unwrap()["websocketLargeRequestThresholdBytes"],
+            value
+        );
+    }
+    let too_large: RequestTuningOverrides = serde_json::from_value(
+        json!({"websocketLargeRequestThresholdBytes": 64 * 1024 * 1024 + 1}),
+    )
+    .unwrap();
+    assert!(!too_large.validate());
+    for value in [json!(-1), json!(1.5), json!("1024"), json!(true)] {
+        assert!(
+            serde_json::from_value::<RequestTuningOverrides>(
+                json!({"websocketLargeRequestThresholdBytes": value}),
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

@@ -127,6 +127,7 @@ async fn request_tuning_overrides_should_round_trip() {
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),
         websocket_http_fallback_enabled: Some(false),
+        websocket_large_request_threshold_bytes: Some(4096),
         websocket_max_age_ms: Some(60_000),
         websocket_stream_idle_timeout_ms: Some(120_000),
         websocket_failure_threshold: Some(3),

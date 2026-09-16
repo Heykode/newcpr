@@ -73,6 +73,49 @@ function settings() {
   }
 }
 
+test('large request threshold inherits defaults and round trips zero and custom bytes', async () => {
+  for (const [overrides, defaults, expected] of [
+    [{}, {}, 15 * 1024 * 1024],
+    [{ websocketLargeRequestThresholdBytes: null }, { websocketLargeRequestThresholdBytes: 8192 }, 8192],
+    [{ websocketLargeRequestThresholdBytes: 0 }, { websocketLargeRequestThresholdBytes: 8192 }, 0],
+  ]) {
+    const query = mountSettings({ ...settings(), requestTuning: overrides, requestTuningDefaults: defaults })
+    try {
+      await query.state.loadSettings()
+      assert.equal(query.state.form.requestTuning.websocketLargeRequestThresholdBytes, expected)
+      for (const value of [expected, 0, 4096, 64 * 1024 * 1024]) {
+        query.state.form.requestTuning.websocketLargeRequestThresholdBytes = value
+        await query.state.saveSettings()
+        assert.equal(query.requests.at(-1).requestTuning.websocketLargeRequestThresholdBytes, value)
+        await query.state.loadSettings()
+        assert.equal(query.state.form.requestTuning.websocketLargeRequestThresholdBytes, value)
+      }
+    }
+    finally {
+      query.stop()
+    }
+  }
+})
+
+test('large request threshold rejects invalid byte counts before saving', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    for (const value of [-1, 1.5, 64 * 1024 * 1024 + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      query.state.form.requestTuning.websocketLargeRequestThresholdBytes = value
+      await query.state.saveSettings()
+    }
+    assert.equal(query.requests.length, 0)
+    assert.equal(warnings.length, 5)
+    const component = readFileSync(new URL('../src/views/settings/components/RuntimeSettingsCard.vue', import.meta.url), 'utf8')
+    assert.match(component, /v-model="tuningValues\.websocketLargeRequestThresholdBytes\.value"/)
+  }
+  finally {
+    query.stop()
+  }
+})
+
 test('key queue bounds round trip and invalid values cannot be saved', async () => {
   for (const [maxWaitingPerKey, keyConcurrencyWaitTimeoutSeconds, valid] of [
     [0, 1, true],
@@ -158,6 +201,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       maxRequestAttempts: 32,
       websocketMaxRetries: 5,
       websocketHttpFallbackEnabled: true,
+      websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
       websocketMaxAgeMs: 55 * 60 * 1_000,
       websocketStreamIdleTimeoutMs: 300_000,
       websocketFailureThreshold: 3,

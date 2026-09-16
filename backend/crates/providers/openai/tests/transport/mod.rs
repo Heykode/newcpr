@@ -58,6 +58,7 @@ mod generate_compat;
 mod headers;
 mod http_client;
 mod http_transport_review;
+mod large_request;
 mod latency;
 mod media_compat;
 mod native_http;

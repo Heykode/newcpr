@@ -237,6 +237,9 @@ fn to_core_request_tuning(
         websocket_http_fallback_enabled: overrides
             .websocket_http_fallback_enabled
             .unwrap_or(defaults.websocket_http_fallback_enabled),
+        websocket_large_request_threshold_bytes: overrides
+            .websocket_large_request_threshold_bytes
+            .unwrap_or(defaults.websocket_large_request_threshold_bytes),
         websocket_max_age_ms: overrides
             .websocket_max_age_ms
             .unwrap_or(defaults.websocket_max_age_ms),

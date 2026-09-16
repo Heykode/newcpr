@@ -75,7 +75,15 @@ profiles or random fingerprint generation.
   the already-sent HTTP status and deliver the error event instead. Preserve
   close details and send state, but do not spend
   recovery budget, replay the request, or classify it as an invalid account.
-  This adds neither a message-size limit nor an HTTP fallback policy.
+  The close handler adds no replay or post-send HTTP fallback policy.
+- Before any WS opening, optional `NewChain` requests at or above
+  `websocket_large_request_threshold_bytes` use the existing HTTP transport.
+  Default is 15 MiB; zero or disabled `websocket_http_fallback_enabled` disables
+  size selection. Measure the final projected WS JSON UTF-8 bytes before
+  compression. Native connection-local first turns, warmup and every previous
+  response scope retain their existing transport contract. Keep the frozen
+  attempt client, selected account, identity, proxy and original input.
+  Do not persist size selection as a session failure or permanent HTTP mode.
 
 ## 4. Validation & Error Matrix
 
@@ -92,6 +100,8 @@ profiles or random fingerprint generation.
 | Commit fails or finalization was already started | Preserve the existing terminal reason; no false success |
 | Actual client disconnect/cancellation | Existing cancellation and detached cleanup contract |
 | WS closes with 1009 before / after HTTP commit | HTTP 413 / streamed error; no replay or account-health penalty |
+| Independent new chain at the configured size threshold | HTTP before WS opening; `http_large_request` decision |
+| Zero threshold, fallback disabled, warmup or continuation | Existing transport policy; no size-driven escape |
 | Retryable upstream 401 then local no-account/capacity failure | Local 503 contract; no stale 401 body or events |
 | Retryable upstream 502 then local capacity failure | Preserve original upstream detail and raw response |
 | Inherited account limit + changed global default | Query returns new effective value; override remains null |
