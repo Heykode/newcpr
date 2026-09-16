@@ -55,6 +55,8 @@ pub fn needs_relogin(account: &AccountRecord) -> bool {
     account.enabled
         && account.authentication_kind == "oauth"
         && account.credential_state == CredentialState::Expired
+        && !(account.has_refresh_token
+            && account.last_error_reason == Some(AccountErrorReason::AccessTokenExpired))
         && matches!(
             account.last_error_reason,
             Some(AccountErrorReason::AccessTokenExpired | AccountErrorReason::CredentialExpired)

@@ -91,6 +91,7 @@ pub enum CodexUpstreamSendPhase {
 pub enum CodexFailureCategory {
     ModelUnsupported,
     CredentialExpired,
+    CredentialRevoked,
     IdentityVerificationRequired,
     Banned,
     /// 当前用量窗口已经耗尽，但存在自动恢复的重置时间。
@@ -238,6 +239,7 @@ impl CodexUpstreamFailure {
                 self.category,
                 CodexFailureCategory::ModelUnsupported
                     | CodexFailureCategory::CredentialExpired
+                    | CodexFailureCategory::CredentialRevoked
                     | CodexFailureCategory::IdentityVerificationRequired
                     | CodexFailureCategory::Banned
                     | CodexFailureCategory::UsageLimitExhausted
@@ -488,6 +490,19 @@ fn classify_upstream_failure(
         status,
         Some(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
     );
+    if structured_auth_signals.into_iter().any(|value| {
+        matches!(
+            value,
+            "token_invalidated" | "token_revoked" | "refresh_token_invalidated"
+        )
+    }) || (status == Some(StatusCode::UNAUTHORIZED)
+        && serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("detail")?.as_str().map(str::to_owned))
+            .is_some_and(|detail| detail.eq_ignore_ascii_case("unauthorized")))
+    {
+        return CodexFailureCategory::CredentialRevoked;
+    }
     if structured_auth_signals
         .into_iter()
         .any(is_expired_credential)

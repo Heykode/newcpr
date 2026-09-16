@@ -1052,16 +1052,12 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              upstream_user_id = case when $11::boolean then $12::text else upstream_user_id end,
              upstream_account_id = case when $11::boolean then $13::text else upstream_account_id end,
              credential_state = case
-                 when not enabled then credential_state
                  when coalesce($12::text, upstream_user_id) is not null then 'ready'
                  else 'unknown'
              end,
-             credential_observed_at = case
-                 when not enabled then credential_observed_at
-                 else now()
-             end,
-             last_error_reason = case when enabled then null else last_error_reason end,
-             last_error_message = case when enabled then null else last_error_message end,
+             credential_observed_at = now(),
+             last_error_reason = null,
+             last_error_message = null,
              updated_at = now()
          where id = $1 and provider_kind = $2
            and credential_revision = $3

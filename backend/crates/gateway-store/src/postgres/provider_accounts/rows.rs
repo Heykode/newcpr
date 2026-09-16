@@ -412,13 +412,22 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select outbound_proxy_url, i
      where provider_kind = $1
        and enabled
        and has_refresh_token
-       and credential_state in ('unknown', 'ready')
-       and access_token_expires_at is not null
        and (
-         access_token_expires_at <= $3
-         or (
-           access_token_expires_at <= $2
+         (
+           provider_kind = 'openai' and authentication_kind = 'oauth'
+           and credential_state = 'expired' and last_error_reason = 'access_token_expired'
            and (next_refresh_at is null or next_refresh_at <= $4)
+         )
+         or (
+           credential_state in ('unknown', 'ready')
+           and access_token_expires_at is not null
+           and (
+             access_token_expires_at <= $3
+             or (
+               access_token_expires_at <= $2
+               and (next_refresh_at is null or next_refresh_at <= $4)
+             )
+           )
          )
        )
        and not (id = any($5::text[]))

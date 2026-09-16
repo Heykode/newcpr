@@ -364,31 +364,19 @@ impl CodexCredentialRefreshService {
                 .await
             }
             Err(RefreshFailure::RetryableTransport { message }) => {
-                if self
-                    .defer_refresh(&due.account, "transport-not-sent", Some(&message), None)
-                    .await?
-                {
-                    Ok(CodexCredentialRefreshOutcome::Transient { account_id })
-                } else {
-                    Ok(CodexCredentialRefreshOutcome::Stale { account_id })
-                }
+                self.defer_refresh(&due.account, "transport-not-sent", Some(&message), None)
+                    .await
             }
             Err(RefreshFailure::Transport { message, upstream }) => {
                 // 上游瞬态（401/429/5xx/超时/畸形响应等）保留现有凭据、
                 // 记录最近一次失败并推进有界退避。
-                if self
-                    .defer_refresh(
-                        &due.account,
-                        "transport-ambiguous",
-                        message.as_deref(),
-                        upstream.as_deref(),
-                    )
-                    .await?
-                {
-                    Ok(CodexCredentialRefreshOutcome::Transient { account_id })
-                } else {
-                    Ok(CodexCredentialRefreshOutcome::Stale { account_id })
-                }
+                self.defer_refresh(
+                    &due.account,
+                    "transport-ambiguous",
+                    message.as_deref(),
+                    upstream.as_deref(),
+                )
+                .await
             }
         }
     }
@@ -604,12 +592,29 @@ impl CodexCredentialRefreshService {
         reason: &'static str,
         upstream_message: Option<&str>,
         upstream: Option<&RefreshUpstreamFailure>,
-    ) -> Result<bool, CodexCredentialRefreshError> {
+    ) -> Result<CodexCredentialRefreshOutcome, CodexCredentialRefreshError> {
         let attempt = self
             .credential_state
             .record_refresh_backoff(account.id(), REFRESH_BACKOFF_WINDOW)
             .await
             .unwrap_or(1);
+        if account.needs_authentication_refresh() && attempt > REFRESH_BACKOFF_MAX_ATTEMPTS {
+            return self
+                .persist_terminal(
+                    account,
+                    CredentialState::Expired,
+                    AccountErrorReason::CredentialExpired,
+                    RefreshFailureContext::new(
+                        "authentication_refresh_retry_exhausted",
+                        upstream_message.map(str::to_owned),
+                        upstream,
+                    ),
+                    CodexCredentialRefreshOutcome::Invalidated {
+                        account_id: account.id().to_string(),
+                    },
+                )
+                .await;
+        }
         let retry_at = oauth_refresh_retry_at(
             account.id(),
             account.access_token_expires_at(),
@@ -621,10 +626,12 @@ impl CodexCredentialRefreshService {
             .filter(|message| !message.trim().is_empty())
             .map(str::to_owned);
         let error_reason = upstream.map(|_| {
-            account
-                .credential_state()
-                .error_reason()
-                .unwrap_or(AccountErrorReason::AccessTokenExpired)
+            account.last_error_reason().unwrap_or_else(|| {
+                account
+                    .credential_state()
+                    .error_reason()
+                    .unwrap_or(AccountErrorReason::AccessTokenExpired)
+            })
         });
         match self
             .repository
@@ -641,9 +648,15 @@ impl CodexCredentialRefreshService {
                     upstream,
                     retry_at,
                 );
-                Ok(true)
+                Ok(CodexCredentialRefreshOutcome::Transient {
+                    account_id: account.id().to_string(),
+                })
             }
-            Err(CredentialRepositoryError::RevisionConflict) => Ok(false),
+            Err(CredentialRepositoryError::RevisionConflict) => {
+                Ok(CodexCredentialRefreshOutcome::Stale {
+                    account_id: account.id().to_string(),
+                })
+            }
             Err(error) => Err(error.into()),
         }
     }

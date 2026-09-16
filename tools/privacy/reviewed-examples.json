@@ -1,5 +1,21 @@
 [
   {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1630,
+    "file_sha256": "52c28fda9413713582ef442c0a2e014684af3a92fbcd17fc39d439ae1a6ed148",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Reviewed unchanged synthetic loopback proxy fixture; authentication recovery tests changed file fingerprint and line position."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1656,
+    "file_sha256": "52c28fda9413713582ef442c0a2e014684af3a92fbcd17fc39d439ae1a6ed148",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Reviewed unchanged normalized synthetic loopback proxy fixture; authentication recovery tests changed file fingerprint and line position."
+  },
+  {
     "path": ".github/actions/verify-container/action.yml",
     "rule": "non-example-ip",
     "line": 25,

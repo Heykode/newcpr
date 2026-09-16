@@ -7,9 +7,19 @@
 - Manual login only caches verified credentials. Explicit push confirms the library
   revision. Automatic recovery requires enabled OAuth, expired credential state, a
   matching terminal expiry reason, and an enabled email-matched library entry.
+- OpenAI `expired` plus `access_token_expired` with a refresh token is reserved for
+  bounded token-refresh recovery, not password relogin. It remains blocked from
+  inference even when the stored access-token expiry is in the future or missing.
+  The refresh worker respects `next_refresh_at`; explicit revocation, invalid grant
+  or exhausted recovery uses terminal `credential_expired`. Do not rewrite tokens
+  from an inference request's stale snapshot.
 - Existing account recovery captures account ID, principal, workspace and credential
   revision. Recheck these at push; automatic push also rechecks recovery eligibility.
   Use the existing prepared rotation and CAS transaction, never delete/recreate.
+- Successful prepared credential replacement updates authentication facts even for
+  manually paused accounts, but preserves `enabled`. A concurrent pause must not
+  be undone by a relogin push. Ordinary file import is different: its explicit
+  scheduling settings remain authoritative.
 - New push uses the existing import preparation and initialization with create-only
   semantics. The PostgreSQL transaction checks email/identity under the configuration
   lock, and the final INSERT conflict clause forbids updating an existing identity.

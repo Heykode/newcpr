@@ -928,12 +928,32 @@ fn credential_expired_failure_keeps_expired_oauth_for_bounded_refresh_recovery()
     let retained = store
         .account("acct_primary")
         .expect("account retained for refresh");
-    assert_eq!(retained.credential_state(), CredentialState::Ready);
+    assert_eq!(retained.credential_state(), CredentialState::Expired);
+    assert!(retained.needs_authentication_refresh());
+    assert!(retained.enabled());
     assert_eq!(
         retained.last_error_reason(),
         Some(AccountErrorReason::AccessTokenExpired)
     );
     assert_eq!(retained.last_error_message(), Some("token_expired"));
+}
+
+#[test]
+fn revoked_credentials_do_not_enter_automatic_refresh_recovery() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_revoked", "at-revoked");
+    let account = store.account("acct_revoked").expect("account");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    block_on(selector.record_failure(&account, CodexAccountFailure::CredentialRevoked, None))
+        .expect("record revocation");
+    let current = store.account("acct_revoked").expect("account");
+    assert!(current.enabled());
+    assert_eq!(current.credential_state(), CredentialState::Expired);
+    assert_eq!(
+        current.last_error_reason(),
+        Some(AccountErrorReason::CredentialExpired)
+    );
+    assert!(!current.needs_authentication_refresh());
 }
 
 #[test]

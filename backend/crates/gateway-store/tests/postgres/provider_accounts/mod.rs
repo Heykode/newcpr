@@ -4,6 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+mod auth_recovery;
 mod quota_forecast;
 
 use chrono::{TimeDelta, Utc};
@@ -2944,7 +2945,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
     .await
     .expect("load disabled account after refresh writes");
     assert!(!current.0);
-    assert_eq!(current.1, "expired");
+    assert_eq!(current.1, "ready");
     assert_eq!(current.2["access_token"], "disabled-refreshed-secret");
     assert_eq!(current.3, 2);
 

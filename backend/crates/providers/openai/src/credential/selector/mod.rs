@@ -27,7 +27,6 @@ use super::affinity::{CODEX_ROOT_SESSION_TTL, CodexSessionAffinity};
 use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
-use super::refresh::refresh_recovery_deadline;
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use super::security::CodexRuntimeAuthentication;
 use super::types::{
@@ -53,6 +52,8 @@ const CYBER_POLICY_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 pub enum CodexAccountFailure {
     /// Access token 已被上游明确判定为过期或失效。
     CredentialExpired,
+    /// Explicit revocation cannot recover through automatic refresh.
+    CredentialRevoked,
     /// 账号需要完成身份验证后才能继续使用。
     IdentityVerificationRequired,
     /// 账号、workspace 或 organization 已被封禁或停用。
@@ -907,37 +908,27 @@ impl CodexCredentialSelector {
         let message = message.filter(|value| !value.trim().is_empty());
         match failure {
             CodexAccountFailure::CredentialExpired => {
-                if account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
-                    && account.has_refresh_token()
-                    && account
-                        .access_token_expires_at()
-                        .is_some_and(|expires_at| expires_at <= now)
-                    && refresh_recovery_deadline(account.access_token_expires_at())
-                        .is_some_and(|deadline| deadline > now)
-                {
-                    tracing::info!(
-                        account_id = %account.id(),
-                        access_token_expires_at = ?account.access_token_expires_at()
-                            .map(chrono::DateTime::<chrono::Utc>::from),
-                        recovery_deadline = ?refresh_recovery_deadline(account.access_token_expires_at())
-                            .map(chrono::DateTime::<chrono::Utc>::from),
-                        "OpenAI access token expired; retaining account for bounded OAuth refresh recovery"
-                    );
-                    return self
-                        .apply_credential_state(
-                            account,
-                            CredentialState::Ready,
-                            AccountErrorReason::AccessTokenExpired,
-                            now,
-                            message,
-                            diagnostic,
-                        )
-                        .await;
-                }
+                let refreshable = account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
+                    && account.has_refresh_token();
                 self.apply_credential_state(
                     account,
                     CredentialState::Expired,
-                    AccountErrorReason::AccessTokenExpired,
+                    if refreshable {
+                        AccountErrorReason::AccessTokenExpired
+                    } else {
+                        AccountErrorReason::CredentialExpired
+                    },
+                    now,
+                    message,
+                    diagnostic,
+                )
+                .await
+            }
+            CodexAccountFailure::CredentialRevoked => {
+                self.apply_credential_state(
+                    account,
+                    CredentialState::Expired,
+                    AccountErrorReason::CredentialExpired,
                     now,
                     message,
                     diagnostic,

@@ -38,6 +38,13 @@ pagination.
   a viewport-clipped `overlayStyle`.
 - `AccountStatusBadge.align` defaults to `left`; only the account-list caller
   opts into centered marks alongside the centered enable switch.
+- `AccountSchedulingSwitch` distinguishes manual intent from authentication failure.
+  An enabled account with backend `status=error` shows an off, read-only switch and
+  an automatic-stop mark, retaining the error badge and recovery details. Existing
+  account settings remain the explicit manual-pause control. Recovery restores the
+  display only if manual enable intent remains true; it never sends a toggle API.
+  Quota/rate-limit states do not masquerade as permanent authentication failure.
+  Terminal reasons ignore leftover refresh-backoff timestamps.
 
 ## 3. Contracts
 

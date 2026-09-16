@@ -182,6 +182,106 @@ struct MutableRuntimePolicy {
     policy: Mutex<ProviderRefreshPolicy>,
 }
 
+struct FixedRefreshAttempt(u32);
+
+impl ProviderCredentialStatePort for FixedRefreshAttempt {
+    fn replace(
+        &self,
+        state: ProviderCredentialState,
+    ) -> BoxFuture<'_, Result<(), ProviderStoreError>> {
+        RefreshCredentialState.replace(state)
+    }
+
+    fn read<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<ProviderCredentialState>, ProviderStoreError>> {
+        RefreshCredentialState.read(account)
+    }
+
+    fn clear<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        RefreshCredentialState.clear(account)
+    }
+
+    fn record_refresh_backoff<'a>(
+        &'a self,
+        _: &'a ProviderAccountId,
+        _: Duration,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async { Ok(self.0) })
+    }
+
+    fn clear_refresh_backoff<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        RefreshCredentialState.clear_refresh_backoff(account)
+    }
+}
+
+#[tokio::test]
+async fn rejected_oauth_refresh_defers_then_becomes_terminal_without_changing_manual_intent() {
+    for attempt in [1, 6] {
+        let store = Arc::new(MemoryAccountStore::default());
+        seed_refreshable_account(
+            &store,
+            "acct_retry_rejected",
+            SystemTime::now() + Duration::from_secs(86_400),
+            None,
+        )
+        .await;
+        let account = store.account("acct_retry_rejected").unwrap();
+        store
+            .apply_state_change(AccountStateChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                credential_state: CredentialState::Expired,
+                observed_at: SystemTime::now(),
+                error_reason: Some(AccountErrorReason::AccessTokenExpired),
+                message: Some("authentication rejected".into()),
+            })
+            .await
+            .unwrap();
+        let service = CodexCredentialRefreshService::new(
+            store.repository(),
+            Arc::new(FailingRefresher {
+                failure: RefreshFailure::RetryableTransport {
+                    message: "synthetic timeout".into(),
+                },
+            }),
+            Arc::new(RefreshLeases),
+            Arc::new(FixedRefreshAttempt(attempt)),
+            MutableRuntimePolicy::new(Duration::from_secs(60)),
+        );
+        let outcomes = service.refresh_due().await.unwrap();
+        let current = store.account("acct_retry_rejected").unwrap();
+        assert!(current.enabled());
+        assert_eq!(current.credential_state(), CredentialState::Expired);
+        if attempt == 1 {
+            assert!(matches!(
+                outcomes.as_slice(),
+                [CodexCredentialRefreshOutcome::Transient { .. }]
+            ));
+            assert!(current.needs_authentication_refresh());
+            assert!(current.next_refresh_at().unwrap() > SystemTime::now());
+        } else {
+            assert!(matches!(
+                outcomes.as_slice(),
+                [CodexCredentialRefreshOutcome::Invalidated { .. }]
+            ));
+            assert!(!current.needs_authentication_refresh());
+            assert_eq!(
+                current.last_error_reason(),
+                Some(AccountErrorReason::CredentialExpired)
+            );
+        }
+        assert!(service.refresh_due().await.unwrap().is_empty());
+    }
+}
+
 impl MutableRuntimePolicy {
     fn new(margin: Duration) -> Arc<Self> {
         Arc::new(Self {
@@ -219,6 +319,58 @@ fn refresh_service(
         Arc::new(RefreshCredentialState),
         runtime_policy,
     )
+}
+
+#[tokio::test]
+async fn rejected_unexpired_oauth_is_blocked_until_refresh_and_keeps_manual_pause() {
+    for enabled in [true, false] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let id = "acct_rejected";
+        seed_refreshable_account(
+            &store,
+            id,
+            SystemTime::now() + Duration::from_secs(24 * 60 * 60),
+            None,
+        )
+        .await;
+        let account = store.account(id).unwrap();
+        store
+            .apply_state_change(AccountStateChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                credential_state: CredentialState::Expired,
+                observed_at: SystemTime::now(),
+                error_reason: Some(AccountErrorReason::AccessTokenExpired),
+                message: Some("upstream rejected authentication".into()),
+            })
+            .await
+            .unwrap();
+        store.set_enabled(account.id(), enabled).await.unwrap();
+        let account = store.account(id).unwrap();
+        assert_ne!(
+            account.status_projection(SystemTime::now(), None).status,
+            AccountStatus::Normal
+        );
+        let refresher = SingleUseRefresher::new();
+        let service = refresh_service(
+            &store,
+            Arc::clone(&refresher),
+            MutableRuntimePolicy::new(Duration::from_secs(60)),
+        );
+        let outcomes = service.refresh_due().await.unwrap();
+        assert_eq!(refresher.calls(), usize::from(enabled));
+        assert_eq!(outcomes.len(), usize::from(enabled));
+        let current = store.account(id).unwrap();
+        assert_eq!(current.enabled(), enabled);
+        if enabled {
+            assert_eq!(current.credential_state(), CredentialState::Ready);
+            assert_eq!(current.last_error_reason(), None);
+            assert_eq!(
+                current.status_projection(SystemTime::now(), None).status,
+                AccountStatus::Normal
+            );
+        }
+    }
 }
 
 async fn seed_refreshable_account(

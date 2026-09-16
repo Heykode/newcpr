@@ -143,6 +143,7 @@ export function resolveAccountStatusPresentation(
     ? null
     : parseTimestamp(input.nextRefreshAt)
   const isBackoff = input.status !== 'disabled'
+    && (!input.errorReason || input.errorReason === 'access_token_expired')
     && nextRefreshTimestamp !== null
     && nextRefreshTimestamp > input.now
   const mode: AccountStatusDisplayMode = isBackoff ? 'refresh_backoff' : input.status

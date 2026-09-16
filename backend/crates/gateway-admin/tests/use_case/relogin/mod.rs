@@ -399,12 +399,16 @@ async fn relogin_auto_only_recovers_expired_credentials_and_locks_workspace() {
 
 #[tokio::test]
 async fn relogin_does_not_recover_generic_errors_disabled_or_non_expired_accounts() {
-    for variant in 0..3 {
+    for variant in 0..4 {
         let mut record = account(true);
         match variant {
             0 => record.enabled = false,
             1 => record.credential_state = CredentialState::Ready,
-            _ => record.last_error_reason = None,
+            2 => record.last_error_reason = None,
+            _ => {
+                record.has_refresh_token = true;
+                record.last_error_reason = Some(AccountErrorReason::AccessTokenExpired);
+            }
         }
         let h = Harness::new(vec![record]).await;
         h.import("test@example.invalid").await;

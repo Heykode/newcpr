@@ -1400,7 +1400,9 @@ pub(super) fn is_history_failure_code(code: &str) -> bool {
 pub(super) const fn provider_error_kind(category: CodexFailureCategory) -> ProviderErrorKind {
     match category {
         CodexFailureCategory::ModelUnsupported => ProviderErrorKind::Unsupported,
-        CodexFailureCategory::CredentialExpired => ProviderErrorKind::Unauthorized,
+        CodexFailureCategory::CredentialExpired | CodexFailureCategory::CredentialRevoked => {
+            ProviderErrorKind::Unauthorized
+        }
         CodexFailureCategory::IdentityVerificationRequired | CodexFailureCategory::Banned => {
             ProviderErrorKind::PermissionDenied
         }
@@ -1433,6 +1435,7 @@ pub(super) fn account_failure(
 ) -> Option<CodexAccountFailure> {
     match category {
         CodexFailureCategory::CredentialExpired => Some(CodexAccountFailure::CredentialExpired),
+        CodexFailureCategory::CredentialRevoked => Some(CodexAccountFailure::CredentialRevoked),
         CodexFailureCategory::IdentityVerificationRequired => {
             Some(CodexAccountFailure::IdentityVerificationRequired)
         }

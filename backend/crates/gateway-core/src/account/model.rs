@@ -899,6 +899,16 @@ impl ProviderAccount {
         self.has_refresh_token
     }
 
+    /// An upstream-rejected OAuth token may recover without changing manual enable intent.
+    #[must_use]
+    pub fn needs_authentication_refresh(&self) -> bool {
+        self.provider.as_str() == "openai"
+            && self.authentication_kind == "oauth"
+            && self.has_refresh_token
+            && self.credential_state == CredentialState::Expired
+            && self.last_error_reason == Some(AccountErrorReason::AccessTokenExpired)
+    }
+
     /// 组合持久事实与请求级冷却，交给唯一解析器派生状态。
     #[must_use]
     pub fn status_projection(
@@ -997,18 +1007,23 @@ impl ProviderRefreshQuery {
         account.provider() == &self.provider
             && account.enabled()
             && account.has_refresh_token()
-            && matches!(
-                account.credential_state(),
-                CredentialState::Unknown | CredentialState::Ready
-            )
             && !self.excluded_account_ids.contains(account.id())
-            && account.access_token_expires_at().is_some_and(|expires_at| {
-                expires_at <= self.force_due_before
-                    || (expires_at <= self.refresh_due_before
-                        && account
-                            .next_refresh_at()
-                            .is_none_or(|retry_at| retry_at <= self.observed_at))
-            })
+            && if account.needs_authentication_refresh() {
+                account
+                    .next_refresh_at()
+                    .is_none_or(|retry_at| retry_at <= self.observed_at)
+            } else {
+                matches!(
+                    account.credential_state(),
+                    CredentialState::Unknown | CredentialState::Ready
+                ) && account.access_token_expires_at().is_some_and(|expires_at| {
+                    expires_at <= self.force_due_before
+                        || (expires_at <= self.refresh_due_before
+                            && account
+                                .next_refresh_at()
+                                .is_none_or(|retry_at| retry_at <= self.observed_at))
+                })
+            }
     }
 }
 

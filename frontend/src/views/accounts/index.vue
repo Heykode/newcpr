@@ -10,7 +10,6 @@ import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
-import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
@@ -29,6 +28,7 @@ import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountQuotaForecastModal from './components/AccountQuotaForecastModal/index.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
+import AccountSchedulingSwitch from './components/AccountSchedulingSwitch.vue'
 import AccountStatusBadge from './components/AccountStatusBadge/index.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
 import AccountUsagePanel from './components/AccountUsagePanel.vue'
@@ -370,11 +370,11 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                   :rate-limited-until="row.quota.rateLimitedUntil"
                   :next-refresh-at="row.nextRefreshAt"
                 />
-                <BaseSwitch
-                  :model-value="row.enabled"
-                  label="启用账号"
-                  :disabled="togglingAccountIds.has(row.id)"
-                  @update:model-value="value => handleToggleEnabled(row, value)"
+                <AccountSchedulingSwitch
+                  :enabled="row.enabled"
+                  :status="derivedAccountStatus(row)"
+                  :loading="togglingAccountIds.has(row.id)"
+                  @change="value => handleToggleEnabled(row, value)"
                 />
               </div>
             </template>

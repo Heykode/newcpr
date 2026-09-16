@@ -98,6 +98,26 @@ function loadSource(filename) {
 
 const component = loadSource(new URL('../src/views/accounts/components/AccountStatusBadge/index.vue', import.meta.url)).default
 
+test('automatic stop is off without losing manual intent; recovery and manual pause remain distinct', async () => {
+  const scheduling = loadSource(new URL('../src/views/accounts/components/AccountSchedulingSwitch.vue', import.meta.url)).default
+  const render = props => renderToString(createSSRApp(scheduling, props))
+  const stopped = await render({ enabled: true, status: 'error' })
+  assert.match(stopped, /自动停调/)
+  assert.doesNotMatch(stopped, /<input[^>]*\schecked/)
+  assert.match(stopped, /disabled/)
+  const recovered = await render({ enabled: true, status: 'normal' })
+  assert.match(recovered, /<input[^>]*\schecked/)
+  assert.doesNotMatch(recovered, /自动停调/)
+  const paused = await render({ enabled: false, status: 'disabled' })
+  assert.doesNotMatch(paused, /<input[^>]*\schecked/)
+  assert.doesNotMatch(paused, /自动停调/)
+  for (const status of ['quota_exhausted', 'rate_limited']) {
+    const temporary = await render({ enabled: true, status })
+    assert.match(temporary, /<input[^>]*\schecked/)
+    assert.doesNotMatch(temporary, /自动停调/)
+  }
+})
+
 test('overview uses authoritative exclusive counts without error or quota cards', async () => {
   const overview = loadSource(new URL('../src/views/accounts/components/AccountOverviewCards.vue', import.meta.url)).default
   const html = await renderToString(createSSRApp(overview, {
@@ -120,6 +140,7 @@ const states = [
   { name: 'credential error', props: { status: 'error', errorReason: 'credential_invalid', errorMessage: 'upstream <blocked> & retry' }, label: '\u9519\u8BEF', text: 'text-cp-error-text', dot: 'bg-cp-error', detail: true },
   { name: 'OAuth backoff', props: { status: 'error', nextRefreshAt: future }, label: '\u9000\u907F\u4E2D', text: 'text-cp-warning-text', dot: 'bg-cp-warning', detail: true },
   { name: 'expired backoff returns to error', props: { status: 'error', nextRefreshAt: past }, label: '\u9519\u8BEF', text: 'text-cp-error-text', dot: 'bg-cp-error', detail: true },
+  { name: 'terminal error ignores leftover retry time', props: { status: 'error', errorReason: 'credential_expired', nextRefreshAt: future }, label: '\u9519\u8BEF', text: 'text-cp-error-text', dot: 'bg-cp-error', detail: true },
 ]
 
 test('paused status and filter reuse the backend disabled value', () => {

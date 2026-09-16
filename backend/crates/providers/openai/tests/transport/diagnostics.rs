@@ -278,12 +278,12 @@ fn openai_account_failure_matrix_is_preserved() {
         (
             401,
             r#"{"error":{"code":"token_revoked","message":"token has been revoked"}}"#,
-            CodexFailureCategory::CredentialExpired,
+            CodexFailureCategory::CredentialRevoked,
         ),
         (
             401,
             r#"{"detail":"Unauthorized"}"#,
-            CodexFailureCategory::CredentialExpired,
+            CodexFailureCategory::CredentialRevoked,
         ),
         (
             402,
