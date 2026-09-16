@@ -269,7 +269,7 @@ pub struct AccountPageItem {
 
 /// 统一账号目录的全局状态计数，不受当前筛选和分页影响。
 ///
-/// 运行状态互斥；disabled 是独立启停维度，与运行状态计数可能重叠。
+/// 管理页五态互斥；暂停账号只计入 disabled，不再计入正常或异常状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSummary {
     pub total: u64,

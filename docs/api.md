@@ -307,6 +307,13 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
   `addedAt`（或 `createdAt`）、`expiresAt`；
 - `sortDirection`: `asc`、`desc`。
 
+管理目录状态优先判断启停：`enabled=false` 一律返回 `disabled`（页面显示“暂停”）；
+启用账号再按凭据错误、额度耗尽、限流、正常的顺序派生状态。
+`status=normal` 不包含暂停账号，`status=disabled` 包含所有关闭账号。
+状态排序、数据库分页和全局 `summary` 采用相同口径，五态计数互斥且相加等于总账号数。
+列表与详情复用现有状态解析器；启停不清除凭据、错误或额度记录，重新开启后展示真实状态。
+“正常”不表示此刻并发空闲，也不保证满足某个请求的分组、模型或路由条件。
+
 账号视图和 Dashboard 账号概览中的 `planType` 保留原始套餐值；`planTypeDisplay` 由后端先按 Provider 解析名称，
 再统一为大驼峰格式，前端直接展示该字段，例如 `Free`、`SuperGrokPro`、`EduPlus`。
 OpenAI 的 `self_serve_business_prolite` 等 Team 套餐显示为 `Business`；新套餐也使用相同格式。

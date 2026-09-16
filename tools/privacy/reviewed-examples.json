@@ -264,6 +264,22 @@
     "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
   },
   {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1629,
+    "file_sha256": "f1adc3754548ec7c3b8ffba185c7d3f6d9c873bcd3c6768de4c070e87ef16f59",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Reviewed unchanged synthetic loopback proxy fixture; only its position moved after directory status regressions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1655,
+    "file_sha256": "f1adc3754548ec7c3b8ffba185c7d3f6d9c873bcd3c6768de4c070e87ef16f59",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Reviewed unchanged expected loopback proxy value; line content matches the previously reviewed fixture."
+  },
+  {
     "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
     "rule": "authenticated-url",
     "line": 96,

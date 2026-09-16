@@ -103,7 +103,7 @@ export const statusLabels: Record<AccountStatus, string> = {
   normal: '正常',
   quota_exhausted: '配额耗尽',
   rate_limited: '限流中',
-  disabled: '已停用',
+  disabled: '暂停',
   error: '错误',
 }
 
@@ -134,7 +134,7 @@ export const errorReasonLabels: Record<AccountErrorReason, string> = {
 }
 
 /**
- * 后端派生运行状态，enabled 独立控制启停；前端不再独立派生。
+ * 后端统一派生状态，关闭开关优先返回 disabled；前端不再独立派生。
  */
 export function derivedAccountStatus(row: AccountRow): AccountStatus {
   return row.status

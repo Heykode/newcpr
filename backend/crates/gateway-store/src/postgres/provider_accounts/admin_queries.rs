@@ -63,6 +63,7 @@ pub(crate) async fn load_admin_account_page(
         "with account_statuses as (
            select a.id, a.enabled,
                   case
+                    when not a.enabled then 'disabled'
                     when a.credential_state <> 'ready'
                       or a.access_token_expires_at <= $2 then 'error'
                     when a.quota_access_state = 'exhausted' then 'quota_exhausted'
@@ -78,7 +79,7 @@ pub(crate) async fn load_admin_account_page(
                     as summary_quota_exhausted,
                   count(*) filter (where admin_status = 'rate_limited')::bigint
                     as summary_rate_limited,
-                  count(*) filter (where not enabled)::bigint
+                  count(*) filter (where admin_status = 'disabled')::bigint
                     as summary_disabled,
                   count(*) filter (where admin_status = 'error')::bigint as summary_error
              from account_statuses
@@ -94,9 +95,7 @@ pub(crate) async fn load_admin_account_page(
                    lower(coalesce(a.email, '')) like $4 escape '\\' or
                    lower(coalesce(a.upstream_account_id, '')) like $4 escape '\\' or
                    lower(coalesce(a.upstream_user_id, '')) like $4 escape '\\')
-              and ($5::text is null
-                   or ($5 = 'disabled' and not a.enabled)
-                   or status.admin_status = $5)
+              and ($5::text is null or status.admin_status = $5)
               and ($6::text is null or lower(coalesce(a.plan_type, '')) = lower($6))
               and ($7::smallint = 0 or
                    ($7 = 1 and exists (

@@ -115,8 +115,8 @@ const displayDefinitions: Record<AccountStatusDisplayMode, AccountStatusDisplayD
   disabled: {
     tone: statusTones.disabled,
     label: statusLabels.disabled,
-    description: '该账号当前状态需要关注。',
-    recoveryHint: '重新测试连接以获取最新状态。',
+    description: '该账号已暂停调度。',
+    recoveryHint: '重新启用后按账号实际状态参与调度。',
     icon: Power,
   },
   error: {

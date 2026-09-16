@@ -5,8 +5,7 @@ use std::{collections::BTreeMap, time::SystemTime};
 use futures::future::join_all;
 use gateway_core::{
     account::{
-        AccountStatusFacts, AccountStatusProjection, ProviderAccountId,
-        resolve_account_operational_status,
+        AccountStatusFacts, AccountStatusProjection, ProviderAccountId, resolve_account_status,
     },
     provider_ports::ProviderCooldownPort,
 };
@@ -19,7 +18,7 @@ pub(crate) fn account_status_projection(
     now: SystemTime,
     rate_limited_until: Option<SystemTime>,
 ) -> AccountStatusProjection {
-    resolve_account_operational_status(
+    resolve_account_status(
         &AccountStatusFacts {
             enabled: account.enabled,
             credential_state: account.credential_state,

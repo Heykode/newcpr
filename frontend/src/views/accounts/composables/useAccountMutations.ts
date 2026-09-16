@@ -204,7 +204,12 @@ export function useAccountMutations(options: {
           weight: account.weight,
           groupIds: account.groups.map(group => group.id),
         })
-        await options.replaceAccount({ ...account, enabled })
+        const remainsVisible = await options.replaceAccount({ ...account, enabled })
+        if (!remainsVisible) {
+          const selectedIds = new Set(options.selectedIds.value)
+          selectedIds.delete(account.id)
+          options.selectedIds.value = selectedIds
+        }
       }
       catch {}
     })

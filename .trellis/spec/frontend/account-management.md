@@ -125,13 +125,17 @@ pagination.
   A manual quota refresh invalidates its account and synchronizes the reset/plan
   signature before publishing updated row facts. Queue cancellation remains
   per consumer.
-- Directory runtime status is independent from `enabled`. Disabled accounts
-  remain filterable by normal/error/rate-limited/quota-exhausted status, while the
-  disabled filter uses `enabled=false`. The backend owns these projections.
-  Summary runtime counts partition total; disabled is an overlapping dimension.
-  Show error count alone in the error card, never disabled+error. A normal
-  account is not necessarily enabled or eligible for scheduling.
-  Dashboard availability keeps its existing disabled-first partition.
+- Directory status is disabled-first: `enabled=false` projects `disabled`,
+  displayed and filtered as "暂停". Reuse Core's existing `resolve_account_status`
+  through the Store directory adapter; do not change scheduling or credential facts.
+  SQL filtering, pagination, status sorting and summary counts use the same priority.
+  The five status counts partition total; normal excludes paused accounts, but does
+  not promise free concurrency slots or request-specific routing eligibility.
+  Enabling reveals retained error/quota/cooldown facts instead of clearing them.
+  Switch mutations immediately reread the current query and summary. Remove the
+  toggled ID from selection only after an accepted reread excludes it; preserve
+  other cross-page selections and keep selection on failed/superseded reads.
+  The 30-second timer, Dashboard availability and group lifespan logic stay unchanged.
 - Pair each quota reset countdown with its own window key and duration label,
   never the group's highest-use or representative window. Preserve per-window
   progress percentages and the existing recorded window costs. Forecasts are

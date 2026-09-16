@@ -630,3 +630,123 @@ test('failed or superseded mutation rereads preserve selection instead of inferr
   assert.equal(query.refreshing.value, false)
   assert.equal(query.loading.value, false)
 })
+
+function toggleHarness(harness, row) {
+  const writes = []
+  const selectedIds = vue.ref(new Set([row.id, 'acct_other_page']))
+  const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url), {})
+  const notifications = { toast: { success() {}, error() {} } }
+  const actions = loadModule(new URL('../src/composables/useAsyncAction.ts', import.meta.url), {
+    'vue': vue,
+    '@/api/request': { ApiError: class extends Error {} },
+    '@/utils/async': asyncUtils,
+    '@/components/base/BaseToast': notifications,
+  })
+  const ids = loadModule(new URL('../src/composables/useIdSet.ts', import.meta.url), { vue })
+  const mutations = loadModule(new URL('../src/views/accounts/composables/useAccountMutations.ts', import.meta.url), {
+    'vue': vue,
+    '@/api': {
+      updateAccount: body => new Promise((resolve, reject) => writes.push({ body, resolve, reject })),
+    },
+    '@/components/base/BaseToast': notifications,
+    '@/composables/useAsyncAction': actions,
+    '@/composables/useIdSet': ids,
+    '@/composables/useDownload': { useDownload: () => ({ downloadJson() {} }) },
+    '@/utils/async': asyncUtils,
+    './useAccountOnboarding': { useAccountOnboarding: () => ({}) },
+  })
+  const state = harness.scope.run(() => mutations.useAccountMutations({
+    accounts: harness.query.accounts,
+    selectedIds,
+    reload: harness.query.loadAccounts,
+    replaceAccount: harness.query.replaceAccount,
+  }))
+  return { state, writes, selectedIds }
+}
+
+for (const enabled of [false, true]) {
+  test(`switch ${enabled ? 'on from paused' : 'off from normal'} rereads the filter immediately and removes only the filtered-out selection`, async (t) => {
+    const h = createHarness(t)
+    const initial = accountResponse()
+    const row = {
+      ...initial.items[0],
+      enabled: !enabled,
+      status: enabled ? 'disabled' : 'normal',
+      concurrencyLimit: 2,
+      weight: 100,
+      groups: [{ id: 'grp_test' }],
+    }
+    initial.items = [row]
+    await mountLoaded(h, initial)
+    h.query.statusQuery.value = row.status
+    await vue.nextTick()
+    await h.settle(initial)
+    const { state, writes, selectedIds } = toggleHarness(h, row)
+    const count = h.requests.length
+    const operation = state.handleToggleEnabled(row, enabled)
+    await state.handleToggleEnabled(row, enabled)
+    assert.equal(writes.length, 1, 'duplicate switch clicks cannot send a second mutation')
+    assert.equal(h.requests.length, count, 'reread must wait for confirmed switch write')
+    assert.deepEqual({ ...writes[0].body, groupIds: [...writes[0].body.groupIds] }, {
+      accountId: row.id,
+      enabled,
+      concurrencyLimit: 2,
+      weight: 100,
+      groupIds: ['grp_test'],
+    })
+    writes[0].resolve({})
+    await flushRequests()
+    assert.equal(h.requests.length, count + 1, 'no 30-second timer tick is needed')
+    assert.equal(h.requests.at(-1).params.status, row.status)
+    assert.ok(selectedIds.value.has(row.id), 'retain selection until authoritative reread')
+    const result = { ...accountResponse({ total: 0 }), items: [] }
+    result.summary = {
+      total: 1,
+      normal: 0,
+      quotaExhausted: 0,
+      rateLimited: 0,
+      disabled: enabled ? 0 : 1,
+      error: enabled ? 1 : 0,
+    }
+    await h.settle(result)
+    await operation
+    assertResult(h.query, result)
+    assert.deepEqual([...selectedIds.value], ['acct_other_page'])
+  })
+}
+
+test('switch failures and failed rereads preserve rows and selection; successful all-status reread shows paused', async (t) => {
+  const h = createHarness(t)
+  const initial = accountResponse()
+  const row = { ...initial.items[0], enabled: true, groups: [], weight: 100, concurrencyLimit: null }
+  initial.items = [row]
+  await mountLoaded(h, initial)
+  const { state, writes, selectedIds } = toggleHarness(h, row)
+  const failedWrite = state.handleToggleEnabled(row, false)
+  writes.at(-1).reject(new Error('write failed'))
+  await failedWrite
+  assert.equal(h.requests.length, 1)
+  assertResult(h.query, initial)
+  assert.equal(selectedIds.value.size, 2)
+
+  const failedRead = state.handleToggleEnabled(row, false)
+  writes.at(-1).resolve({})
+  await flushRequests()
+  h.requests.at(-1).reject(new Error('read failed'))
+  await failedRead
+  assertResult(h.query, initial)
+  assert.equal(selectedIds.value.size, 2)
+
+  const success = state.handleToggleEnabled(row, false)
+  writes.at(-1).resolve({})
+  await flushRequests()
+  const paused = {
+    ...initial,
+    items: [{ ...row, enabled: false, status: 'disabled' }],
+    summary: { ...initial.summary, normal: 0, disabled: 1 },
+  }
+  await h.settle(paused)
+  await success
+  assertResult(h.query, paused)
+  assert.equal(selectedIds.value.size, 2, 'all-status view keeps a still-visible row selected')
+})

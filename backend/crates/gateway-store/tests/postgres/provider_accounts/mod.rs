@@ -655,70 +655,96 @@ async fn diagnostic_state_preserves_disabled_flag_and_fences_revision_and_observ
 }
 
 #[tokio::test]
-async fn disabled_accounts_remain_filterable_by_operational_status() {
-    let Some(database) = TestDatabase::create("disabled_operational_status").await else {
+async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() {
+    let Some(database) = TestDatabase::create("disabled_directory_status").await else {
         return;
     };
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let now = Utc::now();
-    for (id, state) in [
-        ("acct_normal", CredentialState::Ready),
-        ("acct_error", CredentialState::Invalid),
-        ("acct_limited", CredentialState::Ready),
-        ("acct_exhausted", CredentialState::Ready),
-    ] {
-        let mut fixture = account(id, &format!("user-{id}"));
-        fixture.enabled = false;
-        fixture.credential_state = state;
-        repository.insert_provider_account(fixture).await.unwrap();
+    let scenarios = [
+        ("normal", CredentialState::Ready, AccountStatus::Normal),
+        ("error", CredentialState::Invalid, AccountStatus::Error),
+        (
+            "limited",
+            CredentialState::Ready,
+            AccountStatus::RateLimited,
+        ),
+        (
+            "exhausted",
+            CredentialState::Ready,
+            AccountStatus::QuotaExhausted,
+        ),
+    ];
+    for (suffix, state, _) in scenarios {
+        for enabled in [true, false] {
+            let prefix = if enabled { "acct" } else { "acct_paused" };
+            let id = format!("{prefix}_{suffix}");
+            let mut fixture = account(&id, &format!("user-{id}"));
+            fixture.enabled = enabled;
+            fixture.credential_state = state;
+            repository.insert_provider_account(fixture).await.unwrap();
+            if suffix == "exhausted" {
+                repository
+                    .apply_quota_access(QuotaAccessChange {
+                        account_id: ProviderAccountId::new(id).unwrap(),
+                        expected_revision: CredentialRevision::new(1).unwrap(),
+                        state: QuotaState::exhausted(
+                            QuotaEvidence::ProviderDenied,
+                            now.into(),
+                            None,
+                        ),
+                    })
+                    .await
+                    .unwrap();
+            }
+        }
     }
-    repository
-        .apply_quota_access(QuotaAccessChange {
-            account_id: ProviderAccountId::new("acct_exhausted").unwrap(),
-            expected_revision: CredentialRevision::new(1).unwrap(),
-            state: QuotaState::exhausted(QuotaEvidence::ProviderDenied, now.into(), None),
-        })
-        .await
-        .unwrap();
+    sqlx::query("update provider_accounts set last_error_reason='credential_invalid', last_error_message='preserved credential error' where credential_state='invalid'")
+        .execute(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let runtime = AccountRuntimeSnapshot {
-        rate_limited_until: BTreeMap::from([(
-            "acct_limited".to_owned(),
-            now + TimeDelta::minutes(5),
-        )]),
+        rate_limited_until: ["acct_limited", "acct_paused_limited"]
+            .into_iter()
+            .map(|id| (id.to_owned(), now + TimeDelta::minutes(5)))
+            .collect(),
         in_flight: None,
     };
-    for (status, id) in [
-        (AccountStatus::Normal, "acct_normal"),
-        (AccountStatus::Error, "acct_error"),
-        (AccountStatus::RateLimited, "acct_limited"),
-        (AccountStatus::QuotaExhausted, "acct_exhausted"),
-    ] {
+    let query = AccountListQuery {
+        page: 1,
+        page_size: PageSize::new(1).unwrap(),
+        provider_kind: None,
+        group_filter: None,
+        search: None,
+        status: None,
+        plan_type: None,
+        sort: Some(AccountSort {
+            field: AccountSortField::Status,
+            direction: SortDirection::Asc,
+        }),
+    };
+    for (suffix, _, status) in scenarios {
         let page = store
             .list_accounts(
                 AccountListQuery {
-                    page: 1,
-                    page_size: PageSize::new(1).unwrap(),
-                    provider_kind: None,
-                    group_filter: None,
-                    search: None,
                     status: Some(status),
-                    plan_type: None,
-                    sort: None,
+                    ..query.clone()
                 },
                 runtime.clone(),
             )
             .await
             .unwrap();
         assert_eq!(page.total, 1);
-        assert_eq!(page.items[0].account.id, id);
-        assert!(!page.items[0].account.enabled);
+        assert_eq!(page.items[0].account.id, format!("acct_{suffix}"));
+        assert!(page.items[0].account.enabled);
         assert_eq!(page.items[0].projection.status, status);
+        assert_eq!(page.summary.total, 8);
         assert_eq!(page.summary.disabled, 4);
         assert_eq!(page.summary.normal, 1);
         assert_eq!(page.summary.error, 1);
+        assert_eq!(page.summary.rate_limited, 1);
+        assert_eq!(page.summary.quota_exhausted, 1);
         let detail = store
-            .load_account(id, runtime.clone())
+            .load_account(&page.items[0].account.id, runtime.clone())
             .await
             .unwrap()
             .unwrap();
@@ -729,16 +755,8 @@ async fn disabled_accounts_remain_filterable_by_operational_status() {
             .list_accounts(
                 AccountListQuery {
                     page: page_number,
-                    page_size: PageSize::new(1).unwrap(),
-                    provider_kind: None,
-                    group_filter: None,
-                    search: None,
                     status: Some(AccountStatus::Disabled),
-                    plan_type: None,
-                    sort: Some(AccountSort {
-                        field: AccountSortField::Status,
-                        direction: SortDirection::Asc,
-                    }),
+                    ..query.clone()
                 },
                 runtime.clone(),
             )
@@ -747,15 +765,122 @@ async fn disabled_accounts_remain_filterable_by_operational_status() {
         assert_eq!(page.total, 4);
         assert_eq!(page.items.len(), 1);
         assert!(!page.items[0].account.enabled);
+        assert_eq!(page.items[0].projection.status, AccountStatus::Disabled);
         assert_eq!(
             page.items[0].account.id,
             [
-                "acct_normal",
-                "acct_limited",
-                "acct_exhausted",
-                "acct_error"
+                "acct_paused_error",
+                "acct_paused_exhausted",
+                "acct_paused_limited",
+                "acct_paused_normal",
             ][(page_number - 1) as usize],
         );
+        let detail = store
+            .load_account(&page.items[0].account.id, runtime.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.projection, page.items[0].projection);
+    }
+    for direction in [SortDirection::Asc, SortDirection::Desc] {
+        let mut actual = Vec::new();
+        for page in 1..=4 {
+            let result = store
+                .list_accounts(
+                    AccountListQuery {
+                        page,
+                        page_size: PageSize::new(2).unwrap(),
+                        sort: Some(AccountSort {
+                            field: AccountSortField::Status,
+                            direction,
+                        }),
+                        ..query.clone()
+                    },
+                    runtime.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.total, 8);
+            actual.extend(result.items.into_iter().map(|item| item.account.id));
+        }
+        let mut expected = vec![
+            "acct_normal",
+            "acct_limited",
+            "acct_exhausted",
+            "acct_error",
+            "acct_paused_error",
+            "acct_paused_exhausted",
+            "acct_paused_limited",
+            "acct_paused_normal",
+        ];
+        if direction == SortDirection::Desc {
+            expected.reverse();
+        }
+        assert_eq!(actual, expected);
+    }
+    // Exercise the real switch write: enabling must reveal retained facts, not repair them.
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "directory-toggle".to_owned(),
+    };
+    for (suffix, _, status) in scenarios {
+        let id = format!("acct_paused_{suffix}");
+        let retained: serde_json::Value = sqlx::query_scalar(
+            "select to_jsonb(a) - array['enabled','updated_at'] from provider_accounts a where id=$1",
+        ).bind(&id).fetch_one(&database.pool).await.unwrap();
+        for enabled in [true, false, true] {
+            store
+                .update_account(
+                    UpdateAccount {
+                        account_id: id.clone(),
+                        enabled,
+                        concurrency_limit: None,
+                        weight: gateway_core::account::AccountWeight::DEFAULT,
+                        group_ids: Vec::new(),
+                        outbound_proxy: None,
+                    },
+                    &context,
+                )
+                .await
+                .unwrap();
+            let detail = store
+                .load_account(&id, runtime.clone())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                detail.projection.status,
+                if enabled {
+                    status
+                } else {
+                    AccountStatus::Disabled
+                }
+            );
+            if enabled && status == AccountStatus::Error {
+                assert_eq!(
+                    detail.projection.error_message.as_deref(),
+                    Some("preserved credential error")
+                );
+            }
+            let after: serde_json::Value = sqlx::query_scalar(
+                "select to_jsonb(a) - array['enabled','updated_at'] from provider_accounts a where id=$1",
+            ).bind(&id).fetch_one(&database.pool).await.unwrap();
+            assert_eq!(
+                after, retained,
+                "switch must preserve credentials, errors, quota and creation time"
+            );
+            let page = store
+                .list_accounts(
+                    AccountListQuery {
+                        status: Some(status),
+                        ..query.clone()
+                    },
+                    runtime.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(page.total, if enabled { 2 } else { 1 });
+        }
     }
     database.close().await;
 }
@@ -945,7 +1070,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(usage_page.config_revision.get(), 1);
     assert_eq!(usage_page.total, 6);
     assert_eq!(usage_page.summary.total, 6);
-    assert_eq!(usage_page.summary.normal, 2);
+    assert_eq!(usage_page.summary.normal, 1);
     assert_eq!(usage_page.summary.quota_exhausted, 2);
     assert_eq!(usage_page.summary.rate_limited, 0);
     assert_eq!(usage_page.summary.disabled, 1);
@@ -955,6 +1080,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         usage_page.summary.normal
             + usage_page.summary.quota_exhausted
             + usage_page.summary.rate_limited
+            + usage_page.summary.disabled
             + usage_page.summary.error
     );
     assert_eq!(
@@ -1040,7 +1166,8 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     assert_eq!(rate_limited.total, 1);
     assert_eq!(rate_limited.items[0].account.id, "acct_alpha");
     assert_eq!(rate_limited.summary.rate_limited, 1);
-    assert_eq!(rate_limited.summary.normal, 1);
+    assert_eq!(rate_limited.summary.normal, 0);
+    assert_eq!(rate_limited.summary.disabled, 1);
 
     let no_contains_compatibility = store
         .list_accounts(

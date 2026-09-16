@@ -98,14 +98,14 @@ function loadSource(filename) {
 
 const component = loadSource(new URL('../src/views/accounts/components/AccountStatusBadge/index.vue', import.meta.url)).default
 
-test('overview merges total and normal without error or quota cards or inferring enabled counts', async () => {
+test('overview uses authoritative exclusive counts without error or quota cards', async () => {
   const overview = loadSource(new URL('../src/views/accounts/components/AccountOverviewCards.vue', import.meta.url)).default
   const html = await renderToString(createSSRApp(overview, {
-    summary: { total: 4, normal: 1, quotaExhausted: 1, rateLimited: 1, disabled: 4, error: 1 },
+    summary: { total: 5, normal: 1, quotaExhausted: 1, rateLimited: 1, disabled: 1, error: 1 },
     groups: [],
     groupsLoading: false,
   }))
-  assert.match(html, /总账号\s*<\/p>[\s\S]*?<strong[^>]*>4<\/strong>/)
+  assert.match(html, /总账号\s*<\/p>[\s\S]*?<strong[^>]*>5<\/strong>/)
   assert.match(html, /正常 <strong[^>]*>1<\/strong>/)
   assert.doesNotMatch(html, /错误账号|额度受限|可参与调度|已停用 \/ 错误|待处理/)
 })
@@ -116,11 +116,20 @@ const states = [
   { name: 'quota exhausted', props: { status: 'quota_exhausted' }, label: '\u914D\u989D\u8017\u5C3D', text: 'text-cp-warning-text', dot: 'bg-cp-warning', detail: false },
   { name: 'rate limited without recovery time', props: { status: 'rate_limited' }, label: '\u9650\u6D41\u4E2D', text: 'text-cp-warning-text', dot: 'bg-cp-warning', detail: false },
   { name: 'rate limited with recovery time', props: { status: 'rate_limited', rateLimitedUntil: future }, label: '\u9650\u6D41\u4E2D', text: 'text-cp-warning-text', dot: 'bg-cp-warning', detail: true },
-  { name: 'disabled ignores future retry', props: { status: 'disabled', nextRefreshAt: future }, label: '\u5DF2\u505C\u7528', text: 'text-cp-text-secondary', dot: 'bg-cp-text-quaternary', detail: false },
+  { name: 'disabled ignores future retry', props: { status: 'disabled', nextRefreshAt: future }, label: '\u6682\u505C', text: 'text-cp-text-secondary', dot: 'bg-cp-text-quaternary', detail: false },
   { name: 'credential error', props: { status: 'error', errorReason: 'credential_invalid', errorMessage: 'upstream <blocked> & retry' }, label: '\u9519\u8BEF', text: 'text-cp-error-text', dot: 'bg-cp-error', detail: true },
   { name: 'OAuth backoff', props: { status: 'error', nextRefreshAt: future }, label: '\u9000\u907F\u4E2D', text: 'text-cp-warning-text', dot: 'bg-cp-warning', detail: true },
   { name: 'expired backoff returns to error', props: { status: 'error', nextRefreshAt: past }, label: '\u9519\u8BEF', text: 'text-cp-error-text', dot: 'bg-cp-error', detail: true },
 ]
+
+test('paused status and filter reuse the backend disabled value', () => {
+  const { accountStatusFilterOptions, derivedAccountStatus } = loadSource(new URL('../src/views/accounts/constants.ts', import.meta.url))
+  const paused = accountStatusFilterOptions.find(option => option.value === 'disabled')
+  assert.equal(paused.label, '\u6682\u505C')
+  assert.equal(accountStatusFilterOptions.some(option => option.value === 'paused'), false)
+  assert.equal(derivedAccountStatus({ enabled: false, status: 'disabled' }), 'disabled')
+  assert.equal(derivedAccountStatus({ enabled: true, status: 'error' }), 'error')
+})
 
 function renderBadge(props) {
   return renderToString(createSSRApp(component, props))
