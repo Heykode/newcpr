@@ -917,6 +917,21 @@ Redis 故障拒绝准入，取消正常释放登记；故障或进程退出时�
 关闭开关不等于可直接降级旧二进制：旧配置解析器不认识上述五个字段。降级前先备份设置，
 仅移除这五个新增字段并保留其他运行设置，再切换版本。
 
+`requestTuning.websocketLargeRequestThresholdBytes` 控制 OpenAI 普通新链的大请求发送前 HTTP 选择：
+
+- 默认 `15728640`（15 MiB），允许整数 `0..67108864`；`0` 关闭大小分流，缺失或 `null` 继承默认。
+- 仅当 `websocketHttpFallbackEnabled=true` 且传输要求为 `new_chain` 时生效。
+  比较的是身份投影、协议归一化后的最终 WS JSON UTF-8 字节数，达到阈值即走现有 HTTP/SSE 通道，
+  不建立 WS、不尝试先发送失败再重放。HTTP 沿用选定账号、设备画像、出口与下游交付偏好。
+- 原生 WS 的 `store=false` 首轮、预热及所有已有 `previous_response_id` 的续链不参与大小分流。
+  不拼接历史，不自动压缩会话，不将该决定写成会话永久 HTTP 状态；后续独立小请求仍按原策略选择。
+- 这是保守路由阈值，不是上游硬限额或 HTTP 无限大小保证。WS 压缩不改变此字节计算。
+  已发送后的 WS 1000/1009 仍沿用发送状态与禁止不确定重放的既有规则。
+- 诊断 `transport.fallback` 记录 `decision=http_large_request`、`payloadBytes`、`thresholdBytes`
+  和传输要求，不新增正文采集。运行设置仍全量替换，保存时保留其他字段，进行中的请求保持冻结值。
+- 降级到不认识该字段的旧版本前，先备份并从持久化 `requestTuning` 中移除该字段；设为 `0`
+  只关闭功能，不会使旧配置解析器认识该字段。
+
 Windows 离线包接口固定解析 Microsoft Store Product ID `9PLM9XGG6VKS` 的 Retail 包，不接受调用方提供
 产品 ID、上游地址、ring 或文件名。后端只返回通过包名、架构、Microsoft CDN host/path、scheme 和失效
 时间校验的 `x64` / `arm64` MSIX 直链，不代理安装包字节。Store 内容通道返回 HTTP/80 临时地址时保留

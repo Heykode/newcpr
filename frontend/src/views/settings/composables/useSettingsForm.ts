@@ -15,6 +15,7 @@ const requestTuningFallbacks: RequestTuning = {
   maxRequestAttempts: 32,
   websocketMaxRetries: 5,
   websocketHttpFallbackEnabled: true,
+  websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
   websocketMaxAgeMs: 55 * 60 * 1_000,
   websocketStreamIdleTimeoutMs: 300_000,
   websocketFailureThreshold: 3,
@@ -164,6 +165,12 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
+    if (!Number.isInteger(tuning.websocketLargeRequestThresholdBytes)
+      || tuning.websocketLargeRequestThresholdBytes < 0
+      || tuning.websocketLargeRequestThresholdBytes > 64 * 1024 * 1024) {
+      toast.warning('大请求 HTTP 阈值须为 0–67108864 的整数字节数')
+      return
+    }
     if (!Number.isInteger(tuning.maxWaitingPerKey) || tuning.maxWaitingPerKey < 0 || tuning.maxWaitingPerKey > 1024
       || !Number.isInteger(tuning.keyConcurrencyWaitTimeoutSeconds) || tuning.keyConcurrencyWaitTimeoutSeconds < 1 || tuning.keyConcurrencyWaitTimeoutSeconds > 600) {
       toast.warning('Key 等待人数须为 0–1024 的整数，等待秒数须为 1–600 的整数')

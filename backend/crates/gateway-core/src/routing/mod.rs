@@ -35,6 +35,8 @@ pub struct RequestTuning {
     pub max_request_attempts: u32,
     pub websocket_max_retries: u32,
     pub websocket_http_fallback_enabled: bool,
+    #[serde(default = "default_websocket_large_request_threshold_bytes")]
+    pub websocket_large_request_threshold_bytes: u64,
     pub websocket_max_age_ms: u64,
     pub websocket_stream_idle_timeout_ms: u64,
     pub websocket_failure_threshold: u32,
@@ -57,6 +59,10 @@ pub struct RequestTuning {
     pub account_busy_wait_fallback_max_waiting: u32,
     #[serde(default = "default_fallback_timeout_seconds")]
     pub account_busy_wait_fallback_timeout_seconds: u64,
+}
+
+const fn default_websocket_large_request_threshold_bytes() -> u64 {
+    15 * 1024 * 1024
 }
 
 const fn default_sticky_max_waiting() -> u32 {
@@ -89,6 +95,8 @@ impl RequestTuning {
             max_request_attempts: DEFAULT_MAX_REQUEST_ATTEMPTS,
             websocket_max_retries: 5,
             websocket_http_fallback_enabled: true,
+            websocket_large_request_threshold_bytes:
+                default_websocket_large_request_threshold_bytes(),
             websocket_max_age_ms: 55 * 60 * 1_000,
             websocket_stream_idle_timeout_ms: 300_000,
             websocket_failure_threshold: 3,

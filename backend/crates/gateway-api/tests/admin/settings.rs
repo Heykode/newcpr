@@ -56,6 +56,7 @@ fn update_body() -> Value {
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,
             "websocketHttpFallbackEnabled": false,
+            "websocketLargeRequestThresholdBytes": 4096,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
             "websocketFailureThreshold": 3,
@@ -182,6 +183,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             max_request_attempts: Some(8),
             websocket_max_retries: Some(9),
             websocket_http_fallback_enabled: Some(false),
+            websocket_large_request_threshold_bytes: Some(4096),
             websocket_max_age_ms: Some(60_000),
             websocket_stream_idle_timeout_ms: Some(120_000),
             websocket_failure_threshold: Some(3),
@@ -226,6 +228,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
                 "maxRequestAttempts": 8,
                 "websocketMaxRetries": 9,
                 "websocketHttpFallbackEnabled": false,
+                "websocketLargeRequestThresholdBytes": 4096,
                 "websocketMaxAgeMs": 60000,
                 "websocketStreamIdleTimeoutMs": 120000,
                 "websocketFailureThreshold": 3,
@@ -391,6 +394,49 @@ async fn settings_post_and_reload_should_omit_legacy_global_opening_limit() {
         assert_eq!(response.status(), StatusCode::OK);
         let data = response_json(response).await["data"].clone();
         assert_eq!(data["requestTuning"], expected_tuning);
+    }
+}
+
+#[tokio::test]
+async fn large_request_threshold_round_trips_and_rejects_out_of_range_settings() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for value in [json!(null), json!(0), json!(4096), json!(64 * 1024 * 1024)] {
+        let mut body = update_body();
+        body["requestTuning"]["websocketLargeRequestThresholdBytes"] = value;
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app(fixture.state())
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        let data = response_json(response).await["data"].clone();
+        assert_eq!(data["requestTuning"], body["requestTuning"]);
+        assert_eq!(data["rotationStrategy"], body["rotationStrategy"]);
+    }
+    for (value, expected_status) in [
+        (json!(-1), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(1.5), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!(64 * 1024 * 1024 + 1), StatusCode::BAD_REQUEST),
+    ] {
+        let mut body = update_body();
+        body["requestTuning"]["websocketLargeRequestThresholdBytes"] = value;
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
     }
 }
 
