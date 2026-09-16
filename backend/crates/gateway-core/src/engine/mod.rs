@@ -6,6 +6,7 @@ mod capacity_wait;
 pub mod continuation;
 pub mod coordinator;
 pub mod execution;
+mod key_wait;
 mod observation;
 pub mod probe;
 pub mod provider;

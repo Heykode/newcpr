@@ -73,6 +73,17 @@ pub struct AccountWaitBudget {
 }
 
 impl AccountWaitBudget {
+    /// A preceding Key queue constrains all later account queues and retries.
+    pub(super) fn constrain_deadline(&self, deadline: Instant) {
+        let mut windows = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        windows.shared = Some(
+            windows
+                .shared
+                .map_or(deadline, |current| current.min(deadline))
+                .min(self.request_deadline),
+        );
+    }
+
     #[must_use]
     pub fn new(request_deadline: SystemTime, tuning: RequestTuning) -> Self {
         Self::new_at(request_deadline, tuning, SystemTime::now(), Instant::now())
@@ -190,5 +201,48 @@ impl AccountWaitBudget {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .expired = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_queue_deadline_caps_later_sticky_and_fallback_waits() {
+        let wall = SystemTime::now();
+        let now = Instant::now();
+        let budget = AccountWaitBudget::new_at(
+            wall + Duration::from_secs(600),
+            RequestTuning {
+                account_busy_wait_enabled: true,
+                ..Default::default()
+            },
+            wall,
+            now,
+        );
+        let deadline = now + Duration::from_secs(30);
+        budget.constrain_deadline(deadline);
+        for mode in [AccountWaitMode::Sticky, AccountWaitMode::Fallback] {
+            assert_eq!(
+                budget
+                    .enter_at(mode, now + Duration::from_secs(20))
+                    .unwrap()
+                    .monotonic_deadline(),
+                deadline
+            );
+            assert_eq!(
+                budget
+                    .enter_at(mode, now + Duration::from_secs(25))
+                    .unwrap()
+                    .monotonic_deadline(),
+                deadline
+            );
+        }
+        assert!(budget.is_exhausted_at(deadline));
+        assert_eq!(
+            budget.enter_at(AccountWaitMode::Sticky, deadline),
+            Err(AccountWaitBudgetError::Expired)
+        );
     }
 }

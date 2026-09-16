@@ -73,6 +73,40 @@ function settings() {
   }
 }
 
+test('key queue bounds round trip and invalid values cannot be saved', async () => {
+  for (const [maxWaitingPerKey, keyConcurrencyWaitTimeoutSeconds, valid] of [
+    [0, 1, true],
+    [1024, 600, true],
+    [-1, 30, false],
+    [1025, 30, false],
+    [1.5, 30, false],
+    [1, 0, false],
+    [1, 601, false],
+    [1, 2.5, false],
+  ]) {
+    const warnings = []
+    const query = mountSettings(settings(), message => warnings.push(message))
+    try {
+      await query.state.loadSettings()
+      assert.equal(query.state.form.requestTuning.maxWaitingPerKey, 0)
+      assert.equal(query.state.form.requestTuning.keyConcurrencyWaitTimeoutSeconds, 30)
+      Object.assign(query.state.form.requestTuning, { maxWaitingPerKey, keyConcurrencyWaitTimeoutSeconds })
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, valid ? 1 : 0)
+      assert.equal(warnings.length, valid ? 0 : 1)
+      if (valid) {
+        await query.state.loadSettings()
+        assert.equal(query.state.form.requestTuning.maxWaitingPerKey, maxWaitingPerKey)
+        assert.equal(query.state.form.requestTuning.keyConcurrencyWaitTimeoutSeconds, keyConcurrencyWaitTimeoutSeconds)
+        assert.equal(query.state.form.rotationStrategy, 'smart')
+      }
+    }
+    finally {
+      query.stop()
+    }
+  }
+})
+
 test('runtime settings load and save without a global WS opening limit', async () => {
   for (const legacy of [false, true]) {
     const initial = {
@@ -130,6 +164,9 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       websocketFailureWindowMs: 30_000,
       websocketFailureOpenDurationMs: 30_000,
       rateLimitCooldownSeconds: 60,
+      openaiLocationOverrideEnabled: false,
+      maxWaitingPerKey: 0,
+      keyConcurrencyWaitTimeoutSeconds: 30,
       accountBusyWaitEnabled: false,
       accountBusyWaitStickyMaxWaiting: 3,
       accountBusyWaitStickyTimeoutSeconds: 120,
@@ -149,6 +186,25 @@ const busyWaitDefaults = {
   accountBusyWaitFallbackMaxWaiting: 100,
   accountBusyWaitFallbackTimeoutSeconds: 30,
 }
+
+test('location override defaults off and persists independently of scheduling', async () => {
+  const query = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    assert.equal(query.state.form.requestTuning.openaiLocationOverrideEnabled, false)
+    for (const enabled of [true, false, true]) {
+      query.state.form.requestTuning.openaiLocationOverrideEnabled = enabled
+      await query.state.saveSettings()
+      await query.state.loadSettings()
+      assert.equal(query.state.form.requestTuning.openaiLocationOverrideEnabled, enabled)
+      assert.equal(query.requests.at(-1).rotationStrategy, 'smart')
+      assert.deepEqual(busyWaitValues(query.requests.at(-1).requestTuning), busyWaitDefaults)
+    }
+  }
+  finally {
+    query.stop()
+  }
+})
 
 function busyWaitValues(tuning) {
   return Object.fromEntries(Object.keys(busyWaitDefaults).map(key => [key, tuning[key]]))

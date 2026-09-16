@@ -80,7 +80,8 @@ use crate::transport::protocol::responses::{
 };
 use crate::transport::protocol::websocket::WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 use crate::transport::request::{
-    CodexRequestEncodeError, RequestAccountScope, encode_generate_request, scope_request_to_account,
+    CodexRequestEncodeError, RequestAccountScope,
+    encode_generate_request_with_location as encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -291,7 +292,12 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        let Ok(encoded) = encode_generate_request(request, "observability", &self.location) else {
+        let location = self
+            .request_tuning
+            .as_ref()
+            .is_some_and(|tuning| tuning.load().openai_location_override_enabled)
+            .then_some(&self.location);
+        let Ok(encoded) = encode_generate_request(request, "observability", location) else {
             return ProviderRequestObservation::default();
         };
         let semantics = encoded.semantics();
@@ -395,8 +401,12 @@ impl Provider for CodexProvider {
         };
         let previous_session = decode_openai_session_state(generate);
         let continuation_requested = generate.native_continuation_requested();
+        let location = context
+            .request_tuning()
+            .openai_location_override_enabled
+            .then_some(&self.location);
         let mut upstream_request =
-            encode_generate_request(generate, upstream_model.as_str(), &self.location)
+            encode_generate_request(generate, upstream_model.as_str(), location)
                 .map_err(map_request_error)?;
         let client_key_id = context.client_api_key_ref().as_str();
         if previous_session

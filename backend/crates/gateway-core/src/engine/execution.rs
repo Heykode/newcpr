@@ -270,6 +270,7 @@ pub struct DefaultExecutionService {
     observations: Arc<dyn ExecutionStore>,
     providers: ProviderRegistry,
     admissions: Arc<dyn ClientAdmissionPort>,
+    admission_waiting: super::key_wait::KeyWaitQueue,
     circuits: Arc<dyn ProviderCircuitPort>,
     continuation: Arc<dyn NativeContinuationPort>,
     client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
@@ -298,6 +299,7 @@ impl DefaultExecutionService {
             observations,
             providers,
             admissions,
+            admission_waiting: super::key_wait::KeyWaitQueue::default(),
             circuits,
             continuation,
             client_api_key_usage,
@@ -504,40 +506,21 @@ impl DefaultExecutionService {
             operation,
             metadata,
         } = request;
-        let admission_request = ClientAdmissionRequest {
-            model_request_id: request_id.clone(),
-            client_api_key_id: client.policy.key_id().clone(),
-            lease_ttl: MODEL_REQUEST_DEADLINE,
-            limits: client.policy.limits(),
-        };
         let admission_started_at = Instant::now();
-        match self
-            .admissions
-            .admit(admission_request)
-            .await
-            .map_err(|_| {
-                GatewayError::new(
-                    GatewayErrorKind::NoAvailableProvider,
-                    "request admission is temporarily unavailable",
-                )
-            })? {
-            ClientAdmissionDecision::Granted => {}
-            ClientAdmissionDecision::Rejected(
-                ClientAdmissionRejection::RateLimited
-                | ClientAdmissionRejection::ConcurrencyLimited,
-            ) => {
-                return Err(GatewayError::new(
-                    GatewayErrorKind::RateLimited,
-                    "request exceeds client API key limits",
-                ));
-            }
-        }
+        let wait_budget = Arc::new(super::AccountWaitBudget::new(
+            deadline_at,
+            plan.request_tuning(),
+        ));
+        let admission = self
+            .acquire_client_admission(
+                &client,
+                &request_id,
+                deadline_at,
+                plan.request_tuning(),
+                &wait_budget,
+            )
+            .await?;
         let admission_decision_ms = duration_ms(admission_started_at.elapsed());
-        let admission = AdmissionLease {
-            port: Arc::clone(&self.admissions),
-            client_api_key_id: client.policy.key_id().clone(),
-            model_request_id: request_id.clone(),
-        };
         if let Some(budget) = &self.budget
             && let Err(error) = budget.admit(client.policy.key_id().clone()).await
         {
@@ -590,7 +573,7 @@ impl DefaultExecutionService {
             )
             .await
         {
-            Ok(core) => core,
+            Ok(core) => core.with_account_wait_budget(wait_budget),
             Err(error) => {
                 if let Some(budget) = &self.budget {
                     settle_budget(
@@ -620,6 +603,97 @@ impl DefaultExecutionService {
                 self.budget.clone(),
             )),
         })
+    }
+
+    async fn acquire_client_admission(
+        &self,
+        client: &AuthenticatedClient,
+        request_id: &ModelRequestId,
+        deadline: SystemTime,
+        tuning: crate::routing::RequestTuning,
+        wait_budget: &super::AccountWaitBudget,
+    ) -> Result<AdmissionLease, GatewayError> {
+        let key = client.policy.key_id();
+        let limits = client.policy.limits();
+        let mut ticket: Option<super::key_wait::KeyWaitTicket> = None;
+        let mut lease = AdmissionLease {
+            armed: false,
+            port: Arc::clone(&self.admissions),
+            client_api_key_id: key.clone(),
+            model_request_id: request_id.clone(),
+        };
+        loop {
+            let remaining = deadline
+                .duration_since(SystemTime::now())
+                .unwrap_or_default();
+            let acquire_timeout = ticket
+                .as_ref()
+                .map_or(remaining, |t| remaining.min(t.remaining()));
+            if acquire_timeout.is_zero() {
+                return Err(if ticket.is_some() {
+                    super::key_wait::timeout()
+                } else {
+                    GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")
+                });
+            }
+            // Arm before sending, including cancellation while Redis's reply is in flight.
+            lease.armed = true;
+            let acquire = self
+                .admissions
+                .admit(ClientAdmissionRequest {
+                    model_request_id: request_id.clone(),
+                    client_api_key_id: key.clone(),
+                    lease_ttl: remaining,
+                    limits,
+                    allow_concurrency_acquire: limits.max_concurrency == 0
+                        || ticket.is_some()
+                        || !self.admission_waiting.has_waiters(key),
+                })
+                .fuse();
+            let timeout = Delay::new(acquire_timeout).fuse();
+            pin_mut!(acquire, timeout);
+            let decision = select_biased! {
+                result = acquire => result.map_err(|_| GatewayError::new(
+                    GatewayErrorKind::NoAvailableProvider, "request admission is temporarily unavailable",
+                ))?,
+                _ = timeout => return Err(if ticket.is_some() { super::key_wait::timeout() } else {
+                    GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")
+                }),
+            };
+            match decision {
+                ClientAdmissionDecision::Granted => return Ok(lease),
+                ClientAdmissionDecision::Rejected(reason) => {
+                    lease.armed = false;
+                    if reason == ClientAdmissionRejection::RateLimited
+                        || tuning.max_waiting_per_key == 0
+                    {
+                        return Err(GatewayError::new(
+                            GatewayErrorKind::RateLimited,
+                            "request exceeds client API key limits",
+                        ));
+                    }
+                    if ticket.is_none() {
+                        if let Some(budget) = &self.budget {
+                            budget.admit(key.clone()).await?;
+                        }
+                        let now = Instant::now();
+                        let wait_deadline = now
+                            + remaining.min(Duration::from_secs(
+                                tuning.key_concurrency_wait_timeout_seconds,
+                            ));
+                        wait_budget.constrain_deadline(wait_deadline);
+                        ticket = Some(self.admission_waiting.enqueue(
+                            key,
+                            tuning.max_waiting_per_key,
+                            wait_deadline,
+                        )?);
+                    }
+                    if let Some(ticket) = &ticket {
+                        ticket.retry().await?;
+                    }
+                }
+            }
+        }
     }
 
     async fn route_context(
@@ -1042,6 +1116,7 @@ impl AccountProbe for DefaultExecutionService {
 }
 
 struct AdmissionLease {
+    armed: bool,
     port: Arc<dyn ClientAdmissionPort>,
     client_api_key_id: ClientApiKeyId,
     model_request_id: ModelRequestId,
@@ -1054,13 +1129,23 @@ async fn settle_budget(port: &dyn ClientBudgetPort, charge: ClientBudgetCharge) 
 }
 
 impl AdmissionLease {
-    async fn release(self) {
+    async fn release(mut self) {
         if let Err(error) = self
             .port
             .release(&self.client_api_key_id, &self.model_request_id)
             .await
         {
             tracing::warn!(%error, "Client admission 释放失败，依赖租约 TTL 收敛");
+        }
+        self.armed = false;
+    }
+}
+
+impl Drop for AdmissionLease {
+    fn drop(&mut self) {
+        if self.armed {
+            self.port
+                .abandon(&self.client_api_key_id, &self.model_request_id);
         }
     }
 }

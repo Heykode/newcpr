@@ -42,6 +42,12 @@ pub struct RequestTuning {
     pub websocket_failure_open_duration_ms: u64,
     pub rate_limit_cooldown_seconds: u64,
     #[serde(default)]
+    pub openai_location_override_enabled: bool,
+    #[serde(default)]
+    pub max_waiting_per_key: u32,
+    #[serde(default = "default_fallback_timeout_seconds")]
+    pub key_concurrency_wait_timeout_seconds: u64,
+    #[serde(default)]
     pub account_busy_wait_enabled: bool,
     #[serde(default = "default_sticky_max_waiting")]
     pub account_busy_wait_sticky_max_waiting: u32,
@@ -89,6 +95,9 @@ impl RequestTuning {
             websocket_failure_window_ms: 30_000,
             websocket_failure_open_duration_ms: 30_000,
             rate_limit_cooldown_seconds: 60,
+            openai_location_override_enabled: false,
+            max_waiting_per_key: 0,
+            key_concurrency_wait_timeout_seconds: 30,
             account_busy_wait_enabled: false,
             account_busy_wait_sticky_max_waiting: default_sticky_max_waiting(),
             account_busy_wait_sticky_timeout_seconds: default_sticky_timeout_seconds(),

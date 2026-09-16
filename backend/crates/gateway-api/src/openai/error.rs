@@ -207,6 +207,16 @@ pub const fn gateway_error_contract(
     kind: GatewayErrorKind,
 ) -> (StatusCode, &'static str, &'static str) {
     match kind {
+        GatewayErrorKind::ConcurrencyQueueFull => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "concurrency_queue_full",
+        ),
+        GatewayErrorKind::ConcurrencyQueueTimeout => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "concurrency_queue_timeout",
+        ),
         GatewayErrorKind::InvalidRequest => (
             StatusCode::BAD_REQUEST,
             "invalid_request_error",

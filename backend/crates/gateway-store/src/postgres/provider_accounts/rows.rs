@@ -348,6 +348,7 @@ pub struct ProviderAccountAdminRotation {
 
 #[derive(Clone)]
 pub struct ProviderCredentialUpdate {
+    pub preserve_profile: bool,
     pub account_id: String,
     pub expected_revision: Revision,
     pub provider_credentials_json: JsonObject,

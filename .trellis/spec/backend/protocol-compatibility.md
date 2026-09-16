@@ -137,6 +137,18 @@ or multipart image editing. These contracts extend, not replace,
 
 ## Chat Extension Contracts
 
+### File Input and Public Reasoning History
+
+- User `file` parts map to `input_file` without fetching or decoding the payload.
+  Exactly one nonempty `file_id` or `file_data` is required; optional filename
+  remains intact. Reject unknown fields, mixed sources and non-user file parts.
+  File-ID ownership remains an upstream account constraint, not proven by conversion.
+- Assistant string `reasoning_content` or `reasoning` is ordinary public history
+  (`output_text` in a completed assistant message), never encrypted reasoning
+  or a continuation ID. Conflicting aliases and non-assistant roles are rejected.
+- Do not add one-way legacy `functions` conversion, terminal replay or an extra
+  billing source under this compatibility change.
+
 ### Scope
 
 Apply to explicit Chat built-in/custom tools, image/search output and pre-delivery

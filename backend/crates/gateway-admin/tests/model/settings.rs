@@ -15,6 +15,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         websocket_failure_window_ms: Some(30_000),
         websocket_failure_open_duration_ms: Some(45_000),
         rate_limit_cooldown_seconds: Some(60),
+        openai_location_override_enabled: Some(true),
+        max_waiting_per_key: Some(8),
+        key_concurrency_wait_timeout_seconds: Some(30),
         account_busy_wait_enabled: Some(true),
         account_busy_wait_sticky_max_waiting: Some(4),
         account_busy_wait_sticky_timeout_seconds: Some(121),
@@ -36,6 +39,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "websocketFailureWindowMs": 30000,
             "websocketFailureOpenDurationMs": 45000,
             "rateLimitCooldownSeconds": 60,
+            "openaiLocationOverrideEnabled": true,
+            "maxWaitingPerKey": 8,
+            "keyConcurrencyWaitTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
             "accountBusyWaitStickyMaxWaiting": 4,
             "accountBusyWaitStickyTimeoutSeconds": 121,
@@ -50,6 +56,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     let defaults =
         serde_json::to_value(RequestTuning::default()).expect("serialize runtime defaults");
     assert!(defaults.get("websocketMaxConnecting").is_none());
+    assert_eq!(defaults["openaiLocationOverrideEnabled"], false);
     assert_eq!(defaults["accountBusyWaitEnabled"], false);
     assert_eq!(defaults["accountBusyWaitStickyMaxWaiting"], 3);
     assert_eq!(defaults["accountBusyWaitStickyTimeoutSeconds"], 120);

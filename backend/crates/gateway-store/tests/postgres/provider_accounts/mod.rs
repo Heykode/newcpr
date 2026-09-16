@@ -50,6 +50,103 @@ use super::{TestDatabase, admin_account_store};
 mod cumulative_costs;
 mod devices;
 
+#[tokio::test]
+async fn explicit_quota_plan_is_fenced_and_survives_token_only_refreshes() {
+    let Some(database) = TestDatabase::create("quota_plan_refresh").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_plan_refresh").unwrap();
+    let mut seed = account(id.as_str(), "synthetic-plan-owner");
+    seed.plan_type = Some("plus".to_owned());
+    repository.insert_provider_account(seed).await.unwrap();
+    let original = repository.get_account(&id).await.unwrap().unwrap();
+    let observed_at = SystemTime::now();
+    let observation = QuotaObservation {
+        account_id: id.clone(),
+        expected_revision: original.revision(),
+        plan_type: Some("pro".to_owned()),
+        quota: OpaqueProviderData::new(json!({"plan_type": "pro"}).as_object().unwrap().clone()),
+        observed_at,
+        state: QuotaState::allowed(observed_at),
+    };
+    assert_eq!(
+        repository
+            .compare_and_swap_quota(observation.clone())
+            .await
+            .unwrap(),
+        QuotaWriteOutcome::Updated
+    );
+    let stale = QuotaObservation {
+        observed_at: observed_at - Duration::from_secs(1),
+        plan_type: Some("free".to_owned()),
+        ..observation.clone()
+    };
+    assert_eq!(
+        repository.compare_and_swap_quota(stale).await.unwrap(),
+        QuotaWriteOutcome::Conflict
+    );
+    let refresh = CredentialCasUpdate::new(
+        id.clone(),
+        original.revision(),
+        ProviderAccountUpdate {
+            account_id: id.clone(),
+            name: original.name().to_owned(),
+            email: original.email().map(str::to_owned),
+            plan_type: Some("plus".to_owned()),
+        },
+        PlaintextCredential::new(
+            json!({"access_token":"synthetic-refreshed"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+        false,
+        original.access_token_expires_at(),
+        None,
+    )
+    .unwrap()
+    .preserving_profile();
+    assert!(matches!(
+        repository
+            .compare_and_swap_credential(refresh)
+            .await
+            .unwrap(),
+        CredentialCasOutcome::Updated(_)
+    ));
+    let current = repository.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(current.plan_type(), Some("pro"));
+    assert_eq!(
+        repository
+            .compare_and_swap_quota(observation)
+            .await
+            .unwrap(),
+        QuotaWriteOutcome::Conflict
+    );
+
+    let mut credential =
+        credential_update(id.as_str(), current.revision().get(), "manual-synthetic");
+    credential.preserve_profile = true;
+    repository
+        .rotate_provider_account(RotateProviderAccount {
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".to_owned(),
+            },
+            profile: profile(id.as_str(), "stale profile"),
+            replacement_identity: None,
+            credential,
+            relogin_operation_id: None,
+            audit: audit("audit_plan_refresh", "refresh", id.as_str()),
+        })
+        .await
+        .unwrap();
+    let refreshed = repository.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(refreshed.plan_type(), Some("pro"));
+    assert_eq!(refreshed.name(), original.name());
+    assert_eq!(refreshed.upstream_user_id(), original.upstream_user_id());
+    database.close().await;
+}
+
 #[derive(sqlx::FromRow)]
 struct RecoveredAccountRow {
     enabled: bool,
@@ -207,6 +304,7 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
         let observed_at = SystemTime::now();
         let outcome = repository
             .compare_and_swap_quota(QuotaObservation {
+                plan_type: None,
                 account_id: ProviderAccountId::new(id).expect("account id"),
                 expected_revision: revision,
                 quota: OpaqueProviderData::new(
@@ -282,6 +380,7 @@ async fn quota_observation_touch_preserves_quota_state_and_advances_account_upda
     assert_eq!(
         repository
             .compare_and_swap_quota(QuotaObservation {
+                plan_type: None,
                 account_id: account_id.clone(),
                 expected_revision: revision,
                 quota: OpaqueProviderData::new(
@@ -380,6 +479,7 @@ async fn delayed_provider_observations_cannot_overwrite_newer_state_or_quota() {
         .expect("older observation time");
 
     let quota = |marker: &str, observed_at| QuotaObservation {
+        plan_type: None,
         account_id: account_id.clone(),
         expected_revision: revision,
         quota: OpaqueProviderData::new(
@@ -1582,6 +1682,7 @@ async fn account_recovery_resets_status_facts_without_changing_credentials_or_sc
     let observed_at = SystemTime::now();
     repository
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: ProviderAccountId::new("acct_recovery").expect("account ID"),
             expected_revision: CredentialRevision::new(1).expect("credential revision"),
             quota: OpaqueProviderData::new(
@@ -2853,6 +2954,7 @@ pub(super) fn credential_update(
     marker: &str,
 ) -> ProviderCredentialUpdate {
     ProviderCredentialUpdate {
+        preserve_profile: false,
         account_id: account_id.to_owned(),
         expected_revision: Revision::new(revision).expect("credential revision"),
         provider_credentials_json: credential_json(marker),

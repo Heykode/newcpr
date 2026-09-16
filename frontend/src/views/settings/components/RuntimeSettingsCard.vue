@@ -28,6 +28,8 @@ function tuningNumber(key: NumericTuningKey) {
   })
 }
 const tuningValues = {
+  maxWaitingPerKey: tuningNumber('maxWaitingPerKey'),
+  keyConcurrencyWaitTimeoutSeconds: tuningNumber('keyConcurrencyWaitTimeoutSeconds'),
   maxAccountSwitches: tuningNumber('maxAccountSwitches'),
   maxRequestAttempts: tuningNumber('maxRequestAttempts'),
   websocketMaxRetries: tuningNumber('websocketMaxRetries'),
@@ -110,6 +112,29 @@ const tuningValues = {
         </BaseInput>
       </BaseFormItem>
     </BaseForm>
+
+    <div class="mt-5 border-t border-(--cp-border-color) pt-4">
+      <div class="flex items-center justify-between gap-3">
+        <h3 class="text-sm font-medium text-cp-text-secondary">
+          OpenAI 搜索地区与时区覆盖
+        </h3>
+        <BaseSwitch v-model="requestTuning.openaiLocationOverrideEnabled" label="OpenAI 搜索地区与时区覆盖" />
+      </div>
+    </div>
+
+    <div class="mt-5 border-t border-(--cp-border-color) pt-4">
+      <h3 class="text-sm font-medium text-cp-text-secondary">
+        下游 Key 并发排队
+      </h3>
+      <BaseForm class="mt-4 max-w-6xl sm:grid-cols-2">
+        <BaseFormItem label="Key 最大等待人数（0 为关闭）">
+          <BaseInput v-model="tuningValues.maxWaitingPerKey.value" aria-label="Key 最大等待人数" type="number" min="0" max="1024" step="1" />
+        </BaseFormItem>
+        <BaseFormItem label="Key 并发等待秒数">
+          <BaseInput v-model="tuningValues.keyConcurrencyWaitTimeoutSeconds.value" aria-label="Key 并发等待秒数" type="number" min="1" max="600" step="1" :disabled="requestTuning.maxWaitingPerKey === 0" />
+        </BaseFormItem>
+      </BaseForm>
+    </div>
 
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">
       <div class="flex items-center justify-between gap-3">

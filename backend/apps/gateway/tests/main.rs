@@ -153,7 +153,15 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         return false;
     }
     match (member, relative.to_str(), item) {
-        ("crates/gateway-core", Some("runtime/account_concurrency.rs"), Item::Mod(module)) => {
+        // These tests inspect private queue ownership and monotonic deadlines without
+        // exposing test-only hooks in the production admission API.
+        (
+            "crates/gateway-core",
+            Some(
+                "runtime/account_concurrency.rs" | "engine/key_wait.rs" | "engine/capacity_wait.rs",
+            ),
+            Item::Mod(module),
+        ) => {
             module.ident == "tests"
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)

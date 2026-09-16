@@ -1,5 +1,6 @@
 //! OpenAI 额度事实边界与展示快照回归。
 
+mod plan_sync;
 mod recovery;
 mod refresh_timing;
 mod scheduling;

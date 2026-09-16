@@ -120,6 +120,9 @@ async fn request_tuning_overrides_should_round_trip() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let mut update = settings_with_margin(3_600);
     update.request_tuning = RequestTuningOverrides {
+        openai_location_override_enabled: Some(true),
+        max_waiting_per_key: Some(8),
+        key_concurrency_wait_timeout_seconds: Some(30),
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
         websocket_max_retries: Some(9),

@@ -25,12 +25,14 @@ local lease_ttl_ms = tonumber(ARGV[2])
 if now_ms + lease_ttl_ms > tonumber(ARGV[5]) then return 3 end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now_ms)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', cutoff)
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now_ms)
+if redis.call('ZSCORE', KEYS[3], ARGV[1]) then return 4 end
 
-if tonumber(ARGV[3]) > 0 and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
-  return 2
-end
 if tonumber(ARGV[4]) > 0 and redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[4]) then
   return 1
+end
+if tonumber(ARGV[6]) == 0 or (tonumber(ARGV[3]) > 0 and redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3])) then
+  return 2
 end
 
 redis.call('ZADD', KEYS[1], now_ms + lease_ttl_ms, ARGV[1])
@@ -122,6 +124,7 @@ pub struct ClientAdmissionRequest {
     pub model_request_id: String,
     pub client_api_key_ref: String,
     pub lease_ttl: Duration,
+    pub allow_concurrency_acquire: bool,
     pub limits: ClientAdmissionLimits,
 }
 
@@ -247,12 +250,13 @@ impl RedisClientAdmissionRepository {
         })
     }
 
-    fn keys(&self, client_api_key_ref: &str) -> StoreResult<[String; 2]> {
+    fn keys(&self, client_api_key_ref: &str) -> StoreResult<[String; 3]> {
         let fingerprint = resource_fingerprint("client admission", client_api_key_ref)?;
         let tag = format!("{{{fingerprint}}}");
         Ok([
             format!("{}:client:{tag}:active", self.namespace),
             format!("{}:client:{tag}:requests", self.namespace),
+            format!("{}:client:{tag}:abandoned", self.namespace),
         ])
     }
 }
@@ -271,11 +275,13 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
         let code = Script::new(ADMIT_SCRIPT)
             .key(&keys[0])
             .key(&keys[1])
+            .key(&keys[2])
             .arg(&request.model_request_id)
             .arg(lease_ttl_ms)
             .arg(request.limits.max_concurrency)
             .arg(request.limits.requests_per_minute)
             .arg(MAX_REDIS_EXACT_INTEGER)
+            .arg(u8::from(request.allow_concurrency_acquire))
             .invoke_async::<i64>(&mut connection)
             .await
             .map_err(|_| redis_unavailable("admit client request"))?;
@@ -288,6 +294,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
                 ClientAdmissionRejection::ConcurrencyLimited,
             )),
             3 => Err(invalid("lease expiry is outside the supported range")),
+            4 => Err(invalid("client admission was abandoned")),
             _ => Err(invalid("Redis returned an unknown admission decision")),
         }
     }
@@ -372,6 +379,37 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
 }
 
 impl ClientAdmissionPort for RedisClientAdmissionRepository {
+    fn cancel_admission<'a>(
+        &'a self,
+        key: &'a gateway_core::policy::ClientApiKeyId,
+        request: &'a gateway_core::engine::ModelRequestId,
+    ) -> futures::future::BoxFuture<'a, Result<bool, CoreAdmissionError>> {
+        Box::pin(async move {
+            let keys = self.keys(key.as_str()).map_err(|_| CoreAdmissionError)?;
+            let mut connection = self.connection.clone();
+            // Fence a delayed acquire as well as removing a completed one. The expiry
+            // covers Core's maximum ten-minute request lifetime.
+            let result = Script::new(
+                r"
+                    local clock = redis.call('TIME')
+                    local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+                    redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+                    redis.call('ZADD', KEYS[2], now + 600000, ARGV[1])
+                    redis.call('PEXPIRE', KEYS[2], 660000)
+                    return redis.call('ZREM', KEYS[1], ARGV[1])
+                ",
+            )
+            .key(&keys[0])
+            .key(&keys[2])
+            .arg(request.as_str())
+            .invoke_async::<i64>(&mut connection)
+            .await;
+            result
+                .map(|removed| removed == 1)
+                .map_err(|_| CoreAdmissionError)
+        })
+    }
+
     fn admit(
         &self,
         request: CoreAdmissionRequest,
@@ -381,6 +419,7 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
                 model_request_id: request.model_request_id.as_str().to_owned(),
                 client_api_key_ref: request.client_api_key_id.as_str().to_owned(),
                 lease_ttl: request.lease_ttl,
+                allow_concurrency_acquire: request.allow_concurrency_acquire,
                 limits: ClientAdmissionLimits {
                     max_concurrency: request.limits.max_concurrency,
                     requests_per_minute: request.limits.requests_per_minute,

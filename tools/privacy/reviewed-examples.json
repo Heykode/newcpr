@@ -1,5 +1,61 @@
 [
   {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "authenticated-url",
+    "line": 38,
+    "file_sha256": "819b283e3f5cb368d53572feb983f691b57839b235417bbe19f6f406d345df5e",
+    "line_sha256": "9a481ea5dd22c381fddafb18644a4004674839219b8cbf91dbd5c7195b8c4d0c",
+    "reason": "Independently re-reviewed unchanged loopback CI database fixture with synthetic credentials after adding release checks."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 129,
+    "file_sha256": "819b283e3f5cb368d53572feb983f691b57839b235417bbe19f6f406d345df5e",
+    "line_sha256": "3adb12c8f4bff3ffaa94d4cc790ba0695b19869b33d8216b26e08bf4d4e63692",
+    "reason": "Independently re-reviewed IP parser false positive on an unchanged GitHub log-mask command referencing a generated variable."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 130,
+    "file_sha256": "819b283e3f5cb368d53572feb983f691b57839b235417bbe19f6f406d345df5e",
+    "line_sha256": "6818f468f5c49d8f44df010270b465f3b176549efda0b7aeec65156066df78e7",
+    "reason": "Independently re-reviewed IP parser false positive on an unchanged GitHub log-mask command referencing a generated variable."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 26,
+    "file_sha256": "01e319056262b6bea612bcbafa51cddb307cd5298ebb77cd39070640272829ce",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Independently re-reviewed synthetic authentication fixture; both address-family cases use loopback mock proxies and documentation exit addresses."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1602,
+    "file_sha256": "5c38eb702901234bc860a8808e13ae36b86913a0fc79fcf8b152baf480c88b4c",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Independently re-reviewed unchanged database fixture containing a loopback proxy and synthetic credentials."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1628,
+    "file_sha256": "5c38eb702901234bc860a8808e13ae36b86913a0fc79fcf8b152baf480c88b4c",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Independently re-reviewed unchanged assertion preserving the synthetic loopback proxy fixture; the test separately checks audit redaction."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4041,
+    "file_sha256": "38bcefe4d96c54a77920cc82c032c80a375ee6c7bfdc4d38245cf29707568d32",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Independently re-reviewed unchanged synthetic Windows Unicode workspace path used by local WebSocket ASCII and JSON preservation assertions."
+  },
+  {
     "path": ".trellis/spec/backend/client-continuity.md",
     "rule": "gitleaks:cpr-api-key",
     "line": 471,

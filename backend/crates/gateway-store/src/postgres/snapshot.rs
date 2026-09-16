@@ -255,6 +255,15 @@ fn to_core_request_tuning(
         rate_limit_cooldown_seconds: overrides
             .rate_limit_cooldown_seconds
             .unwrap_or(defaults.rate_limit_cooldown_seconds),
+        openai_location_override_enabled: overrides
+            .openai_location_override_enabled
+            .unwrap_or(defaults.openai_location_override_enabled),
+        max_waiting_per_key: overrides
+            .max_waiting_per_key
+            .unwrap_or(defaults.max_waiting_per_key),
+        key_concurrency_wait_timeout_seconds: overrides
+            .key_concurrency_wait_timeout_seconds
+            .unwrap_or(defaults.key_concurrency_wait_timeout_seconds),
         account_busy_wait_enabled: overrides
             .account_busy_wait_enabled
             .unwrap_or(defaults.account_busy_wait_enabled),

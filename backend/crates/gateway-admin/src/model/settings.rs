@@ -26,6 +26,9 @@ pub struct RequestTuningOverrides {
     pub websocket_failure_window_ms: Option<u64>,
     pub websocket_failure_open_duration_ms: Option<u64>,
     pub rate_limit_cooldown_seconds: Option<u64>,
+    pub openai_location_override_enabled: Option<bool>,
+    pub max_waiting_per_key: Option<u32>,
+    pub key_concurrency_wait_timeout_seconds: Option<u64>,
     pub account_busy_wait_enabled: Option<bool>,
     pub account_busy_wait_sticky_max_waiting: Option<u32>,
     pub account_busy_wait_sticky_timeout_seconds: Option<u64>,
@@ -54,6 +57,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_window_ms: Option<u64>,
             websocket_failure_open_duration_ms: Option<u64>,
             rate_limit_cooldown_seconds: Option<u64>,
+            openai_location_override_enabled: Option<bool>,
+            max_waiting_per_key: Option<u32>,
+            key_concurrency_wait_timeout_seconds: Option<u64>,
             account_busy_wait_enabled: Option<bool>,
             account_busy_wait_sticky_max_waiting: Option<u32>,
             account_busy_wait_sticky_timeout_seconds: Option<u64>,
@@ -73,6 +79,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_window_ms: wire.websocket_failure_window_ms,
             websocket_failure_open_duration_ms: wire.websocket_failure_open_duration_ms,
             rate_limit_cooldown_seconds: wire.rate_limit_cooldown_seconds,
+            openai_location_override_enabled: wire.openai_location_override_enabled,
+            max_waiting_per_key: wire.max_waiting_per_key,
+            key_concurrency_wait_timeout_seconds: wire.key_concurrency_wait_timeout_seconds,
             account_busy_wait_enabled: wire.account_busy_wait_enabled,
             account_busy_wait_sticky_max_waiting: wire.account_busy_wait_sticky_max_waiting,
             account_busy_wait_sticky_timeout_seconds: wire.account_busy_wait_sticky_timeout_seconds,
@@ -97,8 +106,13 @@ impl RequestTuningOverrides {
     pub const MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS: u64 = 600;
 
     pub fn validate(&self) -> bool {
-        self.max_account_switches
-            .is_none_or(|value| value <= Self::MAX_ACCOUNT_SWITCHES)
+        self.max_waiting_per_key.is_none_or(|value| value <= 1024)
+            && self
+                .key_concurrency_wait_timeout_seconds
+                .is_none_or(|value| (1..=600).contains(&value))
+            && self
+                .max_account_switches
+                .is_none_or(|value| value <= Self::MAX_ACCOUNT_SWITCHES)
             && self
                 .max_request_attempts
                 .is_none_or(|value| (1..=Self::MAX_REQUEST_ATTEMPTS).contains(&value))

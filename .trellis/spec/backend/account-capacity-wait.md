@@ -96,6 +96,28 @@ Redis `in_flight` 已含本请求时不得再加一。PG 与 Redis 之间不是�
 
 ## 6. 请求共享 Deadline
 
+### 下游 Key 前置排队
+
+Key 并发队列与上游账号容量队列独立。`maxWaitingPerKey=0` 默认关闭，
+`keyConcurrencyWaitTimeoutSeconds=30`；首次 Key 入队将自己的单调截止时间
+写入同一 `AccountWaitBudget`，随后所有账号等待和 attempt 不得延长该截止。
+未发生 Key 等待的请求保持原账号等待窗口行为。
+
+Key 位置是进程内有界 FIFO（单 Key 配置上限、所有 Key 合计 1024），Redis
+仍拥有并发及 RPM 原子准入。只有队首可以获取并发，拒绝不得记 RPM；
+等待中的后继由前序 Drop 唤醒，队首读取 Redis 保留 100ms 间隔。多实例不承诺全局 FIFO。
+预算和 RPM 拒绝不能转成等待，也不能提前提交 HTTP/SSE 成功。
+
+Core 在调用准入端口前 arm 清理 guard；明确拒绝才 disarm。未知结果或取消
+通过 `BufferedClientAdmissionPort` 的既有 4096 有界队列执行
+`cancel_admission`，不逐请求 spawn 新后台任务。Redis 先写取消 tombstone，
+再删除对应 active member；迟到 acquire 拒绝该请求 ID。队列满、停机或 Redis
+故障遵循原 writer 的告警和 TTL 收敛，不承诺立即释放。
+
+`engine/key_wait.rs` 和 `engine/capacity_wait.rs` 的私有状态单测只在精确
+`cfg(test)` 的私有 `tests` 模块内，架构检查按所有者文件明确列举，不允许
+其他生产模块添加测试入口或条件导出。
+
 `CoreSession` 创建一次 `Arc<AccountWaitBudget>`，全部 attempts 复用。设：
 
 ```text

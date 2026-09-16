@@ -112,6 +112,14 @@ pub fn encode_generate_request(
     upstream_model: &str,
     location: &CodexRequestLocation,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
+    encode_generate_request_with_location(request, upstream_model, Some(location))
+}
+
+pub fn encode_generate_request_with_location(
+    request: &GenerateRequest,
+    upstream_model: &str,
+    location: Option<&CodexRequestLocation>,
+) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
     let payload = request.protocol_payload();
     if payload.protocol() != "openai" {
         return Err(CodexRequestEncodeError::InvalidProtocolPayload);
@@ -129,7 +137,7 @@ pub fn encode_generate_request(
 fn adapt_codex_responses_body(
     body: &mut Map<String, Value>,
     upstream_model: &str,
-    location: &CodexRequestLocation,
+    location: Option<&CodexRequestLocation>,
 ) {
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
     // Store is a provider capability, not just a wire default: session capture and
@@ -146,7 +154,9 @@ fn adapt_codex_responses_body(
             tracing::debug!(field = *field, "Unsupported Codex Generate option omitted");
         }
     }
-    align_structured_location_fields(body, Utc::now(), location);
+    if let Some(location) = location {
+        align_structured_location_fields(body, Utc::now(), location);
+    }
 }
 
 fn align_structured_location_fields(

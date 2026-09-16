@@ -216,6 +216,7 @@ impl FakeProviderAdmin {
     fn prepared_rotation(&self, account: &AccountRecord) -> PreparedCredentialRotation {
         PreparedCredentialRotation::new(
             PreparedCredentialRotationFacts {
+                preserve_profile: false,
                 account_id: ProviderAccountId::new(account.id.clone()).expect("account ID"),
                 provider_kind: account.provider_kind.clone(),
                 expected_credential_revision: *self

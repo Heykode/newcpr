@@ -142,6 +142,13 @@ Chat 默认 `stream=false`，使用与 Responses 相同的鉴权、模型范围�
 粘性、代理身份、WS/HTTP 策略及结算；不调用本机 HTTP，也不另建调度或会话数据库。
 `use_websocket` 仍只控制上游传输，`stream_options.include_usage` 只控制下游用量分片。
 
+用户消息支持 `{"type":"file","file":{...}}`，转换为 Responses `input_file`；
+`file_id` 与 `file_data` 必须且只能提供一个非空字符串，可附加 `filename`。
+网关不下载文件，也不保证所选上游账号有权访问文件 ID。
+助手历史支持字符串 `reasoning_content` 或 `reasoning`，作为普通公开历史文字发送，
+不构造加密推理状态；同时给出不同值时拒绝歧义。旧式 `functions` / `function_call`
+协议仍不接入，避免只有请求转换而没有对应返回语义。
+
 支持文本、图片输入、普通 function 工具定义/多轮结果/并行调用、结构化输出、推理配置、
 拒绝信息、网页搜索选项，以及显式 `web_search`、`image_generation`、
 嵌套或 CPA 扁平形式的 `custom` 工具定义和多轮调用结果。custom 输出按 CPA 方式使用
@@ -385,7 +392,8 @@ Tests persist only when the requested revision still matches. Connectivity failu
 `lastTest.success=false`; stale revisions, duplicate URLs and deleting an in-use proxy return 409.
 The test concurrency limit returns 429.
 
-测试固定经代理访问 `https://api.ipify.org?format=json`，超时 15 秒，每进程最多同时测试 4 条。
+测试固定经代理访问双栈端点 `https://api64.ipify.org?format=json`，超时 15 秒，每进程最多同时测试 4 条。
+返回本次连接实际使用的 IPv4 或 IPv6 出口地址，不分别验证两种地址族，也不代表上游账号可用。
 探测器复用 OpenAI 的证书信任配置：优先读取非空的 `CODEX_CA_CERTIFICATE`，
 其次读取 `SSL_CERT_FILE`，并保留系统根证书；证书配置错误不会回退为不验证证书。
 出口测试通过不表示 Provider 账号权限或额度可用；账号可用性使用账号连接测试。
@@ -814,6 +822,29 @@ requestTuning
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+新增的独立参数同样位于 `requestTuning`：
+
+| 字段 | 默认 | 作用 |
+| --- | --- | --- |
+| `openaiLocationOverrideEnabled` | `false` | 是否覆盖 OpenAI 搜索地区和环境上下文时区 |
+| `maxWaitingPerKey` | `0` | 单个下游 Key 的等待人数上限，整数 0–1024；0 关闭 |
+| `keyConcurrencyWaitTimeoutSeconds` | `30` | Key 并发排队最长时间，整数 1–600 秒 |
+
+地区开关关闭时保留客户端原值；开启时使用配置文件的 `openai.wire_profile.location`，
+未自定义时为 `US / Ohio / Piketon / America/New_York`。开关不清空地区配置，
+不更换 UA、TLS、账号设备档案或系统时区。已开始请求使用冻结的开关值。
+
+Key 排队只处理并发已满，不等待 RPM 或预算额度恢复。队列按进程维护，
+同 Key 先进先出，各 Key 共用每进程 1024 个等待名额；Redis 仍是全局并发准入权威，
+多实例之间不保证全局 FIFO。等待不重复记 RPM，不提前返回成功，不占上游账号。
+获得名额后继续原调度；如还需要等待账号，沿用剩余等待截止时间，不叠加完整新预算。
+排队满或超时返回 HTTP 429，错误码分别为 `concurrency_queue_full`、
+`concurrency_queue_timeout`。已取消的准入通过有时限的 Redis 标记防止迟到写入重新占位；
+清理故障时仍依赖租约到期收敛，不声称网络故障下立即释放。
+
+上述字段缺失或为 `null` 时继承默认值。升级不会自动开启地区覆盖或 Key 排队。
+降级到不认识这些字段的旧版本前，应备份并移除这三个新增设置字段。
 
 `requestTuning` 中的 OpenAI 账号忙时等待参数：
 

@@ -210,4 +210,7 @@ jobs:
           .github/workflows/*.yml
 
       - name: Test release platform contracts
-        run: ruby release/tests/platforms_test.rb
+        run: |
+          bash -n release/publish
+          ruby release/tests/platforms_test.rb
+          ruby release/tests/publish_test.rb

@@ -246,12 +246,105 @@ async fn restore_rejects_future_window_fact_without_partial_write() {
     assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
 }
 
+#[tokio::test]
+async fn waiting_checks_do_not_charge_rpm_and_rate_limits_take_precedence() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let key = "key-queue";
+    let mut first = admission_request("first", key, Duration::from_secs(30));
+    first.limits.max_concurrency = 1;
+    first.limits.requests_per_minute = 2;
+    assert_eq!(
+        repository.admit_client_request(&first).await.unwrap(),
+        ClientAdmissionDecision::Granted
+    );
+    let mut waiting = first.clone();
+    waiting.model_request_id = "waiting".to_owned();
+    for _ in 0..5 {
+        assert_eq!(
+            repository.admit_client_request(&waiting).await.unwrap(),
+            ClientAdmissionDecision::Rejected(ClientAdmissionRejection::ConcurrencyLimited)
+        );
+    }
+    repository
+        .release_client_request(key, "first")
+        .await
+        .unwrap();
+    waiting.allow_concurrency_acquire = false;
+    assert_eq!(
+        repository.admit_client_request(&waiting).await.unwrap(),
+        ClientAdmissionDecision::Rejected(ClientAdmissionRejection::ConcurrencyLimited)
+    );
+    waiting.allow_concurrency_acquire = true;
+    assert_eq!(
+        repository.admit_client_request(&waiting).await.unwrap(),
+        ClientAdmissionDecision::Granted
+    );
+    let keys = namespace_keys(&mut connection, &namespace).await;
+    assert_eq!(
+        zcard(&mut connection, key_with_suffix(&keys, ":requests")).await,
+        2
+    );
+    let mut third = first;
+    third.model_request_id = "third".to_owned();
+    assert_eq!(
+        repository.admit_client_request(&third).await.unwrap(),
+        ClientAdmissionDecision::Rejected(ClientAdmissionRejection::RateLimited)
+    );
+    repository.clear_client_admission(key).await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_acquire_is_fenced_before_or_after_the_redis_write() {
+    use gateway_core::{
+        engine::{ModelRequestId, admission::ClientAdmissionPort},
+        policy::ClientApiKeyId,
+    };
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    for granted_first in [false, true] {
+        let key = ClientApiKeyId::new(if granted_first { "after" } else { "before" }).unwrap();
+        let id = ModelRequestId::new("req_cancelled").unwrap();
+        let request = admission_request(id.as_str(), key.as_str(), Duration::from_secs(30));
+        if granted_first {
+            assert_eq!(
+                repository.admit_client_request(&request).await.unwrap(),
+                ClientAdmissionDecision::Granted
+            );
+        }
+        assert_eq!(
+            repository.cancel_admission(&key, &id).await.unwrap(),
+            granted_first
+        );
+        assert!(repository.admit_client_request(&request).await.is_err());
+        assert!(
+            !repository
+                .release_client_request(key.as_str(), id.as_str())
+                .await
+                .unwrap()
+        );
+        let next = admission_request("next", key.as_str(), Duration::from_secs(30));
+        assert_eq!(
+            repository.admit_client_request(&next).await.unwrap(),
+            ClientAdmissionDecision::Granted
+        );
+        repository
+            .clear_client_admission(key.as_str())
+            .await
+            .unwrap();
+    }
+    assert!(namespace_keys(&mut connection, &namespace).await.is_empty());
+}
+
 fn admission_request(
     model_request_id: &str,
     client_api_key_ref: &str,
     lease_ttl: Duration,
 ) -> ClientAdmissionRequest {
     ClientAdmissionRequest {
+        allow_concurrency_acquire: true,
         model_request_id: model_request_id.to_owned(),
         client_api_key_ref: client_api_key_ref.to_owned(),
         lease_ttl,

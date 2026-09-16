@@ -950,6 +950,7 @@ fn prepared_rotation(
         account_id,
         expected_revision,
         profile: credential_profile,
+        preserve_profile,
         credential,
         has_refresh_token,
         access_token_expires_at,
@@ -961,6 +962,7 @@ fn prepared_rotation(
     }
     Ok(PreparedCredentialRotation::new(
         PreparedCredentialRotationFacts {
+            preserve_profile,
             account_id,
             provider_kind,
             expected_credential_revision: Revision::new(expected_revision.get())

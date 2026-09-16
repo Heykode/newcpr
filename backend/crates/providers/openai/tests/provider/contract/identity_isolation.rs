@@ -115,6 +115,83 @@ fn qx_provider(store: &Arc<MemoryAccountStore>, url: String) -> CodexProvider {
 }
 
 #[tokio::test]
+async fn location_switch_controls_actual_http_and_ws_payloads_without_changing_identity() {
+    const ACCOUNT: &str = "acct_location_switch";
+    for websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, ACCOUNT).await;
+        let mut identities = Vec::new();
+        for enabled in [false, true] {
+            let http = MockServer::start().await;
+            let (url, ws_server) = if websocket {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut socket = accept_codex_test_websocket(socket).await;
+                    let frame = socket.next().await.unwrap().unwrap();
+                    let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                    super::generate_compat::send_completion(&mut socket, "resp_location").await;
+                    body
+                });
+                (url, Some(server))
+            } else {
+                Mock::given(method("POST"))
+                    .and(path("/codex/responses"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .insert_header("content-type", "text/event-stream")
+                            .set_body_string(CAPTURE_COMPLETED_SSE),
+                    )
+                    .expect(1)
+                    .mount(&http)
+                    .await;
+                (http.uri(), None)
+            };
+            let body = json!({
+                "model":"gpt-5.4", "input":"same question",
+                "thread_id":"location-thread", "session_id":"location-session",
+                "tools":[{"type":"web_search","user_location":{"city":"London","timezone":"Europe/London"}}]
+            });
+            let request = GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(Map::from_iter([(
+                        "use_websocket".to_owned(),
+                        json!(websocket),
+                    )])),
+            );
+            consume_identity_request(
+                &qx_provider(&store, url),
+                request,
+                scoped_context("location-switch", "key-location", ACCOUNT).with_request_tuning(
+                    gateway_core::routing::RequestTuning {
+                        openai_location_override_enabled: enabled,
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await;
+            let captured = if let Some(server) = ws_server {
+                timeout(Duration::from_secs(5), server)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            } else {
+                captured_request_body(&http.received_requests().await.unwrap()[0])
+            };
+            assert_eq!(
+                captured["tools"][0]["user_location"]["city"],
+                if enabled { "Auckland" } else { "London" }
+            );
+            assert_eq!(body["tools"][0]["user_location"]["city"], "London");
+            identities.push(captured["prompt_cache_key"].clone());
+        }
+        assert_eq!(identities[0], identities[1]);
+    }
+}
+
+#[tokio::test]
 async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_and_transports() {
     const ACCOUNT: &str = "acct_generate_compat";
     for qx in [false, true] {
@@ -428,7 +505,12 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
     let state = consume_identity_request(
         &first_provider,
         request(),
-        scoped_context("location-first", "key-a", ACCOUNT),
+        scoped_context("location-first", "key-a", ACCOUNT).with_request_tuning(
+            gateway_core::routing::RequestTuning {
+                openai_location_override_enabled: true,
+                ..Default::default()
+            },
+        ),
     )
     .await
     .unwrap();
@@ -448,7 +530,12 @@ async fn qx_saved_seed_survives_location_change_without_accepting_a_foreign_key(
     consume_identity_request(
         &next_provider,
         followup,
-        scoped_context("location-next", "key-a", ACCOUNT),
+        scoped_context("location-next", "key-a", ACCOUNT).with_request_tuning(
+            gateway_core::routing::RequestTuning {
+                openai_location_override_enabled: true,
+                ..Default::default()
+            },
+        ),
     )
     .await;
     let requests = server.received_requests().await.unwrap();

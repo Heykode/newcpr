@@ -25,6 +25,11 @@ class ReleasePlatformsTest < Minitest::Test
       FileUtils.mkdir_p(File.join(dir, "release"))
       File.write(File.join(dir, "release/platforms.yaml"), { "platforms" => platforms }.to_yaml)
       File.write(File.join(dir, "release/version.yaml"), { "version" => "1.0.0" }.to_yaml)
+      File.write(File.join(dir, "release/notes.md"), "# v1.0.0\n\nSynthetic release notes.\n")
+      FileUtils.mkdir_p(File.join(dir, "deploy"))
+      %w[config.example.yaml compose.yaml].each do |name|
+        FileUtils.cp(File.join(ROOT, "deploy", name), File.join(dir, "deploy", name))
+      end
       _, error, status = Open3.capture3("git", "init", "-q", dir)
       assert status.success?, error
       _, error, status = Open3.capture3(
@@ -79,16 +84,23 @@ class ReleasePlatformsTest < Minitest::Test
         )
         assert status.success?, error
         checksums = File.readlines(File.join(dir, "dist/release/checksums.txt"))
-        assert_equal platforms.size, checksums.size
+        assert_equal platforms.size + 2, checksums.size
         checksums.each do |line|
           checksum, name = line.split
           archive = File.join(dir, "dist/release", name)
           assert_equal Digest::SHA256.file(archive).hexdigest, checksum
+          next unless name.end_with?(".tar.gz")
           listing, error, status = Open3.capture3("tar", "-tzf", archive)
           assert status.success?, error
           assert_includes listing, "codex-proxy-rs/codex-proxy-rs"
           assert_includes listing, "codex-proxy-rs/web/dist/index.html"
+          assert_includes listing, "codex-proxy-rs/deploy/config.example.yaml"
         end
+        assert_equal File.read(File.join(dir, "deploy/compose.yaml"))
+                         .sub("${CPR_IMAGE:-ghcr.io/heykode/newcpr:latest}", "${CPR_IMAGE:-ghcr.io/heykode/newcpr:1.0.0}"),
+                     File.read(File.join(dir, "dist/release/compose.yaml"))
+        assert_equal File.read(File.join(dir, "deploy/config.example.yaml")),
+                     File.read(File.join(dir, "dist/release/config.example.yaml"))
         FileUtils.rm(File.join(dir, "dist/binaries/codex-proxy-rs-linux-amd64/codex-proxy-rs"))
         _, error, status = Open3.capture3(
           { "VERSION" => "1.0.0" }, "python3", "-c",
@@ -106,6 +118,17 @@ class ReleasePlatformsTest < Minitest::Test
         _, error, status = metadata(dir)
         refute status.success?
         refute_empty error
+      end
+    end
+  end
+
+  def test_missing_or_mismatched_release_notes_fail_metadata
+    fixture(DEFAULTS) do |dir|
+      ["# v0.9.0\n\nNotes\n", "# v1.0.0\n\n"].each do |notes|
+        File.write(File.join(dir, "release/notes.md"), notes)
+        _, error, status = metadata(dir)
+        refute status.success?
+        assert_includes error, "release/notes.md"
       end
     end
   end

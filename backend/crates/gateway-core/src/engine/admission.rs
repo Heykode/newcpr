@@ -13,6 +13,7 @@ pub struct ClientAdmissionRequest {
     pub model_request_id: ModelRequestId,
     pub client_api_key_id: ClientApiKeyId,
     pub lease_ttl: Duration,
+    pub allow_concurrency_acquire: bool,
     pub limits: RateLimits,
 }
 
@@ -58,6 +59,18 @@ pub struct ClientAdmissionRestoreResult {
 pub struct ClientAdmissionError;
 
 pub trait ClientAdmissionPort: Send + Sync {
+    /// Non-blocking cleanup for cancellation or an unobserved admission result.
+    fn abandon(&self, _key: &ClientApiKeyId, _request: &ModelRequestId) {}
+
+    /// Worker-side cleanup; stores may fence an acquire whose result was not observed.
+    fn cancel_admission<'a>(
+        &'a self,
+        key: &'a ClientApiKeyId,
+        request: &'a ModelRequestId,
+    ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
+        self.release(key, request)
+    }
+
     fn admit(
         &self,
         request: ClientAdmissionRequest,
