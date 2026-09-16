@@ -52,7 +52,11 @@ pub struct HostConfig {
 }
 
 impl HostConfig {
-    pub fn resolve_and_validate(&mut self, source_dir: &Path) -> Result<(), ConfigError> {
+    pub fn resolve_and_validate(
+        &mut self,
+        source_dir: &Path,
+        asset_directory: &Path,
+    ) -> Result<(), ConfigError> {
         if let Some(host) = optional_environment_value(SERVER_HOST_ENV)? {
             self.listen.host = host;
         }
@@ -82,8 +86,11 @@ impl HostConfig {
         }
         resolve_relative_path(source_dir, &mut self.runtime_data_dir);
         self.logging.resolve_and_validate(source_dir)?;
-        self.system_update
-            .resolve_and_validate(source_dir, &self.runtime_data_dir)?;
+        self.system_update.resolve_and_validate(
+            source_dir,
+            &self.runtime_data_dir,
+            asset_directory,
+        )?;
         Ok(())
     }
 

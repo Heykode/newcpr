@@ -67,6 +67,77 @@ fn request_defaults_and_transport_remain_independent() {
 }
 
 #[test]
+fn request_preserves_user_files_without_fetching_or_reinterpreting_them() {
+    for file in [
+        json!({"file_id":"file_synthetic"}),
+        json!({"file_data":"data:application/pdf;base64,c3ludGhldGlj","filename":"example.pdf"}),
+    ] {
+        let mut input = request();
+        input["messages"][0]["content"] = json!([
+            {"type":"text","text":"summarize"},
+            {"type":"file","file":file}
+        ]);
+        let decoded = decode_chat_request(input.clone()).unwrap();
+        let mut expected = file;
+        expected["type"] = json!("input_file");
+        assert_eq!(decoded.responses["input"][0]["content"][1], expected);
+        assert_eq!(input["messages"][0]["content"][1]["type"], "file");
+    }
+    for file in [
+        json!({}),
+        json!({"filename":"example.pdf"}),
+        json!({"file_id":""}),
+        json!({"file_id":12}),
+        json!({"file_id":"file_synthetic","file_data":"ambiguous"}),
+        json!({"file_id":"file_synthetic","unknown":"not dropped"}),
+    ] {
+        let mut input = request();
+        input["messages"][0]["content"] = json!([{"type":"file","file":file}]);
+        assert!(decode_chat_request(input).is_err());
+    }
+    for role in ["assistant", "system", "developer"] {
+        let mut input = request();
+        input["messages"][0] = json!({"role":role,"content":[
+            {"type":"file","file":{"file_id":"file_synthetic"}}
+        ]});
+        assert!(decode_chat_request(input).is_err());
+    }
+}
+
+#[test]
+fn request_public_reasoning_is_plain_assistant_history_not_encrypted_state() {
+    for field in ["reasoning_content", "reasoning"] {
+        for content in [Value::Null, json!("answer")] {
+            let mut input = request();
+            let mut assistant = json!({"role":"assistant","content":content});
+            assistant[field] = json!("public explanation");
+            input["messages"] = json!([assistant, {"role":"user","content":"continue"}]);
+            let decoded = decode_chat_request(input).unwrap();
+            let history = &decoded.responses["input"][0];
+            assert_eq!(history["type"], "message");
+            assert_eq!(history["status"], "completed");
+            assert_eq!(
+                history["content"][0],
+                json!({"type":"output_text","text":"public explanation"})
+            );
+            assert!(history.get("encrypted_content").is_none());
+            if !content.is_null() {
+                assert_eq!(history["content"][1]["text"], "answer");
+            }
+        }
+    }
+    for message in [
+        json!({"role":"user","content":"hi","reasoning_content":"invalid role"}),
+        json!({"role":"assistant","content":"hi","reasoning_content":{}}),
+        json!({"role":"assistant","content":"hi","reasoning_content":"a","reasoning":"b"}),
+    ] {
+        let mut input = request();
+        input["messages"] = json!([message]);
+        assert!(decode_chat_request(input).is_err());
+    }
+}
+
+#[test]
 fn request_maps_parameters_schema_and_stream_options() {
     let mut input = request();
     input["stream"] = json!(true);

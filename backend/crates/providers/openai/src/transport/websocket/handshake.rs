@@ -6,8 +6,7 @@ use bytes::Bytes;
 use gateway_protocol::openai::events;
 use tokio::time::timeout;
 use tokio_tungstenite::{
-    Connector, MaybeTlsStream, client_async_tls_with_config, client_async_with_config,
-    connect_async_tls_with_config,
+    Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
 };
 use tungstenite::{
     self, Message,
@@ -64,7 +63,6 @@ impl CodexWebSocketConnection {
             WEBSOCKET_EXTENSIONS.to_string(),
         ));
         Self {
-            tls_profile: crate::transport::profile::CodexTlsProfile::Cpr,
             endpoint,
             headers,
             outbound_proxy: None,
@@ -170,21 +168,14 @@ async fn connect_websocket(
     connection: &CodexWebSocketConnection,
 ) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let request = websocket_handshake_request(connection)?;
-    let connector = if connection.tls_profile == crate::transport::profile::CodexTlsProfile::Cpr {
-        tls::maybe_build_rustls_client_config_with_custom_ca()
-            .map_err(|error| {
-                CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
-                    error,
-                )))
-            })?
-            .map(Connector::Rustls)
-    } else {
-        None
-    };
+    let connector = tls::maybe_build_rustls_client_config_with_custom_ca()
+        .map_err(|error| {
+            CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
+                error,
+            )))
+        })?
+        .map(Connector::Rustls);
     let result = timeout(WEBSOCKET_CONNECT_TIMEOUT, async {
-        if connection.tls_profile == crate::transport::profile::CodexTlsProfile::QxCompatible {
-            return connect_qx_websocket(connection, request).await;
-        }
         // Preserve the native direct handshake; explicit egress never inherits a global proxy.
         if connection.outbound_proxy.is_none()
             && connection.egress_source.is_none()
@@ -231,12 +222,6 @@ async fn connect_websocket(
                     source
                         .downcast_ref::<crate::transport::egress::CodexEgressError>()
                         .copied()
-                        .or_else(|| {
-                            source
-                                .downcast_ref::<crate::transport::native_tls::NativeTransportError>(
-                                )
-                                .and_then(|error| error.egress_error())
-                        })
                 }),
                 _ => None,
             };
@@ -246,38 +231,6 @@ async fn connect_websocket(
             )
         }
         Err(error) => Err(CodexWebSocketExchangeError::Connect(error)),
-    }
-}
-
-async fn connect_qx_websocket(
-    connection: &CodexWebSocketConnection,
-    request: WsRequest,
-) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), tungstenite::Error> {
-    use crate::transport::{dial, native_tls};
-    let invalid = || tungstenite::Error::Io(std::io::Error::other("invalid WebSocket endpoint"));
-    let endpoint = url::Url::parse(connection.endpoint()).map_err(|_| invalid())?;
-    if !matches!(endpoint.scheme(), "ws" | "wss") {
-        return Err(invalid());
-    }
-    let host = endpoint.host_str().ok_or_else(invalid)?;
-    let port = endpoint.port_or_known_default().ok_or_else(invalid)?;
-    let map_native = |error| tungstenite::Error::Io(std::io::Error::other(error));
-    let config = dial::DialConfig::new(connection.outbound_proxy.clone(), connection.egress_source)
-        .map_err(map_native)?;
-    let stream = dial::connect(host, port, &config)
-        .await
-        .map_err(map_native)?;
-    if endpoint.scheme() == "wss" {
-        let stream = native_tls::connect(stream, host, native_tls::NativeAlpn::WebSocket)
-            .await
-            .map_err(map_native)?;
-        let (websocket, response) =
-            client_async_with_config(request, stream, Some(websocket_config())).await?;
-        Ok((Box::new(websocket), response))
-    } else {
-        let (websocket, response) =
-            client_async_with_config(request, stream, Some(websocket_config())).await?;
-        Ok((Box::new(websocket), response))
     }
 }
 

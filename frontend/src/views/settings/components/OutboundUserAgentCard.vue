@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import type {
-  OutboundSessionPolicy,
-  OutboundTlsProfile,
   OutboundUserAgentSelection,
   OutboundUserAgentSettings,
 } from '@/api/modules/outbound-user-agent'
@@ -22,8 +20,6 @@ import { errorMessage } from '@/utils/async'
 
 const settings = ref<OutboundUserAgentSettings | null>(null)
 const preview = ref<OutboundUserAgentSettings | null>(null)
-const tlsProfile = ref<OutboundTlsProfile>('cpr')
-const sessionPolicy = ref<OutboundSessionPolicy>('native')
 const useDefault = ref(true)
 const custom = ref('')
 const loading = ref(false)
@@ -37,25 +33,18 @@ const displayedInput = computed({
   get: () => useDefault.value ? settings.value?.defaultUserAgent ?? '' : custom.value,
   set: value => custom.value = value,
 })
-const selection = computed<OutboundUserAgentSelection>(() => ({
-  mode: 'independent',
-  userAgent: useDefault.value ? null : custom.value,
-  tlsProfile: tlsProfile.value,
-  sessionPolicy: sessionPolicy.value,
-}))
+const selection = computed<OutboundUserAgentSelection>(() => useDefault.value
+  ? { mode: 'default' }
+  : { mode: 'custom', userAgent: custom.value })
 
 function populate(value: OutboundUserAgentSettings) {
   settings.value = value
-  tlsProfile.value = value.tlsProfile
-  sessionPolicy.value = value.sessionPolicy
   useDefault.value = value.mode === 'default'
-    || (value.mode === 'independent' && value.customUserAgent == null)
-  custom.value = value.customUserAgent
-    ?? (value.mode === 'qx-compatible' ? value.qxDefaultUserAgent : value.defaultUserAgent)
+  custom.value = value.customUserAgent ?? value.defaultUserAgent
   preview.value = null
 }
 
-watch([tlsProfile, sessionPolicy, useDefault, custom], () => {
+watch([useDefault, custom], () => {
   error.value = ''
   preview.value = null
 })
@@ -172,35 +161,6 @@ useIntervalFn(() => void load(false, true), 30_000)
       />
     </BaseFormItem>
 
-    <div class="mt-3 flex flex-wrap gap-4">
-      <label for="outbound-tls-profile" class="flex min-w-0 items-center gap-2 text-sm text-cp-text">
-        TLS
-        <select
-          id="outbound-tls-profile"
-          v-model="tlsProfile"
-          aria-label="OpenAI 出站 TLS"
-          class="h-8 min-w-0 rounded-cp-sm bg-cp-bg-container px-2 text-cp-text"
-          :disabled="busy || !settings"
-        >
-          <option value="cpr">CPR 原生</option>
-          <option value="qx-compatible">QX 兼容</option>
-        </select>
-      </label>
-      <label for="outbound-session-policy" class="flex min-w-0 items-center gap-2 text-sm text-cp-text">
-        会话策略
-        <select
-          id="outbound-session-policy"
-          v-model="sessionPolicy"
-          aria-label="OpenAI 出站会话策略"
-          class="h-8 min-w-0 rounded-cp-sm bg-cp-bg-container px-2 text-cp-text"
-          :disabled="busy || !settings"
-        >
-          <option value="native">原生</option>
-          <option value="qx-compatible">QX 兼容</option>
-        </select>
-      </label>
-    </div>
-
     <div class="mt-3 flex flex-wrap gap-3">
       <BaseButton :loading="checking" :disabled="busy || !settings" @click="check">
         检查格式并预览
@@ -221,7 +181,7 @@ useIntervalFn(() => void load(false, true), 30_000)
 
     <dl v-if="settings" class="mt-4 grid gap-2 text-xs">
       <dt class="text-cp-text-secondary">
-        当前实际生效 · TLS {{ settings.tlsProfile === 'cpr' ? 'CPR 原生' : 'QX 兼容' }} · 会话 {{ settings.sessionPolicy === 'native' ? '原生' : 'QX 兼容' }}
+        当前实际生效
       </dt>
       <dd class="m-0 break-all font-mono text-cp-text">
         {{ settings.effectiveUserAgent }}

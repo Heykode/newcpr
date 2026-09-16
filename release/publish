@@ -3,9 +3,9 @@ set -euo pipefail
 
 APP_NAME="codex-proxy-rs"
 VERSION_FILE="release/version.yaml"
+NOTES_FILE="release/notes.md"
 TAG_PREFIX="v"
 SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
-SIGNATURE="Co-authored-by: Codex <noreply@openai.com>"
 
 usage() {
   cat <<USAGE
@@ -14,6 +14,9 @@ Usage:
 
 Example:
   release/publish 0.1.4
+
+Leave the target version's release/notes.md uncommitted, with "# v<version>"
+as its first line. Other tracked files must be clean.
 USAGE
 }
 
@@ -90,11 +93,11 @@ remote_url="$(git remote get-url "$remote")" || die "failed to resolve remote UR
 repository="$(gh repo view "$remote_url" --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)" ||
   die "failed to resolve GitHub repository for $remote_url"
 
-if ! git diff --quiet --ignore-submodules --; then
-  die "tracked files have unstaged changes; commit or stash them first"
+if ! git diff --quiet --ignore-submodules -- . ":(exclude)$NOTES_FILE"; then
+  die "tracked files outside $NOTES_FILE have unstaged changes"
 fi
-if ! git diff --cached --quiet --ignore-submodules --; then
-  die "index has staged changes; commit or unstage them first"
+if ! git diff --cached --quiet --ignore-submodules -- . ":(exclude)$NOTES_FILE"; then
+  die "index has staged changes outside $NOTES_FILE"
 fi
 
 current_version="$(read_version_key version)"
@@ -102,6 +105,17 @@ current_version="${current_version#v}"
 [[ "$version" != "$current_version" ]] || die "$VERSION_FILE is already $version"
 
 tag="${TAG_PREFIX}${version}"
+
+git ls-files --error-unmatch "$NOTES_FILE" >/dev/null 2>&1 || die "$NOTES_FILE is not tracked"
+if git diff HEAD --quiet -- "$NOTES_FILE"; then
+  die "$NOTES_FILE must contain uncommitted release notes"
+fi
+ruby - "$NOTES_FILE" "$tag" <<'RUBY'
+path, tag = ARGV
+lines = File.readlines(path)
+abort("#{path}: first line must be # #{tag}") unless lines.first&.strip == "# #{tag}"
+abort("#{path}: release notes must not be empty") if lines.drop(1).join.strip.empty?
+RUBY
 
 if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
   die "local tag already exists: $tag"
@@ -127,10 +141,8 @@ fi
 
 update_version_file "$version"
 
-git add "$VERSION_FILE"
-git commit \
-  -m "chore: bump version to $version" \
-  -m "$SIGNATURE"
+git add -- "$VERSION_FILE" "$NOTES_FILE"
+git commit -m "chore(release): prepare $tag"
 
 git tag -a "$tag" -m "$tag"
 git push --atomic "$remote" "HEAD:$remote_branch" "refs/tags/$tag"

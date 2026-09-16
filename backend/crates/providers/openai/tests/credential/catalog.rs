@@ -56,8 +56,6 @@ impl Respond for SequencedCatalogResponder {
 
 pub(super) fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        tls_profile: provider_openai::transport::profile::CodexTlsProfile::Cpr,
-        application_profile: Default::default(),
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),

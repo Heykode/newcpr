@@ -1,4 +1,4 @@
-use std::{io, pin::Pin, time::Duration};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use openssl::{
     asn1::Asn1Time,
@@ -12,9 +12,7 @@ use openssl::{
         extension::{BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAlternativeName},
     },
 };
-use provider_openai::transport::native_tls::{
-    NativeAlpn, NativeTlsConnector, NativeTransportError,
-};
+use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::CertificateDer;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -113,9 +111,26 @@ fn build_identity(is_ca: bool, issuer: Option<&Identity>) -> Identity {
     }
 }
 
-pub(super) fn connector(identity: &Identity) -> NativeTlsConnector {
-    NativeTlsConnector::from_certificates(&[CertificateDer::from(identity.cert.to_der().unwrap())])
-        .unwrap()
+pub(super) fn connector(identity: &Identity) -> tokio_rustls::TlsConnector {
+    provider_openai::ensure_rustls_provider();
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(CertificateDer::from(identity.cert.to_der().unwrap()))
+        .unwrap();
+    tokio_rustls::TlsConnector::from(Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    ))
+}
+
+pub(super) fn http_client(identity: &Identity, builder: reqwest::ClientBuilder) -> reqwest::Client {
+    provider_openai::transport::tls::build_reqwest_native_client_with_custom_ca(
+        builder.add_root_certificate(
+            reqwest::Certificate::from_der(&identity.cert.to_der().unwrap()).unwrap(),
+        ),
+    )
+    .unwrap()
 }
 
 pub(super) fn acceptor(identity: &Identity, h2: bool) -> SslAcceptor {
@@ -140,14 +155,10 @@ where
 }
 
 #[tokio::test]
-async fn native_tls_verifies_dns_and_ip_with_protocol_specific_alpn() {
+async fn websocket_rustls_verifies_dns_and_ip_without_http_alpn() {
     let identity = identity();
     let connector = connector(&identity);
-    for (host, mode) in [
-        ("localhost", NativeAlpn::Http),
-        ("127.0.0.1", NativeAlpn::Http1),
-        ("[::1]", NativeAlpn::WebSocket),
-    ] {
+    for host in ["localhost", "127.0.0.1", "::1"] {
         let acceptor = acceptor(&identity, true);
         let (client, server) = tokio::io::duplex(65536);
         timeout(Duration::from_secs(5), async {
@@ -159,11 +170,11 @@ async fn native_tls_verifies_dns_and_ip_with_protocol_specific_alpn() {
                 server.write_all(b"pong").await.unwrap();
             };
             let client = async {
-                let mut client = connector.connect(client, host, mode).await.unwrap();
-                assert_eq!(
-                    client.ssl().selected_alpn_protocol(),
-                    (mode == NativeAlpn::Http).then_some(b"h2".as_slice()),
-                );
+                let mut client = connector
+                    .connect(host.try_into().unwrap(), client)
+                    .await
+                    .unwrap();
+                assert_eq!(client.get_ref().1.alpn_protocol(), None,);
                 client.write_all(b"ping").await.unwrap();
                 let mut response = [0; 4];
                 client.read_exact(&mut response).await.unwrap();
@@ -177,7 +188,7 @@ async fn native_tls_verifies_dns_and_ip_with_protocol_specific_alpn() {
 }
 
 #[tokio::test]
-async fn native_tls_rejects_untrusted_certificate_and_wrong_hostname() {
+async fn websocket_rustls_rejects_untrusted_certificate_and_wrong_hostname() {
     let trusted = identity();
     let untrusted = identity();
     let connector = connector(&trusted);
@@ -191,8 +202,10 @@ async fn native_tls_rejects_untrusted_certificate_and_wrong_hostname() {
                 let _ = Pin::new(&mut server).accept().await;
             };
             let client = async {
-                let result = connector.connect(client, hostname, NativeAlpn::Http).await;
-                assert!(matches!(result, Err(NativeTransportError::Connect { .. })));
+                let result = connector
+                    .connect(hostname.try_into().unwrap(), client)
+                    .await;
+                assert!(result.is_err());
             };
             tokio::join!(server, client);
         })
@@ -202,13 +215,13 @@ async fn native_tls_rejects_untrusted_certificate_and_wrong_hostname() {
 }
 
 #[tokio::test]
-async fn dropping_native_handshake_releases_stream() {
+async fn dropping_websocket_rustls_handshake_releases_stream() {
     let connector = connector(&identity());
     let (client, mut server) = tokio::io::duplex(65536);
     assert!(
         timeout(
             Duration::from_millis(50),
-            connector.connect(client, "localhost", NativeAlpn::WebSocket),
+            connector.connect("localhost".try_into().unwrap(), client),
         )
         .await
         .is_err()
@@ -225,7 +238,7 @@ async fn dropping_native_handshake_releases_stream() {
 }
 
 #[tokio::test]
-async fn native_tls_supports_the_product_websocket_handshake_and_echo() {
+async fn rustls_supports_the_product_websocket_handshake_and_echo() {
     use futures::{SinkExt, StreamExt};
     timeout(Duration::from_secs(5), async {
         let identity = identity();
@@ -240,10 +253,10 @@ async fn native_tls_supports_the_product_websocket_handshake_and_echo() {
         };
         let client = async {
             let stream = connector
-                .connect(client, "localhost", NativeAlpn::WebSocket)
+                .connect("localhost".try_into().unwrap(), client)
                 .await
                 .unwrap();
-            assert!(stream.ssl().selected_alpn_protocol().is_none());
+            assert!(stream.get_ref().1.alpn_protocol().is_none());
             let (mut websocket, response) = tokio_tungstenite::client_async_with_config(
                 "wss://localhost/responses",
                 stream,
@@ -268,24 +281,7 @@ async fn native_tls_supports_the_product_websocket_handshake_and_echo() {
 }
 
 #[test]
-fn native_tls_configuration_fails_closed_and_error_formatting_is_redacted() {
-    assert!(matches!(
-        NativeTlsConnector::from_certificates(&[]),
-        Err(NativeTransportError::Configuration { .. })
-    ));
-    assert!(matches!(
-        NativeTlsConnector::from_certificates(&[CertificateDer::from(vec![1, 2, 3])]),
-        Err(NativeTransportError::Configuration { .. })
-    ));
-    let error = NativeTransportError::Connect {
-        source: Box::new(io::Error::other("https://secret:password@proxy/token")),
-        timeout: false,
-    };
-    assert!(error.is_connect());
-    assert!(!error.is_configuration());
-    for output in [error.to_string(), format!("{error:?}")] {
-        assert!(!output.contains("secret"));
-        assert!(!output.contains("password"));
-        assert!(!output.contains("/token"));
-    }
+fn websocket_rustls_configuration_rejects_malformed_certificates() {
+    let mut roots = RootCertStore::empty();
+    assert!(roots.add(CertificateDer::from(vec![1, 2, 3])).is_err());
 }

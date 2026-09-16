@@ -4,8 +4,7 @@ use super::types::CodexOAuthMetadata;
 
 use crate::transport::{
     headers::build_codex_profile_headers,
-    native_http::{NativeHttpClient, NativeHttpConfig, NativeTransportError},
-    profile::{CodexTlsProfile, CodexWireProfile, CodexWireProfileState},
+    profile::CodexWireProfileState,
     tls::{build_reqwest_native_client_with_custom_ca, ensure_rustls_provider},
 };
 use async_trait::async_trait;
@@ -305,7 +304,6 @@ pub struct OpenAiTokenClient {
     client: Client,
     config: TokenClientConfig,
     profile: CodexWireProfileState,
-    proxy: Option<gateway_core::account::OutboundProxy>,
 }
 
 /// 官方 Codex token client 无法安全构建。
@@ -325,11 +323,6 @@ impl OpenAiTokenClient {
         let Some(proxy) = proxy else {
             return Ok(selected);
         };
-        selected.proxy = Some(proxy.clone());
-        // Native transport takes explicit egress facts, never reqwest's private proxy state.
-        if selected.profile.snapshot().tls_profile == CodexTlsProfile::QxCompatible {
-            return Ok(selected);
-        }
         let builder = Client::builder()
             .no_proxy()
             .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| TokenClientBuildError)?)
@@ -346,41 +339,14 @@ impl OpenAiTokenClient {
             client,
             config,
             profile,
-            proxy: None,
         }
     }
 
     async fn send(
         &self,
         request: reqwest::RequestBuilder,
-        profile: &CodexWireProfile,
     ) -> Result<reqwest::Response, TokenTransportError> {
-        if profile.tls_profile == CodexTlsProfile::Cpr {
-            return request.send().await.map_err(TokenTransportError::Reqwest);
-        }
-        let request = request
-            .timeout(TOKEN_REQUEST_TIMEOUT)
-            .build()
-            .map_err(|error| {
-                TokenTransportError::Native(NativeTransportError::configuration(error))
-            })?;
-        let client = NativeHttpClient::cached_async(NativeHttpConfig {
-            cache_key: format!(
-                "token:{}:{}",
-                self.config.token_endpoint,
-                profile.user_agent()
-            ),
-            proxy: self.proxy.clone(),
-            source: None,
-            fresh: false,
-            timeout: Some(TOKEN_REQUEST_TIMEOUT),
-        })
-        .await
-        .map_err(TokenTransportError::Native)?;
-        client
-            .execute(request)
-            .await
-            .map_err(TokenTransportError::Native)
+        request.send().await.map_err(TokenTransportError)
     }
 
     pub(crate) async fn personal_access_token_metadata(
@@ -416,7 +382,7 @@ impl OpenAiTokenClient {
             .bearer_auth(access_token)
             .header(reqwest::header::ACCEPT, "application/json");
         let response = client
-            .send(request, &profile)
+            .send(request)
             .await
             .map_err(|_| PersonalAccessTokenError::Unavailable)?;
         match response.status() {
@@ -570,7 +536,7 @@ impl TokenRefresher for OpenAiTokenClient {
                 refresh_token,
             });
         let response = self
-            .send(request, &profile)
+            .send(request)
             .await
             .map_err(TokenTransportError::into_refresh_failure)?;
         let (status, body) = read_bounded_response(response).await?;
@@ -600,23 +566,15 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
         &self,
         grant: AuthorizationCodeGrant,
     ) -> Result<AuthorizationTokenSet, AuthorizationCodeExchangeError> {
-        let profile = self.profile.snapshot();
-        let mut request = self.client.post(&self.config.token_endpoint).form(&[
+        let request = self.client.post(&self.config.token_endpoint).form(&[
             ("grant_type", "authorization_code"),
             ("client_id", self.config.client_id.as_str()),
             ("code", grant.code.expose_secret()),
             ("redirect_uri", OFFICIAL_CODEX_REDIRECT_URI),
             ("code_verifier", grant.code_verifier.expose_secret()),
         ]);
-        // QX auth uses its canonical UA/originator; CPR keeps the bare form policy.
-        if profile.tls_profile == CodexTlsProfile::QxCompatible {
-            request = request.headers(
-                build_codex_profile_headers(&profile)
-                    .map_err(|_| AuthorizationCodeExchangeError::Unavailable)?,
-            );
-        }
         let response = self
-            .send(request, &profile)
+            .send(request)
             .await
             .map_err(TokenTransportError::into_exchange_failure)?;
         let (status, body) = read_bounded_response(response)
@@ -642,41 +600,18 @@ impl AuthorizationCodeExchanger for OpenAiTokenClient {
     }
 }
 
-enum TokenTransportError {
-    Reqwest(reqwest::Error),
-    Native(NativeTransportError),
-}
+struct TokenTransportError(reqwest::Error);
 
 impl TokenTransportError {
     fn into_refresh_failure(self) -> RefreshFailure {
-        match self {
-            Self::Reqwest(error) => refresh_transport_failure(&error),
-            Self::Native(error) => {
-                // Request failures may have consumed the RT, regardless of source text.
-                let message = error.to_string();
-                if matches!(error, NativeTransportError::Connect { .. }) {
-                    RefreshFailure::RetryableTransport { message }
-                } else {
-                    RefreshFailure::Transport {
-                        message: Some(message),
-                        upstream: None,
-                    }
-                }
-            }
-        }
+        refresh_transport_failure(&self.0)
     }
 
     fn into_exchange_failure(self) -> AuthorizationCodeExchangeError {
-        match self {
-            Self::Reqwest(error) if is_safe_to_retry_refresh_transport(&error) => {
-                AuthorizationCodeExchangeError::Unavailable
-            }
-            Self::Native(
-                NativeTransportError::Configuration { .. } | NativeTransportError::Connect { .. },
-            ) => AuthorizationCodeExchangeError::Unavailable,
-            Self::Reqwest(_) | Self::Native(NativeTransportError::Request { .. }) => {
-                AuthorizationCodeExchangeError::Ambiguous
-            }
+        if self.0.is_builder() || is_safe_to_retry_refresh_transport(&self.0) {
+            AuthorizationCodeExchangeError::Unavailable
+        } else {
+            AuthorizationCodeExchangeError::Ambiguous
         }
     }
 }
@@ -791,6 +726,10 @@ fn refresh_transport_failure(error: &reqwest::Error) -> RefreshFailure {
 }
 
 fn is_safe_to_retry_refresh_transport(error: &reqwest::Error) -> bool {
+    // Connector errors precede the OAuth payload; lost replies do not.
+    if error.is_connect() {
+        return true;
+    }
     let message = error.to_string().to_ascii_lowercase();
     message.contains("econnrefused")
         || message.contains("could not resolve proxy")

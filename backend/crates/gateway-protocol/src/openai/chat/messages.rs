@@ -25,10 +25,25 @@ pub(super) fn convert(value: &Value, custom_names: &BTreeSet<String>) -> Result<
                 "refusal",
                 "name",
                 "images",
+                "reasoning_content",
+                "reasoning",
             ],
             &path,
         )?;
         let role = string(&message["role"], &format!("{path}.role"))?;
+        let mut reasoning = None;
+        for field in ["reasoning_content", "reasoning"] {
+            if let Some(value) = msg.get(field).filter(|value| !value.is_null()) {
+                if role != "assistant" {
+                    return Err(Error::invalid(format!("{path}.{field}")));
+                }
+                let text = string(value, &format!("{path}.{field}"))?;
+                if reasoning.is_some_and(|previous| previous != text) {
+                    return Err(Error::invalid(format!("{path}.{field}")));
+                }
+                reasoning = Some(text);
+            }
+        }
         let has_images = if let Some(images) = msg.get("images") {
             if role != "assistant" {
                 return Err(Error::invalid(format!("{path}.images")));
@@ -82,6 +97,10 @@ pub(super) fn convert(value: &Value, custom_names: &BTreeSet<String>) -> Result<
             } else {
                 content(&message["content"], role, &path)?
             };
+        // Public reasoning is ordinary assistant history, never encrypted reasoning state.
+        if let Some(reasoning) = reasoning {
+            parts.insert(0, json!({"type":"output_text","text":reasoning}));
+        }
         if let Some(refusal) = msg.get("refusal").filter(|v| !v.is_null()) {
             parts.push(
                 json!({"type":"refusal","refusal":string(refusal, &format!("{path}.refusal"))?}),
@@ -139,7 +158,11 @@ pub(super) fn convert(value: &Value, custom_names: &BTreeSet<String>) -> Result<
                 has_calls = true;
             }
         }
-        if message["content"].is_null() && message["refusal"].is_null() && !has_calls && !has_images
+        if message["content"].is_null()
+            && message["refusal"].is_null()
+            && !has_calls
+            && !has_images
+            && reasoning.is_none()
         {
             return Err(Error::invalid(format!("{path}.content")));
         }
@@ -238,6 +261,22 @@ fn content(value: &Value, role: &str, path: &str) -> Result<Vec<Value>> {
             Some("refusal") if role == "assistant" => {
                 only_keys(raw, &["type", "refusal"], &bp)?;
                 result.push(json!({"type":"refusal","refusal":string(&block["refusal"], &format!("{bp}.refusal"))?}));
+            }
+            Some("file") if role == "user" => {
+                only_keys(raw, &["type", "file"], &bp)?;
+                let fp = format!("{bp}.file");
+                let file = object(&block["file"], &fp)?;
+                only_keys(file, &["file_data", "file_id", "filename"], &fp)?;
+                let mut converted = json!({"type":"input_file"});
+                for field in ["file_data", "file_id", "filename"] {
+                    if let Some(value) = file.get(field).filter(|value| !value.is_null()) {
+                        converted[field] = json!(nonempty(value, &format!("{fp}.{field}"))?);
+                    }
+                }
+                if converted.get("file_data").is_some() == converted.get("file_id").is_some() {
+                    return Err(Error::invalid(fp));
+                }
+                result.push(converted);
             }
             _ => return Err(Error::unsupported(bp)),
         }

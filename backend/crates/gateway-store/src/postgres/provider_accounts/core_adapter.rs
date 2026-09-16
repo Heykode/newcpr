@@ -156,6 +156,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             account_id,
             expected_revision,
             profile,
+            preserve_profile,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -208,7 +209,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .and_then(|state| state.message.as_deref());
         let next = sqlx::query_scalar::<_, i64>(
             "update provider_accounts
-             set name = $3, email = $4, plan_type = $5,
+             set name = case when $14 then name else $3 end,
+                 email = case when $14 then email else $4 end,
+                 plan_type = case when $14 then plan_type else $5 end,
                  provider_credentials_json = $6,
                  credential_revision = credential_revision + 1,
                  has_refresh_token = $7, access_token_expires_at = $8,
@@ -225,7 +228,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                  last_error_message = case
                    when $10::text is not null and enabled and upstream_user_id is not null
                    then $13 else last_error_message end,
-                 updated_at = greatest(now(), coalesce($11, now()))
+                 updated_at = greatest(now(), updated_at, $11)
              where id = $1 and credential_revision = $2
              returning credential_revision",
         )
@@ -242,6 +245,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(credential_observed_at)
         .bind(error_reason)
         .bind(message)
+        .bind(preserve_profile)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
@@ -270,7 +274,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .map(|account| account.as_str().to_owned())
             .collect::<Vec<_>>();
         let rows = sqlx::query(
-            "select id, credential_revision, provider_quota_json, quota_observed_at, \
+            "select id, credential_revision, plan_type, provider_quota_json, quota_observed_at, \
                     quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at \
              from provider_accounts \
              where id = any($1) and quota_observed_at is not null",
@@ -328,6 +332,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 )
                 .ok_or_else(|| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
                 Ok(QuotaObservation {
+                    plan_type: row
+                        .try_get("plan_type")
+                        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
                     account_id: CoreProviderAccountId::new(account_id)
                         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?,
                     expected_revision: revision,
@@ -356,6 +363,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 quota,
                 DateTime::<Utc>::from(observation.observed_at),
                 observation.state,
+                observation.plan_type.as_deref(),
             )
             .await
             .map_err(core_store_error)?;

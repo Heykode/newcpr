@@ -21,7 +21,8 @@ type ProxyClientBuilder =
 
 impl Default for HttpProxyProbe {
     fn default() -> Self {
-        Self::new("https://api.ipify.org?format=json")
+        // A dual-stack target also permits proxies with IPv6-only egress.
+        Self::new("https://api64.ipify.org?format=json")
     }
 }
 

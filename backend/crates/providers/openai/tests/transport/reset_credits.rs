@@ -18,8 +18,6 @@ fn client(base_url: &str) -> CodexBackendClient {
             .expect("reset-credit client"),
         base_url,
         CodexWireProfileState::new(CodexWireProfile {
-            tls_profile: provider_openai::transport::profile::CodexTlsProfile::Cpr,
-            application_profile: Default::default(),
             raw_user_agent: None,
             originator: "Codex Desktop".to_owned(),
             codex_version: "0.115.0-alpha.11".to_owned(),

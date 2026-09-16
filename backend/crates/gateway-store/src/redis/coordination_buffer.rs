@@ -77,6 +77,14 @@ impl BufferedClientAdmissionPort {
 }
 
 impl ClientAdmissionPort for BufferedClientAdmissionPort {
+    fn abandon(&self, key: &ClientApiKeyId, request: &ModelRequestId) {
+        self.enqueue(AdmissionRelease {
+            client_api_key_id: key.clone(),
+            model_request_id: request.clone(),
+            cancelled: true,
+        });
+    }
+
     fn admit(
         &self,
         request: ClientAdmissionRequest,
@@ -92,6 +100,7 @@ impl ClientAdmissionPort for BufferedClientAdmissionPort {
         let enqueued = self.enqueue(AdmissionRelease {
             client_api_key_id: client_api_key_id.clone(),
             model_request_id: model_request_id.clone(),
+            cancelled: false,
         });
         Box::pin(ready(Ok(enqueued)))
     }
@@ -107,6 +116,7 @@ impl ClientAdmissionPort for BufferedClientAdmissionPort {
 struct AdmissionRelease {
     client_api_key_id: ClientApiKeyId,
     model_request_id: ModelRequestId,
+    cancelled: bool,
 }
 
 pub struct ClientAdmissionReleaseWriter {
@@ -128,11 +138,16 @@ impl DaemonTask for ClientAdmissionReleaseWriter {
                         "client admission release queue closed",
                     ));
                 };
-                if let Err(error) = self
-                    .inner
-                    .release(&release.client_api_key_id, &release.model_request_id)
-                    .await
-                {
+                let result = if release.cancelled {
+                    self.inner
+                        .cancel_admission(&release.client_api_key_id, &release.model_request_id)
+                        .await
+                } else {
+                    self.inner
+                        .release(&release.client_api_key_id, &release.model_request_id)
+                        .await
+                };
+                if let Err(error) = result {
                     tracing::warn!(%error, "Client admission 后台释放失败，依赖租约 TTL 收敛");
                 }
             }

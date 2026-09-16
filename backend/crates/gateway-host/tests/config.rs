@@ -4,7 +4,7 @@ use gateway_host::config::{FileLoggingConfig, HostConfig, ListenConfig, LoggingC
 use gateway_host::system_update::SystemUpdateConfig;
 
 #[test]
-fn system_update_defaults_should_use_host_build_metadata_and_official_repository() {
+fn system_update_defaults_should_use_host_build_metadata_and_fork_repository() {
     let config = SystemUpdateConfig::default();
 
     assert_eq!(
@@ -16,16 +16,40 @@ fn system_update_defaults_should_use_host_build_metadata_and_official_repository
         (
             env!("CPR_VERSION"),
             env!("CPR_BUILD_TYPE"),
-            Some("zyycn/codex-proxy-rs"),
+            Some("Heykode/newcpr"),
         )
     );
+}
+
+#[test]
+fn updater_inherits_resolved_assets_and_only_resolves_explicit_overrides() {
+    let source = std::path::Path::new("deploy");
+    let assets = std::path::Path::new("deploy/../web/dist");
+    let mut config = valid_config();
+    config.resolve_and_validate(source, assets).unwrap();
+    assert_eq!(config.system_update.web_dist_dir.as_deref(), Some(assets));
+
+    let mut config = valid_config();
+    config.system_update.web_dist_dir = Some("../custom/dist".into());
+    config.resolve_and_validate(source, assets).unwrap();
+    assert_eq!(
+        config.system_update.web_dist_dir.as_deref(),
+        Some(std::path::Path::new("deploy/../custom/dist"))
+    );
+
+    let mut config = valid_config();
+    config.system_update.web_dist_dir = Some(PathBuf::new());
+    assert!(config.resolve_and_validate(source, assets).is_err());
 }
 
 #[test]
 fn host_config_resolves_only_host_owned_relative_paths() {
     let mut config = valid_config();
     config
-        .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+        .resolve_and_validate(
+            std::path::Path::new("/srv/gateway"),
+            std::path::Path::new("/srv/gateway/web/dist"),
+        )
         .expect("valid host config");
 
     assert_eq!(
@@ -38,7 +62,10 @@ fn host_config_resolves_only_host_owned_relative_paths() {
 fn host_config_resolves_runtime_data_dir_relative_to_configuration() {
     let mut config = valid_config();
     config
-        .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+        .resolve_and_validate(
+            std::path::Path::new("/srv/gateway"),
+            std::path::Path::new("/srv/gateway/web/dist"),
+        )
         .expect("valid host config");
 
     assert_eq!(
@@ -51,7 +78,10 @@ fn host_config_resolves_runtime_data_dir_relative_to_configuration() {
 fn host_config_derives_update_paths_from_runtime_data_dir() {
     let mut config = valid_config();
     config
-        .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+        .resolve_and_validate(
+            std::path::Path::new("/srv/gateway"),
+            std::path::Path::new("/srv/gateway/web/dist"),
+        )
         .expect("valid host config");
 
     assert_eq!(
@@ -75,7 +105,10 @@ fn host_config_rejects_zero_drain_window() {
 
     assert!(
         config
-            .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+            .resolve_and_validate(
+                std::path::Path::new("/srv/gateway"),
+                std::path::Path::new("/srv/gateway/web/dist")
+            )
             .is_err()
     );
 }
@@ -91,7 +124,10 @@ fn logging_rejects_zero_retention_windows() {
         }
         assert!(
             config
-                .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+                .resolve_and_validate(
+                    std::path::Path::new("/srv/gateway"),
+                    std::path::Path::new("/srv/gateway/web/dist")
+                )
                 .is_err()
         );
     }
@@ -120,7 +156,10 @@ fn dedicated_file_channels_can_be_enabled_without_application_sinks() {
         config.logging.oauth_recovery = oauth_recovery;
         config.logging.request_dump = !oauth_recovery;
         config
-            .resolve_and_validate(std::path::Path::new("/srv/gateway"))
+            .resolve_and_validate(
+                std::path::Path::new("/srv/gateway"),
+                std::path::Path::new("/srv/gateway/web/dist"),
+            )
             .unwrap();
     }
 }

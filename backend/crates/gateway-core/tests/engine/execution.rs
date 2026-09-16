@@ -110,6 +110,164 @@ fn service(admissions: Arc<Admissions>, budget: Arc<Budget>) -> DefaultExecution
     .with_budget(budget)
 }
 
+#[derive(Default)]
+struct QueueAdmissions {
+    busy: AtomicBool,
+    acquired: AtomicBool,
+    rate_limited: AtomicBool,
+    delay_granted_reply: AtomicBool,
+    attempts: AtomicUsize,
+    grants: AtomicUsize,
+}
+
+impl ClientAdmissionPort for QueueAdmissions {
+    fn admit(
+        &self,
+        request: ClientAdmissionRequest,
+    ) -> BoxFuture<'_, Result<ClientAdmissionDecision, ClientAdmissionError>> {
+        Box::pin(async move {
+            use gateway_core::engine::admission::ClientAdmissionRejection;
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if self.rate_limited.load(Ordering::SeqCst) {
+                return Ok(ClientAdmissionDecision::Rejected(
+                    ClientAdmissionRejection::RateLimited,
+                ));
+            }
+            if self.busy.load(Ordering::SeqCst) || !request.allow_concurrency_acquire {
+                return Ok(ClientAdmissionDecision::Rejected(
+                    ClientAdmissionRejection::ConcurrencyLimited,
+                ));
+            }
+            assert!(!self.acquired.swap(true, Ordering::SeqCst));
+            self.grants.fetch_add(1, Ordering::SeqCst);
+            if self.delay_granted_reply.load(Ordering::SeqCst) {
+                futures::future::pending::<()>().await;
+            }
+            Ok(ClientAdmissionDecision::Granted)
+        })
+    }
+    fn release<'a>(
+        &'a self,
+        _: &'a ClientApiKeyId,
+        _: &'a ModelRequestId,
+    ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
+        Box::pin(async { Ok(self.acquired.swap(false, Ordering::SeqCst)) })
+    }
+    fn abandon(&self, _: &ClientApiKeyId, _: &ModelRequestId) {
+        self.acquired.store(false, Ordering::SeqCst);
+    }
+    fn restore(
+        &self,
+        _: ClientAdmissionRecovery,
+    ) -> BoxFuture<'_, Result<ClientAdmissionRestoreResult, ClientAdmissionError>> {
+        Box::pin(async { Ok(ClientAdmissionRestoreResult::default()) })
+    }
+}
+
+fn queue_service(admissions: Arc<QueueAdmissions>, max_waiting: u32) -> DefaultExecutionService {
+    DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(start_snapshot().with_request_tuning(
+            gateway_core::routing::RequestTuning {
+                max_waiting_per_key: max_waiting,
+                key_concurrency_wait_timeout_seconds: 1,
+                ..Default::default()
+            },
+        )),
+        Arc::new(TrackingExecutionStore::default()),
+        ProviderRegistry::default(),
+        admissions,
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(RecordingClientApiKeyUsage::default()),
+    )
+}
+
+#[test]
+fn key_queue_admits_after_capacity_returns_for_all_client_transports() {
+    for transport in [
+        ClientTransport::HttpJson,
+        ClientTransport::HttpSse,
+        ClientTransport::WebSocket,
+    ] {
+        let admissions = Arc::new(QueueAdmissions::default());
+        admissions.busy.store(true, Ordering::SeqCst);
+        let service = queue_service(admissions.clone(), 2);
+        futures::executor::block_on(async {
+            let start = service.start(request(&service, transport));
+            let free = async {
+                futures_timer::Delay::new(Duration::from_millis(30)).await;
+                admissions.busy.store(false, Ordering::SeqCst);
+            };
+            let (started, ()) = futures::join!(start, free);
+            let started = started.unwrap();
+            assert!(admissions.attempts.load(Ordering::SeqCst) >= 2);
+            assert_eq!(admissions.grants.load(Ordering::SeqCst), 1);
+            drop(started);
+        });
+    }
+}
+
+#[test]
+fn key_queue_disabled_and_rpm_rejections_do_not_wait() {
+    for (max_waiting, rpm) in [(0, false), (2, true)] {
+        let admissions = Arc::new(QueueAdmissions::default());
+        admissions.busy.store(true, Ordering::SeqCst);
+        admissions.rate_limited.store(rpm, Ordering::SeqCst);
+        let service = queue_service(admissions.clone(), max_waiting);
+        let result = futures::executor::block_on(
+            service.start(request(&service, ClientTransport::HttpJson)),
+        );
+        assert!(matches!(result, Err(error) if error.kind() == GatewayErrorKind::RateLimited));
+        assert_eq!(admissions.attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(admissions.grants.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn cancelling_an_unobserved_admission_result_releases_owned_capacity() {
+    use futures::FutureExt as _;
+    let admissions = Arc::new(QueueAdmissions::default());
+    admissions.delay_granted_reply.store(true, Ordering::SeqCst);
+    let service = queue_service(admissions.clone(), 1);
+    assert!(
+        service
+            .start(request(&service, ClientTransport::HttpSse))
+            .now_or_never()
+            .is_none()
+    );
+    assert_eq!(admissions.grants.load(Ordering::SeqCst), 1);
+    assert!(!admissions.acquired.load(Ordering::SeqCst));
+    admissions
+        .delay_granted_reply
+        .store(false, Ordering::SeqCst);
+    let next =
+        futures::executor::block_on(service.start(request(&service, ClientTransport::HttpSse)))
+            .unwrap();
+    assert_eq!(admissions.grants.load(Ordering::SeqCst), 2);
+    drop(next);
+    assert!(!admissions.acquired.load(Ordering::SeqCst));
+}
+
+#[test]
+fn key_queue_timeout_and_cancelled_request_return_capacity() {
+    use futures::FutureExt as _;
+    let admissions = Arc::new(QueueAdmissions::default());
+    admissions.busy.store(true, Ordering::SeqCst);
+    let service = queue_service(admissions.clone(), 1);
+    assert!(
+        service
+            .start(request(&service, ClientTransport::HttpJson))
+            .now_or_never()
+            .is_none()
+    );
+    let result =
+        futures::executor::block_on(service.start(request(&service, ClientTransport::HttpJson)));
+    assert!(
+        matches!(result, Err(error) if error.kind() == GatewayErrorKind::ConcurrencyQueueTimeout)
+    );
+    assert_eq!(admissions.grants.load(Ordering::SeqCst), 0);
+}
+
 fn request(service: &DefaultExecutionService, transport: ClientTransport) -> StartExecution {
     StartExecution {
         client: service.authenticate("sk_start_test").unwrap(),

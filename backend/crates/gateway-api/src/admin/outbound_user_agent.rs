@@ -8,9 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Utc};
-use gateway_admin::model::user_agent::{
-    OutboundUserAgentView, ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride,
-};
+use gateway_admin::model::user_agent::{OutboundUserAgentView, ProviderUserAgentOverride};
 use gateway_core::routing::ProviderKind;
 use serde::{Deserialize, Serialize};
 
@@ -22,17 +20,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub enum UpdateOutboundUserAgentRequest {
     Default,
-    Custom {
-        user_agent: String,
-    },
-    QxCompatible {
-        user_agent: Option<String>,
-    },
-    Independent {
-        user_agent: Option<String>,
-        tls_profile: ProviderTlsProfile,
-        session_policy: ProviderSessionPolicy,
-    },
+    Custom { user_agent: String },
 }
 
 impl<'de> Deserialize<'de> for UpdateOutboundUserAgentRequest {
@@ -48,60 +36,18 @@ impl<'de> Deserialize<'de> for UpdateOutboundUserAgentRequest {
             deny_unknown_fields
         )]
         enum Wire {
-            Default {
-                user_agent: Option<String>,
-            },
-            Custom {
-                user_agent: String,
-            },
-            QxCompatible {
-                user_agent: Option<String>,
-            },
-            Independent {
-                user_agent: Option<String>,
-                tls_profile: String,
-                session_policy: String,
-            },
+            Default { user_agent: Option<String> },
+            Custom { user_agent: String },
         }
 
         match Wire::deserialize(deserializer)? {
             Wire::Default { user_agent: None } => Ok(Self::Default),
             Wire::Custom { user_agent } => Ok(Self::Custom { user_agent }),
-            Wire::QxCompatible { user_agent } => Ok(Self::QxCompatible { user_agent }),
             Wire::Default {
                 user_agent: Some(_),
             } => Err(serde::de::Error::custom(
                 "userAgent is not allowed when mode is default",
             )),
-            Wire::Independent {
-                user_agent,
-                tls_profile,
-                session_policy,
-            } => {
-                if user_agent
-                    .as_deref()
-                    .is_some_and(|value| value.trim().is_empty())
-                {
-                    return Err(serde::de::Error::custom(
-                        "custom userAgent must not be blank",
-                    ));
-                }
-                let tls_profile = match tls_profile.as_str() {
-                    "cpr" => ProviderTlsProfile::Cpr,
-                    "qx-compatible" => ProviderTlsProfile::QxCompatible,
-                    _ => return Err(serde::de::Error::custom("invalid tlsProfile")),
-                };
-                let session_policy = match session_policy.as_str() {
-                    "native" => ProviderSessionPolicy::Native,
-                    "qx-compatible" => ProviderSessionPolicy::QxCompatible,
-                    _ => return Err(serde::de::Error::custom("invalid sessionPolicy")),
-                };
-                Ok(Self::Independent {
-                    user_agent,
-                    tls_profile,
-                    session_policy,
-                })
-            }
         }
     }
 }
@@ -111,20 +57,7 @@ impl From<UpdateOutboundUserAgentRequest> for ProviderUserAgentOverride {
         match request {
             UpdateOutboundUserAgentRequest::Default => Self::Default,
             UpdateOutboundUserAgentRequest::Custom { user_agent } => Self::Custom { user_agent },
-            UpdateOutboundUserAgentRequest::QxCompatible { user_agent } => {
-                Self::QxCompatible { user_agent }
-            }
-            UpdateOutboundUserAgentRequest::Independent {
-                user_agent,
-                tls_profile,
-                session_policy,
-            } => Self::Independent {
-                user_agent,
-                tls_profile,
-                session_policy,
-            },
         }
-        .normalized()
     }
 }
 
@@ -133,10 +66,7 @@ impl From<UpdateOutboundUserAgentRequest> for ProviderUserAgentOverride {
 pub struct OutboundUserAgentSettingsView {
     mode: &'static str,
     custom_user_agent: Option<String>,
-    tls_profile: &'static str,
-    session_policy: &'static str,
     default_user_agent: String,
-    qx_default_user_agent: String,
     effective_user_agent: String,
     effective_desktop_user_agent: String,
     core_version: String,
@@ -151,23 +81,14 @@ pub struct OutboundUserAgentSettingsView {
 
 impl From<OutboundUserAgentView> for OutboundUserAgentSettingsView {
     fn from(view: OutboundUserAgentView) -> Self {
-        let tls_profile = view.selection.tls_profile().as_str();
-        let session_policy = view.selection.session_policy().as_str();
         let (mode, custom_user_agent) = match view.selection {
             ProviderUserAgentOverride::Default => ("default", None),
             ProviderUserAgentOverride::Custom { user_agent } => ("custom", Some(user_agent)),
-            ProviderUserAgentOverride::QxCompatible { user_agent } => ("qx-compatible", user_agent),
-            ProviderUserAgentOverride::Independent { user_agent, .. } => {
-                ("independent", user_agent)
-            }
         };
         Self {
             mode,
             custom_user_agent,
-            tls_profile,
-            session_policy,
             default_user_agent: view.default_user_agent,
-            qx_default_user_agent: view.qx_default_user_agent,
             effective_user_agent: view.effective_user_agent,
             effective_desktop_user_agent: view.effective_desktop_user_agent,
             core_version: view.core_version,

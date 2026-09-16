@@ -136,8 +136,6 @@ fn selected_account_log_fields<'events>(
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        tls_profile: provider_openai::transport::profile::CodexTlsProfile::Cpr,
-        application_profile: provider_openai::transport::profile::CodexApplicationProfile::Native,
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -691,7 +689,26 @@ async fn capture_scoped_http_request(
     selected_account_id: &str,
     owner_account_id: &str,
     body: Map<String, serde_json::Value>,
+    protocol_context: Map<String, serde_json::Value>,
+) -> wiremock::Request {
+    capture_scoped_http_request_with_tuning(
+        request_id,
+        selected_account_id,
+        owner_account_id,
+        body,
+        protocol_context,
+        Default::default(),
+    )
+    .await
+}
+
+async fn capture_scoped_http_request_with_tuning(
+    request_id: &str,
+    selected_account_id: &str,
+    owner_account_id: &str,
+    body: Map<String, serde_json::Value>,
     mut protocol_context: Map<String, serde_json::Value>,
+    tuning: gateway_core::routing::RequestTuning,
 ) -> wiremock::Request {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, selected_account_id).await;
@@ -715,7 +732,7 @@ async fn capture_scoped_http_request(
     let mut stream = provider_with_base_url(&store, server.uri())
         .execute(
             planned_request("openai", operation),
-            context_with_state_owner(request_id, owner_account_id),
+            context_with_state_owner(request_id, owner_account_id).with_request_tuning(tuning),
         )
         .await
         .expect("prepare scoped provider stream");
@@ -744,12 +761,27 @@ async fn provider_should_send_the_configured_location_to_the_upstream() {
         }],
         "tools": [{"type": "web_search"}]
     }).as_object().expect("request object").clone();
-    let captured = capture_scoped_http_request(
+    let disabled = capture_scoped_http_request(
+        "req_location_disabled",
+        "acct_provider_contract",
+        "acct_provider_contract",
+        body.clone(),
+        Map::new(),
+    )
+    .await;
+    let disabled_body = captured_request_body(&disabled);
+    assert!(disabled_body["tools"][0].get("user_location").is_none());
+    assert_eq!(disabled_body["input"], body["input"]);
+    let captured = capture_scoped_http_request_with_tuning(
         "req_configured_location",
         "acct_provider_contract",
         "acct_provider_contract",
         body,
         Map::new(),
+        gateway_core::routing::RequestTuning {
+            openai_location_override_enabled: true,
+            ..Default::default()
+        },
     )
     .await;
     let body = captured_request_body(&captured);
@@ -973,8 +1005,19 @@ async fn capture_http_request(stream: &mut TcpStream) -> Vec<u8> {
             return request;
         }
         request.extend_from_slice(&buffer[..read]);
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            return request;
+        if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            let headers = std::str::from_utf8(&request[..end]).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            if request.len() >= end + 4 + length {
+                return request;
+            }
         }
     }
 }
@@ -2377,7 +2420,7 @@ async fn websocket_fast_path_miss_uses_http_and_keeps_background_preconnect() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     let mut second = provider
         .execute(
-            planned_request("openai", operation("thread-websocket-reuse")),
+            planned_request("openai", operation("thread-http-fallback")),
             context("req_background_ws_reuse", CancellationToken::new()),
         )
         .await
@@ -3777,10 +3820,13 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
 
     assert!(body.get("authorization").is_none());
     assert!(body.get("conversation").is_none());
-    assert_eq!(
-        body.get("conversation_id"),
-        Some(&json!("client-correlation"))
-    );
+    let projected = body["conversation_id"]
+        .as_str()
+        .expect("projected conversation");
+    assert_ne!(projected, "client-correlation");
+    assert!(uuid::Uuid::parse_str(projected).is_ok());
+    assert_eq!(body["prompt_cache_key"], projected);
+    assert_eq!(request.headers["thread-id"], projected);
     assert_eq!(
         body.get("client_metadata"),
         Some(&json!(["future", "shape"]))
@@ -4776,6 +4822,7 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: first_account.id().clone(),
             expected_revision: first_account.revision(),
             quota: OpaqueProviderData::new(Map::new()),
@@ -5399,6 +5446,7 @@ async fn official_usage_limit_failure_persists_fact_without_fabricating_usage() 
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(
@@ -6673,6 +6721,7 @@ async fn diagnostic_quota_failures_do_not_schedule_authoritative_usage_refresh()
         });
         store
             .compare_and_swap_quota(QuotaObservation {
+                plan_type: None,
                 account_id: account.id().clone(),
                 expected_revision: account.revision(),
                 quota: OpaqueProviderData::new(raw_quota.as_object().expect("quota").clone()),
@@ -6810,6 +6859,7 @@ async fn quota_limited_account_diagnostic_uses_upstream() {
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(

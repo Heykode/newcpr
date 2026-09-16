@@ -1,5 +1,44 @@
 # QX 兼容出站画像
 
+## 当前统一实现
+
+本文以下“历史设计”描述迁移 0018 之前的实现，不再是当前使用说明。
+现在只保留一套出站行为，删除 TLS 和会话策略下拉框及对应运行分支：
+
+| 项目 | 当前规则 |
+| --- | --- |
+| HTTP/SSE | `reqwest/native-tls`，ALPN 优先提供 `h2`，同时提供 `http/1.1` |
+| WS | 原 CPR Rustls、连接池和压缩机制，不把 WS 改成 HTTP/2 |
+| 会话与缓存 | 固定使用账号/可信下游 Key 隔离，最终缓存键按线程派生 |
+| UA | 自动更新的默认 UA，或者一个输入框填写完整 Desktop/CLI UA |
+| 自定义 CA | 可选、追加信任根；配置错误拒绝，不切换 TLS 后端 |
+| 调度与设备 | 权重、粘性、容量等待、重试 owner、持久设备档案保持原机制 |
+
+默认设置提交 `{"mode":"default"}`；自定义提交
+`{"mode":"custom","userAgent":"完整 UA"}`。空白值不等于默认，预览不保存。
+`qx-compatible`、`independent` 及 TLS/session 选择字段不再接受，回读也不再输出
+`tlsProfile`、`sessionPolicy`、`qxDefaultUserAgent`。前后端须同步升级。
+
+Desktop 自定义 UA 的辅助桌面请求使用配套 Desktop 身份；CLI 的辅助请求继续使用
+默认 Desktop 身份。自定义始终固定，恢复默认后才继续自动更新。`verified` 只描述
+默认制品 UA 的选择，不表示 TLS、客户端仿真或风控核验。
+
+HTTP 压缩仍在身份投影后按最终 UTF-8 字节数判断：不足 1024 字节普通 JSON，
+否则 ZSTD level 3。WS 仍按协商采用 128/512 字节门槛及级别 6。统一客户端禁用
+reqwest 自动重试；协议协商不增加业务错误降级重放。精确续接仍优先原 socket owner，
+同账号仅重连不改变派生编号；换账号/Key 改号。没有明确编号时保留既有弱内容回退。
+
+迁移 0018 在事务中先归档 mode、UA、TLS、session 和更新时间到 `legacy_selection`。
+后续保存不覆盖备份，不修改账号/设备/凭据表。旧 QX 无 UA 转为其固定参考 CLI UA；
+已有自定义保留原文，旧 independent 的 null UA 转为自动更新 default。
+旧连接随进程升级排空，首次编号变化可能造成缓存冷启动。
+回退需要旧二进制及匹配的数据库恢复方案，不能只换回旧二进制或删除迁移历史。
+
+本次明确改变 HTTP ALPN，不宣称 ClientHello 不变或等同 QX Go；WS 保持原 Rustls。
+平台/库版本仍影响 TLS。本地与隔离 Linux 测试不等于真实上游、生产吞吐或风控验收。
+
+## 历史设计（0018 之前）
+
 ## 选择与边界
 
 管理端全局出站设置将 UA、TLS 与会话策略独立保存，保留旧模式 API 的读写兼容。

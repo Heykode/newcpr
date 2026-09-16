@@ -4,12 +4,18 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use gateway_core::account::{
-    AccountAttemptFeedback, AccountConcurrencyLimit, AccountFeedbackStats, AccountRuntimeSignals,
-    AccountSelectionPolicy, AccountWeight, CredentialCasOutcome, CredentialRevision,
-    CredentialState, OpaqueProviderData, ProviderAccountId, ProviderAccountStore,
-    ProviderAccountUpdate, QuotaAccessState, QuotaObservation, QuotaState, QuotaWriteOutcome,
-    RotationStrategy,
+    AccountAttemptFeedback, AccountConcurrencyLimit, AccountEligibilityPolicy,
+    AccountFeedbackStats, AccountRuntimeSignals, AccountSelectionPolicy, AccountWeight,
+    CredentialCasOutcome, CredentialRevision, CredentialState, OpaqueProviderData,
+    ProviderAccountId, ProviderAccountStore, ProviderAccountUpdate, QuotaAccessState,
+    QuotaObservation, QuotaState, QuotaWriteOutcome, RotationStrategy,
 };
+use gateway_core::engine::provider::{Provider, ProviderRequest};
+use gateway_core::engine::{
+    AccountAttemptContext, AttemptContext, ModelRequestId, RequestAttemptContext,
+};
+use gateway_core::lifecycle::CancellationToken;
+use gateway_core::operation::{GenerateRequest, Operation, OperationKind, ProtocolPayload};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderCooldownPort, ProviderCooldownScope, ProviderLeaseAcquisition, ProviderLeasePort,
@@ -17,7 +23,8 @@ use gateway_core::provider_ports::{
     ProviderStoreError,
 };
 use gateway_core::routing::{
-    ClientRoutingScope, FrozenAccountScope, RuntimeAccount, RuntimeAccountDirectory,
+    ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ProviderModel,
+    PublicModelId, RoutingContext, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
     UpstreamModelId,
 };
 use provider_xai::{
@@ -41,6 +48,55 @@ struct SchedulingCoordinator {
 }
 
 struct UnavailableBillingTransport;
+
+#[derive(Default)]
+struct DiagnosticSelectionCapture(Mutex<Option<GrokSessionSelection>>);
+
+impl GrokSessionSelector for DiagnosticSelectionCapture {
+    fn select(&self, request: GrokSessionSelection) -> provider_xai::GrokSessionSelectorFuture<'_> {
+        *self.0.lock().expect("captured selection") = Some(request);
+        Box::pin(async { Err(GrokSessionSelectorError::NoEligibleSession) })
+    }
+
+    fn record_failure<'a>(
+        &'a self,
+        _: &'a provider_xai::SelectedGrokSession,
+        _: GrokCredentialFailure,
+    ) -> provider_xai::GrokCredentialFeedbackFuture<'a> {
+        panic!("capturing selection must not report an upstream failure");
+    }
+}
+
+struct NoDiagnosticUpstream;
+
+impl provider_xai::GrokInferenceTransport for NoDiagnosticUpstream {
+    fn execute(
+        &self,
+        _: provider_xai::GrokInferenceRequest,
+    ) -> provider_xai::GrokInferenceTransportFuture<'_> {
+        panic!("capturing selection must not call inference");
+    }
+}
+
+impl provider_xai::GrokModelCatalogTransport for NoDiagnosticUpstream {
+    fn execute(
+        &self,
+        _: provider_xai::GrokModelCatalogRequest,
+    ) -> provider_xai::GrokModelCatalogTransportFuture<'_> {
+        panic!("capturing selection must not fetch a catalog");
+    }
+}
+
+#[async_trait::async_trait]
+impl provider_xai::GrokCredentialRecovery for NoDiagnosticUpstream {
+    async fn recover_unauthorized(
+        &self,
+        _: &ProviderAccountId,
+        _: CredentialRevision,
+    ) -> provider_xai::GrokCredentialRecoveryOutcome {
+        panic!("capturing selection must not refresh credentials");
+    }
+}
 
 impl GrokBillingTransport for UnavailableBillingTransport {
     fn execute(&self, _: GrokBillingRequest) -> GrokBillingTransportFuture<'_> {
@@ -181,6 +237,99 @@ impl SelectorFixture {
         self.request_with_required(excluded, None)
     }
 
+    async fn diagnostic_request(
+        &self,
+        required: ProviderAccountId,
+        excluded: BTreeSet<ProviderAccountId>,
+    ) -> GrokSessionSelection {
+        // The eligibility setter is crate-private; obtain it through the public Provider boundary.
+        let request = self.request_with_required(excluded.clone(), Some(required.clone()));
+        let capture = Arc::new(DiagnosticSelectionCapture::default());
+        let repository = GrokCredentialRepository::new(self.store.clone());
+        let catalog = Arc::new(crate::support::grok_catalog_service(
+            repository,
+            Arc::new(NoDiagnosticUpstream),
+            self.cache.clone(),
+        ));
+        let provider = provider_xai::GrokBuildProvider::new(
+            capture.clone(),
+            Arc::new(NoDiagnosticUpstream),
+            catalog,
+            Arc::new(NoDiagnosticUpstream),
+            self.feedback.clone(),
+            crate::support::xai_wire_profile(),
+        )
+        .expect("provider");
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                serde_json::json!({
+                    "model": "grok-4.5",
+                    "input": "synthetic diagnostic",
+                    "stream": true
+                })
+                .as_object()
+                .expect("request body")
+                .clone(),
+            )
+            .expect("protocol payload"),
+        ));
+        let kind = gateway_core::routing::ProviderKind::new("xai").expect("provider kind");
+        let snapshot = RuntimeSnapshot::new(
+            ConfigRevision::new(1).expect("revision"),
+            request.account_selection_policy(),
+            vec![kind.clone()],
+            vec![ProviderModel::new(
+                kind,
+                request.upstream_model().clone(),
+                ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(131_072)),
+            )],
+            vec![],
+        )
+        .expect("routing snapshot");
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new("grok-4.5").expect("public model"),
+                &operation,
+                Arc::clone(request.account_scope()),
+                &RoutingContext::default(),
+            )
+            .expect("routing plan");
+        let context = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_xai_diagnostic_selection").expect("request"),
+                request.client_api_key_id().clone(),
+            ),
+            std::num::NonZeroU32::new(1).expect("attempt"),
+            request.deadline(),
+            request.account_selection_policy(),
+            AccountAttemptContext::diagnostic(excluded, required.clone(), None),
+            None,
+            CancellationToken::new(),
+        );
+        assert!(
+            provider
+                .execute(
+                    ProviderRequest::new(operation, plan.candidates()[0].clone()),
+                    context
+                )
+                .await
+                .is_err()
+        );
+        let captured = capture
+            .0
+            .lock()
+            .expect("capture")
+            .take()
+            .expect("selection");
+        assert_eq!(captured.required_account(), Some(&required));
+        assert_eq!(
+            captured.eligibility(),
+            AccountEligibilityPolicy::BypassForDiagnostic
+        );
+        captured
+    }
+
     fn request_with_required(
         &self,
         excluded: BTreeSet<ProviderAccountId>,
@@ -268,6 +417,7 @@ impl SelectorFixture {
         let outcome = self
             .store
             .compare_and_swap_quota(QuotaObservation {
+                plan_type: None,
                 account_id: id.clone(),
                 expected_revision: CredentialRevision::new(1).expect("revision"),
                 quota: OpaqueProviderData::new(document.as_object().expect("quota object").clone()),
@@ -312,6 +462,204 @@ async fn required_account_overrides_smart_selection_without_fallback() {
             .await,
         Err(GrokSessionSelectorError::CapacityUnavailable { .. })
     ));
+}
+
+#[tokio::test]
+async fn diagnostic_disabled_required_account_is_selected_without_enabling_it() {
+    let fixture = SelectorFixture::new(&["diagnostic-disabled", "diagnostic-other"]).await;
+    let required = account_id("diagnostic-disabled");
+    fixture
+        .store
+        .set_enabled(&required, false)
+        .await
+        .expect("disable");
+    let before = fixture.store.account(&required).expect("disabled account");
+    let request = fixture
+        .diagnostic_request(required.clone(), BTreeSet::new())
+        .await;
+    let session = fixture
+        .selector
+        .select(request)
+        .await
+        .expect("disabled diagnostic");
+    assert_eq!(session.account_id(), &required);
+    fixture.selector.record_success(&session).await;
+    fixture
+        .selector
+        .record_failure(&session, GrokCredentialFailure::Unauthorized)
+        .await;
+    let after = fixture
+        .store
+        .account(&required)
+        .expect("account after diagnostic");
+    assert!(!after.enabled());
+    assert_eq!(after.credential_state(), before.credential_state());
+    assert_eq!(after.quota(), before.quota());
+    assert!(fixture.cooldowns.cooldown(&required).is_none());
+    let requests = fixture.coordinator.requests.lock().expect("leases");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].account_id(), &required);
+}
+
+#[tokio::test]
+async fn diagnostic_bypass_is_not_available_to_normal_required_disabled_selection() {
+    let fixture = SelectorFixture::new(&["diagnostic-disabled", "diagnostic-other"]).await;
+    let required = account_id("diagnostic-disabled");
+    fixture
+        .store
+        .set_enabled(&required, false)
+        .await
+        .expect("disable");
+    assert!(matches!(
+        fixture
+            .selector
+            .select(fixture.request_with_required(BTreeSet::new(), Some(required)))
+            .await,
+        Err(GrokSessionSelectorError::NoEligibleSession)
+    ));
+    assert!(
+        fixture
+            .coordinator
+            .requests
+            .lock()
+            .expect("leases")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_missing_required_account_cannot_fall_back_to_enabled_accounts() {
+    let fixture = SelectorFixture::new(&["diagnostic-other"]).await;
+    let request = fixture
+        .diagnostic_request(account_id("diagnostic-missing"), BTreeSet::new())
+        .await;
+    assert!(matches!(
+        fixture.selector.select(request).await,
+        Err(GrokSessionSelectorError::NoEligibleSession)
+    ));
+    assert!(
+        fixture
+            .coordinator
+            .requests
+            .lock()
+            .expect("leases")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_required_account_from_another_provider_is_rejected() {
+    let fixture = SelectorFixture::new(&["diagnostic-other"]).await;
+    let input = create_input("diagnostic-foreign", "subject-diagnostic-foreign");
+    let mut foreign = crate::support::prepare_input(&input).expect("synthetic account");
+    foreign.account = gateway_core::account::ProviderAccount::new(
+        input.account_id.clone(),
+        gateway_core::routing::ProviderKind::new("openai").expect("other provider"),
+        input.name.clone(),
+        Some("subject-diagnostic-foreign".to_owned()),
+        "oauth".to_owned(),
+        CredentialRevision::new(1).expect("revision"),
+        None,
+    );
+    fixture
+        .store
+        .create_account(foreign)
+        .await
+        .expect("foreign account");
+    let request = fixture
+        .diagnostic_request(input.account_id, BTreeSet::new())
+        .await;
+    assert!(matches!(
+        fixture.selector.select(request).await,
+        Err(GrokSessionSelectorError::NoEligibleSession)
+    ));
+    assert!(
+        fixture
+            .coordinator
+            .requests
+            .lock()
+            .expect("leases")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_required_account_does_not_bypass_a_failed_provider_list() {
+    let fixture = SelectorFixture::new(&["diagnostic-disabled", "diagnostic-other"]).await;
+    let required = account_id("diagnostic-disabled");
+    fixture
+        .store
+        .set_enabled(&required, false)
+        .await
+        .expect("disable");
+    let request = fixture.diagnostic_request(required, BTreeSet::new()).await;
+    fixture.store.fail_provider_listing();
+    assert!(matches!(
+        fixture.selector.select(request).await,
+        Err(GrokSessionSelectorError::Unavailable)
+    ));
+    assert!(
+        fixture
+            .coordinator
+            .requests
+            .lock()
+            .expect("leases")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_excluded_required_account_cannot_fall_back_to_enabled_accounts() {
+    let fixture = SelectorFixture::new(&["diagnostic-disabled", "diagnostic-other"]).await;
+    let required = account_id("diagnostic-disabled");
+    fixture
+        .store
+        .set_enabled(&required, false)
+        .await
+        .expect("disable");
+    let request = fixture
+        .diagnostic_request(required.clone(), BTreeSet::from([required]))
+        .await;
+    assert!(matches!(
+        fixture.selector.select(request).await,
+        Err(GrokSessionSelectorError::NoEligibleSession)
+    ));
+    assert!(
+        fixture
+            .coordinator
+            .requests
+            .lock()
+            .expect("leases")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_disabled_required_account_still_requires_a_scheduling_lease() {
+    let fixture = SelectorFixture::new(&["diagnostic-disabled", "diagnostic-other"]).await;
+    let required = account_id("diagnostic-disabled");
+    fixture
+        .store
+        .set_enabled(&required, false)
+        .await
+        .expect("disable");
+    fixture
+        .coordinator
+        .denied
+        .lock()
+        .expect("denied")
+        .insert(required.clone());
+    let request = fixture
+        .diagnostic_request(required.clone(), BTreeSet::new())
+        .await;
+    assert!(matches!(
+        fixture.selector.select(request).await,
+        Err(GrokSessionSelectorError::CapacityUnavailable { .. })
+    ));
+    let requests = fixture.coordinator.requests.lock().expect("leases");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].account_id(), &required);
+    assert!(!fixture.store.account(&required).expect("account").enabled());
 }
 
 #[tokio::test]

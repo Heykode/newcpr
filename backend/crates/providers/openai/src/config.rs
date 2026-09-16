@@ -399,8 +399,6 @@ impl CodexWireProfileConfig {
 impl From<CodexWireProfileConfig> for CodexWireProfile {
     fn from(value: CodexWireProfileConfig) -> Self {
         Self {
-            tls_profile: crate::transport::profile::CodexTlsProfile::Cpr,
-            application_profile: crate::transport::profile::CodexApplicationProfile::Native,
             raw_user_agent: None,
             originator: value.originator,
             codex_version: value.codex_version,

@@ -142,6 +142,13 @@ Chat 默认 `stream=false`，使用与 Responses 相同的鉴权、模型范围�
 粘性、代理身份、WS/HTTP 策略及结算；不调用本机 HTTP，也不另建调度或会话数据库。
 `use_websocket` 仍只控制上游传输，`stream_options.include_usage` 只控制下游用量分片。
 
+用户消息支持 `{"type":"file","file":{...}}`，转换为 Responses `input_file`；
+`file_id` 与 `file_data` 必须且只能提供一个非空字符串，可附加 `filename`。
+网关不下载文件，也不保证所选上游账号有权访问文件 ID。
+助手历史支持字符串 `reasoning_content` 或 `reasoning`，作为普通公开历史文字发送，
+不构造加密推理状态；同时给出不同值时拒绝歧义。旧式 `functions` / `function_call`
+协议仍不接入，避免只有请求转换而没有对应返回语义。
+
 支持文本、图片输入、普通 function 工具定义/多轮结果/并行调用、结构化输出、推理配置、
 拒绝信息、网页搜索选项，以及显式 `web_search`、`image_generation`、
 嵌套或 CPA 扁平形式的 `custom` 工具定义和多轮调用结果。custom 输出按 CPA 方式使用
@@ -225,10 +232,22 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 由各段传输层独立管理；其余业务扩展头继续透传，不使用固定业务头白名单。
 此规则同时适用于上游 HTTP 和 WebSocket，不影响上游响应的 `cf-ray` 等诊断信息。
 
+另外过滤下游 `x-stainless-*`、`sec-ch-ua*`、`sec-fetch-*`、`Origin` 和 `Referer`；
+这些字段描述的是下游 SDK、浏览器和页面环境，不作为网关出站身份继承。
+先提取 `session_id` 的会话语义，再丢弃其原样透传值；同时存在时仍以 `session-id` 为先。
+最终会话、线程和安装编号继续由原有账号/Key 隔离规则生成，包括 QX 兼容别名。
+`traceparent`、`tracestate`、未知业务头及正文不受新增过滤影响，原始入站头仍供本地鉴权、
+CORS 和观测读取。这不是正文匿名化或风控效果保证。
+
 Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行。当前响应期间收到的后续业务帧
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 这对齐 Codex 客户端 `stream_request` 持锁至本轮结束的串行行为，不表示支持额外控制消息类型。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行。
+
+下游 WS 无法消费的裸 `error` 会依据已有响应快照包装为 `response.failed`；
+带非成功 `status`/`status_code` 的错误，以及 `websocket_connection_limit_reached`、
+`previous_response_not_found` 控制错误仍保留原样。包装不增加重试、不生成成功用量，
+也不把失败记为成功。
 
 客户端使用 HTTP/SSE 时，OpenAI Provider 仍可能选择上游 WebSocket。
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
@@ -245,7 +264,7 @@ OpenAI Provider 独立传递上游目录中的对应字段；任一值未知时�
 OpenAI 路径保留客户端 Responses wire 语义：请求 body 的未知字段和字段顺序保持不变（受控模型
 映射除外），HTTP SSE 与 WebSocket 的上游业务事件字节原样转发，response ID 按 opaque 值处理而不
 假设 UUID 或固定长度；OpenAI 上游错误 envelope 和允许下发的 opaque header 值也不由 canonical
-观测结果重写。Images 的原始 JSON 请求不读取或重建，也不要求或映射模型字段；它固定使用 OpenAI Provider，
+观测结果重写，前述 WS 裸错误的交付包装除外。Images 的原始 JSON 请求不读取或重建，也不要求或映射模型字段；它固定使用 OpenAI Provider，
 只在原始字节之外完成账号选择、鉴权头替换和端点路由，成功与失败响应正文同样保持原始字节。
 `/v1/alpha/search` 使用相同的 OpenAI Provider 原生端点边界：body（包括 `model`）不解析、不映射，
 `x-codex-turn-metadata` 在移除客户端账号身份并按当前 lease 重写 installation ID 后转发；上游账号
@@ -392,7 +411,8 @@ Tests persist only when the requested revision still matches. Connectivity failu
 `lastTest.success=false`; stale revisions, duplicate URLs and deleting an in-use proxy return 409.
 The test concurrency limit returns 429.
 
-测试固定经代理访问 `https://api.ipify.org?format=json`，超时 15 秒，每进程最多同时测试 4 条。
+测试固定经代理访问双栈端点 `https://api64.ipify.org?format=json`，超时 15 秒，每进程最多同时测试 4 条。
+返回本次连接实际使用的 IPv4 或 IPv6 出口地址，不分别验证两种地址族，也不代表上游账号可用。
 探测器复用 OpenAI 的证书信任配置：优先读取非空的 `CODEX_CA_CERTIFICATE`，
 其次读取 `SSL_CERT_FILE`，并保留系统根证书；证书配置错误不会回退为不验证证书。
 出口测试通过不表示 Provider 账号权限或额度可用；账号可用性使用账号连接测试。
@@ -434,7 +454,7 @@ concurrent proxy mutations return 409. OAuth commits still reject a deleted, cha
 - `error`、`providerErrorCode`、`providerErrorType`、`upstreamStatus`、`upstreamContentType` 和
   `upstreamBody` 是实际捕获的原始诊断字段；缺失时为 `null`，不会由本地猜测或翻译。
 
-导入的 `data` 必须是 JSON object，Admin API 请求上限为 64 MiB；Provider 可以收紧限制，
+同步导入的 `data` 必须是 JSON object，Admin API 请求上限为 64 MiB；Provider 可以收紧限制，
 当前 xAI 导入上限为 16 MiB。内部 schema 由目标 Provider 独占解释：
 
 - OpenAI 接受单账号 OAuth 文档、`accounts` 数组（最多 200 项）、CPR 账号 bundle 和含代理引用的 sub2api 导出；
@@ -449,8 +469,9 @@ concurrent proxy mutations return 409. OAuth commits still reject a deleted, cha
 - xAI API Key 不是受支持的账号 credential；
 - 导入不会只凭文件外形写入账号；目标 Provider 使用认证材料完成必要的 token exchange 或已认证账号资料补全。
 
-管理端的 OpenAI `AT` / `RT` 标签是同一导入 API 的输入便利层：每行一个 token，最多 200 行，提交前
-转换为对应的 `accounts` JSON。Admin API 本身不接收纯文本 token 列表。例如：
+管理端的 OpenAI `AT` / `RT` 标签每行一个 token，最多 200 行；每行转换为独立的
+`accounts` JSON 任务条目，交给后台队列执行。Admin API 本身不接收纯文本 token 列表。
+同步导入接口仍保留，例如：
 
 ```json
 {
@@ -475,6 +496,33 @@ RT-only 使用同一形状，只提交 `refreshToken`。不得把真实 token �
 管理端先配置账号设置，再选择 OAuth、AT/RT 或账号文件完成导入。返回设置保留输入；更改出站配置会使
 旧 OAuth 链接失效。文件中显式的出站配置优先于表单代理，未指定时使用表单代理。
 账号列表的每个 item 返回轻量 `groups: [{ id, name, enabled }]`。
+
+### 后台导入任务
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| `POST` | `/api/admin/accounts/import-tasks` | 接受 `{ submissionId, items }`，返回 202 和任务摘要 |
+| `GET` | `/api/admin/accounts/import-tasks` | 当前管理员的任务摘要列表 `{ items }` |
+| `GET` | `/api/admin/accounts/import-tasks/detail?taskId=...` | 任务摘要及逐条结果 |
+| `POST` | `/api/admin/accounts/import-tasks/stop` | `{ taskId }`，跳过未开始项，在途项继续完成 |
+
+每项复用同步导入的 `{ provider, data, settings?, outboundProxyId? }`，不改变账号识别、
+设备复用、导入事务、设置或套餐同步。JSON 文档保持整体，不在前端擅自拆开内部账号；
+因此“条目成功数”与“已入库账号数”可以不同。OAuth 和重新授权仍走原接口。
+
+任务请求最多 4 MiB、1–200 项；进程内共用 3 个执行槽位、最多 8 个活跃任务和
+100 个保留任务。任务间轮转，已完成结果保留 1 小时。相同管理员及 `submissionId`
+在保留期内重复提交相同内容返回原任务，内容不同返回冲突；提交 ID 不包含令牌。
+请求与结果按管理员主体隔离，而不是按某一次网页请求 ID 隔离。
+
+结果状态为待执行、执行中、成功、失败、待核对和已跳过，对应
+`pending/running/succeeded/failed/unknown/skipped`；结果不包含导入凭据。
+无法确定上游交换或数据库提交结果时标为 `unknown`，不自动重试。
+停止任务不撤销已提交账号，也不强行中断可能正在轮换 RT 的条目。
+任务由服务端持有，关闭网页不取消；服务重启不保留进程内任务及幂等记录，
+重新导入前应核对已入库账号和凭据状态。
+
+### 凭据更新
 
 OpenAI 的 CPR 导出保持 OAuth 账号的既有 token 与过期时间字段。
 
@@ -540,6 +588,9 @@ OAuth start 使用：
 - OpenAI 已耗尽账号每 30 分钟主动复核一次，也会在最早未恢复窗口的 `resetAt + 2 分钟` 到期后
   提前复核。后台每 30 秒检查触发条件；同一重置边界复核后仍未恢复时回到 30 分钟重试，
   避免旧 reset 持续触发请求。各窗口独立确认恢复，时间到期本身不会直接解除账号耗尽。
+- 同一已知 `resetAt` 的账号级窗口也可通过连续两次新鲜观测确认未触顶后恢复。
+  缺失窗口、未知用量、再次触顶或重置时间不匹配会中断该窗口证据；旧观测、重复观测、
+  耗尽前观测不推进恢复。新一轮耗尽不复用旧进度，额度恢复不改变凭据错误或启停状态。
 - `POST /accounts/recover` 是管理员对本地事实的强制恢复：它清除 Redis cooldown 和已保存的额度/错误，
   把账号重新启用并恢复为可调度 credential；它不验证上游账号是否已经恢复，下一次真实请求仍可重新写入
   失败事实。
@@ -570,12 +621,11 @@ OAuth start 使用：
 
 `GET/POST /api/admin/settings/openai-user-agent` 读取或保存全局出站选择；
 `POST /api/admin/settings/openai-user-agent/preview` 仅校验并预览，不持久化。
-模式为 `default`、`custom`、`qx-compatible`、`independent`。`custom` 必须提供 `userAgent`；
-`qx-compatible` 可省略自定义 UA，使用锁定参考格式。旧请求语义保持不变。
-新界面提交 `independent`，必须同时提供 `tlsProfile`（`cpr`/`qx-compatible`）和
-`sessionPolicy`（`native`/`qx-compatible`）；`userAgent=null` 使用 CPR 默认并自动更新，
+模式为 `default`、`custom`。`custom` 必须提供完整 Desktop/CLI `userAgent`；
+`default` 使用 CPR 默认并自动更新。TLS/session 统一执行，不接受旧
+`qx-compatible`、`independent` 模式及其选择字段。迁移 0018 先备份并转换已有设置，
 非空完整 UA 自动识别 Desktop/CLI，空字符串拒绝。UA、TLS、会话策略不互相推断。
-回读包含 `tlsProfile`、`sessionPolicy`，预览、保存和恢复使用同一完整选择。
+回读不再包含 `tlsProfile`、`sessionPolicy`、`qxDefaultUserAgent`。
 QX 兼容并不表示 TLS 指纹逐项等价；设备档案和精确 WS 续接身份保持原有权威。
 详细格式、分请求类型的边界与回退方式见 [QX 兼容画像](qx-compatible-profile.md)。
 
@@ -822,6 +872,29 @@ requestTuning
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+新增的独立参数同样位于 `requestTuning`：
+
+| 字段 | 默认 | 作用 |
+| --- | --- | --- |
+| `openaiLocationOverrideEnabled` | `false` | 是否覆盖 OpenAI 搜索地区和环境上下文时区 |
+| `maxWaitingPerKey` | `0` | 单个下游 Key 的等待人数上限，整数 0–1024；0 关闭 |
+| `keyConcurrencyWaitTimeoutSeconds` | `30` | Key 并发排队最长时间，整数 1–600 秒 |
+
+地区开关关闭时保留客户端原值；开启时使用配置文件的 `openai.wire_profile.location`，
+未自定义时为 `US / Ohio / Piketon / America/New_York`。开关不清空地区配置，
+不更换 UA、TLS、账号设备档案或系统时区。已开始请求使用冻结的开关值。
+
+Key 排队只处理并发已满，不等待 RPM 或预算额度恢复。队列按进程维护，
+同 Key 先进先出，各 Key 共用每进程 1024 个等待名额；Redis 仍是全局并发准入权威，
+多实例之间不保证全局 FIFO。等待不重复记 RPM，不提前返回成功，不占上游账号。
+获得名额后继续原调度；如还需要等待账号，沿用剩余等待截止时间，不叠加完整新预算。
+排队满或超时返回 HTTP 429，错误码分别为 `concurrency_queue_full`、
+`concurrency_queue_timeout`。已取消的准入通过有时限的 Redis 标记防止迟到写入重新占位；
+清理故障时仍依赖租约到期收敛，不声称网络故障下立即释放。
+
+上述字段缺失或为 `null` 时继承默认值。升级不会自动开启地区覆盖或 Key 排队。
+降级到不认识这些字段的旧版本前，应备份并移除这三个新增设置字段。
 
 `requestTuning` 中的 OpenAI 账号忙时等待参数：
 

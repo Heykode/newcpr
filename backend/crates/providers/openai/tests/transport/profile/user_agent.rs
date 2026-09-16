@@ -1,9 +1,6 @@
-use gateway_core::provider_ports::{
-    ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride,
-};
+use gateway_core::provider_ports::ProviderUserAgentOverride;
 use provider_openai::transport::profile::{
-    CodexApplicationProfile, CodexTlsProfile, CodexWireProfile, CodexWireProfileError,
-    CodexWireProfileOverride, CodexWireProfileState, qx,
+    CodexWireProfile, CodexWireProfileError, CodexWireProfileOverride, CodexWireProfileState, qx,
 };
 
 use super::{CodexBundledReleaseProfile, Utc, wire_profile};
@@ -154,7 +151,6 @@ fn qx_user_agent_round_trips_cli_grammar_and_companion_fields() {
         let profile = CodexWireProfile::parse_qx_user_agent(value, &wire_profile()).unwrap();
         assert_eq!(profile.user_agent(), value);
         assert_eq!(profile.raw_user_agent.as_deref(), Some(value));
-        assert_eq!(profile.tls_profile, CodexTlsProfile::QxCompatible);
         let (product, _) = value.split_once(" (").unwrap();
         assert_eq!(
             format!("{}/{}", profile.originator, profile.codex_version),
@@ -163,7 +159,6 @@ fn qx_user_agent_round_trips_cli_grammar_and_companion_fields() {
         assert!(CodexWireProfile::parse_user_agent(value).is_err());
     }
     let cpr = CodexWireProfile::parse_user_agent(CUSTOM).unwrap();
-    assert_eq!(cpr.tls_profile, CodexTlsProfile::Cpr);
     assert_eq!(cpr.raw_user_agent, None);
 }
 
@@ -194,10 +189,11 @@ fn qx_parser_rejects_unsafe_unknown_and_incoherent_cli_values() {
 }
 
 #[test]
-fn qx_selection_is_explicit_and_survives_default_release_updates() {
-    for user_agent in [None, Some(qx::DEFAULT_USER_AGENT.to_owned())] {
+fn cli_selection_is_explicit_and_survives_default_release_updates() {
+    {
+        let user_agent = qx::DEFAULT_USER_AGENT.to_owned();
         let state = CodexWireProfileState::new(wire_profile());
-        let selection = ProviderUserAgentOverride::QxCompatible {
+        let selection = ProviderUserAgentOverride::Custom {
             user_agent: user_agent.clone(),
         };
         state.apply_user_agent_override(&selection).unwrap();
@@ -206,7 +202,6 @@ fn qx_selection_is_explicit_and_survives_default_release_updates() {
         assert_eq!(frozen.originator, "codex-tui");
         assert_eq!(frozen.codex_version, "0.146.0");
         assert_eq!(state.desktop_snapshot(), state.default_snapshot());
-        assert_eq!(state.desktop_snapshot().tls_profile, CodexTlsProfile::Cpr);
         state.update_bundled_release(&CodexBundledReleaseProfile {
             codex_version: "0.154.0".to_owned(),
             desktop_version: "26.912.12345".to_owned(),
@@ -225,46 +220,44 @@ fn qx_selection_is_explicit_and_survives_default_release_updates() {
         );
         assert!(matches!(
             state.settings_snapshot().mode,
-            CodexWireProfileOverride::QxCompatible { user_agent: actual, .. } if actual == user_agent
+            CodexWireProfileOverride::Custom(actual) if actual.user_agent() == user_agent
         ));
         state
             .apply_user_agent_override(&ProviderUserAgentOverride::Default)
             .unwrap();
-        assert_eq!(state.snapshot().tls_profile, CodexTlsProfile::Cpr);
         assert_eq!(state.snapshot().codex_version, "0.154.0");
     }
 }
 
 #[test]
-fn qx_blank_normalizes_to_default_but_invalid_save_does_not_change_selection() {
+fn blank_custom_and_invalid_save_do_not_change_selection() {
     let mut original = wire_profile();
     original.residency = Some(provider_openai::transport::profile::CodexResidency::Us);
     let state = CodexWireProfileState::new(original.clone());
     for value in ["", "   "] {
-        state
-            .apply_user_agent_override(&ProviderUserAgentOverride::QxCompatible {
-                user_agent: Some(value.to_owned()),
-            })
-            .unwrap();
+        assert!(
+            state
+                .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+                    user_agent: value.to_owned(),
+                })
+                .is_err()
+        );
         assert!(matches!(
             state.settings_snapshot().mode,
-            CodexWireProfileOverride::QxCompatible {
-                user_agent: None,
-                ..
-            }
+            CodexWireProfileOverride::Default
         ));
         assert_eq!(state.snapshot().residency, original.residency);
     }
     let before = state.settings_snapshot();
     for selection in [
         ProviderUserAgentOverride::Custom {
-            user_agent: qx::DEFAULT_USER_AGENT.to_owned(),
+            user_agent: "Chrome/123".to_owned(),
         },
-        ProviderUserAgentOverride::QxCompatible {
-            user_agent: Some(CUSTOM.to_owned()),
+        ProviderUserAgentOverride::Custom {
+            user_agent: "invalid".to_owned(),
         },
-        ProviderUserAgentOverride::QxCompatible {
-            user_agent: Some("\r\n".to_owned()),
+        ProviderUserAgentOverride::Custom {
+            user_agent: "\r\n".to_owned(),
         },
     ] {
         assert!(state.apply_user_agent_override(&selection).is_err());
@@ -276,13 +269,15 @@ fn qx_blank_normalizes_to_default_but_invalid_save_does_not_change_selection() {
 fn frozen_qx_state_keeps_its_desktop_surface_and_selection_independent() {
     let state = CodexWireProfileState::new(wire_profile());
     state
-        .apply_user_agent_override(&ProviderUserAgentOverride::QxCompatible { user_agent: None })
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
+        })
         .unwrap();
     let frozen = state.frozen();
     let settings = frozen.settings_snapshot();
     let desktop = frozen.desktop_snapshot();
     assert_eq!(desktop, wire_profile());
-    assert_eq!(frozen.snapshot().tls_profile, CodexTlsProfile::QxCompatible);
+    assert_eq!(frozen.snapshot().user_agent(), qx::DEFAULT_USER_AGENT);
     state.update_bundled_release(&CodexBundledReleaseProfile {
         codex_version: "0.154.0".to_owned(),
         desktop_version: "26.912.12345".to_owned(),
@@ -294,7 +289,6 @@ fn frozen_qx_state_keeps_its_desktop_surface_and_selection_independent() {
         .unwrap();
     assert_eq!(frozen.settings_snapshot(), settings);
     assert_eq!(frozen.desktop_snapshot(), desktop);
-    assert_eq!(state.snapshot().tls_profile, CodexTlsProfile::Cpr);
     frozen
         .apply_user_agent_override(&ProviderUserAgentOverride::Default)
         .unwrap();
@@ -303,50 +297,34 @@ fn frozen_qx_state_keeps_its_desktop_surface_and_selection_independent() {
 }
 
 #[test]
-fn independent_selection_preserves_every_ua_tls_and_session_combination() {
+fn unified_selection_parses_desktop_and_cli_with_coherent_auxiliary_surface() {
     for ua in [
         CUSTOM,
         qx::DEFAULT_USER_AGENT,
         "codex_cli_rs/0.147.0 (Linux 6.8.0; x86_64) unknown (codex_cli_rs; 0.147.0)",
     ] {
-        for tls in [ProviderTlsProfile::Cpr, ProviderTlsProfile::QxCompatible] {
-            for session in [
-                ProviderSessionPolicy::Native,
-                ProviderSessionPolicy::QxCompatible,
-            ] {
-                let state = CodexWireProfileState::new(wire_profile());
-                let desktop = state.desktop_snapshot();
-                state
-                    .apply_user_agent_override(&ProviderUserAgentOverride::Independent {
-                        user_agent: Some(ua.to_owned()),
-                        tls_profile: tls,
-                        session_policy: session,
-                    })
-                    .unwrap();
-                let effective = state.snapshot();
-                assert_eq!(effective.user_agent(), ua);
-                assert_eq!(effective.tls_profile, CodexTlsProfile::from(tls));
-                assert_eq!(
-                    effective.application_profile,
-                    CodexApplicationProfile::from(session)
-                );
-                assert_eq!(
-                    format!("{}/{}", effective.originator, effective.codex_version),
-                    ua.split_once(" (").unwrap().0
-                );
-                assert_eq!(state.desktop_snapshot(), desktop);
-                assert_eq!(state.desktop_snapshot().tls_profile, CodexTlsProfile::Cpr);
-                assert_eq!(
-                    state.desktop_snapshot().application_profile,
-                    CodexApplicationProfile::Native
-                );
-            }
-        }
+        let state = CodexWireProfileState::new(wire_profile());
+        let desktop = state.desktop_snapshot();
+        state
+            .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+                user_agent: ua.to_owned(),
+            })
+            .unwrap();
+        let effective = state.snapshot();
+        assert_eq!(effective.user_agent(), ua);
+        assert_eq!(
+            format!("{}/{}", effective.originator, effective.codex_version),
+            ua.split_once(" (").unwrap().0
+        );
+        assert_eq!(
+            state.desktop_snapshot(),
+            if ua == CUSTOM { effective } else { desktop }
+        );
     }
 }
 
 #[test]
-fn independent_default_release_updates_only_default_ua_and_frozen_snapshots_stay_coherent() {
+fn unified_default_release_updates_only_default_ua_and_frozen_snapshots_stay_coherent() {
     for user_agent in [
         None,
         Some(CUSTOM.to_owned()),
@@ -354,11 +332,13 @@ fn independent_default_release_updates_only_default_ua_and_frozen_snapshots_stay
     ] {
         let state = CodexWireProfileState::new(wire_profile());
         state
-            .apply_user_agent_override(&ProviderUserAgentOverride::Independent {
-                user_agent: user_agent.clone(),
-                tls_profile: ProviderTlsProfile::QxCompatible,
-                session_policy: ProviderSessionPolicy::Native,
-            })
+            .apply_user_agent_override(
+                &user_agent
+                    .clone()
+                    .map_or(ProviderUserAgentOverride::Default, |user_agent| {
+                        ProviderUserAgentOverride::Custom { user_agent }
+                    }),
+            )
             .unwrap();
         let frozen = state.frozen();
         let before = state.settings_snapshot();
@@ -369,14 +349,9 @@ fn independent_default_release_updates_only_default_ua_and_frozen_snapshots_stay
             verified_at: Utc::now(),
         });
         assert_eq!(frozen.settings_snapshot(), before);
-        assert_eq!(state.snapshot().tls_profile, CodexTlsProfile::QxCompatible);
-        assert_eq!(
-            state.snapshot().application_profile,
-            CodexApplicationProfile::Native
-        );
-        if let Some(ua) = user_agent {
+        if let Some(ref ua) = user_agent {
             assert_eq!(state.snapshot(), before.effective_profile);
-            assert_eq!(state.snapshot().user_agent(), ua);
+            assert_eq!(state.snapshot().user_agent(), *ua);
         } else {
             assert_eq!(state.snapshot().codex_version, "0.154.0");
             assert_eq!(
@@ -384,16 +359,24 @@ fn independent_default_release_updates_only_default_ua_and_frozen_snapshots_stay
                 state.default_snapshot().user_agent()
             );
         }
-        assert_eq!(state.desktop_snapshot().desktop_version, "26.912.12345");
-        assert_eq!(state.desktop_snapshot().tls_profile, CodexTlsProfile::Cpr);
+        assert_eq!(
+            state.desktop_snapshot().desktop_version,
+            if user_agent.as_deref() == Some(CUSTOM) {
+                "26.901.51231"
+            } else {
+                "26.912.12345"
+            }
+        );
     }
 }
 
 #[test]
-fn independent_invalid_ua_is_rejected_atomically_including_empty_custom() {
+fn unified_invalid_ua_is_rejected_atomically_including_empty_custom() {
     let state = CodexWireProfileState::new(wire_profile());
     state
-        .apply_user_agent_override(&ProviderUserAgentOverride::QxCompatible { user_agent: None })
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
+        })
         .unwrap();
     let before = state.settings_snapshot();
     for ua in [
@@ -405,10 +388,8 @@ fn independent_invalid_ua_is_rejected_atomically_including_empty_custom() {
     ] {
         assert!(
             state
-                .apply_user_agent_override(&ProviderUserAgentOverride::Independent {
-                    user_agent: Some(ua.to_owned()),
-                    tls_profile: ProviderTlsProfile::Cpr,
-                    session_policy: ProviderSessionPolicy::Native,
+                .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+                    user_agent: ua.to_owned(),
                 })
                 .is_err()
         );

@@ -163,14 +163,6 @@ pub fn custom_ca_env_cache_key() -> Option<String> {
         .map(|bundle| format!("{}={}", bundle.source_env, bundle.path.display()))
 }
 
-pub(crate) fn configured_ca_certificates() -> CustomCaResult<Vec<CertificateDer<'static>>> {
-    ProcessEnv
-        .configured_ca_bundle()
-        .map(|bundle| bundle.load_certificates())
-        .transpose()
-        .map(Option::unwrap_or_default)
-}
-
 /// 构建 rustls client config，若未配置自定义 CA 则返回 `None`。
 pub fn maybe_build_rustls_client_config_with_custom_ca() -> CustomCaResult<Option<Arc<ClientConfig>>>
 {
@@ -225,6 +217,8 @@ fn build_reqwest_native_client_with_env(
     env_source: &dyn EnvSource,
     mut builder: reqwest::ClientBuilder,
 ) -> CustomCaResult<reqwest::Client> {
+    // Replay belongs to the provider, including HTTP/2 transport failures.
+    builder = builder.retry(reqwest::retry::never());
     let Some(bundle) = env_source.configured_ca_bundle() else {
         return builder
             .use_native_tls()

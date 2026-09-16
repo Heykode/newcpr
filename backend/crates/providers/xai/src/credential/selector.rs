@@ -89,11 +89,23 @@ impl GrokAccountSessionSelector {
         request: GrokSessionSelection,
     ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
         let diagnostic = request.eligibility() == AccountEligibilityPolicy::BypassForDiagnostic;
-        let accounts = self
+        let mut accounts = self
             .repository
             .list_accounts_for_provider()
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
+        if diagnostic
+            && let Some(required) = request.required_account()
+            && !accounts.iter().any(|account| account.id() == required)
+            && let Some(account) = self
+                .repository
+                .account_by_id(required)
+                .await
+                .map_err(|_| GrokSessionSelectorError::Unavailable)?
+            && account.provider() == &self.provider_kind
+        {
+            accounts.push(account);
+        }
         let accounts = if diagnostic {
             accounts
         } else {

@@ -2,7 +2,6 @@ use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 use gateway_core::provider_ports::ProviderUserAgentOverride;
-use provider_openai::transport::profile::CodexTlsProfile;
 
 // Plain HTTP/WS fixtures verify profile routing and ownership, not TLS handshakes.
 const QX_USER_AGENT: &str = "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color";
@@ -13,19 +12,13 @@ const TURN_METADATA: &str =
 fn select_profile(profile: &CodexWireProfileState, qx: bool) {
     profile
         .apply_user_agent_override(&if qx {
-            ProviderUserAgentOverride::QxCompatible { user_agent: None }
+            ProviderUserAgentOverride::Custom {
+                user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
+            }
         } else {
             ProviderUserAgentOverride::Default
         })
         .expect("select global wire profile");
-    assert_eq!(
-        profile.snapshot().tls_profile,
-        if qx {
-            CodexTlsProfile::QxCompatible
-        } else {
-            CodexTlsProfile::Cpr
-        }
-    );
 }
 
 fn identity_context(request_id: &str) -> CodexRequestContext<'_> {
@@ -64,14 +57,10 @@ fn assert_identity_header(name: &str, value: Option<&str>, qx: bool) {
         "chatgpt-account-id" => Some("existing-chatgpt-account"),
         "session-id" => Some("existing-session"),
         "thread-id" => Some("existing-thread"),
-        "x-client-request-id" => Some(if qx {
-            "existing-thread"
-        } else {
-            "existing-client-request"
-        }),
+        "x-client-request-id" => Some("existing-thread"),
         "x-codex-turn-metadata" => Some(TURN_METADATA),
         "x-codex-installation-id" => Some(INSTALLATION_ID),
-        "session_id" => qx.then_some("existing-session"),
+        "session_id" => Some("existing-session"),
         _ => panic!("unexpected fixture header"),
     };
     assert_eq!(value, expected, "{name} (QX={qx})");
@@ -439,22 +428,17 @@ async fn both_profiles_reject_unsafe_installation_before_connecting() {
 async fn assert_profile_switch_keeps_exact_owner(initial_qx: bool, identical_identity: bool) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut initial = test_wire_profile().snapshot();
-    // Both parsers accept this CPR UA, allowing backend identity to be the
-    // only changing component of the independent connection's pool key.
+    // Changing only default/custom selection with identical wire UA must not rotate sockets.
     initial.os_type = "Linux".to_owned();
     let profile = CodexWireProfileState::new(initial);
     let cpr_user_agent = profile.snapshot().user_agent();
     let select = |qx| {
         if qx && identical_identity {
             profile
-                .apply_user_agent_override(&ProviderUserAgentOverride::QxCompatible {
-                    user_agent: Some(cpr_user_agent.clone()),
+                .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+                    user_agent: cpr_user_agent.clone(),
                 })
-                .expect("QX backend with identical CPR application identity");
-            assert_eq!(
-                profile.snapshot().tls_profile,
-                CodexTlsProfile::QxCompatible
-            );
+                .expect("custom selection with identical application identity");
             assert_eq!(profile.snapshot().user_agent(), cpr_user_agent);
         } else {
             select_profile(&profile, qx);
@@ -483,6 +467,10 @@ async fn assert_profile_switch_keeps_exact_owner(initial_qx: bool, identical_ide
             Some("resp_old_owner"),
         )
         .await;
+        if identical_identity {
+            exchange(&mut owner, "resp_new_profile", None).await;
+            return;
+        }
         // Keep the old socket alive. An independent chain on the same lane must
         // use a second connection because its global profile has changed.
         let (stream, _) = tokio::select! {
@@ -531,15 +519,18 @@ async fn assert_profile_switch_keeps_exact_owner(initial_qx: bool, identical_ide
             .create_response_stream(&first_request, identity_context("independent-chain"))
             .await
             .expect("independent chain uses new global profile");
-        assert_ne!(
-            fresh.websocket_connection_id.expect("fresh socket UUID"),
-            owner_id
+        assert_eq!(
+            fresh.websocket_connection_id.expect("socket UUID") == owner_id,
+            identical_identity
         );
         let fresh = collect_backend_response(fresh, Instant::now())
             .await
             .unwrap();
         assert_eq!(fresh.transport, CodexBackendTransport::WebSocket);
-        assert_eq!(fresh.websocket_pool_decision.unwrap().kind(), "new");
+        assert_eq!(
+            fresh.websocket_pool_decision.unwrap().kind(),
+            if identical_identity { "reuse" } else { "new" }
+        );
         assert!(fresh.body.contains("resp_new_profile"));
     };
     let outcome = timeout(Duration::from_secs(6), async {
@@ -561,7 +552,7 @@ async fn qx_to_cpr_keeps_exact_ws_owner_and_switches_independent_chain() {
 }
 
 #[tokio::test]
-async fn same_user_agent_still_isolates_ws_backend_without_moving_exact_owner() {
+async fn same_user_agent_keeps_unified_ws_owner_across_selection_change() {
     assert_profile_switch_keeps_exact_owner(false, true).await;
 }
 
@@ -622,14 +613,14 @@ async fn safe_ws_http_fallback_freezes_qx_profile_while_next_request_uses_cpr() 
 }
 
 #[tokio::test]
-async fn qx_plain_ws_skips_unused_custom_ca_while_default_cpr_still_validates_it() {
+async fn every_ua_selection_retains_native_ws_custom_ca_validation() {
     use provider_openai::transport::tls::{CODEX_CA_CERT_ENV, SSL_CERT_FILE_ENV};
 
     const CASE_ENV: &str = "CODEX_PROXY_TEST_QX_PLAIN_WS_CA_CASE";
     const COMPLETED: &str = "qx-plain-ws-ca-case-completed:";
     const TEST_NAME: &str = concat!(
         "transport::qx_profile::",
-        "qx_plain_ws_skips_unused_custom_ca_while_default_cpr_still_validates_it"
+        "every_ua_selection_retains_native_ws_custom_ca_validation"
     );
 
     if let Ok(case) = std::env::var(CASE_ENV) {
@@ -709,8 +700,6 @@ async fn assert_plain_ws_custom_ca_behavior(qx: bool, missing: bool, ca_path: &s
     let profile = test_wire_profile();
     if qx {
         select_profile(&profile, true);
-    } else {
-        assert_eq!(profile.snapshot().tls_profile, CodexTlsProfile::Cpr);
     }
     let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     // The supplied reqwest client deliberately does not invoke CPR's custom
@@ -722,66 +711,48 @@ async fn assert_plain_ws_custom_ca_behavior(qx: bool, missing: bool, ca_path: &s
     )
     .with_websocket_pool(pool.clone());
     let request = websocket_only_request(fixture_request());
-    if qx {
-        let server = async {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut websocket = accept_profile_websocket(stream, QX_USER_AGENT, true).await;
-            exchange(&mut websocket, "resp_qx_without_unused_ca", None).await;
-        };
-        let client = async {
-            let response = backend
-                .create_response(&request, identity_context("qx-unused-ca"))
-                .await
-                .expect("plain QX WS must not construct the unused rustls CA connector");
-            assert_eq!(response.transport, CodexBackendTransport::WebSocket);
-            assert!(response.body.contains("resp_qx_without_unused_ca"));
-            assert_eq!(response.usage.unwrap().total_tokens, 3);
-        };
-        tokio::join!(server, client);
-    } else {
-        let error = backend
-            .create_response(&request, identity_context("cpr-invalid-ca"))
-            .await
-            .expect_err("default CPR must retain its original custom CA validation");
-        let ca_error = std::iter::successors(
-            Some(&error as &(dyn std::error::Error + 'static)),
-            |error| error.source(),
-        )
-        .find_map(|error| {
-            error.downcast_ref::<CustomCaError>().or_else(|| {
-                // io::Error::source forwards to the wrapped error's source;
-                // get_ref retains the actual CustomCaError payload.
-                error
-                    .downcast_ref::<std::io::Error>()?
-                    .get_ref()?
-                    .downcast_ref::<CustomCaError>()
-            })
+    let error = backend
+        .create_response(&request, identity_context("cpr-invalid-ca"))
+        .await
+        .expect_err("default CPR must retain its original custom CA validation");
+    let ca_error = std::iter::successors(
+        Some(&error as &(dyn std::error::Error + 'static)),
+        |error| error.source(),
+    )
+    .find_map(|error| {
+        error.downcast_ref::<CustomCaError>().or_else(|| {
+            // io::Error::source forwards to the wrapped error's source;
+            // get_ref retains the actual CustomCaError payload.
+            error
+                .downcast_ref::<std::io::Error>()?
+                .get_ref()?
+                .downcast_ref::<CustomCaError>()
         })
-        .expect("CPR failure must originate from custom CA loading");
-        match ca_error {
-            CustomCaError::ReadCaFile {
-                source_env,
-                path,
-                source,
-            } if missing => {
-                assert_eq!(*source_env, CODEX_CA_CERT_ENV);
-                assert_eq!(path, ca_path);
-                assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
-            }
-            CustomCaError::InvalidCaFile {
-                source_env, path, ..
-            } if !missing => {
-                assert_eq!(*source_env, CODEX_CA_CERT_ENV);
-                assert_eq!(path, ca_path);
-            }
-            other => panic!("unexpected CPR CA error: {other}"),
+    })
+    .expect("CPR failure must originate from custom CA loading");
+    match ca_error {
+        CustomCaError::ReadCaFile {
+            source_env,
+            path,
+            source,
+        } if missing => {
+            assert_eq!(*source_env, CODEX_CA_CERT_ENV);
+            assert_eq!(path, ca_path);
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
         }
-        assert!(
-            timeout(Duration::from_millis(30), listener.accept())
-                .await
-                .is_err(),
-            "default CPR must fail CA validation before opening a socket"
-        );
+        CustomCaError::InvalidCaFile {
+            source_env, path, ..
+        } if !missing => {
+            assert_eq!(*source_env, CODEX_CA_CERT_ENV);
+            assert_eq!(path, ca_path);
+        }
+        other => panic!("unexpected CPR CA error: {other}"),
     }
+    assert!(
+        timeout(Duration::from_millis(30), listener.accept())
+            .await
+            .is_err(),
+        "default CPR must fail CA validation before opening a socket"
+    );
     pool.shutdown().await;
 }

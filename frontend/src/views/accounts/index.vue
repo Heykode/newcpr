@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from './constants'
-import { ChevronDown, RefreshCw } from '@lucide/vue'
+import { ChevronDown, ListTodo, RefreshCw } from '@lucide/vue'
 import { useLocalStorage } from '@vueuse/core'
 
 import { computed, ref, useTemplateRef, watch } from 'vue'
@@ -23,6 +23,7 @@ import AccountEditModal from './components/AccountEditModal.vue'
 import AccountFilters from './components/AccountFilters.vue'
 import AccountHealthTimeline from './components/AccountHealthTimeline.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
+import AccountImportTasks from './components/AccountImportTasks/index.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountQuotaForecastModal from './components/AccountQuotaForecastModal/index.vue'
@@ -35,6 +36,7 @@ import AccountUsagePanel from './components/AccountUsagePanel.vue'
 import { useAccountBatchEditor } from './composables/useAccountBatchEditor'
 import { useAccountConnectionTest } from './composables/useAccountConnectionTest'
 import { useAccountEditor } from './composables/useAccountEditor'
+import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountListForecast } from './composables/useAccountListForecast'
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
@@ -85,6 +87,24 @@ const {
 } = useAccountGroupCatalog()
 
 const {
+  open: importTasksOpen,
+  tasks: importTasks,
+  detail: importTaskDetail,
+  selectedId: selectedImportTaskId,
+  error: importTasksError,
+  stopError: importTaskStopError,
+  loading: importTasksLoading,
+  stopping: importTaskStopping,
+  activeCount: activeImportTaskCount,
+  select: selectImportTask,
+  created: importTaskCreated,
+  refresh: refreshImportTasks,
+  stop: stopImportTask,
+} = useAccountImportTasks({
+  reload: () => Promise.all([refreshAccountsSilently(), loadGroups({ silent: true })]),
+})
+
+const {
   showCreateModal,
   showDeleteModal,
   showSingleDeleteModal,
@@ -119,6 +139,7 @@ const {
   selectedIds,
   reload: options => Promise.all([loadAccounts(options), loadGroups(options)]),
   replaceAccount,
+  onImportTaskCreated: importTaskCreated,
 })
 
 const {
@@ -258,6 +279,13 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       description="维护账号池，查看可用性、配额与使用状态"
     >
       <template #actions>
+        <BaseIconButton
+          :label="activeImportTaskCount ? `导入任务：${activeImportTaskCount} 个进行中` : '导入任务'"
+          :class="activeImportTaskCount ? 'text-cp-primary-text' : 'text-cp-text-secondary'"
+          @click="importTasksOpen = true"
+        >
+          <ListTodo :size="19" />
+        </BaseIconButton>
         <BaseIconButton
           class="text-cp-primary-text"
           label="刷新账号列表"
@@ -495,6 +523,21 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :status-view="connectionTestStatusView"
       @refresh-models="handleRefreshConnectionTestModels()"
       @test="handleTestConnection()"
+    />
+
+    <AccountImportTasks
+      v-model="importTasksOpen"
+      :tasks="importTasks"
+      :selected-id="selectedImportTaskId"
+      :detail="importTaskDetail"
+      :loading="importTasksLoading"
+      :stopping="importTaskStopping"
+      :error="importTasksError"
+      :stop-error="importTaskStopError"
+      @select="selectImportTask"
+      @refresh="refreshImportTasks()"
+      @stop="stopImportTask"
+      @view-accounts="importTasksOpen = false; void refreshAccounts()"
     />
 
     <AccountCreateModal

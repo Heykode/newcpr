@@ -62,6 +62,9 @@ fn update_body() -> Value {
             "websocketFailureWindowMs": 30000,
             "websocketFailureOpenDurationMs": 45000,
             "rateLimitCooldownSeconds": 60,
+            "openaiLocationOverrideEnabled": false,
+            "maxWaitingPerKey": 0,
+            "keyConcurrencyWaitTimeoutSeconds": 30,
             "accountBusyWaitEnabled": true,
             "accountBusyWaitStickyMaxWaiting": 4,
             "accountBusyWaitStickyTimeoutSeconds": 121,
@@ -185,6 +188,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             websocket_failure_window_ms: Some(30_000),
             websocket_failure_open_duration_ms: Some(45_000),
             rate_limit_cooldown_seconds: Some(60),
+            openai_location_override_enabled: Some(true),
+            max_waiting_per_key: Some(8),
+            key_concurrency_wait_timeout_seconds: Some(30),
             account_busy_wait_enabled: Some(true),
             account_busy_wait_sticky_max_waiting: Some(4),
             account_busy_wait_sticky_timeout_seconds: Some(121),
@@ -226,6 +232,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
                 "websocketFailureWindowMs": 30000,
                 "websocketFailureOpenDurationMs": 45000,
                 "rateLimitCooldownSeconds": 60,
+                "openaiLocationOverrideEnabled": true,
+                "maxWaitingPerKey": 8,
+                "keyConcurrencyWaitTimeoutSeconds": 30,
                 "accountBusyWaitEnabled": true,
                 "accountBusyWaitStickyMaxWaiting": 4,
                 "accountBusyWaitStickyTimeoutSeconds": 121,
@@ -382,6 +391,34 @@ async fn settings_post_and_reload_should_omit_legacy_global_opening_limit() {
         assert_eq!(response.status(), StatusCode::OK);
         let data = response_json(response).await["data"].clone();
         assert_eq!(data["requestTuning"], expected_tuning);
+    }
+}
+
+#[tokio::test]
+async fn location_and_key_wait_settings_round_trip_without_changing_account_waiting() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (enabled, waiting, timeout) in [(true, 8, 45), (false, 0, 45)] {
+        let mut body = update_body();
+        body["requestTuning"]["openaiLocationOverrideEnabled"] = json!(enabled);
+        body["requestTuning"]["maxWaitingPerKey"] = json!(waiting);
+        body["requestTuning"]["keyConcurrencyWaitTimeoutSeconds"] = json!(timeout);
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app(fixture.state())
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        let data = response_json(response).await["data"].clone();
+        assert_eq!(data["requestTuning"], body["requestTuning"]);
+        assert_eq!(data["rotationStrategy"], body["rotationStrategy"]);
     }
 }
 

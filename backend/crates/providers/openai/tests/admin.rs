@@ -777,6 +777,7 @@ async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_o
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(
@@ -890,6 +891,7 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(raw.as_object().expect("quota object").clone()),
@@ -990,6 +992,7 @@ async fn openai_admin_keeps_confirmed_exhaustion_separate_from_raw_usage_display
     let observed_at = SystemTime::now();
     store
         .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
             account_id: account.id().clone(),
             expected_revision: account.revision(),
             quota: OpaqueProviderData::new(
@@ -2452,7 +2455,7 @@ mod errors {
     }
 
     #[tokio::test]
-    async fn manual_refresh_invalid_success_and_unclassified_transport_stay_conservative() {
+    async fn manual_refresh_invalid_success_is_ambiguous_but_connect_failure_is_unavailable() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth/token"))
@@ -2489,11 +2492,11 @@ mod errors {
             .prepare_refresh(command())
             .await
             .unwrap_err();
-        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界。
-        assert_eq!(error.kind(), Kind::Ambiguous);
+        // The connector failed before any OAuth payload; an invalid success above remains ambiguous.
+        assert_eq!(error.kind(), Kind::Unavailable);
         assert_eq!(
             error.public_message(),
-            Some("令牌刷新结果未知，请先核对账号状态，不要立即重复刷新")
+            Some("令牌刷新服务暂不可用，请检查出站连接与依赖服务")
         );
         assert_eq!(store.account("acct_refresh_error").unwrap(), before);
     }

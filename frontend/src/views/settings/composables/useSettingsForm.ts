@@ -21,6 +21,9 @@ const requestTuningFallbacks: RequestTuning = {
   websocketFailureWindowMs: 30_000,
   websocketFailureOpenDurationMs: 30_000,
   rateLimitCooldownSeconds: 60,
+  openaiLocationOverrideEnabled: false,
+  maxWaitingPerKey: 0,
+  keyConcurrencyWaitTimeoutSeconds: 30,
   accountBusyWaitEnabled: false,
   accountBusyWaitStickyMaxWaiting: 3,
   accountBusyWaitStickyTimeoutSeconds: 120,
@@ -161,6 +164,11 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
+    if (!Number.isInteger(tuning.maxWaitingPerKey) || tuning.maxWaitingPerKey < 0 || tuning.maxWaitingPerKey > 1024
+      || !Number.isInteger(tuning.keyConcurrencyWaitTimeoutSeconds) || tuning.keyConcurrencyWaitTimeoutSeconds < 1 || tuning.keyConcurrencyWaitTimeoutSeconds > 600) {
+      toast.warning('Key 等待人数须为 0–1024 的整数，等待秒数须为 1–600 的整数')
+      return
+    }
     if (![tuning.accountBusyWaitStickyMaxWaiting, tuning.accountBusyWaitFallbackMaxWaiting]
       .every(value => Number.isInteger(value) && value >= 1 && value <= 1000)
       || ![tuning.accountBusyWaitStickyTimeoutSeconds, tuning.accountBusyWaitFallbackTimeoutSeconds]

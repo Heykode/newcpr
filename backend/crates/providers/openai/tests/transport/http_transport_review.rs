@@ -19,9 +19,8 @@ use openssl::{
     stack::Stack,
     x509::{X509StoreContext, store::X509StoreBuilder},
 };
-use provider_openai::transport::{
-    native_http::{NativeHttpClient, NativeHttpConfig},
-    tls::{CODEX_CA_CERT_ENV, SSL_CERT_FILE_ENV, build_reqwest_native_client_with_custom_ca},
+use provider_openai::transport::tls::{
+    CODEX_CA_CERT_ENV, SSL_CERT_FILE_ENV, build_reqwest_native_client_with_custom_ca,
 };
 use tokio::{
     net::TcpListener,
@@ -30,28 +29,14 @@ use tokio::{
     time::timeout,
 };
 
-use super::native_tls::{accept, acceptor, ca_identity, connector, identity_signed_by};
+use super::native_tls::{accept, acceptor, ca_identity, identity_signed_by};
 
 const CONCURRENCY: usize = 4;
 const WAVES: usize = 4;
 const REQUESTS: usize = 2 + CONCURRENCY * WAVES;
 
-enum Client {
-    Native(reqwest::Client),
-    Qx(Box<NativeHttpClient>),
-}
-
-impl Client {
-    async fn execute(&self, request: reqwest::Request) -> reqwest::Response {
-        match self {
-            Self::Native(client) => client.execute(request).await.unwrap(),
-            Self::Qx(client) => client.execute(request).await.unwrap(),
-        }
-    }
-}
-
 async fn exchange(
-    client: &Client,
+    client: &reqwest::Client,
     url: &str,
     index: usize,
     releases: &[Arc<Notify>],
@@ -63,7 +48,7 @@ async fn exchange(
         format!("{url}/{index}").parse().unwrap(),
     );
     let started = Instant::now();
-    let response = client.execute(request).await;
+    let response = client.execute(request).await.unwrap();
     assert_eq!(response.version(), expected);
     let mut body = response.bytes_stream();
     let mut event = Vec::new();
@@ -111,36 +96,21 @@ async fn review(mode: &str) {
         root.cert.to_pem().unwrap(),
     )
     .unwrap();
-    let h2 = mode == "qx-h2";
+    let h2 = mode == "native-h2";
     let expected = if h2 {
         Version::HTTP_2
     } else {
         Version::HTTP_11
     };
-    let acceptor = acceptor(&identity, mode != "qx-h1");
-    let client = if mode == "native" {
-        Client::Native(
-            build_reqwest_native_client_with_custom_ca(
-                reqwest::Client::builder()
-                    .no_proxy()
-                    .tcp_nodelay(true)
-                    .pool_max_idle_per_host(CONCURRENCY)
-                    .timeout(Duration::from_secs(10)),
-            )
-            .unwrap(),
-        )
-    } else {
-        Client::Qx(Box::new(
-            NativeHttpClient::with_tls(
-                NativeHttpConfig {
-                    timeout: Some(Duration::from_secs(10)),
-                    ..Default::default()
-                },
-                connector(&root),
-            )
-            .unwrap(),
-        ))
-    };
+    let acceptor = acceptor(&identity, h2);
+    let client = build_reqwest_native_client_with_custom_ca(
+        reqwest::Client::builder()
+            .no_proxy()
+            .tcp_nodelay(true)
+            .pool_max_idle_per_host(CONCURRENCY)
+            .timeout(Duration::from_secs(10)),
+    )
+    .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("https://{}", listener.local_addr().unwrap());
     let connections = Arc::new(AtomicUsize::new(0));
@@ -260,10 +230,10 @@ async fn review(mode: &str) {
 }
 
 #[test]
-fn current_transports_stream_and_reuse_without_changing_native_alpn() {
+fn unified_transport_streams_and_reuses_h2_and_h1() {
     const CASE: &str = "CPR_TEST_HTTP_TRANSPORT_REVIEW";
     if let Ok(mode) = std::env::var(CASE) {
-        assert!(matches!(mode.as_str(), "native" | "qx-h2" | "qx-h1"));
+        assert!(matches!(mode.as_str(), "native-h2" | "native-h1"));
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -276,14 +246,19 @@ fn current_transports_stream_and_reuse_without_changing_native_alpn() {
             });
         return;
     }
-    for mode in ["native", "qx-h2", "qx-h1"] {
+    for mode in ["native-h2", "native-h1"] {
         let directory = tempfile::tempdir().unwrap();
         let output = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "transport::http_transport_review::current_transports_stream_and_reuse_without_changing_native_alpn", "--nocapture"])
+            .args([
+                "--exact",
+                "transport::http_transport_review::unified_transport_streams_and_reuses_h2_and_h1",
+                "--nocapture",
+            ])
             .env(CASE, mode)
             .env(CODEX_CA_CERT_ENV, directory.path().join("ca.pem"))
             .env_remove(SSL_CERT_FILE_ENV)
-            .output().unwrap();
+            .output()
+            .unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success(),

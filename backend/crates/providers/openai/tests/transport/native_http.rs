@@ -2,12 +2,8 @@ use std::{convert::Infallible, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use gateway_core::account::OutboundProxy;
 use http_body_util::{BodyExt, Full};
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use provider_openai::transport::native_http::{
-    NativeHttpClient, NativeHttpConfig, NativeRequestPolicy, NativeTransportError,
-};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpListener,
@@ -16,9 +12,99 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::native_tls::{accept, acceptor, connector, identity};
+use super::native_tls::{accept, acceptor, ca_identity, http_client, identity_signed_by};
 
 const LIMIT: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn native_http2_refused_stream_is_not_replayed_by_the_client() {
+    timeout(LIMIT, async {
+        let root = ca_identity();
+        let identity = identity_signed_by(&root);
+        let client = http_client(&root, reqwest::Client::builder().no_proxy());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "https://localhost:{}/",
+            listener.local_addr().unwrap().port()
+        );
+        let acceptor = acceptor(&identity, true);
+        let (finished, mut finish) = oneshot::channel();
+        let server = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = accept(&acceptor, stream).await;
+            assert_eq!(
+                stream.ssl().selected_alpn_protocol(),
+                Some(b"h2".as_slice())
+            );
+            let mut preface = [0; 24];
+            stream.read_exact(&mut preface).await.unwrap();
+            assert_eq!(&preface, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+            stream
+                .write_all(&[0, 0, 0, 4, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
+            let mut streams = 0;
+            let mut received = Vec::new();
+            loop {
+                let mut header = [0; 9];
+                tokio::select! {
+                    _ = &mut finish => break,
+                    read = stream.read_exact(&mut header) => { read.unwrap(); }
+                }
+                let length = usize::from(header[0]) << 16
+                    | usize::from(header[1]) << 8
+                    | usize::from(header[2]);
+                assert!(length <= 16384);
+                let mut payload = vec![0; length];
+                stream.read_exact(&mut payload).await.unwrap();
+                if header[3] == 4 && header[4] == 0 {
+                    stream
+                        .write_all(&[0, 0, 0, 4, 1, 0, 0, 0, 0])
+                        .await
+                        .unwrap();
+                }
+                if header[3] == 1 {
+                    streams += 1;
+                    assert_eq!(
+                        streams, 1,
+                        "HTTP/2 refusal must not silently replay a request"
+                    );
+                }
+                if header[3] == 0 {
+                    received.extend_from_slice(&payload);
+                    if header[4] & 1 != 0 {
+                        assert_eq!(received, b"synthetic-oauth-payload");
+                        // RST_STREAM(REFUSED_STREAM): a retryable protocol fact, not permission
+                        // for the transport to bypass the provider's retry owner.
+                        let mut reset = vec![0, 0, 4, 3, 0];
+                        reset.extend_from_slice(&header[5..]);
+                        reset.extend_from_slice(&7_u32.to_be_bytes());
+                        stream.write_all(&reset).await.unwrap();
+                    }
+                }
+            }
+            assert_eq!(streams, 1);
+            assert!(
+                timeout(Duration::from_millis(50), listener.accept())
+                    .await
+                    .is_err()
+            );
+        };
+        let send = async {
+            let error = client
+                .post(url)
+                .body("synthetic-oauth-payload")
+                .send()
+                .await
+                .unwrap_err();
+            assert!(!error.is_connect(), "payload already reached the server");
+            finished.send(()).unwrap();
+        };
+        tokio::join!(server, send);
+    })
+    .await
+    .unwrap();
+}
 
 async fn headers<S: AsyncRead + Unpin>(stream: &mut S) -> String {
     let mut bytes = Vec::new();
@@ -36,8 +122,9 @@ fn request(url: &str) -> reqwest::Request {
 #[tokio::test]
 async fn native_http_preserves_json_response_url_headers_and_reuses_h1_connection() {
     timeout(LIMIT, async {
-        let identity = identity();
-        let client = NativeHttpClient::with_tls(NativeHttpConfig::default(), connector(&identity)).unwrap();
+        let root = ca_identity();
+        let identity = identity_signed_by(&root);
+        let client = http_client(&root, reqwest::Client::builder().no_proxy());
         let acceptor = acceptor(&identity, false);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("https://localhost:{}/v1/responses?x=1", listener.local_addr().unwrap().port());
@@ -71,8 +158,9 @@ async fn native_http_preserves_json_response_url_headers_and_reuses_h1_connectio
 #[tokio::test]
 async fn native_http_negotiates_h2_and_preserves_streamed_upload() {
     timeout(LIMIT, async {
-        let identity = identity();
-        let client = NativeHttpClient::with_tls(NativeHttpConfig::default(), connector(&identity)).unwrap();
+        let root = ca_identity();
+        let identity = identity_signed_by(&root);
+        let client = http_client(&root, reqwest::Client::builder().no_proxy());
         let acceptor = acceptor(&identity, true);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("https://localhost:{}/", listener.local_addr().unwrap().port());
@@ -108,8 +196,9 @@ async fn native_http_negotiates_h2_and_preserves_streamed_upload() {
 #[tokio::test]
 async fn native_http_delivers_sse_before_completion_and_enforces_body_deadline() {
     timeout(LIMIT, async {
-        let identity = identity();
-        let client = NativeHttpClient::with_tls(NativeHttpConfig::default(), connector(&identity)).unwrap();
+        let root = ca_identity();
+        let identity = identity_signed_by(&root);
+        let client = http_client(&root, reqwest::Client::builder().no_proxy());
         let acceptor = acceptor(&identity, false);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("https://localhost:{}/", listener.local_addr().unwrap().port());
@@ -141,9 +230,9 @@ async fn native_http_delivers_sse_before_completion_and_enforces_body_deadline()
 #[tokio::test]
 async fn native_http_cancellation_after_headers_drops_body_and_pre_cancel_never_dials() {
     timeout(LIMIT, async {
-        let identity = identity();
-        let client =
-            NativeHttpClient::with_tls(NativeHttpConfig::default(), connector(&identity)).unwrap();
+        let root = ca_identity();
+        let identity = identity_signed_by(&root);
+        let client = http_client(&root, reqwest::Client::builder().no_proxy());
         let acceptor = acceptor(&identity, false);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!(
@@ -152,16 +241,11 @@ async fn native_http_cancellation_after_headers_drops_body_and_pre_cancel_never_
         );
         let token = CancellationToken::new();
         token.cancel();
-        let policy = NativeRequestPolicy {
-            deadline: None,
-            cancellation: Some(token),
-        };
-        assert!(
-            client
-                .execute_with_policy(request(&url), policy)
-                .await
-                .is_err()
-        );
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => {}
+            _ = client.execute(request(&url)) => panic!("cancelled request was sent"),
+        }
         assert!(
             timeout(Duration::from_millis(30), listener.accept())
                 .await
@@ -179,18 +263,8 @@ async fn native_http_cancellation_after_headers_drops_body_and_pre_cancel_never_
             assert!(!matches!(stream.read(&mut byte).await, Ok(1..)));
         };
         let requests = async {
-            let token = CancellationToken::new();
-            let policy = NativeRequestPolicy {
-                deadline: None,
-                cancellation: Some(token.clone()),
-            };
-            let response = client
-                .execute_with_policy(request(&url), policy)
-                .await
-                .unwrap();
-            token.cancel();
-            let error = response.bytes().await.unwrap_err();
-            assert!(!error.is_timeout());
+            let response = client.execute(request(&url)).await.unwrap();
+            drop(response);
         };
         tokio::join!(server, requests);
     })
@@ -201,9 +275,8 @@ async fn native_http_cancellation_after_headers_drops_body_and_pre_cancel_never_
 #[tokio::test]
 async fn native_http_distinguishes_connect_from_ambiguous_send_without_retry() {
     timeout(LIMIT, async {
-        let identity = identity();
-        let client =
-            NativeHttpClient::with_tls(NativeHttpConfig::default(), connector(&identity)).unwrap();
+        let root = ca_identity();
+        let client = http_client(&root, reqwest::Client::builder().no_proxy());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
         drop(listener);
@@ -217,7 +290,7 @@ async fn native_http_distinguishes_connect_from_ambiguous_send_without_retry() {
         };
         let requests = async {
             let error = client.execute(request(&url)).await.unwrap_err();
-            assert!(matches!(error, NativeTransportError::Request { .. }));
+            assert!(!error.is_connect(), "request was sent: {error:?}");
         };
         tokio::join!(server, requests);
         assert!(
@@ -233,19 +306,19 @@ async fn native_http_distinguishes_connect_from_ambiguous_send_without_retry() {
 #[tokio::test]
 async fn native_http_proxy_connect_keeps_credentials_out_of_origin() {
     timeout(LIMIT, async {
-        let identity = identity();
+        let root = ca_identity();
+        let identity = identity_signed_by(&root);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let config = NativeHttpConfig {
-            proxy: Some(
-                OutboundProxy::parse(&format!(
+        let client = http_client(
+            &root,
+            reqwest::Client::builder().no_proxy().proxy(
+                reqwest::Proxy::all(format!(
                     "http://user:password@{}",
                     listener.local_addr().unwrap()
                 ))
                 .unwrap(),
             ),
-            ..Default::default()
-        };
-        let client = NativeHttpClient::with_tls(config, connector(&identity)).unwrap();
+        );
         let acceptor = acceptor(&identity, false);
         let server = async {
             let (mut stream, _) = listener.accept().await.unwrap();
@@ -278,21 +351,21 @@ async fn native_http_proxy_connect_keeps_credentials_out_of_origin() {
 #[tokio::test]
 async fn native_http_forward_proxy_and_https_proxy_outer_tls() {
     timeout(LIMIT, async {
-        let identity = identity();
+        let root = ca_identity();
+        let identity = identity_signed_by(&root);
         for secure_proxy in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let scheme = if secure_proxy { "https" } else { "http" };
-            let config = NativeHttpConfig {
-                proxy: Some(
-                    OutboundProxy::parse(&format!(
+            let client = http_client(
+                &root,
+                reqwest::Client::builder().no_proxy().proxy(
+                    reqwest::Proxy::all(format!(
                         "{scheme}://user:pass@localhost:{}",
                         listener.local_addr().unwrap().port()
                     ))
                     .unwrap(),
                 ),
-                ..Default::default()
-            };
-            let client = NativeHttpClient::with_tls(config, connector(&identity)).unwrap();
+            );
             let acceptor = acceptor(&identity, false);
             let server = async {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -330,7 +403,7 @@ async fn serve_forward<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) {
 #[tokio::test]
 async fn native_http_socks_preserves_local_and_remote_dns() {
     timeout(LIMIT, async {
-        let identity = identity();
+        let root = ca_identity();
         for remote in [false, true] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let scheme = if remote { "socks5h" } else { "socks5" };
@@ -339,14 +412,13 @@ async fn native_http_socks_preserves_local_and_remote_dns() {
             } else {
                 "localhost"
             };
-            let config = NativeHttpConfig {
-                proxy: Some(
-                    OutboundProxy::parse(&format!("{scheme}://{}", listener.local_addr().unwrap()))
+            let client = http_client(
+                &root,
+                reqwest::Client::builder().no_proxy().proxy(
+                    reqwest::Proxy::all(format!("{scheme}://{}", listener.local_addr().unwrap()))
                         .unwrap(),
                 ),
-                ..Default::default()
-            };
-            let client = NativeHttpClient::with_tls(config, connector(&identity)).unwrap();
+            );
             let server = async {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 assert_eq!(stream.read_u8().await.unwrap(), 5);
@@ -399,26 +471,14 @@ async fn native_http_socks_preserves_local_and_remote_dns() {
 }
 
 #[tokio::test]
-async fn native_http_ipv6_source_is_preserved_and_proxy_conflict_fails_closed() {
+async fn native_http_ipv6_source_is_preserved_and_ipv4_never_used() {
     timeout(LIMIT, async {
-        let identity = identity();
-        let config = NativeHttpConfig {
-            source: Some(std::net::Ipv6Addr::LOCALHOST),
-            ..Default::default()
-        };
-        let client = NativeHttpClient::with_tls(config.clone(), connector(&identity)).unwrap();
-        let conflict = NativeHttpConfig {
-            proxy: Some(OutboundProxy::parse("http://localhost:8080").unwrap()),
-            ..config
-        };
-        let error = match NativeHttpClient::with_tls(conflict, connector(&identity)) {
-            Ok(_) => panic!("proxy/source conflict accepted"),
-            Err(error) => error,
-        };
-        assert!(error.is_configuration());
-        assert_eq!(
-            error.egress_error(),
-            Some(provider_openai::transport::egress::CodexEgressError::ProxyConflict)
+        let root = ca_identity();
+        let client = http_client(
+            &root,
+            reqwest::Client::builder()
+                .no_proxy()
+                .local_address(std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
         );
         let listener = TcpListener::bind("[::1]:0").await.unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -448,33 +508,26 @@ async fn native_http_ipv6_source_is_preserved_and_proxy_conflict_fails_closed() 
             .execute(request("http://127.0.0.1:1/"))
             .await
             .unwrap_err();
-        assert_eq!(
-            error.egress_error(),
-            Some(provider_openai::transport::egress::CodexEgressError::DestinationUnavailable)
-        );
+        assert!(error.is_connect());
     })
     .await
     .unwrap();
 }
 
 #[tokio::test]
-async fn native_http_cached_identity_isolates_pools_and_fresh_never_reuses() {
+async fn native_http_separate_clients_isolate_pools_and_fresh_never_reuses() {
     timeout(LIMIT, async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
-        let key = uuid::Uuid::new_v4().to_string();
-        let config = NativeHttpConfig {
-            cache_key: key.clone(),
-            ..Default::default()
-        };
-        let other = NativeHttpConfig {
-            cache_key: format!("{key}-other"),
-            ..config.clone()
-        };
-        let fresh = NativeHttpConfig {
-            fresh: true,
-            ..config.clone()
-        };
+        let root = ca_identity();
+        let account = http_client(&root, reqwest::Client::builder().no_proxy());
+        let other = http_client(&root, reqwest::Client::builder().no_proxy());
+        let fresh = http_client(
+            &root,
+            reqwest::Client::builder()
+                .no_proxy()
+                .pool_max_idle_per_host(0),
+        );
         let server = async {
             let mut retained = Vec::new();
             for count in [2, 2, 1, 1] {
@@ -490,11 +543,8 @@ async fn native_http_cached_identity_isolates_pools_and_fresh_never_reuses() {
             }
         };
         let requests = async {
-            for config in [config, other, fresh] {
+            for client in [account, other, fresh] {
                 for _ in 0..2 {
-                    let client = NativeHttpClient::cached_async(config.clone())
-                        .await
-                        .unwrap();
                     assert_eq!(
                         client
                             .execute(request(&url))

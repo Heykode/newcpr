@@ -14,6 +14,9 @@ export interface RequestTuning {
   websocketFailureWindowMs: number
   websocketFailureOpenDurationMs: number
   rateLimitCooldownSeconds: number
+  openaiLocationOverrideEnabled: boolean
+  maxWaitingPerKey: number
+  keyConcurrencyWaitTimeoutSeconds: number
   accountBusyWaitEnabled: boolean
   accountBusyWaitStickyMaxWaiting: number
   accountBusyWaitStickyTimeoutSeconds: number

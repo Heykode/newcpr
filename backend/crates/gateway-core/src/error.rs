@@ -946,6 +946,8 @@ impl std::error::Error for ProviderError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GatewayErrorKind {
+    ConcurrencyQueueFull,
+    ConcurrencyQueueTimeout,
     /// 请求无效。
     InvalidRequest,
     /// 请求能力不支持。
@@ -979,6 +981,8 @@ impl GatewayErrorKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ConcurrencyQueueFull => "concurrency_queue_full",
+            Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::InvalidRequest => "invalid_request",
             Self::Unsupported => "unsupported",
             Self::Unauthorized => "unauthorized",

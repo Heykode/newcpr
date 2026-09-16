@@ -38,6 +38,17 @@ impl RecordingCoordination {
 }
 
 impl ClientAdmissionPort for RecordingCoordination {
+    fn cancel_admission<'a>(
+        &'a self,
+        _: &'a ClientApiKeyId,
+        _: &'a ModelRequestId,
+    ) -> BoxFuture<'a, Result<bool, ClientAdmissionError>> {
+        Box::pin(async move {
+            self.record("cancelled_admission");
+            Ok(true)
+        })
+    }
+
     fn admit(
         &self,
         _: ClientAdmissionRequest,
@@ -117,6 +128,7 @@ async fn full_recoverable_coordination_queues_should_drop_writes_without_waiting
             .release(&client, &request)
             .await
             .expect("full admission queue remains fail-open");
+        admissions.abandon(&client, &request);
         circuits
             .observe_success(&provider)
             .await
@@ -150,6 +162,7 @@ async fn redis_coordination_writers_should_flush_each_side_effect() {
         .release(&client, &request)
         .await
         .expect("enqueue admission release");
+    admissions.abandon(&client, &request);
     circuits
         .observe_success(&provider)
         .await
@@ -161,7 +174,7 @@ async fn redis_coordination_writers_should_flush_each_side_effect() {
     ];
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if inner.operations().len() == 2 {
+            if inner.operations().len() == 3 {
                 break;
             }
             tokio::task::yield_now().await;
@@ -178,7 +191,10 @@ async fn redis_coordination_writers_should_flush_each_side_effect() {
 
     let mut operations = inner.operations();
     operations.sort_unstable();
-    assert_eq!(operations, ["admission", "circuit_success"]);
+    assert_eq!(
+        operations,
+        ["admission", "cancelled_admission", "circuit_success"]
+    );
 }
 
 fn spawn_writer<T>(

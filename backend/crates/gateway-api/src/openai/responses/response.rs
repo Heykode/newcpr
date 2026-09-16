@@ -75,6 +75,22 @@ impl OpenAiResponsesEncoder {
         let Some(wire) = openai_wire(event).filter(|wire| wire.has_json_data()) else {
             return Vec::new();
         };
+        // Only project errors the WS client cannot consume; keep wrapped errors
+        // and retry-control codes intact. Observation still records a failure,
+        // not a successful terminal or a new metering fact.
+        if wire
+            .event_type()
+            .or_else(|| wire.data().get("type").and_then(Value::as_str))
+            == Some("error")
+            && !ws_client_consumable_error(wire.data())
+            && let Some(data) = response_failed_sse_data_from_error_event(
+                self.response_snapshot.as_ref(),
+                self.response_id.as_deref(),
+                wire.data(),
+            )
+        {
+            return vec![data.to_string()];
+        }
         vec![wire.data().to_string()]
     }
 
@@ -160,4 +176,24 @@ fn openai_wire(event: &ProviderEvent) -> Option<&ProtocolWireEvent> {
     event
         .wire_event()
         .filter(|wire| wire.protocol() == OPENAI_PROTOCOL)
+}
+
+fn ws_client_consumable_error(data: &Value) -> bool {
+    if data
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+        .is_some_and(|code| {
+            matches!(
+                code,
+                "websocket_connection_limit_reached" | "previous_response_not_found"
+            )
+        })
+    {
+        return true;
+    }
+    data.get("status")
+        .or_else(|| data.get("status_code"))
+        .and_then(Value::as_u64)
+        .is_some_and(|status| !(200..300).contains(&status))
 }

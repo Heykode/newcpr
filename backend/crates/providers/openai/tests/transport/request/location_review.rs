@@ -54,6 +54,35 @@ fn environment(text: &str) -> Value {
 }
 
 #[test]
+fn disabled_location_preserves_environment_and_explicit_search_location() {
+    use provider_openai::transport::request::encode_generate_request_with_location;
+    let body = json!({
+        "input": [environment("<environment_context><current_date>2000-01-01</current_date><timezone>UTC</timezone></environment_context>")],
+        "tools": [
+            {"type": "web_search", "user_location": {"city": "London", "future_field": 1}},
+            {"type": "web_search_preview"}
+        ]
+    });
+    let generate = request(body.as_object().unwrap().clone());
+    let disabled = encode_generate_request_with_location(&generate, "gpt-test", None).unwrap();
+    assert_eq!(disabled.body()["input"], body["input"]);
+    assert_eq!(disabled.body()["tools"], body["tools"]);
+    assert_eq!(
+        generate.protocol_payload().body(),
+        body.as_object().unwrap()
+    );
+    let enabled = encode_generate_request(&generate, "gpt-test", &west_coast()).unwrap();
+    assert_eq!(
+        enabled.body()["tools"][0]["user_location"]["city"],
+        "Los Angeles"
+    );
+    let disabled_again =
+        encode_generate_request_with_location(&generate, "gpt-test", None).unwrap();
+    assert_eq!(disabled.body(), disabled_again.body());
+    assert!(!gateway_core::routing::RequestTuning::default().openai_location_override_enabled);
+}
+
+#[test]
 fn current_search_policy_replaces_explicit_locations_and_fills_missing_ones() {
     for kind in [
         "web_search",

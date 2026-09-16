@@ -347,6 +347,14 @@ impl<S: ?Sized> ResponseExecutionSession<S>
 where
     S: ExecutionStore + 'static,
 {
+    pub(super) fn with_account_wait_budget(
+        mut self,
+        budget: Arc<super::AccountWaitBudget>,
+    ) -> Self {
+        self.account_wait_budget = budget;
+        self
+    }
+
     /// 当前请求共享的诊断上下文。
     pub fn trace(&self) -> TraceContext {
         self.trace.clone()

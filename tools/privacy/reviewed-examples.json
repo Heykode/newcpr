@@ -2,6 +2,22 @@
   {
     "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
     "rule": "authenticated-url",
+    "line": 1731,
+    "file_sha256": "b30f7746a18a9230a26d9f115c1ef17e37db9166fa3c49a97a2866154d5236ff",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Re-reviewed unchanged synthetic loopback proxy fixture after integrating timestamp and authentication recovery tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1757,
+    "file_sha256": "b30f7746a18a9230a26d9f115c1ef17e37db9166fa3c49a97a2866154d5236ff",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Re-reviewed unchanged normalized synthetic loopback proxy assertion; credential preservation and audit redaction remain asserted."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
     "line": 1630,
     "file_sha256": "52c28fda9413713582ef442c0a2e014684af3a92fbcd17fc39d439ae1a6ed148",
     "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
@@ -14,6 +30,190 @@
     "file_sha256": "52c28fda9413713582ef442c0a2e014684af3a92fbcd17fc39d439ae1a6ed148",
     "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
     "reason": "Reviewed unchanged normalized synthetic loopback proxy fixture; authentication recovery tests changed file fingerprint and line position."
+  },
+  {
+    "path": ".trellis/spec/backend/client-continuity.md",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 488,
+    "file_sha256": "07c7fb686f0afd39a4d6947da0499ff8170396880e51fbd178c31da9f698728e",
+    "line_sha256": "a9fdc16760660f57b4c9be59b1899df03c1a43a7d1a3e526f2d314ead033da69",
+    "reason": "Independently re-reviewed unchanged Rust TLS regression function reference after adding diagnostic and quota contracts; not a credential."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1603,
+    "file_sha256": "017eb9e56803fb5529685240d80cc1753678bb7901461618b0cec0e4a5db1bbf",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Independently re-reviewed unchanged synthetic loopback proxy fixture after registering timestamp regressions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1629,
+    "file_sha256": "017eb9e56803fb5529685240d80cc1753678bb7901461618b0cec0e4a5db1bbf",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Independently re-reviewed unchanged normalized synthetic loopback proxy assertion; audit redaction remains separately asserted."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/headers.rs",
+    "rule": "non-example-ip",
+    "line": 14,
+    "file_sha256": "430c71a45495a7b4aa7615a509495d52fdc009313d90fc6600f3b3b3407e7789",
+    "line_sha256": "588cd1db9d80d264c927db295a3eba023dbb7a8a1addbc5c814ed3ce29390a15",
+    "reason": "Independently re-reviewed unchanged synthetic forwarding-header fixture; HTTP and WS tests require stripping it, not connecting to it."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "authenticated-url",
+    "line": 38,
+    "file_sha256": "819b283e3f5cb368d53572feb983f691b57839b235417bbe19f6f406d345df5e",
+    "line_sha256": "9a481ea5dd22c381fddafb18644a4004674839219b8cbf91dbd5c7195b8c4d0c",
+    "reason": "Independently re-reviewed unchanged loopback CI database fixture with synthetic credentials after adding release checks."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 129,
+    "file_sha256": "819b283e3f5cb368d53572feb983f691b57839b235417bbe19f6f406d345df5e",
+    "line_sha256": "3adb12c8f4bff3ffaa94d4cc790ba0695b19869b33d8216b26e08bf4d4e63692",
+    "reason": "Independently re-reviewed IP parser false positive on an unchanged GitHub log-mask command referencing a generated variable."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 130,
+    "file_sha256": "819b283e3f5cb368d53572feb983f691b57839b235417bbe19f6f406d345df5e",
+    "line_sha256": "6818f468f5c49d8f44df010270b465f3b176549efda0b7aeec65156066df78e7",
+    "reason": "Independently re-reviewed IP parser false positive on an unchanged GitHub log-mask command referencing a generated variable."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 26,
+    "file_sha256": "01e319056262b6bea612bcbafa51cddb307cd5298ebb77cd39070640272829ce",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Independently re-reviewed synthetic authentication fixture; both address-family cases use loopback mock proxies and documentation exit addresses."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1602,
+    "file_sha256": "5c38eb702901234bc860a8808e13ae36b86913a0fc79fcf8b152baf480c88b4c",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Independently re-reviewed unchanged database fixture containing a loopback proxy and synthetic credentials."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1628,
+    "file_sha256": "5c38eb702901234bc860a8808e13ae36b86913a0fc79fcf8b152baf480c88b4c",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Independently re-reviewed unchanged assertion preserving the synthetic loopback proxy fixture; the test separately checks audit redaction."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4041,
+    "file_sha256": "38bcefe4d96c54a77920cc82c032c80a375ee6c7bfdc4d38245cf29707568d32",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Independently re-reviewed unchanged synthetic Windows Unicode workspace path used by local WebSocket ASCII and JSON preservation assertions."
+  },
+  {
+    "path": ".trellis/spec/backend/client-continuity.md",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 471,
+    "file_sha256": "d0df17ffd7dfe789eac0e76f44ed43c6ce7af9e09f24d67db1bca5553dc31445",
+    "line_sha256": "a9fdc16760660f57b4c9be59b1899df03c1a43a7d1a3e526f2d314ead033da69",
+    "reason": "Unchanged reviewed Rust test identifier reference after the unified profile documentation update."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 72,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "e08f3e5adfbd37e055a284d9e81db7a0ca0b59c809eb7c60cd2f91ebc8cb95f9",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 382,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "866aaa0977c3b9fa9b43fe03981074ea2d58b2b0eefb046ffd37628fb4fe5f05",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 417,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "9de12eaf8ba8b0e4858b4328471402834f850fcf52eeb8962f910183467f1026",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 533,
+    "file_sha256": "540c308ed79b7f80e161ddd25d640f6d5397de79b732de97257763ad33581ee4",
+    "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
+    "reason": "Unchanged reviewed unsigned mock JWT in isolated token-response tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4007,
+    "file_sha256": "c83935d3d9dd6dc9ced2fb3098decb57976deecdc5d4c40acab531904d02c675",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Unchanged reviewed synthetic escaped Windows Unicode path asserting exact JSON preservation."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/headers.rs",
+    "rule": "non-example-ip",
+    "line": 14,
+    "file_sha256": "b90d4c469a891848af26decb51ad331cc2dc901ca530c978110e1b178f010074",
+    "line_sha256": "588cd1db9d80d264c927db295a3eba023dbb7a8a1addbc5c814ed3ce29390a15",
+    "reason": "Unchanged reviewed synthetic forwarding-header fixture, not a deployment endpoint."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/native_http.rs",
+    "rule": "authenticated-url",
+    "line": 316,
+    "file_sha256": "f3bc9ef24f9b4114f29d404f474fe190dfdafac9987b6096f0f90a47a522b856",
+    "line_sha256": "d5cc4ba3c169b4bdc4ae0ec5e3282cfd72911982fd699b7966866794bae482c1",
+    "reason": "Unchanged reviewed synthetic proxy credentials for an isolated local proxy fixture."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/qx_profile.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 545,
+    "file_sha256": "95dd7bde1f67544cf3cdc42fa744b6223932922b2b47293f3854ecc97fe71e4f",
+    "line_sha256": "16b6bf8f4b891653b34ba0e09099c50c327b08529312b5a079a93b518bc73c77",
+    "reason": "Unchanged reviewed Rust test function identifier, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 147,
+    "file_sha256": "02af9156f47600ed5ea787f77492cad39c01e29904ee1cf0ea5fb3a2fb5ad2fe",
+    "line_sha256": "0c9d5d94fc2f00276883de931fc26f0ced43e5e9a0b7730407fc6b6c869b1e4e",
+    "reason": "Unchanged reviewed Rust test function identifier, not a CPR credential."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "authenticated-url",
+    "line": 250,
+    "file_sha256": "02af9156f47600ed5ea787f77492cad39c01e29904ee1cf0ea5fb3a2fb5ad2fe",
+    "line_sha256": "9aa104ea897354d3eb1e73d00d4b556f8ca5fb140acba2afb88e290615cc59ac",
+    "reason": "Unchanged reviewed synthetic proxy URL in isolated TLS fixture."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/tls.rs",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 431,
+    "file_sha256": "02af9156f47600ed5ea787f77492cad39c01e29904ee1cf0ea5fb3a2fb5ad2fe",
+    "line_sha256": "1a58dbbe57cd503aa12612f4280a27ea49f813090650ceaf6490c90504084620",
+    "reason": "Unchanged reviewed Rust test function identifier, not a CPR credential."
   },
   {
     "path": ".github/actions/verify-container/action.yml",

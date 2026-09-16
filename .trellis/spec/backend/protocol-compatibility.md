@@ -1,5 +1,20 @@
 # Protocol Compatibility Contracts
 
+## Downstream Environment and WS Error Projection
+
+- Strip downstream `x-stainless-*`, `sec-ch-ua*`, `sec-fetch-*`, Origin and
+  Referer at the existing ingress/provider passthrough boundaries. Do not
+  broaden this to unknown business headers, traceparent/tracestate or bodies.
+- Extract `session_id` alias semantics before dropping its raw passthrough.
+  The selected account/Key projection remains the sole owner of generated
+  session/thread/installation headers, including the regenerated QX aliases.
+- Native WS bare errors may become `response.failed` for delivery, using the
+  observed response snapshot. Preserve consumable status errors and special
+  continuation/connection-limit control codes. Do not change canonical
+  failure, billing, finish-gate or SSE semantics.
+- Cover real HTTP/WS outbound headers, repeated downstream WS frames, opaque
+  business bytes, unchanged identity and single terminal failure delivery.
+
 ## Scope
 
 Apply when modifying Chat conversion, Responses HTTP delivery, explicit compaction
@@ -136,6 +151,18 @@ or multipart image editing. These contracts extend, not replace,
   acceptance.
 
 ## Chat Extension Contracts
+
+### File Input and Public Reasoning History
+
+- User `file` parts map to `input_file` without fetching or decoding the payload.
+  Exactly one nonempty `file_id` or `file_data` is required; optional filename
+  remains intact. Reject unknown fields, mixed sources and non-user file parts.
+  File-ID ownership remains an upstream account constraint, not proven by conversion.
+- Assistant string `reasoning_content` or `reasoning` is ordinary public history
+  (`output_text` in a completed assistant message), never encrypted reasoning
+  or a continuation ID. Conflicting aliases and non-assistant roles are rejected.
+- Do not add one-way legacy `functions` conversion, terminal replay or an extra
+  billing source under this compatibility change.
 
 ### Scope
 

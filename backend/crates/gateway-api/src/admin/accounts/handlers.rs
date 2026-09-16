@@ -8,6 +8,7 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .merge(import_tasks::router::<S>())
         .route("/api/admin/accounts", get(list_accounts::<S>))
         .route("/api/admin/accounts/detail", get(account_detail::<S>))
         .route("/api/admin/accounts/export", get(export_accounts::<S>))

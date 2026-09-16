@@ -18,7 +18,7 @@ use crate::routing::UpstreamModelId;
 use crate::validation::{IdentifierError, validate_text};
 
 mod user_agent;
-pub use user_agent::{ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride};
+pub use user_agent::ProviderUserAgentOverride;
 
 mod capacity_wait;
 pub use capacity_wait::{

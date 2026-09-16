@@ -655,6 +655,7 @@ impl fmt::Debug for PrepareCredentialRotation {
 /// Provider 已验证、可由 Store 以 credential revision CAS 原子提交的轮换 facts。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedCredentialRotationFacts {
+    pub preserve_profile: bool,
     pub account_id: ProviderAccountId,
     pub provider_kind: ProviderKind,
     pub expected_credential_revision: Revision,

@@ -1,5 +1,6 @@
 //! OpenAI 额度事实边界与展示快照回归。
 
+mod plan_sync;
 mod recovery;
 mod refresh_timing;
 mod scheduling;
@@ -30,8 +31,6 @@ use crate::support::{MemoryAccountStore, profile, secret};
 
 fn wire_profile() -> CodexWireProfileState {
     CodexWireProfileState::new(CodexWireProfile {
-        tls_profile: provider_openai::transport::profile::CodexTlsProfile::Cpr,
-        application_profile: Default::default(),
         raw_user_agent: None,
         originator: "codex_cli_rs".to_owned(),
         codex_version: "0.144.0".to_owned(),
@@ -145,7 +144,9 @@ async fn global_qx_service(
     let profile = wire_profile();
     let desktop_ua = profile.desktop_snapshot().user_agent();
     profile
-        .apply_user_agent_override(&ProviderUserAgentOverride::QxCompatible { user_agent: None })
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
+        })
         .expect("global QX selection");
     assert_ne!(profile.snapshot().user_agent(), desktop_ua);
     let service = CodexCredentialQuotaService::new(

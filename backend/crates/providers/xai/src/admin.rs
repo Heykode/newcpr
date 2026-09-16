@@ -950,6 +950,7 @@ fn prepared_rotation(
         account_id,
         expected_revision,
         profile: credential_profile,
+        preserve_profile,
         credential,
         has_refresh_token,
         access_token_expires_at,
@@ -961,6 +962,7 @@ fn prepared_rotation(
     }
     Ok(PreparedCredentialRotation::new(
         PreparedCredentialRotationFacts {
+            preserve_profile,
             account_id,
             provider_kind,
             expected_credential_revision: Revision::new(expected_revision.get())
@@ -1347,15 +1349,21 @@ fn build_connection_test_operation(
 }
 
 fn map_failure_class(class: FailureClass) -> ProviderAdminError {
-    provider_error(match class {
-        FailureClass::Transient => ProviderAdminErrorKind::Unavailable,
-        FailureClass::Ambiguous => ProviderAdminErrorKind::Conflict,
-        FailureClass::CredentialPermanent
-        | FailureClass::ConfigurationPermanent
-        | FailureClass::UserActionRequired
-        | FailureClass::Security => ProviderAdminErrorKind::Invalid,
-        FailureClass::Unsupported => ProviderAdminErrorKind::Unsupported,
-    })
+    class.into()
+}
+
+impl From<FailureClass> for ProviderAdminError {
+    fn from(class: FailureClass) -> Self {
+        provider_error(match class {
+            FailureClass::Transient => ProviderAdminErrorKind::Unavailable,
+            FailureClass::Ambiguous => ProviderAdminErrorKind::Ambiguous,
+            FailureClass::CredentialPermanent
+            | FailureClass::ConfigurationPermanent
+            | FailureClass::UserActionRequired
+            | FailureClass::Security => ProviderAdminErrorKind::Invalid,
+            FailureClass::Unsupported => ProviderAdminErrorKind::Unsupported,
+        })
+    }
 }
 
 fn map_oauth_error(error: OAuthError) -> ProviderAdminError {

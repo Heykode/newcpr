@@ -1,22 +1,14 @@
 import type { RequestOptions } from '../request'
 import request from '../request'
 
-export type OutboundTlsProfile = 'cpr' | 'qx-compatible'
-export type OutboundSessionPolicy = 'native' | 'qx-compatible'
-
 export type OutboundUserAgentSelection
   = | { mode: 'default' }
     | { mode: 'custom', userAgent: string }
-    | { mode: 'qx-compatible', userAgent?: string | null }
-    | { mode: 'independent', userAgent: string | null, tlsProfile: OutboundTlsProfile, sessionPolicy: OutboundSessionPolicy }
 
 export interface OutboundUserAgentSettings {
-  mode: 'default' | 'custom' | 'qx-compatible' | 'independent'
+  mode: 'default' | 'custom'
   customUserAgent: string | null
-  tlsProfile: OutboundTlsProfile
-  sessionPolicy: OutboundSessionPolicy
   defaultUserAgent: string
-  qxDefaultUserAgent: string
   effectiveUserAgent: string
   effectiveDesktopUserAgent: string
   coreVersion: string

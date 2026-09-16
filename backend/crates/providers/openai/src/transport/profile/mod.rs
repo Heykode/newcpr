@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, future::BoxFuture};
 use gateway_core::account::OpaqueProviderData;
 use gateway_core::provider_ports::{
-    ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderSessionPolicy,
-    ProviderStoreError, ProviderTlsProfile, ProviderUserAgentOverride,
+    ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,
+    ProviderUserAgentOverride,
 };
 use gateway_core::routing::ProviderKind;
 use reqwest::Client;
@@ -62,66 +62,12 @@ impl Default for CodexRequestLocation {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum CodexTlsProfile {
-    #[default]
-    Cpr,
-    QxCompatible,
-}
-
-impl From<ProviderTlsProfile> for CodexTlsProfile {
-    fn from(profile: ProviderTlsProfile) -> Self {
-        match profile {
-            ProviderTlsProfile::Cpr => Self::Cpr,
-            ProviderTlsProfile::QxCompatible => Self::QxCompatible,
-        }
-    }
-}
-
-impl From<CodexTlsProfile> for ProviderTlsProfile {
-    fn from(profile: CodexTlsProfile) -> Self {
-        match profile {
-            CodexTlsProfile::Cpr => Self::Cpr,
-            CodexTlsProfile::QxCompatible => Self::QxCompatible,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub enum CodexApplicationProfile {
-    #[default]
-    Native,
-    QxCompatible,
-}
-
-impl From<ProviderSessionPolicy> for CodexApplicationProfile {
-    fn from(policy: ProviderSessionPolicy) -> Self {
-        match policy {
-            ProviderSessionPolicy::Native => Self::Native,
-            ProviderSessionPolicy::QxCompatible => Self::QxCompatible,
-        }
-    }
-}
-
-impl From<CodexApplicationProfile> for ProviderSessionPolicy {
-    fn from(profile: CodexApplicationProfile) -> Self {
-        match profile {
-            CodexApplicationProfile::Native => Self::Native,
-            CodexApplicationProfile::QxCompatible => Self::QxCompatible,
-        }
-    }
-}
-
 /// Codex 上游请求身份。
 ///
 /// 启动配置提供经源码审计的 Core、运行环境和 Desktop 启动版本。运行时只会使用
 /// 同一个官方 Desktop ZIP 中核验出的 Core、Desktop 版本及构建号原子替换版本字段。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWireProfile {
-    /// 显式传输选择，不从 UA 字符串推断。
-    pub tls_profile: CodexTlsProfile,
-    /// 显式应用层会话策略，不从 TLS 或 UA 身份推断。
-    pub application_profile: CodexApplicationProfile,
     /// QX CLI 保留原始安全语法；CPR 由配套字段生成。
     pub raw_user_agent: Option<String>,
     /// `originator` 请求头及 User-Agent 产品名。
@@ -159,12 +105,12 @@ impl CodexWireProfile {
         } else {
             qx::parse(value, desktop)?
         };
-        profile.tls_profile = CodexTlsProfile::Cpr;
-        profile.application_profile = CodexApplicationProfile::Native;
+        profile.residency = desktop.residency;
+        profile.location = desktop.location.clone();
         Ok(profile)
     }
 
-    /// QX 必须显式选中；Desktop 元数据继承独立的默认 surface。
+    /// 解析 CLI UA；Desktop 元数据继承独立的默认 surface。
     pub fn parse_qx_user_agent(value: &str, desktop: &Self) -> Result<Self, CodexWireProfileError> {
         qx::parse(value, desktop)
     }
@@ -228,8 +174,6 @@ impl CodexWireProfile {
             return Err(CodexWireProfileError::Incoherent);
         }
         Ok(Self {
-            tls_profile: CodexTlsProfile::Cpr,
-            application_profile: CodexApplicationProfile::Native,
             raw_user_agent: None,
             originator: originator.to_owned(),
             codex_version: codex_version.to_owned(),
@@ -314,14 +258,6 @@ fn valid_architecture(os_type: &str, arch: &str) -> bool {
 pub enum CodexWireProfileOverride {
     Default,
     Custom(Box<CodexWireProfile>),
-    QxCompatible {
-        profile: Box<CodexWireProfile>,
-        user_agent: Option<String>,
-    },
-    Independent {
-        profile: Box<CodexWireProfile>,
-        user_agent: Option<String>,
-    },
 }
 
 /// Settings and previews needed by the admin UI.
@@ -352,15 +288,15 @@ impl CodexWireProfileSelection {
     fn effective(&self) -> &CodexWireProfile {
         match &self.mode {
             CodexWireProfileOverride::Default => &self.default_profile,
-            CodexWireProfileOverride::Custom(profile)
-            | CodexWireProfileOverride::QxCompatible { profile, .. }
-            | CodexWireProfileOverride::Independent { profile, .. } => profile,
+            CodexWireProfileOverride::Custom(profile) => profile,
         }
     }
 
     fn desktop(&self) -> &CodexWireProfile {
         match &self.mode {
-            CodexWireProfileOverride::Custom(profile) => profile,
+            CodexWireProfileOverride::Custom(profile) if profile.originator == "Codex Desktop" => {
+                profile
+            }
             _ => &self.default_profile,
         }
     }
@@ -398,7 +334,7 @@ impl CodexWireProfileState {
         }
     }
 
-    /// Desktop 辅助 surface 不消费 CLI 画像，QX 模式回到当前 CPR 默认。
+    /// Desktop 辅助 surface 不消费 CLI 画像，自定义 CLI 使用当前 CPR 默认。
     pub fn desktop_snapshot(&self) -> CodexWireProfile {
         self.selection
             .read()
@@ -447,42 +383,11 @@ impl CodexWireProfileState {
         let mode = match selection {
             ProviderUserAgentOverride::Default => CodexWireProfileOverride::Default,
             ProviderUserAgentOverride::Custom { user_agent } => {
-                let mut profile = CodexWireProfile::parse_user_agent(user_agent)?;
-                profile.residency = current.default_profile.residency;
-                CodexWireProfileOverride::Custom(Box::new(profile))
-            }
-            ProviderUserAgentOverride::QxCompatible { .. } => {
-                let ProviderUserAgentOverride::QxCompatible { user_agent } =
-                    selection.clone().normalized()
-                else {
-                    unreachable!()
-                };
-                CodexWireProfileOverride::QxCompatible {
-                    profile: Box::new(qx::parse(
-                        user_agent.as_deref().unwrap_or(qx::DEFAULT_USER_AGENT),
-                        &current.default_profile,
-                    )?),
+                let profile = CodexWireProfile::parse_custom_user_agent(
                     user_agent,
-                }
-            }
-            ProviderUserAgentOverride::Independent {
-                user_agent,
-                tls_profile,
-                session_policy,
-            } => {
-                let mut profile = match user_agent {
-                    Some(value) => {
-                        CodexWireProfile::parse_custom_user_agent(value, &current.default_profile)?
-                    }
-                    None => current.default_profile.clone(),
-                };
-                profile.tls_profile = (*tls_profile).into();
-                profile.application_profile = (*session_policy).into();
-                profile.residency = current.default_profile.residency;
-                CodexWireProfileOverride::Independent {
-                    profile: Box::new(profile),
-                    user_agent: user_agent.clone(),
-                }
+                    &current.default_profile,
+                )?;
+                CodexWireProfileOverride::Custom(Box::new(profile))
             }
         };
         current.mode = mode;
@@ -499,17 +404,6 @@ impl CodexWireProfileState {
             CodexWireProfileOverride::Custom(profile) => ProviderUserAgentOverride::Custom {
                 user_agent: profile.user_agent(),
             },
-            CodexWireProfileOverride::QxCompatible { user_agent, .. } => {
-                ProviderUserAgentOverride::QxCompatible { user_agent }
-            }
-            CodexWireProfileOverride::Independent {
-                profile,
-                user_agent,
-            } => ProviderUserAgentOverride::Independent {
-                user_agent,
-                tls_profile: profile.tls_profile.into(),
-                session_policy: profile.application_profile.into(),
-            },
         };
         self.apply_user_agent_override(&selection)
     }
@@ -525,18 +419,6 @@ impl CodexWireProfileState {
         profile.desktop_version.clone_from(&release.desktop_version);
         profile.desktop_build.clone_from(&release.desktop_build);
         profile.verified_at = release.verified_at;
-        let updated_default = profile.clone();
-        if let CodexWireProfileOverride::Independent {
-            profile,
-            user_agent: None,
-        } = &mut selection.mode
-        {
-            let tls = profile.tls_profile;
-            let application = profile.application_profile;
-            **profile = updated_default;
-            profile.tls_profile = tls;
-            profile.application_profile = application;
-        }
     }
 }
 

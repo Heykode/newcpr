@@ -48,9 +48,7 @@ impl CodexCredentialRepository {
             .store
             .load_credential(account.id(), account.revision())
             .await?;
-        if current.account != *account {
-            return Err(CredentialRepositoryError::RevisionConflict);
-        }
+        // Credential revision is the fence; quota/profile changes can race a successful exchange.
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
         let oauth = data
             .oauth_mut()
@@ -75,6 +73,7 @@ impl CodexCredentialRepository {
             next_refresh_at,
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
+        .preserving_profile()
         .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
@@ -91,9 +90,6 @@ impl CodexCredentialRepository {
             .store
             .load_credential(account.id(), account.revision())
             .await?;
-        if current.account != *account {
-            return Err(CredentialRepositoryError::RevisionConflict);
-        }
         let data = CodexCredentialCodec::decode_complete(&current.credential)?;
         let has_refresh_token = data.has_refresh_token();
         let credential = CodexCredentialCodec::encode_complete(data)?;
@@ -106,7 +102,8 @@ impl CodexCredentialRepository {
             account.access_token_expires_at(),
             Some(next_refresh_at),
         )
-        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
+        .preserving_profile();
         if let Some(error_reason) = error_reason {
             update = update.with_account_state(
                 account.credential_state(),
@@ -198,7 +195,8 @@ impl CodexCredentialRepository {
             account.access_token_expires_at(),
             account.next_refresh_at(),
         )
-        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
+        .preserving_profile();
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 

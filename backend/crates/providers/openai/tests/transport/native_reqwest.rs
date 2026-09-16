@@ -68,7 +68,7 @@ fn native_reqwest_preserves_custom_ca_and_certificate_validation() {
                 }
 
                 let client = client.expect("custom native TLS client builds");
-                let acceptor = acceptor(&server_identity, true);
+                let acceptor = acceptor(&server_identity, false);
                 let rejected = matches!(case.as_str(), "wrong-host" | "untrusted");
                 timeout(Duration::from_secs(10), async {
                     let server = async {

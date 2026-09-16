@@ -108,7 +108,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
         opening.lines().next(),
         Some("GET /backend-api/codex/responses HTTP/1.1")
     );
-    // 官方 Codex Core 0.154.0（Desktop 26.908.40834）的原始 opening 抓包顺序。
+    // Native WS ordering after the unified QX session header projection.
     assert_eq!(
         read_header_names(&opening),
         vec![
@@ -117,11 +117,11 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             "upgrade",
             "sec-websocket-version",
             "sec-websocket-key",
+            "session_id",
             "chatgpt-account-id",
             "authorization",
             "user-agent",
             "originator",
-            "openai-beta",
             "version",
             "x-codex-beta-features",
             "x-client-request-id",
@@ -130,6 +130,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             "x-codex-window-id",
             "x-codex-turn-metadata",
             "x-codex-routing-hint",
+            "openai-beta",
             "sec-websocket-extensions",
         ]
     );
@@ -153,7 +154,7 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
             Some("codex_cli_rs"),
             Some("1.2.3"),
             Some("responses_websockets=2026-02-06"),
-            Some("request-fingerprint"),
+            Some("thread-fingerprint"),
             Some("model=gpt-5.5"),
         )
     );
@@ -200,131 +201,124 @@ async fn official_websocket_wire_fingerprint_should_remain_aligned() {
 
 #[tokio::test]
 async fn websocket_compression_threshold_keeps_negotiated_dictionary_and_pool_owner() {
-    use gateway_core::provider_ports::{
-        ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride,
-    };
+    use gateway_core::provider_ports::ProviderUserAgentOverride;
 
     let sizes = [
         127, 128, 129, 127, 4096, 4096, 127, 4096, 511, 512, 513, 127,
     ];
-    for tls_profile in [ProviderTlsProfile::Cpr, ProviderTlsProfile::QxCompatible] {
-        for session_policy in [
-            ProviderSessionPolicy::Native,
-            ProviderSessionPolicy::QxCompatible,
+    for selection in [
+        ProviderUserAgentOverride::Default,
+        ProviderUserAgentOverride::Custom {
+            user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
+        },
+    ] {
+        for (extension, threshold, reset_dictionary) in [
+            (None, None, false),
+            (Some("permessage-deflate"), Some(128), false),
+            (
+                Some("permessage-deflate; client_no_context_takeover"),
+                Some(512),
+                true,
+            ),
+            (
+                Some("permessage-deflate; server_no_context_takeover"),
+                Some(128),
+                false,
+            ),
+            (
+                Some("permessage-deflate; server_no_context_takeover; client_no_context_takeover"),
+                Some(512),
+                true,
+            ),
+            (
+                Some("permessage-deflate; client_max_window_bits=12"),
+                Some(128),
+                false,
+            ),
         ] {
-            for (extension, threshold, reset_dictionary) in [
-                (None, None, false),
-                (Some("permessage-deflate"), Some(128), false),
-                (
-                    Some("permessage-deflate; client_no_context_takeover"),
-                    Some(512),
-                    true,
-                ),
-                (
-                    Some("permessage-deflate; server_no_context_takeover"),
-                    Some(128),
-                    false,
-                ),
-                (
-                    Some(
-                        "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
-                    ),
-                    Some(512),
-                    true,
-                ),
-                (
-                    Some("permessage-deflate; client_max_window_bits=12"),
-                    Some(128),
-                    false,
-                ),
-            ] {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let address = listener.local_addr().unwrap();
-                let server = tokio::spawn(async move {
-                    let (mut stream, _) = listener.accept().await.unwrap();
-                    let opening = read_http_request(&mut stream).await;
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let opening = read_http_request(&mut stream).await;
+                assert_eq!(
+                    read_header_value(&opening, "sec-websocket-extensions"),
+                    Some("permessage-deflate; client_max_window_bits"),
+                );
+                let key = read_header_value(&opening, "sec-websocket-key").unwrap();
+                let mut reply = format!(
+                    "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {}\r\n",
+                    derive_accept_key(key.as_bytes()),
+                );
+                if let Some(extension) = extension {
+                    reply.push_str(&format!("Sec-WebSocket-Extensions: {extension}\r\n"));
+                }
+                reply.push_str("\r\n");
+                stream.write_all(reply.as_bytes()).await.unwrap();
+
+                let mut dictionary = Decompress::new(false);
+                let mut models = Vec::new();
+                for size in sizes {
+                    let frame = read_client_frame(&mut stream).await;
+                    let compressed = threshold.is_some_and(|threshold| size >= threshold);
                     assert_eq!(
-                        read_header_value(&opening, "sec-websocket-extensions"),
-                        Some("permessage-deflate; client_max_window_bits"),
+                        frame.first_byte,
+                        if compressed { 0xc1 } else { 0x81 },
+                        "extension={extension:?}, payload bytes={size}",
                     );
-                    let key = read_header_value(&opening, "sec-websocket-key").unwrap();
-                    let mut reply = format!(
-                        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {}\r\n",
-                        derive_accept_key(key.as_bytes()),
+                    assert!(frame.masked);
+                    assert_eq!(frame.mask_len, 4);
+                    let decoded = if compressed {
+                        if reset_dictionary {
+                            dictionary.reset(false);
+                        }
+                        let mut wire = frame.payload;
+                        wire.extend_from_slice(&[0, 0, 0xff, 0xff]);
+                        let before = dictionary.total_out();
+                        let mut output = vec![0; 16 * 1024];
+                        dictionary
+                            .decompress(&wire, &mut output, FlushDecompress::Sync)
+                            .expect(
+                                "mixed compressed/uncompressed frames must keep dictionary sync",
+                            );
+                        output.truncate((dictionary.total_out() - before) as usize);
+                        output
+                    } else {
+                        frame.payload
+                    };
+                    assert_eq!(
+                        decoded.len(),
+                        size,
+                        "threshold uses uncompressed UTF-8 bytes"
                     );
-                    if let Some(extension) = extension {
-                        reply.push_str(&format!("Sec-WebSocket-Extensions: {extension}\r\n"));
-                    }
-                    reply.push_str("\r\n");
-                    stream.write_all(reply.as_bytes()).await.unwrap();
+                    let body: Value = serde_json::from_slice(&decoded).unwrap();
+                    assert_eq!(body["type"], "response.create");
+                    assert_eq!(body["stream"], true);
+                    models.push(body["model"].as_str().unwrap().to_owned());
+                    write_server_text_frame(
+                        &mut stream,
+                        &completed_websocket_response("resp_threshold", 1, 1),
+                    )
+                    .await;
+                }
+                models
+            });
 
-                    let mut dictionary = Decompress::new(false);
-                    let mut models = Vec::new();
-                    for size in sizes {
-                        let frame = read_client_frame(&mut stream).await;
-                        let compressed = threshold.is_some_and(|threshold| size >= threshold);
-                        assert_eq!(
-                            frame.first_byte,
-                            if compressed { 0xc1 } else { 0x81 },
-                            "extension={extension:?}, payload bytes={size}",
-                        );
-                        assert!(frame.masked);
-                        assert_eq!(frame.mask_len, 4);
-                        let decoded = if compressed {
-                            if reset_dictionary {
-                                dictionary.reset(false);
-                            }
-                            let mut wire = frame.payload;
-                            wire.extend_from_slice(&[0, 0, 0xff, 0xff]);
-                            let before = dictionary.total_out();
-                            let mut output = vec![0; 16 * 1024];
-                            dictionary
-                                .decompress(&wire, &mut output, FlushDecompress::Sync)
-                                .expect("mixed compressed/uncompressed frames must keep dictionary sync");
-                            output.truncate((dictionary.total_out() - before) as usize);
-                            output
-                        } else {
-                            frame.payload
-                        };
-                        assert_eq!(
-                            decoded.len(),
-                            size,
-                            "threshold uses uncompressed UTF-8 bytes"
-                        );
-                        let body: Value = serde_json::from_slice(&decoded).unwrap();
-                        assert_eq!(body["type"], "response.create");
-                        assert_eq!(body["stream"], true);
-                        models.push(body["model"].as_str().unwrap().to_owned());
-                        write_server_text_frame(
-                            &mut stream,
-                            &completed_websocket_response("resp_threshold", 1, 1),
-                        )
-                        .await;
-                    }
-                    models
-                });
-
-                let profile = test_wire_profile();
-                profile
-                    .apply_user_agent_override(&ProviderUserAgentOverride::Independent {
-                        user_agent: None,
-                        tls_profile,
-                        session_policy,
-                    })
-                    .unwrap();
-                let client = CodexBackendClient::new(
-                    reqwest::Client::builder().no_proxy().build().unwrap(),
-                    format!("http://{address}"),
-                    profile,
-                )
-                .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_secs(60))));
-                let timestamp_digits = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-                    .to_string()
-                    .len();
-                let base_len = serde_json::to_vec(&json!({
+            let profile = test_wire_profile();
+            profile.apply_user_agent_override(&selection).unwrap();
+            let client = CodexBackendClient::new(
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                format!("http://{address}"),
+                profile,
+            )
+            .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_secs(60))));
+            let timestamp_digits = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                .to_string()
+                .len();
+            let base_len = serde_json::to_vec(&json!({
                     "type": "response.create",
                     "model": "\u{4f60}",
                     "stream": true,
@@ -332,49 +326,48 @@ async fn websocket_compression_threshold_keeps_negotiated_dictionary_and_pool_ow
                 }))
                 .unwrap()
                 .len();
-                let mut expected_models = Vec::new();
-                for (index, size) in sizes.into_iter().enumerate() {
-                    let model = format!("\u{4f60}{}", "x".repeat(size - base_len));
-                    expected_models.push(model.clone());
-                    // A minimal synthetic body exercises the actual 128-byte boundary
-                    // after the transport adds its ordinary stream/timestamp metadata.
-                    let request = websocket_only_request(CodexResponsesRequest::from_body(
-                        json!({"model": model, "stream": false})
-                            .as_object()
-                            .unwrap()
-                            .clone(),
-                    ));
-                    let original = request.body().clone();
-                    let result = timeout(
-                        Duration::from_secs(5),
-                        client.create_response(
-                            &request,
-                            request_context("compression-chain", Some("compression-account")),
-                        ),
-                    )
-                    .await
-                    .expect("bounded compressed WS exchange")
-                    .expect("compressed WS exchange");
-                    assert_eq!(result.transport, CodexBackendTransport::WebSocket);
-                    assert_eq!(
-                        result.websocket_pool_decision,
-                        Some(if index == 0 {
-                            WebSocketPoolDecision::new()
-                        } else {
-                            WebSocketPoolDecision::reuse()
-                        }),
-                    );
-                    assert_eq!(request.body(), &original);
-                }
-                assert_eq!(
-                    timeout(Duration::from_secs(5), server)
-                        .await
+            let mut expected_models = Vec::new();
+            for (index, size) in sizes.into_iter().enumerate() {
+                let model = format!("\u{4f60}{}", "x".repeat(size - base_len));
+                expected_models.push(model.clone());
+                // A minimal synthetic body exercises the actual 128-byte boundary
+                // after the transport adds its ordinary stream/timestamp metadata.
+                let request = websocket_only_request(CodexResponsesRequest::from_body(
+                    json!({"model": model, "stream": false})
+                        .as_object()
                         .unwrap()
-                        .unwrap(),
-                    expected_models,
-                    "alternating compression must preserve every message on the same socket",
+                        .clone(),
+                ));
+                let original = request.body().clone();
+                let result = timeout(
+                    Duration::from_secs(5),
+                    client.create_response(
+                        &request,
+                        request_context("compression-chain", Some("compression-account")),
+                    ),
+                )
+                .await
+                .expect("bounded compressed WS exchange")
+                .expect("compressed WS exchange");
+                assert_eq!(result.transport, CodexBackendTransport::WebSocket);
+                assert_eq!(
+                    result.websocket_pool_decision,
+                    Some(if index == 0 {
+                        WebSocketPoolDecision::new()
+                    } else {
+                        WebSocketPoolDecision::reuse()
+                    }),
                 );
+                assert_eq!(request.body(), &original);
             }
+            assert_eq!(
+                timeout(Duration::from_secs(5), server)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                expected_models,
+                "alternating compression must preserve every message on the same socket",
+            );
         }
     }
 }

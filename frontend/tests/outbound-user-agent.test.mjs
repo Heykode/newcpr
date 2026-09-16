@@ -29,16 +29,13 @@ function load(text, dependencies) {
 }
 
 function view(selection = { mode: 'default' }) {
-  const isQx = selection.mode === 'qx-compatible'
+  const isQx = selection.userAgent?.startsWith('codex') ?? false
   const raw = selection.userAgent ?? null
   return {
     mode: selection.mode,
     customUserAgent: raw,
-    tlsProfile: selection.tlsProfile ?? (isQx ? 'qx-compatible' : 'cpr'),
-    sessionPolicy: selection.sessionPolicy ?? (isQx ? 'qx-compatible' : 'native'),
     defaultUserAgent: cpr,
-    qxDefaultUserAgent: qx,
-    effectiveUserAgent: raw ?? (isQx ? qx : cpr),
+    effectiveUserAgent: raw ?? cpr,
     effectiveDesktopUserAgent: 'Codex Desktop/26.901.51231 (Mac OS; arm64)',
     coreVersion: isQx ? '0.146.0' : '0.153.4',
     desktopVersion: '26.901.51231',
@@ -89,36 +86,29 @@ function harness(initial = view(), overrides = {}) {
   return { state, requests, previews, messages, poll: () => poll(), stop: () => scope.stop() }
 }
 
-test('legacy QX selections migrate to fixed UA with the same TLS and session choices', async () => {
+test('migrated CLI selections preview save and reload their exact pinned UA', async () => {
   for (const selection of [
-    { mode: 'qx-compatible' },
-    { mode: 'qx-compatible', userAgent: customQx },
-    { mode: 'qx-compatible', userAgent: qx },
+    { mode: 'custom', userAgent: customQx },
+    { mode: 'custom', userAgent: qx },
   ]) {
     const app = harness(view(selection))
-    const independent = {
-      mode: 'independent',
-      userAgent: selection.userAgent ?? qx,
-      tlsProfile: 'qx-compatible',
-      sessionPolicy: 'qx-compatible',
-    }
     try {
       await app.state.load(true)
-      assert.equal(app.state.tlsProfile.value, 'qx-compatible')
-      assert.equal(app.state.sessionPolicy.value, 'qx-compatible')
+      assert.equal(app.state.tlsProfile, undefined)
+      assert.equal(app.state.sessionPolicy, undefined)
       assert.equal(app.state.useDefault.value, false)
       assert.equal(app.state.displayedInput.value, selection.userAgent ?? qx)
       await app.state.check()
-      assert.deepEqual(app.previews, [independent])
+      assert.deepEqual(app.previews, [selection])
       assert.equal(app.state.preview.value.verified, false)
       assert.equal(app.requests.length, 0)
       await app.state.save()
-      assert.deepEqual(app.requests, [independent])
-      app.state.tlsProfile.value = 'cpr'
+      assert.deepEqual(app.requests, [selection])
+      app.state.custom.value = cpr
       await app.state.load(true)
-      assert.equal(app.state.tlsProfile.value, 'qx-compatible')
+      assert.equal(app.state.custom.value, selection.userAgent)
       await app.state.save()
-      assert.deepEqual(app.requests, [independent, independent])
+      assert.deepEqual(app.requests, [selection, selection])
     }
     finally {
       app.stop()
@@ -131,15 +121,9 @@ test('CPR default and explicit custom equal to default remain distinct', async (
     const app = harness(view(selection))
     try {
       await app.state.load(true)
-      assert.equal(app.state.tlsProfile.value, 'cpr')
       assert.equal(app.state.useDefault.value, selection.mode === 'default')
       await app.state.save()
-      assert.deepEqual(app.requests, [{
-        mode: 'independent',
-        userAgent: selection.userAgent ?? null,
-        tlsProfile: 'cpr',
-        sessionPolicy: 'native',
-      }])
+      assert.deepEqual(app.requests, [selection])
     }
     finally {
       app.stop()
@@ -147,40 +131,29 @@ test('CPR default and explicit custom equal to default remain distinct', async (
   }
 })
 
-test('UA TLS and session edits remain independent and retain the custom draft', async () => {
+test('the single input accepts either UA format and retains the draft across checkbox changes', async () => {
   const app = harness(view({ mode: 'custom', userAgent: cpr }))
   try {
     await app.state.load(true)
     app.state.displayedInput.value = qx
-    assert.equal(app.state.tlsProfile.value, 'cpr')
-    assert.equal(app.state.sessionPolicy.value, 'native')
     assert.deepEqual(structuredClone(app.state.selection.value), {
-      mode: 'independent',
+      mode: 'custom',
       userAgent: qx,
-      tlsProfile: 'cpr',
-      sessionPolicy: 'native',
     })
-    app.state.tlsProfile.value = 'qx-compatible'
     app.state.displayedInput.value = customQx
     await app.state.save()
     assert.deepEqual(app.requests, [{
-      mode: 'independent',
+      mode: 'custom',
       userAgent: customQx,
-      tlsProfile: 'qx-compatible',
-      sessionPolicy: 'native',
     }])
     app.state.useDefault.value = true
     assert.equal(app.state.displayedInput.value, cpr)
-    app.state.sessionPolicy.value = 'qx-compatible'
-    app.state.tlsProfile.value = 'cpr'
     app.state.useDefault.value = false
     assert.equal(app.state.displayedInput.value, customQx)
     await app.state.save()
     assert.deepEqual(app.requests.at(-1), {
-      mode: 'independent',
+      mode: 'custom',
       userAgent: customQx,
-      tlsProfile: 'cpr',
-      sessionPolicy: 'qx-compatible',
     })
   }
   finally {
@@ -189,7 +162,7 @@ test('UA TLS and session edits remain independent and retain the custom draft', 
 })
 
 test('blank custom UA is rejected instead of switching to default implicitly', async () => {
-  const app = harness(view({ mode: 'qx-compatible' }))
+  const app = harness(view({ mode: 'custom', userAgent: qx }))
   try {
     await app.state.load(true)
     for (const blank of ['', '   ']) {
@@ -217,7 +190,6 @@ test('rejected QX save retains persisted state and editable input without succes
   const app = harness(initial)
   try {
     await app.state.load(true)
-    app.state.tlsProfile.value = 'qx-compatible'
     app.state.useDefault.value = false
     app.state.displayedInput.value = 'invalid'
     await vue.nextTick()
@@ -234,14 +206,13 @@ test('rejected QX save retains persisted state and editable input without succes
 })
 
 test('a new default release from polling does not reset QX choice or draft', async () => {
-  const app = harness(view({ mode: 'qx-compatible', userAgent: customQx }), {
-    getOutboundUserAgent: async () => ({ ...view({ mode: 'qx-compatible', userAgent: customQx }), defaultUserAgent: 'new-default' }),
+  const app = harness(view({ mode: 'custom', userAgent: customQx }), {
+    getOutboundUserAgent: async () => ({ ...view({ mode: 'custom', userAgent: customQx }), defaultUserAgent: 'new-default' }),
   })
   try {
     await app.state.load(true)
     app.state.displayedInput.value = `${customQx} (codex_cli_rs; 0.146.0)`
     await app.state.load(false, true)
-    assert.equal(app.state.tlsProfile.value, 'qx-compatible')
     assert.equal(app.state.settings.value.defaultUserAgent, 'new-default')
     assert.equal(app.state.displayedInput.value, `${customQx} (codex_cli_rs; 0.146.0)`)
   }
@@ -258,10 +229,11 @@ test('unmounted QX preview and save cannot publish late results', async () => {
       [operation === 'check' ? 'previewOutboundUserAgent' : 'updateOutboundUserAgent']: () => pending,
     })
     await app.state.load(true)
-    app.state.tlsProfile.value = 'qx-compatible'
+    app.state.useDefault.value = false
+    app.state.custom.value = qx
     const running = app.state[operation]()
     app.stop()
-    resolve(view({ mode: 'qx-compatible' }))
+    resolve(view({ mode: 'custom', userAgent: qx }))
     await running
     assert.equal(app.state.settings.value.mode, 'default')
     assert.equal(app.state.preview.value, null)
@@ -269,80 +241,74 @@ test('unmounted QX preview and save cannot publish late results', async () => {
   }
 })
 
-test('QX API keeps explicit mode, raw input and request cancellation options', async () => {
+test('UA API keeps explicit mode, raw input and request cancellation options', async () => {
   const calls = []
   const api = load(readFileSync(new URL('../src/api/modules/outbound-user-agent.ts', import.meta.url), 'utf8'), {
     '../request': config => calls.push(config),
   })
   const options = { silent: true, signal: new AbortController().signal }
-  for (const selection of [{ mode: 'qx-compatible' }, { mode: 'qx-compatible', userAgent: customQx }]) {
+  for (const selection of [{ mode: 'default' }, { mode: 'custom', userAgent: customQx }]) {
     await api.previewOutboundUserAgent(selection, options)
     await api.updateOutboundUserAgent(selection, options)
   }
   assert.equal(calls.length, 4)
   for (const [index, call] of calls.entries()) {
     assert.equal(call.method, 'POST')
-    assert.equal(call.data.mode, 'qx-compatible')
+    assert.equal(call.data.mode, index >= 2 ? 'custom' : 'default')
     assert.equal(call.data.userAgent, index >= 2 ? customQx : undefined)
     assert.equal(call.signal, options.signal)
     assert.equal(call.silent, true)
   }
 })
 
-test('all independent combinations preview save and reload without field loss', async () => {
+test('all supported UA selections preview save and reload without field loss', async () => {
   for (const userAgent of [null, cpr, qx, customQx]) {
-    for (const tlsProfile of ['cpr', 'qx-compatible']) {
-      for (const sessionPolicy of ['native', 'qx-compatible']) {
-        const selection = { mode: 'independent', userAgent, tlsProfile, sessionPolicy }
-        const app = harness(view(selection))
-        try {
-          await app.state.load(true)
-          assert.equal(app.state.useDefault.value, userAgent === null)
-          assert.equal(app.state.displayedInput.value, userAgent ?? cpr)
-          await app.state.check()
-          assert.deepEqual(app.previews, [selection])
-          assert.equal(app.requests.length, 0)
-          await app.state.save()
-          await app.state.load(true)
-          assert.deepEqual(app.requests, [selection])
-          assert.deepEqual(structuredClone(app.state.selection.value), selection)
-        }
-        finally {
-          app.stop()
-        }
-      }
+    const selection = userAgent === null ? { mode: 'default' } : { mode: 'custom', userAgent }
+    const app = harness(view(selection))
+    try {
+      await app.state.load(true)
+      assert.equal(app.state.useDefault.value, userAgent === null)
+      assert.equal(app.state.displayedInput.value, userAgent ?? cpr)
+      await app.state.check()
+      assert.deepEqual(app.previews, [selection])
+      assert.equal(app.requests.length, 0)
+      await app.state.save()
+      await app.state.load(true)
+      assert.deepEqual(app.requests, [selection])
+      assert.deepEqual(structuredClone(app.state.selection.value), selection)
+    }
+    finally {
+      app.stop()
     }
   }
 })
 
-test('default UA follows polling without changing independent TLS or session drafts', async () => {
-  const selection = { mode: 'independent', userAgent: null, tlsProfile: 'qx-compatible', sessionPolicy: 'native' }
+test('default UA follows polling and remains automatic after saving', async () => {
+  const selection = { mode: 'default' }
   let latest = cpr
   const app = harness(view(selection), {
     getOutboundUserAgent: async () => ({ ...view(selection), defaultUserAgent: latest }),
   })
   try {
     await app.state.load(true)
-    app.state.sessionPolicy.value = 'qx-compatible'
     latest = 'updated-default'
     await app.state.load(false, true)
     assert.equal(app.state.displayedInput.value, latest)
-    assert.equal(app.state.tlsProfile.value, 'qx-compatible')
-    assert.equal(app.state.sessionPolicy.value, 'qx-compatible')
+    assert.equal(app.state.useDefault.value, true)
     await app.state.save()
-    assert.deepEqual(app.requests, [{ ...selection, sessionPolicy: 'qx-compatible' }])
+    assert.deepEqual(app.requests, [selection])
   }
   finally {
     app.stop()
   }
 })
 
-test('independent API transmits null and both required choices unchanged', async () => {
+test('default API does not transmit retired choices or an implicit custom UA', async () => {
   const calls = []
   const api = load(readFileSync(new URL('../src/api/modules/outbound-user-agent.ts', import.meta.url), 'utf8'), {
     '../request': config => calls.push(config),
   })
-  const selection = { mode: 'independent', userAgent: null, tlsProfile: 'qx-compatible', sessionPolicy: 'native' }
+  const selection = { mode: 'default' }
   const signal = new AbortController().signal
   await api.previewOutboundUserAgent(selection, { signal })
   await api.updateOutboundUserAgent(selection, { signal })

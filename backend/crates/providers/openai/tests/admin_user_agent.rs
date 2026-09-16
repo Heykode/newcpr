@@ -3,8 +3,8 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use gateway_core::{
     provider_ports::{
-        ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderSessionPolicy,
-        ProviderStoreError, ProviderStorePorts, ProviderTlsProfile, ProviderUserAgentOverride,
+        ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStorePorts,
+        ProviderUserAgentOverride,
     },
     routing::ProviderKind,
 };
@@ -107,7 +107,9 @@ async fn qx_initializer_preview_and_apply_preserve_explicit_selection_without_ve
     let config = valid_config();
     let bundle = provider_openai::initialize(
         config.config.clone(),
-        ports(ProviderUserAgentOverride::QxCompatible { user_agent: None }),
+        ports(ProviderUserAgentOverride::Custom {
+            user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned(),
+        }),
     )
     .await
     .unwrap();
@@ -115,10 +117,11 @@ async fn qx_initializer_preview_and_apply_preserve_explicit_selection_without_ve
     let current = provider.outbound_user_agent().unwrap();
     assert_eq!(
         current.selection,
-        ProviderUserAgentOverride::QxCompatible { user_agent: None }
+        ProviderUserAgentOverride::Custom {
+            user_agent: provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned()
+        }
     );
     assert_eq!(current.effective_user_agent, qx::DEFAULT_USER_AGENT);
-    assert_eq!(current.qx_default_user_agent, qx::DEFAULT_USER_AGENT);
     assert!(!current.verified);
     assert!(
         current
@@ -133,8 +136,8 @@ async fn qx_initializer_preview_and_apply_preserve_explicit_selection_without_ve
             .is_none()
     );
 
-    let custom = ProviderUserAgentOverride::QxCompatible {
-        user_agent: Some("codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown".to_owned()),
+    let custom = ProviderUserAgentOverride::Custom {
+        user_agent: "codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown".to_owned(),
     };
     let preview = provider.preview_outbound_user_agent(&custom).unwrap();
     assert_eq!(preview.selection, custom);
@@ -142,20 +145,22 @@ async fn qx_initializer_preview_and_apply_preserve_explicit_selection_without_ve
     assert_eq!(provider.outbound_user_agent().unwrap(), current);
     assert_eq!(provider.apply_outbound_user_agent(custom).unwrap(), preview);
 
-    let blank = provider
-        .apply_outbound_user_agent(ProviderUserAgentOverride::QxCompatible {
-            user_agent: Some("   ".to_owned()),
-        })
-        .unwrap();
-    assert_eq!(blank, current);
     assert!(
         provider
-            .apply_outbound_user_agent(ProviderUserAgentOverride::QxCompatible {
-                user_agent: Some(CUSTOM.to_owned()),
+            .apply_outbound_user_agent(ProviderUserAgentOverride::Custom {
+                user_agent: "   ".to_owned(),
             })
             .is_err()
     );
-    assert_eq!(provider.outbound_user_agent().unwrap(), current);
+    assert_eq!(provider.outbound_user_agent().unwrap(), preview);
+    assert!(
+        provider
+            .apply_outbound_user_agent(ProviderUserAgentOverride::Custom {
+                user_agent: "invalid".to_owned(),
+            })
+            .is_err()
+    );
+    assert_eq!(provider.outbound_user_agent().unwrap(), preview);
     assert!(
         provider
             .apply_outbound_user_agent(ProviderUserAgentOverride::Default)
@@ -165,56 +170,41 @@ async fn qx_initializer_preview_and_apply_preserve_explicit_selection_without_ve
 }
 
 #[tokio::test]
-async fn independent_initializer_preview_and_apply_round_trip_every_dimension() {
+async fn unified_initializer_preview_and_apply_round_trip_default_desktop_and_cli() {
     for user_agent in [
         None,
         Some(CUSTOM.to_owned()),
         Some(provider_openai::transport::profile::qx::DEFAULT_USER_AGENT.to_owned()),
     ] {
-        for tls_profile in [ProviderTlsProfile::Cpr, ProviderTlsProfile::QxCompatible] {
-            for session_policy in [
-                ProviderSessionPolicy::Native,
-                ProviderSessionPolicy::QxCompatible,
-            ] {
-                let selection = ProviderUserAgentOverride::Independent {
-                    user_agent: user_agent.clone(),
-                    tls_profile,
-                    session_policy,
-                };
-                let config = valid_config();
-                let bundle =
-                    provider_openai::initialize(config.config.clone(), ports(selection.clone()))
-                        .await
-                        .unwrap();
-                let provider = bundle.admin_provider();
-                let loaded = provider.outbound_user_agent().unwrap();
-                assert_eq!(loaded.selection, selection);
-                assert_eq!(
-                    loaded.effective_user_agent,
-                    user_agent.as_deref().unwrap_or(&loaded.default_user_agent)
-                );
-                assert_eq!(
-                    loaded.verified,
-                    user_agent.is_none()
-                        && tls_profile == ProviderTlsProfile::Cpr
-                        && session_policy == ProviderSessionPolicy::Native
-                );
-                let preview = provider.preview_outbound_user_agent(&selection).unwrap();
-                assert_eq!(preview, loaded);
-                assert_eq!(provider.outbound_user_agent().unwrap(), loaded);
-                assert_eq!(
-                    provider.apply_outbound_user_agent(selection).unwrap(),
-                    preview
-                );
-                let invalid = ProviderUserAgentOverride::Independent {
-                    user_agent: Some(String::new()),
-                    tls_profile: ProviderTlsProfile::Cpr,
-                    session_policy: ProviderSessionPolicy::Native,
-                };
-                assert!(provider.preview_outbound_user_agent(&invalid).is_err());
-                assert!(provider.apply_outbound_user_agent(invalid).is_err());
-                assert_eq!(provider.outbound_user_agent().unwrap(), loaded);
-            }
-        }
+        let selection = user_agent
+            .clone()
+            .map_or(ProviderUserAgentOverride::Default, |user_agent| {
+                ProviderUserAgentOverride::Custom { user_agent }
+            });
+        let config = valid_config();
+        let bundle = provider_openai::initialize(config.config.clone(), ports(selection.clone()))
+            .await
+            .unwrap();
+        let provider = bundle.admin_provider();
+        let loaded = provider.outbound_user_agent().unwrap();
+        assert_eq!(loaded.selection, selection);
+        assert_eq!(
+            loaded.effective_user_agent,
+            user_agent.as_deref().unwrap_or(&loaded.default_user_agent)
+        );
+        assert_eq!(loaded.verified, user_agent.is_none());
+        let preview = provider.preview_outbound_user_agent(&selection).unwrap();
+        assert_eq!(preview, loaded);
+        assert_eq!(provider.outbound_user_agent().unwrap(), loaded);
+        assert_eq!(
+            provider.apply_outbound_user_agent(selection).unwrap(),
+            preview
+        );
+        let invalid = ProviderUserAgentOverride::Custom {
+            user_agent: String::new(),
+        };
+        assert!(provider.preview_outbound_user_agent(&invalid).is_err());
+        assert!(provider.apply_outbound_user_agent(invalid).is_err());
+        assert_eq!(provider.outbound_user_agent().unwrap(), loaded);
     }
 }

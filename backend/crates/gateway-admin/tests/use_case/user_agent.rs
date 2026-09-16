@@ -7,9 +7,7 @@ use std::{
 
 use gateway_admin::model::{
     AdminErrorKind, MutationActor,
-    user_agent::{
-        OutboundUserAgentView, ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride,
-    },
+    user_agent::{OutboundUserAgentView, ProviderUserAgentOverride},
 };
 use gateway_core::{
     lifecycle::CancellationToken,
@@ -128,7 +126,6 @@ impl IdentityProvider {
                 .to_owned(),
             selection,
             default_user_agent: "fixture".to_owned(),
-            qx_default_user_agent: "fixture-qx".to_owned(),
             effective_desktop_user_agent: "fixture-desktop".to_owned(),
             core_version: "1".to_owned(),
             desktop_version: "1".to_owned(),
@@ -352,7 +349,9 @@ fn mutation() -> MutationContext {
 }
 
 fn qx() -> ProviderUserAgentOverride {
-    ProviderUserAgentOverride::QxCompatible { user_agent: None }
+    ProviderUserAgentOverride::Custom {
+        user_agent: "fixture-cli".to_owned(),
+    }
 }
 
 #[tokio::test]
@@ -562,22 +561,20 @@ async fn timed_out_read_is_bounded_and_next_cycle_can_recover() {
 }
 
 #[tokio::test]
-async fn preview_is_read_only_and_blank_qx_reconciliation_is_normalized() {
+async fn preview_is_read_only_and_reconciliation_is_idempotent() {
     let fixture = Fixture::new().await;
-    let blank = ProviderUserAgentOverride::QxCompatible {
-        user_agent: Some("   ".to_owned()),
-    };
+    let selection = qx();
     let preview = fixture
         .services
         .outbound_user_agent()
-        .preview(&fixture.provider.kind, &blank)
+        .preview(&fixture.provider.kind, &selection)
         .expect("preview");
     assert_eq!(preview.selection, qx());
     assert_eq!(fixture.selection(), ProviderUserAgentOverride::Default);
     assert_eq!(fixture.store.reads.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.store.commits.load(Ordering::SeqCst), 0);
     assert!(fixture.applied().is_empty());
-    *fixture.store.selection.lock().expect("selection") = blank;
+    *fixture.store.selection.lock().expect("selection") = selection;
     fixture.cycle().await;
     fixture.cycle().await;
     assert_eq!(fixture.selection(), qx());
@@ -601,14 +598,12 @@ async fn already_cancelled_worker_does_not_read_or_publish() {
 }
 
 #[tokio::test]
-async fn independent_save_preview_and_reconciliation_keep_the_complete_selection() {
+async fn unified_save_preview_and_reconciliation_keep_the_complete_selection() {
     let fixture = Fixture::new().await;
     for user_agent in [None, Some("fixture-cli".to_owned())] {
-        let selection = ProviderUserAgentOverride::Independent {
-            user_agent,
-            tls_profile: ProviderTlsProfile::Cpr,
-            session_policy: ProviderSessionPolicy::QxCompatible,
-        };
+        let selection = user_agent.map_or(ProviderUserAgentOverride::Default, |user_agent| {
+            ProviderUserAgentOverride::Custom { user_agent }
+        });
         let previous = fixture.selection();
         let preview = fixture
             .services

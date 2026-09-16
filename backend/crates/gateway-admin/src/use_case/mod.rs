@@ -8,6 +8,7 @@ pub mod client_distribution;
 pub mod client_keys;
 pub mod egress;
 pub mod group_monitor;
+pub mod import_tasks;
 pub mod observability;
 pub mod openai;
 pub mod proxies;

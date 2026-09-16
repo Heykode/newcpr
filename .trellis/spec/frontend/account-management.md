@@ -1,5 +1,25 @@
 # Account Management Contracts
 
+## Background Imports and Independent Table Preferences
+
+- Browser AT/RT and JSON imports submit server-owned tasks. Preserve JSON document
+  boundaries, existing settings/proxy semantics and the synchronous OAuth path.
+  Generate submission UUIDs through crypto.getRandomValues on non-secure HTTP too.
+  Retry an unchanged uncertain submission with the same ID, never automatically
+  retry an unknown credential exchange. Editing the input invalidates the ID.
+- Recover task summaries from the server on mount; cancel only progress reads
+  when closing/disposal, not accepted work. Stop skips pending items only.
+  Refresh accounts when imported-account counts advance; fence stale detail
+  responses by selected task and cancellation. Never persist tokens in browser
+  task preferences or include them in task results.
+- Account-column preferences already exist and remain authoritative. Usage and
+  error tables use separate storage keys, keep required identity/actions and error
+  columns visible, tolerate invalid stored values and retain original layout.
+  New columns follow their defaults, reset does not affect other tables.
+- Verify API/composable lifecycle tests plus synthetic desktop/mobile browser
+  interactions, including submission response loss, reopen, stop, unknown result,
+  persisted columns, reset, keyboard focus and layout.
+
 ## 1. Scope / Trigger
 
 Apply when changing account connection tests, account column preferences,

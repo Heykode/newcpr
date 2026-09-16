@@ -1,10 +1,56 @@
 # Client Continuity Contracts
 
+## Diagnostic Selection and Quota Evidence
+
+- Production provider lists exclude disabled accounts. An explicit administrator
+  diagnostic may recover only its pinned account through a direct repository
+  read, followed by the existing provider/exclusion/lease checks. Ordinary
+  required-account requests must not use that bypass. In-memory test stores
+  must reproduce the production enabled-only list behavior.
+- Diagnostic selection never enables an account. Preserve existing per-provider
+  feedback rules; OpenAI diagnostic health updates are not equivalent to enabling.
+- Same-window quota recovery requires two consecutive fresh observations of a
+  known account-wide reset with known non-exhausted usage. Persist candidate
+  evidence with the exhaustion fact and a microsecond observation watermark.
+  Missing windows, unknown usage, renewed limits or mismatched reset interrupt
+  evidence; old/duplicate/pre-exhaustion observations cannot advance it.
+  New exhaustion invalidates prior evidence, and legacy documents need fresh
+  evidence. Keep existing reset-advance recovery and credential/enabled state.
+
 ## 1. Scope / Trigger
 
 Apply to OpenAI outbound identity, account import/rotation/deletion, IPv6 policy,
-WebSocket pooling, and HTTP fallback. Preserve independently selected TLS, account
-selection, billing and downstream streaming/buffered delivery.
+WebSocket pooling, and HTTP fallback. Preserve the unified protocol-specific TLS
+policy, account selection, billing and downstream streaming/buffered delivery.
+
+### Unified Profile Supersession (Migration 0018)
+
+The approved unified profile supersedes the independent TLS/session choices and
+no-ALPN policy documented historically below. Live settings are Default/Custom
+UA only; both Desktop and CLI are parsed without selecting transport. Native
+reqwest HTTP advertises h2 then http/1.1; WS retains the original Rustls stack.
+Remove the obsolete QX OpenSSL transport, not its applicable regression coverage.
+QX account/Key session projection is unconditional at its existing owner.
+Scheduling, device persistence, seeds, exact continuations and replay boundaries
+remain authoritative. Native reqwest retries are disabled explicitly.
+
+Migration 0018 archives the exact previous row selection before canonicalizing
+UA and dropping TLS/session columns. Saves leave `legacy_selection` untouched.
+Pinned legacy QX defaults become explicit custom CLI UA; independent null UA
+becomes auto-updating Default. Old mode commands are rejected, not silently
+ignored. Rollback requires a schema-compatible restore as well as the old binary.
+Custom Desktop controls its auxiliary Desktop surface; custom CLI retains the
+default auxiliary Desktop snapshot. `verified` describes UA artifact selection,
+not full handshake verification. CA remains additive and never selects a backend.
+
+Tests must exercise actual H2/H1 negotiation, streamed delivery and pool reuse,
+unchanged Rustls WS ClientHello, both UA grammars, strict certificate/proxy checks,
+HTTP and WS identity projection, original-seed continuation, cross-Key/account
+isolation and migration/backup persistence. Do not treat skipped DB tests as pass.
+Native TLS fixtures need a distinct CA and signed server leaf so both macOS trust
+evaluation and Linux OpenSSL exercise a valid chain, not platform-specific trust
+of a self-signed leaf. Register each new migration in `.frozen-sha256` without
+editing prior entries.
 
 ## 2. Signatures
 

@@ -1,8 +1,5 @@
 use chrono::Utc;
-use gateway_core::{
-    provider_ports::{ProviderSessionPolicy, ProviderTlsProfile, ProviderUserAgentOverride},
-    routing::ProviderKind,
-};
+use gateway_core::{provider_ports::ProviderUserAgentOverride, routing::ProviderKind};
 use gateway_store::postgres::{
     AdminAuditActorKind, AdminAuditEvent, PgControlPlaneRepository, PgRuntimeSettingsRepository,
     RuntimeSettingsRepository,
@@ -82,7 +79,7 @@ fn audit(id: &str) -> AdminAuditEvent {
 }
 
 #[tokio::test]
-async fn qx_user_agent_selection_round_trips_and_blank_uses_null() {
+async fn cli_user_agent_selection_round_trips_without_normalizing_text() {
     let Some(database) = TestDatabase::create("qx_user_agent").await else {
         return;
     };
@@ -91,16 +88,15 @@ async fn qx_user_agent_selection_round_trips_and_blank_uses_null() {
     let runtime = PgRuntimeSettingsRepository::new(database.pool.clone());
     let before = runtime.load_runtime_settings().await.unwrap();
     for (index, user_agent) in [
-        None,
-        Some("codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned()),
-        Some("codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown".to_owned()),
-        Some("   ".to_owned()),
-        Some(String::new()),
+        "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned(),
+        "codex_cli_rs/0.146.0 (Linux 6.8.0; x86_64) unknown".to_owned(),
     ]
     .into_iter()
     .enumerate()
     {
-        let selection = ProviderUserAgentOverride::QxCompatible { user_agent };
+        let selection = ProviderUserAgentOverride::Custom {
+            user_agent: user_agent.clone(),
+        };
         repository
             .replace_user_agent_override(
                 &provider,
@@ -112,15 +108,13 @@ async fn qx_user_agent_selection_round_trips_and_blank_uses_null() {
         let reloaded = PgControlPlaneRepository::new(database.pool.clone());
         assert_eq!(
             reloaded.load_user_agent_override(&provider).await.unwrap(),
-            selection.normalized()
+            selection
         );
         let (mode, raw): (String, Option<String>) = sqlx::query_as(
             "select mode, custom_user_agent from provider_outbound_user_agents where provider_kind = 'openai'",
         ).fetch_one(&database.pool).await.unwrap();
-        assert_eq!(mode, "qx-compatible");
-        if index >= 3 {
-            assert_eq!(raw, None);
-        }
+        assert_eq!(mode, "custom");
+        assert_eq!(raw.as_deref(), Some(user_agent.as_str()));
     }
     let after = runtime.load_runtime_settings().await.unwrap();
     assert_eq!(after.request_tuning, before.request_tuning);
@@ -157,7 +151,7 @@ async fn qx_invalid_persistence_does_not_mutate_selection_or_revision() {
     let provider = ProviderKind::new("openai").unwrap();
     let repository = PgControlPlaneRepository::new(database.pool.clone());
     let runtime = PgRuntimeSettingsRepository::new(database.pool.clone());
-    let selection = ProviderUserAgentOverride::QxCompatible { user_agent: None };
+    let selection = ProviderUserAgentOverride::Default;
     repository
         .replace_user_agent_override(&provider, selection.clone(), audit("qx-initial"))
         .await
@@ -173,9 +167,7 @@ async fn qx_invalid_persistence_does_not_mutate_selection_or_revision() {
             repository
                 .replace_user_agent_override(
                     &provider,
-                    ProviderUserAgentOverride::QxCompatible {
-                        user_agent: Some(user_agent)
-                    },
+                    ProviderUserAgentOverride::Custom { user_agent },
                     audit("qx-invalid"),
                 )
                 .await
@@ -275,8 +267,7 @@ async fn qx_migration_preserves_existing_default_and_custom_rows() {
 }
 
 #[tokio::test]
-async fn independent_selection_round_trips_all_choices_and_resets_to_legacy_without_stale_columns()
-{
+async fn unified_selection_round_trips_without_retired_columns() {
     let Some(database) = TestDatabase::create("independent_user_agent").await else {
         return;
     };
@@ -284,60 +275,56 @@ async fn independent_selection_round_trips_all_choices_and_resets_to_legacy_with
     let repository = PgControlPlaneRepository::new(database.pool.clone());
     let runtime = PgRuntimeSettingsRepository::new(database.pool.clone());
     let before = runtime.load_runtime_settings().await.unwrap();
-    let mut index = 0;
-    for user_agent in [
+    for (index, user_agent) in [
         None,
         Some(
             "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)"
                 .to_owned(),
         ),
         Some("codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned()),
-    ] {
-        for tls_profile in [ProviderTlsProfile::Cpr, ProviderTlsProfile::QxCompatible] {
-            for session_policy in [
-                ProviderSessionPolicy::Native,
-                ProviderSessionPolicy::QxCompatible,
-            ] {
-                let selection = ProviderUserAgentOverride::Independent {
-                    user_agent: user_agent.clone(),
-                    tls_profile,
-                    session_policy,
-                };
-                repository
-                    .replace_user_agent_override(
-                        &provider,
-                        selection.clone(),
-                        audit(&format!("independent-{index}")),
-                    )
-                    .await
-                    .unwrap();
-                index += 1;
-                let reloaded = PgControlPlaneRepository::new(database.pool.clone());
-                assert_eq!(
-                    reloaded.load_user_agent_override(&provider).await.unwrap(),
-                    selection
-                );
-                let row: (String, Option<String>, String, String) = sqlx::query_as(
-                    "select mode, custom_user_agent, tls_profile, session_policy from provider_outbound_user_agents where provider_kind = 'openai'",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let selection = user_agent
+            .clone()
+            .map_or(ProviderUserAgentOverride::Default, |user_agent| {
+                ProviderUserAgentOverride::Custom { user_agent }
+            });
+        repository
+            .replace_user_agent_override(
+                &provider,
+                selection.clone(),
+                audit(&format!("independent-{index}")),
+            )
+            .await
+            .unwrap();
+        let reloaded = PgControlPlaneRepository::new(database.pool.clone());
+        assert_eq!(
+            reloaded.load_user_agent_override(&provider).await.unwrap(),
+            selection
+        );
+        let row: (String, Option<String>) = sqlx::query_as(
+                    "select mode, custom_user_agent from provider_outbound_user_agents where provider_kind = 'openai'",
                 ).fetch_one(&database.pool).await.unwrap();
-                assert_eq!(
-                    row,
-                    (
-                        "independent".to_owned(),
-                        user_agent.clone(),
-                        tls_profile.as_str().to_owned(),
-                        session_policy.as_str().to_owned()
-                    )
-                );
-            }
-        }
+        assert_eq!(
+            row,
+            (
+                if user_agent.is_some() {
+                    "custom"
+                } else {
+                    "default"
+                }
+                .to_owned(),
+                user_agent.clone(),
+            )
+        );
     }
     for (index, selection) in [
         ProviderUserAgentOverride::Default,
         ProviderUserAgentOverride::Custom {
             user_agent: "legacy-custom".to_owned(),
         },
-        ProviderUserAgentOverride::QxCompatible { user_agent: None },
     ]
     .into_iter()
     .enumerate()
@@ -357,10 +344,10 @@ async fn independent_selection_round_trips_all_choices_and_resets_to_legacy_with
                 .unwrap(),
             selection
         );
-        let choices: (Option<String>, Option<String>) = sqlx::query_as(
-            "select tls_profile, session_policy from provider_outbound_user_agents where provider_kind = 'openai'",
+        let choices: (Option<serde_json::Value>,) = sqlx::query_as(
+            "select legacy_selection from provider_outbound_user_agents where provider_kind = 'openai'",
         ).fetch_one(&database.pool).await.unwrap();
-        assert_eq!(choices, (None, None));
+        assert_eq!(choices, (None,));
     }
     let after = runtime.load_runtime_settings().await.unwrap();
     assert_eq!(after.request_tuning, before.request_tuning);
@@ -378,11 +365,7 @@ async fn independent_invalid_choices_and_blank_custom_do_not_commit() {
     let provider = ProviderKind::new("openai").unwrap();
     let repository = PgControlPlaneRepository::new(database.pool.clone());
     let runtime = PgRuntimeSettingsRepository::new(database.pool.clone());
-    let selection = ProviderUserAgentOverride::Independent {
-        user_agent: None,
-        tls_profile: ProviderTlsProfile::QxCompatible,
-        session_policy: ProviderSessionPolicy::Native,
-    };
+    let selection = ProviderUserAgentOverride::Default;
     repository
         .replace_user_agent_override(&provider, selection.clone(), audit("independent-valid"))
         .await
@@ -398,30 +381,23 @@ async fn independent_invalid_choices_and_blank_custom_do_not_commit() {
             repository
                 .replace_user_agent_override(
                     &provider,
-                    ProviderUserAgentOverride::Independent {
-                        user_agent: Some(user_agent),
-                        tls_profile: ProviderTlsProfile::Cpr,
-                        session_policy: ProviderSessionPolicy::QxCompatible,
-                    },
+                    ProviderUserAgentOverride::Custom { user_agent },
                     audit("independent-invalid")
                 )
                 .await
                 .is_err()
         );
     }
-    for (mode, raw, tls, session) in [
-        ("independent", None, None, Some("native")),
-        ("independent", None, Some("cpr"), None),
-        ("independent", None, Some("guess"), Some("native")),
-        ("independent", None, Some("cpr"), Some("guess")),
-        ("independent", Some(""), Some("cpr"), Some("native")),
-        ("independent", Some(" "), Some("cpr"), Some("native")),
-        ("default", None, Some("cpr"), Some("native")),
-        ("qx-compatible", None, None, Some("qx-compatible")),
+    for (mode, raw) in [
+        ("independent", None),
+        ("qx-compatible", None),
+        ("custom", Some("")),
+        ("custom", Some(" ")),
+        ("default", Some("unexpected")),
     ] {
         assert!(sqlx::query(
-            "update provider_outbound_user_agents set mode = $1, custom_user_agent = $2, tls_profile = $3, session_policy = $4 where provider_kind = 'openai'",
-        ).bind(mode).bind(raw).bind(tls).bind(session).execute(&database.pool).await.is_err());
+            "update provider_outbound_user_agents set mode = $1, custom_user_agent = $2 where provider_kind = 'openai'",
+        ).bind(mode).bind(raw).execute(&database.pool).await.is_err());
     }
     assert_eq!(
         repository
@@ -486,5 +462,129 @@ async fn independent_migration_preserves_legacy_values_and_timestamps() {
     ).fetch_one(&mut *transaction).await.unwrap();
     assert_eq!(count, 4);
     transaction.rollback().await.unwrap();
+    database.close().await;
+}
+
+#[tokio::test]
+async fn unified_migration_archives_all_legacy_choices_and_keeps_backup_after_save() {
+    let Some(database) = TestDatabase::create("unified_user_agent_upgrade").await else {
+        return;
+    };
+    let mut transaction = database.pool.begin().await.unwrap();
+    sqlx::query("drop table provider_outbound_user_agents")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    for migration in [
+        include_str!("../../../../migrations/0009_outbound_user_agent.sql"),
+        include_str!("../../../../migrations/0011_qx_compatible_user_agent.sql"),
+        include_str!("../../../../migrations/0012_independent_outbound_profiles.sql"),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(&mut *transaction)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "insert into provider_outbound_user_agents
+            (provider_kind, mode, custom_user_agent, tls_profile, session_policy)
+         values ('default', 'default', null, null, null),
+                ('custom', 'custom', 'exact-desktop-ua', null, null),
+                ('qx-default', 'qx-compatible', null, null, null),
+                ('qx-custom', 'qx-compatible', 'exact-cli-ua', null, null),
+                ('independent-default', 'independent', null, 'qx-compatible', 'native'),
+                ('independent-custom', 'independent', 'exact-custom-ua', 'cpr', 'qx-compatible')",
+    )
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    let before: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "select provider_kind, to_jsonb(t) - 'provider_kind'
+         from provider_outbound_user_agents t order by provider_kind",
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0018_unified_outbound_profile.sql"
+    ))
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    type MigratedSelection = (
+        String,
+        String,
+        Option<String>,
+        serde_json::Value,
+        chrono::DateTime<Utc>,
+    );
+    let after: Vec<MigratedSelection> = sqlx::query_as(
+        "select provider_kind, mode, custom_user_agent, legacy_selection, updated_at
+             from provider_outbound_user_agents order by provider_kind",
+    )
+    .fetch_all(&mut *transaction)
+    .await
+    .unwrap();
+    for ((id, archived), (new_id, mode, ua, backup, updated)) in before.iter().zip(&after) {
+        assert_eq!(id, new_id);
+        assert_eq!(
+            backup, archived,
+            "backup must preserve exact previous selection"
+        );
+        assert_eq!(
+            *updated,
+            chrono::DateTime::parse_from_rfc3339(archived["updated_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        let expected = if id == "qx-default" {
+            Some("codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color")
+        } else {
+            archived["custom_user_agent"].as_str()
+        };
+        assert_eq!(ua.as_deref(), expected);
+        assert_eq!(
+            mode,
+            if expected.is_some() {
+                "custom"
+            } else {
+                "default"
+            }
+        );
+    }
+    transaction.commit().await.unwrap();
+    let repository = PgControlPlaneRepository::new(database.pool.clone());
+    for (index, (id, _, _, backup, _)) in after.iter().enumerate() {
+        let provider = ProviderKind::new(id).unwrap();
+        for (stage, selection) in [
+            ("reset", ProviderUserAgentOverride::Default),
+            (
+                "custom",
+                ProviderUserAgentOverride::Custom {
+                    user_agent: "replacement".to_owned(),
+                },
+            ),
+        ] {
+            repository
+                .replace_user_agent_override(
+                    &provider,
+                    selection.clone(),
+                    audit(&format!("unified-{index}-{stage}")),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                repository
+                    .load_user_agent_override(&provider)
+                    .await
+                    .unwrap(),
+                selection
+            );
+            let preserved: serde_json::Value = sqlx::query_scalar(
+                "select legacy_selection from provider_outbound_user_agents where provider_kind = $1",
+            ).bind(id).fetch_one(&database.pool).await.unwrap();
+            assert_eq!(&preserved, backup);
+        }
+    }
     database.close().await;
 }
