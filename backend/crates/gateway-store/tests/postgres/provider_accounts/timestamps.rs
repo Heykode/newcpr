@@ -219,17 +219,24 @@ async fn admin_rotation_keeps_retained_quota_times_and_disabled_identity() {
             .await
             .unwrap();
         let after = row(&database, &id).await;
-        let mut changed = vec![
+        let changed = [
             "name",
             "email",
             "plan_type",
             "provider_credentials_json",
             "credential_revision",
             "access_token_expires_at",
+            "credential_observed_at",
         ];
-        if enabled {
-            changed.push("credential_observed_at");
-        }
+        assert_eq!(after["enabled"], enabled);
+        assert_eq!(after["updated_at"], before["updated_at"]);
+        assert_eq!(after["credential_state"], "ready");
+        let observed: DateTime<Utc> =
+            serde_json::from_value(after["credential_observed_at"].clone()).unwrap();
+        let previous: DateTime<Utc> =
+            serde_json::from_value(before["credential_observed_at"].clone()).unwrap();
+        // Replacement credentials start a new observation clock even while manually paused.
+        assert!(observed < previous);
         unchanged_except(before, after.clone(), &changed);
         assert!(matches!(
             repository.rotate_provider_account(command).await,
