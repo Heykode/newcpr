@@ -12,12 +12,18 @@ use crate::{
         },
         relogin::*,
     },
-    ports::{provider::ProviderAdmin, relogin::ReloginStore, store::AccountStore},
+    ports::{
+        provider::ProviderAdmin,
+        relogin::ReloginStore,
+        store::{AccountRuntimeStore, AccountStore},
+    },
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::{
-    account::OpaqueProviderData, lifecycle::CancellationToken, runtime::SnapshotControl,
+    account::{AccountStatusFacts, OpaqueProviderData, resolve_account_operational_status},
+    lifecycle::CancellationToken,
+    runtime::SnapshotControl,
 };
 use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc};
@@ -41,12 +47,26 @@ pub struct ReloginView {
     pub credential_status: &'static str,
     pub pool_status: &'static str,
     pub pool_account_ids: Vec<String>,
+    pub pool_accounts: Vec<ReloginPoolAccountView>,
     pub relogin_account_id: Option<String>,
     pub relogin_count: Option<u64>,
     pub last_relogin_at: Option<DateTime<Utc>>,
     pub verified_at: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
+    pub imported_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginPoolAccountView {
+    pub id: String,
+    pub workspace_id: Option<String>,
+    pub plan_type: Option<String>,
+    pub enabled: bool,
+    pub status: &'static str,
+    pub error_reason: Option<&'static str>,
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +109,7 @@ struct Gate {
 pub(crate) struct DefaultReloginService {
     store: Option<Arc<dyn ReloginStore>>,
     accounts: Arc<dyn AccountStore>,
+    runtime: Arc<dyn AccountRuntimeStore>,
     provider: Arc<dyn ProviderAdmin>,
     openai: Arc<dyn OpenAiService>,
     snapshot: Arc<dyn SnapshotControl>,
@@ -99,6 +120,7 @@ impl DefaultReloginService {
     pub(crate) fn new(
         store: Option<Arc<dyn ReloginStore>>,
         accounts: Arc<dyn AccountStore>,
+        runtime: Arc<dyn AccountRuntimeStore>,
         provider: Arc<dyn ProviderAdmin>,
         openai: Arc<dyn OpenAiService>,
         snapshot: Arc<dyn SnapshotControl>,
@@ -106,6 +128,7 @@ impl DefaultReloginService {
         Self {
             store,
             accounts,
+            runtime,
             provider,
             openai,
             snapshot,
@@ -234,9 +257,6 @@ impl DefaultReloginService {
             None
         };
         let document = ProviderDocument::new(OpaqueProviderData::new(credential.document.clone()));
-        // Persist the irreversible boundary. After a crash this must not replay a stale token.
-        entry.status = ReloginStatus::Pushing;
-        self.save(entry).await?;
         if let Some(current) = current {
             if entry.synced_at.is_some() {
                 return Ok(());
@@ -249,6 +269,9 @@ impl DefaultReloginService {
                 })
                 .await
                 .map_err(|error| map_provider_error(error, "relogin rotation"))?;
+            // Preparation cannot mutate the pool. Fence replay only before the commit attempt.
+            entry.status = ReloginStatus::Pushing;
+            self.save(entry).await?;
             let result = commit_credential_rotation(
                 self.accounts.as_ref(),
                 prepared,
@@ -267,6 +290,9 @@ impl DefaultReloginService {
             publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
             entry.target = Some(ReloginTarget::from_account(current)?);
         } else {
+            // Import owns both preparation and commit, so fence before entering it.
+            entry.status = ReloginStatus::Pushing;
+            self.save(entry).await?;
             let result = self
                 .openai
                 .import_new_document(ImportCredentials {
@@ -377,13 +403,25 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 #[async_trait]
 impl ReloginService for DefaultReloginService {
     async fn list(&self) -> Result<ReloginList, AdminError> {
-        let entries = self.entries().await?;
+        let mut entries = self.entries().await?;
+        entries.sort_by(|left, right| {
+            right
+                .import_time()
+                .cmp(&left.import_time())
+                .then_with(|| right.id.cmp(&left.id))
+        });
         let pool = self.pool().await?;
+        let runtime = self
+            .runtime
+            .active_rate_limits()
+            .await
+            .map_err(store_error)?;
         let settings = self.store()?.settings().await.map_err(store_error)?;
         let now = Utc::now();
         let items = entries
             .into_iter()
             .map(|entry| {
+                let imported_at = entry.import_time();
                 let matches = matching_accounts(&entry, &pool);
                 let statistics = statistics_account(&entry, &matches);
                 let material_error = entry.validate_totp().err();
@@ -442,6 +480,38 @@ impl ReloginService for DefaultReloginService {
                     },
                     pool_status,
                     pool_account_ids: matches.iter().map(|account| account.id.clone()).collect(),
+                    pool_accounts: matches
+                        .iter()
+                        .map(|account| {
+                            let projection = resolve_account_operational_status(
+                                &AccountStatusFacts {
+                                    enabled: account.enabled,
+                                    credential_state: account.credential_state,
+                                    access_token_expires_at: account
+                                        .access_token_expires_at
+                                        .map(Into::into),
+                                    quota: account.quota,
+                                    rate_limited_until: runtime
+                                        .rate_limited_until
+                                        .get(&account.id)
+                                        .copied()
+                                        .map(Into::into),
+                                    last_error_reason: account.last_error_reason,
+                                    last_error_message: account.last_error_message.clone(),
+                                },
+                                now.into(),
+                            );
+                            ReloginPoolAccountView {
+                                id: account.id.clone(),
+                                workspace_id: account.upstream_account_id.clone(),
+                                plan_type: account.plan_type.clone(),
+                                enabled: account.enabled,
+                                status: projection.status.as_str(),
+                                error_reason: projection.error_reason.map(|reason| reason.as_str()),
+                                error_message: projection.error_message,
+                            }
+                        })
+                        .collect(),
                     relogin_account_id: statistics.map(|account| account.id.clone()),
                     relogin_count: statistics
                         .map(|account| account.relogin_count)
@@ -449,6 +519,7 @@ impl ReloginService for DefaultReloginService {
                     last_relogin_at: statistics.and_then(|account| account.last_relogin_at),
                     verified_at: credential.map(|value| value.verified_at),
                     expires_at: credential.map(|value| value.expires_at),
+                    imported_at,
                     updated_at: entry.updated_at,
                 }
             })
@@ -501,6 +572,7 @@ impl ReloginService for DefaultReloginService {
                     .filter(|revision| *revision <= i64::MAX as u64)
                     .ok_or_else(|| AdminError::internal("重登资料版本超出范围"))?;
                 entry.updated_at = Utc::now();
+                entry.imported_at = Some(entry.updated_at);
                 changes.push((entry, Some(expected)));
             } else {
                 let entry = ReloginEntry {
@@ -520,6 +592,7 @@ impl ReloginService for DefaultReloginService {
                     attempted_target: None,
                     next_attempt_at: None,
                     synced_at: None,
+                    imported_at: Some(Utc::now()),
                     updated_at: Utc::now(),
                 };
                 changes.push((entry, None));
@@ -637,6 +710,19 @@ impl ReloginService for DefaultReloginService {
             .into_iter()
             .find(|entry| entry.id == id)
             .ok_or_else(|| AdminError::not_found("资料不存在"))?;
+        if let Some(workspace) = &workspace {
+            let pool = self.pool().await?;
+            let known = matching_accounts(&entry, &pool)
+                .iter()
+                .any(|account| account.upstream_account_id.as_ref() == Some(workspace))
+                || entry
+                    .credential
+                    .as_ref()
+                    .is_some_and(|credential| &credential.workspace_id == workspace);
+            if !known {
+                return Err(AdminError::invalid("请选择该邮箱已识别的工作区"));
+            }
+        }
         Self::stop(&gate, &mut entry);
         entry.preferred_workspace_id = workspace;
         entry.credential = None;
@@ -644,6 +730,7 @@ impl ReloginService for DefaultReloginService {
         entry.synced_at = None;
         entry.automatic_attempts = 0;
         entry.status = ReloginStatus::Pending;
+        entry.message = "工作区选择已更新，等待重新获取凭据".to_owned();
         self.save(&mut entry).await
     }
 

@@ -14,6 +14,62 @@ function load(path, dependencies = {}) {
   return exports
 }
 const { importPreview } = load('../src/views/relogin/import-preview.ts')
+const { processingStatus, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace } = load('../src/views/relogin/presentation.ts')
+
+test('relogin view never treats cached verification or previous push as current pool health', () => {
+  const row = {
+    status: 'uncertain',
+    credentialStatus: 'verified',
+    poolStatus: 'pending_push',
+    poolAccountIds: ['account'],
+    reloginAccountId: 'account',
+    poolAccounts: [{ id: 'account', workspaceId: 'workspace', enabled: false, status: 'error', errorReason: 'credential_expired' }],
+  }
+  assert.equal(processingStatus(row).label, '推送待核实')
+  assert.equal(credentialLabel(row), '新凭据已验证')
+  assert.equal(poolPresentation(row).label, '凭据失效')
+  assert.equal(poolPresentation(row).caption, '暂停调度')
+  assert.equal(matchesPool(row, 'error'), true)
+  assert.equal(matchesPool(row, 'disabled'), true)
+  row.status = 'ready'
+  row.poolStatus = 'synced'
+  assert.equal(processingStatus(row).label, '已同步到号池')
+  assert.match(poolPresentation(row).label, /凭据失效/)
+  row.poolAccounts[0].enabled = true
+  row.poolAccounts[0].status = 'normal'
+  assert.equal(poolPresentation(row).label, '正常')
+  delete row.poolAccounts
+  assert.equal(poolPresentation(row).label, '状态未知')
+  assert.equal(credentialLabel({ credentialStatus: 'none' }), '尚未获取')
+})
+
+test('unresolved workspaces expose every matching pool status without claiming one is normal', () => {
+  const row = {
+    poolAccountIds: ['a', 'b'],
+    poolAccounts: [
+      { id: 'a', enabled: true, status: 'normal' },
+      { id: 'b', enabled: false, status: 'error', errorReason: 'credential_expired' },
+    ],
+    reloginAccountId: null,
+  }
+  assert.equal(poolPresentation(row).label, '2 个池中账号')
+  assert.equal(matchesPool(row, 'error'), true)
+  assert.equal(matchesPool(row, 'disabled'), true)
+  row.reloginAccountId = 'a'
+  assert.equal(matchesPool(row, 'error'), false)
+  assert.equal(poolPresentation(row).label, '正常')
+})
+
+test('relogin workspace choices are deduplicated known IDs, not arbitrary preferred text', () => {
+  const row = {
+    poolAccounts: [{ workspaceId: 'known', planType: 'team' }, { workspaceId: 'known', planType: 'team' }],
+    workspaceId: 'cached',
+    planType: 'free',
+    preferredWorkspaceId: 'unverified',
+  }
+  assert.deepEqual(Array.from(workspaceChoices(row), item => item.value), ['known', 'cached'])
+  assert.equal(shortWorkspace('12345678-1234-5678-9012-123456789012'), '12345678…789012')
+})
 
 test('relogin preview retains source line numbers, normalizes email and never returns secrets', () => {
   const rows = importPreview('\uFEFFTest@Example.invalid----p%----ss----jbsw y3dp-ehpk3pxp\n\nsecond@example.invalid----p----JBSWY3DPEHPK3PXP')

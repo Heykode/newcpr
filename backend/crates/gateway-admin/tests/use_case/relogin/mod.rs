@@ -11,6 +11,7 @@ use gateway_admin::{
         relogin::*,
     },
     ports::{
+        provider::ProviderAdminErrorKind,
         relogin::ReloginStore,
         store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
     },
@@ -418,6 +419,109 @@ async fn relogin_does_not_recover_generic_errors_disabled_or_non_expired_account
 }
 
 #[tokio::test]
+async fn relogin_list_separates_cached_verification_from_current_pool_state() {
+    let h = Harness::new(vec![account(false)]).await;
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    {
+        let mut rows = h.store.rows.lock().unwrap();
+        rows.get_mut(&id).unwrap().status = ReloginStatus::Uncertain;
+    }
+    let mut expired = account(true);
+    expired.enabled = false;
+    expired.last_error_message = Some("upstream rejected authentication".into());
+    h.accounts.set_accounts(vec![expired]);
+    let view = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(view.status, ReloginStatus::Uncertain);
+    assert_eq!(view.credential_status, "verified");
+    assert_eq!(view.pool_accounts.len(), 1);
+    let pool = &view.pool_accounts[0];
+    assert_eq!(pool.status, "error");
+    assert_eq!(pool.error_reason, Some("credential_expired"));
+    assert!(!pool.enabled);
+    assert_eq!(pool.workspace_id.as_deref(), Some("workspace-team"));
+    h.accounts.set_accounts(vec![account(false)]);
+    let view = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(view.pool_accounts[0].status, "normal");
+    assert!(view.pool_accounts[0].enabled);
+    assert_eq!(view.status, ReloginStatus::Uncertain);
+    assert!(h.accounts.audit_requests().is_empty());
+}
+
+#[tokio::test]
+async fn relogin_import_order_does_not_follow_background_updates() {
+    let h = Harness::new(vec![]).await;
+    let old = h.import("old@example.invalid").await;
+    let new = h.import("new@example.invalid").await;
+    let now = Utc::now();
+    {
+        let mut rows = h.store.rows.lock().unwrap();
+        rows.get_mut(&old).unwrap().imported_at = Some(now - Duration::hours(1));
+        rows.get_mut(&old).unwrap().updated_at = now + Duration::hours(1);
+        rows.get_mut(&new).unwrap().imported_at = Some(now);
+    }
+    let before = h.services.relogin().list().await.unwrap();
+    assert_eq!(before.items[0].id, new);
+    h.services
+        .relogin()
+        .automatic(std::slice::from_ref(&old), false)
+        .await
+        .unwrap();
+    let after = h.services.relogin().list().await.unwrap();
+    assert_eq!(after.items[0].id, new);
+    assert_eq!(after.items[1].imported_at, before.items[1].imported_at);
+    h.services
+        .relogin()
+        .import(
+            "old@example.invalid----test-only-password----JBSWY3DPEHPK3PXP",
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(h.services.relogin().list().await.unwrap().items[0].id, old);
+
+    let row = h.row(&old).await;
+    let mut legacy = serde_json::to_value(&row).unwrap();
+    legacy.as_object_mut().unwrap().remove("imported_at");
+    let mut legacy: ReloginEntry = serde_json::from_value(legacy).unwrap();
+    let created = legacy.import_time().expect("legacy UUIDv7 creation time");
+    legacy.updated_at += Duration::days(1);
+    assert_eq!(legacy.import_time(), Some(created));
+    legacy.id = "relogin_non_timestamp_id".into();
+    assert!(legacy.import_time().is_none());
+}
+
+#[tokio::test]
+async fn relogin_workspace_rejects_unknown_choices_without_clearing_credentials() {
+    let h = Harness::new(vec![account(false)]).await;
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let before = h.row(&id).await;
+    assert!(
+        h.services
+            .relogin()
+            .workspace(&id, Some("unknown-workspace".into()))
+            .await
+            .is_err()
+    );
+    let after = h.row(&id).await;
+    assert_eq!(after.revision, before.revision);
+    assert!(after.credential.is_some());
+    h.services
+        .relogin()
+        .workspace(&id, Some("workspace-team".into()))
+        .await
+        .unwrap();
+    let after = h.row(&id).await;
+    assert_eq!(after.status, ReloginStatus::Pending);
+    assert!(after.credential.is_none());
+    assert_eq!(
+        after.preferred_workspace_id.as_deref(),
+        Some("workspace-team")
+    );
+}
+
+#[tokio::test]
 async fn relogin_multi_workspace_requires_selection_and_never_falls_back() {
     let mut second = account(false);
     second.id = "acct_other".into();
@@ -489,6 +593,57 @@ async fn relogin_push_refuses_target_that_appears_after_login() {
             .success
     );
     assert!(h.accounts.audit_requests().is_empty());
+}
+
+#[tokio::test]
+async fn relogin_rotation_preparation_failure_keeps_cached_credentials_retryable() {
+    for kind in [
+        ProviderAdminErrorKind::Invalid,
+        ProviderAdminErrorKind::Conflict,
+        ProviderAdminErrorKind::Unavailable,
+    ] {
+        let h = Harness::new(vec![account(false)]).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let before = h.row(&id).await;
+        let revisions = BTreeMap::from([(id.clone(), before.revision)]);
+        h.provider.fail_next(kind);
+        assert!(
+            !h.services
+                .relogin()
+                .push(
+                    std::slice::from_ref(&id),
+                    &revisions,
+                    &context("prepare-fail")
+                )
+                .await
+                .unwrap()[0]
+                .success
+        );
+        let after = h.row(&id).await;
+        assert_eq!(after.status, ReloginStatus::Ready);
+        assert_eq!(after.revision, before.revision);
+        assert!(after.synced_at.is_none());
+        assert_eq!(
+            after.credential.unwrap().document,
+            before.credential.unwrap().document
+        );
+        assert!(h.accounts.audit_requests().is_empty());
+        assert!(
+            h.services
+                .relogin()
+                .push(
+                    std::slice::from_ref(&id),
+                    &revisions,
+                    &context("prepare-retry")
+                )
+                .await
+                .unwrap()[0]
+                .success
+        );
+        assert_eq!(h.accounts.audit_requests(), vec!["prepare-retry"]);
+        assert!(h.row(&id).await.synced_at.is_some());
+    }
 }
 
 #[tokio::test]

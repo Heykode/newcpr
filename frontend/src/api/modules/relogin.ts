@@ -2,6 +2,15 @@ import type { RequestOptions } from '../request'
 import request from '../request'
 
 export type ReloginStatus = 'pending' | 'queued' | 'running' | 'ready' | 'pushing' | 'uncertain' | 'failed'
+export interface ReloginPoolAccount {
+  id: string
+  workspaceId: string | null
+  planType: string | null
+  enabled: boolean
+  status: 'normal' | 'error' | 'rate_limited' | 'quota_exhausted' | 'disabled'
+  errorReason: string | null
+  errorMessage: string | null
+}
 export interface ReloginEntry {
   id: string
   revision: number
@@ -15,11 +24,13 @@ export interface ReloginEntry {
   credentialStatus: 'none' | 'verified' | 'expired'
   poolStatus: 'absent' | 'present' | 'pending_push' | 'synced'
   poolAccountIds: string[]
+  poolAccounts?: ReloginPoolAccount[]
   reloginAccountId: string | null
   reloginCount: number | null
   lastReloginAt: string | null
   verifiedAt: string | null
   expiresAt: string | null
+  importedAt?: string | null
   updatedAt: string
 }
 export interface ReloginSettings { concurrency: number, paused: boolean }
