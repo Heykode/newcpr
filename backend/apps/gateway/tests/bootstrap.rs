@@ -265,6 +265,100 @@ fn bootstrap_config_debug_should_redact_all_passwords() {
 }
 
 #[test]
+fn startup_diagnostics_ignore_only_retired_fields_and_never_echo_values() {
+    const CHILD_ENV: &str = "CPR_TEST_STARTUP_DIAGNOSTICS";
+    const SECRET: &str = "retired-sensitive-value-must-not-be-printed";
+    if std::env::var_os(CHILD_ENV).is_some() {
+        gateway_host::load_config::<GatewayConfig>().expect("startup configuration");
+        return;
+    }
+    for case in [
+        "normal",
+        "retired",
+        "missing",
+        "typo",
+        "invalid",
+        "wrong-type",
+        "known-location",
+    ] {
+        let mut document: Value = config::Config::builder()
+            .add_source(config::File::from_str(
+                &valid_config(),
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        match case {
+            "retired" => {
+                document["openai"]["tls"] = json!({"secret": SECRET});
+                document["openai"]["fingerprint"] = json!({"secret": SECRET});
+                document["host"]["logging"]["file"]["max_files"] = json!(SECRET);
+            }
+            "missing" => {
+                document["host"]["listen"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("port");
+            }
+            "typo" => {
+                document["openai"]["wire_profile"]["codex_versoin"] = json!(SECRET);
+            }
+            "invalid" => {
+                document["openai"]["tls"] = json!(SECRET);
+                document["host"]["listen"]["port"] = json!(0);
+            }
+            "wrong-type" => {
+                document["host"]["listen"]["port"] = json!(SECRET);
+            }
+            "known-location" => {
+                document["openai"]["wire_profile"]["location"] = json!(SECRET);
+            }
+            _ => {}
+        }
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("deploy")).unwrap();
+        fs::write(
+            directory.path().join("deploy/config.yaml"),
+            document.to_string(),
+        )
+        .unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "bootstrap::startup_diagnostics_ignore_only_retired_fields_and_never_echo_values",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.success(),
+            matches!(case, "normal" | "retired"),
+            "{case}: {stderr}"
+        );
+        assert!(!stderr.contains(SECRET), "{case}: secret leaked");
+        match case {
+            "retired" => {
+                for field in [
+                    "openai.tls",
+                    "openai.fingerprint",
+                    "host.logging.file.max_files",
+                ] {
+                    assert!(stderr.contains(field), "{stderr}");
+                }
+            }
+            "missing" => assert!(stderr.contains("host.listen.port"), "{stderr}"),
+            "normal" => assert!(!stderr.contains("[warning]"), "{stderr}"),
+            _ => {}
+        }
+    }
+}
+
+#[test]
 fn config_loader_should_reject_unknown_fields() {
     assert_rejected(format!(
         "{}\nunknown_terminal_field: true\n",

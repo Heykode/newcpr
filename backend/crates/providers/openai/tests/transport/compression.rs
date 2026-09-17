@@ -187,3 +187,37 @@ fn http_compression_threshold_cost_probe() {
         }
     }
 }
+
+#[test]
+#[ignore = "explicit synthetic compression upgrade evidence; emits hashes to stdout"]
+fn capture_zstd_upgrade_corpus() {
+    use sha2::{Digest as _, Sha256};
+
+    for size in [0, 1, 127, 128, 511, 512, 1023, 1024, 16384, 1048576] {
+        for kind in ["repeated", "pattern", "json"] {
+            let body = match kind {
+                "repeated" => vec![b'a'; size],
+                "pattern" => (0..size)
+                    .map(|index| u8::try_from(index % 251).unwrap())
+                    .collect(),
+                _ => br#"{"role":"user","content":"synthetic compression input"}"#
+                    .iter()
+                    .copied()
+                    .cycle()
+                    .take(size)
+                    .collect(),
+            };
+            let encoded = zstd::stream::encode_all(body.as_slice(), 3).unwrap();
+            assert_eq!(zstd::stream::decode_all(encoded.as_slice()).unwrap(), body);
+            println!(
+                "ZSTD_CAPTURE {}",
+                serde_json::json!({
+                    "kind": kind,
+                    "size": size,
+                    "encoded_len": encoded.len(),
+                    "sha256": hex::encode(Sha256::digest(&encoded)),
+                })
+            );
+        }
+    }
+}

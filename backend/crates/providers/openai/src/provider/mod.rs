@@ -249,6 +249,10 @@ impl Provider for CodexProvider {
         self.catalog.catalog_generation()
     }
 
+    fn model_catalog_is_exhaustive(&self) -> bool {
+        false
+    }
+
     fn request_observation(
         &self,
         operation: &Operation,

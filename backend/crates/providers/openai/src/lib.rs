@@ -187,7 +187,6 @@ async fn initialize_with_request_tuning_mode(
             Arc::clone(&leases),
             session_affinity,
             session_exclusions,
-            Arc::clone(&catalog),
             Arc::clone(&quota),
             Arc::clone(&account_feedback),
             CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,

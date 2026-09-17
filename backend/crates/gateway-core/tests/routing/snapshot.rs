@@ -55,13 +55,18 @@ enum TestCatalog {
     NoProviders,
     Unavailable,
     Empty,
+    Discovery,
 }
 
 impl ProviderCatalogPort for TestCatalog {
+    fn model_catalog_is_exhaustive(&self, _: &ProviderKind) -> bool {
+        !matches!(self, Self::Discovery)
+    }
+
     fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
         match self {
             Self::NoProviders => BTreeMap::new(),
-            Self::Unavailable | Self::Empty => catalog_generations(0),
+            Self::Unavailable | Self::Empty | Self::Discovery => catalog_generations(0),
         }
     }
 
@@ -73,6 +78,13 @@ impl ProviderCatalogPort for TestCatalog {
             match self {
                 Self::NoProviders | Self::Unavailable => Err(ProviderCatalogUnavailable),
                 Self::Empty => Ok(Vec::new()),
+                Self::Discovery => Ok(vec![ProviderModelCapabilities::new(
+                    UpstreamModelId::new("listed-model").unwrap(),
+                    ModelCapabilities::new(
+                        std::collections::BTreeSet::from([OperationKind::Generate]),
+                        None,
+                    ),
+                )]),
             }
         })
     }
@@ -184,6 +196,45 @@ fn compiler_should_preserve_passthrough_when_provider_catalog_is_unavailable() {
     ));
     assert_eq!(snapshot.mapped_model("public-model"), "upstream-model");
     assert_eq!(snapshot.client_policies().count(), 1);
+}
+
+#[test]
+fn discovery_catalog_does_not_reject_an_unlisted_or_mapped_model() {
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(TestSnapshotStore::new(Ok(facts(3, 3)))),
+        Arc::new(TestCatalog::Discovery),
+    );
+    let snapshot = block_on(compiler.compile()).unwrap();
+    let provider = ProviderKind::new("alpha").unwrap();
+    for name in ["unlisted-model", "public-model"] {
+        let model = PublicModelId::new(name).unwrap();
+        assert!(snapshot.contains_public_model_for_provider(&model, &provider));
+        snapshot
+            .plan(
+                &model,
+                &super::operation(),
+                snapshot.all_account_scope(),
+                &gateway_core::routing::RoutingContext {
+                    required_provider: Some(provider.clone()),
+                    ..gateway_core::routing::RoutingContext::default()
+                },
+            )
+            .expect("upstream judges undiscovered models");
+        assert!(
+            snapshot
+                .plan(
+                    &model,
+                    &super::operation(),
+                    snapshot.all_account_scope(),
+                    &gateway_core::routing::RoutingContext {
+                        required_provider: Some(provider.clone()),
+                        blocked_providers: std::collections::BTreeSet::from([provider.clone()]),
+                    },
+                )
+                .is_err(),
+            "discovery does not bypass blocked providers"
+        );
+    }
 }
 
 #[test]
