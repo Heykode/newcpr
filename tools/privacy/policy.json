@@ -32,6 +32,18 @@
     {
       "commit": "05fc728b3b29f6caea614e8898d677c26dc3d4ff",
       "reason": "Previously published merge identity reviewed after the repository began enforcing noreply commit metadata."
+    },
+    {
+      "commit": "d52212c08e21aadd23fd7e62761827448add7a31",
+      "reason": "Previously published relogin fix committer identity reviewed after noreply enforcement."
+    },
+    {
+      "commit": "e4f6c1720e1b079639124585cf84ddbe368be70c",
+      "reason": "Previously published relogin test committer identity reviewed after noreply enforcement."
+    },
+    {
+      "commit": "8507033c82f3850a2494a734e02dca7f276eaefd",
+      "reason": "Previously published relogin account update committer identity reviewed after noreply enforcement."
     }
   ],
   "max_file_bytes": 10485760
