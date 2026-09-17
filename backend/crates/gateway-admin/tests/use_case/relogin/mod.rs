@@ -296,6 +296,7 @@ async fn relogin_legacy_mailbox_rows_cannot_login_or_push_until_totp_is_imported
 
         let view = h.services.relogin().list().await.unwrap().items.remove(0);
         assert!(!view.automatic);
+        assert!(!view.has_totp);
         assert_eq!(view.credential_status, "none");
         if matches!(status, ReloginStatus::Pushing | ReloginStatus::Uncertain) {
             assert_eq!(view.status, status);
@@ -432,6 +433,11 @@ async fn relogin_list_separates_cached_verification_from_current_pool_state() {
     expired.last_error_message = Some("upstream rejected authentication".into());
     h.accounts.set_accounts(vec![expired]);
     let view = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert!(view.has_totp);
+    let serialized = serde_json::to_value(&view).unwrap();
+    assert_eq!(serialized["hasTotp"], true);
+    assert!(serialized.get("password").is_none());
+    assert!(serialized.get("mfaSecret").is_none());
     assert_eq!(view.status, ReloginStatus::Uncertain);
     assert_eq!(view.credential_status, "verified");
     assert_eq!(view.pool_accounts.len(), 1);

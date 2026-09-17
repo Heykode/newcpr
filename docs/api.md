@@ -354,7 +354,9 @@ OpenAI 的 `self_serve_business_prolite` 等 Team 套餐显示为 `Business`；�
 账号原位重新导入保留计数，删除号池账号后新建则开启新的统计。
 
 `GET /api/admin/relogin` 的每条资料同样返回 `reloginCount`、`lastReloginAt`，
-以及对应的 `reloginAccountId`。按已锁定身份/工作区、明确工作区选择或唯一邮箱
+对应的 `reloginAccountId`，以及只读布尔值 `hasTotp`。`hasTotp` 只表示该资料的
+密码与 TOTP 材料通过本地格式校验，不返回或派生任何密钥内容；账号列表用它按
+邮箱大小写无关匹配并展示 2FA 标记。按已锁定身份/工作区、明确工作区选择或唯一邮箱
 候选关联号池统计；同邮箱多工作区未明确目标时计数为 `null`，不能将其当作 0
 或合计值。尚未入池的资料计数为 0，账号 ID 和最近成功时间为空。
 凭证替换、成功事件去重和计数在同一数据库事务中提交；号池已提交而重登资料库

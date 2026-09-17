@@ -408,6 +408,12 @@ Use `relogin-count.test.mjs` and `browser/relogin-count.mjs` for regression; the
 opt-in `relogin-count-preview.mjs` disables the backend proxy and serves only fake,
 read-only data.
 
+The account directory may mark an avatar with a compact top-left key badge only when
+the safe relogin list reports `hasTotp=true` for the same normalized email. The badge
+must not resize the identity cell, expose secret material or imply that cached credentials
+or the pool account are currently healthy. Relogin-list read failures retain the last safe
+projection and do not fail the account directory.
+
 ## 9. Group Monitor Overview
 
 - Keep provisional-account counts off the cards. Existing help text explains

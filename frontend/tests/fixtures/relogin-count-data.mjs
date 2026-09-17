@@ -54,6 +54,7 @@ export const reloginEntries = accounts.map(account => ({
   id: `relogin_${account.id}`,
   revision: 1,
   email: account.email,
+  hasTotp: account.id !== 'acct_sample_2',
   automatic: true,
   status: 'ready',
   message: '凭据已同步到号池',

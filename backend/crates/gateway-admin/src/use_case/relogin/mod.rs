@@ -38,6 +38,7 @@ pub struct ReloginView {
     pub id: String,
     pub revision: u64,
     pub email: String,
+    pub has_totp: bool,
     pub automatic: bool,
     pub status: ReloginStatus,
     pub message: String,
@@ -425,10 +426,8 @@ impl ReloginService for DefaultReloginService {
                 let matches = matching_accounts(&entry, &pool);
                 let statistics = statistics_account(&entry, &matches);
                 let material_error = entry.validate_totp().err();
-                let credential = entry
-                    .credential
-                    .as_ref()
-                    .filter(|_| material_error.is_none());
+                let has_totp = material_error.is_none();
+                let credential = entry.credential.as_ref().filter(|_| has_totp);
                 let uncertain = matches!(
                     entry.status,
                     ReloginStatus::Pushing | ReloginStatus::Uncertain
@@ -455,7 +454,8 @@ impl ReloginService for DefaultReloginService {
                     id: entry.id,
                     revision: entry.revision,
                     email: entry.email,
-                    automatic: entry.automatic && material_error.is_none(),
+                    has_totp,
+                    automatic: entry.automatic && has_totp,
                     status: if material_error.is_some() && !uncertain {
                         ReloginStatus::Failed
                     } else {

@@ -15,6 +15,7 @@ export interface ReloginEntry {
   id: string
   revision: number
   email: string
+  hasTotp: boolean
   automatic: boolean
   status: ReloginStatus
   message: string
