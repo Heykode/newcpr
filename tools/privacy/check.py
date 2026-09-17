@@ -200,6 +200,7 @@ def identity_findings(label, value):
     if not addresses or any(
         a.lower() != "noreply@github.com"
         and a.rpartition("@")[2].lower() not in POLICY["public_email_domains"]
+        and hashlib.sha256(a.lower().encode("utf-8")).hexdigest() not in POLICY.get("public_email_sha256", [])
         for a in addresses
     ):
         return [Finding(label, 0, "non-public-git-email")]

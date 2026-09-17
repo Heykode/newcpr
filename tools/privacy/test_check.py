@@ -49,6 +49,39 @@ class ContentTests(unittest.TestCase):
                 with self.assertRaises(guard.CheckError):
                     guard.reviewed_commit_identities()
 
+    def test_approved_email_is_exact_not_a_domain_exemption(self):
+        address = "approved@example.invalid"
+        digest = hashlib.sha256(address.encode()).hexdigest()
+        with patch.dict(guard.POLICY, {"public_email_sha256": [digest]}):
+            for value in (address, address.upper()):
+                self.assertEqual(guard.identity_findings("commit", f"User <{value}>"), [])
+            for value in ("other@example.invalid", "approved@sub.example.invalid",
+                          "approved+alias@example.invalid", "approved@example.invalid.evil"):
+                self.assertTrue(guard.identity_findings("commit", f"User <{value}>"))
+
+    def test_approved_author_does_not_exempt_other_committer(self):
+        digest = hashlib.sha256(b"approved@example.invalid").hexdigest()
+        with patch.dict(guard.POLICY, {"public_email_sha256": [digest]}):
+            value = "Author <approved@example.invalid>\nCommitter <other@example.invalid>"
+            self.assertTrue(guard.identity_findings("commit", value))
+            self.assertTrue(guard.identity_findings("commit", "No email identity"))
+
+    def test_email_approval_does_not_bypass_content_checks(self):
+        address = "approved@example.invalid"
+        digest = hashlib.sha256(address.encode()).hexdigest()
+        with patch.dict(guard.POLICY, {"public_email_sha256": [digest]}):
+            self.assertIn("private-blocklist", self.rules(address, [address]))
+            self.assertIn("private-key", self.rules(
+                address + "\n-----BEGIN " + "RSA PRIVATE KEY-----"))
+            self.assertIn("non-example-ip", self.rules(
+                address + "\n" + ".".join(["10", "22", "33", "44"])))
+
+    def test_email_approval_is_opt_in(self):
+        policy = {key: value for key, value in guard.POLICY.items() if key != "public_email_sha256"}
+        with patch.object(guard, "POLICY", policy):
+            self.assertTrue(guard.identity_findings("commit", "User <approved@example.invalid>"))
+            self.assertEqual(guard.identity_findings("commit", "GitHub <noreply@github.com>"), [])
+
     def reviewed(self, data, rule="authenticated-url"):
         return [{
             "path": "README.md", "line": 1, "rule": rule,

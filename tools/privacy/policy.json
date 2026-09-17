@@ -58,5 +58,8 @@
       "reason": "Previously published privacy policy update committer identity reviewed after noreply enforcement."
     }
   ],
+  "public_email_sha256": [
+    "53f39b83463f69653cc1f4eeb8920750e9edd667a23869a1be3e4533cc49f676"
+  ],
   "max_file_bytes": 10485760
 }
