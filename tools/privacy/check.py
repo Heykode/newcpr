@@ -206,6 +206,29 @@ def identity_findings(label, value):
     return []
 
 
+def reviewed_commit_identities():
+    items = POLICY.get("reviewed_commit_identities", [])
+    if not isinstance(items, list):
+        raise CheckError("Reviewed commit identities are invalid.")
+    commits = set()
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {"commit", "reason"}:
+            raise CheckError("Reviewed commit identities are invalid.")
+        commit = item["commit"]
+        reason = item["reason"]
+        if (
+            not isinstance(commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit)
+            or commit in commits
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or any(ord(char) < 32 for char in reason)
+        ):
+            raise CheckError("Reviewed commit identities are invalid.")
+        commits.add(commit)
+    return commits
+
+
 def gitleaks(records):
     configured = os.environ.get("PRIVACY_GITLEAKS") or os.fsdecode(git("config", "--get", "privacy.gitleaksPath", optional=True)).strip()
     binary = configured or shutil.which("gitleaks")
@@ -284,9 +307,11 @@ def history(ref, exclude=None):
         revisions.append("^" + git("rev-parse", "--verify", exclude + "^{commit}").decode().strip())
     entries, messages, findings = [], [], []
     commits = git("rev-list", *revisions).decode().splitlines()
+    reviewed_identities = reviewed_commit_identities()
     for commit in commits:
         info = git("show", "-s", "--format=%an <%ae>%n%cn <%ce>%n%B", commit)
-        findings.extend(identity_findings("commit-" + commit[:12], "\n".join(info.decode("utf-8").splitlines()[:2])))
+        if commit not in reviewed_identities:
+            findings.extend(identity_findings("commit-" + commit[:12], "\n".join(info.decode("utf-8").splitlines()[:2])))
         messages.append(("commit-" + commit[:12], info))
         # Every reachable commit is included; a later deletion cannot hide an earlier leak.
         entries.extend(tree_entries(commit))

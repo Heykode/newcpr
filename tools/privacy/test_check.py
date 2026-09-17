@@ -29,6 +29,26 @@ class ContentTests(unittest.TestCase):
         self.assertTrue(guard.identity_findings("commit", "User <person@github.com>"))
         self.assertTrue(guard.identity_findings("commit", "User <noreply@notgithub.com>"))
 
+    def test_reviewed_commit_identities_require_exact_unique_oids_and_reasons(self):
+        valid = {
+            **guard.POLICY,
+            "reviewed_commit_identities": [{"commit": "a" * 40, "reason": "Reviewed history"}],
+        }
+        with patch.object(guard, "POLICY", valid):
+            self.assertEqual(guard.reviewed_commit_identities(), {"a" * 40})
+        for items in [
+            "invalid",
+            [{"commit": "short", "reason": "Reviewed history"}],
+            [{"commit": "a" * 40, "reason": ""}],
+            [
+                {"commit": "a" * 40, "reason": "Reviewed history"},
+                {"commit": "a" * 40, "reason": "Duplicate"},
+            ],
+        ]:
+            with patch.object(guard, "POLICY", {**guard.POLICY, "reviewed_commit_identities": items}):
+                with self.assertRaises(guard.CheckError):
+                    guard.reviewed_commit_identities()
+
     def reviewed(self, data, rule="authenticated-url"):
         return [{
             "path": "README.md", "line": 1, "rule": rule,
@@ -195,6 +215,26 @@ class RepositoryTests(unittest.TestCase):
     def test_git_email_checked(self):
         self.run_git("config", "user.email", "private-person@laptop.local")
         self.assertIn("non-public-git-email", self.check("staged").stderr)
+
+    def test_reviewed_commit_identity_is_exact_and_future_bad_identity_still_fails(self):
+        self.run_git("config", "user.email", "reviewed-person@laptop.local")
+        self.run_git("commit", "--allow-empty", "-qm", "Reviewed historical identity")
+        reviewed = self.run_git("rev-parse", "HEAD").strip()
+        policy = {
+            **guard.POLICY,
+            "reviewed_commit_identities": [{"commit": reviewed, "reason": "Reviewed history"}],
+        }
+        previous = Path.cwd()
+        try:
+            os.chdir(self.repo)
+            with patch.object(guard, "POLICY", policy):
+                _, _, findings = guard.history("HEAD")
+                self.assertNotIn("non-public-git-email", {finding.rule for finding in findings})
+                self.run_git("commit", "--allow-empty", "-qm", "Future bad identity")
+                _, _, findings = guard.history("HEAD")
+                self.assertIn("non-public-git-email", {finding.rule for finding in findings})
+        finally:
+            os.chdir(previous)
 
     def test_deleted_secret_still_blocks_history_and_push(self):
         self.write("docs/private-note.md", HOME_PATH)
