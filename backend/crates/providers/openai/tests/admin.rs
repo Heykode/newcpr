@@ -2006,6 +2006,12 @@ fn provider_ports_with(
     provider_ports_with_catalog(accounts, pending, Arc::new(TestCatalogCache::default()))
 }
 
+pub(super) fn provider_ports_with_accounts(
+    accounts: Arc<MemoryAccountStore>,
+) -> ProviderStorePorts {
+    provider_ports_with(accounts, Arc::new(TestOAuthPending::default()))
+}
+
 fn provider_ports_with_catalog(
     accounts: Arc<MemoryAccountStore>,
     pending: Arc<TestOAuthPending>,

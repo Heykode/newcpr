@@ -35,6 +35,9 @@
 - OpenAI 的发现型目录不能证明未列出的模型不可用。Provider 的
   `model_catalog_is_exhaustive` 返回 false，Core 仍保留映射、账号权限和 Provider 排除，
   即时/等待选择器均不得再次使用目录缺失淘汰账号。其他 Provider 默认维持完整目录准入。
+- Responses 观测到新模型 ETag 时只合并触发一份后台刷新；失败保留最近成功目录并按
+  1、2、4、8、16、32、60 秒有界退避，后续封顶 60 秒。成功重置退避；关闭可立即
+  取消等待。目录辅助请求失败不修改正常推理账号的调度、身份或会话状态。
 
 ## 4. Validation & Error Matrix
 

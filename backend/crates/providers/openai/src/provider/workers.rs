@@ -12,6 +12,37 @@ pub(super) const DESKTOP_RELEASE_WORKER_OWNER: &str = "openai-desktop-release";
 pub(super) const MODEL_ETAG_WORKER_OWNER: &str = "openai-model-etag";
 pub(super) const MODEL_CATALOG_WORKER_OWNER: &str = "openai-model-catalog";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EtagRefreshBackoff {
+    initial: Duration,
+    current: Duration,
+    maximum: Duration,
+}
+
+impl EtagRefreshBackoff {
+    const fn new(initial: Duration, maximum: Duration) -> Self {
+        Self {
+            initial,
+            current: initial,
+            maximum,
+        }
+    }
+
+    fn take_delay(&mut self) -> Duration {
+        let delay = self.current;
+        self.current = self
+            .current
+            .checked_mul(2)
+            .unwrap_or(self.maximum)
+            .min(self.maximum);
+        delay
+    }
+
+    const fn reset(&mut self) {
+        self.current = self.initial;
+    }
+}
+
 pub(crate) fn worker_contributions(
     refresh: Arc<CodexCredentialRefreshService>,
     quota: Arc<CodexCredentialQuotaService>,
@@ -255,16 +286,43 @@ impl DaemonTask for OpenAiCatalogEtagTask {
         cancellation: gateway_core::lifecycle::CancellationToken,
     ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
+            let mut backoff =
+                EtagRefreshBackoff::new(WORKER_INITIAL_BACKOFF, WORKER_MAXIMUM_BACKOFF);
+            let mut consecutive_failures = 0_u32;
             loop {
                 tokio::select! {
                     () = cancellation.cancelled() => return Ok(()),
                     () = self.catalog.wait_for_etag_refresh() => {},
                 };
-                if let Err(error) = self.catalog.refresh().await {
-                    tracing::warn!(
-                        error = %error,
-                        "OpenAI model catalog ETag refresh failed"
-                    );
+                let result = tokio::select! {
+                    () = cancellation.cancelled() => return Ok(()),
+                    result = self.catalog.refresh() => result.map(|_| ()),
+                };
+                match result {
+                    Ok(()) => {
+                        if consecutive_failures > 0 {
+                            tracing::info!(
+                                failures = consecutive_failures,
+                                "OpenAI model catalog ETag refresh recovered"
+                            );
+                        }
+                        consecutive_failures = 0;
+                        backoff.reset();
+                    }
+                    Err(error) => {
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        let delay = backoff.take_delay();
+                        tracing::warn!(
+                            error = %error,
+                            failures = consecutive_failures,
+                            retry_after_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                            "OpenAI model catalog ETag refresh failed; retrying after backoff"
+                        );
+                        tokio::select! {
+                            () = cancellation.cancelled() => return Ok(()),
+                            () = tokio::time::sleep(delay) => {},
+                        }
+                    }
                 }
             }
         })
