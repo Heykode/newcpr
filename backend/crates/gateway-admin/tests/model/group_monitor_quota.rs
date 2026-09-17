@@ -61,6 +61,29 @@ fn latest_three_live_peers_recalculate_without_recursively_learning_fallbacks() 
 }
 
 #[test]
+fn subsecond_reset_rounding_is_live_but_older_observations_stay_unknown() {
+    let peers = vec![peer("new", 0), peer("source", 1)];
+    let reset = now() + Duration::days(7);
+    let mut recipient = source("0", 0.0);
+    recipient.windows[0].reset_at = Some(reset);
+    recipient.observed_at = Some(now() - Duration::milliseconds(999));
+    let mut donor = source("10", 10.0);
+    donor.windows[0].reset_at = Some(reset);
+    let mut quotas = BTreeMap::from([("new".to_owned(), recipient), ("source".to_owned(), donor)]);
+
+    assert_eq!(
+        monitor_quota_estimates(&peers, &quotas, now())["new"].remaining_usd,
+        100.0
+    );
+
+    quotas.get_mut("new").unwrap().observed_at = Some(now() - Duration::milliseconds(1_001));
+    assert!(!monitor_quota_estimates(&peers, &quotas, now()).contains_key("new"));
+
+    quotas.get_mut("new").unwrap().observed_at = Some(now() + Duration::milliseconds(1));
+    assert!(!monitor_quota_estimates(&peers, &quotas, now()).contains_key("new"));
+}
+
+#[test]
 fn incompatible_or_incomplete_sources_never_supply_a_fallback() {
     for mode in [
         "provider",

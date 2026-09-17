@@ -48,6 +48,9 @@
 - References require a live weekly observation and complete costs. Recipients
   require a valid current percentage and zero known local USD consumption,
   without missing/partial costs. Remaining is peer mean times unused fraction.
+  Upstream reset timestamps have whole-second precision, so an observation at
+  most one second before the derived window start is still current; anything
+  older remains ineligible.
   Own `current_window_estimate` always wins, even below 5%. Do not feed fallback
   values into references, persist peer samples or change account-list estimates.
   An empty reference pool remains unknown, with no historical template.

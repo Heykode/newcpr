@@ -45,9 +45,11 @@ fn live_window(quota: &ProviderQuota, now: DateTime<Utc>) -> Option<&ProviderQuo
     let reset = window.reset_at?;
     let seconds = i64::try_from(window.window_seconds?).ok()?;
     let start = reset.checked_sub_signed(Duration::try_seconds(seconds)?)?;
+    // Upstream reset timestamps lose sub-second precision; do not reject that rounding gap.
+    let earliest_observation = start.checked_sub_signed(Duration::seconds(1))?;
     let observed = quota.observed_at?;
     (seconds > 0
-        && start <= observed
+        && earliest_observation <= observed
         && observed <= now
         && now < reset
         && window
