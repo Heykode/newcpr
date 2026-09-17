@@ -182,6 +182,10 @@ Following the release process introduced by upstream commit `9b19cf08`:
   metadata/packaging scripts and conditional gates, but do not replace a future
   authorized GitHub release run or native execution tests for restored targets.
 - Do not move historical tags or replace historical assets to change platforms.
+- The pinned artifact downloader flattens a single matched artifact, including
+  pattern downloads. Packaging must accept this root layout only when exactly
+  one platform is configured, while retaining named directories for multiple
+  platforms. Test both download layouts, not only pre-created named fixtures.
 
 ## Minimum Verification Checklist
 

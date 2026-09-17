@@ -122,6 +122,34 @@ class ReleasePlatformsTest < Minitest::Test
     end
   end
 
+  def test_flat_binary_is_supported_only_for_one_platform
+    [DEFAULTS, DEFAULTS + RESTORED.first(1)].each do |platforms|
+      fixture(platforms) do |dir|
+        File.write(File.join(dir, "release-platforms.json"), JSON.generate("platforms" => platforms))
+        FileUtils.mkdir_p(File.join(dir, "dist/frontend"))
+        File.write(File.join(dir, "dist/frontend/index.html"), "<html>fixture</html>")
+        FileUtils.mkdir_p(File.join(dir, "dist/binaries"))
+        File.write(File.join(dir, "dist/binaries/codex-proxy-rs"), "synthetic single-platform binary")
+        _, error, status = Open3.capture3(
+          { "VERSION" => "1.0.0" }, "python3", "-c",
+          script("package-assets", "Package release assets", "PY"), chdir: dir
+        )
+        if platforms.one?
+          assert status.success?, error
+          archive = File.join(dir, "dist/release/codex-proxy-rs_1.0.0_linux_amd64.tar.gz")
+          binary, error, status = Open3.capture3(
+            "tar", "-xOf", archive, "codex-proxy-rs/codex-proxy-rs"
+          )
+          assert status.success?, error
+          assert_equal "synthetic single-platform binary", binary
+        else
+          refute status.success?
+          assert_includes error, "Missing binary artifact"
+        end
+      end
+    end
+  end
+
   def test_missing_or_mismatched_release_notes_fail_metadata
     fixture(DEFAULTS) do |dir|
       ["# v0.9.0\n\nNotes\n", "# v1.0.0\n\n"].each do |notes|

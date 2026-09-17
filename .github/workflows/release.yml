@@ -375,6 +375,9 @@ jobs:
               platform_name = f"{platform['os']}-{platform['arch']}"
               artifact_name = f"{APP_NAME}-{platform_name}"
               binary_src = binary_artifacts_dir / artifact_name / platform["binary"]
+              # download-artifact flattens a single match even when a pattern is used.
+              if not binary_src.is_file() and len(platforms) == 1:
+                  binary_src = binary_artifacts_dir / platform["binary"]
               if not binary_src.is_file():
                   raise SystemExit(f"Missing binary artifact: {binary_src}")
 
