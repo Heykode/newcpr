@@ -10,7 +10,9 @@ profiles or random fingerprint generation.
 
 ## 2. Signatures
 
-- `POST /v1/responses`: `stream` controls downstream delivery.
+- `POST /v1/responses`: only boolean `stream=true` selects downstream SSE;
+  omitted, false or non-boolean values use buffered delivery. Preserve the
+  original field for the existing Provider normalization and validation path.
 - `decode_request_object`: consumes boolean `use_websocket` into protocol context.
 - `websocket_upstream_request(&CodexResponsesRequest)`: normalizes a clone.
 - `ExecutionSession::fail_delivery(GatewayError)`: finalizes a local delivery
@@ -27,6 +29,10 @@ profiles or random fingerprint generation.
 - `stream=false` must not force HTTP. Preserve transport override, fallback and
   continuation ownership. Both HTTP and WebSocket send streaming upstream copies;
   only the downstream HTTP response is buffered into complete JSON.
+- The HTTP omitted-stream default is buffered and must not insert `stream=false`
+  into the opaque request body. A downstream WebSocket `response.create` frame
+  keeps its existing omitted-stream default of streaming and rejects explicit
+  false or non-boolean values.
 - Never mutate the original request's `stream` or copy downstream credentials
   into the selected account's identity. Reuse existing transport projection.
 - Generate normalizes string `input` and the exact `fast` tier alias only in

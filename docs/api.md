@@ -135,7 +135,9 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-openai-subagent` 请求头携带子代理类型；
 网关不提供独立的子代理请求路径。
 
-HTTP Responses 的 `stream=false` 只决定下游收取完整 JSON，不强制改变上游传输。
+HTTP Responses 只有布尔 `stream=true` 才向下游返回 SSE；省略 `stream`、显式
+`false` 或非布尔值都走完整 JSON 交付，原字段保留给既有 Provider 规范化与校验路径。
+该选择只决定下游交付方式，不强制改变上游传输，也不会向原始请求体补写 `stream=false`。
 OpenAI Provider 沿用既有 WebSocket/HTTP 选择，将上游请求副本规范为流式，并在收齐后返回
 完整结果、工具调用及用量。显式 `use_websocket=false` 仍选择 HTTP/SSE；该本地开关不进入上游请求体。
 下游 WebSocket 帧仍遵循原来的流式协议，不接受 `stream=false`。

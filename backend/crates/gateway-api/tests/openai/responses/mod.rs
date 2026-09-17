@@ -209,6 +209,52 @@ fn decoder_should_keep_delivery_mode_independent_of_upstream_transport_selection
 }
 
 #[test]
+fn http_decoder_should_default_to_buffered_delivery_without_rewriting_routing_context() {
+    let mut headers = HeaderMap::new();
+    headers.insert("conversation-id", HeaderValue::from_static("conversation"));
+    headers.insert("thread-id", HeaderValue::from_static("thread"));
+    headers.insert(
+        "x-codex-turn-metadata",
+        HeaderValue::from_static("{\"request_kind\":\"turn\"}"),
+    );
+    let body = json!({
+        "model": "smart-code",
+        "input": "hello",
+        "use_websocket": true,
+        "previous_response_id": "resp_previous",
+        "prompt_cache_key": "cache-key",
+        "client_metadata": {"future": "opaque"}
+    });
+
+    let decoded = decode_request_with_headers(body.to_string().as_bytes(), &headers)
+        .expect("HTTP request should decode");
+
+    assert!(!decoded.metadata().stream());
+    assert!(!openai_wire_body(&decoded).contains_key("stream"));
+    assert!(!openai_wire_body(&decoded).contains_key("use_websocket"));
+    assert_eq!(
+        openai_wire_body(&decoded)["previous_response_id"],
+        json!("resp_previous")
+    );
+    assert_eq!(
+        openai_wire_body(&decoded)["prompt_cache_key"],
+        json!("cache-key")
+    );
+    assert_eq!(
+        openai_wire_body(&decoded)["client_metadata"],
+        json!({"future": "opaque"})
+    );
+    let context = openai_protocol_context(&decoded);
+    assert_eq!(context["use_websocket"], json!(true));
+    assert_eq!(context["conversation_id"], json!("conversation"));
+    assert_eq!(context["thread_id"], json!("thread"));
+    assert_eq!(
+        context["turn_metadata"],
+        json!("{\"request_kind\":\"turn\"}")
+    );
+}
+
+#[test]
 fn decoder_should_preserve_unrecognized_use_websocket_values() {
     let decoded = generate_request(json!({
         "model": "smart-code",
