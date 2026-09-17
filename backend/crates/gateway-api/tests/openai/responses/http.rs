@@ -2082,10 +2082,22 @@ async fn response(
     session: FakeSession,
     streaming: bool,
 ) -> axum::response::Response {
+    response_with_stream_field(provider, session, Some(streaming)).await
+}
+
+async fn response_with_stream_field(
+    provider: &str,
+    session: FakeSession,
+    streaming: Option<bool>,
+) -> axum::response::Response {
     let execution = Arc::new(SessionExecution {
         client: authenticated_client_for_provider("sk_correlation_test", provider),
         session: Mutex::new(Some(Box::new(session))),
     });
+    let mut body = json!({"model": "model-a", "input": "synthetic"});
+    if let Some(streaming) = streaming {
+        body["stream"] = json!(streaming);
+    }
     api_router(execution)
         .await
         .oneshot(
@@ -2093,16 +2105,54 @@ async fn response(
                 .header(AUTHORIZATION, "Bearer sk_correlation_test")
                 .header("x-request-id", "caller-chosen-not-a-model-id")
                 .header("user-agent", "AnotherTerminal/1.0")
-                .body(Body::from(
-                    json!({
-                        "model": "model-a", "input": "synthetic", "stream": streaming
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from(body.to_string()))
                 .unwrap(),
         )
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn http_responses_should_only_stream_when_stream_is_explicitly_true() {
+    for (streaming, expected_content_type) in [
+        (None, "application/json"),
+        (Some(false), "application/json"),
+        (Some(true), "text/event-stream"),
+    ] {
+        let trace = Arc::new(Trace::default());
+        let session = if streaming == Some(true) {
+            FakeSession::streaming(
+                trace,
+                vec![
+                    NextStep::Event(delivery(started(), CommitRequirement::CommitBeforeDelivery)),
+                    NextStep::Event(delivery(completed(), CommitRequirement::AlreadyCommitted)),
+                    NextStep::FinalizeSuccess,
+                ],
+            )
+        } else {
+            FakeSession::buffered(trace, vec![started(), completed()])
+        };
+
+        let response = response_with_stream_field("openai", session, streaming).await;
+
+        assert_eq!(response.status(), StatusCode::OK, "stream={streaming:?}");
+        assert_eq!(
+            response.headers()[CONTENT_TYPE],
+            expected_content_type,
+            "stream={streaming:?}"
+        );
+        let body = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("response body");
+        if streaming == Some(true) {
+            assert!(
+                body.starts_with(b"event:") || body.starts_with(b"data:"),
+                "streaming response must be SSE"
+            );
+        } else {
+            serde_json::from_slice::<Value>(&body).expect("buffered response must be JSON");
+        }
+    }
 }
 
 fn headers(values: &[(&str, &'static str)]) -> Vec<ProviderResponseHeader> {

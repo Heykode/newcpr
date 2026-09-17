@@ -465,7 +465,7 @@ pub(super) fn decode_request_object(
     let stream = object
         .get("stream")
         .and_then(Value::as_bool)
-        .unwrap_or(true);
+        .unwrap_or(matches!(source, RequestDecodeSource::WebSocketFrame));
     let store = object
         .get("store")
         .and_then(Value::as_bool)
