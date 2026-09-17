@@ -105,6 +105,8 @@
   independent from runtime errors. Do not infer HTTP 401 from a generic expired state.
 - Cached credential verification, previous sync and current pool health are independent.
   Neither a normal pool account nor a success counter settles an uncertain library push.
+- Safe list projections may expose `hasTotp` only as the result of full local material
+  validation. Never expose the password, TOTP secret, derived code or secret metadata.
 - Workspace selection accepts known same-email pool workspaces or the current verified
   document workspace. Unknown choices fail without clearing cached credentials. Selection
   changes still cancel/fence old work, clear cached credentials and require a fresh login;

@@ -3,7 +3,8 @@ import type { AccountRow } from './constants'
 import { ChevronDown, ListTodo, RefreshCw } from '@lucide/vue'
 import { useLocalStorage } from '@vueuse/core'
 
-import { computed, ref, useTemplateRef, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
+import { getRelogin } from '@/api/modules/relogin'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -43,6 +44,7 @@ import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
 import { useAccountSwipeSelect } from './composables/useAccountSwipeSelect'
 import { accountColumnOptions, accountColumns, derivedAccountStatus, readAccountColumnKeys, writeAccountColumnKeys } from './constants'
+import { accountHasReloginTotp, reloginTotpEmailSet } from './relogin-availability'
 
 const selectedIds = ref<Set<string>>(new Set())
 const forecastAccount = ref<AccountRow | null>(null)
@@ -58,7 +60,7 @@ const {
   refreshing,
   accounts,
   loadAccounts,
-  refreshAccounts,
+  refreshAccounts: refreshAccountDirectory,
   refreshAccountsSilently,
   searchQuery,
   providerQuery,
@@ -73,6 +75,35 @@ const {
   handlePageSizeChange,
   handleSortChange,
 } = useAccountsQuery()
+
+const reloginTotpEmails = shallowRef<ReadonlySet<string>>(new Set())
+let reloginAvailabilityGeneration = 0
+
+async function loadReloginAvailability() {
+  const generation = ++reloginAvailabilityGeneration
+  try {
+    const result = await getRelogin({ silent: true })
+    if (generation === reloginAvailabilityGeneration)
+      reloginTotpEmails.value = reloginTotpEmailSet(result.items)
+  }
+  catch {
+    // Keep the last safe projection; account directory availability is independent.
+  }
+}
+
+function hasReloginTotp(account: AccountRow) {
+  return accountHasReloginTotp(account, reloginTotpEmails.value)
+}
+
+async function refreshAccounts() {
+  const [result] = await Promise.all([
+    refreshAccountDirectory(),
+    loadReloginAvailability(),
+  ])
+  return result
+}
+
+onMounted(() => void loadReloginAvailability())
 
 async function applyForecastAccount(account: AccountRow) {
   if (forecastAccount.value?.id === account.id)
@@ -385,7 +416,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             </template>
 
             <template #identity="{ row }">
-              <AccountIdentityCell :account="row" />
+              <AccountIdentityCell :account="row" :has-totp="hasReloginTotp(row)" />
             </template>
 
             <template #status="{ row }">
