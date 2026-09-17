@@ -19,8 +19,8 @@ use crate::{
     model::{
         AdminError,
         group_monitor::{GroupMonitorReport, MonitorAccountEstimate, project_group_monitor},
-        provider_credentials::AccountUsagePeriod,
-        quota_forecast::current_window_estimate,
+        group_monitor_quota::monitor_quota_estimates,
+        provider_credentials::{AccountUsagePeriod, explicit_plan_type},
     },
     ports::store::{AccountGroupStore, AccountRuntimeStore},
 };
@@ -82,6 +82,19 @@ impl DefaultGroupMonitorService {
             .account_runtime(&ids)
             .await
             .map_err(|error| map_store_error(error, "group monitor runtime"))?;
+        let client_ids = facts
+            .group_client_keys
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let client_counts = self
+            .runtime
+            .client_in_flight(&client_ids)
+            .await
+            .map_err(|error| map_store_error(error, "group monitor concurrency"))?;
         let mut estimates = BTreeMap::new();
         let mut eligible_ids = BTreeSet::new();
         for fact in &facts.members {
@@ -119,28 +132,56 @@ impl DefaultGroupMonitorService {
                 eligible_ids.insert(id.clone());
             }
         }
-        // Deduplicate across the entire pool, not just one browser page.
-        let loaded = stream::iter(eligible_ids)
+        let target_plans = facts
+            .members
+            .iter()
+            .filter(|member| eligible_ids.contains(&member.member.account_id))
+            .filter_map(|member| {
+                explicit_plan_type(member.plan.as_deref())
+                    .map(|plan| (member.provider.as_str(), plan.trim().to_ascii_lowercase()))
+            })
+            .collect::<BTreeSet<_>>();
+        let mut peers = facts.quota_peers;
+        peers.retain(|peer| {
+            eligible_ids.contains(&peer.id)
+                || explicit_plan_type(peer.plan.as_deref()).is_some_and(|plan| {
+                    target_plans
+                        .contains(&(peer.provider.as_str(), plan.trim().to_ascii_lowercase()))
+                })
+        });
+        // Own and deduplicate IDs before crossing the async-trait boundary.
+        let mut quota_ids = BTreeSet::new();
+        quota_ids.extend(peers.iter().map(|peer| peer.id.clone()));
+        let loaded = stream::iter(quota_ids)
             .map(|id| async move {
-                let account_id = ProviderAccountId::new(id.clone())
-                    .map_err(|_| AdminError::internal("监控账号 ID 不合法"))?;
-                self.accounts
-                    .current_quota(&account_id)
-                    .await
-                    .map(|account| (id, account))
+                let result = match ProviderAccountId::new(id.clone()) {
+                    Ok(account_id) => self.accounts.current_quota(&account_id).await,
+                    Err(_) => Err(AdminError::internal("监控账号 ID 不合法")),
+                };
+                (id, result)
             })
             .buffer_unordered(2)
             .collect::<Vec<_>>()
             .await;
         let generated_at = Utc::now();
-        for result in loaded {
-            let (id, account) = result?;
-            if let Some(estimate) = estimates.get_mut(&id)
+        let mut quotas = BTreeMap::new();
+        for (id, result) in loaded {
+            match result {
+                Ok(quota) => {
+                    quotas.insert(id, quota);
+                }
+                Err(error) if eligible_ids.contains(&id) => return Err(error),
+                // Optional references may disappear or become unreadable between samples.
+                Err(_) => {}
+            }
+        }
+        let current = monitor_quota_estimates(&peers, &quotas, generated_at);
+        for (id, account) in &quotas {
+            if let Some(estimate) = estimates.get_mut(id)
                 && let Some((window, AccountUsagePeriod::Weekly)) = account.usage_window()
             {
-                let current = current_window_estimate(window, generated_at);
-                estimate.remaining_usd = current.map(|value| value.remaining_usd);
-                estimate.incomplete = current.is_some_and(|value| value.incomplete_cost);
+                estimate.remaining_usd = current.get(id).map(|value| value.remaining_usd);
+                estimate.incomplete = current.get(id).is_some_and(|value| value.incomplete_cost);
                 estimate.reset_at = window.reset_at;
             }
         }
@@ -161,6 +202,23 @@ impl DefaultGroupMonitorService {
                     .get(group.id.as_str())
                     .cloned()
                     .unwrap_or_default(),
+                if !group.enabled {
+                    Some(0)
+                } else {
+                    facts
+                        .group_client_keys
+                        .get(group.id.as_str())
+                        .map_or(Some(0), |keys| {
+                            client_counts.as_ref().and_then(|counts| {
+                                keys.iter().collect::<BTreeSet<_>>().into_iter().try_fold(
+                                    0_u64,
+                                    |sum, key| {
+                                        counts.get(key).map(|value| sum.saturating_add(*value))
+                                    },
+                                )
+                            })
+                        })
+                },
             );
             items.push(item);
         }

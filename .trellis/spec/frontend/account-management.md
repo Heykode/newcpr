@@ -399,6 +399,10 @@ read-only data.
 
 ## 9. Group Monitor Overview
 
+- Keep provisional-account counts off the cards. Existing help text explains
+  peer fallback, shared dynamic capacity and mixed-lifespan expiry only.
+  When occupancy is unknown, display neither a numeric numerator nor denominator.
+  Concurrency progress uses the server's dynamic capacity, not configured limits.
 - Keep total/normal in one compact left summary, with up to three monitor groups
   per page (two/one at narrower widths). Divide remaining width by the actual
   visible card count, including the last page. Default card height is about 128px.

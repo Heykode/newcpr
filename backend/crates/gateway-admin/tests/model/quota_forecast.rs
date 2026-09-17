@@ -10,11 +10,11 @@ use gateway_admin::model::{
     },
 };
 
-fn now() -> DateTime<Utc> {
+pub(super) fn now() -> DateTime<Utc> {
     "2026-09-12T00:00:00Z".parse().unwrap()
 }
 
-fn window(key: &str, days: u64) -> ProviderQuotaWindow {
+pub(super) fn window(key: &str, days: u64) -> ProviderQuotaWindow {
     ProviderQuotaWindow {
         key: key.to_owned(),
         group: if days > 7 { "monthly" } else { "shortTerm" }.to_owned(),
@@ -57,7 +57,7 @@ fn window(key: &str, days: u64) -> ProviderQuotaWindow {
     }
 }
 
-fn quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
+pub(super) fn quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
     ProviderQuota {
         plan_type: None,
         observed_at: Some(now()),
