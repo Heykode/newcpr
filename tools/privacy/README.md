@@ -63,7 +63,8 @@ python3 tools/privacy/install.py --gitleaks "$PRIVACY_GITLEAKS"
 Installation backs up local Git configuration inside `.git/privacy-hook-backups/`.
 It refuses to overwrite custom hooks or implicitly change shared worktrees.
 It does not change Git author identity. Set a reviewed public identity separately;
-the policy accepts GitHub noreply email domains, not local-machine emails.
+the policy accepts GitHub noreply identities and individually approved public
+email addresses, not arbitrary local-machine emails.
 Existing commits are not changed when Git identity configuration changes.
 
 An already published commit identity that cannot be rewritten may be listed in
@@ -72,6 +73,17 @@ non-empty review reason. This exception suppresses only the identity-domain find
 for that exact commit. Its message and every reachable file remain fully scanned;
 later commits, abbreviated IDs, duplicate entries and malformed records fail closed.
 Never generate this list from scanner output or use it for an unpublished commit.
+
+### Approved Public Email
+
+The owner has approved the existing merge-author email for publication.
+`policy.json` records its SHA-256 in `public_email_sha256`, computed over the
+lowercase UTF-8 address. This only exempts that address from the Git identity
+email check, including future commits; it does not allow its entire domain,
+other authors or committers, or bypass any content, credential or private
+blocklist checks. The digest avoids duplicating the address in policy text;
+it does not anonymize the email already present in public Git metadata.
+Additional entries require explicit owner approval, never automatic baselining.
 
 Each clone needs installation. Hooks can be bypassed, so also use a reviewed,
 protected CI check and pre-upload publication checks. CI runs after upload and
