@@ -11,7 +11,8 @@ use gateway_admin::{
 
 use super::{
     CredentialCooldownRepository as _, CredentialLeaseRepository as _,
-    RedisCredentialCooldownRepository, RedisCredentialLeaseRepository,
+    RedisClientAdmissionRepository, RedisCredentialCooldownRepository,
+    RedisCredentialLeaseRepository,
 };
 
 /// 只组合可丢失 Redis 事实；不持有 PostgreSQL，也不执行状态投影。
@@ -19,6 +20,7 @@ use super::{
 pub struct RedisAdminAccountRuntimeStore {
     cooldowns: RedisCredentialCooldownRepository,
     leases: RedisCredentialLeaseRepository,
+    clients: RedisClientAdmissionRepository,
 }
 
 impl RedisAdminAccountRuntimeStore {
@@ -26,13 +28,25 @@ impl RedisAdminAccountRuntimeStore {
     pub const fn new(
         cooldowns: RedisCredentialCooldownRepository,
         leases: RedisCredentialLeaseRepository,
+        clients: RedisClientAdmissionRepository,
     ) -> Self {
-        Self { cooldowns, leases }
+        Self {
+            cooldowns,
+            leases,
+            clients,
+        }
     }
 }
 
 #[async_trait]
 impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
+    async fn client_in_flight(
+        &self,
+        client_key_ids: &[String],
+    ) -> AdminStoreResult<Option<BTreeMap<String, u64>>> {
+        Ok(self.clients.active_counts(client_key_ids).await.ok())
+    }
+
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
         self.cooldowns
             .active_cooldowns()

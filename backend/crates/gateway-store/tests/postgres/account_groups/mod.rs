@@ -25,6 +25,57 @@ const EMPTY_GROUP: &str = "grp_00000000000000000000000000000002";
 mod monitor_lifecycles;
 
 #[tokio::test]
+async fn monitor_reuses_key_bindings_and_includes_ungrouped_quota_peers() {
+    let Some(db) = TestDatabase::create("monitor_key_facts").await else {
+        return;
+    };
+    let groups = PgAccountGroupRepository::new(db.pool.clone());
+    let keys = PgAdminClientKeyStore::new(db.pool.clone());
+    for id in [MIXED_GROUP, EMPTY_GROUP] {
+        groups
+            .create_account_group(
+                NewAccountGroup {
+                    id: group_id(id),
+                    name: id.to_owned(),
+                    description: None,
+                    color: group_color("#2563EBFF"),
+                },
+                &context("monitor-groups"),
+            )
+            .await
+            .unwrap();
+    }
+    for id in ["acct_bound", "acct_unbound"] {
+        seed_account(&db.pool, id, "openai", id).await;
+    }
+    assign_accounts(&db.pool, MIXED_GROUP, &["acct_bound"]).await;
+    keys.create_client_key(
+        new_key(
+            "key_shared",
+            vec![group_id(MIXED_GROUP), group_id(EMPTY_GROUP)],
+        ),
+        &context("monitor-key"),
+    )
+    .await
+    .unwrap();
+    keys.create_client_key(new_key("key_all", vec![]), &context("monitor-all"))
+        .await
+        .unwrap();
+    let facts = groups.load_group_monitor(chrono::Utc::now()).await.unwrap();
+    assert_eq!(facts.group_client_keys[MIXED_GROUP], ["key_shared"]);
+    assert_eq!(facts.group_client_keys[EMPTY_GROUP], ["key_shared"]);
+    assert_eq!(facts.members.len(), 1);
+    assert_eq!(facts.quota_peers.len(), 2);
+    assert!(
+        facts
+            .quota_peers
+            .iter()
+            .any(|peer| peer.id == "acct_unbound")
+    );
+    db.close().await;
+}
+
+#[tokio::test]
 async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multiplication() {
     let Some(database) = TestDatabase::create("account_group_aggregate").await else {
         return;

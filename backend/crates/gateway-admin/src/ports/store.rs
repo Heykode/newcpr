@@ -262,6 +262,14 @@ pub trait AccountRuntimeStore: Send + Sync {
         &self,
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot>;
+
+    /// Read existing admission leases; unavailable is not zero occupancy.
+    async fn client_in_flight(
+        &self,
+        _client_key_ids: &[String],
+    ) -> AdminStoreResult<Option<std::collections::BTreeMap<String, u64>>> {
+        Ok(None)
+    }
 }
 
 /// 管理员密码、会话和安全审计。

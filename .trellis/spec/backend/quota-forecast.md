@@ -27,6 +27,42 @@
   Store 串行同步只写监控表，后续业务统计仍只读；过期采样不得覆盖新生命周期。
   生命周期保留历史与额度样本停用是两回事。
 
+### Group Monitor Dynamic Capacity
+
+- Group occupancy reads existing Redis client-admission leases using server time
+  and exclusive expiry bounds. This observer never prunes, renews, admits or
+  releases leases. Batch reads are bounded to 128 keys; no keyspace scan.
+- Reuse current group/key bindings, including disabled keys with draining
+  requests. Multi-group keys can contribute to multiple groups. Unscoped keys
+  do not acquire a fictitious group; their account occupancy still consumes
+  shared free slots.
+- `usedSlots` is group-key occupancy; `totalSlots` is that occupancy plus the sum
+  of `max(account_limit - account_global_in_flight, 0)` for unique eligible
+  members. Failed reads yield unknown concurrency, not zero; the UI hides both
+  numbers when `usedSlots` is null. Configured account limits never change.
+- Group-only quota fallback uses the arithmetic mean of up to three genuine
+  current estimates from existing pool accounts, including ungrouped peers.
+  Rank by account `created_at` descending and ID ascending. Match provider,
+  normalized explicit Plan, window key/group/role/limit ID and exact duration.
+  New explicit Plan names work without registration.
+- References require a live weekly observation and complete costs. Recipients
+  require a valid current percentage and zero known local USD consumption,
+  without missing/partial costs. Remaining is peer mean times unused fraction.
+  Own `current_window_estimate` always wins, even below 5%. Do not feed fallback
+  values into references, persist peer samples or change account-list estimates.
+  An empty reference pool remains unknown, with no historical template.
+- Failed optional peer reads are excluded from references; required eligible
+  account read errors still fail the sample. Never disguise an account read
+  error as zero usage or substitute a peer estimate for unreadable own facts.
+- Mixed expiry projections skip accounts that outlived their Plan average,
+  while retaining calculable accounts. All-outlived groups and otherwise missing
+  lifespan/rate evidence remain unknown. ETA still uses the full known remaining
+  amount and eligible accounts' deduplicated cross-group consumption.
+- Sampling remains 10 seconds, list reads 30 seconds, without upstream refresh.
+  Own the deduplicated quota IDs before building the buffered async stream:
+  a borrowed mapped peer iterator fails `async_trait`'s `Send` generalization
+  in this toolchain. Keep that ownership boundary during collection cleanup.
+
 
 ## 1. Scope / Trigger
 
@@ -130,6 +166,10 @@ estimates are not balances, billing facts or scheduling inputs.
   non-overflowing 320/390px layouts.
 - Use `CI=true`, `CPR_TEST_DATABASE_URL` and `CPR_TEST_REDIS_URL` with isolated
   services; missing-environment early returns are not persistence verification.
+- Linux test bundles from macOS must exclude AppleDouble (`._*`) metadata:
+  SQLx treats stray metadata beside migrations as invalid migration filenames.
+  Fix the bundle, not migrations. Remove task-owned build and browser artifacts
+  after remote verification, retaining only small evidence outside the checkout.
 
 ## 7. Wrong vs Correct
 

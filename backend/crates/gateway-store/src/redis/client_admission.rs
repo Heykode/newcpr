@@ -243,6 +243,37 @@ pub struct RedisClientAdmissionRepository {
 }
 
 impl RedisClientAdmissionRepository {
+    /// Observe live leases without pruning or extending their lifetime.
+    pub async fn active_counts(
+        &self,
+        client_key_ids: &[String],
+    ) -> StoreResult<std::collections::BTreeMap<String, u64>> {
+        let mut counts = std::collections::BTreeMap::new();
+        let script = r"
+            local clock = redis.call('TIME')
+            local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+            return redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')
+            ";
+        let mut connection = self.connection.clone();
+        for ids in client_key_ids.chunks(128) {
+            let mut pipeline = redis::pipe();
+            for id in ids {
+                // EVAL keeps each read single-key and works before script cache warmup.
+                pipeline
+                    .cmd("EVAL")
+                    .arg(script)
+                    .arg(1)
+                    .arg(&self.keys(id)?[0]);
+            }
+            let values: Vec<u64> = pipeline
+                .query_async(&mut connection)
+                .await
+                .map_err(|_| redis_unavailable("read client concurrency"))?;
+            counts.extend(ids.iter().cloned().zip(values));
+        }
+        Ok(counts)
+    }
+
     pub fn new(connection: ConnectionManager, key_namespace: &str) -> StoreResult<Self> {
         Ok(Self {
             connection,

@@ -31,6 +31,14 @@ pub struct MonitorLifespan {
     pub samples: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct MonitorQuotaPeer {
+    pub id: String,
+    pub provider: String,
+    pub plan: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GroupMonitorFacts {
     pub config_revision: u64,
@@ -39,6 +47,9 @@ pub struct GroupMonitorFacts {
     pub group_usage: BTreeMap<String, MonitorUsage>,
     pub account_usage: BTreeMap<String, MonitorUsage>,
     pub lifespans: Vec<MonitorLifespan>,
+    /// One row per current pool account, including ungrouped accounts.
+    pub quota_peers: Vec<MonitorQuotaPeer>,
+    pub group_client_keys: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,6 +153,7 @@ pub fn project_group_monitor(
     group: AccountGroupRef,
     accounts: &[MonitorAccountEstimate],
     group_usage: &MonitorUsage,
+    group_in_flight: Option<u64>,
 ) -> GroupMonitorItem {
     let unique = accounts
         .iter()
@@ -157,7 +169,7 @@ pub fn project_group_monitor(
         total_accounts: unique.len() as u64,
         eligible_accounts: eligible.len() as u64,
         estimated_accounts: 0,
-        used_slots: Some(0),
+        used_slots: group_in_flight,
         total_slots: 0,
         remaining_usd: None,
         remaining_status: "learning",
@@ -172,14 +184,14 @@ pub fn project_group_monitor(
     };
     let mut remaining = 0.0;
     let mut expiry = Some(0.0);
+    let mut calculable_expiry = 0;
+    let mut free_slots = Some(0_u64);
     let mut partial = false;
     let mut unavailable = false;
     for account in eligible {
-        item.total_slots = item.total_slots.saturating_add(account.total_slots);
-        item.used_slots = item
-            .used_slots
+        free_slots = free_slots
             .zip(account.used_slots)
-            .map(|(left, right)| left.saturating_add(right));
+            .map(|(free, used)| free.saturating_add(account.total_slots.saturating_sub(used)));
         item.quota_consume_usd_per_minute = item
             .quota_consume_usd_per_minute
             .zip(known_usage(&account.consumption))
@@ -199,17 +211,29 @@ pub fn project_group_monitor(
         {
             item.estimated_accounts += 1;
             remaining += amount;
-            expiry = expiry
-                .zip(
-                    account
-                        .remaining_life_minutes
-                        .filter(|minutes| minutes.is_finite() && *minutes > 0.0),
-                )
-                .zip(known_usage(&account.consumption))
-                .map(|((total, minutes), rate)| total + (amount - rate * minutes).max(0.0));
+            match account
+                .remaining_life_minutes
+                .filter(|minutes| minutes.is_finite())
+            {
+                Some(minutes) if minutes <= 0.0 => {}
+                Some(minutes) => {
+                    expiry = expiry
+                        .zip(known_usage(&account.consumption))
+                        .map(|(total, rate)| total + (amount - rate * minutes).max(0.0));
+                    calculable_expiry += 1;
+                }
+                None => expiry = None,
+            }
         } else {
             expiry = None;
         }
+    }
+    item.used_slots = item.used_slots.zip(free_slots).map(|(used, free)| {
+        item.total_slots = used.saturating_add(free);
+        used
+    });
+    if calculable_expiry == 0 && item.eligible_accounts > 0 {
+        expiry = None;
     }
     if !item.group.enabled {
         item.remaining_status = "disabled";

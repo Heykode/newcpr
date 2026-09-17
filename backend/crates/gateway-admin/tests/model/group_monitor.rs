@@ -49,6 +49,7 @@ fn monitor_deduplicates_accounts_and_uses_shared_rate_without_subtracting_expiry
             usd: 1.0,
             missing_costs: 0,
         },
+        Some(2),
     );
     assert_eq!(
         (
@@ -71,35 +72,43 @@ fn monitor_distinguishes_unknown_partial_learning_idle_and_disabled() {
     let mut a = account("a");
     a.remaining_usd = None;
     assert_eq!(
-        project_group_monitor(group(), &[a.clone()], &MonitorUsage::default()).remaining_status,
+        project_group_monitor(group(), &[a.clone()], &MonitorUsage::default(), Some(2))
+            .remaining_status,
         "learning"
     );
     a.unavailable = true;
     assert_eq!(
-        project_group_monitor(group(), &[a.clone()], &MonitorUsage::default()).remaining_status,
+        project_group_monitor(group(), &[a.clone()], &MonitorUsage::default(), Some(2))
+            .remaining_status,
         "unknown"
     );
-    let partial = project_group_monitor(group(), &[a, account("b")], &MonitorUsage::default());
+    let partial = project_group_monitor(
+        group(),
+        &[a, account("b")],
+        &MonitorUsage::default(),
+        Some(2),
+    );
     assert_eq!(partial.remaining_status, "partial");
     assert_eq!(partial.eta_minutes, None);
     assert_eq!(partial.expected_expiry_usd, None);
     let mut a = account("a");
     a.consumption.usd = 0.0;
-    let idle = project_group_monitor(group(), &[a.clone()], &MonitorUsage::default());
+    let idle = project_group_monitor(group(), &[a.clone()], &MonitorUsage::default(), Some(2));
     assert_eq!(idle.eta_status, "idle");
     assert_eq!(idle.eta_minutes, None);
     a.remaining_life_minutes = Some(-1.0);
     assert_eq!(
-        project_group_monitor(group(), &[a.clone()], &MonitorUsage::default()).expected_expiry_usd,
+        project_group_monitor(group(), &[a.clone()], &MonitorUsage::default(), Some(2))
+            .expected_expiry_usd,
         None
     );
     let mut disabled = group();
     disabled.enabled = false;
     assert_eq!(
-        project_group_monitor(disabled, &[a], &MonitorUsage::default()).remaining_status,
+        project_group_monitor(disabled, &[a], &MonitorUsage::default(), Some(0)).remaining_status,
         "disabled"
     );
-    let empty = project_group_monitor(group(), &[], &MonitorUsage::default());
+    let empty = project_group_monitor(group(), &[], &MonitorUsage::default(), Some(0));
     assert_eq!(empty.remaining_usd, Some(0.0));
     assert_eq!(empty.eta_status, "empty");
 }
@@ -116,6 +125,7 @@ fn missing_cost_or_runtime_is_never_reported_as_zero_and_nonfinite_is_rejected()
             usd: 1.0,
             missing_costs: 1,
         },
+        Some(2),
     );
     assert_eq!(item.used_slots, None);
     assert_eq!(item.consume_usd_per_minute, None);
@@ -123,9 +133,66 @@ fn missing_cost_or_runtime_is_never_reported_as_zero_and_nonfinite_is_rejected()
     assert_eq!(item.eta_status, "unknown");
     a.remaining_usd = Some(f64::INFINITY);
     assert_eq!(
-        project_group_monitor(group(), &[a], &MonitorUsage::default()).remaining_usd,
+        project_group_monitor(group(), &[a], &MonitorUsage::default(), Some(2)).remaining_usd,
         None
     );
+}
+
+#[test]
+fn shared_capacity_is_group_occupancy_plus_free_slots_and_recovers_on_release() {
+    let mut shared = account("shared");
+    shared.total_slots = 10;
+    shared.used_slots = Some(5);
+    for (own, maximum) in [(3, 8), (2, 7)] {
+        let item = project_group_monitor(
+            group(),
+            &[shared.clone(), shared.clone()],
+            &MonitorUsage::default(),
+            Some(own),
+        );
+        assert_eq!((item.used_slots, item.total_slots), (Some(own), maximum));
+    }
+    shared.used_slots = Some(3);
+    let item = project_group_monitor(
+        group(),
+        &[shared.clone()],
+        &MonitorUsage::default(),
+        Some(3),
+    );
+    assert_eq!((item.used_slots, item.total_slots), (Some(3), 10));
+    let unknown = project_group_monitor(group(), &[shared.clone()], &MonitorUsage::default(), None);
+    assert_eq!(unknown.used_slots, None);
+    shared.used_slots = Some(12);
+    let overloaded = project_group_monitor(group(), &[shared], &MonitorUsage::default(), Some(3));
+    assert_eq!(
+        (overloaded.used_slots, overloaded.total_slots),
+        (Some(3), 3)
+    );
+}
+
+#[test]
+fn outlived_accounts_do_not_hide_calculable_expiry_or_reduce_eta_balance() {
+    let mut old = account("old");
+    old.remaining_life_minutes = Some(0.0);
+    let item = project_group_monitor(
+        group(),
+        &[old.clone(), account("young")],
+        &MonitorUsage::default(),
+        Some(0),
+    );
+    assert_eq!(item.expected_expiry_usd, Some(80.0));
+    assert_eq!(item.remaining_usd, Some(200.0));
+    assert_eq!(item.eta_minutes, Some(50.0));
+    let all_old = project_group_monitor(group(), &[old.clone()], &MonitorUsage::default(), Some(0));
+    assert_eq!(all_old.expected_expiry_usd, None);
+    old.remaining_life_minutes = None;
+    let missing = project_group_monitor(
+        group(),
+        &[old, account("young")],
+        &MonitorUsage::default(),
+        Some(0),
+    );
+    assert_eq!(missing.expected_expiry_usd, None);
 }
 
 #[test]
