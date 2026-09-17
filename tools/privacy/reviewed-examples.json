@@ -475,7 +475,23 @@
     "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
     "rule": "non-example-ip",
     "line": 661,
+    "file_sha256": "33b1e9c3011ac50a294fa67bf463beaf7f81d8c2eddabb1499bf267b3d8d9378",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 661,
     "file_sha256": "0462e4d0cf8d76faff13a1d21352557d7f20ad982806c2c07e06caf39a8b2209",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 685,
+    "file_sha256": "33b1e9c3011ac50a294fa67bf463beaf7f81d8c2eddabb1499bf267b3d8d9378",
     "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
     "reason": "Synthetic network-policy, forwarding or DNS resolution test; no deployment endpoint."
   },
