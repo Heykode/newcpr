@@ -44,6 +44,18 @@
     {
       "commit": "8507033c82f3850a2494a734e02dca7f276eaefd",
       "reason": "Previously published relogin account update committer identity reviewed after noreply enforcement."
+    },
+    {
+      "commit": "ed404c9821f2d54849894614527cbdacd9d3a242",
+      "reason": "Previously published dependency integration committer identity reviewed after noreply enforcement."
+    },
+    {
+      "commit": "53945b0d1f538597c14b7d36e5173787ae729960",
+      "reason": "Previously published privacy guard update committer identity reviewed after noreply enforcement."
+    },
+    {
+      "commit": "f38a0e61e41d45f8ad142d29f782792367851c19",
+      "reason": "Previously published privacy policy update committer identity reviewed after noreply enforcement."
     }
   ],
   "max_file_bytes": 10485760
