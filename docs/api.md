@@ -113,6 +113,10 @@ body 不进入这个通用信封。稳定业务码如下：
 
 ## 3. OpenAI 数据面与模型目录
 
+OpenAI 模型目录是发现结果，不是推理白名单。列表尚未包含的新模型可经原有模型映射、
+Client Key 账号范围及调度规则发往上游；实际不支持的模型仍由上游返回错误。
+此规则同时适用于即时选账号和账号并发等待，不放宽账号权限、健康或额度限制。
+
 除下述 JSON 入站解压和 multipart 上传保护外，Responses、Images 和 standalone Search HTTP body、
 WebSocket message 和 frame 不设置网关私有长度上限；协议可接受性由上游决定。
 

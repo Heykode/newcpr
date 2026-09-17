@@ -182,7 +182,11 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生。
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果。
 
-Responses 按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
+Responses 按 Provider 声明的目录完整性编译候选。OpenAI 目录用于发现模型，不作为推理白名单；
+未列出的模型仍可在已授权账号范围内发送，由上游验证。其他声明完整目录的 Provider 保留原准入。
+全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
+即时选择与并发等待路径不再因 OpenAI 发现目录缺少模型淘汰账号；健康、额度、并发、粘性、
+续接所有权及等待预算不变，也不在推理热路径增加目录查询。
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
 的账号范围确实包含 OpenAI 账号时生成单一 OpenAI 候选。Images 不要求模型字段；Search body 中的模型
 及其他字段保持原始 bytes 并由上游解释。

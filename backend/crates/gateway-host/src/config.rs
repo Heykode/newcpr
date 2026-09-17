@@ -19,6 +19,9 @@ const SERVER_PORT_ENV: &str = "CPR_SERVER_PORT";
 /// Host 只负责找到和解析文件；每个包的字段解释与相对路径解析
 /// 由顶层配置委托给对应的包完成。
 pub trait LoadableConfig: DeserializeOwned {
+    /// Explicitly retired fields; unknown fields outside this list remain errors.
+    const RETIRED_FIELDS: &'static [&'static [&'static str]] = &[];
+
     fn resolve_and_validate(&mut self, source_dir: &Path) -> Result<(), ConfigError>;
 }
 
@@ -27,13 +30,57 @@ pub fn load_config<T: LoadableConfig>() -> Result<T, ConfigError> {
     let current = env::current_dir().map_err(|_| ConfigError::CurrentDirectory)?;
     let path = discover_config_path(&current)?;
     let source_dir = path.parent().ok_or(ConfigError::InvalidConfigPath)?;
-    let mut value: T = config::Config::builder()
+    let mut document = config::Config::builder()
         .add_source(config::File::from(path.as_path()).required(true))
         .build()
-        .and_then(config::Config::try_deserialize)
         .map_err(|_| ConfigError::InvalidDocument { path: path.clone() })?;
+    for field in T::RETIRED_FIELDS {
+        if remove_retired_field(&mut document.cache, field) {
+            // Startup precedes logging initialization. Never echo a configuration value.
+            eprintln!(
+                "[warning] retired configuration field {:?} ignored",
+                field.join(".")
+            );
+        }
+    }
+    let mut value: T =
+        document
+            .try_deserialize()
+            .map_err(|error| match missing_config_field(&error) {
+                Some(field) => ConfigError::MissingField {
+                    path: path.clone(),
+                    field,
+                },
+                None => ConfigError::InvalidDocument { path: path.clone() },
+            })?;
     value.resolve_and_validate(source_dir)?;
     Ok(value)
+}
+
+fn remove_retired_field(value: &mut config::Value, path: &[&str]) -> bool {
+    let Some((first, rest)) = path.split_first() else {
+        return false;
+    };
+    let config::ValueKind::Table(table) = &mut value.kind else {
+        return false;
+    };
+    if rest.is_empty() {
+        return table.remove(*first).is_some();
+    }
+    table
+        .get_mut(*first)
+        .is_some_and(|nested| remove_retired_field(nested, rest))
+}
+
+fn missing_config_field(error: &config::ConfigError) -> Option<String> {
+    match error {
+        config::ConfigError::NotFound(field) => Some(field.clone()),
+        config::ConfigError::At { error, key, .. } => missing_config_field(error).map(|field| {
+            key.as_ref()
+                .map_or_else(|| field.clone(), |key| format!("{key}.{field}"))
+        }),
+        _ => None,
+    }
 }
 
 /// Host 唯一拥有的进程配置。
@@ -197,6 +244,8 @@ pub enum ConfigError {
     InvalidConfigPath,
     #[error("configuration document is invalid: {path}")]
     InvalidDocument { path: PathBuf },
+    #[error("configuration document {path} is missing required field {field:?}")]
+    MissingField { path: PathBuf, field: String },
     #[error("configuration field is invalid: {0}")]
     InvalidField(&'static str),
     #[error("environment variable is invalid: {0}")]

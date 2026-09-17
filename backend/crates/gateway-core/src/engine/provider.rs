@@ -486,6 +486,10 @@ pub trait Provider: Send + Sync {
     /// 返回当前进程已经成功发布的目录代次。
     fn catalog_generation(&self) -> ProviderCatalogGeneration;
 
+    fn model_catalog_is_exhaustive(&self) -> bool {
+        true
+    }
+
     /// 解释 Provider 差异化观测字段；不参与路由和传输。
     fn request_observation(
         &self,
@@ -653,6 +657,12 @@ impl ProviderRegistry {
 }
 
 impl ProviderCatalogPort for ProviderRegistry {
+    fn model_catalog_is_exhaustive(&self, provider: &ProviderKind) -> bool {
+        self.providers
+            .get(provider)
+            .is_none_or(|provider| provider.model_catalog_is_exhaustive())
+    }
+
     fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
         self.providers
             .iter()

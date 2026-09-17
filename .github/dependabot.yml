@@ -28,6 +28,30 @@ updates:
       - dependency-name: rustls
     groups:
       minor-and-patch:
+        # 协议敏感依赖单独提 PR，需握手/读写/压缩回归；不新增全量忽略规则。
+        exclude-patterns:
+          - aws-lc-rs
+          - http-body-util
+          - hyper
+          - hyper-rustls
+          - hyper-tls
+          - hyper-util
+          - native-tls
+          - openssl
+          - openssl-src
+          - openssl-sys
+          - reqwest
+          - rustls
+          - rustls-native-certs
+          - rustls-pki-types
+          - tokio
+          - tokio-native-tls
+          - tokio-rustls
+          - tokio-tungstenite
+          - tungstenite
+          - zstd
+          - zstd-safe
+          - zstd-sys
         update-types:
           - minor
           - patch

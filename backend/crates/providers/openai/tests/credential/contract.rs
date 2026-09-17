@@ -27,9 +27,9 @@ use gateway_core::routing::{
 };
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
-    CodexAccountFailure, CodexCookiePolicy, CodexCredentialCatalogService, CodexCredentialCodec,
-    CodexCredentialQuotaService, CodexCredentialSelector, CodexDeviceCodec,
-    CredentialSelectionError, ImportCodexOAuthCredential, SelectCodexCredential,
+    CodexAccountFailure, CodexCookiePolicy, CodexCredentialCodec, CodexCredentialQuotaService,
+    CodexCredentialSelector, CodexDeviceCodec, CredentialSelectionError,
+    ImportCodexOAuthCredential, SelectCodexCredential,
 };
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use secrecy::ExposeSecret;
@@ -38,7 +38,7 @@ use url::Url;
 
 use crate::support::{
     MemoryAccountStore, MemoryCooldownPort, MemorySessionAffinity, MemorySessionExclusions,
-    TestLeaseCoordinator, account_policy, catalog_cache, profile, secret,
+    TestLeaseCoordinator, account_policy, profile, secret,
 };
 
 fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
@@ -166,13 +166,6 @@ fn selector_with_runtime(
         verified_at: chrono::Utc::now(),
     });
     let http = reqwest::Client::builder().build().expect("HTTP client");
-    let catalog = Arc::new(CodexCredentialCatalogService::new(
-        store.repository(),
-        profile.clone(),
-        http.clone(),
-        OFFICIAL_CODEX_BASE_URL.to_owned(),
-        catalog_cache(),
-    ));
     let quota = Arc::new(CodexCredentialQuotaService::new(
         store.repository(),
         profile,
@@ -186,7 +179,6 @@ fn selector_with_runtime(
         leases,
         session_affinity,
         Arc::new(MemorySessionExclusions::default()),
-        catalog,
         quota,
         account_feedback,
         CodexCookiePolicy::official().expect("official cookie policy"),

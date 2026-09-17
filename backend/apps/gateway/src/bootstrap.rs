@@ -23,6 +23,12 @@ pub struct GatewayConfig {
 }
 
 impl LoadableConfig for GatewayConfig {
+    const RETIRED_FIELDS: &'static [&'static [&'static str]] = &[
+        &["openai", "tls"],
+        &["openai", "fingerprint"],
+        &["host", "logging", "file", "max_files"],
+    ];
+
     fn resolve_and_validate(&mut self, source_dir: &std::path::Path) -> Result<(), ConfigError> {
         if self.schema_version != CONFIG_SCHEMA_VERSION {
             return Err(ConfigError::InvalidField("schema_version"));
