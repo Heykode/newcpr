@@ -28,5 +28,11 @@
     ".dump", ".bak", ".log", ".zip", ".tar", ".gz", ".7z"
   ],
   "public_email_domains": ["users.noreply.github.com"],
+  "reviewed_commit_identities": [
+    {
+      "commit": "05fc728b3b29f6caea614e8898d677c26dc3d4ff",
+      "reason": "Previously published merge identity reviewed after the repository began enforcing noreply commit metadata."
+    }
+  ],
   "max_file_bytes": 10485760
 }

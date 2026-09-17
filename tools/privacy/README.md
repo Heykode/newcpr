@@ -66,6 +66,13 @@ It does not change Git author identity. Set a reviewed public identity separatel
 the policy accepts GitHub noreply email domains, not local-machine emails.
 Existing commits are not changed when Git identity configuration changes.
 
+An already published commit identity that cannot be rewritten may be listed in
+`policy.json` under `reviewed_commit_identities` by its complete object ID and a
+non-empty review reason. This exception suppresses only the identity-domain finding
+for that exact commit. Its message and every reachable file remain fully scanned;
+later commits, abbreviated IDs, duplicate entries and malformed records fail closed.
+Never generate this list from scanner output or use it for an unpublished commit.
+
 Each clone needs installation. Hooks can be bypassed, so also use a reviewed,
 protected CI check and pre-upload publication checks. CI runs after upload and
 does not prevent the initial exposure. GitHub push protection is supplementary.
