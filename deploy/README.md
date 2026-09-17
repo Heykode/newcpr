@@ -231,6 +231,11 @@ cargo run -p codex-proxy-rs
 `CPR_TEST_DATABASE_URL` / `CPR_TEST_REDIS_URL` 约定见
 [迁移文档](../backend/migrations/README.md)。
 
+启动加载器兼容并忽略已废弃的 `openai.tls`、`openai.fingerprint` 和
+`host.logging.file.max_files`，只打印字段路径，不打印其值。忽略旧字段不会重新启用旧 TLS
+或指纹模式。其他未知字段、拼写错误和错误类型仍拒绝启动；缺少必填项时给出字段路径。
+`openai.wire_profile.location` 仍是有效的地区回退配置，不属于忽略名单。
+
 ## 持久化与备份
 
 Compose 使用以下绑定目录：

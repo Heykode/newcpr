@@ -616,6 +616,66 @@ async fn proxy_accounts_paginate_thousands_of_accounts_and_search_without_loadin
 }
 
 #[tokio::test]
+async fn rejected_import_reservations_release_proxy_lock_before_returning() {
+    let Some(database) = TestDatabase::create("rejected_proxy_import").await else {
+        return;
+    };
+    let store = PgProxyRepository::new(database.pool.clone());
+    let other_process = PgProxyRepository::new(database.pool.clone());
+    let context = context();
+    let saved = store
+        .create(
+            NewProxy {
+                request_location: None,
+                name: "Unchecked proxy".to_owned(),
+                proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
+            },
+            &context,
+        )
+        .await
+        .unwrap()
+        .record;
+    for _ in 0..64 {
+        let error = store.reserve_import(&saved.id).await.err().unwrap();
+        assert_eq!(error.kind(), AdminStoreErrorKind::Conflict);
+        other_process
+            .record_test(
+                &saved.id,
+                saved.revision,
+                ProxyTestResult {
+                    success: false,
+                    ..success()
+                },
+                &context,
+            )
+            .await
+            .unwrap();
+    }
+    // A missing record must release the same lock and preserve NotFound.
+    let error = store
+        .reserve_import("missing-import-proxy")
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), AdminStoreErrorKind::NotFound);
+    let mut connection = database.pool.acquire().await.unwrap();
+    let acquired: bool =
+        sqlx::query_scalar("select pg_try_advisory_lock(hashtextextended($1, 739219))")
+            .bind("missing-import-proxy")
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+    assert!(acquired);
+    sqlx::query("select pg_advisory_unlock(hashtextextended($1, 739219))")
+        .bind("missing-import-proxy")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    drop(connection);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are_committed() {
     use gateway_store::postgres::{
         ImportProviderAccounts, ProviderAccountAdminRepository, ProviderAccountAdminScope,

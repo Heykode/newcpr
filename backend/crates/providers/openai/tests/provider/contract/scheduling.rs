@@ -624,7 +624,6 @@ fn waiting_provider_with_exclusions(
         leases,
         Arc::new(MemorySessionAffinity::default()),
         exclusions,
-        Arc::clone(&catalog),
         Arc::clone(&quota),
         Arc::clone(&feedback),
         CodexCookiePolicy::official().unwrap(),
@@ -670,6 +669,75 @@ async fn provider_wait_queued(leases: &TestLeaseCoordinator) {
     })
     .await
     .expect("provider reaches selector account wait");
+}
+
+#[tokio::test]
+async fn discovery_catalog_missing_model_allows_immediate_and_queued_requests() {
+    use std::sync::atomic::Ordering;
+    for queued in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_scope_old").await;
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let server = local_server().await;
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"models":[{"slug":"other-model","display_name":"Other"}]}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        let provider = waiting_provider(&store, Arc::clone(&leases), server.uri());
+        let discovered = provider.query_model_capabilities().await.unwrap();
+        assert!(!provider.model_catalog_is_exhaustive());
+        assert!(
+            discovered
+                .iter()
+                .all(|model| model.upstream_model().as_str() != "gpt-5.4")
+        );
+        let mut attempt = context("req_unlisted_model", CancellationToken::new());
+        if queued {
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            leases.capacity.set_load("acct_scope_old", 1);
+            attempt = waiting_attempt(attempt);
+        }
+        let selected = provider.execute(
+            planned_request("openai", Operation::Generate(generation(None, "hello"))),
+            attempt,
+        );
+        tokio::pin!(selected);
+        if queued {
+            tokio::select! {
+                result = &mut selected => panic!("must reach wait: {:?}", result.err()),
+                () = provider_wait_queued(&leases) => {}
+            }
+            assert!(
+                server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|request| request.method == "GET")
+            );
+            leases.capacity.set_load("acct_scope_old", 0);
+        }
+        let mut stream = timeout(Duration::from_secs(3), selected)
+            .await
+            .unwrap()
+            .expect("undiscovered model remains eligible");
+        while let Some(event) = stream.next().await {
+            event.expect("upstream response");
+        }
+        let sent = server.received_requests().await.unwrap();
+        assert_eq!(
+            sent.iter()
+                .filter(|request| request.method == "POST")
+                .count(),
+            1
+        );
+        assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[tokio::test]

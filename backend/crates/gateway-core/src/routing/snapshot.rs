@@ -293,14 +293,16 @@ async fn compile_runtime_snapshot(
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
     let registered_providers = provider_kinds.iter().cloned().collect::<BTreeSet<_>>();
 
-    // 目录查询失败表示未知；查询成功后，即使为空，也必须与“已知缺少模型”区分。
+    // Discovery catalogs cannot prove that a new upstream model is unavailable.
     let mut provider_models = Vec::new();
-    let mut known_provider_catalogs = BTreeSet::new();
+    let mut exhaustive_provider_catalogs = BTreeSet::new();
     for provider in &provider_kinds {
         let Ok(models) = catalogs.query_model_capabilities(provider).await else {
             continue;
         };
-        known_provider_catalogs.insert(provider.clone());
+        if catalogs.model_catalog_is_exhaustive(provider) {
+            exhaustive_provider_catalogs.insert(provider.clone());
+        }
         provider_models.extend(models.into_iter().map(|model| {
             let compiled = ProviderModel::new(
                 provider.clone(),
@@ -454,7 +456,7 @@ async fn compile_runtime_snapshot(
         snapshot
             .with_model_mappings(model_mappings)
             .with_account_directory(account_directory)
-            .with_known_provider_catalogs(known_provider_catalogs)
+            .with_exhaustive_provider_catalogs(exhaustive_provider_catalogs)
             .with_min_codex_client_versions(min_client_versions)
             .with_request_tuning(request_tuning)
             .with_request_location(facts.settings.request_location)
@@ -474,7 +476,7 @@ pub struct RuntimeSnapshot {
         Arc<BTreeMap<ProviderKind, BTreeMap<UpstreamModelId, super::ModelPresentation>>>,
     model_mappings: Arc<BTreeMap<String, String>>,
     provider_catalog_generations: Arc<BTreeMap<ProviderKind, ProviderCatalogGeneration>>,
-    known_provider_catalogs: Arc<BTreeSet<ProviderKind>>,
+    exhaustive_provider_catalogs: Arc<BTreeSet<ProviderKind>>,
     account_directory: Arc<RuntimeAccountDirectory>,
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
     min_codex_client_versions: CodexClientMinVersions,
@@ -515,7 +517,7 @@ impl RuntimeSnapshot {
             }
         }
 
-        let mut known_provider_catalogs = BTreeSet::new();
+        let mut exhaustive_provider_catalogs = BTreeSet::new();
         let mut model_map =
             BTreeMap::<ProviderKind, BTreeMap<UpstreamModelId, ModelCapabilities>>::new();
         let mut presentation_map =
@@ -527,7 +529,7 @@ impl RuntimeSnapshot {
                 capabilities,
                 presentation,
             } = model;
-            known_provider_catalogs.insert(provider.clone());
+            exhaustive_provider_catalogs.insert(provider.clone());
             if !provider_set.contains(&provider) {
                 return Err(RoutingError::NotFound {
                     entity: "provider",
@@ -573,7 +575,7 @@ impl RuntimeSnapshot {
             provider_model_presentations: Arc::new(presentation_map),
             model_mappings: Arc::new(BTreeMap::new()),
             provider_catalog_generations: Arc::new(BTreeMap::new()),
-            known_provider_catalogs: Arc::new(known_provider_catalogs),
+            exhaustive_provider_catalogs: Arc::new(exhaustive_provider_catalogs),
             account_directory: Arc::new(RuntimeAccountDirectory::default()),
             client_policies: Arc::new(client_policy_map),
             min_codex_client_versions: CodexClientMinVersions::default(),
@@ -621,8 +623,8 @@ impl RuntimeSnapshot {
     }
 
     #[must_use]
-    fn with_known_provider_catalogs(mut self, providers: BTreeSet<ProviderKind>) -> Self {
-        self.known_provider_catalogs = Arc::new(providers);
+    fn with_exhaustive_provider_catalogs(mut self, providers: BTreeSet<ProviderKind>) -> Self {
+        self.exhaustive_provider_catalogs = Arc::new(providers);
         self
     }
 
@@ -753,7 +755,7 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 已取得目录时以映射后的上游模型为准；目录不可用时由 Provider 在发送前判定。
+    /// 完整目录按映射后的模型判定；发现型或不可用目录交由上游验证。
     #[must_use]
     pub fn contains_public_model_for_provider(
         &self,
@@ -763,10 +765,13 @@ impl RuntimeSnapshot {
         if !self.providers.contains(provider) {
             return false;
         }
+        if !self.exhaustive_provider_catalogs.contains(provider) {
+            return true;
+        }
         let upstream_model = self.mapped_model(public_model.as_str());
         match self.provider_models.get(provider) {
             Some(models) => models.keys().any(|model| model.as_str() == upstream_model),
-            None => !self.known_provider_catalogs.contains(provider),
+            None => !self.exhaustive_provider_catalogs.contains(provider),
         }
     }
 
@@ -857,7 +862,7 @@ impl RuntimeSnapshot {
                     };
                     emulated
                 }
-                None if self.known_provider_catalogs.contains(provider) => continue,
+                None if self.exhaustive_provider_catalogs.contains(provider) => continue,
                 None => BTreeSet::new(),
             };
             candidates.push(ProviderCandidate {
@@ -873,7 +878,7 @@ impl RuntimeSnapshot {
             let mut scoped_providers = providers.intersection(&self.providers).peekable();
             if scoped_providers.peek().is_some()
                 && scoped_providers.all(|provider| {
-                    self.known_provider_catalogs.contains(provider)
+                    self.exhaustive_provider_catalogs.contains(provider)
                         && !self.contains_public_model_for_provider(public_model, provider)
                 })
             {

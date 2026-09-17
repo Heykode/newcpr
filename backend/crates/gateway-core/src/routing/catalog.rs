@@ -93,12 +93,17 @@ pub struct ProviderCatalogUnavailable;
 
 /// 快照编译与对账使用的对象安全目录端口。
 pub trait ProviderCatalogPort: Send + Sync {
+    /// Only exhaustive catalogs can prove that an unlisted model is unavailable.
+    fn model_catalog_is_exhaustive(&self, _provider: &ProviderKind) -> bool {
+        true
+    }
+
     /// 返回全部已注册 Provider 的目录代次；注册集合在初始化后保持不变。
     ///
     /// 即使某个目录暂时不可读，也必须保留它的 Provider 与最近成功发布的代次。
     fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration>;
 
-    /// 查询指定 Provider 的模型事实；成功的空列表表示已知无模型，失败表示未知。
+    /// 查询模型发现事实；只有完整目录的空列表能证明无模型，失败表示未知。
     fn query_model_capabilities(
         &self,
         provider: &ProviderKind,

@@ -279,7 +279,6 @@ fn provider_and_quota_with_profile(
         leases,
         session_affinity,
         Arc::new(MemorySessionExclusions::default()),
-        Arc::clone(&catalog),
         Arc::clone(&quota),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().expect("cookie policy"),

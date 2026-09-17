@@ -331,7 +331,7 @@ async fn compact_propagates_upstream_rejection_and_rejects_false_success() {
 }
 
 #[tokio::test]
-async fn compact_publishes_model_capability_but_does_not_bypass_account_catalog() {
+async fn compact_publishes_capability_and_forwards_models_missing_from_discovery() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
@@ -340,6 +340,14 @@ async fn compact_publishes_model_capability_but_does_not_bypass_account_catalog(
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "models":[{"slug":"gpt-5.3-codex","display_name":"Codex"}]
         })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .and(header("authorization", "Bearer at-acct_provider_contract"))
+        .and(body_bytes(br#"{"model":"gpt-5.4","input":[]}"#.as_slice()))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(COMPACT_RESPONSE, "application/json"))
         .expect(1)
         .mount(&server)
         .await;
@@ -352,24 +360,35 @@ async fn compact_publishes_model_capability_but_does_not_bypass_account_catalog(
             .match_requirements(&CapabilityRequirements::new(OperationKind::Compact))
             .is_some()
     );
-    assert!(
-        provider
-            .execute(
-                planned_request(
-                    "openai",
-                    compact_operation(
-                        Bytes::from_static(br#"{"model":"gpt-5.4","input":[]}"#),
-                        Map::new(),
-                    )
+    assert!(!provider.model_catalog_is_exhaustive());
+    let mut stream = provider
+        .execute(
+            planned_request(
+                "openai",
+                compact_operation(
+                    Bytes::from_static(br#"{"model":"gpt-5.4","input":[]}"#),
+                    Map::new(),
                 ),
-                context("req_compact_catalog", CancellationToken::new()),
-            )
-            .await
-            .is_err(),
-        "gpt-5.4 is absent from this account's known catalog"
-    );
+            ),
+            context("req_compact_catalog", CancellationToken::new()),
+        )
+        .await
+        .expect("discovery does not reject an unlisted compact model");
+    let mut completed = false;
+    let mut raw = None;
+    while let Some(event) = stream.next().await {
+        let (facts, wire) = event.expect("compact result").into_parts();
+        completed |= facts
+            .iter()
+            .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
+        if let Some(body) = wire.and_then(|wire| wire.into_raw_json_body()) {
+            raw = Some(body);
+        }
+    }
+    assert!(completed);
+    assert_eq!(raw.as_deref(), Some(COMPACT_RESPONSE));
     let requests = server.received_requests().await.expect("requests");
-    assert!(requests.iter().all(|request| request.method == "GET"));
+    assert_eq!(requests.len(), 2, "one discovery and one compact request");
 }
 
 #[tokio::test]

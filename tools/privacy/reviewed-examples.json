@@ -1022,5 +1022,85 @@
     "file_sha256": "eb9e064478b745d214b81906e3b4c55b7edd5fdb8fb1a7c045ccdf5ccd568b98",
     "line_sha256": "1f4e54601e99cfed60e0375d1c5bc9324fa74ea5b88ebe97e8805f00df10bbf2",
     "reason": "Static previewUsageRecord fixture with synthetic preview IDs and example accounts."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "authenticated-url",
+    "line": 38,
+    "file_sha256": "779b591530696baed81755da128018b483312ac600db4cbe2908baa207a1837e",
+    "line_sha256": "9a481ea5dd22c381fddafb18644a4004674839219b8cbf91dbd5c7195b8c4d0c",
+    "reason": "Independently re-reviewed unchanged loopback CI database fixture with synthetic credentials after adding release checks. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 129,
+    "file_sha256": "779b591530696baed81755da128018b483312ac600db4cbe2908baa207a1837e",
+    "line_sha256": "3adb12c8f4bff3ffaa94d4cc790ba0695b19869b33d8216b26e08bf4d4e63692",
+    "reason": "Independently re-reviewed IP parser false positive on an unchanged GitHub log-mask command referencing a generated variable. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": ".github/workflows/_quality.yml",
+    "rule": "non-example-ip",
+    "line": 130,
+    "file_sha256": "779b591530696baed81755da128018b483312ac600db4cbe2908baa207a1837e",
+    "line_sha256": "6818f468f5c49d8f44df010270b465f3b176549efda0b7aeec65156066df78e7",
+    "reason": "Independently re-reviewed IP parser false positive on an unchanged GitHub log-mask command referencing a generated variable. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 388,
+    "file_sha256": "0acfc051daf3c3624d2e98e0610de3ca22edf63673a0b08d019b190a2012d770",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 231,
+    "file_sha256": "e199325e53164d8af9b3536e58d3961b6192cc2e01933cc1ee462aad51cd0cbd",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Re-reviewed unchanged synthetic batch-update proxy fixture after adding isolated location persistence tests. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 335,
+    "file_sha256": "e199325e53164d8af9b3536e58d3961b6192cc2e01933cc1ee462aad51cd0cbd",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Re-reviewed unchanged synthetic account removal proxy fixture; no actual deployment connection. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 802,
+    "file_sha256": "e199325e53164d8af9b3536e58d3961b6192cc2e01933cc1ee462aad51cd0cbd",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Re-reviewed unchanged managed proxy fixture using synthetic credentials; location additions changed only the surrounding file. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 959,
+    "file_sha256": "e199325e53164d8af9b3536e58d3961b6192cc2e01933cc1ee462aad51cd0cbd",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Re-reviewed unchanged synthetic legacy proxy import fixture; original line hash remains identical. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1027,
+    "file_sha256": "e199325e53164d8af9b3536e58d3961b6192cc2e01933cc1ee462aad51cd0cbd",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Re-reviewed unchanged synthetic migration backfill credential assertion; original migration and fixture values remain unchanged. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4040,
+    "file_sha256": "aa88168d2327ababd914224e6a2a5c517aed8a4e9d170ec77f19c7465826df42",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Re-reviewed unchanged synthetic Windows Unicode workspace fixture for ASCII WebSocket metadata preservation; installation ID assertions changed elsewhere. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
   }
 ]

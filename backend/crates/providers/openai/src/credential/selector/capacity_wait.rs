@@ -116,16 +116,13 @@ impl CodexCredentialSelector {
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_key: Option<&ProviderSessionAffinityKey>,
-        model: ModelCatalogEligibility<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let pinned = request.attempt.required_account().is_some()
             || matches!(
                 request.attempt.continuation_attempt(),
                 ContinuationAttempt::Native | ContinuationAttempt::ReplayOwner
             );
-        let result = self
-            .select_waiting_inner(request, cyber_policy_key, model)
-            .await;
+        let result = self.select_waiting_inner(request, cyber_policy_key).await;
         result.map_err(|source| {
             if pinned {
                 let owner_lost = matches!(source, CredentialSelectionError::NoEligibleCredential);
@@ -143,7 +140,6 @@ impl CodexCredentialSelector {
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_key: Option<&ProviderSessionAffinityKey>,
-        model: ModelCatalogEligibility<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let mut control = WaitControl::new(request.attempt)?;
         let accounts = control
@@ -171,7 +167,7 @@ impl CodexCredentialSelector {
             })
             .await?;
         let mut candidates = control
-            .run(self.wait_candidates(accounts, scheduling.signals(), request, model))
+            .run(self.wait_candidates(accounts, scheduling.signals(), request))
             .await?;
         let continuation = match request.attempt.continuation_attempt() {
             ContinuationAttempt::Native => request
@@ -273,7 +269,7 @@ impl CodexCredentialSelector {
                 .await?;
             if scan != 0 {
                 candidates = control
-                    .run(self.reload_wait_pool(request, model, &state.universe))
+                    .run(self.reload_wait_pool(request, &state.universe))
                     .await?;
             }
             if let Some(pin) = &state.pinned {
@@ -304,7 +300,6 @@ impl CodexCredentialSelector {
                         AccountWaitMode::Sticky,
                         &mut control,
                         request,
-                        model,
                         &mut state,
                     )
                     .await?
@@ -344,9 +339,7 @@ impl CodexCredentialSelector {
                     break;
                 };
                 let id = selection.candidate().account.id().clone();
-                let Some(candidate) = control
-                    .run(self.reload_wait_target(&id, request, model))
-                    .await?
+                let Some(candidate) = control.run(self.reload_wait_target(&id, request)).await?
                 else {
                     raced.insert(id);
                     continue;
@@ -383,7 +376,6 @@ impl CodexCredentialSelector {
                                 limits.revision(),
                                 &candidate.account,
                                 request,
-                                model,
                                 &mut state,
                             ))
                             .await?
@@ -401,7 +393,6 @@ impl CodexCredentialSelector {
                                     AccountWaitMode::Sticky,
                                     &mut control,
                                     request,
-                                    model,
                                     &mut state,
                                 )
                                 .await?
@@ -429,7 +420,7 @@ impl CodexCredentialSelector {
             // Refresh facts without consuming another RR cursor. Lease-race Busy remains a
             // separate observation, not a forged in_flight signal or a business exclusion.
             candidates = control
-                .run(self.reload_wait_pool(request, model, &state.universe))
+                .run(self.reload_wait_pool(request, &state.universe))
                 .await?;
             if let Some(pin) = &state.pinned {
                 candidates.retain(|candidate| candidate.account.id() == pin);
@@ -481,7 +472,6 @@ impl CodexCredentialSelector {
                         AccountWaitMode::Fallback,
                         &mut control,
                         request,
-                        model,
                         &mut state,
                     )
                     .await?
@@ -534,7 +524,6 @@ impl CodexCredentialSelector {
         accounts: Vec<ProviderAccount>,
         signals: &std::collections::BTreeMap<ProviderAccountId, AccountRuntimeSignals>,
         request: &CredentialSelectionInput<'_>,
-        model: ModelCatalogEligibility<'_>,
     ) -> Result<Vec<AccountCandidate>, CredentialSelectionError> {
         let mut candidates = Vec::new();
         self.quota.prepare_scheduling(&accounts).await;
@@ -546,13 +535,6 @@ impl CodexCredentialSelector {
                     .is_some_and(|scope| scope.allows(account.id()))
             {
                 continue;
-            }
-            if let ModelCatalogEligibility::Required(model) = model {
-                match self.catalog.observed_model_support(&account, model) {
-                    Ok(Some(false)) => continue,
-                    Ok(_) => {}
-                    Err(_) => return Err(CredentialSelectionError::Store),
-                }
             }
             let cooldown = self
                 .quota
@@ -577,7 +559,6 @@ impl CodexCredentialSelector {
     async fn reload_wait_pool(
         &self,
         request: &CredentialSelectionInput<'_>,
-        model: ModelCatalogEligibility<'_>,
         universe: &BTreeSet<ProviderAccountId>,
     ) -> Result<Vec<AccountCandidate>, CredentialSelectionError> {
         let accounts = self
@@ -592,15 +573,13 @@ impl CodexCredentialSelector {
             .map(|account| account.id().clone())
             .collect::<Vec<_>>();
         let signals = self.leases.load_signals(&self.provider_kind, &ids).await?;
-        self.wait_candidates(accounts, &signals, request, model)
-            .await
+        self.wait_candidates(accounts, &signals, request).await
     }
 
     async fn reload_wait_target(
         &self,
         id: &ProviderAccountId,
         request: &CredentialSelectionInput<'_>,
-        model: ModelCatalogEligibility<'_>,
     ) -> Result<Option<AccountCandidate>, CredentialSelectionError> {
         let Some(account) = self
             .repository
@@ -616,7 +595,7 @@ impl CodexCredentialSelector {
             .load_signals(&self.provider_kind, std::slice::from_ref(id))
             .await?;
         Ok(self
-            .wait_candidates(vec![account], &signals, request, model)
+            .wait_candidates(vec![account], &signals, request)
             .await?
             .pop())
     }
@@ -645,13 +624,9 @@ impl CodexCredentialSelector {
         mode: AccountWaitMode,
         control: &mut WaitControl<'_>,
         request: &CredentialSelectionInput<'_>,
-        model: ModelCatalogEligibility<'_>,
         state: &mut WaitingSelection,
     ) -> Result<WaitOutcome, CredentialSelectionError> {
-        let Some(candidate) = control
-            .run(self.reload_wait_target(id, request, model))
-            .await?
-        else {
+        let Some(candidate) = control.run(self.reload_wait_target(id, request)).await? else {
             return Ok(WaitOutcome::Changed);
         };
         state.context.now = SystemTime::now();
@@ -683,7 +658,6 @@ impl CodexCredentialSelector {
                                 limits.revision(),
                                 &candidate.account,
                                 request,
-                                model,
                                 state,
                             ))
                             .await?
@@ -693,10 +667,7 @@ impl CodexCredentialSelector {
                         },
                     );
                 }
-                let Some(current) = control
-                    .run(self.reload_wait_target(id, request, model))
-                    .await?
-                else {
+                let Some(current) = control.run(self.reload_wait_target(id, request)).await? else {
                     return Ok(WaitOutcome::Changed);
                 };
                 state.context.now = SystemTime::now();
@@ -741,7 +712,7 @@ impl CodexCredentialSelector {
             .run(async {
                 let mut poll = Duration::from_millis(100);
                 loop {
-                    let Some(candidate) = self.reload_wait_target(id, request, model).await? else {
+                    let Some(candidate) = self.reload_wait_target(id, request).await? else {
                         return Ok(WaitOutcome::Changed);
                     };
                     let limits = self.wait_limits()?;
@@ -769,7 +740,6 @@ impl CodexCredentialSelector {
                                         limits.revision(),
                                         &candidate.account,
                                         request,
-                                        model,
                                         state,
                                     )
                                     .await?
@@ -820,11 +790,10 @@ impl CodexCredentialSelector {
         revision: gateway_core::routing::ConfigRevision,
         acquired_account: &ProviderAccount,
         request: &CredentialSelectionInput<'_>,
-        model: ModelCatalogEligibility<'_>,
         state: &mut WaitingSelection,
     ) -> Result<Option<CodexCredentialLease>, CredentialSelectionError> {
         let id = acquired_account.id();
-        let Some(candidate) = self.reload_wait_target(id, request, model).await? else {
+        let Some(candidate) = self.reload_wait_target(id, request).await? else {
             return Ok(None);
         };
         let limits = self.wait_limits()?;
@@ -905,9 +874,7 @@ impl CodexCredentialSelector {
                     )
             })
             .collect();
-        let current = self
-            .reload_wait_pool(request, model, &state.universe)
-            .await?;
+        let current = self.reload_wait_pool(request, &state.universe).await?;
         self.reload_wait_exclusions(state, request.attempt).await?;
         let current_limits = self.wait_limits()?;
         acquired_context.now = SystemTime::now();
