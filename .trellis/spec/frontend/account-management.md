@@ -378,6 +378,17 @@ with disabled controls when nothing is selected: inserting a toolbar during a dr
 moves the row geometry and changes which rows the pointer reaches.
 Polling must retain the same selection Set when no selected IDs disappeared.
 Keep processing, credential verification and pool membership states separate.
+The relogin table labels its cached JSON separately from current pool health.
+Render `ready + synced` in the processing column only; never infer normal health from
+membership or sync. Read safe `poolAccounts` from the same polled list response and
+keep disabled and error filters orthogonal. Old servers without pool facts display
+unknown, not normal. Uncertain pushes stay fenced even when the pool later recovers.
+Keep newest material imports first using server `importedAt` order. Background changes
+do not reorder entries. Display unknown import times honestly.
+Bound long plan names and workspace IDs within their column; retain full values in
+titles and the workspace picker. Known workspace choices are deduplicated; no free-text
+ID editor. Text actions `重登` / `推送` have stable, non-wrapping widths. On viewports
+below 1600px, the action column scrolls normally instead of covering other facts.
 Push confirmation captures row revisions and must not silently switch to a newer
 credential returned by background polling. Keep action failures independent of
 successful list refreshes, so polling cannot erase a failed push message.

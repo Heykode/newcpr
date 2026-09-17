@@ -2,6 +2,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import { accounts, reloginEntries } from './fixtures/relogin-count-data.mjs'
+import { layoutEntries } from './fixtures/relogin-layout-data.mjs'
 
 // Read-only synthetic data. No request is forwarded to the normal backend proxy.
 async function main() {
@@ -46,7 +47,7 @@ async function main() {
                 data = { items: [], page: { page: 1, pageSize: 200, total: 0, totalPages: 0 } }
                 break
               case '/api/admin/relogin':
-                data = { items: reloginEntries, settings: { concurrency: 1, paused: false } }
+                data = { items: process.env.QA_RELOGIN_LAYOUT ? layoutEntries : reloginEntries, settings: { concurrency: 1, paused: false } }
                 break
             }
           }

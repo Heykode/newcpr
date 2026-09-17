@@ -84,10 +84,24 @@ pub struct ReloginEntry {
     pub attempted_target: Option<ReloginTarget>,
     pub next_attempt_at: Option<DateTime<Utc>>,
     pub synced_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub imported_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl ReloginEntry {
+    pub fn import_time(&self) -> Option<DateTime<Utc>> {
+        self.imported_at.or_else(|| {
+            // Legacy rows have immutable UUIDv7 creation times, not an import timestamp.
+            let id = uuid::Uuid::parse_str(self.id.strip_prefix("relogin_")?).ok()?;
+            if id.get_version_num() != 7 {
+                return None;
+            }
+            let (seconds, nanos) = id.get_timestamp()?.to_unix();
+            DateTime::from_timestamp(i64::try_from(seconds).ok()?, nanos)
+        })
+    }
+
     pub fn validate_totp(&self) -> Result<(), AdminError> {
         if self.password.is_empty() || totp_secret(&self.mfa_secret).is_none() {
             return Err(AdminError::invalid("请重新导入邮箱、密码和有效的 2FA 密钥"));

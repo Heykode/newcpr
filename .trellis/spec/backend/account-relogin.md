@@ -20,6 +20,11 @@
   manually paused accounts, but preserves `enabled`. A concurrent pause must not
   be undone by a relogin push. Ordinary file import is different: its explicit
   scheduling settings remain authoritative.
+- The provider rotation parser accepts the worker's complete token document, including
+  optional `email`, `account_id` and `type: codex`. Email/workspace metadata must agree
+  with the new token claims; it cannot supply missing identity or override claims.
+  Keep unknown-field rejection and same-principal/device continuity checks. Test this
+  contract against the real provider, not only an admin fake that ignores the JSON.
 - New push uses the existing import preparation and initialization with create-only
   semantics. The PostgreSQL transaction checks email/identity under the configuration
   lock, and the final INSERT conflict clause forbids updating an existing identity.
@@ -27,6 +32,11 @@
 - Persist `Pushing` before pool mutation. A crash or ambiguous failure becomes
   `Uncertain`, not an automatic retry. Library and pool commits have distinct owners;
   no distributed transaction or exactly-once claim is made.
+- For existing-account push, prepare and validate rotation before persisting `Pushing`.
+  A preparation error has not attempted the pool commit: retain `Ready`, the cached
+  document and its revision so an explicit push can retry. New-account import still
+  fences before calling the combined prepare/commit import use case. Do not move the
+  fence past the commit or downgrade post-commit publication/settlement failures.
 - Manual and automatic login share bounded concurrency. Publish in-memory occupancy
   only after all fallible claim writes complete; otherwise a partial claim failure
   can permanently fill the queue with jobs that were never started.
@@ -82,6 +92,23 @@
   JSON, core scheduling policy, device identity and transport configuration.
 - `account_summary_from_row` is also used by account-group member/monitor queries.
   Keep every SQL projection feeding it in sync, not just account-directory reads.
+
+## List Projections
+
+- `imported_at` records the latest explicit material import, not login/automatic-toggle
+  time. Preserve it through background updates. Old JSON can omit it: derive legacy
+  creation time from a valid UUIDv7 entry ID, otherwise expose unknown. Never backfill
+  using `updated_at`. Sort the list view by import time and ID descending without
+  changing worker queue ordering or database migrations.
+- `poolAccounts` contains safe same-email pool facts and the shared Core operational
+  status projection, using the existing runtime rate-limit snapshot. `enabled` remains
+  independent from runtime errors. Do not infer HTTP 401 from a generic expired state.
+- Cached credential verification, previous sync and current pool health are independent.
+  Neither a normal pool account nor a success counter settles an uncertain library push.
+- Workspace selection accepts known same-email pool workspaces or the current verified
+  document workspace. Unknown choices fail without clearing cached credentials. Selection
+  changes still cancel/fence old work, clear cached credentials and require a fresh login;
+  upstream ownership and locked-target checks remain authoritative.
 
 ## Verification
 

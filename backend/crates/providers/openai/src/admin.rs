@@ -58,7 +58,9 @@ use crate::credential::{
     CodexResetCreditsError, CompleteCodexOAuthAuthorization, CompletedCodexOAuthCredential,
     ExportManagedCodexCredential, StartCodexOAuthAuthorization, StoredCodexPendingAuthorization,
 };
-use crate::credential::{CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration};
+use crate::credential::{
+    CodexOAuthSecret, candidate_oauth_metadata, oauth_owner_ref, parse_access_token_expiration,
+};
 use crate::transport::CodexWebSocketPool;
 use crate::transport::profile::{
     CodexDesktopReleaseSnapshot, CodexDesktopReleaseStatus, CodexWireProfile, CodexWireProfileState,
@@ -795,17 +797,47 @@ struct RotationDocument {
     access_token: String,
     refresh_token: Option<String>,
     id_token: Option<String>,
+    email: Option<String>,
+    account_id: Option<String>,
+    #[serde(rename = "type")]
+    document_type: Option<String>,
 }
 
 fn rotation_secret(document: ProviderDocument) -> Result<CodexOAuthSecret, ProviderAdminError> {
     let document: RotationDocument =
         serde_json::from_value(Value::Object(document.into_provider_data().into_inner()))
             .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
-    Ok(CodexOAuthSecret {
+    let secret = CodexOAuthSecret {
         access_token: SecretString::from(document.access_token),
         refresh_token: document.refresh_token.map(SecretString::from),
         id_token: document.id_token.map(SecretString::from),
-    })
+    };
+    if document
+        .document_type
+        .as_deref()
+        .is_some_and(|kind| kind != "codex")
+    {
+        return Err(provider_admin_error(ProviderAdminErrorKind::Invalid));
+    }
+    // Relogin metadata corroborates new token claims; it never supplies identity.
+    if document.email.is_some() || document.account_id.is_some() {
+        let metadata = candidate_oauth_metadata(&secret)
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Conflict))?;
+        if document.email.as_deref().is_some_and(|email| {
+            metadata
+                .email
+                .as_deref()
+                .is_none_or(|claim| !email.eq_ignore_ascii_case(claim))
+        }) || document
+            .account_id
+            .as_deref()
+            .is_some_and(|account| metadata.chatgpt_account_id.as_deref() != Some(account))
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Invalid)
+                .with_public_message("凭据文档的邮箱或工作区与新令牌不一致"));
+        }
+    }
+    Ok(secret)
 }
 
 fn validate_account_record(

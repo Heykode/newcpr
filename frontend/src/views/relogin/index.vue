@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ReloginBatchResult, ReloginEntry, ReloginStatus } from '@/api/modules/relogin'
+import type { ReloginBatchResult, ReloginEntry } from '@/api/modules/relogin'
 import { CheckCheck, GripVertical, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
@@ -30,6 +30,7 @@ import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
+import { credentialLabel, matchesPool, poolPresentation, processingStatus, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
 const entries = shallowRef<ReloginEntry[]>([])
 const loading = shallowRef(false)
@@ -47,26 +48,24 @@ const pageSize = shallowRef(20)
 const concurrency = shallowRef('1')
 const savedConcurrency = shallowRef(1)
 const paused = shallowRef(false)
-const statuses: Record<ReloginStatus, string> = {
-  pending: '待处理',
-  queued: '排队中',
-  running: '重登中',
-  ready: '已获取新 JSON',
-  pushing: '推送中',
-  uncertain: '推送待核实',
-  failed: '失败',
-}
-const poolLabels = { absent: '未在池中', present: '已在池中', pending_push: '新凭证待推送', synced: '已同步' }
-const credentialLabels = { none: '无凭证', verified: '验证通过', expired: '已过期' }
-const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries(statuses).map(([value, label]) => ({ value, label }))]
-const poolOptions = [{ value: '', label: '全部入池状态' }, ...Object.entries(poolLabels).map(([value, label]) => ({ value, label }))]
+const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
+const poolOptions = [
+  { value: '', label: '全部号池状态' },
+  { value: 'absent', label: '未入池' },
+  { value: 'present', label: '已在池中' },
+  { value: 'normal', label: '正常' },
+  { value: 'error', label: '凭据异常' },
+  { value: 'disabled', label: '暂停调度' },
+  { value: 'rate_limited', label: '请求限流' },
+  { value: 'quota_exhausted', label: '额度耗尽' },
+]
 const autoOptions = [{ value: '', label: '全部自动重登' }, { value: 'on', label: '允许自动重登' }, { value: 'off', label: '关闭自动重登' }]
 const plans = computed(() => [{ value: '', label: '全部 PLAN' }, ...[...new Set(entries.value.map(row => row.planType).filter((value): value is string => !!value))].sort().map(value => ({ value, label: value.toUpperCase() }))])
 const filtered = computed(() => entries.value.filter(row =>
   row.email.toLowerCase().includes(search.value.trim().toLowerCase())
   && (!plan.value || row.planType === plan.value)
-  && (!status.value || row.status === status.value)
-  && (!pool.value || row.poolStatus === pool.value)
+  && (!status.value || processingStatus(row).key === status.value)
+  && matchesPool(row, pool.value)
   && (!automatic.value || row.automatic === (automatic.value === 'on')),
 ))
 const visible = computed(() => filtered.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
@@ -74,11 +73,11 @@ const allSelected = computed(() => visible.value.length > 0 && visible.value.eve
 const partialSelected = computed(() => !allSelected.value && visible.value.some(row => selected.value.has(row.id)))
 const columns = defineTableColumns<ReloginEntry>([
   { key: 'selection', kind: 'selection' },
-  { key: 'identity', label: '账号', kind: 'identity', size: '2xl', grow: 1 },
+  { key: 'identity', label: '账号', kind: 'identity', size: 'xl', grow: 1 },
   { key: 'plan', label: 'PLAN / 工作区', kind: 'custom', size: 'lg' },
-  { key: 'status', label: '处理状态', kind: 'status', size: 'lg' },
-  { key: 'credential', label: '凭证', kind: 'status' },
-  { key: 'pool', label: '号池', kind: 'status', size: 'lg' },
+  { key: 'status', label: '处理状态', kind: 'status' },
+  { key: 'credential', label: '本次凭据', kind: 'status' },
+  { key: 'pool', label: '号池状态', kind: 'status' },
   { key: 'reloginCount', label: '重登次数', kind: 'numeric', size: 'sm', align: 'center' },
   { key: 'automatic', label: '自动重登', kind: 'status', size: 'sm' },
   { key: 'actions', label: '操作', kind: 'actions', size: 'lg' },
@@ -227,6 +226,7 @@ function saveImport() {
     const result = await importRelogin(importText.value, replaceExisting.value)
     importing.value = false
     importText.value = ''
+    page.value = 1
     toast.success(`已导入 ${result.imported} 个账号`)
   })
 }
@@ -257,6 +257,11 @@ function executeConfirmed() {
 const editing = shallowRef(false)
 const editRow = shallowRef<ReloginEntry>()
 const workspace = shallowRef('')
+const workspaceOptions = computed(() => [
+  { value: '', label: '自动选择（已有账号沿用原工作区）' },
+  ...editRow.value ? workspaceChoices(editRow.value) : [],
+])
+const workspaceKnown = computed(() => workspaceOptions.value.some(option => option.value === workspace.value))
 function edit(row: ReloginEntry) {
   editRow.value = row
   workspace.value = row.preferredWorkspaceId ?? ''
@@ -265,6 +270,8 @@ function edit(row: ReloginEntry) {
 function saveWorkspace() {
   const row = editRow.value
   if (!row)
+    return
+  if (!workspaceKnown.value)
     return
   return action(async () => {
     await setReloginWorkspace(row.id, workspace.value.trim() || null)
@@ -335,7 +342,7 @@ onBeforeUnmount(() => {
       </BaseInput>
       <BaseSelect v-model="plan" :options="plans" aria-label="PLAN 筛选" />
       <BaseSelect v-model="status" :options="statusOptions" aria-label="处理状态筛选" />
-      <BaseSelect v-model="pool" :options="poolOptions" aria-label="入池状态筛选" />
+      <BaseSelect v-model="pool" :options="poolOptions" aria-label="号池状态筛选" />
       <BaseSelect v-model="automatic" :options="autoOptions" aria-label="自动重登筛选" />
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-y border-cp-border py-2">
@@ -367,7 +374,7 @@ onBeforeUnmount(() => {
       {{ failure || loadFailure }}
     </div>
     <section class="flex min-h-48 min-w-0 flex-1 flex-col overflow-hidden border-y border-cp-border bg-cp-bg-container">
-      <BaseTable ref="table" class="min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" empty-text="暂无匹配账号" @mousedown="onMouseDown">
+      <BaseTable ref="table" class="relogin-table min-h-0 flex-1" :columns="columns" :rows="visible" :selected-row-keys="[...selected]" :loading="loading && !entries.length" column-layout="content" empty-text="暂无匹配账号" @mousedown="onMouseDown">
         <template #header-selection>
           <BaseCheckbox label="全选当前页" :model-value="allSelected" :indeterminate="partialSelected" :disabled="busy" @update:model-value="selectPage" />
         </template>
@@ -384,25 +391,33 @@ onBeforeUnmount(() => {
               <div class="truncate text-cp-xs text-cp-text-tertiary" :title="row.message">
                 {{ row.message || '待处理' }}
               </div>
+              <div class="truncate text-cp-xs text-cp-text-tertiary">
+                导入 {{ row.importedAt ? formatDateTime(row.importedAt) : '时间未记录' }}
+              </div>
             </div>
           </div>
         </template>
         <template #plan="{ row }">
-          <div class="font-mono text-cp-sm">
-            {{ row.planType?.toUpperCase() ?? '未知' }}
-          </div>
-          <div class="truncate text-cp-xs text-cp-text-tertiary" :title="row.workspaceId ?? row.preferredWorkspaceId ?? ''">
-            {{ row.workspaceId ?? row.preferredWorkspaceId ?? '自动选择' }}
+          <div class="w-full min-w-0 overflow-hidden">
+            <div class="truncate font-mono text-cp-sm" :title="row.planType?.toUpperCase()">
+              {{ row.planType?.toUpperCase() ?? '待识别' }}
+            </div>
+            <div class="truncate font-mono text-cp-xs text-cp-text-tertiary" :title="workspaceId(row) ?? '自动选择工作区'">
+              {{ shortWorkspace(workspaceId(row)) }}
+            </div>
           </div>
         </template>
         <template #status="{ row }">
-          <span :class="row.status === 'failed' ? 'text-cp-error' : row.status === 'running' ? 'text-cp-primary' : ''">{{ statuses[row.status] }}</span>
+          <span class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
         </template>
         <template #credential="{ row }">
-          <span :class="row.credentialStatus === 'verified' ? 'text-cp-success' : row.credentialStatus === 'expired' ? 'text-cp-warning' : 'text-cp-text-tertiary'" :title="row.verifiedAt ? `验证于 ${formatDateTime(row.verifiedAt)}` : ''">{{ credentialLabels[row.credentialStatus] }}</span>
+          <span class="block whitespace-normal break-words" :class="row.credentialStatus === 'verified' ? 'text-cp-success' : row.credentialStatus === 'expired' ? 'text-cp-warning' : 'text-cp-text-tertiary'" :title="row.verifiedAt ? `本次缓存凭据验证于 ${formatDateTime(row.verifiedAt)}；不代表已推送或号池当前正常` : '尚未通过重登获取新的 JSON；与号池已有凭据无关'">{{ credentialLabel(row) }}</span>
         </template>
         <template #pool="{ row }">
-          <span :class="row.poolStatus === 'synced' ? 'text-cp-success' : 'text-cp-text-secondary'">{{ poolLabels[row.poolStatus] }}</span>
+          <div :title="poolPresentation(row).detail">
+            <span class="block whitespace-normal break-words" :class="poolPresentation(row).tone">{{ poolPresentation(row).label }}</span>
+            <span v-if="poolPresentation(row).caption" class="block text-cp-xs text-cp-text-tertiary">{{ poolPresentation(row).caption }}</span>
+          </div>
         </template>
         <template #automatic="{ row }">
           <BaseSwitch :label="`${row.email} 自动重登`" :model-value="row.automatic" :disabled="busy" @update:model-value="changeAutomatic([row.id], $event)" />
@@ -411,19 +426,23 @@ onBeforeUnmount(() => {
           <ReloginCountCell :count="row.reloginCount" :last-relogin-at="row.lastReloginAt" />
         </template>
         <template #actions="{ row }">
-          <div class="flex items-center gap-1">
-            <BaseIconButton label="重登获取凭证" size="sm" :disabled="busy || ['queued', 'running', 'pushing'].includes(row.status)" :loading="row.status === 'running'" @click="queue([row.id])">
-              <RefreshCw class="size-3.5" />
-            </BaseIconButton>
-            <BaseIconButton label="推送到号池" size="sm" :disabled="busy || !canPush(row)" @click="confirm('push', [row.id])">
-              <Upload class="size-3.5 text-cp-link" />
-            </BaseIconButton>
-            <BaseIconButton label="工作区设置" size="sm" :disabled="busy" @click="edit(row)">
-              <Settings2 class="size-3.5" />
-            </BaseIconButton>
-            <BaseIconButton label="删除重登资料" size="sm" :disabled="busy" @click="confirm('delete', [row.id])">
-              <Trash2 class="size-3.5 text-cp-error" />
-            </BaseIconButton>
+          <div class="grid w-full min-w-0 justify-items-start gap-1 py-1">
+            <div class="flex items-center gap-1">
+              <BaseButton class="w-12 whitespace-nowrap px-2!" size="sm" title="重新登录并获取新凭据" :aria-busy="row.status === 'running' || undefined" :disabled="busy || ['queued', 'running', 'pushing'].includes(row.status)" @click="queue([row.id])">
+                重登
+              </BaseButton>
+              <BaseButton class="w-12 whitespace-nowrap px-2!" variant="soft" size="sm" title="确认推送到号池" :disabled="busy || !canPush(row)" @click="confirm('push', [row.id])">
+                推送
+              </BaseButton>
+            </div>
+            <div class="flex items-center gap-1">
+              <BaseIconButton label="选择工作区" size="sm" :disabled="busy || ['queued', 'running', 'pushing', 'uncertain'].includes(row.status)" @click="edit(row)">
+                <Settings2 class="size-3.5" />
+              </BaseIconButton>
+              <BaseIconButton label="删除重登资料" size="sm" :disabled="busy" @click="confirm('delete', [row.id])">
+                <Trash2 class="size-3.5 text-cp-error" />
+              </BaseIconButton>
+            </div>
           </div>
         </template>
       </BaseTable>
@@ -480,21 +499,46 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </BaseConfirmModal>
-    <BaseModal v-model="editing" title="工作区设置" :dismissible="!busy">
+    <BaseModal v-model="editing" title="选择登录工作区" :dismissible="!busy">
       <div class="grid gap-3">
         <p class="m-0 break-all text-cp-sm">
           {{ editRow?.email }}
         </p>
-        <BaseInput v-model="workspace" aria-label="指定工作区 ID" placeholder="自动选择优先套餐" :disabled="busy" />
-        <p class="m-0 text-cp-sm text-cp-warning">
-          修改后需重新获取凭证。已在池中的账号恢复时锁定原工作区。
+        <BaseSelect v-model="workspace" :options="workspaceOptions" aria-label="登录工作区" :disabled="busy" />
+        <p v-if="!workspaceKnown" class="m-0 text-cp-sm text-cp-warning">
+          原指定工作区尚未被识别，请重新选择。
         </p>
+        <dl class="m-0 grid gap-2 text-cp-sm text-cp-text-secondary">
+          <div class="flex justify-between gap-3">
+            <dt>已有号池账号</dt><dd class="m-0">
+              沿用选中账号的原工作区
+            </dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt>首次获取</dt><dd class="m-0">
+              自动优先选择可访问的高套餐
+            </dd>
+          </div>
+          <div class="flex justify-between gap-3">
+            <dt>选择变更</dt><dd class="m-0">
+              清除缓存凭据，需重新登录
+            </dd>
+          </div>
+        </dl>
       </div>
       <template #footer>
-        <BaseButton variant="primary" :loading="busy" @click="saveWorkspace">
+        <BaseButton variant="primary" :loading="busy" :disabled="!workspaceKnown || workspace === (editRow?.preferredWorkspaceId ?? '')" @click="saveWorkspace">
           保存
         </BaseButton>
       </template>
     </BaseModal>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 1599px) {
+  .relogin-table :deep([data-column-key='actions']) {
+    position: static;
+  }
+}
+</style>

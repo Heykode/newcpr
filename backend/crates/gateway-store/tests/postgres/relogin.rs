@@ -18,6 +18,7 @@ use gateway_store::postgres::{
 
 fn entry(id: &str, email: &str) -> ReloginEntry {
     ReloginEntry {
+        imported_at: Some(Utc::now()),
         id: id.into(),
         email: email.into(),
         password: "test-only-password".into(),

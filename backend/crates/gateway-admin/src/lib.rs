@@ -356,6 +356,7 @@ pub async fn initialize(
     let relogin = Arc::new(use_case::relogin::DefaultReloginService::new(
         store.relogin(),
         store.accounts(),
+        store.account_runtime(),
         openai,
         openai_service.clone(),
         snapshot.clone(),

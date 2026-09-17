@@ -1390,6 +1390,141 @@ async fn rotation_requires_new_identity_and_an_existing_user_anchor() {
 }
 
 #[tokio::test]
+async fn rotation_accepts_relogin_document_and_preserves_the_device() {
+    let store = principal_account(Some("user-A"), Some("A")).await;
+    let id = ProviderAccountId::new("acct_principal").unwrap();
+    let before = store.load_current_credential(&id).await.unwrap();
+    let old = CodexCredentialCodec::decode_complete(&before.credential).unwrap();
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let token = principal_jwt(json!({
+        "email": "test@example.invalid",
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": "user-A",
+            "chatgpt_account_id": "A",
+            "chatgpt_plan_type": "team"
+        }
+    }));
+    for access in [token.as_str(), "opaque-synthetic"] {
+        let prepared = bundle
+            .admin_provider()
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&before.account),
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    json!({
+                        "access_token": access,
+                        "refresh_token": "synthetic-new-RT",
+                        "id_token": token,
+                        "email": "TEST@example.invalid",
+                        "account_id": "A",
+                        "type": "codex"
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )),
+            })
+            .await
+            .expect("full relogin documents must support existing-account rotation");
+        let facts = prepared.facts();
+        assert_eq!(
+            facts.expected_credential_revision.get(),
+            before.account.revision().get()
+        );
+        assert_eq!(facts.email.as_deref(), Some("test@example.invalid"));
+        assert_eq!(facts.plan_type.as_deref(), Some("team"));
+        let identity = facts.replacement_identity.as_ref().unwrap();
+        assert_eq!(identity.upstream_user_id(), "user-A");
+        assert_eq!(identity.upstream_account_id(), Some("A"));
+        let updated = CodexCredentialCodec::decode_complete(
+            &gateway_core::account::PlaintextCredential::new(
+                facts
+                    .provider_material
+                    .clone()
+                    .into_provider_data()
+                    .into_inner(),
+            ),
+        )
+        .unwrap();
+        let new = updated.oauth().unwrap();
+        let old = old.oauth().unwrap();
+        assert_eq!(new.installation_id, old.installation_id);
+        assert_eq!(new.cookies, old.cookies);
+        assert_eq!(new.oauth_client_id, old.oauth_client_id);
+        assert_eq!(new.oauth_scope, old.oauth_scope);
+        assert_eq!(new.access_token, access);
+        assert_eq!(new.refresh_token.as_deref(), Some("synthetic-new-RT"));
+        assert_eq!(new.id_token.as_deref(), Some(token.as_str()));
+        let after = store.load_current_credential(&id).await.unwrap();
+        assert_eq!(after.account, before.account);
+        assert_eq!(
+            after.credential.expose_to_provider(),
+            before.credential.expose_to_provider()
+        );
+    }
+}
+
+#[tokio::test]
+async fn rotation_rejects_inconsistent_or_unknown_relogin_metadata() {
+    let store = principal_account(Some("user-A"), Some("A")).await;
+    let id = ProviderAccountId::new("acct_principal").unwrap();
+    let before = store.load_current_credential(&id).await.unwrap();
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    let token = principal_jwt(json!({
+        "email": "test@example.invalid",
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": "user-A", "chatgpt_account_id": "A"
+        }
+    }));
+    for (field, value) in [
+        ("email", json!("other@example.invalid")),
+        ("email", json!(123)),
+        ("account_id", json!("B")),
+        ("account_id", json!("")),
+        ("type", json!("other")),
+        ("unexpected", json!(true)),
+        ("access_token", json!("opaque-synthetic")),
+        (
+            "access_token",
+            json!(principal_token(Some("user-A"), Some("A"))),
+        ),
+    ] {
+        let mut document = json!({
+            "access_token": token,
+            "refresh_token": "synthetic-new-RT",
+            "email": "test@example.invalid",
+            "account_id": "A",
+            "type": "codex"
+        });
+        document[field] = value;
+        let error = bundle
+            .admin_provider()
+            .prepare_rotation(PrepareCredentialRotation {
+                account: account_record(&before.account),
+                provider_material: ProviderDocument::new(OpaqueProviderData::new(
+                    document.as_object().unwrap().clone(),
+                )),
+            })
+            .await
+            .expect_err("metadata must match new token claims, not replace them");
+        assert_eq!(error.kind(), ProviderAdminErrorKind::Invalid);
+        assert!(!format!("{error:?}").contains(&token));
+        assert_eq!(store.account("acct_principal").unwrap(), before.account);
+    }
+}
+
+#[tokio::test]
 async fn rotation_same_principal_refreshes_metadata_and_preserves_the_device() {
     for (old_workspace, opaque_access, fresh_profile) in [
         (Some("A"), false, true),
