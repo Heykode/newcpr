@@ -3,7 +3,9 @@
 use chrono::{DateTime, Duration, Utc};
 use gateway_admin::model::{
     account_groups::AccountGroupRef,
-    group_monitor::{GroupMonitorFacts, MonitorLifespan, MonitorMember, MonitorUsage},
+    group_monitor::{
+        GroupMonitorFacts, MonitorLifespan, MonitorMember, MonitorQuotaPeer, MonitorUsage,
+    },
 };
 
 use super::*;
@@ -84,19 +86,27 @@ impl PgAccountGroupRepository {
             .into_iter()
             .collect::<Vec<_>>();
         let query = format!(
-            "select a.id, a.provider_kind, a.plan_type, coalesce(l.account_created_at, a.created_at) as first_seen_at
+            "select a.id, a.provider_kind, a.plan_type, a.created_at, coalesce(l.account_created_at, a.created_at) as first_seen_at
              from provider_accounts a left join monitor_account_lifecycles l
-               on l.identity_key = {}
-             where a.id = any($1::text[])",
+               on l.identity_key = {}",
             monitor_lifecycles::IDENTITY_SQL,
         );
         let rows = sqlx::query(sqlx::AssertSqlSafe(query))
-            .bind(&account_ids)
             .fetch_all(&mut *tx)
             .await
             .map_err(|_| unavailable("monitor account facts"))?;
         let mut metadata = BTreeMap::new();
         for row in rows {
+            facts.quota_peers.push(MonitorQuotaPeer {
+                id: row.try_get("id").map_err(|_| invalid("account ID"))?,
+                provider: row
+                    .try_get("provider_kind")
+                    .map_err(|_| invalid("provider"))?,
+                plan: row.try_get("plan_type").map_err(|_| invalid("plan"))?,
+                created_at: row
+                    .try_get("created_at")
+                    .map_err(|_| invalid("created at"))?,
+            });
             metadata.insert(
                 row.try_get::<String, _>("id")
                     .map_err(|_| invalid("account ID"))?,
@@ -109,6 +119,27 @@ impl PgAccountGroupRepository {
                         .map_err(|_| invalid("first seen"))?,
                 ),
             );
+        }
+        let rows = sqlx::query(
+            "select account_group_id, client_api_key_id from client_api_key_groups
+             where account_group_id = any($1::text[]) order by account_group_id, client_api_key_id",
+        )
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|_| unavailable("monitor group client keys"))?;
+        for row in rows {
+            facts
+                .group_client_keys
+                .entry(
+                    row.try_get("account_group_id")
+                        .map_err(|_| invalid("group ID"))?,
+                )
+                .or_default()
+                .push(
+                    row.try_get("client_api_key_id")
+                        .map_err(|_| invalid("client key ID"))?,
+                );
         }
         for member in members {
             let Some((provider, plan, first_seen_at)) = metadata.get(&member.account_id) else {

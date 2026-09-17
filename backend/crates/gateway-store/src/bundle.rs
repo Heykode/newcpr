@@ -72,9 +72,12 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
 
     let credential_leases =
         redis::RedisCredentialLeaseRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?;
+    let client_admissions =
+        redis::RedisClientAdmissionRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?;
     let admin_account_runtime = Arc::new(redis::RedisAdminAccountRuntimeStore::new(
         cooldowns.as_ref().clone(),
         credential_leases.clone(),
+        client_admissions.clone(),
     ));
     let (provider_leases, capacity_wait_cleanup_writer) =
         redis::RedisProviderLeaseCoordinator::new(credential_leases.clone());
@@ -141,9 +144,8 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let (client_key_usage, client_key_usage_writer) =
         postgres::PgClientApiKeyUsageSink::new(pool.clone());
     let retention = Arc::new(postgres::PgRetentionRepository::new(pool.clone()));
-    let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> = Arc::new(
-        redis::RedisClientAdmissionRepository::new(redis_connection.clone(), REDIS_NAMESPACE)?,
-    );
+    let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> =
+        Arc::new(client_admissions);
     let circuits: Arc<dyn gateway_core::engine::execution::ProviderCircuitPort> =
         Arc::new(redis::RedisProviderCircuitRepository::new(
             redis_connection.clone(),

@@ -99,6 +99,8 @@ struct FakeGroupStore {
     failed: AtomicBool,
     delay: std::time::Duration,
     extra_groups: usize,
+    client_keys: BTreeMap<String, Vec<String>>,
+    extra_quota_peers: Vec<gateway_admin::model::group_monitor::MonitorQuotaPeer>,
 }
 
 #[async_trait]
@@ -132,6 +134,15 @@ impl AccountGroupStore for FakeGroupStore {
             config_revision: 1,
             groups,
             members,
+            group_client_keys: self.client_keys.clone(),
+            quota_peers: std::iter::once(gateway_admin::model::group_monitor::MonitorQuotaPeer {
+                id: "acct_test".to_owned(),
+                provider: "openai".to_owned(),
+                plan: Some("plus".to_owned()),
+                created_at: Utc::now() - Duration::hours(1),
+            })
+            .chain(self.extra_quota_peers.clone())
+            .collect(),
             ..Default::default()
         })
     }
@@ -228,6 +239,119 @@ impl AccountGroupStore for FakeGroupStore {
     }
 }
 
+#[tokio::test]
+async fn monitor_reuses_ungrouped_peer_current_usage_then_switches_to_own_estimate() {
+    use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, quota_local_usage};
+    use gateway_admin::model::{
+        accounts::{AccountCost, AccountUsageWindowResult},
+        group_monitor::MonitorQuotaPeer,
+        provider_credentials::{ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution},
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = FakeAccountStore::new("openai", events.clone());
+    let mut donor = account_record("openai");
+    donor.id = "acct_peer".to_owned();
+    store.set_accounts(vec![account_record("openai"), donor]);
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    provider.set_quota(ProviderQuota {
+        plan_type: Some("plus".to_owned()),
+        observed_at: Some(Utc::now()),
+        refresh_token_expires_at: None,
+        limit_reached: false,
+        provider_data: None,
+        windows: vec![ProviderQuotaWindow {
+            key: "week".to_owned(),
+            group: "weekly".to_owned(),
+            label: "7d".to_owned(),
+            limit_id: None,
+            limit_name: None,
+            role: None,
+            local_usage_attribution: QuotaLocalUsageAttribution::AccountWide,
+            window_seconds: Some(604_800),
+            used_percent: Some(10.0),
+            reset_at: Some(Utc::now() + Duration::days(1)),
+            limit_reached: false,
+            local_usage: None,
+            provider_data: None,
+        }],
+    });
+    let services = AdminHarness::new()
+        .accounts(store.clone())
+        .provider(provider)
+        .account_runtime(Arc::new(FakeRuntimeStore::default()))
+        .account_groups(Arc::new(FakeGroupStore {
+            extra_quota_peers: vec![MonitorQuotaPeer {
+                id: "acct_peer".to_owned(),
+                provider: "openai".to_owned(),
+                plan: Some("plus".to_owned()),
+                created_at: Utc::now() - Duration::days(1),
+            }],
+            ..Default::default()
+        }))
+        .build()
+        .await;
+    for (own_cost, donor_cost, remaining) in
+        [("0", "10", 90.0), ("0", "20", 180.0), ("1", "20", 9.0)]
+    {
+        store.set_quota_window_usage(
+            [("acct_test", own_cost), ("acct_peer", donor_cost)]
+                .into_iter()
+                .map(|(id, cost)| {
+                    let mut usage = quota_local_usage(id, 0);
+                    usage.costs = vec![AccountCost {
+                        currency: "USD".to_owned(),
+                        amount: cost.parse().unwrap(),
+                    }];
+                    usage.cost_coverage = Default::default();
+                    AccountUsageWindowResult {
+                        account_id: id.to_owned(),
+                        key: "week".to_owned(),
+                        usage,
+                    }
+                })
+                .collect(),
+        );
+        services.group_monitor().sample().await.unwrap();
+        let report = services
+            .group_monitor()
+            .read(vec![group_id()], false)
+            .await
+            .unwrap();
+        assert_eq!(report.items[0].remaining_usd, Some(remaining));
+        assert_eq!(report.items[0].estimated_accounts, 1);
+    }
+    store.set_accounts(vec![account_record("openai")]);
+    services
+        .group_monitor()
+        .sample()
+        .await
+        .expect("unreadable optional peer does not block own estimate");
+    assert_eq!(
+        services
+            .group_monitor()
+            .read(vec![group_id()], false)
+            .await
+            .unwrap()
+            .items[0]
+            .remaining_usd,
+        Some(9.0)
+    );
+    store.set_accounts(vec![]);
+    assert!(
+        services.group_monitor().sample().await.is_err(),
+        "required account read failure must not be hidden"
+    );
+    assert!(
+        !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.contains("commit")
+                || event.contains("refresh")
+                || *event == "provider.quota")
+    );
+}
+
 impl FakeGroupStore {
     fn monitor_groups(&self) -> Vec<gateway_admin::model::account_groups::AccountGroupRef> {
         (0..=self.extra_groups)
@@ -252,10 +376,17 @@ impl FakeGroupStore {
 struct FakeRuntimeStore {
     requested_accounts: Mutex<Vec<String>>,
     unavailable: bool,
+    client_counts: Option<BTreeMap<String, u64>>,
 }
 
 #[async_trait]
 impl AccountRuntimeStore for FakeRuntimeStore {
+    async fn client_in_flight(
+        &self,
+        _: &[String],
+    ) -> AdminStoreResult<Option<BTreeMap<String, u64>>> {
+        Ok(self.client_counts.clone())
+    }
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot> {
         Ok(AccountRuntimeSnapshot::default())
     }
@@ -275,6 +406,39 @@ impl AccountRuntimeStore for FakeRuntimeStore {
             )]),
             in_flight: Some(BTreeMap::from([("acct_available".to_owned(), 2)])),
         })
+    }
+}
+
+#[tokio::test]
+async fn monitor_reads_key_occupancy_and_does_not_report_failed_reads_as_idle() {
+    use super::accounts::{FakeAccountStore, FakeProviderAdmin};
+    for counts in [None, Some(BTreeMap::from([("key-a".to_owned(), 3)]))] {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let services = AdminHarness::new()
+            .account_groups(Arc::new(FakeGroupStore {
+                client_keys: BTreeMap::from([(
+                    GROUP_ID.to_owned(),
+                    vec!["key-a".to_owned(), "key-a".to_owned()],
+                )]),
+                ..Default::default()
+            }))
+            .account_runtime(Arc::new(FakeRuntimeStore {
+                client_counts: counts.clone(),
+                ..Default::default()
+            }))
+            .accounts(FakeAccountStore::new("openai", events.clone()))
+            .provider(FakeProviderAdmin::new("openai", events))
+            .build()
+            .await;
+        services.group_monitor().sample().await.unwrap();
+        let report = services
+            .group_monitor()
+            .read(vec![group_id()], false)
+            .await
+            .unwrap();
+        let item = &report.items[0];
+        assert_eq!(item.used_slots, counts.as_ref().map(|_| 3));
+        assert_eq!(item.total_slots, if counts.is_some() { 7 } else { 0 });
     }
 }
 

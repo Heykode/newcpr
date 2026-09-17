@@ -51,7 +51,7 @@ fn report(facts: &GroupMonitorFacts, at: DateTime<Utc>) -> GroupMonitorReport {
             .iter()
             .cloned()
             .map(|group| {
-                let mut item = project_group_monitor(group, &[], &MonitorUsage::default());
+                let mut item = project_group_monitor(group, &[], &MonitorUsage::default(), Some(0));
                 item.total_accounts = 4;
                 item.eligible_accounts = 3;
                 item.estimated_accounts = 2;

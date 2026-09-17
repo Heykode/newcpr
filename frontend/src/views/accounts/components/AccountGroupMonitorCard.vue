@@ -54,17 +54,17 @@ const percentage = computed(() => props.snapshot?.usedSlots != null && props.sna
           <p v-if="expired" class="text-cp-warning-text">
             额度窗口已到期，等待新的有效观测。
           </p>
-          <p>7D 额度估算覆盖 {{ snapshot?.estimatedAccounts ?? 0 }} / {{ snapshot?.eligibleAccounts ?? 0 }} 个可调度账号；按各账号本轮消费与已用比例动态计算，不包含未来重置补充，短期限额仍可能限制使用。</p>
+          <p>7D 额度估算覆盖 {{ snapshot?.estimatedAccounts ?? 0 }} / {{ snapshot?.eligibleAccounts ?? 0 }} 个可调度账号；优先按自身本轮消费与已用比例计算。新号无自身估值时，参考同 Provider、套餐及窗口最新最多 3 个有效账号的平均总额度，再按自身已用比例计算剩余。不包含未来重置补充，短期限额仍可能限制使用。</p>
           <p v-if="snapshot?.remainingStatus === 'partial'">
             部分账号或费用缺失，当前仅为已知部分，不计算可支撑时间。
           </p>
           <p v-if="snapshot?.lowSample">
             样本较少，估算可能波动。
           </p>
-          <p>预计过期额度依据同 Provider、同套餐最近最多 5 个未恢复失效账号的平均寿命。恢复后撤销样本；普通 Token 到期、限流和额度耗尽不计死亡。缺失样本或超出平均寿命时保持未知，不从剩余额度扣除。</p>
+          <p>预计过期额度依据同 Provider、同套餐最近最多 5 个未恢复失效账号的平均寿命。恢复后撤销样本；普通 Token 到期、限流和额度耗尽不计死亡。已超过平均寿命的账号跳过；全部超出或其余账号资料缺失时保持未知，不从剩余额度扣除。</p>
           <p>每分钟消耗为最近 60 秒已完成推理请求的已记录 USD，按请求授权分组范围归属，跨组可能重叠。</p>
           <p>可支撑时间按共享账号在所有分组的消耗 {{ monitorMoney(snapshot?.quotaConsumeUsdPerMinute, 'unknown', 4) }} /分计算。</p>
-          <p>并发为本组可调度账号的共享占用 / 动态槽位，并非本组独占请求数。不同分组的额度及并发不可直接相加。</p>
+          <p>并发为本组 API Key 的当前占用 /（本组占用 + 可调度账号的共享空位）。其他组占用共享账号时，本组可用上限随之减少。Key 绑定多个组时占用可能重叠，不同分组的额度及并发不可直接相加。</p>
         </div>
       </BasePopover>
       <BaseIconButton
@@ -92,7 +92,7 @@ const percentage = computed(() => props.snapshot?.usedSlots != null && props.sna
     </dl>
     <div class="monitor-concurrency mt-auto flex items-center gap-2 text-cp-xs" :class="stale ? 'text-cp-text-tertiary' : 'text-cp-text-secondary'">
       <span>并发</span>
-      <strong class="shrink-0 font-mono font-emphasis">{{ snapshot?.usedSlots ?? '—' }} / {{ snapshot?.totalSlots ?? '—' }}</strong>
+      <strong class="shrink-0 font-mono font-emphasis">{{ snapshot?.usedSlots ?? '—' }} / {{ snapshot?.usedSlots == null ? '—' : snapshot.totalSlots }}</strong>
       <div
         class="h-1 min-w-3 flex-1 overflow-hidden rounded-sm bg-cp-fill-quaternary"
         role="progressbar"

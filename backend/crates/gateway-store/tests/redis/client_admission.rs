@@ -16,6 +16,58 @@ fn client_admission_rejects_zero_ttl() {
     assert!(request.validate().is_err());
 }
 
+#[tokio::test]
+async fn monitor_reads_live_key_leases_without_mutation_and_observes_release() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let key = "monitor-key";
+    for id in ["first", "second"] {
+        repository
+            .admit_client_request(&admission_request(id, key, Duration::from_secs(30)))
+            .await
+            .expect("admit");
+    }
+    let keys = namespace_keys(&mut connection, &namespace).await;
+    let active = key_with_suffix(&keys, ":active");
+    redis::cmd("ZADD")
+        .arg(active)
+        .arg(1)
+        .arg("expired")
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    let ttl = pttl(&mut connection, active).await;
+    let counts = repository
+        .active_counts(&[key.to_owned(), "empty-key".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(counts[key], 2);
+    assert_eq!(counts["empty-key"], 0);
+    assert_eq!(
+        zcard(&mut connection, active).await,
+        3,
+        "read must not prune"
+    );
+    assert!(
+        pttl(&mut connection, active).await <= ttl,
+        "read must not renew"
+    );
+    repository
+        .release_client_request(key, "first")
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.active_counts(&[key.to_owned()]).await.unwrap()[key],
+        1
+    );
+    assert_eq!(
+        namespace_keys(&mut connection, &namespace).await.len(),
+        keys.len()
+    );
+    delete_namespace_keys(&mut connection, &namespace).await;
+}
+
 #[test]
 fn client_admission_rejects_values_outside_redis_exact_integer_range() {
     let mut request = admission_request("request-1", "key-1", Duration::from_secs(30));

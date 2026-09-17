@@ -3013,7 +3013,7 @@ fn empty_quota() -> ProviderQuota {
     }
 }
 
-fn quota_local_usage(account_id: &str, total_tokens: u64) -> AccountUsage {
+pub(super) fn quota_local_usage(account_id: &str, total_tokens: u64) -> AccountUsage {
     AccountUsage {
         account_id: account_id.to_owned(),
         request_count: 1,
