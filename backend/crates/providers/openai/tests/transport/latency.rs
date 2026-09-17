@@ -657,10 +657,12 @@ async fn timed_out_websocket_should_finish_in_background_and_serve_the_next_requ
 async fn shared_websocket_opening_should_keep_the_original_fast_path_deadline() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let (opening_received_tx, opening_received_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (mut stalled_websocket, _) = listener.accept().await.unwrap();
         let opening = read_http_request(&mut stalled_websocket).await;
         assert!(opening.starts_with("GET /codex/responses HTTP/1.1"));
+        opening_received_tx.send(()).unwrap();
 
         for _ in 0..2 {
             let (mut http, _) = listener.accept().await.unwrap();
@@ -678,19 +680,32 @@ async fn shared_websocket_opening_should_keep_the_original_fast_path_deadline() 
     .with_websocket_pool(Arc::clone(&pool));
     let request = new_chain_request("conversation-original-deadline");
 
-    let first = backend
-        .create_response(
-            &request,
-            request_context("req_original_deadline_first", Some("chatgpt-account")),
-        )
+    let first_backend = backend.clone();
+    let first_request = request.clone();
+    let first = tokio::spawn(async move {
+        first_backend
+            .create_response(
+                &first_request,
+                request_context("req_original_deadline_first", Some("chatgpt-account")),
+            )
+            .await
+    });
+    opening_received_rx.await.unwrap();
+    tokio::time::pause();
+    // The opening can start after the first request's capacity budget starts.
+    // Explicitly exhaust both budgets before testing that a waiter cannot reset one.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let first = complete_with_frozen_clock(first)
         .await
+        .expect("first request task should finish")
         .expect("first request should use HTTP after the opening budget");
-    let second = complete_without_advancing_time(backend.create_response(
+    let second = complete_with_frozen_clock(backend.create_response(
         &request,
         request_context("req_original_deadline_second", Some("chatgpt-account")),
     ))
     .await
     .expect("second request should use HTTP");
+    tokio::time::resume();
     server.await.unwrap();
 
     assert_eq!(first.transport, CodexBackendTransport::HttpSse);
