@@ -303,6 +303,15 @@ async fn wait_count(counter: &AtomicUsize, expected: usize) {
 
 #[tokio::test]
 async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight_probe() {
+    collector_cancellation(false).await;
+}
+
+#[tokio::test]
+async fn hard_credential_rotation_cancels_inflight_probe_and_restarts_with_new_binding() {
+    collector_cancellation(true).await;
+}
+
+async fn collector_cancellation(hard_rotation: bool) {
     let accounts = Arc::new(MemoryAccountStore::default());
     let mut imported = CodexCredentialAdmin
         .prepare_import(ImportCodexOAuthCredential {
@@ -317,7 +326,7 @@ async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight
     imported.account = imported.account.with_turn_state_injection_enabled(true);
     let account_id = imported.account.id().clone();
     accounts.create_account(imported).await.unwrap();
-    let base = provider_ports_with_accounts(accounts);
+    let base = provider_ports_with_accounts(accounts.clone());
     let leases = Arc::new(ReadOnlyLeases::default());
     let states = Arc::new(ProbeStates::default());
     let ports = ProviderStorePorts::new(
@@ -340,7 +349,7 @@ async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight
             address: Ipv6Addr::LOCALHOST,
             enabled: true,
         }],
-        account_overrides: [(account_id, None)].into(),
+        account_overrides: [(account_id.clone(), None)].into(),
         ..ProviderEgressConfig::default()
     })));
     let listener = std::net::TcpListener::bind("[::1]:0").expect("IPv6 loopback");
@@ -404,7 +413,22 @@ async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight
         0,
         "collection is independent of business leases"
     );
-    tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
+    if hard_rotation {
+        let account = accounts.get_account(&account_id).await.unwrap().unwrap();
+        let mut data = accounts
+            .repository()
+            .load_complete_data(&account)
+            .await
+            .unwrap();
+        data.oauth_mut().unwrap().access_token = "synthetic-replacement".into();
+        accounts
+            .repository()
+            .compare_and_swap_data(&account, data)
+            .await
+            .unwrap();
+    } else {
+        tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
+    }
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(states.writes.load(Ordering::SeqCst), 0);
     assert_eq!(states.cancelled.load(Ordering::SeqCst), 1);
@@ -514,6 +538,7 @@ enum AcquisitionScenario {
     RepeatedStandby,
     ConcurrentStarts,
     PromoteStandby,
+    SoftCookieRefresh,
 }
 
 async fn independent_collectors(scenario: AcquisitionScenario) {
@@ -522,8 +547,10 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
         AcquisitionScenario::ImmediateStandby
             | AcquisitionScenario::RepeatedStandby
             | AcquisitionScenario::PromoteStandby
+            | AcquisitionScenario::SoftCookieRefresh
     );
-    let repeat_first = matches!(scenario, AcquisitionScenario::RepeatedStandby);
+    let soft_cookie = matches!(scenario, AcquisitionScenario::SoftCookieRefresh);
+    let repeat_first = matches!(scenario, AcquisitionScenario::RepeatedStandby) || soft_cookie;
     let start_only = matches!(scenario, AcquisitionScenario::ConcurrentStarts);
     let promote = matches!(scenario, AcquisitionScenario::PromoteStandby);
     let accounts = Arc::new(MemoryAccountStore::default());
@@ -543,7 +570,7 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
         imported.account = imported.account.with_turn_state_injection_enabled(true);
         accounts.create_account(imported).await.unwrap();
     }
-    let base = provider_ports_with_accounts(accounts);
+    let base = provider_ports_with_accounts(accounts.clone());
     let states = Arc::new(ProbeStates::default());
     let captured = SystemTime::now() - Duration::from_secs(1200);
     if promote {
@@ -662,6 +689,46 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
     task.run_cycle(WorkerCycleContext::new(id, None, cancel.clone()))
         .await
         .unwrap();
+    if soft_cookie {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let ready = {
+                    let calls = responder.calls.lock().unwrap();
+                    calls.len() == key_count && calls.values().all(|count| *count >= 2)
+                };
+                if ready {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        for index in 0..account_count {
+            let id = format!("acct_parallel_{index}");
+            let account = accounts.account(&id).unwrap();
+            let mut data = accounts
+                .repository()
+                .load_complete_data(&account)
+                .await
+                .unwrap();
+            data.cookies_mut()
+                .push(provider_openai::credential::CodexCookie {
+                    name: "__cf_bm".into(),
+                    value: "synthetic-fresh".into(),
+                    domain: "::1".into(),
+                    path: "/".into(),
+                    host_only: true,
+                    secure: false,
+                    expires_at: None,
+                });
+            accounts
+                .repository()
+                .compare_and_swap_data(&account, data)
+                .await
+                .unwrap();
+        }
+    }
     let completed = tokio::time::timeout(
         Duration::from_secs(if start_only { 20 } else { 300 }),
         async {
@@ -678,9 +745,12 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
         },
     )
     .await;
+    if soft_cookie && completed.is_ok() {
+        wait_count(&states.cancelled, key_count).await;
+    }
     cancel.cancel();
     handle.await.unwrap().unwrap();
-    let calls = responder.calls.lock().unwrap();
+    let calls = responder.calls.lock().unwrap().clone();
     assert!(
         completed.is_ok(),
         "independent tasks timed out: calls={calls:?}, failed={}, cancelled={}",
@@ -750,6 +820,32 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
     if promote {
         assert_eq!(states.promoted.load(Ordering::SeqCst), 4);
     }
+    if soft_cookie {
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| {
+                    request
+                        .headers
+                        .get("cookie")
+                        .is_some_and(|value| value == "__cf_bm=synthetic-fresh")
+                })
+                .count(),
+            4,
+            "the next batch must reload each account's Cookie material"
+        );
+        assert_eq!(
+            states.cancelled.load(Ordering::SeqCst),
+            4,
+            "only completed tasks are cleaned up, not cancelled/restarted by soft saves"
+        );
+    }
+}
+
+#[tokio::test]
+async fn soft_cookie_updates_keep_collectors_alive_and_reload_next_batch_material() {
+    independent_collectors(AcquisitionScenario::SoftCookieRefresh).await;
 }
 
 #[tokio::test]

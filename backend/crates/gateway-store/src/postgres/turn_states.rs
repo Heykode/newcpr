@@ -159,7 +159,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                    and exists (select 1 from provider_accounts a
                      where a.id = s.provider_account_id and a.enabled
                        and a.turn_state_injection_enabled
-                       and a.credential_revision = s.credential_revision)
+                       and a.turn_state_binding_revision = s.credential_revision)
                    and exists (select 1 from runtime_settings r
                      where r.turn_state_injection_enabled
                        and s.upstream_model = any(r.turn_state_models))",
@@ -432,7 +432,7 @@ async fn ensure_row(
     .map_err(|_| unavailable("lock turn state policy"))?
     .unwrap_or(false);
     let owner = sqlx::query_scalar::<_, bool>(
-        "select enabled and turn_state_injection_enabled and credential_revision = $2
+        "select enabled and turn_state_injection_enabled and turn_state_binding_revision = $2
          from provider_accounts where id = $1 for share",
     )
     .bind(account_id.as_str())

@@ -44,9 +44,28 @@
   and remaining lifetime under the row lock; preserve the promoted clock.
   Plan-shape changes clear
   both slots and the old observed length, and advance the version.
-- State reads and writes are fenced by credential revision. Writes lock current
+- State reads and writes are fenced by `turn_state_binding_revision`, separate
+  from the credential-material write CAS. The legacy State row column named
+  `credential_revision` stores this binding generation from migration 0027.
+  Writes lock current
   global/model policy and account opt-in before locking the state row. A rotated
   credential cannot inherit the previous credential's active or standby.
+- Identical accepted Cookie sets do not write. Provider-verified identical
+  credentials or `__cf_bm`-only changes may preserve binding, clocks, slots and
+  pool version. Other cookies, tokens, principal/device/client/scope changes
+  remain hard invalidations. Only trusted provider code can request preservation;
+  ordinary import/rotation paths default to hard invalidation. Generic credential
+  CAS and device locking remain unchanged.
+- Response State observations always use the original request lease's binding,
+  not the account reloaded after response Cookie persistence. Maintenance checks
+  binding ownership but reloads current request material between batches when
+  the credential CAS changes. In-flight batches may finish with their original
+  soft material; hard changes still cancel and fence persistence.
+- Migration initializes binding from current credential CAS without rebinding
+  stale State rows. Deploy with all old writers stopped: old binaries do not
+  know the binding field and must not share this database with new writers.
+  A downgrade requires a schema-aware restore or explicit State invalidation;
+  never claim swapping only the old binary is a transparent rollback.
 - Degraded observations apply only to the managed version actually injected.
   Late rejection of an older version cannot rotate the current active. If no
   valid standby exists, clear the rejected active and block new chains until acquisition.
@@ -65,7 +84,7 @@
   refresh status, active/standby presence, character count and local expiry.
   Preserve the existing required/ready model fields for compatible clients.
 - Project a slot only when global/account policy, enabled status, model,
-  credential revision, plan length, issuance and local expiry all still match.
+  State binding revision, plan length, issuance and local expiry all still match.
   Invalid, expired or mismatched rows appear as missing slots; never expose the
   opaque value, its prefix, preview, hash or any reversible derivative.
 - `readyModels` remains active-only scheduling readiness. The detailed model
@@ -142,7 +161,7 @@
 - Individual probes are bounded to thirty seconds, excluding semaphore waiting.
   HTTP errors, missing states and unusable candidates continue on the applicable
   urgent/background cadence without special 429 backoff or an attempt budget.
-  Poll account/revision/policy every second and recheck before each batch and
+  Poll account/binding/policy every second and recheck before each batch and
   persistence. Switch disable, model removal or credential replacement cancels
   outstanding probes. Cancellation performs revision-fenced status cleanup even
   after opt-out; it cannot finish a newer credential's task. Store unavailability

@@ -354,6 +354,7 @@ impl ProviderAccountStore for MemoryProviderAccountStore {
             expected_revision,
             profile,
             preserve_profile,
+            preserve_turn_state_binding: _,
             credential,
             has_refresh_token,
             access_token_expires_at,

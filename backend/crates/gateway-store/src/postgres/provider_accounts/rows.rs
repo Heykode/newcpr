@@ -131,6 +131,7 @@ pub struct ProviderAccountSummary {
     pub plan_type: Option<String>,
     pub authentication_kind: String,
     pub credential_revision: Revision,
+    pub turn_state_binding_revision: Revision,
     pub relogin_count: u64,
     pub last_relogin_at: Option<DateTime<Utc>>,
     pub has_refresh_token: bool,
@@ -391,7 +392,7 @@ impl ProviderAccountStateUpdate {
 pub(crate) const ACCOUNT_SELECT: &str = "select
             (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
-            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
+            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
@@ -401,7 +402,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
-            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
+            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
@@ -413,7 +414,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
 pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
-            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
+            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
@@ -474,6 +475,8 @@ pub(crate) fn core_account_from_summary(
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
     let revision = CoreCredentialRevision::new(summary.credential_revision.get())
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
+    let binding_revision = CoreCredentialRevision::new(summary.turn_state_binding_revision.get())
+        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::InvalidData))?;
     Ok(CoreProviderAccount::new(
         id,
         provider,
@@ -496,6 +499,7 @@ pub(crate) fn core_account_from_summary(
         summary.last_error_message,
     )
     .with_turn_state_injection_enabled(summary.turn_state_injection_enabled)
+    .with_turn_state_binding_revision(binding_revision)
     .with_scheduling(summary.concurrency_limit, summary.weight)
     .with_outbound_proxy(summary.outbound_proxy)
     .with_request_location(summary.request_location)
@@ -577,6 +581,10 @@ pub(crate) fn account_summary_from_row(
         plan_type: get(&row, "plan_type")?,
         authentication_kind: get(&row, "authentication_kind")?,
         credential_revision: Revision::new(to_u64(revision)?)?,
+        turn_state_binding_revision: Revision::new(to_u64(get(
+            &row,
+            "turn_state_binding_revision",
+        )?)?)?,
         relogin_count: to_u64(get::<i64>(&row, "relogin_count")?)?,
         last_relogin_at: get(&row, "last_relogin_at")?,
         has_refresh_token: get(&row, "has_refresh_token")?,

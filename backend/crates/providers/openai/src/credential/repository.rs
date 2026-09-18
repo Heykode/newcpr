@@ -103,7 +103,8 @@ impl CodexCredentialRepository {
             Some(next_refresh_at),
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
-        .preserving_profile();
+        .preserving_profile()
+        .preserving_turn_state_binding();
         if let Some(error_reason) = error_reason {
             update = update.with_account_state(
                 account.credential_state(),
@@ -181,7 +182,13 @@ impl CodexCredentialRepository {
     ) -> Result<CredentialRevision, CredentialRepositoryError> {
         let has_refresh_token = data.has_refresh_token();
         let credential = CodexCredentialCodec::encode_complete(data)?;
-        let update = CredentialCasUpdate::new(
+        let current = self
+            .store
+            .load_credential(account.id(), account.revision())
+            .await?;
+        let preserve_binding =
+            CodexCredentialCodec::same_turn_state_binding(&current.credential, &credential)?;
+        let mut update = CredentialCasUpdate::new(
             account.id().clone(),
             account.revision(),
             ProviderAccountUpdate {
@@ -197,6 +204,9 @@ impl CodexCredentialRepository {
         )
         .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
         .preserving_profile();
+        if preserve_binding {
+            update = update.preserving_turn_state_binding();
+        }
         cas_revision(self.store.compare_and_swap_credential(update).await?)
     }
 

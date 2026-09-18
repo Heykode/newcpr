@@ -19,6 +19,219 @@ fn revision() -> CredentialRevision {
     CredentialRevision::new(1).unwrap()
 }
 
+#[tokio::test]
+async fn soft_credential_cas_keeps_both_slots_clocks_readiness_and_hard_rotation_fence() {
+    use gateway_admin::ports::store::AccountStore;
+    use gateway_core::account::{
+        CredentialCasOutcome, CredentialCasUpdate, ProviderAccountStore, ProviderAccountUpdate,
+    };
+    let Some(database) = TestDatabase::create("state_cookie_binding").await else {
+        return;
+    };
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    accounts
+        .insert_provider_account(account("acct_cookie", "cookie-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let id = ProviderAccountId::new("acct_cookie").unwrap();
+    let states = PgProviderTurnStateRepository::new(database.pool.clone());
+    let models = ["model-a", "model-b"].map(|m| UpstreamModelId::new(m).unwrap());
+    let mut before = Vec::new();
+    for model in &models {
+        states
+            .put_candidate(candidate(
+                &id,
+                model,
+                &"a".repeat(292),
+                SystemTime::now(),
+                ProviderTurnStateSlot::Active,
+                292,
+            ))
+            .await
+            .unwrap();
+        before.push(
+            states
+                .put_candidate(candidate(
+                    &id,
+                    model,
+                    &"b".repeat(292),
+                    SystemTime::now(),
+                    ProviderTurnStateSlot::Standby,
+                    292,
+                ))
+                .await
+                .unwrap(),
+        );
+    }
+    let loaded = accounts.load_current_credential(&id).await.unwrap();
+    let make_update = |revision| {
+        CredentialCasUpdate::new(
+            id.clone(),
+            revision,
+            ProviderAccountUpdate {
+                account_id: id.clone(),
+                name: loaded.account.name().into(),
+                email: loaded.account.email().map(str::to_owned),
+                plan_type: loaded.account.plan_type().map(str::to_owned),
+            },
+            loaded.credential.clone(),
+            false,
+            loaded.account.access_token_expires_at(),
+            None,
+        )
+        .unwrap()
+        .preserving_profile()
+    };
+    for next in 2..=21 {
+        assert_eq!(
+            accounts
+                .compare_and_swap_credential(
+                    make_update(CredentialRevision::new(next - 1).unwrap())
+                        .preserving_turn_state_binding()
+                )
+                .await
+                .unwrap(),
+            CredentialCasOutcome::Updated(CredentialRevision::new(next).unwrap())
+        );
+        let current = accounts.get_account(&id).await.unwrap().unwrap();
+        assert_eq!(current.turn_state_binding_revision(), revision());
+        for (model, original) in models.iter().zip(&before) {
+            let after = states
+                .read(&id, model, current.turn_state_binding_revision())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(after.active(), original.active());
+            assert_eq!(after.standby(), original.standby());
+            assert_eq!(after.state_version(), original.state_version());
+            assert_eq!(
+                after.last_observed_length(),
+                original.last_observed_length()
+            );
+        }
+    }
+    let admin = super::admin_account_store(&database.pool);
+    let ids = [id.as_str().to_owned()];
+    assert_eq!(
+        admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()]
+            .ready_models
+            .len(),
+        2
+    );
+    // Two writers based on the same revision cannot both win, including a soft save.
+    let hard = make_update(CredentialRevision::new(21).unwrap());
+    let soft = hard.clone().preserving_turn_state_binding();
+    assert!(matches!(
+        accounts.compare_and_swap_credential(hard).await.unwrap(),
+        CredentialCasOutcome::Updated(_)
+    ));
+    assert_eq!(
+        accounts.compare_and_swap_credential(soft).await.unwrap(),
+        CredentialCasOutcome::Conflict
+    );
+    let current = accounts.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(current.turn_state_binding_revision().get(), 22);
+    assert!(
+        admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()]
+            .ready_models
+            .is_empty()
+    );
+    for model in &models {
+        assert!(states.read(&id, model, revision()).await.unwrap().is_none());
+        assert!(
+            states
+                .put_candidate(candidate(
+                    &id,
+                    model,
+                    &"c".repeat(292),
+                    SystemTime::now(),
+                    ProviderTurnStateSlot::Active,
+                    292
+                ))
+                .await
+                .is_err()
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn binding_migration_preserves_current_rows_without_reviving_stale_rows() {
+    let Some(database) = TestDatabase::create("state_binding_upgrade").await else {
+        return;
+    };
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    for id in ["acct_current", "acct_stale"] {
+        accounts
+            .insert_provider_account(account(id, id))
+            .await
+            .unwrap();
+    }
+    enable(&database).await;
+    let states = PgProviderTurnStateRepository::new(database.pool.clone());
+    let model = UpstreamModelId::new("model-a").unwrap();
+    for id in ["acct_current", "acct_stale"] {
+        states
+            .put_candidate(candidate(
+                &ProviderAccountId::new(id).unwrap(),
+                &model,
+                &"a".repeat(292),
+                SystemTime::now(),
+                ProviderTurnStateSlot::Active,
+                292,
+            ))
+            .await
+            .unwrap();
+    }
+    // Simulate the immediately preceding schema without rewriting frozen migrations.
+    let mut tx = database.pool.begin().await.unwrap();
+    sqlx::query("alter table provider_accounts drop column turn_state_binding_revision")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("update provider_accounts set credential_revision=2 where id='acct_stale'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0027_turn_state_binding_revision.sql"
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert!(
+        states
+            .read(
+                &ProviderAccountId::new("acct_current").unwrap(),
+                &model,
+                revision()
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .active()
+            .is_some()
+    );
+    let stale = ProviderAccountId::new("acct_stale").unwrap();
+    assert!(
+        states
+            .read(&stale, &model, revision())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        states
+            .read(&stale, &model, CredentialRevision::new(2).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    database.close().await;
+}
+
 async fn enable(database: &TestDatabase) {
     sqlx::query(
         "update runtime_settings set turn_state_injection_enabled = true,
@@ -120,10 +333,12 @@ async fn admin_readiness_and_cancel_cleanup_are_model_revision_and_policy_fenced
         .unwrap();
     assert_eq!(status, "failed");
     enable(&database).await;
-    sqlx::query("update provider_accounts set credential_revision=2")
-        .execute(&database.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "update provider_accounts set credential_revision=2, turn_state_binding_revision=2",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
     assert!(
         admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()]
             .ready_models
@@ -247,10 +462,12 @@ async fn proactive_promotion_preserves_clock_and_rejects_late_or_short_lived_sta
     let echoed = store.put_candidate(echo).await.unwrap();
     assert_eq!(echoed.active(), promoted.active());
     assert_eq!(echoed.state_version(), promoted.state_version());
-    sqlx::query("update provider_accounts set credential_revision = 2")
-        .execute(&database.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "update provider_accounts set credential_revision = 2, turn_state_binding_revision = 2",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
     assert!(store.promote_standby(promotion).await.is_err());
     database.close().await;
 }
@@ -655,10 +872,12 @@ async fn policy_and_credential_fences_reject_late_writes_and_reads() {
             .await
             .unwrap();
     }
-    sqlx::query("update provider_accounts set credential_revision = 2")
-        .execute(&database.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "update provider_accounts set credential_revision = 2, turn_state_binding_revision = 2",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
     assert!(store.read(&id, &model, revision()).await.unwrap().is_none());
     assert!(
         store

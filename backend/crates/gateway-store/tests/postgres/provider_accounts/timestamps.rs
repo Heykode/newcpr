@@ -97,12 +97,14 @@ async fn repository_credential_cas_keeps_time_and_stale_revision_fencing() {
         2
     );
     let after = row(&database, id).await;
+    assert_eq!(after["turn_state_binding_revision"], 2);
     unchanged_except(
         before,
         after.clone(),
         &[
             "provider_credentials_json",
             "credential_revision",
+            "turn_state_binding_revision",
             "access_token_expires_at",
         ],
     );
@@ -130,6 +132,7 @@ async fn repository_credential_cas_keeps_time_and_stale_revision_fencing() {
     ));
     let final_row = row(&database, id).await;
     assert_eq!(final_row["credential_revision"], 3);
+    assert_eq!(final_row["turn_state_binding_revision"], 3);
     assert_eq!(final_row["updated_at"], after["updated_at"]);
     database.close().await;
 }
@@ -177,7 +180,12 @@ async fn core_credential_cas_preserves_other_observation_clocks_and_disabled_sta
             CredentialCasOutcome::Updated(_)
         ));
         let after = row(&database, id.as_str()).await;
-        let mut changed = vec!["provider_credentials_json", "credential_revision"];
+        assert_eq!(after["turn_state_binding_revision"], 2);
+        let mut changed = vec![
+            "provider_credentials_json",
+            "credential_revision",
+            "turn_state_binding_revision",
+        ];
         if enabled && with_state {
             changed.push("credential_observed_at");
         }
@@ -225,10 +233,12 @@ async fn admin_rotation_keeps_retained_quota_times_and_disabled_identity() {
             "plan_type",
             "provider_credentials_json",
             "credential_revision",
+            "turn_state_binding_revision",
             "access_token_expires_at",
             "credential_observed_at",
         ];
         assert_eq!(after["enabled"], enabled);
+        assert_eq!(after["turn_state_binding_revision"], 2);
         assert_eq!(after["updated_at"], before["updated_at"]);
         assert_eq!(after["credential_state"], "ready");
         let observed: DateTime<Utc> =

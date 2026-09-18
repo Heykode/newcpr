@@ -1676,6 +1676,159 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
 }
 
 #[test]
+fn routine_cookie_saves_preserve_binding_and_identical_headers_are_noops() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "synthetic-cookie");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let origin = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let original = store.account("acct_primary").unwrap();
+    let installation = block_on(store.repository().load_complete_data(&original))
+        .unwrap()
+        .installation_id()
+        .to_owned();
+    let header = "__cf_bm=synthetic-one; Path=/; Domain=chatgpt.com; Secure";
+    for index in 0..20 {
+        let account = store.account("acct_primary").unwrap();
+        let result =
+            block_on(selector.capture_response_cookies(&account, &origin, &[header.to_owned()]))
+                .unwrap();
+        assert_eq!(result.credential_revision, (index == 0).then_some(2));
+    }
+    let current = store.account("acct_primary").unwrap();
+    assert_eq!(current.revision().get(), 2);
+    assert_eq!(
+        current.turn_state_binding_revision(),
+        original.turn_state_binding_revision()
+    );
+    let result = block_on(selector.capture_response_cookies(
+        &current,
+        &origin,
+        &["__cf_bm=synthetic-two; Path=/; Domain=chatgpt.com; Secure; Max-Age=3600".to_owned()],
+    ))
+    .unwrap();
+    assert_eq!(result.credential_revision, Some(3));
+    let current = store.account("acct_primary").unwrap();
+    assert_eq!(
+        current.turn_state_binding_revision(),
+        original.turn_state_binding_revision()
+    );
+    assert_eq!(
+        block_on(store.repository().load_complete_data(&current))
+            .unwrap()
+            .installation_id(),
+        installation
+    );
+    // A stale response must not overwrite the Cookie already committed.
+    assert!(
+        block_on(selector.capture_response_cookies(&original, &origin, &[header.to_owned()],))
+            .is_err()
+    );
+    block_on(selector.capture_response_cookies(
+        &current,
+        &origin,
+        &["__Secure-next-auth.session-token=synthetic-login; Path=/; Secure".to_owned()],
+    ))
+    .unwrap();
+    let changed = store.account("acct_primary").unwrap();
+    assert_eq!(changed.turn_state_binding_revision(), changed.revision());
+    assert_eq!(changed.revision().get(), 4);
+}
+
+#[test]
+fn cookie_capture_deduplicates_scopes_and_preserves_unrelated_cookie_order() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "synthetic-cookie-order");
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let origin = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let original = store.account("acct_primary").unwrap();
+    let header = "__cf_bm=synthetic-one; Path=/; Domain=chatgpt.com; Secure";
+    block_on(selector.capture_response_cookies(
+        &original,
+        &origin,
+        &[
+            header.to_owned(),
+            "cf_clearance=synthetic-other; Path=/; Domain=chatgpt.com; Secure".into(),
+        ],
+    ))
+    .unwrap();
+    let account = store.account("acct_primary").unwrap();
+    let mut data = block_on(store.repository().load_complete_data(&account)).unwrap();
+    let duplicate = data.cookies()[0].clone();
+    data.cookies_mut().push(duplicate);
+    block_on(store.repository().compare_and_swap_data(&account, data)).unwrap();
+    let account = store.account("acct_primary").unwrap();
+    assert!(
+        block_on(selector.capture_response_cookies(&account, &origin, &[header.into()]))
+            .unwrap()
+            .credential_revision
+            .is_some()
+    );
+    let account = store.account("acct_primary").unwrap();
+    let data = block_on(store.repository().load_complete_data(&account)).unwrap();
+    assert_eq!(
+        data.cookies()
+            .iter()
+            .map(|cookie| cookie.name.as_str())
+            .collect::<Vec<_>>(),
+        ["__cf_bm", "cf_clearance"]
+    );
+    assert!(
+        block_on(selector.capture_response_cookies(&account, &origin, &[header.into()]))
+            .unwrap()
+            .credential_revision
+            .is_none()
+    );
+}
+
+#[test]
+fn state_binding_changes_for_tokens_device_principal_and_nonroutine_cookies() {
+    for field in [
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "installation_id",
+        "principal",
+        "oauth_client_id",
+        "oauth_scope",
+        "cookie",
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "synthetic-binding");
+        let account = store.account("acct_primary").unwrap();
+        let mut data = block_on(store.repository().load_complete_data(&account)).unwrap();
+        let oauth = data.oauth_mut().unwrap();
+        match field {
+            "access_token" => oauth.access_token = "synthetic-new".into(),
+            "refresh_token" => oauth.refresh_token = Some("synthetic-new".into()),
+            "id_token" => oauth.id_token = Some("synthetic-new".into()),
+            "installation_id" => oauth.installation_id = uuid::Uuid::new_v4().to_string(),
+            "principal" => oauth.principal.as_mut().unwrap().poid = Some("synthetic-other".into()),
+            "oauth_client_id" => oauth.oauth_client_id = Some("synthetic-client".into()),
+            "oauth_scope" => oauth.oauth_scope = Some("synthetic-scope".into()),
+            "cookie" => oauth
+                .cookies
+                .push(provider_openai::credential::CodexCookie {
+                    name: "oai-did".into(),
+                    value: "synthetic-device".into(),
+                    domain: "chatgpt.com".into(),
+                    path: "/".into(),
+                    host_only: true,
+                    secure: true,
+                    expires_at: None,
+                }),
+            _ => unreachable!(),
+        }
+        block_on(store.repository().compare_and_swap_data(&account, data)).unwrap();
+        let changed = store.account("acct_primary").unwrap();
+        assert_ne!(
+            changed.turn_state_binding_revision(),
+            account.turn_state_binding_revision(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
 fn response_cookie_rotation_returns_a_current_account_for_later_fenced_writes() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");

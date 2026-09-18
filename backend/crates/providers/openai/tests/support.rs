@@ -260,6 +260,7 @@ impl ProviderAccountStore for MemoryAccountStore {
             expected_revision,
             profile,
             preserve_profile,
+            preserve_turn_state_binding,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -290,6 +291,11 @@ impl ProviderAccountStore for MemoryAccountStore {
             |state| state.message.clone(),
         );
         let state_observed_at = account_state.as_ref().map(|state| state.observed_at);
+        let binding = if preserve_turn_state_binding && preserve_profile {
+            stored.account.turn_state_binding_revision()
+        } else {
+            next
+        };
         stored.account = rebuild_account(
             &stored.account,
             AccountRebuild {
@@ -308,7 +314,8 @@ impl ProviderAccountStore for MemoryAccountStore {
                     profile.plan_type,
                 )),
             },
-        );
+        )
+        .with_turn_state_binding_revision(binding);
         stored.credential = credential;
         stored.quota = None;
         if let Some(observed_at) = state_observed_at {
@@ -565,6 +572,10 @@ fn rebuild_account(current: &ProviderAccount, rebuild: AccountRebuild) -> Provid
         rebuild.last_error_message,
     )
     .with_scheduling(current.concurrency_limit(), current.weight())
+    .with_turn_state_injection_enabled(current.turn_state_injection_enabled())
+    .with_turn_state_binding_revision(current.turn_state_binding_revision())
+    .with_outbound_proxy(current.outbound_proxy().cloned())
+    .with_request_location(current.request_location().cloned())
     .with_refresh_schedule(rebuild.has_refresh_token, rebuild.next_refresh_at)
 }
 
