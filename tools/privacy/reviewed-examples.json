@@ -722,6 +722,22 @@
   {
     "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
     "rule": "gitleaks:generic-api-key",
+    "line": 157,
+    "file_sha256": "4492693163b9df8be00c1833a864b56c9407c17fc0d7ffb6a15184752e22ca05",
+    "line_sha256": "b694d43bcd4cf81f0a75c5b6e286b07b3f4936dc9e7e30592017b7b0b819b117",
+    "reason": "Invalid-secret test containing the standard illustrative UUID, not an actual TOTP secret."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "authenticated-url",
+    "line": 234,
+    "file_sha256": "4492693163b9df8be00c1833a864b56c9407c17fc0d7ffb6a15184752e22ca05",
+    "line_sha256": "47e73e43e21ddf5e79f265d16deb345c7d52a1cf04c0683c90e5d50b4e49aee3",
+    "reason": "Explicit synthetic proxy or local database fixture used by isolated tests, including URL rejection tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/relogin_worker_test.py",
+    "rule": "gitleaks:generic-api-key",
     "line": 188,
     "file_sha256": "7d6e8ba846519c40b86f2b84bca7c963a49468c38e9ec4eff439c47a1aff0363",
     "line_sha256": "b694d43bcd4cf81f0a75c5b6e286b07b3f4936dc9e7e30592017b7b0b819b117",
