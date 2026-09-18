@@ -31,7 +31,22 @@ async function main() {
                 data = { version: 'local-sample', buildType: 'test' }
                 break
               case '/api/admin/accounts': {
-                const items = [...accounts]
+                const items = accounts.map(account => ({ ...account }))
+                const stateModelCount = Number(process.env.QA_STATE_MODEL_COUNT || 0)
+                if (Number.isInteger(stateModelCount) && stateModelCount > 0 && stateModelCount <= 10) {
+                  const models = Array.from({ length: stateModelCount }, (_, index) => ({
+                    model: `model-${index + 1}`,
+                    refreshStatus: index === 1 ? 'refreshing' : 'ready',
+                    active: index === 1 ? null : { chars: 332, expiresAt: new Date(Date.now() + 40 * 60_000).toISOString() },
+                    standby: index === 1 ? null : { chars: 332, expiresAt: new Date(Date.now() + 45 * 60_000).toISOString() },
+                  }))
+                  items[0].turnStateInjectionEnabled = true
+                  items[0].turnState = {
+                    requiredModels: models.map(item => item.model),
+                    readyModels: models.filter(item => item.active).map(item => ({ model: item.model, expiresAt: item.active.expiresAt })),
+                    models,
+                  }
+                }
                 if (url.searchParams.get('sortBy') === 'reloginCount') {
                   const direction = url.searchParams.get('sortDirection') === 'asc' ? 1 : -1
                   items.sort((a, b) => direction * (a.reloginCount - b.reloginCount))

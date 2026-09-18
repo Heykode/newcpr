@@ -59,6 +59,23 @@
   the token's local capture clock. Existing pre-upgrade expiry is never extended.
 - Opaque values must not appear in Debug, ordinary logs or admin list responses.
 
+## Account-List Safe Projection
+
+- The authenticated account list may expose only per-model control metadata:
+  refresh status, active/standby presence, character count and local expiry.
+  Preserve the existing required/ready model fields for compatible clients.
+- Project a slot only when global/account policy, enabled status, model,
+  credential revision, plan length, issuance and local expiry all still match.
+  Invalid, expired or mismatched rows appear as missing slots; never expose the
+  opaque value, its prefix, preview, hash or any reversible derivative.
+- `readyModels` remains active-only scheduling readiness. The detailed model
+  list may include a valid standby and the current refresh status so the UI can
+  distinguish ready, standby refill and acquisition. Slot counts are display
+  metadata, not proof of upstream acceptance or future validity.
+- Keep configured model order from the runtime allowlist. PostgreSQL regression
+  must cover active-only and active-plus-standby projection together with the
+  existing policy, revision and plan fences.
+
 ## Request-Level Admin Diagnostics
 
 - The usage-log feature has explicit owner authorization to retain the full

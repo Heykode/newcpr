@@ -525,7 +525,10 @@ mod response {
             AccountDirectoryItem, ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution,
         },
     };
-    use gateway_api::admin::accounts::AccountUsageView;
+    use gateway_api::admin::accounts::{
+        AccountTurnStateModelStatusView, AccountTurnStateModelView, AccountTurnStateSlotView,
+        AccountTurnStateView, AccountUsageView,
+    };
     use gateway_api::admin::presenter::format_decimal_currency;
     use gateway_core::{
         account::{
@@ -538,6 +541,52 @@ mod response {
     use tower::ServiceExt as _;
 
     use super::super::{AdminTestFixture, AdminTestState};
+
+    #[test]
+    fn account_turn_state_projection_serializes_only_safe_slot_metadata() {
+        let value = serde_json::to_value(AccountTurnStateView {
+            required_models: vec!["model-a".to_owned()],
+            ready_models: vec![AccountTurnStateModelView {
+                model: "model-a".to_owned(),
+                expires_at: "2026-09-18T13:00:00+08:00".to_owned(),
+            }],
+            models: vec![AccountTurnStateModelStatusView {
+                model: "model-a".to_owned(),
+                refresh_status: "ready".to_owned(),
+                active: Some(AccountTurnStateSlotView {
+                    chars: 332,
+                    expires_at: "2026-09-18T13:00:00+08:00".to_owned(),
+                }),
+                standby: Some(AccountTurnStateSlotView {
+                    chars: 332,
+                    expires_at: "2026-09-18T13:05:00+08:00".to_owned(),
+                }),
+            }],
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "requiredModels": ["model-a"],
+                "readyModels": [{
+                    "model": "model-a",
+                    "expiresAt": "2026-09-18T13:00:00+08:00"
+                }],
+                "models": [{
+                    "model": "model-a",
+                    "refreshStatus": "ready",
+                    "active": {
+                        "chars": 332,
+                        "expiresAt": "2026-09-18T13:00:00+08:00"
+                    },
+                    "standby": {
+                        "chars": 332,
+                        "expiresAt": "2026-09-18T13:05:00+08:00"
+                    }
+                }]
+            })
+        );
+    }
 
     #[tokio::test]
     async fn connection_test_get_and_post_require_admin_authentication() {

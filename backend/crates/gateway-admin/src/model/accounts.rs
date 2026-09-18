@@ -89,6 +89,21 @@ pub enum AccountGroupFilter {
 pub struct AccountTurnStateStatus {
     pub required_models: Vec<String>,
     pub ready_models: Vec<(String, DateTime<Utc>)>,
+    pub models: Vec<AccountTurnStateModelStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTurnStateModelStatus {
+    pub model: String,
+    pub refresh_status: String,
+    pub active: Option<AccountTurnStateSlotStatus>,
+    pub standby: Option<AccountTurnStateSlotStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTurnStateSlotStatus {
+    pub chars: u16,
+    pub expires_at: DateTime<Utc>,
 }
 
 /// 账号公共存储投影；Provider 专属字段不进入此结构。

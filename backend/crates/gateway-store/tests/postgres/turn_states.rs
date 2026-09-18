@@ -69,6 +69,34 @@ async fn admin_readiness_and_cancel_cleanup_are_model_revision_and_policy_fenced
     let statuses = admin.load_turn_state_status(&ids).await.unwrap();
     assert_eq!(statuses[id.as_str()].ready_models.len(), 1);
     assert_eq!(statuses[id.as_str()].ready_models[0].0, "model-a");
+    let model_status = statuses[id.as_str()]
+        .models
+        .iter()
+        .find(|status| status.model == "model-a")
+        .unwrap();
+    assert_eq!(model_status.refresh_status, "refreshing");
+    assert_eq!(model_status.active.as_ref().unwrap().chars, 292);
+    assert!(model_status.standby.is_none());
+    store
+        .put_candidate(candidate(
+            &id,
+            &model,
+            &"b".repeat(292),
+            SystemTime::now(),
+            ProviderTurnStateSlot::Standby,
+            292,
+        ))
+        .await
+        .unwrap();
+    let statuses = admin.load_turn_state_status(&ids).await.unwrap();
+    let model_status = statuses[id.as_str()]
+        .models
+        .iter()
+        .find(|status| status.model == "model-a")
+        .unwrap();
+    assert_eq!(model_status.refresh_status, "ready");
+    assert_eq!(model_status.active.as_ref().unwrap().chars, 292);
+    assert_eq!(model_status.standby.as_ref().unwrap().chars, 292);
     store
         .mark_refresh_status(
             &id,
