@@ -197,6 +197,7 @@ pub enum ProviderTurnStateSlot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderTurnStateCandidate {
     pub account_id: ProviderAccountId,
+    /// Account State binding generation, not the credential-material write CAS.
     pub expected_revision: CredentialRevision,
     /// Fence passive responses to their injected version; independent probes use None.
     pub expected_active_version: Option<u64>,
@@ -230,6 +231,7 @@ pub struct ProviderTurnStatePromotion {
     pub minimum_remaining: Duration,
 }
 
+/// Every expected_revision here is the account's State binding generation.
 pub trait ProviderTurnStatePort: Send + Sync {
     /// Promote a still-valid standby atomically without restarting its capture clock.
     fn promote_standby(

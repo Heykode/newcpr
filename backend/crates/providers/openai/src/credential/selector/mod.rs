@@ -1231,6 +1231,7 @@ impl CodexCredentialSelector {
         }
         let mut data = self.repository.load_complete_data(account).await?;
         let cookies = data.cookies_mut();
+        let previous = cookies.clone();
         for input in parsed.inputs {
             let scope = self.cookie_policy.validate_capture(
                 &input.response_origin,
@@ -1238,13 +1239,18 @@ impl CodexCredentialSelector {
                 &input.name,
                 &input.path,
             )?;
+            let position = cookies.iter().position(|cookie| {
+                cookie.name == input.name
+                    && cookie.domain == scope.domain
+                    && cookie.path == input.path
+            });
             cookies.retain(|cookie| {
                 !(cookie.name == input.name
                     && cookie.domain == scope.domain
                     && cookie.path == input.path)
             });
             if !input.delete {
-                cookies.push(CodexCookie {
+                let cookie = CodexCookie {
                     name: input.name,
                     value: input.value.expose_secret().to_owned(),
                     domain: scope.domain,
@@ -1252,8 +1258,15 @@ impl CodexCredentialSelector {
                     host_only: scope.host_only,
                     secure: input.secure,
                     expires_at: input.expires_at,
-                });
+                };
+                cookies.insert(position.unwrap_or(cookies.len()), cookie);
             }
+        }
+        if *cookies == previous {
+            return Ok(CodexCookieCaptureOutcome {
+                credential_revision: None,
+                rejected: parsed.rejected,
+            });
         }
         let revision = self.repository.compare_and_swap_data(account, data).await?;
         Ok(CodexCookieCaptureOutcome {

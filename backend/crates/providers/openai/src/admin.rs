@@ -768,6 +768,7 @@ fn prepared_rotation(
         expected_revision,
         profile: credential_profile,
         preserve_profile,
+        preserve_turn_state_binding: _,
         credential,
         has_refresh_token,
         access_token_expires_at,

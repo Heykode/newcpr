@@ -121,7 +121,7 @@ pub(crate) async fn load_admin_account_page(
          select (select request_location_json from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id) as request_location_json,
                 a.outbound_proxy_url, a.id, a.provider_kind, a.name, a.email, a.upstream_user_id,
                 a.upstream_account_id, a.plan_type, a.authentication_kind,
-                a.credential_revision, a.relogin_count, a.last_relogin_at,
+                a.credential_revision, a.turn_state_binding_revision, a.relogin_count, a.last_relogin_at,
                 a.has_refresh_token, a.access_token_expires_at,
                 a.next_refresh_at, a.enabled, a.turn_state_injection_enabled,
                 a.concurrency_limit, a.weight,

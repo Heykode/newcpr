@@ -157,6 +157,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             expected_revision,
             profile,
             preserve_profile,
+            preserve_turn_state_binding,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -215,6 +216,8 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                  plan_type = case when $14 then plan_type else $5 end,
                  provider_credentials_json = $6,
                  credential_revision = credential_revision + 1,
+                 turn_state_binding_revision = case when $15 and $14
+                   then turn_state_binding_revision else credential_revision + 1 end,
                  has_refresh_token = $7, access_token_expires_at = $8,
                  next_refresh_at = $9,
                  credential_state = case
@@ -247,6 +250,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(error_reason)
         .bind(message)
         .bind(preserve_profile)
+        .bind(preserve_turn_state_binding)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;

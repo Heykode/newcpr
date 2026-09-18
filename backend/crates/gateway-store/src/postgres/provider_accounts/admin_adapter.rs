@@ -418,33 +418,33 @@ impl AccountStore for PgAdminAccountStore {
     {
         let rows = sqlx::query_as::<_, AccountTurnStateStatusRow>(
             "select a.id as account_id, m.model,
-                case when s.credential_revision = a.credential_revision
+                case when s.credential_revision = a.turn_state_binding_revision
                   and s.normal_length = case when lower(trim(a.plan_type)) in
                     ('team','self_serve_business_prolite','self_serve_business_usage_based')
                     then 332 else 292 end
                 then s.refresh_status else null end as refresh_status,
-                case when s.credential_revision = a.credential_revision
+                case when s.credential_revision = a.turn_state_binding_revision
                   and s.normal_length = case when lower(trim(a.plan_type)) in
                     ('team','self_serve_business_prolite','self_serve_business_usage_based')
                     then 332 else 292 end
                   and length(s.active_state) = s.normal_length
                   and s.active_issued_at <= now() and s.active_expires_at > now()
                 then s.normal_length else null end as active_chars,
-                case when s.credential_revision = a.credential_revision
+                case when s.credential_revision = a.turn_state_binding_revision
                   and s.normal_length = case when lower(trim(a.plan_type)) in
                     ('team','self_serve_business_prolite','self_serve_business_usage_based')
                     then 332 else 292 end
                   and length(s.active_state) = s.normal_length
                   and s.active_issued_at <= now() and s.active_expires_at > now()
                 then s.active_expires_at else null end as active_expires_at,
-                case when s.credential_revision = a.credential_revision
+                case when s.credential_revision = a.turn_state_binding_revision
                   and s.normal_length = case when lower(trim(a.plan_type)) in
                     ('team','self_serve_business_prolite','self_serve_business_usage_based')
                     then 332 else 292 end
                   and length(s.standby_state) = s.normal_length
                   and s.standby_issued_at <= now() and s.standby_expires_at > now()
                 then s.normal_length else null end as standby_chars,
-                case when s.credential_revision = a.credential_revision
+                case when s.credential_revision = a.turn_state_binding_revision
                   and s.normal_length = case when lower(trim(a.plan_type)) in
                     ('team','self_serve_business_prolite','self_serve_business_usage_based')
                     then 332 else 292 end

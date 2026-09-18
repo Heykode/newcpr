@@ -675,6 +675,7 @@ pub struct ProviderAccount {
     plan_type: Option<String>,
     authentication_kind: String,
     revision: CredentialRevision,
+    turn_state_binding_revision: CredentialRevision,
     enabled: bool,
     turn_state_injection_enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
@@ -712,6 +713,7 @@ impl ProviderAccount {
             plan_type: None,
             authentication_kind,
             revision,
+            turn_state_binding_revision: revision,
             enabled: true,
             turn_state_injection_enabled: false,
             concurrency_limit: None,
@@ -788,6 +790,18 @@ impl ProviderAccount {
     pub const fn with_turn_state_injection_enabled(mut self, enabled: bool) -> Self {
         self.turn_state_injection_enabled = enabled;
         self
+    }
+
+    /// State ownership is independent of routine credential-material saves.
+    #[must_use]
+    pub const fn with_turn_state_binding_revision(mut self, revision: CredentialRevision) -> Self {
+        self.turn_state_binding_revision = revision;
+        self
+    }
+
+    #[must_use]
+    pub const fn turn_state_binding_revision(&self) -> CredentialRevision {
+        self.turn_state_binding_revision
     }
 
     #[must_use]
@@ -1127,6 +1141,7 @@ pub struct CredentialCasUpdateParts {
     pub expected_revision: CredentialRevision,
     pub profile: ProviderAccountUpdate,
     pub preserve_profile: bool,
+    pub preserve_turn_state_binding: bool,
     pub credential: PlaintextCredential,
     pub has_refresh_token: bool,
     pub access_token_expires_at: Option<SystemTime>,
@@ -1141,6 +1156,7 @@ pub struct CredentialCasUpdate {
     expected_revision: CredentialRevision,
     profile: ProviderAccountUpdate,
     preserve_profile: bool,
+    preserve_turn_state_binding: bool,
     credential: PlaintextCredential,
     has_refresh_token: bool,
     access_token_expires_at: Option<SystemTime>,
@@ -1156,6 +1172,10 @@ impl fmt::Debug for CredentialCasUpdate {
             .field("expected_revision", &self.expected_revision)
             .field("profile", &self.profile)
             .field("preserve_profile", &self.preserve_profile)
+            .field(
+                "preserve_turn_state_binding",
+                &self.preserve_turn_state_binding,
+            )
             .field("credential", &self.credential)
             .field("has_refresh_token", &self.has_refresh_token)
             .field("access_token_expires_at", &self.access_token_expires_at)
@@ -1191,6 +1211,7 @@ impl CredentialCasUpdate {
             expected_revision,
             profile,
             preserve_profile: false,
+            preserve_turn_state_binding: false,
             credential,
             has_refresh_token,
             access_token_expires_at,
@@ -1203,6 +1224,14 @@ impl CredentialCasUpdate {
     #[must_use]
     pub const fn preserving_profile(mut self) -> Self {
         self.preserve_profile = true;
+        self
+    }
+
+    /// Only a provider-verified non-identity material update may use this.
+    /// The ordinary credential CAS and device checks remain mandatory.
+    #[must_use]
+    pub const fn preserving_turn_state_binding(mut self) -> Self {
+        self.preserve_turn_state_binding = true;
         self
     }
 
@@ -1272,6 +1301,7 @@ impl CredentialCasUpdate {
             expected_revision: self.expected_revision,
             profile: self.profile,
             preserve_profile: self.preserve_profile,
+            preserve_turn_state_binding: self.preserve_turn_state_binding,
             credential: self.credential,
             has_refresh_token: self.has_refresh_token,
             access_token_expires_at: self.access_token_expires_at,

@@ -241,7 +241,8 @@ impl CodexTurnStateManager {
         }
         let record = tokio::time::timeout(
             STATE_STORE_TIMEOUT,
-            self.store.read(account.id(), model, account.revision()),
+            self.store
+                .read(account.id(), model, account.turn_state_binding_revision()),
         )
         .await
         .ok()?
@@ -298,7 +299,8 @@ impl CodexTurnStateManager {
     ) -> Option<ProviderTurnStateRecord> {
         tokio::time::timeout(
             STATE_STORE_TIMEOUT,
-            self.store.read(account.id(), model, account.revision()),
+            self.store
+                .read(account.id(), model, account.turn_state_binding_revision()),
         )
         .await
         .ok()?
@@ -319,7 +321,7 @@ impl CodexTurnStateManager {
             self.store.mark_refresh_status(
                 account.id(),
                 model,
-                account.revision(),
+                account.turn_state_binding_revision(),
                 normal_length,
                 status,
                 observed_at,
@@ -351,7 +353,7 @@ impl CodexTurnStateManager {
             CodexTurnStateShape::Normal => {
                 TurnStateObservation::Candidate(ProviderTurnStateCandidate {
                     account_id: account.id().clone(),
-                    expected_revision: account.revision(),
+                    expected_revision: account.turn_state_binding_revision(),
                     expected_active_version: injected_version,
                     upstream_model: requested_model.clone(),
                     normal_length,
@@ -370,7 +372,7 @@ impl CodexTurnStateManager {
                 };
                 TurnStateObservation::Anomaly(ProviderTurnStateAnomaly {
                     account_id: account.id().clone(),
-                    expected_revision: account.revision(),
+                    expected_revision: account.turn_state_binding_revision(),
                     expected_active_version,
                     upstream_model: requested_model.clone(),
                     normal_length,
@@ -410,7 +412,7 @@ impl CodexTurnStateManager {
         }
         let observation = TurnStateObservation::Anomaly(ProviderTurnStateAnomaly {
             account_id: account.id().clone(),
-            expected_revision: account.revision(),
+            expected_revision: account.turn_state_binding_revision(),
             expected_active_version,
             upstream_model: model.clone(),
             normal_length: expected_normal_length(account.plan_type()),
@@ -508,7 +510,7 @@ impl CodexTurnStateManager {
             STATE_STORE_TIMEOUT,
             self.store.put_candidate(ProviderTurnStateCandidate {
                 account_id: account.id().clone(),
-                expected_revision: account.revision(),
+                expected_revision: account.turn_state_binding_revision(),
                 expected_active_version: None,
                 upstream_model: model,
                 normal_length,
@@ -709,19 +711,29 @@ impl CodexTurnStateMaintenanceService {
             () = self.wait_until_invalid(&account, model) => {},
         }
         // A batch-boundary check can observe cancellation before the watcher does.
-        // The store only closes a still-refreshing row for this credential revision.
+        // The store only closes a still-refreshing row for this binding generation.
         let _ = tokio::time::timeout(
             STATE_STORE_TIMEOUT,
-            self.manager
-                .store
-                .cancel_refresh(account.id(), model, account.revision()),
+            self.manager.store.cancel_refresh(
+                account.id(),
+                model,
+                account.turn_state_binding_revision(),
+            ),
         )
         .await;
     }
 
     async fn target_current(&self, account: &ProviderAccount, model: &UpstreamModelId) -> bool {
+        self.current_target(account, model).await.is_some()
+    }
+
+    async fn current_target(
+        &self,
+        account: &ProviderAccount,
+        model: &UpstreamModelId,
+    ) -> Option<ProviderAccount> {
         if !self.manager.feature_enabled_for(account, model) {
-            return false;
+            return None;
         }
         tokio::time::timeout(
             STATE_STORE_TIMEOUT,
@@ -731,10 +743,10 @@ impl CodexTurnStateMaintenanceService {
         .ok()
         .and_then(Result::ok)
         .flatten()
-        .is_some_and(|current| {
-            current.revision() == account.revision()
+        .filter(|current| {
+            current.turn_state_binding_revision() == account.turn_state_binding_revision()
                 && current.plan_type() == account.plan_type()
-                && self.manager.feature_enabled_for(&current, model)
+                && self.manager.feature_enabled_for(current, model)
         })
     }
 
@@ -755,17 +767,27 @@ impl CodexTurnStateMaintenanceService {
         mut force_standby: bool,
     ) {
         let normal_length = expected_normal_length(account.plan_type());
-        let runtime = match self.repository.load_runtime_credential(account).await {
-            Ok(runtime) => Arc::new(runtime),
-            Err(_) => return,
-        };
+        let mut runtime = None;
         let mut sources = VecDeque::new();
         let mut previous = None;
         let mut attempted = 0_u64;
         let mut failures = HashMap::<&'static str, usize>::new();
         loop {
-            if !self.target_current(account, model).await {
+            let Some(current_account) = self.current_target(account, model).await else {
                 return;
+            };
+            if runtime
+                .as_ref()
+                .is_none_or(|(revision, _)| *revision != current_account.revision())
+            {
+                let Ok(current_runtime) = self
+                    .repository
+                    .load_runtime_credential(&current_account)
+                    .await
+                else {
+                    return;
+                };
+                runtime = Some((current_account.revision(), Arc::new(current_runtime)));
             }
             let now = SystemTime::now();
             let record = self.manager.record(account, model).await;
@@ -790,7 +812,7 @@ impl CodexTurnStateMaintenanceService {
                         .store
                         .promote_standby(ProviderTurnStatePromotion {
                             account_id: account.id().clone(),
-                            expected_revision: account.revision(),
+                            expected_revision: account.turn_state_binding_revision(),
                             expected_active_version: version,
                             upstream_model: model.clone(),
                             normal_length,
@@ -845,13 +867,19 @@ impl CodexTurnStateMaintenanceService {
                 };
                 batch.push(source);
             }
-            let runtime = &runtime;
+            let Some((_, runtime)) = &runtime else { return };
+            let probe_account = &current_account;
             let results = stream::iter(batch.into_iter().map(|source| async move {
                 // Transport waiting does not spend the per-request timeout.
                 let _permit = egress.acquire_probe_connection().await?;
                 tokio::time::timeout(
                     PROBE_TIMEOUT,
-                    self.probe(account.clone(), model.clone(), Arc::clone(runtime), source),
+                    self.probe(
+                        probe_account.clone(),
+                        model.clone(),
+                        Arc::clone(runtime),
+                        source,
+                    ),
                 )
                 .await
                 .unwrap_or(Err("timeout"))
@@ -1562,7 +1590,10 @@ mod tests {
             panic!("expected version-fenced anomaly")
         };
         assert_eq!(anomaly.expected_active_version, 3);
-        assert_eq!(anomaly.expected_revision, account.revision());
+        assert_eq!(
+            anomaly.expected_revision,
+            account.turn_state_binding_revision()
+        );
     }
 
     #[test]

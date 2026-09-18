@@ -648,6 +648,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             allows_account_state_mutation,
         };
         let mut active_account = lease.account().clone();
+        // Observations belong to the credentials actually sent, even if the
+        // response subsequently changes the persisted binding via Set-Cookie.
+        let state_observation_account = lease.account();
         let cookie_header = build_cookie_header(lease.cookies())?;
         let authorization = lease
             .authentication()
@@ -725,7 +728,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     );
                 }
                 if let Some(manager) = turn_states.as_ref() {
-                    manager.observe_failure(&active_account, &upstream_model,
+                    manager.observe_failure(state_observation_account, &upstream_model,
                         request.managed_turn_state_version, None, &failure.error);
                 }
                 if let Some(observation) = attach_turn_state_snapshot(
@@ -932,7 +935,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         .await;
                     }
                     if let Some(manager) = turn_states.as_ref() {
-                        manager.observe_failure(&active_account, &upstream_model,
+                        manager.observe_failure(state_observation_account, &upstream_model,
                             request.managed_turn_state_version, decoder.response_model(), &failure.error);
                     }
                     apply_failure(&failure_context, &active_account, &failure)
@@ -1014,7 +1017,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 && let Some((value, observed_at)) = managed_state_observation.take()
             {
                 manager.observe(
-                    &active_account,
+                    state_observation_account,
                     &upstream_model,
                     request.managed_turn_state_version,
                     decoder.response_model(),
@@ -1040,7 +1043,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             }
             if let Some((failure, _)) = terminal_failure.as_ref() {
                 if let Some(manager) = turn_states.as_ref() {
-                    manager.observe_failure(&active_account, &upstream_model,
+                    manager.observe_failure(state_observation_account, &upstream_model,
                         request.managed_turn_state_version, decoder.response_model(), &failure.error);
                 }
                 apply_failure(&failure_context, &active_account, failure)
@@ -1181,7 +1184,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             && let Some((value, observed_at)) = managed_state_observation.take()
         {
             manager.observe(
-                &active_account,
+                state_observation_account,
                 &upstream_model,
                 request.managed_turn_state_version,
                 decoder.response_model(),
@@ -1192,7 +1195,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         if let Some((failure, _)) = terminal_failure.as_ref()
             && let Some(manager) = turn_states.as_ref()
         {
-            manager.observe_failure(&active_account, &upstream_model,
+            manager.observe_failure(state_observation_account, &upstream_model,
                 request.managed_turn_state_version, decoder.response_model(), &failure.error);
         }
         let terminal_changed = completed

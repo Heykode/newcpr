@@ -131,7 +131,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             "select
                     (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
-                    upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
+                    upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
@@ -269,6 +269,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             "update provider_accounts
              set provider_credentials_json = $3,
                  credential_revision = credential_revision + 1,
+                 turn_state_binding_revision = credential_revision + 1,
                  has_refresh_token = $4,
                  access_token_expires_at = $5,
                  next_refresh_at = $6,
@@ -976,6 +977,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            outbound_proxy_url = coalesce(excluded.outbound_proxy_url, provider_accounts.outbound_proxy_url),
            outbound_proxy_id = coalesce(excluded.outbound_proxy_id, provider_accounts.outbound_proxy_id),
            credential_revision = provider_accounts.credential_revision + 1,
+           turn_state_binding_revision = provider_accounts.credential_revision + 1,
            has_refresh_token = excluded.has_refresh_token,
            access_token_expires_at = excluded.access_token_expires_at,
            next_refresh_at = excluded.next_refresh_at,
@@ -1056,6 +1058,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
              plan_type = case when $14 then plan_type else $6 end,
              provider_credentials_json = $7,
              credential_revision = credential_revision + 1,
+             turn_state_binding_revision = credential_revision + 1,
              has_refresh_token = $8,
              access_token_expires_at = $9,
              next_refresh_at = $10,
