@@ -56,7 +56,7 @@ const percentage = computed(() => props.snapshot?.usedSlots != null && props.sna
           </p>
           <p>7D 额度估算覆盖 {{ snapshot?.estimatedAccounts ?? 0 }} / {{ snapshot?.eligibleAccounts ?? 0 }} 个可调度账号；优先按自身本轮消费与已用比例计算。新号无自身估值时，参考同 Provider、套餐及窗口最新最多 3 个有效账号的平均总额度，再按自身已用比例计算剩余。不包含未来重置补充，短期限额仍可能限制使用。</p>
           <p v-if="snapshot?.remainingStatus === 'partial'">
-            部分账号或费用缺失，当前仅为已知部分，不计算可支撑时间。
+            部分可调度账号暂无有效额度估值，当前仅汇总已可计算账号。
           </p>
           <p v-if="snapshot?.lowSample">
             样本较少，估算可能波动。
