@@ -1309,6 +1309,7 @@ mod response {
         let now = Utc::now();
         let quota = QuotaState::allowed(now.into());
         AccountDirectoryItem {
+            turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
                 id: "acct_cost".to_owned(),

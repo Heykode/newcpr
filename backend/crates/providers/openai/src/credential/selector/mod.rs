@@ -105,6 +105,7 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
 }
 
 struct CredentialSelectionInput<'a> {
+    upstream_model: Option<&'a str>,
     request_url: &'a Url,
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
@@ -128,6 +129,7 @@ pub struct CodexCredentialSelector {
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
     account_concurrency: AccountConcurrencyHandle,
+    turn_states: Option<crate::provider::CodexTurnStateManager>,
 }
 
 enum SessionAffinityLookup {
@@ -284,6 +286,7 @@ impl CodexCredentialSelector {
             risk_recovery: Mutex::new(HashMap::new()),
             account_feedback,
             account_concurrency: AccountConcurrencyHandle::default(),
+            turn_states: None,
         }
     }
 
@@ -294,11 +297,58 @@ impl CodexCredentialSelector {
         self
     }
 
+    pub(crate) fn with_turn_states(
+        mut self,
+        manager: crate::provider::CodexTurnStateManager,
+    ) -> Self {
+        self.turn_states = Some(manager);
+        self
+    }
+
+    async fn state_allows(
+        &self,
+        account: &ProviderAccount,
+        request: &CredentialSelectionInput<'_>,
+    ) -> bool {
+        if request.attempt.continuation_attempt() == ContinuationAttempt::Native
+            && (request.attempt.required_account() == Some(account.id())
+                || request
+                    .attempt
+                    .continuation()
+                    .and_then(gateway_core::engine::continuation::ContinuationBinding::pinned)
+                    .is_some_and(|pin| pin.account() == account.id()))
+        {
+            return true;
+        }
+        let (Some(manager), Some(model)) = (&self.turn_states, request.upstream_model) else {
+            return true;
+        };
+        manager.allows_new_request(account, model).await
+    }
+
+    async fn state_ready_accounts(
+        &self,
+        accounts: Vec<ProviderAccount>,
+        request: &CredentialSelectionInput<'_>,
+    ) -> Vec<ProviderAccount> {
+        use futures::StreamExt as _;
+        futures::stream::iter(accounts.into_iter().map(|account| async move {
+            self.state_allows(&account, request)
+                .await
+                .then_some(account)
+        }))
+        .buffered(16)
+        .filter_map(|account| async move { account })
+        .collect()
+        .await
+    }
+
     pub async fn select(
         &self,
         request: &SelectCodexCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
+            upstream_model: Some(request.upstream_model),
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
@@ -314,6 +364,7 @@ impl CodexCredentialSelector {
         session_affinity_observation: Option<&CodexSessionAffinity>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
+            upstream_model: Some(request.upstream_model),
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
@@ -331,6 +382,7 @@ impl CodexCredentialSelector {
         request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
+            upstream_model: None,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity.map(CodexSessionAffinity::key),
@@ -375,6 +427,7 @@ impl CodexCredentialSelector {
                             .is_some_and(|scope| scope.allows(account.id())))
             })
             .collect::<Vec<_>>();
+        let accounts = self.state_ready_accounts(accounts, request).await;
         if !diagnostic {
             self.quota.prepare_scheduling(&accounts).await;
         }
@@ -542,6 +595,10 @@ impl CodexCredentialSelector {
             // disabled that account. Ordinary scheduling keeps the enabled
             // guard in case the account changes after candidate loading.
             let allows_account_state_mutation = diagnostic || account.enabled();
+            if !self.state_allows(&account, request).await {
+                excluded.insert(account.id().clone());
+                continue;
+            }
             match self
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(

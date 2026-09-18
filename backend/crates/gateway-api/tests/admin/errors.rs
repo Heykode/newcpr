@@ -473,6 +473,7 @@ mod provider {
             last_error_message: None,
         };
         AccountDirectoryItem {
+            turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
                 id: "acct_error_test".to_owned(),

@@ -414,12 +414,16 @@ must not resize the identity cell, expose secret material or imply that cached c
 or the pool account are currently healthy. Relogin-list read failures retain the last safe
 projection and do not fail the account directory.
 
-The identity avatar uses a gold inset ring and bottom-right shield only when
-`provider === 'openai' && turnStateInjectionEnabled === true`. This is the saved
-account opt-in, not proof of an active injection, valid token or healthy account.
-Its tooltip names the global switch, model list and usable State as additional
-conditions. Do not add global-settings reads, polling or upstream probes to render
-the mark. Missing fields and non-OpenAI providers retain the original identity tone.
+The identity avatar uses an inset ring and bottom-right shield only when
+`provider === 'openai' && turnStateInjectionEnabled === true`. Gold means opted in
+without a ready model. Green requires an unexpired model in the authenticated
+account list's `turnState.readyModels`; its tooltip names both ready and pending
+models. Partial readiness must not claim that every model can be scheduled.
+The server projection checks global/account policy, enabled status, model list,
+credential revision, plan length, issuance and expiry without exposing raw State.
+Use the shared UI clock to age the projection, not a per-row timer or probe.
+Missing projection or global-off never renders green. Missing opt-in fields and
+non-OpenAI providers retain the original identity tone.
 Keep the provider icon, fixed 36/40px avatar, separate top-left 2FA badge and
 `data-swipe-select-handle` behavior. The existing mutation/list refresh supplies
 updates; failed mutations must not invent an enabled mark.

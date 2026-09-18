@@ -5,11 +5,14 @@
 - The global policy, OpenAI account switch and canonical upstream model allowlist
   must all match. Defaults are disabled globally and per account.
 - The provider owns parsing and injection; the store owns atomic account/model
-  records. Do not involve the selector, affinity seeds, UA/TLS, installation IDs,
-  cookies or ordinary IPv6 selection.
+  records. Opted-in new-chain selection requires a valid active for the requested
+  canonical model, in ordinary selection and capacity-wait reloads. Do not change
+  affinity seeds, UA/TLS, installation IDs, cookies or ordinary IPv6 selection.
 - Preserve client-turn state and exact continuations. Only an eligible new chain
   without existing turn state receives managed state after account scoping.
-- A missing/unavailable record falls back to the established request behavior.
+- A missing/unavailable record excludes the opted-in account/model from new chains
+  and queues acquisition. Disabled policy/account switches and excluded models retain
+  ordinary behavior. Exact native owners retain existing continuations.
   Foreground lookup has a one-second upper bound. Do not introduce a stale local
   active-state cache that hides cross-process promotion.
 
@@ -37,7 +40,7 @@
   credential cannot inherit the previous credential's active or standby.
 - Degraded observations apply only to the managed version actually injected.
   Late rejection of an older version cannot rotate the current active. If no
-  valid standby exists, clear the rejected active and continue uninjected.
+  valid standby exists, clear the rejected active and block new chains until acquisition.
 - Normal passive observations carry the same injected-version fence. A late
   normal echo must not restore a rejected active or undo standby promotion.
   Coalescing prefers newer credential/version observations, then rejection over
@@ -86,7 +89,8 @@
   pools refuse new chains. Return/maintenance closes sockets without a response
   owner, while exact owners remain available under normal lifetime/capacity rules.
 - Recheck expiry after opening/capacity waits, before sending the first business
-  payload. Discard the unsent opening and strip only managed state on expiry.
+  payload. Discard the unsent opening and return a local NotSent readiness failure
+  on expiry or retirement; never silently send a managed new chain uninjected.
   Never retry an already-sent payload as a side effect of state refresh.
 
 ## Maintenance Isolation
@@ -94,16 +98,24 @@
 - The scheduled leader cycle discovers targets; a separately supervised daemon
   drains a bounded, coalescing FIFO. Discovery resumes fairly after saturation.
   Passive active replacement wakes acquisition without waiting for discovery.
-- One acquisition task runs per replica, so account/model tasks never overlap
-  within that replica. Batch sizes are 1, 10, 20, ..., capped at 100. Active and
-  standby share a 500-source budget; every allocated source is unique per task.
-- Read business in-flight signals only. Never acquire business scheduling
-  leases, advance rotation, write affinity or update business account feedback.
-  Busy accounts yield this discovery opportunity.
-- Whole tasks are bounded to ten minutes and individual probes to thirty seconds.
+- Up to 32 account/model tasks run concurrently per replica. A key never overlaps
+  itself; pending followups stay coalesced. A shared 100-probe semaphore bounds
+  transport resources without sharing per-key acquisition budgets.
+- Each active or standby acquisition has its own 500-attempt budget. Batch sizes
+  are 1, 10, 20, ..., capped at 100, with the last batch truncated to the remainder.
+  A smaller IPv6 pool is cycled rather than silently shortening the budget. Only
+  configured enabled addresses are used; 500 globally unique addresses cannot be
+  promised when fewer are configured.
+- Never read/acquire business scheduling leases, advance rotation, write affinity
+  or update business account feedback. Business load cannot starve maintenance.
+- Individual probes are bounded to thirty seconds, excluding semaphore waiting.
+  There is no whole-task ten-minute cutoff. HTTP errors, missing states and unusable
+  candidates continue until success or 500 attempts.
   Poll account/revision/policy every second and recheck before each batch and
   persistence. Switch disable, model removal or credential replacement cancels
-  outstanding probes. Store unavailability prevents starting collection.
+  outstanding probes. Cancellation performs revision-fenced status cleanup even
+  after opt-out; it cannot finish a newer credential's task. Store unavailability
+  prevents starting collection.
 - Stop a batch at the first accepted fresh state and cancel remaining probes.
   A repeated active/standby is not a new acquisition. Require over ten minutes
   of remaining lifetime for active and over thirty minutes for standby.

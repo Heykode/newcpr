@@ -390,6 +390,49 @@ impl PgAdminAccountStore {
 
 #[async_trait]
 impl AccountStore for PgAdminAccountStore {
+    async fn load_turn_state_status(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountTurnStateStatus>>
+    {
+        let rows = sqlx::query_as::<_, (String, String, Option<chrono::DateTime<Utc>>)>(
+            "select a.id, m.model,
+                case when s.credential_revision = a.credential_revision
+                  and s.normal_length = case when lower(trim(a.plan_type)) in
+                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
+                    then 332 else 292 end
+                  and length(s.active_state) = s.normal_length
+                  and s.active_issued_at <= now() and s.active_expires_at > now()
+                then s.active_expires_at else null end
+             from provider_accounts a cross join runtime_settings r
+             cross join lateral unnest(r.turn_state_models) m(model)
+             left join provider_turn_states s on s.provider_account_id = a.id
+               and s.upstream_model = m.model
+             where a.id = any($1) and a.provider_kind = 'openai'
+               and a.enabled and a.turn_state_injection_enabled and r.turn_state_injection_enabled
+             order by a.id, m.model",
+        )
+        .bind(account_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| {
+            admin_store_error(
+                ENTITY,
+                postgres_unavailable("load account turn state status"),
+            )
+        })?;
+        let mut statuses =
+            BTreeMap::<String, gateway_admin::model::accounts::AccountTurnStateStatus>::new();
+        for (id, model, expires_at) in rows {
+            let status = statuses.entry(id).or_default();
+            status.required_models.push(model.clone());
+            if let Some(expires_at) = expires_at {
+                status.ready_models.push((model, expires_at));
+            }
+        }
+        Ok(statuses)
+    }
+
     async fn list_accounts(
         &self,
         query: AdminAccountListQuery,

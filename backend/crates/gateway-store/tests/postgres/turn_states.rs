@@ -33,6 +33,97 @@ async fn enable(database: &TestDatabase) {
         .unwrap();
 }
 
+#[tokio::test]
+async fn admin_readiness_and_cancel_cleanup_are_model_revision_and_policy_fenced() {
+    use gateway_admin::ports::store::AccountStore;
+    let Some(database) = TestDatabase::create("turn_state_readiness").await else {
+        return;
+    };
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    accounts
+        .insert_provider_account(account("acct_ready", "ready-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let admin = super::admin_account_store(&database.pool);
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_ready").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let ids = [id.as_str().to_owned()];
+    assert!(
+        admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()]
+            .ready_models
+            .is_empty()
+    );
+    store
+        .put_candidate(candidate(
+            &id,
+            &model,
+            &"a".repeat(292),
+            SystemTime::now(),
+            ProviderTurnStateSlot::Active,
+            292,
+        ))
+        .await
+        .unwrap();
+    let statuses = admin.load_turn_state_status(&ids).await.unwrap();
+    assert_eq!(statuses[id.as_str()].ready_models.len(), 1);
+    assert_eq!(statuses[id.as_str()].ready_models[0].0, "model-a");
+    store
+        .mark_refresh_status(
+            &id,
+            &model,
+            revision(),
+            292,
+            ProviderTurnStateRefreshStatus::Refreshing,
+            SystemTime::now(),
+        )
+        .await
+        .unwrap();
+    sqlx::query("update runtime_settings set turn_state_injection_enabled=false")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    store.cancel_refresh(&id, &model, revision()).await.unwrap();
+    assert!(admin.load_turn_state_status(&ids).await.unwrap().is_empty());
+    let status: String = sqlx::query_scalar("select refresh_status from provider_turn_states")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "failed");
+    enable(&database).await;
+    sqlx::query("update provider_accounts set credential_revision=2")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(
+        admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()]
+            .ready_models
+            .is_empty()
+    );
+    store
+        .mark_refresh_status(
+            &id,
+            &model,
+            CredentialRevision::new(2).unwrap(),
+            292,
+            ProviderTurnStateRefreshStatus::Refreshing,
+            SystemTime::now(),
+        )
+        .await
+        .unwrap();
+    store.cancel_refresh(&id, &model, revision()).await.unwrap();
+    let status: String = sqlx::query_scalar("select refresh_status from provider_turn_states")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        status, "refreshing",
+        "old cancellation must not finish a newer credential task"
+    );
+    database.close().await;
+}
+
 fn candidate(
     account_id: &ProviderAccountId,
     model: &UpstreamModelId,

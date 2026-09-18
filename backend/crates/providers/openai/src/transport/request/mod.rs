@@ -608,24 +608,6 @@ pub(crate) fn apply_managed_turn_state(
     request.set_client_metadata(Some(Value::Object(metadata)));
 }
 
-pub(crate) fn clear_managed_turn_state(request: &mut CodexResponsesRequest) {
-    if request.managed_turn_state_version.take().is_none() {
-        return;
-    }
-    request.managed_turn_state_expires_at = None;
-    request.turn_state = None;
-    if let Some(metadata) = request
-        .body_mut()
-        .get_mut("client_metadata")
-        .and_then(Value::as_object_mut)
-    {
-        metadata.remove("x-codex-turn-state");
-        if metadata.is_empty() {
-            request.body_mut().remove("client_metadata");
-        }
-    }
-}
-
 fn clear_turn_state_fields(fields: &mut Map<String, Value>) {
     for key in ["turnState", "turn_state", "x-codex-turn-state"] {
         fields.remove(key);

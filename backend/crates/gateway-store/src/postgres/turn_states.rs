@@ -43,6 +43,29 @@ struct TurnStateRow {
 }
 
 impl ProviderTurnStatePort for PgProviderTurnStateRepository {
+    fn cancel_refresh<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        upstream_model: &'a UpstreamModelId,
+        expected_revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            // Cancellation must work after opt-out, but must not touch a newer credential's task.
+            sqlx::query(
+                "update provider_turn_states set refresh_status = 'failed', updated_at = now()
+                 where provider_account_id = $1 and upstream_model = $2
+                   and credential_revision = $3 and refresh_status = 'refreshing'",
+            )
+            .bind(account_id.as_str())
+            .bind(upstream_model.as_str())
+            .bind(revision_value(expected_revision)?)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| unavailable("cancel provider turn state refresh"))?;
+            Ok(())
+        })
+    }
+
     fn read<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
