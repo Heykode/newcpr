@@ -14,7 +14,7 @@ use gateway_core::routing::ProviderKind;
 use reqwest::Client;
 use reqwest::redirect::Policy;
 use roxmltree::{Document, Node};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -35,7 +35,7 @@ const ARTIFACT_PROFILE_CACHE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 
 const ARTIFACT_PROFILE_SCHEMA_VERSION: u64 = 1;
 
 /// 与官方 managed residency requirement 相同的可选请求约束。
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CodexResidency {
     Us,
@@ -47,7 +47,7 @@ pub use gateway_core::account::RequestLocation as CodexRequestLocation;
 ///
 /// 启动配置提供经源码审计的 Core、运行环境和 Desktop 启动版本。运行时只会使用
 /// 同一个官方 Desktop ZIP 中核验出的 Core、Desktop 版本及构建号原子替换版本字段。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexWireProfile {
     /// QX CLI 保留原始安全语法；CPR 由配套字段生成。
     pub raw_user_agent: Option<String>,
@@ -235,7 +235,7 @@ fn valid_architecture(os_type: &str, arch: &str) -> bool {
 }
 
 /// Explicitly selected outbound UA behavior.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodexWireProfileOverride {
     Default,
     Custom(Box<CodexWireProfile>),
@@ -259,7 +259,7 @@ pub struct CodexWireProfileState {
     selection: Arc<RwLock<CodexWireProfileSelection>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexWireProfileSelection {
     default_profile: CodexWireProfile,
     mode: CodexWireProfileOverride,
@@ -284,6 +284,32 @@ impl CodexWireProfileSelection {
 }
 
 impl CodexWireProfileState {
+    /// 只保存客户端配置；CLI 自定义与独立 Desktop 辅助画像必须原子冻结。
+    pub fn request_snapshot(&self) -> Result<OpaqueProviderData, serde_json::Error> {
+        let selection = self
+            .selection
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Ok(OpaqueProviderData::new(Map::from_iter([(
+            "selection".to_owned(),
+            serde_json::to_value(selection)?,
+        )])))
+    }
+
+    pub fn from_request_snapshot(snapshot: &OpaqueProviderData) -> Result<Self, serde_json::Error> {
+        let selection = serde_json::from_value(
+            snapshot
+                .expose_to_provider()
+                .get("selection")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )?;
+        Ok(Self {
+            selection: Arc::new(RwLock::new(selection)),
+        })
+    }
+
     /// 从启动画像创建运行时状态。
     pub fn new(profile: CodexWireProfile) -> Self {
         Self {

@@ -308,6 +308,7 @@ struct ScriptedProvider {
     contexts: Mutex<Vec<AttemptContext>>,
     operations: Mutex<Vec<Operation>>,
     released_leases: Arc<AtomicUsize>,
+    profile_resolutions: AtomicUsize,
 }
 
 struct TrackedLease(Arc<AtomicUsize>);
@@ -325,12 +326,22 @@ impl ScriptedProvider {
             contexts: Mutex::new(Vec::new()),
             operations: Mutex::new(Vec::new()),
             released_leases: Arc::new(AtomicUsize::new(0)),
+            profile_resolutions: AtomicUsize::new(0),
         }
     }
 }
 
 #[async_trait]
 impl Provider for ScriptedProvider {
+    fn resolve_request_profile(
+        &self,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
+        let generation = self.profile_resolutions.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(Some(gateway_core::account::OpaqueProviderData::new(
+            Map::from_iter([("generation".to_owned(), json!(generation))]),
+        )))
+    }
+
     fn name(&self) -> &'static str {
         "openai"
     }
@@ -2881,6 +2892,46 @@ fn key_budget_settles_post_send_failures_from_observed_cost_without_replaying() 
 }
 
 #[test]
+fn request_profile_is_recaptured_for_each_new_execution() {
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+    for _ in 0..2 {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        block_on(session.collect_uncommitted()).unwrap();
+        block_on(session.commit_downstream(Some(200))).unwrap();
+    }
+    assert_eq!(provider.profile_resolutions.load(Ordering::SeqCst), 2);
+    let contexts = provider.contexts.lock().unwrap();
+    assert_ne!(contexts[0].request_profile(), contexts[1].request_profile());
+    assert_eq!(
+        contexts[0].request_profile().unwrap().expose_to_provider()["generation"],
+        1
+    );
+    assert_eq!(
+        contexts[1].request_profile().unwrap().expose_to_provider()["generation"],
+        2
+    );
+}
+
+#[test]
 fn pre_commit_failure_excludes_account_and_retries_same_target() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
@@ -2919,6 +2970,9 @@ fn pre_commit_failure_excludes_account_and_retries_same_target() {
 
     let contexts = provider.contexts.lock().expect("contexts lock");
     assert_eq!(contexts.len(), 2);
+    assert_eq!(provider.profile_resolutions.load(Ordering::SeqCst), 1);
+    assert_eq!(contexts[0].request_profile(), contexts[1].request_profile());
+    assert!(contexts[0].request_profile().is_some());
     assert!(contexts[0].account_state_owner().is_none());
     assert!(
         contexts[1]
@@ -3800,6 +3854,12 @@ fn provider_owned_transport_retries_keep_the_same_account_until_fallback() {
     let original = ProviderAccountId::new("acct_first").expect("account id");
     let contexts = provider.contexts.lock().expect("contexts lock");
     assert_eq!(contexts.len(), 4);
+    assert_eq!(provider.profile_resolutions.load(Ordering::SeqCst), 1);
+    assert!(
+        contexts
+            .iter()
+            .all(|context| context.request_profile() == contexts[0].request_profile())
+    );
     assert_eq!(contexts[0].transport(), AttemptTransport::Default);
     assert_eq!(contexts[1].transport(), AttemptTransport::Retry(retry_one));
     assert_eq!(contexts[2].transport(), AttemptTransport::Retry(retry_two));

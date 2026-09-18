@@ -486,6 +486,14 @@ pub trait Provider: Send + Sync {
     /// 返回当前进程已经成功发布的目录代次。
     fn catalog_generation(&self) -> ProviderCatalogGeneration;
 
+    /// 冻结本次请求跨 attempt 复用的公共客户端画像，不得包含账号或连接状态。
+    /// 只读取内存配置；不得发送请求或查询外部存储。
+    fn resolve_request_profile(
+        &self,
+    ) -> Result<Option<crate::account::OpaqueProviderData>, ProviderError> {
+        Ok(None)
+    }
+
     fn model_catalog_is_exhaustive(&self) -> bool {
         true
     }

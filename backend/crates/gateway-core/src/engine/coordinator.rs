@@ -200,6 +200,7 @@ where
             recovery_account: None,
             pending_retry: None,
             transient_retry_counts: BTreeMap::new(),
+            request_profiles: BTreeMap::new(),
             current: None,
             send_state_watermark: UpstreamSendState::NotSent,
             downstream_committed_at: None,
@@ -313,6 +314,9 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     pending_retry: Option<PendingAttemptRetry>,
     /// 请求内按账号累计的瞬时拒绝重试次数，不能跨请求污染账号健康状态。
     transient_retry_counts: BTreeMap<crate::account::ProviderAccountId, u32>,
+    /// 公共画像按 Provider 在首次进入时冻结；账号私有状态仍逐 attempt 绑定。
+    request_profiles:
+        BTreeMap<crate::routing::ProviderKind, Option<Arc<crate::account::OpaqueProviderData>>>,
     current: Option<CurrentAttempt>,
     /// 请求级发送状态水位；跨 attempt 单调不降，终态写回不得低于此档。
     send_state_watermark: UpstreamSendState,
@@ -855,8 +859,34 @@ where
             self.credential_recovery_attempted_accounts
                 .contains(account)
         }));
+        let provider = self
+            .engine
+            .providers()
+            .get(candidate.provider())
+            .cloned()
+            .ok_or_else(|| EngineError::ProviderNotRegistered {
+                provider: candidate.provider().as_str().to_owned(),
+            })?;
+        if !self.request_profiles.contains_key(candidate.provider()) {
+            match provider.resolve_request_profile() {
+                Ok(profile) => {
+                    self.request_profiles
+                        .insert(candidate.provider().clone(), profile.map(Arc::new));
+                }
+                Err(error) => {
+                    self.finish_provider_error(&error).await?;
+                    return Err(provider_engine_error(error));
+                }
+            }
+        }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_request_profile(
+                    self.request_profiles
+                        .get(candidate.provider())
+                        .cloned()
+                        .flatten(),
+                )
                 .with_disable_fast(self.plan.disable_fast())
                 .with_request_location(self.plan.request_location().cloned())
                 .with_timing_started_at(self.observation.timing_started_at)
@@ -877,14 +907,6 @@ where
         } else {
             AttemptTrigger::AccountRetry
         };
-        let provider = self
-            .engine
-            .providers()
-            .get(candidate.provider())
-            .cloned()
-            .ok_or_else(|| EngineError::ProviderNotRegistered {
-                provider: candidate.provider().as_str().to_owned(),
-            })?;
         let attempt_trace = self.trace.attempt(next_attempt.get());
         attempt_trace.record(
             "attempt.started",

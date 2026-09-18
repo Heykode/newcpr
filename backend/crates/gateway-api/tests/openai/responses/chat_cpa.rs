@@ -39,6 +39,92 @@ pub(super) struct Script {
     pending_failure: Option<GatewayError>,
 }
 
+#[tokio::test]
+async fn chat_capacity_failure_is_retryable_before_and_after_output() {
+    for code in ["server_is_overloaded", "slow_down"] {
+        for (stream, after_content) in [(false, false), (true, false), (true, true)] {
+            let mut events = vec![created()];
+            if after_content {
+                events.push(text_delta("hello"));
+            }
+            events.push(wire(
+                "response.failed",
+                json!({
+                    "type":"response.failed","response":{
+                        "id":"resp_chat","status":"failed",
+                        "error":{"code":code,"message":"synthetic capacity failure"}
+                    }
+                }),
+            ));
+            let execution = scripted(Script::new(events));
+            let response = request(Arc::clone(&execution), body_for(stream)).await;
+            assert_eq!(
+                response.status().as_u16(),
+                if after_content { 200 } else { 503 }
+            );
+            let body = read_text(response).await;
+            let value: Value = if after_content {
+                assert_eq!(streamed_content(&chunks(&body)), "hello");
+                assert!(!body.contains("\"finish_reason\":\"stop\""));
+                let errors: Vec<_> = chunks(&body)
+                    .into_iter()
+                    .filter(|chunk| chunk["error"].is_object())
+                    .collect();
+                assert_eq!(errors.len(), 1);
+                errors[0].clone()
+            } else {
+                serde_json::from_str(&body).unwrap()
+            };
+            assert_eq!(value["error"]["code"], "server_error");
+            assert_eq!(value["error"]["message"], "synthetic capacity failure");
+            let failures = execution.trace.delivery_errors();
+            assert_eq!(failures.len(), 1);
+            assert_eq!(failures[0].client_error_code(), Some(code));
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_capacity_http_error_does_not_restore_original_429_status() {
+    for stream in [false, true] {
+        let error = EngineError::Provider(
+            ProviderError::new(
+                ProviderErrorKind::UpstreamCapacityUnavailable,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "synthetic overloaded",
+                Some("slow_down".to_owned()),
+                Some("server_error".to_owned()),
+            ))
+            .with_client_visible_upstream_response(
+                ClientVisibleUpstreamResponse::new(
+                    429,
+                    Some(b"text/plain".to_vec()),
+                    Bytes::from_static(b"opaque upstream body"),
+                )
+                .with_headers(vec![ProviderResponseHeader::new(
+                    "retry-after",
+                    Bytes::from_static(b"2"),
+                )]),
+            ),
+        );
+        let mut script = Script::new(Vec::new());
+        if stream {
+            script.steps = Some(vec![NextStep::Error(error)]);
+        } else {
+            script.collect_error = Some(error);
+        }
+        let response = request(scripted(script), body_for(stream)).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["retry-after"], "2");
+        let body: Value = serde_json::from_str(&read_text(response).await).unwrap();
+        assert_eq!(body["error"]["code"], "server_error");
+        assert_eq!(body["error"]["message"], "synthetic overloaded");
+    }
+}
+
 impl Script {
     fn new(events: Vec<ProviderEvent>) -> Self {
         Self {

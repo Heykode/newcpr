@@ -8,6 +8,7 @@ use gateway_protocol::openai::sse::{
 use serde_json::Value;
 
 use super::error::ResponseEncodeError;
+use crate::openai::error::capacity_error_for_client;
 
 const OPENAI_PROTOCOL: &str = "openai";
 
@@ -44,11 +45,13 @@ impl OpenAiResponsesEncoder {
         };
         // 当前 Codex 不消费 Responses `error` event，会在 EOF 时丢失失败原因。
         // 在客户端 SSE 边界统一投影成它能识别的 `response.failed`。
-        if wire.event_type() == Some("error")
+        let projected = projected_capacity_error(wire);
+        let data = projected.as_ref().unwrap_or(wire.data());
+        if effective_event_type(wire) == Some("error")
             && let Some(data) = response_failed_sse_data_from_error_event(
                 self.response_snapshot.as_ref(),
                 self.response_id.as_deref(),
-                wire.data(),
+                data,
             )
         {
             return vec![Bytes::from(encode_sse_event_with_metadata(
@@ -58,12 +61,14 @@ impl OpenAiResponsesEncoder {
                 wire.sse_retry(),
             ))];
         }
-        if let Some(raw_sse_frame) = wire.raw_sse_frame() {
+        if projected.is_none()
+            && let Some(raw_sse_frame) = wire.raw_sse_frame()
+        {
             return vec![raw_sse_frame.clone()];
         }
         vec![Bytes::from(encode_sse_event_with_metadata(
-            wire.event_type().unwrap_or_default(),
-            &wire.data().to_string(),
+            effective_event_type(wire).unwrap_or_default(),
+            &data.to_string(),
             wire.sse_id(),
             wire.sse_retry(),
         ))]
@@ -75,23 +80,21 @@ impl OpenAiResponsesEncoder {
         let Some(wire) = openai_wire(event).filter(|wire| wire.has_json_data()) else {
             return Vec::new();
         };
-        // Only project errors the WS client cannot consume; keep wrapped errors
-        // and retry-control codes intact. Observation still records a failure,
-        // not a successful terminal or a new metering fact.
-        if wire
-            .event_type()
-            .or_else(|| wire.data().get("type").and_then(Value::as_str))
-            == Some("error")
-            && !ws_client_consumable_error(wire.data())
+        let projected = projected_capacity_error(wire);
+        let data = projected.as_ref().unwrap_or(wire.data());
+        // Keep consumable wrappers and continuation-control codes; only final
+        // capacity failures receive the client-retryable code/status.
+        if effective_event_type(wire) == Some("error")
+            && !ws_client_consumable_error(data)
             && let Some(data) = response_failed_sse_data_from_error_event(
                 self.response_snapshot.as_ref(),
                 self.response_id.as_deref(),
-                wire.data(),
+                data,
             )
         {
             return vec![data.to_string()];
         }
-        vec![wire.data().to_string()]
+        vec![data.to_string()]
     }
 
     pub(in crate::openai) fn observe_event(&mut self, event: &ProviderEvent) {
@@ -176,6 +179,20 @@ fn openai_wire(event: &ProviderEvent) -> Option<&ProtocolWireEvent> {
     event
         .wire_event()
         .filter(|wire| wire.protocol() == OPENAI_PROTOCOL)
+}
+
+fn effective_event_type(wire: &ProtocolWireEvent) -> Option<&str> {
+    wire.event_type()
+        .or_else(|| wire.data().get("type").and_then(Value::as_str))
+}
+
+fn projected_capacity_error(wire: &ProtocolWireEvent) -> Option<Value> {
+    matches!(
+        effective_event_type(wire),
+        Some("error" | "response.failed")
+    )
+    .then(|| capacity_error_for_client(wire.data()))
+    .flatten()
 }
 
 fn ws_client_consumable_error(data: &Value) -> bool {

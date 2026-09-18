@@ -1,5 +1,29 @@
 [
   {
+    "path": ".trellis/spec/backend/client-continuity.md",
+    "rule": "gitleaks:cpr-api-key",
+    "line": 496,
+    "file_sha256": "fd3274856c52225dad13f961180e03e57835cb4d39b849c188a6c9c0634527e8",
+    "line_sha256": "a9fdc16760660f57b4c9be59b1899df03c1a43a7d1a3e526f2d314ead033da69",
+    "reason": "Re-reviewed unchanged TLS regression function reference after documenting request-local profile snapshots; this names a Rust test, not a credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 707,
+    "file_sha256": "53d36b239259941cce998012657d7f8a54b6541a8ff0afe0e1a8e7590d4345e7",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Re-reviewed unchanged synthetic forwarded-header fixture after updating an unrelated capacity error assertion; no connection is made to this private hop."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 731,
+    "file_sha256": "53d36b239259941cce998012657d7f8a54b6541a8ff0afe0e1a8e7590d4345e7",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Re-reviewed unchanged duplicate forwarded-header fixture for trusted-hop selection; test-only data, not a server endpoint."
+  },
+  {
     "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
     "rule": "authenticated-url",
     "line": 223,

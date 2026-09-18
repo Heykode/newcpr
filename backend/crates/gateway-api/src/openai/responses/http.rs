@@ -271,7 +271,13 @@ fn engine_error_response_with_headers_as(
     let response = match format {
         HttpResponseFormat::Responses => engine_error_response(error),
         HttpResponseFormat::Chat { .. } => {
-            let mut response = gateway_error_response(&gateway_error_from_engine(error));
+            let gateway = gateway_error_from_engine(error);
+            let capacity_unavailable = matches!(error, EngineError::Provider(provider)
+                if provider.kind() == gateway_core::error::ProviderErrorKind::UpstreamCapacityUnavailable)
+                || gateway
+                    .client_error_code()
+                    .is_some_and(|code| super::super::error::client_error_code(code) != code);
+            let mut response = gateway_error_response(&gateway);
             if let EngineError::Provider(error) = error
                 && let Some(upstream) = error.client_visible_upstream_response()
             {
@@ -286,6 +292,9 @@ fn engine_error_response_with_headers_as(
                 && let Ok(value) = HeaderValue::from_str(request_id.as_str())
             {
                 response.headers_mut().insert("x-request-id", value);
+            }
+            if capacity_unavailable {
+                *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             }
             response
         }
@@ -313,9 +322,10 @@ fn engine_error_response_with_headers_as(
 
 fn encoding_error_response(error: &HttpEncodeError, format: HttpResponseFormat) -> Response {
     protocol_error_response(
-        match format {
-            HttpResponseFormat::Responses => StatusCode::INTERNAL_SERVER_ERROR,
-            HttpResponseFormat::Chat { .. } => StatusCode::BAD_GATEWAY,
+        match (error, format) {
+            (HttpEncodeError::Capacity(_), _) => StatusCode::SERVICE_UNAVAILABLE,
+            (_, HttpResponseFormat::Responses) => StatusCode::INTERNAL_SERVER_ERROR,
+            (_, HttpResponseFormat::Chat { .. }) => StatusCode::BAD_GATEWAY,
         },
         error.protocol_body(),
     )

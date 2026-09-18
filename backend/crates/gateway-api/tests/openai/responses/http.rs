@@ -1748,7 +1748,7 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
                     "status": "failed",
                     "error": {
                         "type": "service_unavailable_error",
-                        "code": "server_is_overloaded",
+                        "code": "server_error",
                         "message": "Our servers are currently overloaded. Please try again later.",
                         "param": null,
                         "future_error_field": {"keep": true}

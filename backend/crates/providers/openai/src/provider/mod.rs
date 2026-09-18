@@ -159,6 +159,20 @@ pub struct CodexProvider {
 }
 
 impl CodexProvider {
+    pub(super) fn client_for_request(
+        &self,
+        context: &AttemptContext,
+    ) -> Result<CodexBackendClient, ProviderError> {
+        match context.request_profile() {
+            Some(snapshot) => CodexWireProfileState::from_request_snapshot(snapshot)
+                .map(|profile| self.client.with_request_profile(profile))
+                .map_err(|_| {
+                    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+                }),
+            None => Ok(self.client.clone()),
+        }
+    }
+
     #[must_use]
     pub fn with_egress_runtime(
         mut self,
@@ -250,6 +264,15 @@ impl fmt::Debug for CodexProvider {
 
 #[async_trait]
 impl Provider for CodexProvider {
+    fn resolve_request_profile(
+        &self,
+    ) -> Result<Option<gateway_core::account::OpaqueProviderData>, ProviderError> {
+        self.client
+            .request_profile()
+            .map(Some)
+            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))
+    }
+
     fn name(&self) -> &'static str {
         PROVIDER_NAME
     }
@@ -686,9 +709,12 @@ impl Provider for CodexProvider {
             AttemptTransport::Default | AttemptTransport::Fallback => 0,
         };
         let events = cold_response_stream(ColdResponse {
-            client: self.client.for_account(lease.account()).map_err(|_| {
-                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-            })?,
+            client: self
+                .client_for_request(&context)?
+                .for_account(lease.account())
+                .map_err(|_| {
+                    provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                })?,
             response_origin: self.responses_url.clone(),
             request: upstream_request,
             upstream_model: upstream_model.clone(),

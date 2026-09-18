@@ -743,6 +743,18 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn request_profile(
+        &self,
+    ) -> Result<gateway_core::account::OpaqueProviderData, serde_json::Error> {
+        self.profile.request_snapshot()
+    }
+
+    pub(crate) fn with_request_profile(&self, profile: CodexWireProfileState) -> Self {
+        let mut client = self.clone();
+        client.profile = profile;
+        client
+    }
+
     pub fn for_account(
         &self,
         account: &gateway_core::account::ProviderAccount,
