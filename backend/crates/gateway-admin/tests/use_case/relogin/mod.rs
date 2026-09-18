@@ -9,6 +9,7 @@ use gateway_admin::{
     model::{
         accounts::{AccountRecord, CredentialState},
         relogin::*,
+        relogin_templates::{ReloginTemplate, ReloginTemplateConfig, ReloginTemplateSelection},
     },
     ports::{
         provider::ProviderAdminErrorKind,
@@ -30,6 +31,8 @@ use std::{
 
 #[derive(Default)]
 struct MemoryStore {
+    templates: Mutex<BTreeMap<String, ReloginTemplate>>,
+    invalid_template_references: Mutex<bool>,
     rows: Mutex<BTreeMap<String, ReloginEntry>>,
     settings: Mutex<ReloginSettings>,
     fail_after: Mutex<Option<usize>>,
@@ -41,6 +44,47 @@ fn conflict() -> AdminStoreError {
 
 #[async_trait]
 impl ReloginStore for MemoryStore {
+    async fn templates(&self) -> AdminStoreResult<Vec<ReloginTemplate>> {
+        Ok(self.templates.lock().unwrap().values().cloned().collect())
+    }
+    async fn save_template(
+        &self,
+        template: &ReloginTemplate,
+        expected: Option<u64>,
+    ) -> AdminStoreResult<()> {
+        self.validate_template_references(&template.config).await?;
+        let mut rows = self.templates.lock().unwrap();
+        if rows.get(&template.id).map(|row| row.revision) != expected
+            || rows.values().any(|row| {
+                row.id != template.id && row.config.name.eq_ignore_ascii_case(&template.config.name)
+            })
+        {
+            return Err(conflict());
+        }
+        rows.insert(template.id.clone(), template.clone());
+        Ok(())
+    }
+    async fn delete_template(&self, id: &str, expected: u64) -> AdminStoreResult<()> {
+        let mut rows = self.templates.lock().unwrap();
+        if rows.get(id).map(|row| row.revision) != Some(expected) {
+            return Err(conflict());
+        }
+        rows.remove(id);
+        Ok(())
+    }
+    async fn validate_template_references(
+        &self,
+        _: &ReloginTemplateConfig,
+    ) -> AdminStoreResult<()> {
+        if *self.invalid_template_references.lock().unwrap() {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::Invalid,
+                "template",
+                "missing reference",
+            ));
+        }
+        Ok(())
+    }
     async fn entries(&self) -> AdminStoreResult<Vec<ReloginEntry>> {
         Ok(self.rows.lock().unwrap().values().cloned().collect())
     }
@@ -175,6 +219,21 @@ impl Harness {
         .await
         .unwrap();
     }
+    async fn queue_account(
+        &self,
+        id: &str,
+        target: &AccountRecord,
+    ) -> Result<(), gateway_admin::model::AdminError> {
+        self.services
+            .relogin()
+            .queue_account(
+                id,
+                self.row(id).await.revision,
+                &ReloginTarget::from_account(target).unwrap(),
+                &context("account-menu"),
+            )
+            .await
+    }
 }
 fn cycle_context() -> WorkerCycleContext {
     WorkerCycleContext::new(
@@ -206,6 +265,228 @@ fn credential() -> ReloginCredential {
         expires_at: Utc::now() + Duration::hours(1),
         verified_at: Utc::now(),
     }
+}
+
+fn template_config() -> ReloginTemplateConfig {
+    ReloginTemplateConfig {
+        name: "Team defaults".into(),
+        enabled: false,
+        concurrency_limit: Some(7),
+        weight: 13,
+        group_ids: vec!["grp_00000000000000000000000000000091".into()],
+        outbound_proxy_id: None,
+    }
+}
+
+fn template_selection(template: &ReloginTemplate) -> ReloginTemplateSelection {
+    ReloginTemplateSelection {
+        id: template.id.clone(),
+        revision: template.revision,
+    }
+}
+
+#[tokio::test]
+async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
+    let h = Harness::new(vec![]).await;
+    let mut invalid = template_config();
+    invalid.concurrency_limit = Some(0);
+    assert!(
+        h.services
+            .relogin()
+            .save_template(None, invalid)
+            .await
+            .is_err()
+    );
+    let template = h
+        .services
+        .relogin()
+        .save_template(None, template_config())
+        .await
+        .unwrap();
+    assert_eq!(
+        h.services.relogin().templates().await.unwrap(),
+        vec![template.clone()]
+    );
+    assert!(
+        h.services
+            .relogin()
+            .save_template(None, template_config())
+            .await
+            .is_err()
+    );
+    let mut config = template_config();
+    config.weight = 29;
+    let updated = h
+        .services
+        .relogin()
+        .save_template(Some(template_selection(&template)), config)
+        .await
+        .unwrap();
+    assert_eq!(updated.revision, 2);
+    assert!(
+        h.services
+            .relogin()
+            .delete_template(template_selection(&template))
+            .await
+            .is_err()
+    );
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let before = h.row(&id).await;
+    let versions = BTreeMap::from([(id.clone(), before.revision)]);
+    assert!(
+        h.services
+            .relogin()
+            .push_with_template(
+                std::slice::from_ref(&id),
+                &versions,
+                Some(template_selection(&template)),
+                &context("stale-template")
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(h.row(&id).await.revision, before.revision);
+    assert!(h.accounts.audit_requests().is_empty());
+    h.services
+        .relogin()
+        .delete_template(template_selection(&updated))
+        .await
+        .unwrap();
+    assert!(
+        h.services
+            .relogin()
+            .push_with_template(
+                std::slice::from_ref(&id),
+                &versions,
+                Some(template_selection(&updated)),
+                &context("deleted-template")
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(h.row(&id).await.status, ReloginStatus::Ready);
+}
+
+#[tokio::test]
+async fn relogin_templates_reject_missing_references_before_push_fence() {
+    let h = Harness::new(vec![]).await;
+    let template = h
+        .services
+        .relogin()
+        .save_template(None, template_config())
+        .await
+        .unwrap();
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let before = h.row(&id).await;
+    *h.store.invalid_template_references.lock().unwrap() = true;
+    let result = h
+        .services
+        .relogin()
+        .push_with_template(
+            std::slice::from_ref(&id),
+            &BTreeMap::from([(id.clone(), before.revision)]),
+            Some(template_selection(&template)),
+            &context("invalid-reference"),
+        )
+        .await
+        .unwrap();
+    assert!(!result[0].success);
+    assert!(result[0].message.contains("模板"));
+    assert_eq!(h.row(&id).await.revision, before.revision);
+    assert_eq!(h.row(&id).await.status, ReloginStatus::Ready);
+    assert!(h.accounts.audit_requests().is_empty());
+}
+
+#[tokio::test]
+async fn relogin_template_mixed_batch_only_configures_new_accounts() {
+    let mut existing = account(false);
+    existing.email = Some("existing@example.invalid".into());
+    existing.enabled = false;
+    let h = Harness::new(vec![existing]).await;
+    let template = h
+        .services
+        .relogin()
+        .save_template(None, template_config())
+        .await
+        .unwrap();
+    let old = h.import("existing@example.invalid").await;
+    let mut old_credential = credential();
+    old_credential.email = "existing@example.invalid".into();
+    *h.provider.relogin_result.lock().unwrap() = Some(old_credential);
+    h.ready(&old).await;
+    *h.provider.relogin_result.lock().unwrap() = Some(credential());
+    let new = h.import("test@example.invalid").await;
+    h.ready(&new).await;
+    let versions = BTreeMap::from([
+        (old.clone(), h.row(&old).await.revision),
+        (new.clone(), h.row(&new).await.revision),
+    ]);
+    let result = h
+        .services
+        .relogin()
+        .push_with_template(
+            &[old.clone(), new.clone()],
+            &versions,
+            Some(template_selection(&template)),
+            &context("mixed-template"),
+        )
+        .await
+        .unwrap();
+    assert!(result.iter().all(|result| result.success), "{result:?}");
+    assert_eq!(
+        h.accounts.import_settings(),
+        vec![Some(template.config.settings().unwrap())]
+    );
+    assert!(h.row(&old).await.synced_at.is_some());
+    assert!(h.row(&new).await.synced_at.is_some());
+    assert_eq!(h.row(&old).await.target.unwrap().account_id, "acct_test");
+    assert_eq!(
+        h.row(&new).await.target.unwrap().account_id,
+        "acct_prepared"
+    );
+    // A repeated confirmation must not create another account or apply settings twice.
+    let result = h
+        .services
+        .relogin()
+        .push_with_template(
+            &[old, new],
+            &versions,
+            Some(template_selection(&template)),
+            &context("repeat-template"),
+        )
+        .await
+        .unwrap();
+    assert!(result.iter().all(|result| !result.success));
+    assert_eq!(h.accounts.import_settings().len(), 1);
+}
+
+#[tokio::test]
+async fn relogin_existing_account_ignores_template_references_and_settings() {
+    let h = Harness::new(vec![account(false)]).await;
+    let template = h
+        .services
+        .relogin()
+        .save_template(None, template_config())
+        .await
+        .unwrap();
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    *h.store.invalid_template_references.lock().unwrap() = true;
+    let result = h
+        .services
+        .relogin()
+        .push_with_template(
+            std::slice::from_ref(&id),
+            &BTreeMap::from([(id.clone(), h.row(&id).await.revision)]),
+            Some(template_selection(&template)),
+            &context("existing-template"),
+        )
+        .await
+        .unwrap();
+    assert!(result[0].success);
+    assert!(h.accounts.import_settings().is_empty());
 }
 
 #[tokio::test]
@@ -959,4 +1240,305 @@ async fn relogin_statistics_resolve_identity_and_workspace_without_combining_acc
         h.services.relogin().list().await.unwrap().items[0].relogin_count,
         None
     );
+}
+
+#[tokio::test]
+async fn account_relogin_locks_selected_workspace_preserves_preferences_and_counts_once() {
+    let first = account(false);
+    let mut second = first.clone();
+    second.id = "acct_other".into();
+    second.upstream_account_id = Some("workspace-other".into());
+    let h = Harness::new(vec![first.clone(), second]).await;
+    let id = h.import("test@example.invalid").await;
+    h.services
+        .relogin()
+        .automatic(std::slice::from_ref(&id), false)
+        .await
+        .unwrap();
+    h.services
+        .relogin()
+        .workspace(&id, Some("workspace-other".into()))
+        .await
+        .unwrap();
+    h.queue_account(&id, &first).await.unwrap();
+    assert!(h.queue_account(&id, &first).await.is_err());
+    assert!(
+        !h.services
+            .relogin()
+            .queue(std::slice::from_ref(&id))
+            .await
+            .unwrap()[0]
+            .success
+    );
+    let actions = h
+        .services
+        .relogin()
+        .account_actions(&["acct_test".into(), "acct_other".into()])
+        .await
+        .unwrap();
+    assert!(
+        actions
+            .iter()
+            .all(|action| action.busy && action.blocked_reason.is_some())
+    );
+    h.cycle().await;
+    h.cycle().await;
+    let row = h.row(&id).await;
+    assert!(row.synced_at.is_some());
+    assert!(!row.automatic);
+    assert_eq!(
+        row.preferred_workspace_id.as_deref(),
+        Some("workspace-other")
+    );
+    assert_eq!(row.target.unwrap().account_id, first.id);
+    assert_eq!(h.accounts.audit_requests(), vec!["account-menu"]);
+    assert_eq!(
+        *h.provider.relogin_requests.lock().unwrap(),
+        vec![Some("workspace-team".into())]
+    );
+    let view = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(view.relogin_count, Some(1));
+}
+
+#[tokio::test]
+async fn account_relogin_queries_hide_missing_invalid_and_non_oauth_material_without_secrets() {
+    let first = account(false);
+    let mut other = first.clone();
+    other.id = "acct_other".into();
+    other.email = Some("absent@example.invalid".into());
+    let mut key = first.clone();
+    key.id = "acct_key".into();
+    key.authentication_kind = "api_key".into();
+    let h = Harness::new(vec![first, other, key]).await;
+    let ids = ["acct_test".into(), "acct_other".into(), "acct_key".into()];
+    assert!(
+        h.services
+            .relogin()
+            .account_actions(&ids)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let id = h.import("test@example.invalid").await;
+    let actions = h.services.relogin().account_actions(&ids).await.unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].account_id, "acct_test");
+    let wire = serde_json::to_string(&actions).unwrap();
+    for secret in ["password", "mfa_secret", "test-only", "JBSWY"] {
+        assert!(!wire.contains(secret));
+    }
+    h.store
+        .rows
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .mfa_secret
+        .clear();
+    assert!(
+        h.services
+            .relogin()
+            .account_actions(&ids)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(h.services.relogin().account_actions(&[]).await.is_err());
+}
+
+#[tokio::test]
+async fn account_relogin_rejects_stale_material_target_wrong_email_and_pause_before_login() {
+    for variant in [
+        "material",
+        "revision",
+        "identity",
+        "workspace",
+        "email",
+        "deleted",
+        "paused",
+    ] {
+        let original = account(false);
+        let h = Harness::new(vec![original.clone()]).await;
+        let id = h.import("test@example.invalid").await;
+        let version = h.row(&id).await.revision;
+        let mut changed = original.clone();
+        match variant {
+            "material" => h.services.relogin().workspace(&id, None).await.unwrap(),
+            "revision" => changed.credential_revision = revision(2),
+            "identity" => changed.upstream_user_id = Some("changed-user".into()),
+            "workspace" => changed.upstream_account_id = Some("changed-workspace".into()),
+            "email" => changed.email = Some("changed@example.invalid".into()),
+            "paused" => h
+                .services
+                .relogin()
+                .configure(ReloginSettings {
+                    concurrency: 1,
+                    paused: true,
+                })
+                .await
+                .unwrap(),
+            _ => {}
+        }
+        h.accounts.set_accounts(if variant == "deleted" {
+            vec![]
+        } else {
+            vec![changed]
+        });
+        assert!(
+            h.services
+                .relogin()
+                .queue_account(
+                    &id,
+                    version,
+                    &ReloginTarget::from_account(&original).unwrap(),
+                    &context("stale")
+                )
+                .await
+                .is_err(),
+            "{variant}"
+        );
+        assert!(h.accounts.audit_requests().is_empty());
+        assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn account_relogin_failed_verification_or_changed_pool_never_overwrites() {
+    for variant in [
+        "login",
+        "workspace",
+        "identity",
+        "email",
+        "expired",
+        "revision",
+        "deleted",
+    ] {
+        let original = account(false);
+        let h = Harness::new(vec![original.clone()]).await;
+        let id = h.import("test@example.invalid").await;
+        let mut result = credential();
+        match variant {
+            "workspace" => result.workspace_id = "wrong".into(),
+            "identity" => result.user_id = "wrong".into(),
+            "expired" => result.expires_at = Utc::now() - Duration::hours(1),
+            _ => {}
+        }
+        *h.provider.relogin_result.lock().unwrap() = (variant != "login").then_some(result);
+        h.queue_account(&id, &original).await.unwrap();
+        *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_millis(30);
+        let task = h.task.clone();
+        let running = tokio::spawn(async move { task.run_cycle(cycle_context()).await });
+        h.wait_running().await;
+        if variant == "revision" || variant == "email" {
+            let mut newer = original;
+            if variant == "revision" {
+                newer.credential_revision = revision(2);
+            } else {
+                newer.email = Some("changed@example.invalid".into());
+            }
+            h.accounts.set_accounts(vec![newer]);
+        } else if variant == "deleted" {
+            h.accounts.set_accounts(vec![]);
+        }
+        running.await.unwrap().unwrap();
+        assert!(h.accounts.audit_requests().is_empty(), "{variant}");
+        assert!(h.row(&id).await.synced_at.is_none());
+        assert_eq!(h.row(&id).await.status, ReloginStatus::Failed, "{variant}");
+    }
+}
+
+#[tokio::test]
+async fn account_relogin_cancel_and_library_queue_do_not_reuse_manual_push_intent() {
+    let original = account(false);
+    for operation in ["delete", "pause", "automatic", "workspace", "import"] {
+        let h = Harness::new(vec![original.clone()]).await;
+        let id = h.import("test@example.invalid").await;
+        h.queue_account(&id, &original).await.unwrap();
+        *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_secs(30);
+        let task = h.task.clone();
+        let running = tokio::spawn(async move { task.run_cycle(cycle_context()).await });
+        h.wait_running().await;
+        match operation {
+            "delete" => h
+                .services
+                .relogin()
+                .delete(std::slice::from_ref(&id))
+                .await
+                .unwrap(),
+            "pause" => h
+                .services
+                .relogin()
+                .configure(ReloginSettings {
+                    concurrency: 1,
+                    paused: true,
+                })
+                .await
+                .unwrap(),
+            "automatic" => h
+                .services
+                .relogin()
+                .automatic(std::slice::from_ref(&id), false)
+                .await
+                .unwrap(),
+            "import" => {
+                h.services
+                    .relogin()
+                    .import("test@example.invalid----changed----JBSWY3DPEHPK3PXP", true)
+                    .await
+                    .unwrap();
+            }
+            _ => h.services.relogin().workspace(&id, None).await.unwrap(),
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(3), running)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(h.accounts.audit_requests().is_empty());
+        if operation != "delete" {
+            assert!(h.row(&id).await.manual_push_context.is_none());
+        }
+    }
+    let h = Harness::new(vec![original.clone()]).await;
+    let id = h.import("test@example.invalid").await;
+    h.queue_account(&id, &original).await.unwrap();
+    h.cycle().await;
+    h.ready(&id).await;
+    assert!(h.row(&id).await.manual_push_context.is_none());
+    assert_eq!(h.accounts.audit_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn account_relogin_legacy_rows_default_to_no_push_and_context_roundtrips() {
+    let h = Harness::new(vec![account(false)]).await;
+    let id = h.import("test@example.invalid").await;
+    let mut legacy = serde_json::to_value(h.row(&id).await).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("manual_push_context");
+    let row: ReloginEntry = serde_json::from_value(legacy).unwrap();
+    assert!(row.manual_push_context.is_none());
+    h.queue_account(&id, &account(false)).await.unwrap();
+    let row: ReloginEntry =
+        serde_json::from_value(serde_json::to_value(h.row(&id).await).unwrap()).unwrap();
+    assert_eq!(row.manual_push_context, Some(context("account-menu")));
+}
+
+#[tokio::test]
+async fn account_relogin_committed_rotation_survives_lost_settlement_without_replay() {
+    let original = account(false);
+    let h = Harness::new(vec![original.clone()]).await;
+    let id = h.import("test@example.invalid").await;
+    h.queue_account(&id, &original).await.unwrap();
+    // Running, Ready and Pushing persist; the post-commit library settlement fails.
+    *h.store.fail_after.lock().unwrap() = Some(3);
+    assert!(h.task.run_cycle(cycle_context()).await.is_err());
+    assert_eq!(h.row(&id).await.status, ReloginStatus::Pushing);
+    assert_eq!(h.accounts.audit_requests(), vec!["account-menu"]);
+    h.cycle().await;
+    let view = h.services.relogin().list().await.unwrap().items.remove(0);
+    assert_eq!(view.status, ReloginStatus::Uncertain);
+    assert_eq!(view.relogin_count, Some(1));
+    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 1);
 }

@@ -9,7 +9,8 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use gateway_admin::model::relogin::ReloginSettings;
+use gateway_admin::model::relogin::{ReloginSettings, ReloginTarget};
+use gateway_admin::model::relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -28,9 +29,25 @@ struct BatchRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AccountQueueRequest {
+    entry_id: String,
+    revision: u64,
+    target: ReloginTarget,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushRequest {
     ids: Vec<String>,
     revisions: std::collections::BTreeMap<String, u64>,
+    template: Option<ReloginTemplateSelection>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TemplateSaveRequest {
+    selection: Option<ReloginTemplateSelection>,
+    config: ReloginTemplateConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +77,65 @@ where
         .route("/api/admin/relogin/automatic", post(automatic::<S>))
         .route("/api/admin/relogin/workspace", post(workspace::<S>))
         .route("/api/admin/relogin/settings", post(settings::<S>))
+        .route("/api/admin/relogin/templates", get(templates::<S>))
+        .route(
+            "/api/admin/relogin/templates/save",
+            post(save_template::<S>),
+        )
+        .route(
+            "/api/admin/relogin/templates/delete",
+            post(delete_template::<S>),
+        )
+        .route(
+            "/api/admin/relogin/accounts/query",
+            post(account_actions::<S>),
+        )
+        .route(
+            "/api/admin/relogin/accounts/queue",
+            post(queue_account::<S>),
+        )
+}
+
+async fn account_actions<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<BatchRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .relogin()
+        .account_actions(&request.ids)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn queue_account<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<AccountQueueRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .relogin()
+        .queue_account(
+            &request.entry_id,
+            request.revision,
+            &request.target,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
 }
 
 async fn list<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>
@@ -129,9 +205,10 @@ where
     let result = state
         .admin_services()
         .relogin()
-        .push(
+        .push_with_template(
             &request.ids,
             &request.revisions,
+            request.template,
             &auth.context().mutation_context(),
         )
         .await
@@ -140,6 +217,59 @@ where
         StatusCode::OK,
         AdminEnvelope::ok(result),
     ))
+}
+
+async fn templates<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .relogin()
+        .templates()
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn save_template<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<TemplateSaveRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .relogin()
+        .save_template(request.selection, request.config)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn delete_template<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<ReloginTemplateSelection>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .relogin()
+        .delete_template(request)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
 }
 
 async fn delete<S>(

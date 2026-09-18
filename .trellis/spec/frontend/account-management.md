@@ -432,6 +432,27 @@ regressions and `browser/account-state-indicator.mjs` with the read-only preview
 plus intercepted synthetic mutations for menu toggles and both themes at narrow
 widths. These UI checks do not validate upstream State acceptance.
 
+## Relogin Templates and Account Actions
+
+- Keep the key badge independent from the account action's busy/blocked state.
+  The menu uses a bounded current-page action query, immutable confirmation target
+  and version, independent error state, and cancellation for reads only.
+- A confirmed account-menu action queues login plus automatic settlement to the
+  selected account. Show progress, block duplicate submissions, refresh account
+  facts/counts on completion, and retain actionable failures. Do not implicitly
+  enable scheduling or require the per-entry automatic-relogin switch.
+- Template management reuses import scheduling/group/proxy controls. Persist on
+  the server; copy editable group arrays and retain template revision for save/delete.
+  Missing group references must remain visible and explicitly removable.
+- New-account push confirms an optional template ID/revision plus unchanged row
+  revisions. Default to no template on each open, show a readable config summary,
+  and do not send a template for an existing-only batch. Mixed batches apply it
+  only to new imports. Show request failures inside an open confirmation as well
+  as after closure; polling must not erase them or adopt new versions.
+- Verify CRUD, reload, cancellation, stale responses, no-template/mixed pushes and
+  desktop/mobile layouts with synthetic endpoints only. Change themes through
+  the actual theme control so generated CSS variables match the selected theme.
+
 ## 9. Group Monitor Overview
 
 - Keep provisional-account counts off the cards. Existing help text explains

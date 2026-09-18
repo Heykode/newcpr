@@ -11,6 +11,7 @@ use crate::{
             PrepareCredentialRotation, ProviderDocument,
         },
         relogin::*,
+        relogin_templates::{ReloginTemplate, ReloginTemplateConfig, ReloginTemplateSelection},
     },
     ports::{
         provider::ProviderAdmin,
@@ -29,6 +30,7 @@ use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
+mod templates;
 mod worker;
 pub(crate) use worker::contribution;
 
@@ -85,9 +87,48 @@ pub struct ReloginBatchResult {
     pub message: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountReloginAction {
+    pub account_id: String,
+    pub entry_id: String,
+    pub revision: u64,
+    pub target: Option<ReloginTarget>,
+    pub status: ReloginStatus,
+    pub message: String,
+    pub busy: bool,
+    pub blocked_reason: Option<String>,
+    pub synced_at: Option<DateTime<Utc>>,
+}
+
 #[async_trait]
 pub trait ReloginService: Send + Sync {
+    async fn templates(&self) -> Result<Vec<ReloginTemplate>, AdminError>;
+    async fn save_template(
+        &self,
+        selection: Option<ReloginTemplateSelection>,
+        config: ReloginTemplateConfig,
+    ) -> Result<ReloginTemplate, AdminError>;
+    async fn delete_template(&self, selection: ReloginTemplateSelection) -> Result<(), AdminError>;
+    async fn push_with_template(
+        &self,
+        ids: &[String],
+        revisions: &BTreeMap<String, u64>,
+        template: Option<ReloginTemplateSelection>,
+        context: &MutationContext,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError>;
     async fn list(&self) -> Result<ReloginList, AdminError>;
+    async fn account_actions(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<AccountReloginAction>, AdminError>;
+    async fn queue_account(
+        &self,
+        entry_id: &str,
+        revision: u64,
+        target: &ReloginTarget,
+        context: &MutationContext,
+    ) -> Result<(), AdminError>;
     async fn import(&self, text: &str, replace: bool) -> Result<usize, AdminError>;
     async fn queue(&self, ids: &[String]) -> Result<Vec<ReloginBatchResult>, AdminError>;
     async fn push(
@@ -177,6 +218,7 @@ impl DefaultReloginService {
     }
 
     fn stop(gate: &Gate, entry: &mut ReloginEntry) {
+        entry.manual_push_context = None;
         if let Some(cancellation) = gate.active.get(&entry.email) {
             cancellation.cancel();
         }
@@ -191,7 +233,16 @@ impl DefaultReloginService {
         entry: &mut ReloginEntry,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        let outcome = self.push_checked(entry, context).await;
+        self.push_entry_with_template(entry, None, context).await
+    }
+
+    async fn push_entry_with_template(
+        &self,
+        entry: &mut ReloginEntry,
+        template: Option<&ReloginTemplateConfig>,
+        context: &MutationContext,
+    ) -> Result<(), AdminError> {
+        let outcome = self.push_checked(entry, template, context).await;
         if outcome.is_err() && entry.status == ReloginStatus::Pushing {
             entry.status = ReloginStatus::Uncertain;
             entry.message = "推送结果未确认，请检查号池并重新获取凭证后再推送".to_owned();
@@ -203,9 +254,13 @@ impl DefaultReloginService {
     async fn push_checked(
         &self,
         entry: &mut ReloginEntry,
+        template: Option<&ReloginTemplateConfig>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
         entry.validate_totp()?;
+        if entry.manual_push_context.is_some() && entry.target.is_none() {
+            return Err(AdminError::conflict("指定账号任务缺少目标，不能新建账号"));
+        }
         if entry.status != ReloginStatus::Ready {
             return Err(AdminError::conflict("请先成功获取新凭据"));
         }
@@ -291,14 +346,21 @@ impl DefaultReloginService {
             publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
             entry.target = Some(ReloginTarget::from_account(current)?);
         } else {
+            let settings = template.map(ReloginTemplateConfig::settings).transpose()?;
+            if let Some(config) = template {
+                self.store()?
+                    .validate_template_references(config)
+                    .await
+                    .map_err(templates::template_error)?;
+            }
             // Import owns both preparation and commit, so fence before entering it.
             entry.status = ReloginStatus::Pushing;
             self.save(entry).await?;
             let result = self
                 .openai
                 .import_new_document(ImportCredentials {
-                    outbound_proxy_id: None,
-                    settings: None,
+                    outbound_proxy_id: template.and_then(|config| config.outbound_proxy_id.clone()),
+                    settings,
                     context: context.clone(),
                     document,
                 })
@@ -403,6 +465,152 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 
 #[async_trait]
 impl ReloginService for DefaultReloginService {
+    async fn templates(&self) -> Result<Vec<ReloginTemplate>, AdminError> {
+        self.store()?
+            .templates()
+            .await
+            .map_err(templates::template_error)
+    }
+
+    async fn save_template(
+        &self,
+        selection: Option<ReloginTemplateSelection>,
+        mut config: ReloginTemplateConfig,
+    ) -> Result<ReloginTemplate, AdminError> {
+        config.name = config.name.trim().to_owned();
+        config.settings()?;
+        let (id, expected) = match selection {
+            Some(selection) => {
+                templates::validate_selection(&selection)?;
+                (selection.id, Some(selection.revision))
+            }
+            None => (format!("template_{}", uuid::Uuid::now_v7().simple()), None),
+        };
+        let template = ReloginTemplate {
+            id,
+            revision: expected.unwrap_or(0) + 1,
+            config,
+        };
+        self.store()?
+            .save_template(&template, expected)
+            .await
+            .map_err(templates::template_error)?;
+        Ok(template)
+    }
+
+    async fn delete_template(&self, selection: ReloginTemplateSelection) -> Result<(), AdminError> {
+        templates::validate_selection(&selection)?;
+        self.store()?
+            .delete_template(&selection.id, selection.revision)
+            .await
+            .map_err(templates::template_error)
+    }
+
+    async fn account_actions(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<AccountReloginAction>, AdminError> {
+        validate_ids(ids)?;
+        let gate = self.gate.lock().await;
+        let entries = self.entries().await?;
+        let pool = self.pool().await?;
+        let settings = self.store()?.settings().await.map_err(store_error)?;
+        let by_email: BTreeMap<_, _> = entries
+            .iter()
+            .filter(|entry| entry.validate_totp().is_ok())
+            .map(|entry| (entry.email.to_ascii_lowercase(), entry))
+            .collect();
+        Ok(pool
+            .iter()
+            .filter(|account| ids.contains(&account.id) && account.authentication_kind == "oauth")
+            .filter_map(|account| {
+                let entry = by_email.get(&account.email.as_ref()?.to_ascii_lowercase())?;
+                let target = ReloginTarget::from_account(account);
+                let busy = entry.status.active() || gate.active.contains_key(&entry.email);
+                let blocked_reason = if settings.paused {
+                    Some("重登队列已暂停".to_owned())
+                } else if busy {
+                    Some("该邮箱已有重登任务".to_owned())
+                } else {
+                    target
+                        .as_ref()
+                        .err()
+                        .map(|error| error.message().to_owned())
+                };
+                let owns_result = entry.target.as_ref().is_some_and(|target| {
+                    target.account_id == account.id
+                        && account.upstream_user_id.as_ref() == Some(&target.user_id)
+                        && account.upstream_account_id.as_ref() == Some(&target.workspace_id)
+                });
+                Some(AccountReloginAction {
+                    account_id: account.id.clone(),
+                    entry_id: entry.id.clone(),
+                    revision: entry.revision,
+                    target: target.ok(),
+                    status: if owns_result || busy {
+                        entry.status
+                    } else {
+                        ReloginStatus::Pending
+                    },
+                    message: if owns_result || busy {
+                        entry.message.clone()
+                    } else {
+                        String::new()
+                    },
+                    busy,
+                    blocked_reason,
+                    synced_at: owns_result.then_some(entry.synced_at).flatten(),
+                })
+            })
+            .collect())
+    }
+
+    async fn queue_account(
+        &self,
+        entry_id: &str,
+        revision: u64,
+        target: &ReloginTarget,
+        context: &MutationContext,
+    ) -> Result<(), AdminError> {
+        validate_ids(&[entry_id.to_owned()])?;
+        validate_ids(std::slice::from_ref(&target.account_id))?;
+        let gate = self.gate.lock().await;
+        if self.store()?.settings().await.map_err(store_error)?.paused {
+            return Err(AdminError::conflict("重登队列已暂停"));
+        }
+        let mut entry = self
+            .entries()
+            .await?
+            .into_iter()
+            .find(|entry| entry.id == entry_id)
+            .ok_or_else(|| AdminError::not_found("重登资料不存在"))?;
+        entry.validate_totp()?;
+        if entry.revision != revision {
+            return Err(AdminError::conflict("重登资料已变化，请重新确认"));
+        }
+        if entry.status.active() || gate.active.contains_key(&entry.email) {
+            return Err(AdminError::conflict("该邮箱已有重登任务"));
+        }
+        let pool = self.pool().await?;
+        let account = matching_accounts(&entry, &pool)
+            .into_iter()
+            .find(|account| account.id == target.account_id)
+            .ok_or_else(|| AdminError::conflict("目标账号已删除或不再匹配该邮箱"))?;
+        if &ReloginTarget::from_account(account)? != target {
+            return Err(AdminError::conflict(
+                "目标账号身份、工作区或凭据已变化，请重新确认",
+            ));
+        }
+        entry.target = Some(target.clone());
+        entry.automatic_job = false;
+        entry.manual_push_context = Some(context.clone());
+        entry.credential = None;
+        entry.synced_at = None;
+        entry.status = ReloginStatus::Queued;
+        entry.message = "等待重登，验证后同步到指定账号".to_owned();
+        self.save(&mut entry).await
+    }
+
     async fn list(&self) -> Result<ReloginList, AdminError> {
         let mut entries = self.entries().await?;
         entries.sort_by(|left, right| {
@@ -588,6 +796,7 @@ impl ReloginService for DefaultReloginService {
                     credential: None,
                     target: None,
                     automatic_job: false,
+                    manual_push_context: None,
                     automatic_attempts: 0,
                     attempted_target: None,
                     next_attempt_at: None,
@@ -624,6 +833,7 @@ impl ReloginService for DefaultReloginService {
                 }
                 entry.target = select_target(&entry, &pool)?;
                 entry.automatic_job = false;
+                entry.manual_push_context = None;
                 entry.status = ReloginStatus::Queued;
                 entry.message = "等待重登".to_owned();
                 self.save(&mut entry).await
@@ -640,14 +850,30 @@ impl ReloginService for DefaultReloginService {
         revisions: &BTreeMap<String, u64>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
+        self.push_with_template(ids, revisions, None, context).await
+    }
+
+    async fn push_with_template(
+        &self,
+        ids: &[String],
+        revisions: &BTreeMap<String, u64>,
+        template: Option<ReloginTemplateSelection>,
+        context: &MutationContext,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         validate_ids(ids)?;
         let _gate = self.gate.lock().await;
+        let template = self.resolve_template(template).await?;
         let entries = self.entries().await?;
         let mut results = Vec::new();
         for id in ids {
             let outcome = match entries.iter().find(|entry| &entry.id == id) {
                 Some(entry) if revisions.get(id) == Some(&entry.revision) => {
-                    self.push_entry(&mut entry.clone(), context).await
+                    self.push_entry_with_template(
+                        &mut entry.clone(),
+                        template.as_ref().map(|template| &template.config),
+                        context,
+                    )
+                    .await
                 }
                 Some(_) => Err(AdminError::conflict("资料已变化，请刷新列表后重新确认推送")),
                 None => Err(AdminError::not_found("资料不存在")),

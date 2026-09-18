@@ -39,11 +39,19 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
     let fixture = AdminTestFixture::new().await;
     for (path, body) in [
         ("/api/admin/relogin", None),
+        ("/api/admin/relogin/templates", None),
+        ("/api/admin/relogin/templates/save", Some(json!({}))),
+        ("/api/admin/relogin/templates/delete", Some(json!({}))),
         (
             "/api/admin/relogin/import",
             Some(json!({"text":"test-only-private-material"})),
         ),
         ("/api/admin/relogin/queue", Some(json!({"ids":["a"]}))),
+        (
+            "/api/admin/relogin/accounts/query",
+            Some(json!({"ids":["a"]})),
+        ),
+        ("/api/admin/relogin/accounts/queue", Some(json!({}))),
         (
             "/api/admin/relogin/push",
             Some(json!({"ids":["a"],"revisions":{"a":1}})),
@@ -74,6 +82,40 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
     fixture.auth.insert_session("valid-session");
     for (path, body) in [
         ("/api/admin/relogin/push", json!({"ids":["a"]})),
+        (
+            "/api/admin/relogin/push",
+            json!({"ids":["a"],"revisions":{"a":1},"template":{"id":"t"}}),
+        ),
+        ("/api/admin/relogin/templates/delete", json!({"id":"t"})),
+        (
+            "/api/admin/relogin/templates/save",
+            json!({"config":{
+                "name":"example","enabled":true,"weight":1,"concurrencyLimit":0.5,
+                "groupIds":[],"outboundProxyId":null
+            }}),
+        ),
+        (
+            "/api/admin/relogin/templates/save",
+            json!({"config":{
+                "name":"example","enabled":true,"weight":1,"concurrencyLimit":null,
+                "groupIds":[],"outboundProxyId":null,"password":"test-only-private-material"
+            }}),
+        ),
+        (
+            "/api/admin/relogin/accounts/query",
+            json!({"ids":["a"],"surprise":true}),
+        ),
+        (
+            "/api/admin/relogin/accounts/queue",
+            json!({"entryId":"a","revision":1}),
+        ),
+        (
+            "/api/admin/relogin/accounts/queue",
+            json!({
+                "entryId":"a","revision":1,
+                "target":{"account_id":"a","credential_revision":1,"user_id":"u","workspace_id":"w","surprise":true}
+            }),
+        ),
         (
             "/api/admin/relogin/settings",
             json!({"concurrency":1,"paused":false,"surprise":true}),
