@@ -267,6 +267,8 @@ pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageLi
         model,
         requested_model: record.requested_model_id,
         upstream_model: record.upstream_model_id,
+        upstream_response_model: record.upstream_response_model,
+        turn_state: usage_turn_state_summary(record.turn_state_summary_json.as_deref()),
         service_tier: record.service_tier,
         client_transport: record.client_transport,
         upstream_transport: record.upstream_transport,
@@ -360,6 +362,7 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         model,
         requested_model: record.requested_model_id,
         upstream_model: record.upstream_model_id,
+        upstream_response_model: record.upstream_response_model,
         service_tier: record.service_tier,
         status_code,
         client_transport: record.client_transport,
@@ -421,6 +424,24 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         latency_ms_display: latency_display,
         logical_outcome: outcome,
     }
+}
+
+pub(crate) fn usage_turn_state_summary(value: Option<&str>) -> Option<UsageTurnStateSummaryView> {
+    let summary: UsageTurnStateSummaryView = serde_json::from_str(value?).ok()?;
+    if !matches!(summary.transport.as_str(), "http_sse" | "websocket")
+        || summary.preview.as_ref().is_some_and(|value| {
+            value.len() > 20 || !value.is_ascii() || value.chars().any(char::is_control)
+        })
+        || (summary.injected
+            && (!summary
+                .chars
+                .is_some_and(|chars| (1..=2048).contains(&chars))
+                || summary.preview.is_none()))
+        || (!summary.injected && (summary.chars.is_some() || summary.preview.is_some()))
+    {
+        return None;
+    }
+    Some(summary)
 }
 
 pub(crate) fn provider_metadata_fields(value: Option<&str>) -> BTreeMap<String, Value> {

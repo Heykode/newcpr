@@ -84,6 +84,7 @@ pub struct AccountGroupRecord {
     pub description: Option<String>,
     pub color: AccountGroupColor,
     pub enabled: bool,
+    pub disable_fast: bool,
     pub member_count: u64,
     pub provider_counts: BTreeMap<String, u64>,
     pub client_key_count: u64,
@@ -110,6 +111,7 @@ pub struct CreateAccountGroup {
     pub name: String,
     pub description: Option<String>,
     pub color: AccountGroupColor,
+    pub disable_fast: bool,
 }
 
 /// Store-ready create command with a generated stable ID.
@@ -119,6 +121,7 @@ pub struct NewAccountGroup {
     pub name: String,
     pub description: Option<String>,
     pub color: AccountGroupColor,
+    pub disable_fast: bool,
 }
 
 /// Update an account group's descriptive fields.
@@ -128,6 +131,8 @@ pub struct UpdateAccountGroup {
     pub name: String,
     pub description: Option<String>,
     pub color: AccountGroupColor,
+    /// `None` 保留原值，兼容未提供该字段的旧管理客户端。
+    pub disable_fast: Option<bool>,
 }
 
 /// Enable or disable an account group.

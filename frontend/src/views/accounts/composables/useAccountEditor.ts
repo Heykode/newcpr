@@ -17,6 +17,7 @@ export function useAccountEditor(options: {
   const showEditModal = shallowRef(false)
   const editingAccountId = shallowRef<string | null>(null)
   const schedulingEnabled = shallowRef(true)
+  const turnStateInjectionEnabled = shallowRef(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const proxyMode = shallowRef('preserve')
@@ -36,6 +37,7 @@ export function useAccountEditor(options: {
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
+    turnStateInjectionEnabled.value = account.turnStateInjectionEnabled
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     selectedGroupIds.value = account.groups.map(group => group.id)
@@ -57,14 +59,17 @@ export function useAccountEditor(options: {
     }
 
     await saveAction.run(async () => {
-      await updateAccount({
+      const payload: Parameters<typeof updateAccount>[0] = {
         accountId,
         outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
         enabled: schedulingEnabled.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
         groupIds: [...new Set(selectedGroupIds.value)],
-      })
+      }
+      if (editingAccount.value?.provider === 'openai')
+        payload.turnStateInjectionEnabled = turnStateInjectionEnabled.value
+      await updateAccount(payload)
       showEditModal.value = false
       await Promise.all([options.reloadAccounts(), options.reloadGroups()])
       toast.success('账号已更新')
@@ -78,6 +83,7 @@ export function useAccountEditor(options: {
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = true
+    turnStateInjectionEnabled.value = false
     concurrencyLimit.value = ''
     weight.value = '1'
     selectedGroupIds.value = []
@@ -87,6 +93,7 @@ export function useAccountEditor(options: {
     showEditModal,
     editingAccount,
     schedulingEnabled,
+    turnStateInjectionEnabled,
     concurrencyLimit,
     weight,
     proxyMode,

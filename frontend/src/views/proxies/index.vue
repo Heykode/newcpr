@@ -200,7 +200,18 @@ onMounted(() => void query.execute())
               </div>
             </template>
             <template #exitIp="{ row }">
-              <span class="break-all font-mono text-cp-xs">{{ row.lastTest?.exitIp ?? '-' }}</span>
+              <div v-if="row.lastTest?.exitIpv4 && row.lastTest?.exitIpv6" class="flex flex-col gap-0.5 font-mono text-cp-xs">
+                <span class="truncate" :title="`IPv4: ${row.lastTest.exitIpv4}`">{{ row.lastTest.exitIpv4 }}</span>
+                <span class="truncate" :title="`IPv6: ${row.lastTest.exitIpv6}`">{{ row.lastTest.exitIpv6 }}</span>
+              </div>
+              <div v-else-if="row.lastTest?.exitIpv4" class="font-mono text-cp-xs" :title="`IPv4: ${row.lastTest.exitIpv4}`">
+                {{ row.lastTest.exitIpv4 }}
+              </div>
+              <div v-else-if="row.lastTest?.exitIpv6" class="font-mono text-cp-xs" :title="`IPv6: ${row.lastTest.exitIpv6}`">
+                {{ row.lastTest.exitIpv6 }}
+              </div>
+              <span v-else-if="row.lastTest?.exitIp" class="break-all font-mono text-cp-xs">{{ row.lastTest.exitIp }}</span>
+              <span v-else class="text-cp-text-quaternary">-</span>
             </template>
             <template #latency="{ row }">
               <span v-if="testingIds.has(row.id)" class="text-cp-text-secondary">测试中</span>

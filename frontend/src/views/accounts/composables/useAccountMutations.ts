@@ -4,6 +4,7 @@ import type { RequestOptions } from '@/api/request'
 import dayjs from 'dayjs'
 import { ref, watch } from 'vue'
 import {
+  batchUpdateAccounts,
   deleteAccounts,
   exportAccounts,
   recoverAccount,
@@ -46,6 +47,7 @@ export function useAccountMutations(options: {
   const batchDeletingAction = useAsyncAction()
   const exportingAccountsAction = useAsyncAction()
   const togglingAccountIds = useIdSet<string>()
+  const togglingTurnStateAccountIds = useIdSet<string>()
   const recoveringAccountIds = recoveringAccounts.ids
   const refreshingAccountIds = refreshingAccounts.ids
   const refreshingQuotaAccountIds = refreshingQuotaAccounts.ids
@@ -217,6 +219,22 @@ export function useAccountMutations(options: {
     })
   }
 
+  async function handleToggleTurnState(account: AccountRow, enabled: boolean) {
+    if (account.provider !== 'openai')
+      return
+    await togglingTurnStateAccountIds.run(account.id, async () => {
+      try {
+        await batchUpdateAccounts({
+          accountIds: [account.id],
+          turnStateInjectionEnabled: enabled,
+        })
+        await options.replaceAccount({ ...account, turnStateInjectionEnabled: enabled })
+        toast.success(enabled ? 'State 注入已开启' : 'State 注入已关闭')
+      }
+      catch {}
+    })
+  }
+
   async function handleRecover(accountId: string) {
     await recoveringAccounts.run(accountId, async () => {
       try {
@@ -283,6 +301,7 @@ export function useAccountMutations(options: {
     batchDeleting,
     exportingAccounts,
     togglingAccountIds: togglingAccountIds.ids,
+    togglingTurnStateAccountIds: togglingTurnStateAccountIds.ids,
     requestDeleteAccount,
     handleDelete,
     handleBatchDelete,
@@ -292,5 +311,6 @@ export function useAccountMutations(options: {
     handleRefresh,
     handleRefreshQuota,
     handleToggleEnabled,
+    handleToggleTurnState,
   }
 }

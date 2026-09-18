@@ -676,6 +676,7 @@ pub struct ProviderAccount {
     authentication_kind: String,
     revision: CredentialRevision,
     enabled: bool,
+    turn_state_injection_enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
     credential_state: CredentialState,
@@ -712,6 +713,7 @@ impl ProviderAccount {
             authentication_kind,
             revision,
             enabled: true,
+            turn_state_injection_enabled: false,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             credential_state: CredentialState::Unknown,
@@ -780,6 +782,17 @@ impl ProviderAccount {
         self.last_error_reason = last_error_reason;
         self.last_error_message = last_error_message;
         self
+    }
+
+    #[must_use]
+    pub const fn with_turn_state_injection_enabled(mut self, enabled: bool) -> Self {
+        self.turn_state_injection_enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn turn_state_injection_enabled(&self) -> bool {
+        self.turn_state_injection_enabled
     }
 
     #[must_use]

@@ -505,8 +505,18 @@ async fn captured_http_request(
 async fn http_request_with_body(
     provider_name: &str,
     body: Bytes,
+    headers: HeaderMap,
+    peer_address: Option<SocketAddr>,
+) -> (axum::response::Response, Option<CapturedClientContext>) {
+    http_request_with_body_and_limit(provider_name, body, headers, peer_address, None).await
+}
+
+async fn http_request_with_body_and_limit(
+    provider_name: &str,
+    body: Bytes,
     mut headers: HeaderMap,
     peer_address: Option<SocketAddr>,
+    response_limit: Option<usize>,
 ) -> (axum::response::Response, Option<CapturedClientContext>) {
     headers.insert(
         AUTHORIZATION,
@@ -515,7 +525,16 @@ async fn http_request_with_body(
     let observed = Arc::new(Mutex::new(None));
     let execution = Arc::new(ContextCaptureExecution {
         observed: Arc::clone(&observed),
-        client: authenticated_client_for_provider("sk_context_test", provider_name),
+        client: response_limit.map_or_else(
+            || authenticated_client_for_provider("sk_context_test", provider_name),
+            |bytes| {
+                super::super::authenticated_client_with_response_limit(
+                    "sk_context_test",
+                    provider_name,
+                    bytes,
+                )
+            },
+        ),
     });
     let mut request = Request::post("/v1/responses")
         .body(Body::from(body))
@@ -531,6 +550,33 @@ async fn http_request_with_body(
         .expect("context response");
     let observed = observed.lock().expect("context capture lock").clone();
     (response, observed)
+}
+
+#[tokio::test]
+async fn configured_decompression_limit_is_frozen_in_the_authenticated_snapshot() {
+    let body = json!({"model":"model-a","input":"hello","padding":"x".repeat(4096)});
+    let compressed = super::request::encode_body("zstd", body.to_string().as_bytes());
+    let headers = HeaderMap::from_iter([
+        (CONTENT_ENCODING, HeaderValue::from_static("zstd")),
+        (CONTENT_TYPE, HeaderValue::from_static("application/json")),
+    ]);
+
+    let (rejected, observed) = http_request_with_body_and_limit(
+        "openai",
+        compressed.clone().into(),
+        headers.clone(),
+        None,
+        Some(1024),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert!(observed.is_none());
+
+    let (accepted, observed) =
+        http_request_with_body_and_limit("openai", compressed.into(), headers, None, Some(8192))
+            .await;
+    assert_eq!(accepted.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(observed.is_some());
 }
 
 #[tokio::test]

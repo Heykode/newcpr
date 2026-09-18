@@ -73,6 +73,8 @@ struct CreateAccountGroupRequest {
     name: String,
     description: Option<String>,
     color: String,
+    #[serde(default)]
+    disable_fast: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +84,7 @@ struct UpdateAccountGroupRequest {
     name: String,
     description: Option<String>,
     color: String,
+    disable_fast: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +101,7 @@ struct AccountGroupView {
     description: Option<String>,
     color: String,
     enabled: bool,
+    disable_fast: bool,
     member_count: u64,
     provider_counts: BTreeMap<String, u64>,
     client_key_count: u64,
@@ -138,6 +142,7 @@ impl From<AccountGroupRecord> for AccountGroupView {
             description: record.description,
             color: record.color.as_str().to_owned(),
             enabled: record.enabled,
+            disable_fast: record.disable_fast,
             member_count: record.member_count,
             provider_counts: record.provider_counts,
             client_key_count: record.client_key_count,
@@ -272,6 +277,7 @@ where
                     name: request.name,
                     description: request.description,
                     color: group_color(&request.color)?,
+                    disable_fast: request.disable_fast,
                 },
             )
             .await,
@@ -299,6 +305,7 @@ where
                     name: request.name,
                     description: request.description,
                     color: group_color(&request.color)?,
+                    disable_fast: request.disable_fast,
                 },
             )
             .await,

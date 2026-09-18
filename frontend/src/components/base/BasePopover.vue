@@ -271,6 +271,7 @@ async function openPopover() {
 }
 
 function closePopover() {
+  clearHoverOpenTimer()
   clearHoverCloseTimer()
   open.value = false
 }

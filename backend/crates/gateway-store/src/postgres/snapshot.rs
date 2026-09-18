@@ -21,6 +21,10 @@ use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
+    pub disable_fast: bool,
+    pub turn_state_injection_enabled: bool,
+    pub turn_state_models: Vec<String>,
+    pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
@@ -48,6 +52,7 @@ pub struct SnapshotAccountGroupData {
     pub id: AccountGroupId,
     pub name: String,
     pub enabled: bool,
+    pub disable_fast: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,8 +156,16 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.min_codex_desktop_version,
                 data.settings.min_codex_cli_version,
             )
+            .with_disable_fast(data.settings.disable_fast)
+            .with_responses_max_decompressed_body_bytes(
+                data.settings.responses_max_decompressed_body_bytes,
+            )
             .with_request_location(data.settings.request_tuning.openai_request_location.clone())
-            .with_request_tuning(to_core_request_tuning(data.settings.request_tuning));
+            .with_request_tuning(to_core_request_tuning(data.settings.request_tuning))
+            .with_openai_turn_state_policy(
+                data.settings.turn_state_injection_enabled,
+                data.settings.turn_state_models,
+            );
             let client_policies = data
                 .client_api_keys
                 .into_iter()
@@ -168,7 +181,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             let account_groups = data
                 .account_groups
                 .into_iter()
-                .map(|group| SnapshotAccountGroupFacts::new(group.id, group.name, group.enabled))
+                .map(|group| {
+                    SnapshotAccountGroupFacts::new(group.id, group.name, group.enabled)
+                        .with_disable_fast(group.disable_fast)
+                })
                 .collect();
             let provider_accounts = data
                 .provider_accounts
@@ -302,12 +318,18 @@ async fn load_settings(
             Option<String>,
             Option<String>,
             Option<sqlx::types::Json<RequestTuningOverrides>>,
+            bool,
+            i64,
+            bool,
+            Vec<String>,
         ),
     >(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
                 model_mappings_json, min_codex_desktop_version,
-                min_codex_cli_version, request_tuning_json
+                min_codex_cli_version, request_tuning_json, disable_fast,
+                responses_max_decompressed_body_bytes, turn_state_injection_enabled,
+                turn_state_models
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -331,6 +353,10 @@ async fn load_settings(
             request_tuning: row
                 .9
                 .map_or_else(RequestTuningOverrides::default, |value| value.0),
+            disable_fast: row.10,
+            responses_max_decompressed_body_bytes: to_u64(row.11)?,
+            turn_state_injection_enabled: row.12,
+            turn_state_models: row.13,
         },
     ))
 }
@@ -360,18 +386,19 @@ async fn load_client_keys(
 async fn load_account_groups(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<SnapshotAccountGroupData>> {
-    let rows = sqlx::query_as::<_, (String, String, bool)>(
-        "select id, name, enabled from account_groups order by id",
+    let rows = sqlx::query_as::<_, (String, String, bool, bool)>(
+        "select id, name, enabled, disable_fast from account_groups order by id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("load snapshot account groups"))?;
     rows.into_iter()
-        .map(|(id, name, enabled)| {
+        .map(|(id, name, enabled, disable_fast)| {
             Ok(SnapshotAccountGroupData {
                 id: AccountGroupId::new(id).map_err(|_| invalid("invalid account group id"))?,
                 name,
                 enabled,
+                disable_fast,
             })
         })
         .collect()

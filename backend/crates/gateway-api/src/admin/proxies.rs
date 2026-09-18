@@ -82,6 +82,8 @@ struct ProxyTestView {
     success: bool,
     latency_ms: u64,
     exit_ip: Option<String>,
+    exit_ipv4: Option<String>,
+    exit_ipv6: Option<String>,
     message: String,
 }
 
@@ -91,6 +93,8 @@ impl From<ProxyTestResult> for ProxyTestView {
             success: result.success,
             latency_ms: result.latency_ms,
             exit_ip: result.exit_ip.map(|ip| ip.to_string()),
+            exit_ipv4: result.exit_ipv4.map(|ip| ip.to_string()),
+            exit_ipv6: result.exit_ipv6.map(|ip| ip.to_string()),
             message: result.message,
         }
     }

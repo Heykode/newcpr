@@ -103,6 +103,7 @@ pub struct AccountRecord {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+    pub turn_state_injection_enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
@@ -285,6 +286,7 @@ pub struct AccountSummary {
 pub struct UpdateAccount {
     pub account_id: String,
     pub enabled: bool,
+    pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
@@ -303,6 +305,7 @@ pub struct AccountUpdateResult {
 pub struct BatchUpdateAccounts {
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
+    pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     pub weight: Option<AccountWeight>,
     pub group_ids: Option<Vec<gateway_core::routing::AccountGroupId>>,

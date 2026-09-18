@@ -374,6 +374,91 @@ fn compiler_should_reject_zero_default_or_account_concurrency_override() {
     }
 }
 
+#[test]
+fn decompression_limit_is_frozen_and_rejects_zero_or_oversized_values() {
+    for (bytes, expected) in [
+        (1_u64, Ok(1_usize)),
+        (64 * 1024 * 1024, Ok(64 * 1024 * 1024)),
+        (256 * 1024 * 1024, Ok(256 * 1024 * 1024)),
+        (0, Err(RuntimeSnapshotCompileError::InvalidData)),
+        (
+            256 * 1024 * 1024 + 1,
+            Err(RuntimeSnapshotCompileError::InvalidData),
+        ),
+    ] {
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_responses_max_decompressed_body_bytes(bytes),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let result = block_on(compiler(Arc::new(TestSnapshotStore::new(Ok(facts)))).compile())
+            .map(|snapshot| snapshot.responses_max_decompressed_body_bytes());
+        assert_eq!(result, expected, "{bytes}");
+    }
+}
+
+#[test]
+fn disable_fast_uses_bound_groups_and_global_policy_without_changing_scope() {
+    let group_id =
+        gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
+    let account_id = ProviderAccountId::new("acct_fast").unwrap();
+    for (global, group, expected) in [
+        (false, false, false),
+        (true, false, true),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_disable_fast(global),
+            vec![SnapshotClientPolicyFacts::new(
+                ClientApiKeyId::new("key_fast").unwrap(),
+                PlaintextClientApiKey::new("sk_fast").unwrap(),
+                vec![group_id.clone()],
+                RateLimits::unlimited(),
+            )],
+            vec![
+                SnapshotAccountGroupFacts::new(group_id.clone(), "Fast policy".to_owned(), true)
+                    .with_disable_fast(group),
+            ],
+            vec![SnapshotProviderAccountFacts::new(
+                account_id.clone(),
+                "alpha",
+            )],
+            vec![SnapshotAccountGroupMemberFacts::new(
+                group_id.clone(),
+                account_id.clone(),
+            )],
+        );
+        let snapshot = block_on(
+            RuntimeSnapshotCompiler::new(
+                Arc::new(TestSnapshotStore::new(Ok(facts))),
+                Arc::new(TestCatalog::Unavailable),
+            )
+            .compile(),
+        )
+        .expect("snapshot");
+        let policy = snapshot.client_policies().next().expect("client policy");
+        assert!(policy.account_scope().allows(&account_id));
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new("unlisted-model").unwrap(),
+                &super::operation(),
+                Arc::clone(policy.account_scope()),
+                &gateway_core::routing::RoutingContext::default(),
+            )
+            .expect("routing plan");
+        assert_eq!(plan.disable_fast(), expected);
+    }
+}
+
 fn account_concurrency_facts(default_limit: u32, override_limit: Option<u32>) -> SnapshotFacts {
     SnapshotFacts::new(
         revision(1),

@@ -26,6 +26,8 @@ impl ProxyProbe for ControlledProbe {
             success: self.success,
             latency_ms: 12,
             exit_ip: self.success.then(|| "203.0.113.2".parse().unwrap()),
+            exit_ipv4: self.success.then(|| "203.0.113.2".parse().unwrap()),
+            exit_ipv6: None,
             message: if self.success {
                 "连接成功"
             } else {

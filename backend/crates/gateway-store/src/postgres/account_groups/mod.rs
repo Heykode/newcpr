@@ -203,20 +203,25 @@ impl AccountGroupStore for PgAccountGroupRepository {
             "create",
             "account_group",
             id.as_str(),
-            vec!["name".to_owned(), "description".to_owned()],
+            vec![
+                "name".to_owned(),
+                "description".to_owned(),
+                "disable_fast".to_owned(),
+            ],
         );
         let revision = self
             .mutate(audit, |transaction| {
                 Box::pin(async move {
                     sqlx::query(
                         "insert into account_groups
-                         (id, name, description, color, enabled, created_at, updated_at)
-                         values ($1, $2, $3, $4, true, now(), now())",
+                         (id, name, description, color, disable_fast, enabled, created_at, updated_at)
+                         values ($1, $2, $3, $4, $5, true, now(), now())",
                     )
                     .bind(command.id.as_str())
                     .bind(command.name)
                     .bind(command.description)
                     .bind(command.color.as_str())
+                    .bind(command.disable_fast)
                     .execute(&mut **transaction)
                     .await
                     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
@@ -243,20 +248,26 @@ impl AccountGroupStore for PgAccountGroupRepository {
             "update",
             "account_group",
             id.as_str(),
-            vec!["name".to_owned(), "description".to_owned()],
+            vec![
+                "name".to_owned(),
+                "description".to_owned(),
+                "disable_fast".to_owned(),
+            ],
         );
         let revision = self
             .mutate(audit, |transaction| {
                 Box::pin(async move {
                     let result = sqlx::query(
                         "update account_groups
-                 set name = $2, description = $3, color = $4, updated_at = now()
+                 set name = $2, description = $3, color = $4,
+                     disable_fast = coalesce($5, disable_fast), updated_at = now()
                  where id = $1",
                     )
                     .bind(command.id.as_str())
                     .bind(command.name)
                     .bind(command.description)
                     .bind(command.color.as_str())
+                    .bind(command.disable_fast)
                     .execute(&mut **transaction)
                     .await
                     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
@@ -371,7 +382,8 @@ async fn load_member_facts<'e>(
                 (select request_location_json from outbound_proxies where outbound_proxies.id = account.outbound_proxy_id) as request_location_json,
                 account.authentication_kind, account.credential_revision, account.outbound_proxy_url,
                 account.has_refresh_token, account.access_token_expires_at,
-                account.next_refresh_at, account.enabled, account.concurrency_limit,
+                account.next_refresh_at, account.enabled, account.turn_state_injection_enabled,
+                account.concurrency_limit,
                 account.weight, account.credential_state, account.quota_access_state,
                 account.quota_evidence, account.quota_access_observed_at,
                 account.quota_reset_at, account.last_error_reason,
@@ -421,7 +433,7 @@ async fn load_member_facts<'e>(
 
 fn group_select() -> QueryBuilder<Postgres> {
     QueryBuilder::new(
-        "select g.id, g.name, g.description, g.color, g.enabled, g.created_at, g.updated_at,
+        "select g.id, g.name, g.description, g.color, g.enabled, g.disable_fast, g.created_at, g.updated_at,
                 coalesce(members.member_count, 0)::bigint as member_count,
                 coalesce(keys.client_key_count, 0)::bigint as client_key_count,
                 coalesce(members.provider_counts, '{}'::jsonb) as provider_counts
@@ -516,6 +528,9 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
         enabled: row
             .try_get("enabled")
             .map_err(|_| invalid("invalid enabled"))?,
+        disable_fast: row
+            .try_get("disable_fast")
+            .map_err(|_| invalid("invalid disable_fast"))?,
         member_count: count_value(row, "member_count")?,
         provider_counts,
         client_key_count: count_value(row, "client_key_count")?,

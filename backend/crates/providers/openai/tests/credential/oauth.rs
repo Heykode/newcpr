@@ -575,9 +575,10 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
             Arc::new(CandidateExchanger {
                 access_token: "opaque-access".to_owned(),
                 id_token: id_token(serde_json::json!({
+                    "email": "A@example.com",
                     "https://api.openai.com/auth": {
-                        "chatgpt_user_id": if same_user { "user-A" } else { "user-B" },
-                        "chatgpt_account_id": "A"
+                        "chatgpt_user_id": "user-A",
+                        "chatgpt_account_id": if same_user { "A" } else { "B" }
                     }
                 })),
             }),

@@ -21,7 +21,7 @@ use crate::{
         auth::{authenticate_client, client_access_error_response},
         endpoint::collect_raw_json_response,
         error::gateway_error_response,
-        responses::{OpenAiRequestHeaders, decompress_request_body, request_client_context},
+        responses::{OpenAiRequestHeaders, decompress_request_body_limit, request_client_context},
     },
 };
 
@@ -37,7 +37,11 @@ pub(crate) async fn compact_response(
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
-    let (model, request) = match decode_compact(body, &headers) {
+    let (model, request) = match decode_compact(
+        body,
+        &headers,
+        client.snapshot().responses_max_decompressed_body_bytes(),
+    ) {
         Ok(decoded) => decoded,
         Err(error) => return gateway_error_response(&error),
     };
@@ -58,10 +62,11 @@ pub(crate) async fn compact_response(
 fn decode_compact(
     body: Bytes,
     headers: &HeaderMap,
+    max_decompressed_bytes: usize,
 ) -> Result<(PublicModelId, CompactRequest), GatewayError> {
-    let body = match decompress_request_body(&body, headers).map_err(|_| {
-        invalid("compact request content encoding is invalid, unsupported or too large")
-    })? {
+    let body = match decompress_request_body_limit(&body, headers, max_decompressed_bytes).map_err(
+        |_| invalid("compact request content encoding is invalid, unsupported or too large"),
+    )? {
         Cow::Borrowed(_) => body,
         Cow::Owned(decoded) => Bytes::from(decoded),
     };

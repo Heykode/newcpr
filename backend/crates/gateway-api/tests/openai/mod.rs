@@ -114,6 +114,27 @@ pub(super) fn authenticated_client_for_provider(
         .expect("authenticated client")
 }
 
+pub(super) fn authenticated_client_with_response_limit(
+    plaintext: &str,
+    provider_name: &str,
+    bytes: usize,
+) -> AuthenticatedClient {
+    let snapshot = snapshot(plaintext, provider_name)
+        .with_responses_max_decompressed_body_bytes(std::num::NonZeroUsize::new(bytes).unwrap());
+    let source = DefaultExecutionService::new(
+        RuntimeSnapshotHandle::new(snapshot),
+        Arc::new(UnusedExecutionStore),
+        ProviderRegistry::default(),
+        Arc::new(UnusedAdmissions),
+        Arc::new(UnusedCircuits),
+        Arc::new(UnusedContinuation),
+        Arc::new(IgnoredClientApiKeyUsage),
+    );
+    source
+        .authenticate(plaintext)
+        .expect("authenticated client")
+}
+
 pub(super) fn authenticated_client_with_min_versions(
     plaintext: &str,
     desktop: Option<&str>,

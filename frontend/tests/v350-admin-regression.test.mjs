@@ -469,7 +469,7 @@ test('diagnostic exports allow only safe fields and never borrow correlation fro
     requestId: 'request-b',
     upstreamRequestId: null,
     message: 'sensitive message',
-    metadata: { apiKey: 'sensitive credential' },
+    metadata: { apiKey: 'sensitive credential', turnState: { injectedState: 'sensitive-state' } },
     trace: { schemaVersion: 1, events: [traceEvent] },
     attempts: [{ attemptIndex: 1, accountId: 'account-test', rawBody: 'sensitive body' }],
     relatedRequests: [],

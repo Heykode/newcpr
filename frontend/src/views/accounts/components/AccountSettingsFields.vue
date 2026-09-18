@@ -16,15 +16,18 @@ withDefaults(defineProps<{
   accountId?: string
   preserveProxy?: boolean
   proxyError?: string
-}>(), { preserveProxy: true, batch: false })
+  turnStateAvailable?: boolean
+}>(), { preserveProxy: true, batch: false, turnStateAvailable: false })
 
 const enabled = defineModel<boolean>('enabled', { required: true })
+const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 const updateEnabled = defineModel<boolean>('updateEnabled', { default: false })
+const updateTurnStateInjectionEnabled = defineModel<boolean>('updateTurnStateInjectionEnabled', { default: false })
 const updateConcurrencyLimit = defineModel<boolean>('updateConcurrencyLimit', { default: false })
 const updateWeight = defineModel<boolean>('updateWeight', { default: false })
 const updateGroups = defineModel<boolean>('updateGroups', { default: false })
@@ -48,6 +51,32 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         v-model="enabled"
         label="切换账号调度"
         :disabled="disabled || (batch && !updateEnabled)"
+      />
+    </div>
+
+    <div
+      v-if="turnStateAvailable"
+      :class="batch ? 'grid gap-2' : 'flex min-h-6 items-center justify-between gap-3'"
+    >
+      <div class="flex min-w-0 items-center justify-between gap-3">
+        <div>
+          <span class="text-cp leading-none font-medium text-cp-text-secondary">Turn State 注入</span>
+          <p class="mt-1 mb-0 text-cp-xs text-cp-text-tertiary">
+            仅在全局开启且模型命中维护名单时生效
+          </p>
+        </div>
+        <BaseCheckbox
+          v-if="batch"
+          v-model="updateTurnStateInjectionEnabled"
+          label="应用 Turn State 注入更改"
+          title="应用 Turn State 注入更改"
+          :disabled="disabled"
+        />
+      </div>
+      <BaseSwitch
+        v-model="turnStateInjectionEnabled"
+        label="切换 Turn State 注入"
+        :disabled="disabled || (batch && !updateTurnStateInjectionEnabled)"
       />
     </div>
 

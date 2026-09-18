@@ -1058,6 +1058,13 @@ impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             config_revision: revision(1),
+            disable_fast: false,
+            turn_state_injection_enabled: false,
+            turn_state_models: vec![
+                gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
+                    .expect("model"),
+            ],
+            responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             model_mappings: Default::default(),
             refresh_margin_seconds: 300,
             refresh_concurrency: 2,
@@ -1484,6 +1491,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
+                turn_state_injection_enabled: Some(false),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -1521,6 +1529,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
+                turn_state_injection_enabled: Some(false),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -1563,6 +1572,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
                 outbound_proxy: None,
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
                 enabled: Some(false),
+                turn_state_injection_enabled: None,
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(Vec::new()),
@@ -3083,6 +3093,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         access_token_expires_at: Some(now + TimeDelta::hours(1)),
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
+        turn_state_injection_enabled: false,
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
         credential_state: CredentialState::Ready,

@@ -137,6 +137,7 @@ pub struct ProviderAccountSummary {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+    pub turn_state_injection_enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub credential_state: CredentialState,
@@ -322,6 +323,7 @@ pub struct BatchUpdateProviderAccountsAdmin {
     pub outbound_proxy: Option<gateway_admin::model::proxies::AccountProxySelection>,
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
+    pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     pub weight: Option<AccountWeight>,
     pub group_ids: Option<Vec<AccountGroupId>>,
@@ -390,7 +392,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
             (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -400,7 +402,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -412,7 +414,7 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -493,6 +495,7 @@ pub(crate) fn core_account_from_summary(
         summary.last_error_reason,
         summary.last_error_message,
     )
+    .with_turn_state_injection_enabled(summary.turn_state_injection_enabled)
     .with_scheduling(summary.concurrency_limit, summary.weight)
     .with_outbound_proxy(summary.outbound_proxy)
     .with_request_location(summary.request_location)
@@ -580,6 +583,7 @@ pub(crate) fn account_summary_from_row(
         access_token_expires_at: get(&row, "access_token_expires_at")?,
         next_refresh_at: get(&row, "next_refresh_at")?,
         enabled: get(&row, "enabled")?,
+        turn_state_injection_enabled: get(&row, "turn_state_injection_enabled")?,
         concurrency_limit,
         weight,
         credential_state: parse_credential_state(&credential_state)?,

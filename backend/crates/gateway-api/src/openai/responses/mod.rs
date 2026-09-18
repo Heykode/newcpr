@@ -15,7 +15,7 @@ pub use request::{
     ContinuationIntent, DecodedResponsesRequest, OpenAiRequestHeaders, ResponsesRequestMetadata,
     decode_request_with_headers,
 };
-pub(in crate::openai) use request::{decode_object_with_headers, decompress_request_body};
+pub(in crate::openai) use request::{decode_object_with_headers, decompress_request_body_limit};
 pub use response::OpenAiResponsesEncoder;
 pub(crate) use websocket::responses_websocket;
 pub use websocket::{ResponseCreateFrameError, decode_response_create_with_context};

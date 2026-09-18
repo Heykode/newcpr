@@ -33,6 +33,7 @@ async fn seed(repo: &PgAccountGroupRepository) -> Vec<AccountGroupId> {
                 name: format!("Group {index}"),
                 description: None,
                 color: AccountGroupColor::parse("#16A34AFF").expect("color"),
+                disable_fast: false,
             },
             &context(),
         )
@@ -193,6 +194,7 @@ async fn monitor_snapshot_config_changes_wait_for_resample_and_group_deletion_re
             name: "Renamed".to_owned(),
             description: None,
             color: AccountGroupColor::parse("#2563EBFF").expect("color"),
+            disable_fast: None,
         },
         &context(),
     )

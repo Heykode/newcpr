@@ -236,6 +236,7 @@ impl ClientRoutingScope {
 pub struct FrozenAccountScope {
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
+    disable_fast: bool,
 }
 
 impl FrozenAccountScope {
@@ -247,7 +248,19 @@ impl FrozenAccountScope {
         Self {
             directory,
             client_scope,
+            disable_fast: false,
         }
+    }
+
+    #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
+    }
+
+    #[must_use]
+    pub const fn disable_fast(&self) -> bool {
+        self.disable_fast
     }
 
     #[must_use]

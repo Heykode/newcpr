@@ -67,6 +67,15 @@ export interface UsageRecordMetadata {
   [key: string]: unknown
 }
 
+export interface UsageTurnStateSummary {
+  injected: boolean
+  preview: string | null
+  chars: number | null
+  returnedChars: number | null
+  returnedSame: boolean | null
+  transport: string
+}
+
 export interface UsageListRecord {
   id: string
   provider: string | null
@@ -78,6 +87,8 @@ export interface UsageListRecord {
   model: string | null
   requestedModel: string | null
   upstreamModel: string | null
+  upstreamResponseModel: string | null
+  turnState?: UsageTurnStateSummary | null
   serviceTier: string | null
   clientTransport: string
   upstreamTransport: string | null
@@ -110,6 +121,7 @@ export interface UsageRecord {
   model: string | null
   requestedModel: string | null
   upstreamModel: string | null
+  upstreamResponseModel: string | null
   serviceTier: string | null
   statusCode: number | null
   clientTransport: string

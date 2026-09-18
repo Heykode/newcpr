@@ -414,6 +414,20 @@ must not resize the identity cell, expose secret material or imply that cached c
 or the pool account are currently healthy. Relogin-list read failures retain the last safe
 projection and do not fail the account directory.
 
+The identity avatar uses a gold inset ring and bottom-right shield only when
+`provider === 'openai' && turnStateInjectionEnabled === true`. This is the saved
+account opt-in, not proof of an active injection, valid token or healthy account.
+Its tooltip names the global switch, model list and usable State as additional
+conditions. Do not add global-settings reads, polling or upstream probes to render
+the mark. Missing fields and non-OpenAI providers retain the original identity tone.
+Keep the provider icon, fixed 36/40px avatar, separate top-left 2FA badge and
+`data-swipe-select-handle` behavior. The existing mutation/list refresh supplies
+updates; failed mutations must not invent an enabled mark.
+Use `account-state-indicator.test.mjs` for rendered on/off/legacy/provider/2FA
+regressions and `browser/account-state-indicator.mjs` with the read-only preview
+plus intercepted synthetic mutations for menu toggles and both themes at narrow
+widths. These UI checks do not validate upstream State acceptance.
+
 ## 9. Group Monitor Overview
 
 - Keep provisional-account counts off the cards. Existing help text explains

@@ -21,6 +21,10 @@ use gateway_admin::model::settings::RequestTuningOverrides;
 pub struct RuntimeSettings {
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
+    pub disable_fast: bool,
+    pub turn_state_injection_enabled: bool,
+    pub turn_state_models: Vec<String>,
+    pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
@@ -45,6 +49,16 @@ impl fmt::Debug for RuntimeSettings {
                 "admin_api_key",
                 &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("disable_fast", &self.disable_fast)
+            .field(
+                "turn_state_injection_enabled",
+                &self.turn_state_injection_enabled,
+            )
+            .field("turn_state_models", &self.turn_state_models)
+            .field(
+                "responses_max_decompressed_body_bytes",
+                &self.responses_max_decompressed_body_bytes,
+            )
             .field("refresh_margin_seconds", &self.refresh_margin_seconds)
             .field("refresh_concurrency", &self.refresh_concurrency)
             .field(
@@ -67,6 +81,10 @@ impl fmt::Debug for RuntimeSettings {
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
     pub admin_api_key: Option<String>,
+    pub disable_fast: Option<bool>,
+    pub turn_state_injection_enabled: Option<bool>,
+    pub turn_state_models: Vec<String>,
+    pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
@@ -89,6 +107,16 @@ impl fmt::Debug for RuntimeSettingsUpdate {
                 "admin_api_key",
                 &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("disable_fast", &self.disable_fast)
+            .field(
+                "turn_state_injection_enabled",
+                &self.turn_state_injection_enabled,
+            )
+            .field("turn_state_models", &self.turn_state_models)
+            .field(
+                "responses_max_decompressed_body_bytes",
+                &self.responses_max_decompressed_body_bytes,
+            )
             .field("rotation_strategy", &self.rotation_strategy)
             .field("model_mappings", &self.model_mappings)
             .finish_non_exhaustive()
@@ -100,10 +128,14 @@ impl RuntimeSettingsUpdate {
         if self.refresh_margin_seconds == 0
             || self.refresh_concurrency == 0
             || self.max_concurrent_per_account == 0
+            || self.responses_max_decompressed_body_bytes == 0
+            || self.responses_max_decompressed_body_bytes
+                > gateway_admin::model::settings::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES
             || self.usage_retention_days < 31
             || self.ops_event_retention_days == 0
             || self.audit_retention_days == 0
             || !valid_model_mappings(&self.model_mappings)
+            || !valid_turn_state_models(&self.turn_state_models)
             || !valid_client_version(self.min_codex_desktop_version.as_deref())
             || !valid_client_version(self.min_codex_cli_version.as_deref())
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
@@ -164,7 +196,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select config_revision, admin_api_key, refresh_margin_seconds,
+            "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
@@ -217,7 +249,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select config_revision, admin_api_key, refresh_margin_seconds,
+        "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
@@ -257,6 +289,10 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 min_codex_desktop_version = $11,
 	                 min_codex_cli_version = $12,
 	                 request_tuning_json = $13,
+	                 responses_max_decompressed_body_bytes = $14,
+	                 disable_fast = coalesce($15, disable_fast),
+	                 turn_state_injection_enabled = coalesce($16, turn_state_injection_enabled),
+	                 turn_state_models = $17,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -274,6 +310,13 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.min_codex_desktop_version.as_deref())
     .bind(update.min_codex_cli_version.as_deref())
     .bind(sqlx::types::Json(&update.request_tuning))
+    .bind(
+        i64::try_from(update.responses_max_decompressed_body_bytes)
+            .map_err(|_| invalid_numeric())?,
+    )
+    .bind(update.disable_fast)
+    .bind(update.turn_state_injection_enabled)
+    .bind(&update.turn_state_models)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -321,43 +364,52 @@ pub(crate) async fn update_admin_api_key_in_transaction(
     Ok(())
 }
 
-type RuntimeSettingsRow = (
-    i64,
-    Option<String>,
-    i64,
-    i64,
-    i64,
-    i64,
-    String,
-    sqlx::types::Json<BTreeMap<String, String>>,
-    i64,
-    i64,
-    i64,
-    Option<String>,
-    Option<String>,
-    Option<sqlx::types::Json<RequestTuningOverrides>>,
-    DateTime<Utc>,
-);
+#[derive(sqlx::FromRow)]
+struct RuntimeSettingsRow {
+    config_revision: i64,
+    admin_api_key: Option<String>,
+    disable_fast: bool,
+    turn_state_injection_enabled: bool,
+    turn_state_models: Vec<String>,
+    responses_max_decompressed_body_bytes: i64,
+    refresh_margin_seconds: i64,
+    refresh_concurrency: i64,
+    max_concurrent_per_account: i64,
+    request_interval_ms: i64,
+    rotation_strategy: String,
+    model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
+    usage_retention_days: i64,
+    ops_event_retention_days: i64,
+    audit_retention_days: i64,
+    min_codex_desktop_version: Option<String>,
+    min_codex_cli_version: Option<String>,
+    request_tuning_json: Option<sqlx::types::Json<RequestTuningOverrides>>,
+    updated_at: DateTime<Utc>,
+}
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
-        config_revision: Revision::new(to_u64(row.0)?)?,
-        admin_api_key: row.1,
-        refresh_margin_seconds: to_u64(row.2)?,
-        refresh_concurrency: to_u32(row.3)?,
-        max_concurrent_per_account: to_u32(row.4)?,
-        request_interval_ms: to_u64(row.5)?,
-        rotation_strategy: row.6,
-        model_mappings: row.7.0,
-        usage_retention_days: to_u32(row.8)?,
-        ops_event_retention_days: to_u32(row.9)?,
-        audit_retention_days: to_u32(row.10)?,
-        min_codex_desktop_version: row.11,
-        min_codex_cli_version: row.12,
+        config_revision: Revision::new(to_u64(row.config_revision)?)?,
+        admin_api_key: row.admin_api_key,
+        disable_fast: row.disable_fast,
+        turn_state_injection_enabled: row.turn_state_injection_enabled,
+        turn_state_models: row.turn_state_models,
+        responses_max_decompressed_body_bytes: to_u64(row.responses_max_decompressed_body_bytes)?,
+        refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,
+        refresh_concurrency: to_u32(row.refresh_concurrency)?,
+        max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
+        request_interval_ms: to_u64(row.request_interval_ms)?,
+        rotation_strategy: row.rotation_strategy,
+        model_mappings: row.model_mappings_json.0,
+        usage_retention_days: to_u32(row.usage_retention_days)?,
+        ops_event_retention_days: to_u32(row.ops_event_retention_days)?,
+        audit_retention_days: to_u32(row.audit_retention_days)?,
+        min_codex_desktop_version: row.min_codex_desktop_version,
+        min_codex_cli_version: row.min_codex_cli_version,
         request_tuning: row
-            .13
+            .request_tuning_json
             .map_or_else(RequestTuningOverrides::default, |value| value.0),
-        updated_at: row.14,
+        updated_at: row.updated_at,
     })
 }
 
@@ -389,6 +441,21 @@ fn valid_model_mappings(mappings: &BTreeMap<String, String>) -> bool {
         && mappings.iter().all(|(requested, upstream)| {
             valid_model_name(requested, 256) && valid_model_name(upstream, 256)
         })
+}
+
+fn valid_turn_state_models(models: &[String]) -> bool {
+    !models.is_empty()
+        && models.len() <= 64
+        && models.iter().all(|model| {
+            model == model.trim()
+                && model == &model.to_ascii_lowercase()
+                && valid_model_name(model, 256)
+        })
+        && models
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == models.len()
 }
 
 fn valid_model_name(value: &str, max_len: usize) -> bool {

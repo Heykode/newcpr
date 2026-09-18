@@ -80,7 +80,7 @@ use crate::transport::protocol::responses::{
 };
 use crate::transport::protocol::websocket::WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 use crate::transport::request::{
-    CodexRequestEncodeError, RequestAccountScope,
+    CodexRequestEncodeError, RequestAccountScope, apply_managed_turn_state,
     encode_generate_request_with_location as encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
@@ -91,14 +91,15 @@ use crate::transport::{
     CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
     CodexBackendJsonResponse, CodexBackendStreamingResponse, CodexBackendTransport,
     CodexClientError, CodexRateLimitUpdates, CodexRequestContext, CodexResponseMetadata,
-    CodexTransportMetrics, CodexTurnStateUpdate, CodexUpstreamDiagnostics, CodexWebSocketPool,
-    endpoint_url,
+    CodexResponseMetadataUpdates, CodexTransportMetrics, CodexUpstreamDiagnostics,
+    CodexWebSocketPool, endpoint_url,
 };
 
 mod compact;
 mod execution;
 mod failure;
 mod observation;
+mod turn_state;
 mod workers;
 
 use execution::*;
@@ -106,6 +107,7 @@ use execution::*;
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
+pub(crate) use turn_state::{CodexTurnStateMaintenanceService, CodexTurnStateManager};
 pub(crate) use workers::worker_contributions;
 
 const PROVIDER_NAME: &str = "openai";
@@ -153,6 +155,7 @@ pub struct CodexProvider {
     session_transport_recovery: CodexSessionTransportRecovery,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
+    turn_states: Option<CodexTurnStateManager>,
 }
 
 impl CodexProvider {
@@ -171,6 +174,11 @@ impl CodexProvider {
     ) -> Self {
         self.client = self.client.with_request_tuning(request_tuning.clone());
         self.request_tuning = Some(request_tuning);
+        self
+    }
+
+    pub(crate) fn with_turn_state_manager(mut self, manager: CodexTurnStateManager) -> Self {
+        self.turn_states = Some(manager);
         self
     }
 
@@ -220,6 +228,7 @@ impl CodexProvider {
             session_transport_recovery: CodexSessionTransportRecovery::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
+            turn_states: None,
         })
     }
 
@@ -412,6 +421,8 @@ impl Provider for CodexProvider {
         let mut upstream_request =
             encode_generate_request(generate, upstream_model.as_str(), location)
                 .map_err(map_request_error)?;
+        // 编码已生成独立请求；HTTP、WS 与重试在头部和计量之前共用此策略。
+        upstream_request.apply_fast_policy(context.disable_fast());
         let client_key_id = context.client_api_key_ref().as_str();
         if previous_session
             .as_ref()
@@ -583,6 +594,17 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
+        if context.continuation_attempt() == ContinuationAttempt::None
+            && !continuation_requested
+            && upstream_request.previous_response_id().is_none()
+            && upstream_request.turn_state.is_none()
+            && let Some(turn_states) = &self.turn_states
+            && let Some((state, version, expires_at)) = turn_states
+                .active(lease.account(), upstream_model, SystemTime::now())
+                .await
+        {
+            apply_managed_turn_state(&mut upstream_request, state, version, expires_at);
+        }
         // Preserve the established identity/affinity inputs above. Only the
         // selected account's outbound copy receives the effective location.
         if context.request_tuning().openai_location_override_enabled {
@@ -669,6 +691,7 @@ impl Provider for CodexProvider {
                 self.stream_max_retries
             },
             session_capture,
+            turn_states: self.turn_states.clone(),
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {

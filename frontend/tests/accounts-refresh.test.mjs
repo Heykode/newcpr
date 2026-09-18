@@ -647,6 +647,7 @@ function toggleHarness(harness, row) {
     'vue': vue,
     '@/api': {
       updateAccount: body => new Promise((resolve, reject) => writes.push({ body, resolve, reject })),
+      batchUpdateAccounts: body => new Promise((resolve, reject) => writes.push({ body, resolve, reject })),
     },
     '@/components/base/BaseToast': notifications,
     '@/composables/useAsyncAction': actions,
@@ -665,12 +666,58 @@ function toggleHarness(harness, row) {
 }
 
 for (const enabled of [false, true]) {
+  test(`turn state switch ${enabled ? 'on' : 'off'} only patches its own field and preserves concurrent scheduling changes`, async (t) => {
+    const h = createHarness(t)
+    const initial = accountResponse()
+    const row = {
+      ...initial.items[0],
+      provider: 'openai',
+      enabled: true,
+      turnStateInjectionEnabled: !enabled,
+      concurrencyLimit: 2,
+      weight: 100,
+      groups: [{ id: 'grp_test' }],
+    }
+    initial.items = [row]
+    await mountLoaded(h, initial)
+    const { state, writes, selectedIds } = toggleHarness(h, row)
+    const operation = state.handleToggleTurnState(row, enabled)
+    await state.handleToggleTurnState(row, enabled)
+    assert.equal(writes.length, 1, 'duplicate state switches must share the in-flight guard')
+    assert.deepEqual(structuredClone(writes[0].body), {
+      accountIds: [row.id],
+      turnStateInjectionEnabled: enabled,
+    })
+    writes[0].resolve({})
+    await flushRequests()
+    const updated = {
+      ...initial,
+      items: [{
+        ...row,
+        enabled: false,
+        weight: 250,
+        concurrencyLimit: 7,
+        groups: [{ id: 'grp_changed' }],
+        turnStateInjectionEnabled: enabled,
+      }],
+    }
+    await h.settle(updated)
+    await operation
+    assertResult(h.query, updated)
+    assert.equal(selectedIds.value.size, 2)
+    await state.handleToggleTurnState({ ...row, provider: 'xai' }, enabled)
+    assert.equal(writes.length, 1, 'non-OpenAI accounts must not expose this mutation')
+  })
+}
+
+for (const enabled of [false, true]) {
   test(`switch ${enabled ? 'on from paused' : 'off from normal'} rereads the filter immediately and removes only the filtered-out selection`, async (t) => {
     const h = createHarness(t)
     const initial = accountResponse()
     const row = {
       ...initial.items[0],
       enabled: !enabled,
+      turnStateInjectionEnabled: true,
       status: enabled ? 'disabled' : 'normal',
       concurrencyLimit: 2,
       weight: 100,

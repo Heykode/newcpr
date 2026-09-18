@@ -3,6 +3,12 @@ use gateway_core::{
     account::{CredentialRevision, OutboundProxy, ProviderAccount, ProviderAccountId},
     routing::ProviderKind,
 };
+use std::{
+    io::{self, Cursor, Read},
+    pin::Pin,
+    task::{Context, Poll},
+};
+use tokio::io::{AsyncRead, AsyncWrite, BufWriter, ReadBuf};
 
 fn account(id: &str, proxy: Option<&str>) -> ProviderAccount {
     ProviderAccount::new(
@@ -34,6 +40,168 @@ async fn http_exit(label: &'static str) -> (String, tokio::task::JoinHandle<Stri
         String::from_utf8(request[..header_end].to_vec()).unwrap()
     });
     (format!("http://{address}"), task)
+}
+
+async fn pooled_http_exit(
+    expected_connections: usize,
+    expected_requests: usize,
+) -> (String, tokio::task::JoinHandle<Vec<usize>>) {
+    use std::convert::Infallible;
+
+    use http_body_util::Full;
+    use hyper::server::conn::http1;
+    use hyper_util::rt::TokioIo;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
+        let accept = tokio::spawn(async move {
+            let mut tasks = Vec::new();
+            for connection_id in 0..expected_connections {
+                let (stream, _) = listener.accept().await.unwrap();
+                let seen_tx = seen_tx.clone();
+                tasks.push(tokio::spawn(async move {
+                    let service = hyper::service::service_fn(move |_request| {
+                        let seen_tx = seen_tx.clone();
+                        async move {
+                            seen_tx.send(connection_id).unwrap();
+                            let body = concat!(
+                                "event: response.completed\n",
+                                "data: {\"type\":\"response.completed\",\"response\":{",
+                                "\"id\":\"resp_pool\",\"status\":\"completed\",\"output\":[],",
+                                "\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+                            );
+                            Ok::<_, Infallible>(
+                                hyper::Response::builder()
+                                    .header("content-type", "text/event-stream")
+                                    .body(Full::new(bytes::Bytes::from_static(body.as_bytes())))
+                                    .unwrap(),
+                            )
+                        }
+                    });
+                    http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await
+                        .unwrap();
+                }));
+            }
+            tasks
+        });
+        let mut connection_ids = Vec::with_capacity(expected_requests);
+        for _ in 0..expected_requests {
+            connection_ids.push(seen_rx.recv().await.unwrap());
+        }
+        for task in accept.await.unwrap() {
+            task.abort();
+        }
+        connection_ids
+    });
+    (format!("http://{address}"), task)
+}
+
+#[tokio::test]
+async fn direct_http_accounts_use_distinct_connection_pools() {
+    let (base_url, server) = pooled_http_exit(2, 2).await;
+    let base = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        base_url,
+        test_wire_profile(),
+    );
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+    for (id, request_id) in [("direct-a", "direct-a"), ("direct-b", "direct-b")] {
+        base.for_account(&account(id, None))
+            .unwrap()
+            .create_response(&request, request_context(request_id, Some(id)))
+            .await
+            .unwrap();
+    }
+
+    let connection_ids = timeout(Duration::from_secs(5), server)
+        .await
+        .expect("two account-scoped connections")
+        .unwrap();
+    assert_ne!(connection_ids[0], connection_ids[1]);
+}
+
+#[tokio::test]
+async fn direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change() {
+    use gateway_core::provider_ports::ProviderUserAgentOverride;
+
+    let (base_url, server) = pooled_http_exit(2, 3).await;
+    let account = account("profile-pool", None);
+    let base = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        &base_url,
+        test_wire_profile(),
+    );
+    let default_client = base.for_account(&account).unwrap();
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+    for request_id in ["profile-default-a", "profile-default-b"] {
+        default_client
+            .create_response(&request, request_context(request_id, Some("profile-pool")))
+            .await
+            .unwrap();
+    }
+
+    let custom_profile = test_wire_profile();
+    custom_profile
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned(),
+        })
+        .unwrap();
+    CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        base_url,
+        custom_profile,
+    )
+    .for_account(&account)
+    .unwrap()
+    .create_response(
+        &request,
+        request_context("profile-custom", Some("profile-pool")),
+    )
+    .await
+    .unwrap();
+
+    let connection_ids = timeout(Duration::from_secs(5), server)
+        .await
+        .expect("default and custom profile connections")
+        .unwrap();
+    assert_eq!(connection_ids[0], connection_ids[1]);
+    assert_ne!(connection_ids[0], connection_ids[2]);
+}
+
+#[tokio::test]
+async fn account_http_pool_eviction_forces_a_fresh_connection() {
+    let (base_url, server) = pooled_http_exit(2, 2).await;
+    let account = account("evicted", None);
+    let base = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        base_url,
+        test_wire_profile(),
+    );
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+    base.for_account(&account)
+        .unwrap()
+        .create_response(&request, request_context("before-evict", Some("evicted")))
+        .await
+        .unwrap();
+    provider_openai::transport::evict_account_http_clients(account.id().as_str());
+    base.for_account(&account)
+        .unwrap()
+        .create_response(&request, request_context("after-evict", Some("evicted")))
+        .await
+        .unwrap();
+
+    let connection_ids = timeout(Duration::from_secs(5), server)
+        .await
+        .expect("connection after account eviction")
+        .unwrap();
+    assert_ne!(connection_ids[0], connection_ids[1]);
 }
 
 #[tokio::test]
@@ -332,5 +500,112 @@ async fn https_account_proxy_starts_tls_and_rejection_never_falls_back_to_direct
                 .await
                 .is_err()
         );
+    }
+}
+
+// 以底层写入调用为边界模拟问题代理，避免将 TCP 单次读取误当成报文边界。
+struct GreetingSensitiveProxy {
+    greeting: Vec<u8>,
+    replies: Cursor<Vec<u8>>,
+    writes: Vec<Vec<u8>>,
+}
+
+impl GreetingSensitiveProxy {
+    fn new(authenticated: bool) -> Self {
+        let (greeting, mut replies) = if authenticated {
+            (vec![5, 2, 0, 2], vec![5, 2, 1, 0])
+        } else {
+            (vec![5, 1, 0], vec![5, 0])
+        };
+        replies.extend_from_slice(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80]);
+        Self {
+            greeting,
+            replies: Cursor::new(replies),
+            writes: Vec::new(),
+        }
+    }
+}
+
+impl AsyncRead for GreetingSensitiveProxy {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.writes.first() != Some(&self.greeting) {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "proxy rejected partial method negotiation",
+            )));
+        }
+        if buf.remaining() > 0 {
+            let mut byte = [0];
+            let count = Read::read(&mut self.replies, &mut byte)?;
+            buf.put_slice(&byte[..count]);
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for GreetingSensitiveProxy {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.writes.push(buf.to_vec());
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn socks_proxy_flush_contract_coalesces_greeting_without_losing_auth_or_connect() {
+    use tokio_tungstenite::proxy::connect_via_proxy;
+    use tungstenite::proxy::ProxyConfig;
+
+    for scheme in ["socks5", "socks5h"] {
+        for authenticated in [false, true] {
+            let authentication = if authenticated { "user:pass@" } else { "" };
+            let config =
+                ProxyConfig::parse(&format!("{scheme}://{authentication}127.0.0.1:1080")).unwrap();
+            let raw = connect_via_proxy(
+                GreetingSensitiveProxy::new(authenticated),
+                &config,
+                "upstream.invalid",
+                443,
+            )
+            .await;
+            assert!(matches!(raw, Err(tungstenite::Error::Io(ref error))
+                if error.kind() == io::ErrorKind::UnexpectedEof));
+
+            let buffered = connect_via_proxy(
+                BufWriter::new(GreetingSensitiveProxy::new(authenticated)),
+                &config,
+                "upstream.invalid",
+                443,
+            )
+            .await
+            .unwrap();
+            assert!(buffered.buffer().is_empty());
+            let stream = buffered.into_inner();
+            let mut expected = vec![stream.greeting];
+            if authenticated {
+                expected.push(b"\x01\x04user\x04pass".to_vec());
+            }
+            expected.push(b"\x05\x01\x00\x03\x10upstream.invalid\x01\xbb".to_vec());
+            assert_eq!(stream.writes, expected);
+            assert_eq!(
+                stream.replies.position(),
+                stream.replies.get_ref().len() as u64
+            );
+        }
     }
 }

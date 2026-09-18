@@ -34,6 +34,7 @@ mod runtime_settings;
 mod schema_integrity;
 mod snapshot;
 mod snapshots;
+mod turn_states;
 
 static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
@@ -256,6 +257,7 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "provider_egress_fixed_affinity",
             "provider_egress_settings",
             "provider_outbound_user_agents",
+            "provider_turn_states",
             "quota_learning_accounts",
             "quota_learning_plan_samples",
             "runtime_settings",

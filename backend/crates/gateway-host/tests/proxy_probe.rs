@@ -4,7 +4,7 @@ use gateway_host::proxy_probe::HttpProxyProbe;
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{any, header},
+    matchers::{any, header, path},
 };
 
 #[tokio::test]
@@ -88,4 +88,60 @@ async fn invalid_certificate_configuration_should_not_fall_back_or_expose_detail
         .await;
     assert!(!result.success);
     assert!(!result.message.contains("private-certificate-path"));
+}
+
+#[tokio::test]
+async fn dual_stack_proxy_probe_reports_both_addresses_when_available() {
+    let proxy_server = MockServer::start().await;
+    Mock::given(path("/v4"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ip": "203.0.113.8"})))
+        .expect(1)
+        .mount(&proxy_server)
+        .await;
+    Mock::given(path("/v6"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ip": "2001:db8::8"})))
+        .expect(1)
+        .mount(&proxy_server)
+        .await;
+
+    let proxy = OutboundProxy::parse(&proxy_server.uri()).unwrap();
+    let result = HttpProxyProbe::new_dual(
+        format!("{}/v4", proxy_server.uri()),
+        format!("{}/v6", proxy_server.uri()),
+    )
+    .test(&proxy)
+    .await;
+
+    assert!(result.success);
+    assert_eq!(result.exit_ipv4.unwrap().to_string(), "203.0.113.8");
+    assert_eq!(result.exit_ipv6.unwrap().to_string(), "2001:db8::8");
+    assert!(result.message.contains("双栈可用"));
+}
+
+#[tokio::test]
+async fn dual_stack_proxy_probe_reports_single_stack_when_only_one_succeeds() {
+    let proxy_server = MockServer::start().await;
+    Mock::given(path("/v4"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ip": "203.0.113.8"})))
+        .expect(1)
+        .mount(&proxy_server)
+        .await;
+    Mock::given(path("/v6"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&proxy_server)
+        .await;
+
+    let proxy = OutboundProxy::parse(&proxy_server.uri()).unwrap();
+    let result = HttpProxyProbe::new_dual(
+        format!("{}/v4", proxy_server.uri()),
+        format!("{}/v6", proxy_server.uri()),
+    )
+    .test(&proxy)
+    .await;
+
+    assert!(result.success);
+    assert_eq!(result.exit_ipv4.unwrap().to_string(), "203.0.113.8");
+    assert!(result.exit_ipv6.is_none());
+    assert!(result.message.contains("仅 IPv4"));
 }

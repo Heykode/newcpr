@@ -24,6 +24,7 @@ const emit = defineEmits<{
 
 const open = defineModel<boolean>({ required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
+const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
@@ -60,6 +61,7 @@ const egressSaving = shallowRef(false)
 
       <AccountSettingsFields
         v-model:enabled="enabled"
+        v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
         v-model:selected-group-ids="selectedGroupIds"
@@ -67,6 +69,7 @@ const egressSaving = shallowRef(false)
         v-model:proxy-id="proxyId"
         :groups="groups"
         :groups-loading="groupsLoading"
+        :turn-state-available="account.provider === 'openai'"
         :disabled="saving || egressSaving"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"

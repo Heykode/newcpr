@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, VecDeque},
     hash::{Hash, Hasher},
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use gateway_core::{account::ProviderAccountId, provider_ports::egress::ProviderEgressConfig};
@@ -27,6 +27,9 @@ pub struct CodexWebSocketPoolKey {
     account_id: String,
     client_scope: String,
     conversation_id: String,
+    upstream_model: String,
+    turn_state_version: u64,
+    pub(super) turn_state_expires_at: Option<SystemTime>,
     connection_profile: String,
     downstream_connection_id: String,
     egress_key: String,
@@ -48,6 +51,8 @@ impl PartialEq for CodexWebSocketPoolKey {
             && self.account_id == other.account_id
             && self.client_scope == other.client_scope
             && self.conversation_id == other.conversation_id
+            && self.upstream_model == other.upstream_model
+            && self.turn_state_version == other.turn_state_version
             && self.connection_profile == other.connection_profile
             && self.downstream_connection_id == other.downstream_connection_id
             && self.egress_key == other.egress_key
@@ -61,6 +66,8 @@ impl Hash for CodexWebSocketPoolKey {
         self.base_url.hash(state);
         self.account_id.hash(state);
         self.conversation_id.hash(state);
+        self.upstream_model.hash(state);
+        self.turn_state_version.hash(state);
         self.connection_profile.hash(state);
         self.downstream_connection_id.hash(state);
         self.egress_key.hash(state);
@@ -82,6 +89,9 @@ impl CodexWebSocketPoolKey {
             account_id: account_id.into(),
             client_scope: String::new(),
             conversation_id: conversation_id.into(),
+            upstream_model: String::new(),
+            turn_state_version: 0,
+            turn_state_expires_at: None,
             connection_profile: String::new(),
             downstream_connection_id: String::new(),
             egress_key: String::new(),
@@ -106,6 +116,31 @@ impl CodexWebSocketPoolKey {
     pub(crate) fn with_connection_profile(mut self, connection_profile: impl Into<String>) -> Self {
         self.connection_profile = connection_profile.into();
         self
+    }
+
+    pub(crate) fn with_model_state(
+        mut self,
+        upstream_model: impl Into<String>,
+        turn_state_version: u64,
+    ) -> Self {
+        self.upstream_model = upstream_model.into();
+        self.turn_state_version = turn_state_version;
+        self
+    }
+
+    pub(crate) fn with_state_expiry(mut self, expires_at: Option<SystemTime>) -> Self {
+        self.turn_state_expires_at = expires_at;
+        self
+    }
+
+    pub(super) fn managed_state_expired(&self) -> bool {
+        self.turn_state_expires_at
+            .is_some_and(|expiry| expiry <= SystemTime::now())
+    }
+
+    pub(super) fn managed_version(&self, account: &str, model: &str) -> Option<u64> {
+        (self.account_id == account && self.upstream_model == model)
+            .then_some(self.turn_state_version)
     }
 
     /// 隔离同一逻辑会话中由不同下游 WebSocket 驱动的并发响应链。
@@ -185,10 +220,14 @@ impl CodexWebSocketPoolKey {
             self.downstream_connection_id.as_str(),
             self.egress_key.as_str(),
         ];
+        let version = self.turn_state_version.to_string();
+        let managed = (!self.upstream_model.is_empty())
+            .then_some([self.upstream_model.as_str(), version.as_str()]);
         short_sha256(
             parts
                 .into_iter()
-                .chain((!self.client_scope.is_empty()).then_some(self.client_scope.as_str())),
+                .chain((!self.client_scope.is_empty()).then_some(self.client_scope.as_str()))
+                .chain(managed.into_iter().flatten()),
         )
     }
 

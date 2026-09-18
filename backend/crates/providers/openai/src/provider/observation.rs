@@ -33,13 +33,51 @@ pub(super) struct OpenAiResponseObservationState {
     stream: bool,
     requested_service_tier: Option<String>,
     upstream_service_tier: Option<String>,
+    upstream_response_model: Option<String>,
     rate_limit_headers: Vec<(String, String)>,
     timings: ProviderResponseTimings,
     terminal: Option<OpenAiResponseTerminal>,
+    turn_state_capture: Option<Arc<crate::transport::turn_state_capture::TurnStateCapture>>,
 }
 
 pub(super) struct OpenAiPassiveQuotaObservation {
     rate_limits: Vec<ParsedRateLimits>,
+}
+
+pub(super) fn attach_turn_state_snapshot(
+    observation: Option<ProviderResponseObservation>,
+    snapshot: Option<Value>,
+    transport: CodexProviderTransport,
+) -> Option<ProviderResponseObservation> {
+    let Some(snapshot) = snapshot else {
+        return observation;
+    };
+    let actual_transport = snapshot
+        .pointer("/summary/transport")
+        .and_then(Value::as_str)
+        .unwrap_or(transport_name(transport));
+    let observation = observation.unwrap_or(ProviderResponseObservation::new(
+        UpstreamTransport::new(actual_transport).ok()?,
+    ));
+    let mut metadata = observation
+        .provider_metadata()
+        .and_then(|metadata| serde_json::from_str::<Map<String, Value>>(metadata.as_json()).ok())
+        .unwrap_or_default();
+    metadata.insert("turnState".to_owned(), snapshot);
+    Some(match bounded_observation_metadata(metadata) {
+        Some(metadata) => observation.with_provider_metadata(metadata),
+        None => observation,
+    })
+}
+
+fn bounded_observation_metadata(
+    mut metadata: Map<String, Value>,
+) -> Option<ProviderResponseMetadata> {
+    ProviderResponseMetadata::new(serde_json::to_string(&metadata).ok()?).or_else(|| {
+        // Supplemental State evidence must not displace the existing diagnostics.
+        metadata.remove("turnState")?;
+        ProviderResponseMetadata::new(serde_json::to_string(&metadata).ok()?)
+    })
 }
 
 impl OpenAiPassiveQuotaObservation {
@@ -69,6 +107,9 @@ impl OpenAiResponseObservationState {
         response: &CodexBackendStreamingResponse,
         request: &CodexResponsesRequest,
     ) -> Self {
+        if let Some(capture) = &request.turn_state_capture {
+            capture.returned(response.turn_state.as_deref());
+        }
         Self {
             transport: response.transport,
             diagnostics: response.diagnostics.clone(),
@@ -79,12 +120,20 @@ impl OpenAiResponseObservationState {
             stream: request.stream(),
             requested_service_tier: normalize_service_tier(request.service_tier()),
             upstream_service_tier: None,
+            upstream_response_model: response.response_metadata.effective_model.clone(),
             rate_limit_headers: selected_observation_headers(&response.rate_limit_headers),
             timings: openai_response_timings(
                 &response.transport_metrics,
                 &response.response_metadata,
             ),
             terminal: None,
+            turn_state_capture: request.turn_state_capture.clone(),
+        }
+    }
+
+    pub(super) fn observe_turn_state(&self, value: &str) {
+        if let Some(capture) = &self.turn_state_capture {
+            capture.returned(Some(value));
         }
     }
 
@@ -121,7 +170,21 @@ impl OpenAiResponseObservationState {
         if let Some(service_tier) = &self.requested_service_tier {
             observation = observation.with_service_tier_if_valid(service_tier.clone());
         }
+        if let Some(model) = &self.upstream_response_model {
+            observation = observation.with_upstream_response_model_if_valid(model);
+        }
         Some(observation)
+    }
+
+    pub(super) fn observe_upstream_response_model(&mut self, model: Option<&str>) -> bool {
+        let Some(model) = model else {
+            return false;
+        };
+        if self.upstream_response_model.as_deref() == Some(model) {
+            return false;
+        }
+        self.upstream_response_model = Some(model.to_owned());
+        true
     }
 
     pub(super) fn observe_stream_chunk(&mut self, chunk: &[u8], started_at: Instant) -> bool {
@@ -218,6 +281,13 @@ impl OpenAiResponseObservationState {
     pub(super) fn provider_metadata(&self) -> Option<ProviderResponseMetadata> {
         let mut metadata = Map::new();
         metadata.insert("schemaVersion".to_owned(), json!(2));
+        if let Some(snapshot) = self
+            .turn_state_capture
+            .as_ref()
+            .and_then(|capture| capture.snapshot())
+        {
+            metadata.insert("turnState".to_owned(), snapshot);
+        }
         if self.transport == CodexBackendTransport::WebSocket
             && let Some(request_id) = &self.diagnostics.request_id
         {
@@ -284,7 +354,7 @@ impl OpenAiResponseObservationState {
             metadata.insert("incomplete".to_owned(), Value::Bool(incomplete));
             metadata.insert("eventStatusCode".to_owned(), json!(200_u16));
         }
-        ProviderResponseMetadata::new(serde_json::to_string(&Value::Object(metadata)).ok()?)
+        bounded_observation_metadata(metadata)
     }
 }
 

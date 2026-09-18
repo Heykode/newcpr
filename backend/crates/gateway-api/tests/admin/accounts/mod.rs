@@ -1327,6 +1327,7 @@ mod response {
                 access_token_expires_at: None,
                 next_refresh_at: None,
                 enabled: true,
+                turn_state_injection_enabled: false,
                 concurrency_limit: None,
                 weight: AccountWeight::DEFAULT,
                 outbound_proxy: None,

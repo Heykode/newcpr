@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use gateway_core::policy::CodexClientVersion;
+use gateway_core::routing::UpstreamModelId;
 use gateway_core::runtime::SnapshotControl;
 use rand_core::{OsRng, RngCore as _};
 
@@ -114,12 +115,30 @@ impl SettingsService for DefaultSettingsService {
 }
 
 fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
+    let unique_turn_state_models = command
+        .turn_state_models
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(UpstreamModelId::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
     let valid = command.refresh_margin_seconds > 0
         && command.refresh_concurrency > 0
         && command.max_concurrent_per_account > 0
+        && command
+            .responses_max_decompressed_body_bytes
+            .is_none_or(|value| {
+                value > 0
+                    && value <= crate::model::settings::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES
+            })
         && command.usage_retention_days >= 31
         && command.ops_event_retention_days > 0
         && command.audit_retention_days > 0
+        && command.turn_state_models.as_ref().is_none_or(|models| {
+            !models.is_empty()
+                && models.len() <= 64
+                && unique_turn_state_models.len() == models.len()
+        })
         && valid_client_version(command.min_codex_desktop_version.as_deref())
         && valid_client_version(command.min_codex_cli_version.as_deref())
         && i64::try_from(command.request_interval_ms).is_ok();

@@ -11,6 +11,8 @@ pub(super) const QUOTA_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 pub(super) const DESKTOP_RELEASE_WORKER_OWNER: &str = "openai-desktop-release";
 pub(super) const MODEL_ETAG_WORKER_OWNER: &str = "openai-model-etag";
 pub(super) const MODEL_CATALOG_WORKER_OWNER: &str = "openai-model-catalog";
+pub(super) const TURN_STATE_WORKER_OWNER: &str = "openai-turn-state";
+pub(super) const TURN_STATE_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EtagRefreshBackoff {
@@ -50,6 +52,7 @@ pub(crate) fn worker_contributions(
     quota_refresh_policy: CodexQuotaRefreshPolicy,
     oauth_refresh_enabled: bool,
     desktop_release: Arc<CodexDesktopReleaseService>,
+    turn_state_maintenance: Arc<CodexTurnStateMaintenanceService>,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
     let refresh_id = WorkerId::try_new(WorkerKind::OAuthRefresh, PROVIDER_NAME)?;
     let quota_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, PROVIDER_NAME)?;
@@ -57,6 +60,15 @@ pub(crate) fn worker_contributions(
     let etag_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, MODEL_ETAG_WORKER_OWNER)?;
     let desktop_release_id =
         WorkerId::try_new(WorkerKind::QuotaCatalogHealth, DESKTOP_RELEASE_WORKER_OWNER)?;
+    let turn_state_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, TURN_STATE_WORKER_OWNER)?;
+    let turn_state_observer_id = WorkerId::try_new(
+        WorkerKind::QuotaCatalogHealth,
+        "openai-turn-state-observations",
+    )?;
+    let turn_state_collector_id = WorkerId::try_new(
+        WorkerKind::QuotaCatalogHealth,
+        "openai-turn-state-collector",
+    )?;
     let mut contributions = Vec::new();
     if oauth_refresh_enabled {
         contributions.push(WorkerContribution::Registration(scheduled_registration(
@@ -94,6 +106,37 @@ pub(crate) fn worker_contributions(
             Box::new(OpenAiDesktopReleaseTask {
                 service: desktop_release,
             }),
+        )?),
+        WorkerContribution::Registration(scheduled_registration(
+            turn_state_id,
+            TURN_STATE_MAINTENANCE_INTERVAL,
+            Box::new(OpenAiTurnStateMaintenanceTask {
+                service: Arc::clone(&turn_state_maintenance),
+            }),
+        )?),
+        WorkerContribution::Registration(WorkerRegistration::try_new(
+            turn_state_observer_id,
+            WorkerRunnable::Daemon {
+                restart: DaemonRestartPolicy::try_new(
+                    WORKER_INITIAL_BACKOFF,
+                    WORKER_MAXIMUM_BACKOFF,
+                )?,
+                task: Box::new(OpenAiTurnStateObservationTask {
+                    service: Arc::clone(&turn_state_maintenance),
+                }),
+            },
+        )?),
+        WorkerContribution::Registration(WorkerRegistration::try_new(
+            turn_state_collector_id,
+            WorkerRunnable::Daemon {
+                restart: DaemonRestartPolicy::try_new(
+                    WORKER_INITIAL_BACKOFF,
+                    WORKER_MAXIMUM_BACKOFF,
+                )?,
+                task: Box::new(OpenAiTurnStateCollectorTask {
+                    service: turn_state_maintenance,
+                }),
+            },
         )?),
     ]);
     Ok(contributions)
@@ -209,6 +252,59 @@ pub(super) struct OpenAiCatalogEtagTask {
 
 pub(super) struct OpenAiDesktopReleaseTask {
     service: Arc<CodexDesktopReleaseService>,
+}
+
+pub(super) struct OpenAiTurnStateMaintenanceTask {
+    service: Arc<CodexTurnStateMaintenanceService>,
+}
+
+struct OpenAiTurnStateObservationTask {
+    service: Arc<CodexTurnStateMaintenanceService>,
+}
+
+struct OpenAiTurnStateCollectorTask {
+    service: Arc<CodexTurnStateMaintenanceService>,
+}
+
+impl DaemonTask for OpenAiTurnStateCollectorTask {
+    fn run(
+        &self,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = cancellation.cancelled() => Ok(()),
+                () = self.service.run_maintenance() => Ok(()),
+            }
+        })
+    }
+}
+
+impl DaemonTask for OpenAiTurnStateObservationTask {
+    fn run(
+        &self,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = cancellation.cancelled() => Ok(()),
+                () = self.service.run_observations() => Ok(()),
+            }
+        })
+    }
+}
+
+impl ScheduledTask for OpenAiTurnStateMaintenanceTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            let synchronize = self.service.synchronize();
+            tokio::pin!(synchronize);
+            tokio::select! {
+                () = context.cancellation().cancelled() => Ok(()),
+                () = &mut synchronize => Ok(()),
+            }
+        })
+    }
 }
 
 impl ScheduledTask for OpenAiDesktopReleaseTask {

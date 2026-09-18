@@ -73,6 +73,20 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         let replacement = postgres::ControlPlaneReplacement {
             settings: postgres::RuntimeSettingsUpdate {
                 admin_api_key: current.settings.admin_api_key,
+                disable_fast: command.disable_fast,
+                turn_state_injection_enabled: command.turn_state_injection_enabled,
+                turn_state_models: command.turn_state_models.map_or_else(
+                    || current.settings.turn_state_models,
+                    |models| {
+                        models
+                            .into_iter()
+                            .map(|model| model.as_str().to_owned())
+                            .collect()
+                    },
+                ),
+                responses_max_decompressed_body_bytes: command
+                    .responses_max_decompressed_body_bytes
+                    .unwrap_or(current.settings.responses_max_decompressed_body_bytes),
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
@@ -93,6 +107,10 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "1",
                 vec![
                     "model_mappings_json".to_owned(),
+                    "disable_fast".to_owned(),
+                    "turn_state_injection_enabled".to_owned(),
+                    "turn_state_models".to_owned(),
+                    "responses_max_decompressed_body_bytes".to_owned(),
                     "refresh_margin_seconds".to_owned(),
                     "refresh_concurrency".to_owned(),
                     "max_concurrent_per_account".to_owned(),
@@ -195,6 +213,22 @@ pub(crate) fn admin_runtime_settings(
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
         config_revision: admin_revision(settings.config_revision)?,
+        disable_fast: settings.disable_fast,
+        turn_state_injection_enabled: settings.turn_state_injection_enabled,
+        turn_state_models: settings
+            .turn_state_models
+            .into_iter()
+            .map(|model| {
+                gateway_core::routing::UpstreamModelId::new(model).map_err(|_| {
+                    AdminStoreError::new(
+                        AdminStoreErrorKind::Invalid,
+                        "runtime settings",
+                        "turn state model is invalid",
+                    )
+                })
+            })
+            .collect::<AdminStoreResult<Vec<_>>>()?,
+        responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
         model_mappings,
         refresh_margin_seconds: settings.refresh_margin_seconds,
         refresh_concurrency: settings.refresh_concurrency,

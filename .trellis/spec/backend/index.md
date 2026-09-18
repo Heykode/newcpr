@@ -29,6 +29,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Native Model Catalog](./native-model-catalog.md) | 完整原生对象、冻结账号权限、有界缓存与账号出口 | v3.6.1 本地适配 |
 | [Account Relogin](./account-relogin.md) | Login library, create-only import, cancellation and ambiguous push fencing | Local tests; one live Free login passed |
 | [Request Location](./request-location.md) | Default-off global and proxy locations without changing account identity | HTTP/WS payload and persistence contracts |
+| [Managed Turn State](./managed-turn-state.md) | Opt-in state storage, nonblocking observation and exact WS ownership | Workspace/database regression verified; live opt-in acceptance pending |
 
 ---
 

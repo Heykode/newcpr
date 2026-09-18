@@ -9,7 +9,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 
 const require = createRequire(import.meta.url)
-const updateFields = ['updateEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy']
+const updateFields = ['updateEnabled', 'updateTurnStateInjectionEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy']
 
 function loadModule(filename, dependencies = {}) {
   const exports = {}
@@ -30,6 +30,7 @@ const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 function account(id, overrides = {}) {
   return {
     id,
+    provider: 'openai',
     enabled: true,
     concurrencyLimit: 8,
     weight: 17,
@@ -100,6 +101,39 @@ function assertNoRequest(editor) {
   assert.deepEqual(editor.messages.success, [])
   assert.equal(editor.state.saving.value, false)
 }
+
+test('turn state batch update is opt-in and does not change ordinary scheduling', async (t) => {
+  const editor = mountEditor(t)
+  editor.state.open()
+  assert.equal(editor.state.turnStateAvailable.value, true)
+  assert.equal(editor.state.updateTurnStateInjectionEnabled.value, false)
+  editor.state.turnStateInjectionEnabled.value = true
+  assert.equal(editor.state.hasUpdates.value, false)
+  editor.state.updateTurnStateInjectionEnabled.value = true
+  await editor.state.save()
+  assert.deepEqual(editor.requests, [{
+    accountIds: ['account-a'],
+    turnStateInjectionEnabled: true,
+  }])
+})
+
+test('mixed providers cannot apply turn state settings but retain weight editing', async (t) => {
+  const editor = mountEditor(t, {
+    accounts: [account('account-a'), account('account-b', { provider: 'xai' })],
+  })
+  editor.state.open()
+  assert.equal(editor.state.turnStateAvailable.value, false)
+  editor.state.updateTurnStateInjectionEnabled.value = true
+  editor.state.turnStateInjectionEnabled.value = true
+  assert.equal(editor.state.hasUpdates.value, false)
+  editor.state.updateWeight.value = true
+  editor.state.weight.value = '20'
+  await editor.state.save()
+  assert.deepEqual(editor.requests, [{
+    accountIds: ['account-a', 'account-b'],
+    weight: 20,
+  }])
+})
 
 test('batch editor requires fresh opt-ins initially, on every open and after closing', async (t) => {
   const { state } = mountEditor(t)
@@ -212,6 +246,7 @@ test('saving without opt-ins warns and never validates stale values or sends a r
 test('every single field and combination sends exactly the opted-in patch after other fields are unchecked', async (t) => {
   const patches = [
     { enabled: false },
+    { turnStateInjectionEnabled: false },
     { concurrencyLimit: 6 },
     { weight: 23 },
     { groupIds: ['group-new', 'group-other'] },

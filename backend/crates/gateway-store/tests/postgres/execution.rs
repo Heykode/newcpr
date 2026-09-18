@@ -356,8 +356,10 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
     let repository = PgExecutionStore::new(database.pool.clone());
 
     let mut finalization = successful_core_finalization("req_calculated_cost");
+    finalization.downstream_committed_at = Some(std::time::SystemTime::now());
     finalization.websocket_pool = Some("reuse".to_owned());
     finalization.service_tier = Some("priority".to_owned());
+    finalization.upstream_response_model = Some("grok-4.6-build".to_owned());
     finalization.cost = CalculatedCost::from_usd_ticks(12_345)
         .expect("calculated cost")
         .into_estimate();
@@ -392,6 +394,37 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
             "reuse".to_owned(),
             Some("priority".to_owned()),
         )
+    );
+    let observation = observability_repository(&database.pool);
+    let detail = observation
+        .usage_record_detail("req_calculated_cost")
+        .await
+        .expect("request detail");
+    assert_eq!(
+        detail.request.upstream_model_id.as_deref(),
+        Some("grok-4.5")
+    );
+    assert_eq!(
+        detail.request.upstream_response_model.as_deref(),
+        Some("grok-4.6-build")
+    );
+    let page = observation
+        .list_usage_records(UsageRecordQuery {
+            range: ObservabilityRange::new(
+                Utc::now() - Duration::hours(1),
+                Utc::now() + Duration::hours(1),
+            )
+            .unwrap(),
+            filter: UsageRecordFilter::default(),
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).unwrap(),
+        })
+        .await
+        .expect("request list");
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(
+        page.items[0].upstream_response_model.as_deref(),
+        Some("grok-4.6-build")
     );
     database.close().await;
 }
@@ -494,6 +527,7 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
         upstream_transport: Some("websocket".to_owned()),
         http_version: Some("HTTP/2".to_owned()),
         websocket_pool: None,
+        upstream_response_model: None,
         service_tier: None,
         provider_metadata_json: None,
         error: None,
@@ -585,7 +619,19 @@ async fn core_adapter_should_persist_only_object_provider_observation() {
         .expect("seed model request");
     let store = PgExecutionStore::new(database.pool.clone());
     let mut finalization = successful_core_finalization("req_provider_observation");
-    finalization.provider_metadata_json = Some("{\"effectiveModel\":\"gpt-test\"}".to_owned());
+    finalization.downstream_committed_at = Some(std::time::SystemTime::now());
+    let raw = format!("synthetic-{}-state", "a".repeat(300));
+    let summary = json!({
+        "injected": true, "preview": "syntheti...-state", "chars": raw.len(),
+        "returnedChars": 356, "returnedSame": false, "transport": "http_sse"
+    });
+    finalization.provider_metadata_json = Some(
+        json!({
+            "effectiveModel": "gpt-test",
+            "turnState": {"injectedState": raw, "summary": summary}
+        })
+        .to_string(),
+    );
 
     ExecutionStore::finalize_model_request(&store, finalization)
         .await
@@ -597,6 +643,39 @@ async fn core_adapter_should_persist_only_object_provider_observation() {
     .await
     .expect("load provider observation");
     assert_eq!(persisted["effectiveModel"], "gpt-test");
+    assert_eq!(persisted["turnState"]["injectedState"], raw);
+    let observation = observability_repository(&database.pool);
+    let detail = observation
+        .usage_record_detail("req_provider_observation")
+        .await
+        .unwrap();
+    assert!(
+        detail
+            .request
+            .provider_metadata_json
+            .unwrap()
+            .contains(&raw)
+    );
+    let page = observation
+        .list_usage_records(UsageRecordQuery {
+            range: ObservabilityRange::new(
+                Utc::now() - Duration::hours(1),
+                Utc::now() + Duration::hours(1),
+            )
+            .unwrap(),
+            filter: UsageRecordFilter::default(),
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    let listed = &page.items[0];
+    assert_eq!(
+        serde_json::from_str::<Value>(listed.turn_state_summary_json.as_deref().unwrap()).unwrap(),
+        summary
+    );
+    assert!(!format!("{listed:?}").contains(&raw));
 
     database.close().await;
 }
@@ -1230,6 +1309,7 @@ pub(super) fn early_failure(request: &CoreNewModelRequest) -> CoreModelRequestFi
         upstream_transport: None,
         http_version: None,
         websocket_pool: None,
+        upstream_response_model: None,
         service_tier: None,
         provider_metadata_json: None,
         diagnostic_trace_json: trace.snapshot().map(|value| value.to_string()),

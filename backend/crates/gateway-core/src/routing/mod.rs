@@ -24,6 +24,53 @@ use crate::operation::{CapabilityRequirements, Feature, OperationKind};
 use crate::validation::{IdentifierError, RoutingError, validate_text};
 
 pub const DEFAULT_MAX_REQUEST_ATTEMPTS: u32 = 32;
+pub const DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 = 256 * 1024 * 1024;
+
+/// OpenAI managed turn-state injection policy published with the runtime snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiTurnStatePolicy {
+    enabled: bool,
+    models: Arc<BTreeSet<UpstreamModelId>>,
+}
+
+impl Default for OpenAiTurnStatePolicy {
+    fn default() -> Self {
+        let models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]
+            .into_iter()
+            .filter_map(|model| UpstreamModelId::new(model.to_owned()).ok())
+            .collect();
+        Self {
+            enabled: false,
+            models: Arc::new(models),
+        }
+    }
+}
+
+impl OpenAiTurnStatePolicy {
+    #[must_use]
+    pub fn new(enabled: bool, models: BTreeSet<UpstreamModelId>) -> Self {
+        Self {
+            enabled,
+            models: Arc::new(models),
+        }
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn contains(&self, model: &UpstreamModelId) -> bool {
+        self.models.contains(model)
+    }
+
+    #[must_use]
+    pub fn models(&self) -> &BTreeSet<UpstreamModelId> {
+        &self.models
+    }
+}
 
 /// 请求级重试、账号切换和 WebSocket 恢复参数。
 ///
@@ -633,6 +680,7 @@ impl ProviderCandidate {
 /// 一次请求冻结的 Provider 尝试顺序。
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
+    disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
     config_revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
@@ -644,6 +692,11 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub const fn disable_fast(&self) -> bool {
+        self.disable_fast
+    }
+
     #[must_use]
     pub fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()

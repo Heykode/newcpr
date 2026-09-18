@@ -197,6 +197,9 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         runtime_policy,
         oauth_pending,
     )
+    .with_turn_states(Arc::new(postgres::PgProviderTurnStateRepository::new(
+        pool.clone(),
+    )))
     .with_egress(Arc::new(postgres::PgProviderEgressRepository::new(
         pool.clone(),
     )));

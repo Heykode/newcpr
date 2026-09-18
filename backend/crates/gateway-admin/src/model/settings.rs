@@ -12,6 +12,11 @@ use super::Revision;
 /// 客户端模型到上游模型的全局精确映射。
 pub type ModelMappings = BTreeMap<PublicModelId, UpstreamModelId>;
 
+pub const DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 =
+    gateway_core::routing::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES;
+pub const MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 =
+    gateway_core::routing::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES;
+
 /// 管理员明确保存的请求调优覆盖值；`None` 表示继承启动配置或代码默认值。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +185,10 @@ pub use gateway_core::account::RotationStrategy;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
     pub config_revision: Revision,
+    pub disable_fast: bool,
+    pub turn_state_injection_enabled: bool,
+    pub turn_state_models: Vec<UpstreamModelId>,
+    pub responses_max_decompressed_body_bytes: u64,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -198,6 +207,10 @@ pub struct RuntimeSettings {
 /// 原子替换运行设置的命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplaceRuntimeSettings {
+    pub disable_fast: Option<bool>,
+    pub turn_state_injection_enabled: Option<bool>,
+    pub turn_state_models: Option<Vec<UpstreamModelId>>,
+    pub responses_max_decompressed_body_bytes: Option<u64>,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,

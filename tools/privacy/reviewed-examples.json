@@ -1118,5 +1118,221 @@
     "file_sha256": "aa88168d2327ababd914224e6a2a5c517aed8a4e9d170ec77f19c7465826df42",
     "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
     "reason": "Re-reviewed unchanged synthetic Windows Unicode workspace fixture for ASCII WebSocket metadata preservation; installation ID assertions changed elsewhere. Re-reviewed for dependency/upstream integration; the synthetic fixture line is unchanged."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 388,
+    "file_sha256": "b2da94e77a57493cfd0fa763c4018d56e0c36b5466f6425d13f10158869e51c6",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Reviewed synthetic loopback database URL used only to prove embedded passwords are rejected by configuration validation."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 223,
+    "file_sha256": "2cb46c8c96a006b5c67e24324840a0107cfe303ee475b54c5a64f45a8073dec2",
+    "line_sha256": "a64a4ebd4745816bca847998941cb69d613488075fddc35523e9618944445362",
+    "reason": "Re-reviewed unchanged synthetic proxy probe credential after adding dual-stack response fields."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 276,
+    "file_sha256": "2cb46c8c96a006b5c67e24324840a0107cfe303ee475b54c5a64f45a8073dec2",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Re-reviewed unchanged synthetic saved-proxy fixture; no real endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 475,
+    "file_sha256": "2cb46c8c96a006b5c67e24324840a0107cfe303ee475b54c5a64f45a8073dec2",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed unchanged synthetic unsaved proxy probe fixture after dual-stack projection changes."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 515,
+    "file_sha256": "2cb46c8c96a006b5c67e24324840a0107cfe303ee475b54c5a64f45a8073dec2",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Re-reviewed unchanged synthetic probe fixture asserting saved connection isolation."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 707,
+    "file_sha256": "3876f145c5f5a884c1ee76afe3f1d62a857d3ae0f2b8a5a43b5cdedc2997c044",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Reviewed synthetic forwarded-header chain containing one private hop and one documentation address; no connection is made."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 731,
+    "file_sha256": "3876f145c5f5a884c1ee76afe3f1d62a857d3ae0f2b8a5a43b5cdedc2997c044",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Reviewed duplicate synthetic forwarded-header chain used to verify trusted-hop selection."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 26,
+    "file_sha256": "841ea452881c4644dbec659c3ce235ba448308b856b0f72ac9ea11dbe10915d3",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Re-reviewed synthetic loopback proxy authentication fixture after adding dual-stack probe tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1733,
+    "file_sha256": "e2624ae988f9c5c284d64b3ca44a8824210f2a839626415ef86198f7066e0b28",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Re-reviewed unchanged synthetic loopback proxy fixture after device identity transaction tests changed the file."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1760,
+    "file_sha256": "e2624ae988f9c5c284d64b3ca44a8824210f2a839626415ef86198f7066e0b28",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Re-reviewed unchanged normalized synthetic loopback proxy assertion; audit redaction remains separately asserted."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 234,
+    "file_sha256": "ff686fb3dce650bccdd79bc1bafb3f715bcf4296a14cb45857b249a91bdb81d8",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Re-reviewed unchanged synthetic batch-update proxy fixture after dual-stack persistence changes."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 339,
+    "file_sha256": "ff686fb3dce650bccdd79bc1bafb3f715bcf4296a14cb45857b249a91bdb81d8",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Re-reviewed unchanged synthetic account-removal proxy fixture."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 806,
+    "file_sha256": "ff686fb3dce650bccdd79bc1bafb3f715bcf4296a14cb45857b249a91bdb81d8",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Re-reviewed unchanged managed proxy fixture with synthetic loopback credentials."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 963,
+    "file_sha256": "ff686fb3dce650bccdd79bc1bafb3f715bcf4296a14cb45857b249a91bdb81d8",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Re-reviewed unchanged synthetic legacy proxy catalog fixture."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1032,
+    "file_sha256": "ff686fb3dce650bccdd79bc1bafb3f715bcf4296a14cb45857b249a91bdb81d8",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Re-reviewed unchanged synthetic migration backfill SQL fixture."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4091,
+    "file_sha256": "5883b370451f56f1c57f97c3eeffb50ab73860871b091ce99fa3800b59ff9cd1",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Re-reviewed unchanged synthetic Windows Unicode workspace path after provider contract helpers changed nearby."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/transport/account_proxy.rs",
+    "rule": "authenticated-url",
+    "line": 268,
+    "file_sha256": "24d6923273c034dbaee997563fafac1bb49e42761b00fdefb502fb388157ceea",
+    "line_sha256": "7ae38a2d8c3b3611074836a9d726f97308e63f6c0536fe0ea125d79c7c41b97c",
+    "reason": "Reviewed synthetic loopback WebSocket proxy URL created by the in-process fixture; credentials and endpoint are generated only for the test."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 395,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "22a9edc2ec1798b0f4370c03489ec74713550fa6107fa544ab3b54d3c1f25a54",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 396,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "543be7395e9f3f640692cdfe43dcf5923bb5f50c40c00a4777fbe9ea4998a574",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 397,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "a649b1f5a355cc87ba0c9c1176f42eb6a619d76ec03a15b9d1c4b91c795d74b2",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 398,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "acc8562886b64af13820f3233051f4fdee9db0539d6aa02992b113f59028b70f",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 399,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "4cd99d26dc77e695e952ff0557c5b72ebc4e4cbaa2b0760f5b4fb2d4824402be",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 400,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "25b5a9145901ab9c4d223054a5d93c2a46332c705f9a1c64ce6e4dffdd9d33b5",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 401,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "6add8befdfda841950de19d1be394a23e57efad89eba38751020e251a02d6127",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 402,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "fd08411c930ac37fffb72a69e0ddf7c4748697f590f8d186b0b0593fb7f26965",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 403,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "19d01127d86ffe835cd117a4be9e27126c7cb3e143749432d85d6fd00fbe3d8b",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 404,
+    "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
+    "line_sha256": "1f4e54601e99cfed60e0375d1c5bc9324fa74ea5b88ebe97e8805f00df10bbf2",
+    "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
   }
 ]

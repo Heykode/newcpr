@@ -785,7 +785,7 @@ async fn manual_rotation_commits_same_principal_and_rejects_conflict_or_unknown_
         .unwrap()
         .installation_id;
     let initial = harness.snapshot().await;
-    let fresh_id = token("user-A", "workspace-A", "fresh@example.com", "plus");
+    let fresh_id = token("user-B", "workspace-A", "old@example.com", "plus");
     harness
         .rotate(&id, "opaque-new", Some(&fresh_id))
         .await
@@ -800,16 +800,25 @@ async fn manual_rotation_commits_same_principal_and_rejects_conflict_or_unknown_
     assert_eq!(oauth.installation_id, old_device);
     assert_eq!(oauth.access_token, "opaque-new");
     assert_eq!(oauth.id_token.as_deref(), Some(fresh_id.as_str()));
-    assert_eq!(current.account.email(), Some("fresh@example.com"));
+    assert_eq!(current.account.email(), Some("old@example.com"));
     assert_eq!(current.account.plan_type(), Some("plus"));
-    assert_eq!(current.account.upstream_user_id(), Some("user-A"));
+    assert_eq!(current.account.upstream_user_id(), Some("user-B"));
     assert_eq!(current.account.upstream_account_id(), Some("workspace-A"));
     assert_eq!(
         current.account.revision().get(),
         before.account.revision().get() + 1
     );
     let committed = harness.snapshot().await;
-    assert_eq!(committed["devices"], initial["devices"]);
+    assert_eq!(committed["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        committed["devices"][0]["installation_id"],
+        initial["devices"][0]["installation_id"]
+    );
+    assert_eq!(committed["devices"][0]["upstream_user_id"], "user-B");
+    assert_eq!(
+        committed["devices"][0]["upstream_account_id"],
+        "workspace-A"
+    );
     assert_eq!(
         committed["settings"][0]["config_revision"]
             .as_i64()
@@ -818,13 +827,21 @@ async fn manual_rotation_commits_same_principal_and_rejects_conflict_or_unknown_
     );
     assert_eq!(committed["audit"].as_array().unwrap().len(), 2);
 
-    let other_user = token("user-B", "workspace-A", "fresh@example.com", "plus");
-    let other_workspace = token("user-A", "workspace-B", "fresh@example.com", "plus");
+    let other_email = token("user-B", "workspace-A", "fresh@example.com", "plus");
+    let other_workspace = token("user-B", "workspace-B", "old@example.com", "plus");
     for (access, new_id, message) in [
-        (other_user.as_str(), None, "账号主体"),
+        (other_email.as_str(), None, "账号主体"),
         (other_workspace.as_str(), None, "账号主体"),
-        (other_user.as_str(), Some(fresh_id.as_str()), "账号主体"),
-        (fresh_id.as_str(), Some(other_user.as_str()), "账号主体"),
+        (
+            other_workspace.as_str(),
+            Some(fresh_id.as_str()),
+            "账号主体",
+        ),
+        (
+            fresh_id.as_str(),
+            Some(other_workspace.as_str()),
+            "账号主体",
+        ),
         ("opaque-unknown", None, "无法确认"),
     ] {
         let error = harness.rotate(&id, access, new_id).await.unwrap_err();

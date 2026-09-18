@@ -39,6 +39,7 @@ async fn monitor_reuses_key_bindings_and_includes_ungrouped_quota_peers() {
                     name: id.to_owned(),
                     description: None,
                     color: group_color("#2563EBFF"),
+                    disable_fast: false,
                 },
                 &context("monitor-groups"),
             )
@@ -76,6 +77,64 @@ async fn monitor_reuses_key_bindings_and_includes_ungrouped_quota_peers() {
 }
 
 #[tokio::test]
+async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot_facts() {
+    use gateway_admin::model::account_groups::UpdateAccountGroup;
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("disable_fast_group").await else {
+        return;
+    };
+    let repository = PgAccountGroupRepository::new(database.pool.clone());
+    let id = group_id(MIXED_GROUP);
+    repository
+        .create_account_group(
+            NewAccountGroup {
+                id: id.clone(),
+                name: "Fast policy".to_owned(),
+                description: None,
+                color: group_color("#2563EBFF"),
+                disable_fast: true,
+            },
+            &context("create-fast"),
+        )
+        .await
+        .unwrap();
+    for (value, expected) in [(None, true), (Some(false), false), (Some(true), true)] {
+        let mutation = repository
+            .update_account_group(
+                UpdateAccountGroup {
+                    id: id.clone(),
+                    name: "Renamed policy".to_owned(),
+                    description: None,
+                    color: group_color("#2563EBFF"),
+                    disable_fast: value,
+                },
+                &context("update-fast"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(mutation.record.unwrap().disable_fast, expected);
+        let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot.config_revision.get(),
+            mutation.config_revision.get()
+        );
+        assert_eq!(
+            snapshot
+                .account_groups
+                .iter()
+                .find(|group| group.id == id)
+                .unwrap()
+                .disable_fast,
+            expected
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multiplication() {
     let Some(database) = TestDatabase::create("account_group_aggregate").await else {
         return;
@@ -106,6 +165,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
                 name: "Mixed Production".to_owned(),
                 description: Some("cross-provider".to_owned()),
                 color: group_color("#2563EBFF"),
+                disable_fast: false,
             },
             &context("create-mixed"),
         )
@@ -118,6 +178,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
                 name: "Empty Pool".to_owned(),
                 description: None,
                 color: group_color("#06B6D4CC"),
+                disable_fast: false,
             },
             &context("create-empty"),
         )
@@ -312,6 +373,7 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
                 name: "Statusless Costs".to_owned(),
                 description: None,
                 color: group_color("#06B6D4CC"),
+                disable_fast: false,
             },
             &context("create-statusless-cost-group"),
         )
@@ -397,6 +459,7 @@ async fn monitor_snapshot_uses_completion_window_shared_costs_and_durable_identi
                     name: id.to_owned(),
                     description: None,
                     color: group_color("#2563EBFF"),
+                    disable_fast: false,
                 },
                 &context(id),
             )

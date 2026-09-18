@@ -9,6 +9,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
@@ -58,6 +59,17 @@ const description = computed(() => props.group
           aria-label="分组描述"
           :rows="4"
           placeholder="说明这个分组的用途..."
+          :disabled="saving"
+        />
+      </BaseFormItem>
+      <BaseFormItem
+        label="关闭 Fast 档位"
+        description="绑定此分组的下游 Key 会把顶层 priority/fast 请求收敛为 default"
+      >
+        <BaseSwitch
+          v-model="form.disableFast"
+          label="关闭 Fast 档位"
+          show-label
           :disabled="saving"
         />
       </BaseFormItem>

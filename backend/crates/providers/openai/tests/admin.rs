@@ -74,7 +74,28 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 5);
+    assert_eq!(contributions.len(), 8);
+    for (owner, scheduled) in [
+        ("openai-turn-state", true),
+        ("openai-turn-state-observations", false),
+        ("openai-turn-state-collector", false),
+    ] {
+        let registration = contributions
+            .iter()
+            .find_map(|contribution| match contribution {
+                WorkerContribution::Registration(registration)
+                    if registration.id.owner() == owner =>
+                {
+                    Some(registration)
+                }
+                _ => None,
+            })
+            .expect("managed state worker registered");
+        assert_eq!(
+            matches!(registration.runnable, WorkerRunnable::Scheduled { .. }),
+            scheduled,
+        );
+    }
     assert!(
         contributions
             .iter()
@@ -1188,6 +1209,7 @@ async fn openai_rotation_preserves_the_new_access_token_jwt_expiration() {
     let payload = URL_SAFE_NO_PAD.encode(
         serde_json::to_vec(&serde_json::json!({
             "exp": expires_at.timestamp(),
+            "email": "chatgpt-admin-rotation-expiration@example.com",
             "https://api.openai.com/auth": {
                 "chatgpt_user_id": "user-chatgpt-admin-rotation-expiration",
                 "chatgpt_account_id": "chatgpt-admin-rotation-expiration"
@@ -1219,6 +1241,15 @@ async fn openai_rotation_preserves_the_new_access_token_jwt_expiration() {
 
 fn principal_token(user: Option<&str>, account: Option<&str>) -> String {
     principal_jwt(json!({
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": user, "chatgpt_account_id": account
+        }
+    }))
+}
+
+fn anchored_principal_token(email: &str, user: Option<&str>, account: Option<&str>) -> String {
+    principal_jwt(json!({
+        "email": email,
         "https://api.openai.com/auth": {
             "chatgpt_user_id": user, "chatgpt_account_id": account
         }
@@ -1290,22 +1321,49 @@ async fn rotation_rejects_conflicting_principals_before_old_id_fallback() {
     .await
     .unwrap();
     for (access, id) in [
-        (principal_token(Some("user-B"), Some("B")), None),
-        (principal_token(Some("user-B"), Some("A")), None),
-        (principal_token(Some("user-A"), Some("B")), None),
-        (principal_token(Some("user-B"), None), None),
-        (principal_token(None, Some("B")), None),
         (
-            principal_token(Some("user-B"), Some("B")),
-            Some(principal_token(Some("user-A"), Some("A"))),
+            anchored_principal_token("A@example.com", Some("user-B"), Some("B")),
+            None,
         ),
         (
-            principal_token(Some("user-A"), Some("A")),
-            Some(principal_token(Some("user-B"), Some("B"))),
+            anchored_principal_token("A@example.com", Some("user-A"), Some("B")),
+            None,
+        ),
+        (
+            anchored_principal_token("other@example.com", Some("user-A"), Some("A")),
+            None,
+        ),
+        (
+            anchored_principal_token("A@example.com", Some("user-B"), None),
+            None,
+        ),
+        (
+            anchored_principal_token("A@example.com", None, Some("A")),
+            None,
+        ),
+        (
+            anchored_principal_token("A@example.com", Some("user-B"), Some("B")),
+            Some(anchored_principal_token(
+                "A@example.com",
+                Some("user-A"),
+                Some("A"),
+            )),
+        ),
+        (
+            anchored_principal_token("A@example.com", Some("user-A"), Some("A")),
+            Some(anchored_principal_token(
+                "A@example.com",
+                Some("user-B"),
+                Some("B"),
+            )),
         ),
         (
             "opaque-synthetic".to_owned(),
-            Some(principal_token(Some("user-B"), Some("B"))),
+            Some(anchored_principal_token(
+                "A@example.com",
+                Some("user-B"),
+                Some("B"),
+            )),
         ),
         (
             principal_jwt(json!({
@@ -1324,7 +1382,8 @@ async fn rotation_rejects_conflicting_principals_before_old_id_fallback() {
             .await
             .expect_err("conflicting principal must not produce prepared facts");
         assert_eq!(error.kind(), ProviderAdminErrorKind::Conflict);
-        assert!(error.public_message().unwrap().contains("账号主体"));
+        let message = error.public_message().unwrap();
+        assert!(message.contains("账号主体") || message.contains("无法确认"));
         assert!(!format!("{error:?}").contains(&access));
         let after = store.load_current_credential(&account_id).await.unwrap();
         assert_eq!(after.account, before.account);
@@ -1403,7 +1462,7 @@ async fn rotation_accepts_relogin_document_and_preserves_the_device() {
     .await
     .unwrap();
     let token = principal_jwt(json!({
-        "email": "test@example.invalid",
+        "email": "A@example.com",
         "https://api.openai.com/auth": {
             "chatgpt_user_id": "user-A",
             "chatgpt_account_id": "A",
@@ -1420,7 +1479,7 @@ async fn rotation_accepts_relogin_document_and_preserves_the_device() {
                         "access_token": access,
                         "refresh_token": "synthetic-new-RT",
                         "id_token": token,
-                        "email": "TEST@example.invalid",
+                        "email": "A@example.com",
                         "account_id": "A",
                         "type": "codex"
                     })
@@ -1436,7 +1495,7 @@ async fn rotation_accepts_relogin_document_and_preserves_the_device() {
             facts.expected_credential_revision.get(),
             before.account.revision().get()
         );
-        assert_eq!(facts.email.as_deref(), Some("test@example.invalid"));
+        assert_eq!(facts.email.as_deref(), Some("A@example.com"));
         assert_eq!(facts.plan_type.as_deref(), Some("team"));
         let identity = facts.replacement_identity.as_ref().unwrap();
         assert_eq!(identity.upstream_user_id(), "user-A");
@@ -1526,13 +1585,8 @@ async fn rotation_rejects_inconsistent_or_unknown_relogin_metadata() {
 
 #[tokio::test]
 async fn rotation_same_principal_refreshes_metadata_and_preserves_the_device() {
-    for (old_workspace, opaque_access, fresh_profile) in [
-        (Some("A"), false, true),
-        (Some("A"), true, true),
-        (Some("A"), false, false),
-        (None, true, true),
-    ] {
-        let store = principal_account(Some("user-A"), old_workspace).await;
+    for (new_user, opaque_access) in [("user-A", false), ("user-B", false), ("user-B", true)] {
+        let store = principal_account(Some("user-A"), Some("A")).await;
         let id = ProviderAccountId::new("acct_principal").unwrap();
         let before = store.load_current_credential(&id).await.unwrap();
         let old = CodexCredentialCodec::decode_complete(&before.credential).unwrap();
@@ -1543,16 +1597,12 @@ async fn rotation_same_principal_refreshes_metadata_and_preserves_the_device() {
         )
         .await
         .unwrap();
-        let fresh = if fresh_profile {
-            principal_jwt(json!({
-                "email": "changed@example.com",
-                "https://api.openai.com/auth": {
-                    "chatgpt_user_id": "user-A", "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
-                }
-            }))
-        } else {
-            principal_token(Some("user-A"), Some("A"))
-        };
+        let fresh = principal_jwt(json!({
+            "email": "A@example.com",
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": new_user, "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
+            }
+        }));
         let (access, new_id) = if opaque_access {
             ("opaque-synthetic", Some(fresh.as_str()))
         } else {
@@ -1571,20 +1621,10 @@ async fn rotation_same_principal_refreshes_metadata_and_preserves_the_device() {
             facts.expected_credential_revision.get(),
             before.account.revision().get()
         );
-        assert_eq!(
-            facts.email.as_deref(),
-            Some(if fresh_profile {
-                "changed@example.com"
-            } else {
-                "A@example.com"
-            })
-        );
-        assert_eq!(
-            facts.plan_type.as_deref(),
-            Some(if fresh_profile { "plus" } else { "pro" })
-        );
+        assert_eq!(facts.email.as_deref(), Some("A@example.com"));
+        assert_eq!(facts.plan_type.as_deref(), Some("plus"));
         let identity = facts.replacement_identity.as_ref().unwrap();
-        assert_eq!(identity.upstream_user_id(), "user-A");
+        assert_eq!(identity.upstream_user_id(), new_user);
         assert_eq!(identity.upstream_account_id(), Some("A"));
         let raw = facts
             .provider_material
@@ -1658,7 +1698,7 @@ async fn reauthorization_entry_rejects_conflicts_and_unknown_and_releases_claim(
                 "email": 123,
                 "https://api.openai.com/auth": {"chatgpt_user_id": "user-B"}
             })),
-            "账号主体",
+            "无法确认",
         ),
         (
             Some("user-A"),
@@ -1777,9 +1817,9 @@ async fn reauthorization_entry_accepts_opaque_access_and_uses_current_revision()
                 "access_token": "opaque-new",
                 "refresh_token": "synthetic-new-RT",
                 "id_token": principal_jwt(json!({
-                    "email": "fresh@example.com",
+                    "email": "A@example.com",
                     "https://api.openai.com/auth": {
-                        "chatgpt_user_id": "user-A", "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
+                        "chatgpt_user_id": "user-B", "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
                     }
                 }))
             }))).expect(1).mount(&server).await;
@@ -1853,7 +1893,7 @@ async fn reauthorization_entry_accepts_opaque_access_and_uses_current_revision()
             facts.expected_credential_revision.get(),
             current.account.revision().get()
         );
-        assert_eq!(facts.email.as_deref(), Some("fresh@example.com"));
+        assert_eq!(facts.email.as_deref(), Some("A@example.com"));
         assert_eq!(facts.plan_type.as_deref(), Some("plus"));
         assert_eq!(
             facts
@@ -1861,7 +1901,7 @@ async fn reauthorization_entry_accepts_opaque_access_and_uses_current_revision()
                 .as_ref()
                 .unwrap()
                 .upstream_user_id(),
-            "user-A"
+            "user-B"
         );
         let runtime =
             CodexCredentialCodec::decode(&gateway_core::account::PlaintextCredential::new(
@@ -2051,6 +2091,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
+        turn_state_injection_enabled: false,
         concurrency_limit: account.concurrency_limit(),
         weight: account.weight(),
         credential_state: account.credential_state(),

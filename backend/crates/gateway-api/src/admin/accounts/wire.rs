@@ -66,6 +66,7 @@ pub struct BatchUpdateAccountsRequest {
     pub outbound_proxy_url: Option<AccountProxyUpdate>,
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
+    pub turn_state_injection_enabled: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub concurrency_limit: Option<Option<u64>>,
     pub weight: Option<u64>,
@@ -125,6 +126,7 @@ impl BatchUpdateAccountsRequest {
             self.outbound_proxy_url.clone(),
         )?;
         if self.enabled.is_none()
+            && self.turn_state_injection_enabled.is_none()
             && self.concurrency_limit.is_none()
             && self.weight.is_none()
             && self.group_ids.is_none()
@@ -142,6 +144,7 @@ impl BatchUpdateAccountsRequest {
             outbound_proxy: proxy_selection(self.outbound_proxy_id, self.outbound_proxy_url)?,
             account_ids: self.account_ids,
             enabled: self.enabled,
+            turn_state_injection_enabled: self.turn_state_injection_enabled,
             concurrency_limit: self
                 .concurrency_limit
                 .map(parse_concurrency_limit)
@@ -305,6 +308,7 @@ pub struct AccountView {
     /// 最近一次失败的上游错误描述；仅错误状态存在。
     pub error_message: Option<String>,
     pub enabled: bool,
+    pub turn_state_injection_enabled: bool,
     pub in_flight: Option<u64>,
     pub health_timeline: Vec<AccountHealthBucketView>,
     pub concurrency_limit: Option<u32>,

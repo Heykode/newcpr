@@ -16,7 +16,7 @@ const tables = [
     storage: 'codex-proxy:table-columns:usage-records',
     hidden: { key: 'model', label: '模型' },
     required: ['账号', '操作'],
-    columns: ['accountEmail', 'provider', 'model', 'reasoningEffort', 'route', 'upstreamTransport', 'clientTransport', 'tokenDetails', 'billing', 'latency', 'createdAtDisplay', 'clientIp', 'userAgent', 'actions'],
+    columns: ['accountEmail', 'provider', 'model', 'reasoningEffort', 'route', 'upstreamTransport', 'clientTransport', 'turnState', 'tokenDetails', 'billing', 'latency', 'createdAtDisplay', 'clientIp', 'userAgent', 'actions'],
   },
   {
     id: 'errors',
@@ -42,6 +42,7 @@ function fixtures() {
     model: 'synthetic-model',
     requestedModel: 'synthetic-model',
     upstreamModel: 'synthetic-model-upstream',
+    upstreamResponseModel: 'synthetic-model-returned',
     serviceTier: 'default',
     clientTransport: 'websocket',
     reasoningEffort: 'high',
@@ -498,7 +499,7 @@ async function main() {
   }
 }
 
-export { assertColumns, checkKeyboard, closeSettings, geometry, isolateNetwork, openSettings, runScenario, selectTable, tables }
+export { assertColumns, checkKeyboard, closeSettings, fixtures, geometry, isolateNetwork, openSettings, runScenario, selectTable, tables }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {

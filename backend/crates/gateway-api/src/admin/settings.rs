@@ -33,6 +33,10 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
+    pub disable_fast: bool,
+    pub turn_state_injection_enabled: bool,
+    pub turn_state_models: Vec<String>,
+    pub responses_max_decompressed_body_bytes: u64,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -52,6 +56,10 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
+    pub disable_fast: Option<bool>,
+    pub turn_state_injection_enabled: Option<bool>,
+    pub turn_state_models: Option<Vec<String>>,
+    pub responses_max_decompressed_body_bytes: Option<u64>,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -71,6 +79,21 @@ impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数。
     pub fn validate(&self) -> Result<(), WireValidationError> {
         validate_model_mappings(&self.model_mappings)?;
+        if let Some(models) = &self.turn_state_models {
+            validate_turn_state_models(models)?;
+        }
+        if self
+            .responses_max_decompressed_body_bytes
+            .is_some_and(|value| {
+                value == 0
+                    || value
+                        > gateway_admin::model::settings::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES
+            })
+        {
+            return Err(WireValidationError::new(
+                "responsesMaxDecompressedBodyBytes",
+            ));
+        }
         for (value, field) in [
             (self.refresh_margin_seconds, "refreshMarginSeconds"),
             (self.refresh_concurrency, "refreshConcurrency"),
@@ -104,6 +127,19 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
+            disable_fast: self.disable_fast,
+            turn_state_injection_enabled: self.turn_state_injection_enabled,
+            turn_state_models: self
+                .turn_state_models
+                .map(|models| {
+                    models
+                        .into_iter()
+                        .map(UpstreamModelId::new)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .map_err(|_| WireValidationError::new("turnStateModels"))?,
+            responses_max_decompressed_body_bytes: self.responses_max_decompressed_body_bytes,
             model_mappings: domain_model_mappings(self.model_mappings)?,
             refresh_margin_seconds: self.refresh_margin_seconds,
             refresh_concurrency: u32::try_from(self.refresh_concurrency)
@@ -129,6 +165,14 @@ impl UpdateRuntimeSettingsRequest {
 impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
+            disable_fast: settings.disable_fast,
+            turn_state_injection_enabled: settings.turn_state_injection_enabled,
+            turn_state_models: settings
+                .turn_state_models
+                .into_iter()
+                .map(|model| model.as_str().to_owned())
+                .collect(),
+            responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
             model_mappings: wire_model_mappings(settings.model_mappings),
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: u64::from(settings.refresh_concurrency),
@@ -144,6 +188,23 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             updated_at: settings.updated_at,
         }
     }
+}
+
+fn validate_turn_state_models(models: &[String]) -> Result<(), WireValidationError> {
+    if models.is_empty() || models.len() > 64 {
+        return Err(WireValidationError::new("turnStateModels"));
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    for model in models {
+        let model = model.trim();
+        if model != model.to_ascii_lowercase()
+            || UpstreamModelId::new(model.to_owned()).is_err()
+            || !unique.insert(model)
+        {
+            return Err(WireValidationError::new("turnStateModels"));
+        }
+    }
+    Ok(())
 }
 
 /// 管理 API Key 状态；状态读取不回显完整值。

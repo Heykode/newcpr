@@ -71,6 +71,18 @@ pub struct BillingView {
 }
 
 /// 使用记录表格的窄展示。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageTurnStateSummaryView {
+    pub injected: bool,
+    pub preview: Option<String>,
+    pub chars: Option<u32>,
+    pub returned_chars: Option<u32>,
+    pub returned_same: Option<bool>,
+    pub transport: String,
+}
+
+/// 使用记录表格的窄展示。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageListRecordView {
@@ -84,6 +96,8 @@ pub struct UsageListRecordView {
     pub model: Option<String>,
     pub requested_model: Option<String>,
     pub upstream_model: Option<String>,
+    pub upstream_response_model: Option<String>,
+    pub turn_state: Option<UsageTurnStateSummaryView>,
     pub service_tier: Option<String>,
     pub client_transport: String,
     pub upstream_transport: Option<String>,
@@ -122,6 +136,7 @@ pub struct UsageRecordView {
     pub model: Option<String>,
     pub requested_model: Option<String>,
     pub upstream_model: Option<String>,
+    pub upstream_response_model: Option<String>,
     pub service_tier: Option<String>,
     pub status_code: Option<i64>,
     pub client_transport: String,
