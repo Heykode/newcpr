@@ -15,10 +15,11 @@ use gateway_core::{
     lifecycle::CancellationToken,
     policy::ClientApiKeyId,
     provider_ports::{
-        ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingState,
-        ProviderStoreError, ProviderStorePorts, ProviderTurnStateAnomaly,
-        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStateRecord,
-        ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
+        OpaqueTurnState, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+        ProviderSchedulingState, ProviderStoreError, ProviderStorePorts, ProviderTurnStateAnomaly,
+        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStatePromotion,
+        ProviderTurnStateRecord, ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
+        ProviderTurnStateValue,
         egress::{ProviderEgressAddress, ProviderEgressConfig, ProviderEgressStorePort},
     },
     routing::{OpenAiTurnStatePolicy, ProviderKind, UpstreamModelId},
@@ -110,9 +111,45 @@ pub(super) struct ProbeStates {
     writes: AtomicUsize,
     failed: AtomicUsize,
     cancelled: AtomicUsize,
+    promoted: AtomicUsize,
 }
 
 impl ProviderTurnStatePort for ProbeStates {
+    fn promote_standby(
+        &self,
+        promotion: ProviderTurnStatePromotion,
+    ) -> BoxFuture<'_, Result<Option<ProviderTurnStateRecord>, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut records = self.records.lock().unwrap();
+            let key = (promotion.account_id, promotion.upstream_model);
+            let Some(current) = records.get(&key) else {
+                return Ok(None);
+            };
+            let Some(standby) = current.standby() else {
+                return Ok(None);
+            };
+            if current.state_version() != promotion.expected_active_version
+                || !standby.is_valid_at(promotion.observed_at)
+                || standby.expires_at() <= promotion.observed_at + promotion.minimum_remaining
+            {
+                return Ok(None);
+            }
+            let next = ProviderTurnStateRecord::new(
+                key.0.clone(),
+                key.1.clone(),
+                current.normal_length(),
+                Some(standby.clone()),
+                None,
+                current.state_version() + 1,
+                ProviderTurnStateRefreshStatus::Refreshing,
+                None,
+            );
+            records.insert(key, next.clone());
+            self.promoted.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(next))
+        })
+    }
+
     fn read<'a>(
         &'a self,
         account: &'a ProviderAccountId,
@@ -165,13 +202,15 @@ impl ProviderTurnStatePort for ProbeStates {
                     ProviderTurnStateRefreshStatus::Ready,
                 ),
             };
+            let version = previous.map_or(0, ProviderTurnStateRecord::state_version)
+                + u64::from(candidate.slot == ProviderTurnStateSlot::Active);
             let record = ProviderTurnStateRecord::new(
                 candidate.account_id,
                 candidate.upstream_model,
                 candidate.normal_length,
                 active,
                 standby,
-                1,
+                version,
                 status,
                 Some(candidate.normal_length),
             );
@@ -386,6 +425,9 @@ async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight
 struct BudgetResponder {
     calls: Arc<Mutex<BTreeMap<(String, String), usize>>>,
     succeed: bool,
+    repeat_first: bool,
+    start_only: bool,
+    times: Arc<Mutex<Vec<(usize, std::time::Instant)>>>,
 }
 
 impl Respond for BudgetResponder {
@@ -411,48 +453,83 @@ impl Respond for BudgetResponder {
             .to_owned();
         let count = {
             let mut calls = self.calls.lock().unwrap();
-            if !self.succeed && calls.get(&(owner.clone(), model.clone())) == Some(&1) {
+            if !self.succeed
+                && !self.start_only
+                && calls.get(&(owner.clone(), model.clone())) == Some(&1)
+            {
                 assert_eq!(
                     calls.len(),
                     4,
                     "all keys must start before any key completes its first round"
                 );
             }
-            let count = calls.entry((owner, model.clone())).or_default();
+            let count = calls.entry((owner, model)).or_default();
             *count += 1;
             *count
         };
+        self.times
+            .lock()
+            .unwrap()
+            .push((count, std::time::Instant::now()));
         if !self.succeed {
-            let response = ResponseTemplate::new(if count % 2 == 0 { 429 } else { 500 })
-                .set_body_json(serde_json::json!({"error":{"code":"synthetic_failure"}}));
+            let response = match count % 6 {
+                0 => ResponseTemplate::new(429),
+                1 => ResponseTemplate::new(500),
+                2 => ResponseTemplate::new(200),
+                3 => {
+                    ResponseTemplate::new(200).insert_header("x-codex-turn-state", "x".repeat(292))
+                }
+                4 => ResponseTemplate::new(200)
+                    .insert_header("x-codex-turn-state", format!("gAAAAA{}", "x".repeat(306))),
+                _ => ResponseTemplate::new(204)
+                    .insert_header("x-codex-turn-state", format!("gAAAAA{}", "x".repeat(286))),
+            }
+            .set_body_json(serde_json::json!({"error":{"code":"synthetic_failure"}}));
             return if count == 1 {
-                response.set_delay(Duration::from_millis(400))
+                response.set_delay(if self.start_only {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::from_millis(400)
+                })
             } else {
                 response
             };
         }
-        let mut bytes = vec![0x80];
-        bytes.extend_from_slice(
-            &SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                .to_be_bytes(),
-        );
-        bytes.extend(std::iter::repeat_n(
-            u8::try_from(count).unwrap(),
-            16 + 160 + 32,
-        ));
+        let value = if self.repeat_first && count == 2 {
+            1
+        } else {
+            count
+        };
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .insert_header("x-codex-turn-state", URL_SAFE.encode(bytes))
-            .set_body_string(format!("event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_probe\",\"model\":\"{model}\",\"status\":\"completed\",\"output\":[]}}}}\n\n"))
+            .insert_header("x-codex-turn-state", format!("gAAAAA{value:0286}"))
+            .set_body_string("event: response.failed\ndata: {\"type\":\"response.failed\"}\n\n")
     }
 }
 
-async fn independent_collectors(succeed: bool) {
+#[derive(Clone, Copy)]
+enum AcquisitionScenario {
+    ContinuousMisses,
+    ImmediateStandby,
+    RepeatedStandby,
+    ConcurrentStarts,
+    PromoteStandby,
+}
+
+async fn independent_collectors(scenario: AcquisitionScenario) {
+    let succeed = matches!(
+        scenario,
+        AcquisitionScenario::ImmediateStandby
+            | AcquisitionScenario::RepeatedStandby
+            | AcquisitionScenario::PromoteStandby
+    );
+    let repeat_first = matches!(scenario, AcquisitionScenario::RepeatedStandby);
+    let start_only = matches!(scenario, AcquisitionScenario::ConcurrentStarts);
+    let promote = matches!(scenario, AcquisitionScenario::PromoteStandby);
     let accounts = Arc::new(MemoryAccountStore::default());
-    for index in 0..2 {
+    let account_count = if start_only { 20 } else { 2 };
+    let key_count = account_count * 2;
+    for index in 0..account_count {
         let mut imported = CodexCredentialAdmin
             .prepare_import(ImportCodexOAuthCredential {
                 account_id: format!("acct_parallel_{index}"),
@@ -468,6 +545,35 @@ async fn independent_collectors(succeed: bool) {
     }
     let base = provider_ports_with_accounts(accounts);
     let states = Arc::new(ProbeStates::default());
+    let captured = SystemTime::now() - Duration::from_secs(1200);
+    if promote {
+        for index in 0..account_count {
+            for model in ["model-a", "model-b"] {
+                let id = ProviderAccountId::new(format!("acct_parallel_{index}")).unwrap();
+                let model = UpstreamModelId::new(model).unwrap();
+                let state = |ch: char, captured: SystemTime| {
+                    ProviderTurnStateValue::new(
+                        OpaqueTurnState::new(format!("gAAAAA{}", ch.to_string().repeat(286))),
+                        captured,
+                        captured + Duration::from_secs(3600),
+                    )
+                };
+                states.records.lock().unwrap().insert(
+                    (id.clone(), model.clone()),
+                    ProviderTurnStateRecord::new(
+                        id,
+                        model,
+                        292,
+                        Some(state('a', captured - Duration::from_secs(1900))),
+                        Some(state('b', captured)),
+                        1,
+                        ProviderTurnStateRefreshStatus::Ready,
+                        None,
+                    ),
+                );
+            }
+        }
+    }
     let ports = ProviderStorePorts::new(
         base.accounts(),
         Arc::new(ReadOnlyLeases::default()),
@@ -497,11 +603,24 @@ async fn independent_collectors(succeed: bool) {
     let responder = BudgetResponder {
         calls: Arc::default(),
         succeed,
+        repeat_first,
+        start_only,
+        times: Arc::default(),
     };
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .respond_with(responder.clone())
-        .expect(if succeed { 8 } else { 2000 })
+        .expect(if promote {
+            4..=4
+        } else if start_only {
+            40..=40
+        } else if !succeed {
+            2044..=u64::MAX
+        } else if repeat_first {
+            12..=12
+        } else {
+            8..=8
+        })
         .mount(&server)
         .await;
     let tuning = RequestTuningHandle::default();
@@ -543,15 +662,21 @@ async fn independent_collectors(succeed: bool) {
     task.run_cycle(WorkerCycleContext::new(id, None, cancel.clone()))
         .await
         .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(300), async {
-        while if succeed {
-            states.writes.load(Ordering::SeqCst) < 8
-        } else {
-            states.failed.load(Ordering::SeqCst) < 4
-        } {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
+    let completed = tokio::time::timeout(
+        Duration::from_secs(if start_only { 20 } else { 300 }),
+        async {
+            while if start_only {
+                responder.calls.lock().unwrap().len() < key_count
+            } else if succeed {
+                states.writes.load(Ordering::SeqCst) < if promote { 4 } else { 8 }
+            } else {
+                let calls = responder.calls.lock().unwrap();
+                calls.len() < 4 || calls.values().any(|count| *count < 511)
+            } {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        },
+    )
     .await;
     cancel.cancel();
     handle.await.unwrap().unwrap();
@@ -562,16 +687,56 @@ async fn independent_collectors(succeed: bool) {
         states.failed.load(Ordering::SeqCst),
         states.cancelled.load(Ordering::SeqCst),
     );
-    assert_eq!(calls.len(), 4, "each account and model owns its own task");
-    assert!(
-        calls
-            .values()
-            .all(|count| *count == if succeed { 2 } else { 500 })
+    assert_eq!(
+        calls.len(),
+        key_count,
+        "each account and model owns its own task"
     );
+    assert!(calls.values().all(|count| if start_only || promote {
+        *count == 1
+    } else if !succeed {
+        *count >= 511
+    } else if repeat_first {
+        *count == 3
+    } else {
+        *count == 2
+    }));
+    assert_eq!(
+        states.failed.load(Ordering::SeqCst),
+        0,
+        "ordinary misses do not exhaust a task"
+    );
+    if repeat_first {
+        let times = responder.times.lock().unwrap();
+        let latest_second = times
+            .iter()
+            .filter(|(n, _)| *n == 2)
+            .map(|(_, at)| *at)
+            .max()
+            .unwrap();
+        let earliest_third = times
+            .iter()
+            .filter(|(n, _)| *n == 3)
+            .map(|(_, at)| *at)
+            .min()
+            .unwrap();
+        assert!(
+            earliest_third.duration_since(latest_second) >= Duration::from_secs(5),
+            "standby misses must not use the urgent retry loop"
+        );
+    }
     if succeed {
         let records = states.records.lock().unwrap();
         assert_eq!(records.len(), 4);
         for record in records.values() {
+            if promote {
+                assert_eq!(record.active().unwrap().issued_at(), captured);
+                assert_eq!(
+                    record.active().unwrap().expires_at(),
+                    captured + Duration::from_secs(3600)
+                );
+                assert_eq!(record.state_version(), 2);
+            }
             assert_eq!(
                 record.refresh_status(),
                 ProviderTurnStateRefreshStatus::Ready
@@ -582,14 +747,32 @@ async fn independent_collectors(succeed: bool) {
             );
         }
     }
+    if promote {
+        assert_eq!(states.promoted.load(Ordering::SeqCst), 4);
+    }
 }
 
 #[tokio::test]
-async fn independent_accounts_and_models_exhaust_500_even_with_one_ipv6_and_upstream_errors() {
-    independent_collectors(false).await;
+async fn independent_accounts_and_models_continue_past_500_with_one_ipv6_and_upstream_errors() {
+    independent_collectors(AcquisitionScenario::ContinuousMisses).await;
 }
 
 #[tokio::test]
 async fn independent_accounts_and_models_immediately_acquire_distinct_standby() {
-    independent_collectors(true).await;
+    independent_collectors(AcquisitionScenario::ImmediateStandby).await;
+}
+
+#[tokio::test]
+async fn standby_repeats_are_rejected_and_retried_on_the_background_interval() {
+    independent_collectors(AcquisitionScenario::RepeatedStandby).await;
+}
+
+#[tokio::test]
+async fn more_than_32_account_model_collectors_start_without_waiting_for_other_keys() {
+    independent_collectors(AcquisitionScenario::ConcurrentStarts).await;
+}
+
+#[tokio::test]
+async fn expiring_active_promotes_standby_without_renewal_then_immediately_refills() {
+    independent_collectors(AcquisitionScenario::PromoteStandby).await;
 }

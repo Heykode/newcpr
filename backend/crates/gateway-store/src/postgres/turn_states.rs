@@ -7,8 +7,9 @@ use gateway_core::{
     account::{CredentialRevision, ProviderAccountId},
     provider_ports::{
         OpaqueTurnState, ProviderStoreError, ProviderStoreErrorKind, ProviderTurnStateAnomaly,
-        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStateRecord,
-        ProviderTurnStateRefreshStatus, ProviderTurnStateSlot, ProviderTurnStateValue,
+        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStatePromotion,
+        ProviderTurnStateRecord, ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
+        ProviderTurnStateValue,
     },
     routing::UpstreamModelId,
 };
@@ -43,6 +44,79 @@ struct TurnStateRow {
 }
 
 impl ProviderTurnStatePort for PgProviderTurnStateRepository {
+    fn promote_standby(
+        &self,
+        promotion: ProviderTurnStatePromotion,
+    ) -> futures::future::BoxFuture<'_, Result<Option<ProviderTurnStateRecord>, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            validate_normal_length(promotion.normal_length)?;
+            let deadline = promotion
+                .observed_at
+                .checked_add(promotion.minimum_remaining)
+                .ok_or_else(|| invalid("turn state promotion deadline"))?;
+            let mut transaction = self
+                .pool
+                .begin()
+                .await
+                .map_err(|_| unavailable("begin provider turn state promotion"))?;
+            ensure_row(
+                &mut transaction,
+                &promotion.account_id,
+                &promotion.upstream_model,
+                promotion.expected_revision,
+                promotion.normal_length,
+                promotion.observed_at,
+            )
+            .await?;
+            let current = load_locked(
+                &mut transaction,
+                &promotion.account_id,
+                &promotion.upstream_model,
+            )
+            .await?;
+            if u64::try_from(current.state_version).ok() != Some(promotion.expected_active_version)
+                || current
+                    .active_expires_at
+                    .is_some_and(|expires| SystemTime::from(expires) > deadline)
+                || !current
+                    .standby_issued_at
+                    .is_some_and(|issued| SystemTime::from(issued) <= promotion.observed_at)
+                || !current
+                    .standby_expires_at
+                    .is_some_and(|expires| SystemTime::from(expires) > deadline)
+            {
+                return Ok(None);
+            }
+            sqlx::query(
+                "update provider_turn_states
+                 set active_state = standby_state, active_issued_at = standby_issued_at,
+                     active_expires_at = standby_expires_at,
+                     standby_state = null, standby_issued_at = null, standby_expires_at = null,
+                     state_version = state_version + 1, refresh_status = 'refreshing',
+                     updated_at = $3
+                 where provider_account_id = $1 and upstream_model = $2",
+            )
+            .bind(promotion.account_id.as_str())
+            .bind(promotion.upstream_model.as_str())
+            .bind(DateTime::<Utc>::from(promotion.observed_at))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| unavailable("promote provider turn state standby"))?;
+            let row = load_locked(
+                &mut transaction,
+                &promotion.account_id,
+                &promotion.upstream_model,
+            )
+            .await?;
+            transaction
+                .commit()
+                .await
+                .map_err(|_| unavailable("commit provider turn state promotion"))?;
+            decode_row(row).map(Some)
+        })
+    }
+
     fn cancel_refresh<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
@@ -102,7 +176,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
 
     fn put_candidate(
         &self,
-        candidate: ProviderTurnStateCandidate,
+        mut candidate: ProviderTurnStateCandidate,
     ) -> futures::future::BoxFuture<'_, Result<ProviderTurnStateRecord, ProviderStoreError>> {
         Box::pin(async move {
             validate_candidate(&candidate)?;
@@ -131,6 +205,21 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                 .is_some_and(|version| u64::try_from(current.state_version).ok() != Some(version))
             {
                 return decode_row(current);
+            }
+            // A captured standby echoed by a probe/response keeps its original lifetime.
+            if current.standby_state.as_deref()
+                == Some(candidate.value.state().expose_to_provider())
+                && let (Some(issued), Some(expires)) =
+                    (current.standby_issued_at, current.standby_expires_at)
+            {
+                candidate.value = ProviderTurnStateValue::new(
+                    candidate.value.state().clone(),
+                    issued.into(),
+                    expires.into(),
+                );
+                if !candidate.value.is_valid_at(candidate.observed_at) {
+                    return decode_row(current);
+                }
             }
             let candidate_value = candidate.value.state().expose_to_provider();
             let (same_value, replace) = match candidate.slot {
