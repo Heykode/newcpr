@@ -31,6 +31,7 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
         credential: None,
         target: None,
         automatic_job: false,
+        manual_push_context: None,
         automatic_attempts: 0,
         attempted_target: None,
         next_attempt_at: None,
@@ -50,6 +51,10 @@ async fn relogin_storage_can_read_and_update_legacy_mailbox_rows_without_using_t
     store.save(&legacy, None).await.unwrap();
     store.save(&normal, None).await.unwrap();
     let mut material = serde_json::to_value(&legacy).unwrap();
+    material
+        .as_object_mut()
+        .unwrap()
+        .remove("manual_push_context");
     material["mfa_secret"] = "".into();
     material["mailbox"] = serde_json::json!({
         "client_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -72,8 +77,15 @@ async fn relogin_storage_can_read_and_update_legacy_mailbox_rows_without_using_t
             .is_ok()
     );
     let mut loaded = rows.into_iter().find(|row| row.id == legacy.id).unwrap();
+    assert!(loaded.manual_push_context.is_none());
     assert!(loaded.validate_totp().is_err());
     loaded.automatic = false;
+    loaded.manual_push_context = Some(gateway_admin::model::MutationContext {
+        actor: gateway_admin::model::MutationActor::AdminSession {
+            admin_user_id: "admin-test".into(),
+        },
+        request_id: "account-menu-test".into(),
+    });
     loaded.revision += 1;
     store.save(&loaded, Some(legacy.revision)).await.unwrap();
     let saved: serde_json::Value =
@@ -84,8 +96,82 @@ async fn relogin_storage_can_read_and_update_legacy_mailbox_rows_without_using_t
             .unwrap();
     assert!(saved.get("mailbox").is_none());
     assert!(!saved.to_string().contains("synthetic-mailbox-token"));
+    let roundtrip: ReloginEntry = serde_json::from_value(saved).unwrap();
+    assert_eq!(roundtrip.manual_push_context, loaded.manual_push_context);
     store.delete(&legacy.id, loaded.revision).await.unwrap();
     assert_eq!(store.entries().await.unwrap().len(), 1);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
+    use gateway_admin::model::relogin_templates::{ReloginTemplate, ReloginTemplateConfig};
+    let Some(database) = TestDatabase::create("relogin_templates").await else {
+        return;
+    };
+    let store = PgReloginStore::new(database.pool.clone());
+    let group = "grp_00000000000000000000000000000091";
+    sqlx::query("insert into account_groups (id,name,color,created_at,updated_at) values ($1,'Template group','#34A853FF',now(),now())")
+        .bind(group).execute(&database.pool).await.unwrap();
+    sqlx::query("insert into outbound_proxies (id,name,proxy_url,last_test_success) values ('proxy-template','Template proxy','http://127.0.0.1:8080',true)")
+        .execute(&database.pool).await.unwrap();
+    let mut template = ReloginTemplate {
+        id: "template-one".into(),
+        revision: 1,
+        config: ReloginTemplateConfig {
+            name: "Team settings".into(),
+            enabled: false,
+            concurrency_limit: Some(7),
+            weight: 17,
+            group_ids: vec![group.into()],
+            outbound_proxy_id: Some("proxy-template".into()),
+        },
+    };
+    store.save_template(&template, None).await.unwrap();
+    let reopened = PgReloginStore::new(database.pool.clone());
+    assert_eq!(reopened.templates().await.unwrap(), vec![template.clone()]);
+    let mut duplicate = template.clone();
+    duplicate.id = "template-duplicate".into();
+    duplicate.config.name = "TEAM SETTINGS".into();
+    assert!(store.save_template(&duplicate, None).await.is_err());
+    template.revision = 2;
+    template.config.weight = 23;
+    store.save_template(&template, Some(1)).await.unwrap();
+    assert!(store.save_template(&template, Some(1)).await.is_err());
+    assert!(store.delete_template(&template.id, 1).await.is_err());
+    store
+        .validate_template_references(&template.config)
+        .await
+        .unwrap();
+    sqlx::query("update outbound_proxies set last_test_success=false where id='proxy-template'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .validate_template_references(&template.config)
+            .await
+            .is_err()
+    );
+    sqlx::query("update outbound_proxies set last_test_success=true where id='proxy-template'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    sqlx::query("delete from account_groups where id=$1")
+        .bind(group)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .validate_template_references(&template.config)
+            .await
+            .is_err()
+    );
+    // Stale references remain visible and deletable; they never silently become defaults.
+    assert_eq!(reopened.templates().await.unwrap(), vec![template.clone()]);
+    store.delete_template(&template.id, 2).await.unwrap();
+    assert!(reopened.templates().await.unwrap().is_empty());
     database.close().await;
 }
 

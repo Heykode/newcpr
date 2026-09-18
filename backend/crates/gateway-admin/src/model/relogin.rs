@@ -40,6 +40,7 @@ pub struct ReloginCredential {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReloginTarget {
     pub account_id: String,
     pub credential_revision: u64,
@@ -80,6 +81,9 @@ pub struct ReloginEntry {
     pub credential: Option<ReloginCredential>,
     pub target: Option<ReloginTarget>,
     pub automatic_job: bool,
+    /// Explicit account-menu confirmation; absent on legacy and library-only jobs.
+    #[serde(default)]
+    pub manual_push_context: Option<super::MutationContext>,
     pub automatic_attempts: u32,
     pub attempted_target: Option<ReloginTarget>,
     pub next_attempt_at: Option<DateTime<Utc>>,

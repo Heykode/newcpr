@@ -40,6 +40,7 @@ import { useAccountEditor } from './composables/useAccountEditor'
 import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountListForecast } from './composables/useAccountListForecast'
 import { useAccountMutations } from './composables/useAccountMutations'
+import { useAccountRelogin } from './composables/useAccountRelogin'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
 import { useAccountSwipeSelect } from './composables/useAccountSwipeSelect'
@@ -104,6 +105,17 @@ async function refreshAccounts() {
 }
 
 onMounted(() => void loadReloginAvailability())
+const {
+  actions: reloginActions,
+  readError: reloginReadError,
+  actionError: reloginActionError,
+  open: reloginOpen,
+  selected: reloginSelected,
+  confirmDisabled: reloginConfirmDisabled,
+  submitting: reloginSubmitting,
+  request: requestRelogin,
+  confirm: confirmRelogin,
+} = useAccountRelogin({ accounts, reload: refreshAccountsSilently })
 
 async function applyForecastAccount(account: AccountRow) {
   if (forecastAccount.value?.id === account.id)
@@ -491,6 +503,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :refreshing="refreshingAccountIds.has(row.id)"
                 :toggling-turn-state="togglingTurnStateAccountIds.has(row.id)"
                 :testing="testingConnectionIds.has(row.id)"
+                :relogin="reloginActions[row.id]"
+                :relogin-unavailable="Boolean(reloginReadError)"
                 @edit="openAccountEdit"
                 @delete="requestDeleteAccount"
                 @recover="handleRecover"
@@ -498,6 +512,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 @reauthorize="openReauthorizeAccount"
                 @test="openConnectionTest"
                 @toggle-turn-state="handleToggleTurnState"
+                @relogin="requestRelogin"
               />
             </template>
 
@@ -631,6 +646,34 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :saving="savingBatchEdit"
       @save="saveBatchEdit"
     />
+
+    <BaseConfirmModal
+      v-model="reloginOpen"
+      title="确认失效重登"
+      confirm-text="重登并同步"
+      :loading="reloginSubmitting"
+      :confirm-disabled="reloginConfirmDisabled"
+      @confirm="confirmRelogin"
+    >
+      <dl class="space-y-2 break-all">
+        <div>
+          <dt class="text-cp-text-tertiary">
+            邮箱
+          </dt><dd>{{ reloginSelected?.email }}</dd>
+        </div>
+        <div>
+          <dt class="text-cp-text-tertiary">
+            工作区
+          </dt><dd>{{ reloginSelected?.action.target?.workspace_id }}</dd>
+        </div>
+      </dl>
+      <p v-if="reloginActionError" role="alert" class="mt-3 break-words text-cp-error">
+        {{ reloginActionError }}
+      </p>
+      <p v-else-if="reloginConfirmDisabled" role="alert" class="mt-3 text-cp-warning-text">
+        状态已变化或暂不可用，请关闭后重新确认。
+      </p>
+    </BaseConfirmModal>
 
     <BaseConfirmModal
       v-model="showExportModal"

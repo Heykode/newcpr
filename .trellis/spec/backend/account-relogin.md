@@ -73,6 +73,30 @@
   initialization in the image build; none of these checks should make login requests.
   Do not suppress container vulnerability gates to retain unused build dependencies.
 
+## Account Menu and Import Templates
+
+- Account-menu actions query only requested pool IDs and expose matching valid TOTP
+  availability, task status and a target snapshot, never login secrets. Queueing
+  rechecks material revision and the selected account/principal/workspace/credential
+  revision. Manual confirmation is independent of the entry's automatic switch.
+- Persist `manual_push_context` with a default of `None` for old JSONB rows. This
+  authorizes worker settlement to the selected existing account only; it cannot
+  create a replacement if that account disappears. Cancel/edit/library queue paths
+  clear the intent. Preserve the administrator's audit context and pool settings.
+- Relogin templates contain only named import settings and an optional saved proxy ID.
+  `account_relogin_templates` stores independent revisions and unique normalized names.
+  Updates/deletes require their confirmed revision. Changing a template never changes
+  accounts that previously used it.
+- Manual push optionally captures template ID/revision; resolve one immutable config
+  snapshot per batch. Stale/deleted templates fail before any push. Only create-only
+  imports receive settings/proxy; existing account rotation never applies them.
+- Validate group existence and tested proxy availability before entering `Pushing`.
+  A preflight rejection preserves `Ready` and cached credentials. Import transactions
+  still own final reference checks, create-only identity fencing and device creation.
+  Races or failures after the import fence retain the existing uncertain semantics.
+- Verify template CRUD/CAS, missing references, mixed batches, default imports and
+  original credential/device preservation against an isolated PostgreSQL instance.
+
 ## Success Counts
 
 - `provider_accounts.relogin_count` / `last_relogin_at` are pool-owned facts, not

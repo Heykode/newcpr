@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
+import type { AccountReloginAction } from '@/api/modules/relogin'
 import { KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldOff, Trash2, Wifi } from '@lucide/vue'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -13,6 +14,8 @@ defineProps<{
   refreshing: boolean
   togglingTurnState: boolean
   testing: boolean
+  relogin?: AccountReloginAction
+  reloginUnavailable?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,6 +26,7 @@ const emit = defineEmits<{
   refresh: [accountId: string]
   reauthorize: [account: AccountRow]
   toggleTurnState: [account: AccountRow, enabled: boolean]
+  relogin: [account: AccountRow]
 }>()
 </script>
 
@@ -55,7 +59,7 @@ const emit = defineEmits<{
       </template>
 
       <template #default="{ close }">
-        <div class="w-40 p-1.5">
+        <div role="group" aria-label="账号操作" class="w-40 p-1.5">
           <BaseMenuItem
             :loading="testing"
             :disabled="testing"
@@ -85,6 +89,24 @@ const emit = defineEmits<{
             </template>
             重新授权
           </BaseMenuItem>
+          <BaseMenuItem
+            v-if="relogin"
+            :loading="relogin.busy"
+            :disabled="reloginUnavailable || relogin.busy || Boolean(relogin.blockedReason)"
+            :title="reloginUnavailable ? '重登状态读取失败，正在重试' : relogin.blockedReason || relogin.message"
+            @click.stop="(close(), emit('relogin', account))"
+          >
+            <template #icon>
+              <RotateCcw class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            {{ relogin.busy ? '重登处理中' : '失效重登' }}
+          </BaseMenuItem>
+          <p
+            v-if="relogin && !relogin.busy && (relogin.status === 'failed' || relogin.status === 'uncertain')"
+            class="px-2 py-1 text-cp-xs break-words text-cp-error"
+          >
+            {{ relogin.message }}
+          </p>
           <BaseMenuItem
             :loading="recovering"
             :disabled="recovering"

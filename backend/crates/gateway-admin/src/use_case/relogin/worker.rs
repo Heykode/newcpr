@@ -126,6 +126,7 @@ impl DefaultReloginService {
                     }
                     entry.target = Some(ReloginTarget::from_account(account)?);
                     entry.automatic_job = true;
+                    entry.manual_push_context = None;
                 }
                 let target_account = entry
                     .target
@@ -203,7 +204,7 @@ impl DefaultReloginService {
                 Ok(credential) => {
                     if !credential.email.eq_ignore_ascii_case(&current.email)
                         || current.target.as_ref().is_some_and(|target| target.user_id != credential.user_id || target.workspace_id != credential.workspace_id)
-                        || current.preferred_workspace_id.as_ref().is_some_and(|workspace| workspace != &credential.workspace_id)
+                        || (current.manual_push_context.is_none() && current.preferred_workspace_id.as_ref().is_some_and(|workspace| workspace != &credential.workspace_id))
                     {
                         current.status = ReloginStatus::Failed;
                         current.message = "新凭据身份或工作区不一致，未推送".to_owned();
@@ -221,11 +222,15 @@ impl DefaultReloginService {
             }
             current.next_attempt_at = Some(Utc::now() + chrono::Duration::minutes(5 * i64::from(current.automatic_attempts.max(1))));
             self.save(&mut current).await?;
-            if current.status == ReloginStatus::Ready && current.automatic_job && current.automatic
+            if current.status == ReloginStatus::Ready
+                && ((current.automatic_job && current.automatic) || current.manual_push_context.is_some())
                 && !shutdown.is_cancelled() && !self.store()?.settings().await.map_err(store_error)?.paused
             {
-                let context = MutationContext { actor: MutationActor::System, request_id: format!("relogin_{}", uuid::Uuid::now_v7()) };
+                let context = current.manual_push_context.clone().unwrap_or_else(|| MutationContext { actor: MutationActor::System, request_id: format!("relogin_{}", uuid::Uuid::now_v7()) });
                 if let Err(error) = self.push_entry(&mut current, &context).await {
+                    if current.status == ReloginStatus::Ready && current.manual_push_context.is_some() {
+                        current.status = ReloginStatus::Failed;
+                    }
                     current.message = format!("新凭据已保存，推送未完成：{}", error.message());
                     self.save(&mut current).await?;
                 }

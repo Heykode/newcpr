@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { ReloginBatchResult, ReloginEntry } from '@/api/modules/relogin'
-import { CheckCheck, GripVertical, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
+import type { ReloginBatchResult, ReloginEntry, ReloginTemplate } from '@/api/modules/relogin'
+import { CheckCheck, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   configureRelogin,
@@ -31,6 +31,8 @@ import { formatDateTime } from '@/utils/date'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
 import { credentialLabel, matchesPool, poolPresentation, processingStatus, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
+import ReloginTemplatePicker from './ReloginTemplatePicker.vue'
+import ReloginTemplatesModal from './ReloginTemplatesModal.vue'
 
 const entries = shallowRef<ReloginEntry[]>([])
 const loading = shallowRef(false)
@@ -231,9 +233,13 @@ function saveImport() {
   })
 }
 const confirming = shallowRef(false)
+const templatesOpen = shallowRef(false)
+const selectedTemplate = shallowRef<ReloginTemplate | null>(null)
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
 function confirm(mode: 'push' | 'delete', ids: string[]) {
+  failure.value = ''
+  selectedTemplate.value = null
   confirmMode.value = mode
   pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
   confirming.value = pendingRows.value.length > 0
@@ -242,10 +248,14 @@ function canPush(row: ReloginEntry) {
   return row.status === 'ready' && row.credentialStatus === 'verified' && row.poolStatus !== 'synced'
 }
 const pushable = computed(() => pendingRows.value.filter(canPush))
+const newPushCount = computed(() => pushable.value.filter(row => row.poolAccountIds.length === 0).length)
 function executeConfirmed() {
   return action(async () => {
     if (confirmMode.value === 'push') {
-      batchReport(await pushRelogin(pushable.value))
+      const template = newPushCount.value > 0 && selectedTemplate.value
+        ? { id: selectedTemplate.value.id, revision: selectedTemplate.value.revision }
+        : undefined
+      batchReport(await pushRelogin(pushable.value, template))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))
@@ -328,6 +338,11 @@ onBeforeUnmount(() => {
           <template #icon>
             <Upload class="size-4" />
           </template>导入
+        </BaseButton>
+        <BaseButton :disabled="busy" @click="templatesOpen = true">
+          <template #icon>
+            <LayoutTemplate class="size-4" />
+          </template>账号模板
         </BaseButton>
       </div>
     </header>
@@ -479,11 +494,18 @@ onBeforeUnmount(() => {
       </template>
     </BaseModal>
     <BaseConfirmModal v-model="confirming" :title="confirmMode === 'push' ? '确认推送到号池' : '删除重登资料'" :destructive="confirmMode === 'delete'" :loading="busy" :confirm-disabled="confirmMode === 'push' && !pushable.length" @confirm="executeConfirmed">
+      <p v-if="failure" class="mt-0 whitespace-pre-wrap break-words text-cp-sm text-cp-error" role="alert">
+        {{ failure }}
+      </p>
       <p v-if="confirmMode === 'delete'" class="mt-0 text-cp-sm">
         删除 {{ pendingRows.length }} 项资料并取消相关重登任务，号池账号不受影响。
       </p>
       <p v-else class="mt-0 text-cp-sm">
-        推送 {{ pushable.length }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
+        新增 {{ newPushCount }} 项，更新已有账号 {{ pushable.length - newPushCount }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
+      </p>
+      <ReloginTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
+      <p v-if="confirmMode === 'push' && pushable.length > newPushCount" class="text-cp-sm text-cp-text-secondary">
+        已有账号仅更新凭据，保留原配置。
       </p>
       <div class="max-h-64 overflow-auto">
         <div v-for="row in pendingRows" :key="row.id" class="border-b border-cp-border py-2 text-cp-sm">
@@ -499,6 +521,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </BaseConfirmModal>
+    <ReloginTemplatesModal v-model="templatesOpen" />
     <BaseModal v-model="editing" title="选择登录工作区" :dismissible="!busy">
       <div class="grid gap-3">
         <p class="m-0 break-all text-cp-sm">
