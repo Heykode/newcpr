@@ -92,6 +92,27 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        self.send_response_http_sse(upstream_request, context, false)
+            .await
+    }
+
+    pub(crate) async fn probe_turn_state_headers(
+        &self,
+        upstream_request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<Option<String>> {
+        let response = self
+            .send_response_http_sse(upstream_request, context, true)
+            .await?;
+        Ok(response.turn_state)
+    }
+
+    async fn send_response_http_sse(
+        &self,
+        upstream_request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+        headers_only: bool,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let profile = self.profile.snapshot();
         let headers = self.request_headers_for_http_response(upstream_request, context)?;
         let headers_started_at = Instant::now();
@@ -171,25 +192,30 @@ impl CodexBackendClient {
         let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
-        if !status.is_success() {
+        if !status.is_success() || (headers_only && status != reqwest::StatusCode::OK) {
             let content_type = response
                 .headers()
                 .get(CONTENT_TYPE)
                 .map(|value| value.as_bytes().to_vec());
             let client_headers = response_meta::client_headers(response.headers());
-            let raw_body = read_error_response_body(response).await.map_err(|source| {
-                CodexClientError::ErrorBodyRead {
-                    source,
-                    status,
-                    diagnostics: Box::new(diagnostics.clone()),
-                    transport: CodexBackendTransport::HttpSse,
-                    transport_metrics: Box::new(CodexTransportMetrics {
-                        upstream_headers_ms: Some(upstream_headers_ms),
-                        http_version: Some(http_version.clone()),
-                        ..CodexTransportMetrics::default()
-                    }),
-                }
-            })?;
+            let raw_body = if headers_only {
+                drop(response);
+                bytes::Bytes::new()
+            } else {
+                read_error_response_body(response).await.map_err(|source| {
+                    CodexClientError::ErrorBodyRead {
+                        source,
+                        status,
+                        diagnostics: Box::new(diagnostics.clone()),
+                        transport: CodexBackendTransport::HttpSse,
+                        transport_metrics: Box::new(CodexTransportMetrics {
+                            upstream_headers_ms: Some(upstream_headers_ms),
+                            http_version: Some(http_version.clone()),
+                            ..CodexTransportMetrics::default()
+                        }),
+                    }
+                })?
+            };
             trace.capture("upstream.error.body", &raw_body);
             let body = String::from_utf8_lossy(&raw_body).into_owned();
             let retry_after_seconds =
@@ -218,8 +244,14 @@ impl CodexBackendClient {
         }
 
         let rate_limit_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let body = if headers_only {
+            drop(response);
+            Box::pin(futures::stream::empty()) as _
+        } else {
+            http_sse_stream(response, Arc::clone(&rate_limit_updates), trace)
+        };
         Ok(CodexBackendStreamingResponse {
-            body: http_sse_stream(response, Arc::clone(&rate_limit_updates), trace),
+            body,
             transport: CodexBackendTransport::HttpSse,
             websocket_connection_id: None,
             turn_state,

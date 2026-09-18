@@ -6,26 +6,22 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime},
 };
 
-use base64::{
-    Engine as _,
-    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
-};
 use futures::{StreamExt as _, stream};
 use gateway_core::{
     account::{ProviderAccount, ProviderAccountId},
     provider_ports::{
         OpaqueTurnState, ProviderTurnStateAnomaly, ProviderTurnStateCandidate,
-        ProviderTurnStatePort, ProviderTurnStateRecord, ProviderTurnStateRefreshStatus,
-        ProviderTurnStateSlot, ProviderTurnStateValue,
+        ProviderTurnStatePort, ProviderTurnStatePromotion, ProviderTurnStateRecord,
+        ProviderTurnStateRefreshStatus, ProviderTurnStateSlot, ProviderTurnStateValue,
     },
     routing::UpstreamModelId,
     runtime::RequestTuningHandle,
 };
 use serde_json::{Map, Value, json};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::{
@@ -48,9 +44,9 @@ const TEAM_DEGRADED_LENGTH: u16 = 356;
 const MAX_PENDING_OBSERVATIONS: usize = 256;
 const STATE_STORE_TIMEOUT: Duration = Duration::from_secs(1);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_PROBES: usize = 500;
-const MAX_BATCH: usize = 100;
-const MAX_COLLECTORS: usize = 32;
+const URGENT_BATCH: usize = 10;
+const BACKGROUND_INTERVAL: Duration = Duration::from_secs(6);
+const REFRESH_MARGIN: Duration = Duration::from_secs(10 * 60);
 
 type ObservationKey = (ProviderAccountId, UpstreamModelId);
 
@@ -103,11 +99,17 @@ impl PendingObservations {
 #[derive(Default)]
 struct MaintenanceQueue {
     values: Mutex<VecDeque<(ObservationKey, bool)>>,
+    followups: Mutex<HashMap<ObservationKey, bool>>,
     ready: Notify,
 }
 
 impl MaintenanceQueue {
     fn enqueue(&self, key: ObservationKey, force_standby: bool) -> bool {
+        let mut followups = self.followups.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(force) = followups.get_mut(&key) {
+            *force |= force_standby;
+            return true;
+        }
         let mut values = self.values.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((_, force)) = values.iter_mut().find(|(pending, _)| pending == &key) {
             *force |= force_standby;
@@ -121,9 +123,30 @@ impl MaintenanceQueue {
     }
 
     fn pop_available(&self, running: &HashSet<ObservationKey>) -> Option<(ObservationKey, bool)> {
+        let mut followups = self.followups.lock().unwrap_or_else(|e| e.into_inner());
         let mut values = self.values.lock().unwrap_or_else(|e| e.into_inner());
         let index = values.iter().position(|(key, _)| !running.contains(key))?;
-        values.remove(index)
+        let next = values.remove(index)?;
+        followups.insert(next.0.clone(), false);
+        Some(next)
+    }
+
+    fn finish(&self, key: &ObservationKey) {
+        let force = self
+            .followups
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(key);
+        if force == Some(true) {
+            self.enqueue(key.clone(), true);
+        }
+    }
+
+    fn reset_running(&self) {
+        self.followups
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -136,45 +159,17 @@ pub(crate) enum CodexTurnStateShape {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ParsedCodexTurnState {
-    issued_at: SystemTime,
-    expires_at: SystemTime,
     encoded_length: u16,
 }
 
 impl ParsedCodexTurnState {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         let value = value.trim();
-        if value.len() > 4096 {
+        if value.len() > 4096 || !value.starts_with("gAAAAA") {
             return None;
         }
         let encoded_length = u16::try_from(value.len()).ok()?;
-        let bytes = URL_SAFE
-            .decode(value)
-            .or_else(|_| URL_SAFE_NO_PAD.decode(value))
-            .ok()?;
-        if bytes.first().copied() != Some(0x80) || bytes.len() < 9 + 16 + 16 + 32 {
-            return None;
-        }
-        let timestamp = u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?);
-        let cipher_bytes = bytes.len().checked_sub(9 + 16 + 32)?;
-        if cipher_bytes == 0 || cipher_bytes % 16 != 0 {
-            return None;
-        }
-        let issued_at = UNIX_EPOCH.checked_add(Duration::from_secs(timestamp))?;
-        let expires_at = issued_at.checked_add(TURN_STATE_TTL)?;
-        Some(Self {
-            issued_at,
-            expires_at,
-            encoded_length,
-        })
-    }
-
-    pub(crate) const fn issued_at(self) -> SystemTime {
-        self.issued_at
-    }
-
-    pub(crate) const fn expires_at(self) -> SystemTime {
-        self.expires_at
+        Some(Self { encoded_length })
     }
 
     pub(crate) const fn encoded_length(self) -> u16 {
@@ -352,9 +347,6 @@ impl CodexTurnStateManager {
         let Some(parsed) = ParsedCodexTurnState::parse(value) else {
             return;
         };
-        if parsed.issued_at() > observed_at || parsed.expires_at() <= observed_at {
-            return;
-        }
         let observation = match classify_length(normal_length, parsed.encoded_length()) {
             CodexTurnStateShape::Normal => {
                 TurnStateObservation::Candidate(ProviderTurnStateCandidate {
@@ -366,8 +358,8 @@ impl CodexTurnStateManager {
                     slot: ProviderTurnStateSlot::Active,
                     value: ProviderTurnStateValue::new(
                         OpaqueTurnState::new(value.trim().to_owned()),
-                        parsed.issued_at(),
-                        parsed.expires_at(),
+                        observed_at,
+                        observed_at + TURN_STATE_TTL,
                     ),
                     observed_at,
                 })
@@ -498,32 +490,16 @@ impl CodexTurnStateManager {
         let Some(parsed) = ParsedCodexTurnState::parse(&value) else {
             return false;
         };
-        if parsed.issued_at() > observed_at
-            || parsed.expires_at() <= observed_at
-            || classify_length(normal_length, parsed.encoded_length())
-                != CodexTurnStateShape::Normal
-        {
-            return false;
-        }
-        let margin = match slot {
-            ProviderTurnStateSlot::Active => Duration::from_secs(10 * 60),
-            ProviderTurnStateSlot::Standby => Duration::from_secs(30 * 60),
-        };
-        if parsed
-            .expires_at()
-            .duration_since(observed_at)
-            .is_ok_and(|remaining| remaining <= margin)
-        {
+        if classify_length(normal_length, parsed.encoded_length()) != CodexTurnStateShape::Normal {
             return false;
         }
         if self.record(account, &model).await.is_some_and(|record| {
             record
                 .active()
                 .is_some_and(|active| active.state().expose_to_provider() == value)
-                || (slot == ProviderTurnStateSlot::Standby
-                    && record
-                        .standby()
-                        .is_some_and(|standby| standby.state().expose_to_provider() == value))
+                || record
+                    .standby()
+                    .is_some_and(|standby| standby.state().expose_to_provider() == value)
         }) {
             return false;
         }
@@ -539,8 +515,8 @@ impl CodexTurnStateManager {
                 slot,
                 value: ProviderTurnStateValue::new(
                     OpaqueTurnState::new(value),
-                    parsed.issued_at(),
-                    parsed.expires_at(),
+                    observed_at,
+                    observed_at + TURN_STATE_TTL,
                 ),
                 observed_at,
             }),
@@ -587,7 +563,6 @@ pub(crate) const fn classify_length(
 }
 
 pub(crate) fn needs_refresh(record: &ProviderTurnStateRecord, now: SystemTime) -> bool {
-    const REFRESH_MARGIN: Duration = Duration::from_secs(10 * 60);
     record
         .active()
         .is_none_or(|active| match active.expires_at().duration_since(now) {
@@ -597,12 +572,11 @@ pub(crate) fn needs_refresh(record: &ProviderTurnStateRecord, now: SystemTime) -
 }
 
 fn standby_needs_refresh(record: &ProviderTurnStateRecord, now: SystemTime) -> bool {
-    const STANDBY_MARGIN: Duration = Duration::from_secs(30 * 60);
     record.refresh_status() != ProviderTurnStateRefreshStatus::Ready
         || record
             .standby()
             .is_none_or(|standby| match standby.expires_at().duration_since(now) {
-                Ok(remaining) => remaining <= STANDBY_MARGIN,
+                Ok(remaining) => remaining <= REFRESH_MARGIN,
                 Err(_) => true,
             })
 }
@@ -628,7 +602,6 @@ pub(crate) struct CodexTurnStateMaintenanceService {
     egress: Option<Arc<CodexEgressRuntime>>,
     manager: CodexTurnStateManager,
     discovery_cursor: Arc<AtomicUsize>,
-    probe_capacity: Arc<Semaphore>,
 }
 
 impl CodexTurnStateMaintenanceService {
@@ -644,7 +617,6 @@ impl CodexTurnStateMaintenanceService {
             egress,
             manager,
             discovery_cursor: Arc::default(),
-            probe_capacity: Arc::new(Semaphore::new(MAX_BATCH)),
         }
     }
 
@@ -697,13 +669,12 @@ impl CodexTurnStateMaintenanceService {
     }
 
     pub(crate) async fn run_maintenance(&self) {
+        // A restarted daemon must not inherit deduplication ownership of dropped futures.
+        self.manager.maintenance.reset_running();
         let mut running = HashSet::new();
         let mut tasks = stream::FuturesUnordered::new();
         loop {
-            while tasks.len() < MAX_COLLECTORS {
-                let Some((key, force)) = self.manager.maintenance.pop_available(&running) else {
-                    break;
-                };
+            while let Some((key, force)) = self.manager.maintenance.pop_available(&running) {
                 running.insert(key.clone());
                 tasks.push(async move {
                     self.run_target(&key.0, &key.1, force).await;
@@ -711,8 +682,11 @@ impl CodexTurnStateMaintenanceService {
                 });
             }
             tokio::select! {
-                Some(key) = tasks.next(), if !tasks.is_empty() => { running.remove(&key); },
-                () = self.manager.maintenance.ready.notified(), if tasks.len() < MAX_COLLECTORS => {},
+                Some(key) = tasks.next(), if !tasks.is_empty() => {
+                    running.remove(&key);
+                    self.manager.maintenance.finish(&key);
+                },
+                () = self.manager.maintenance.ready.notified() => {},
             }
         }
     }
@@ -778,104 +752,103 @@ impl CodexTurnStateMaintenanceService {
         account: &ProviderAccount,
         model: &UpstreamModelId,
         egress: &CodexEgressRuntime,
-        force_standby: bool,
+        mut force_standby: bool,
     ) {
-        let now = SystemTime::now();
-        let record = self.manager.record(account, model).await;
         let normal_length = expected_normal_length(account.plan_type());
-        let (active_due, standby_due) = refresh_slots(record.as_ref(), normal_length, now);
-        let standby_due = standby_due || force_standby;
-        if !active_due && !standby_due {
-            return;
-        }
-        let Ok(mut sources) = egress.probe_sources() else {
-            return;
-        };
-        sources.truncate(MAX_PROBES);
-        if sources.is_empty() {
-            return;
-        }
         let runtime = match self.repository.load_runtime_credential(account).await {
             Ok(runtime) => Arc::new(runtime),
             Err(_) => return,
         };
-        if active_due
-            && self
-                .collect_slot(
-                    account,
-                    model,
-                    normal_length,
-                    ProviderTurnStateSlot::Active,
-                    &runtime,
-                    &sources,
-                )
-                .await
-        {
-            // Standby has its own acquisition budget after a fresh active is committed.
-            let _ = self
-                .collect_slot(
-                    account,
-                    model,
-                    normal_length,
-                    ProviderTurnStateSlot::Standby,
-                    &runtime,
-                    &sources,
-                )
-                .await;
-        } else if !active_due && standby_due {
-            let _ = self
-                .collect_slot(
-                    account,
-                    model,
-                    normal_length,
-                    ProviderTurnStateSlot::Standby,
-                    &runtime,
-                    &sources,
-                )
-                .await;
-        }
-    }
-
-    async fn collect_slot(
-        &self,
-        account: &ProviderAccount,
-        model: &UpstreamModelId,
-        normal_length: u16,
-        slot: ProviderTurnStateSlot,
-        runtime: &Arc<crate::credential::CodexRuntimeCredential>,
-        sources: &[std::net::Ipv6Addr],
-    ) -> bool {
-        if !self
-            .manager
-            .mark_refresh_status(
-                account,
-                model,
-                normal_length,
-                ProviderTurnStateRefreshStatus::Refreshing,
-                SystemTime::now(),
-            )
-            .await
-        {
-            return false;
-        }
-        let mut round = 0_usize;
-        let mut cursor = 0_usize;
+        let mut sources = VecDeque::new();
+        let mut previous = None;
+        let mut attempted = 0_u64;
         let mut failures = HashMap::<&'static str, usize>::new();
-        while cursor < MAX_PROBES {
+        loop {
             if !self.target_current(account, model).await {
-                return false;
+                return;
             }
-            let batch_size = probe_batch_size(round, cursor, MAX_PROBES);
-            let batch = (cursor..cursor + batch_size).map(|index| sources[index % sources.len()]);
-            cursor += batch_size;
-            round += 1;
-            let results = stream::iter(batch.map(|source| async move {
-                // Waiting for shared transport capacity does not spend a probe timeout.
-                let _permit = self
-                    .probe_capacity
-                    .acquire()
+            let now = SystemTime::now();
+            let record = self.manager.record(account, model).await;
+            let (active_due, standby_due) = refresh_slots(record.as_ref(), normal_length, now);
+            // A coalesced wakeup may outlive the refill that already satisfied it.
+            if !active_due && !standby_due {
+                force_standby = false;
+            }
+            let version = record
+                .as_ref()
+                .map_or(0, ProviderTurnStateRecord::state_version);
+            if active_due
+                && let Some(record) = &record
+                && record.normal_length() == normal_length
+                && record.standby().is_some_and(|standby| {
+                    standby.is_valid_at(now) && standby.expires_at() > now + REFRESH_MARGIN
+                })
+            {
+                let promoted = tokio::time::timeout(
+                    STATE_STORE_TIMEOUT,
+                    self.manager
+                        .store
+                        .promote_standby(ProviderTurnStatePromotion {
+                            account_id: account.id().clone(),
+                            expected_revision: account.revision(),
+                            expected_active_version: version,
+                            upstream_model: model.clone(),
+                            normal_length,
+                            observed_at: now,
+                            minimum_remaining: REFRESH_MARGIN,
+                        }),
+                )
+                .await;
+                if let Ok(Ok(Some(promoted))) = promoted {
+                    self.manager.retire_old_pools(&promoted);
+                    force_standby = true;
+                    previous = None;
+                    continue;
+                }
+            }
+            if !active_due && !standby_due && !force_standby {
+                return;
+            }
+            let slot = if active_due {
+                ProviderTurnStateSlot::Active
+            } else {
+                ProviderTurnStateSlot::Standby
+            };
+            let context = (slot, version);
+            let first = previous != Some(context);
+            if first
+                && !self
+                    .manager
+                    .mark_refresh_status(
+                        account,
+                        model,
+                        normal_length,
+                        ProviderTurnStateRefreshStatus::Refreshing,
+                        now,
+                    )
                     .await
-                    .map_err(|_| "capacity_closed")?;
+            {
+                return;
+            }
+            previous = Some(context);
+            let batch_size = probe_batch_size(slot, first);
+            let mut batch = Vec::with_capacity(batch_size);
+            for _ in 0..batch_size {
+                if sources.is_empty() {
+                    let Ok(next) = egress.probe_sources() else {
+                        return;
+                    };
+                    sources.extend(next);
+                }
+                let Some(source) = sources.pop_front() else {
+                    return;
+                };
+                batch.push(source);
+            }
+            let runtime = &runtime;
+            let results = stream::iter(batch.into_iter().map(|source| async move {
+                // Transport waiting does not spend the per-request timeout.
+                let _permit = egress.acquire_probe_connection().await?;
                 tokio::time::timeout(
                     PROBE_TIMEOUT,
                     self.probe(account.clone(), model.clone(), Arc::clone(runtime), source),
@@ -885,7 +858,9 @@ impl CodexTurnStateMaintenanceService {
             }))
             .buffer_unordered(batch_size);
             tokio::pin!(results);
+            let mut accepted = false;
             while let Some(value) = results.next().await {
+                attempted = attempted.saturating_add(1);
                 let value = match value {
                     Ok(value) => value,
                     Err(reason) => {
@@ -894,7 +869,7 @@ impl CodexTurnStateMaintenanceService {
                     }
                 };
                 if !self.target_current(account, model).await {
-                    return false;
+                    return;
                 }
                 if self
                     .manager
@@ -911,32 +886,47 @@ impl CodexTurnStateMaintenanceService {
                     tracing::info!(
                         model = model.as_str(),
                         ?slot,
-                        allocated = cursor,
+                        attempted,
                         "Turn state acquisition succeeded"
                     );
-                    // Dropping the bounded batch cancels its remaining probes.
-                    return true;
+                    accepted = true;
+                    break;
                 }
                 *failures.entry("unusable_state").or_default() += 1;
             }
+            if accepted {
+                force_standby = slot == ProviderTurnStateSlot::Active;
+                previous = None;
+                if !force_standby {
+                    return;
+                }
+            } else if slot == ProviderTurnStateSlot::Standby {
+                // Re-evaluate active changes/expiry during background pacing.
+                let deadline = tokio::time::Instant::now() + BACKGROUND_INTERVAL;
+                while tokio::time::Instant::now() < deadline {
+                    tokio::time::sleep_until(
+                        deadline.min(tokio::time::Instant::now() + Duration::from_secs(1)),
+                    )
+                    .await;
+                    let current = self.manager.record(account, model).await;
+                    if current.as_ref().is_none_or(|record| {
+                        record.state_version() != version
+                            || needs_refresh(record, SystemTime::now())
+                    }) {
+                        break;
+                    }
+                }
+            }
+            if attempted % 100 < batch_size as u64 && !accepted {
+                tracing::info!(
+                    model = model.as_str(),
+                    ?slot,
+                    attempted,
+                    ?failures,
+                    "Turn state acquisition continues"
+                );
+            }
         }
-        self.manager
-            .mark_refresh_status(
-                account,
-                model,
-                normal_length,
-                ProviderTurnStateRefreshStatus::Failed,
-                SystemTime::now(),
-            )
-            .await;
-        tracing::warn!(
-            model = model.as_str(),
-            ?slot,
-            attempted = cursor,
-            ?failures,
-            "Turn state acquisition exhausted request budget"
-        );
-        false
     }
 
     async fn probe(
@@ -985,8 +975,8 @@ impl CodexTurnStateMaintenanceService {
             cookie.as_ref(),
             CodexAccountSelectionTelemetry::NONE,
         );
-        let mut response = client
-            .create_response_stream_http_sse(&request, context)
+        client
+            .probe_turn_state_headers(&request, context)
             .await
             .map_err(|error| match error {
                 crate::transport::CodexClientError::Upstream { status, .. }
@@ -996,39 +986,17 @@ impl CodexTurnStateMaintenanceService {
                 }
                 crate::transport::CodexClientError::Upstream { .. } => "upstream_error",
                 _ => "transport_error",
-            })?;
-        let state = response.turn_state.take();
-        let mut decoder = crate::transport::canonical::CodexCanonicalDecoder::new(model.as_str())
-            .with_reported_model(response.response_metadata.effective_model.as_deref());
-        while let Some(chunk) = response.body.next().await {
-            let chunk = chunk.map_err(|_| "stream_error")?;
-            if matches!(
-                decoder.push(&chunk),
-                crate::transport::canonical::CodexCanonicalOutcome::Failed(_)
-            ) {
-                return Err("response_failed");
-            }
-        }
-        if matches!(
-            decoder.finish(),
-            crate::transport::canonical::CodexCanonicalOutcome::Failed(_)
-        ) || decoder
-            .response_model()
-            .is_some_and(|reported| reported != model.as_str())
-        {
-            return Err("response_failed_or_model_mismatch");
-        }
-        state.ok_or("missing_state")
+            })?
+            .ok_or("missing_state")
     }
 }
 
-fn probe_batch_size(round: usize, cursor: usize, sources: usize) -> usize {
-    let requested = if round == 0 {
+fn probe_batch_size(slot: ProviderTurnStateSlot, first: bool) -> usize {
+    if first || slot == ProviderTurnStateSlot::Standby {
         1
     } else {
-        round.saturating_mul(10).min(MAX_BATCH)
-    };
-    requested.min(sources.min(MAX_PROBES).saturating_sub(cursor))
+        URGENT_BATCH
+    }
 }
 
 fn is_state_rejection_code(code: Option<&str>) -> bool {
@@ -1042,11 +1010,13 @@ fn is_state_rejection_code(code: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE};
     use gateway_core::{
         account::CredentialRevision,
         provider_ports::NoopProviderTurnStatePort,
         routing::{OpenAiTurnStatePolicy, ProviderKind},
     };
+    use std::time::UNIX_EPOCH;
 
     fn managed_account(id: &str) -> ProviderAccount {
         ProviderAccount::new(
@@ -1118,6 +1088,31 @@ mod tests {
         assert_eq!(queue.pop_available(&HashSet::new()), Some((first, true)));
     }
 
+    #[test]
+    fn running_keys_cannot_fill_the_pending_queue_and_forced_followups_survive() {
+        let queue = MaintenanceQueue::default();
+        let mut running = HashSet::new();
+        for index in 0..MAX_PENDING_OBSERVATIONS + 64 {
+            let key = (
+                managed_account(&format!("running-{index}")).id().clone(),
+                UpstreamModelId::new("model-a").unwrap(),
+            );
+            assert!(queue.enqueue(key.clone(), false));
+            assert_eq!(queue.pop_available(&running), Some((key.clone(), false)));
+            running.insert(key);
+        }
+        for key in &running {
+            assert!(queue.enqueue(key.clone(), true));
+        }
+        assert!(queue.values.lock().unwrap().is_empty());
+        let key = running.iter().next().unwrap().clone();
+        running.remove(&key);
+        queue.finish(&key);
+        assert_eq!(queue.pop_available(&running), Some((key, true)));
+        queue.reset_running();
+        assert!(queue.followups.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn missing_state_blocks_only_opted_in_models_and_disabling_restores_scheduling() {
         let (manager, model) = manager();
@@ -1139,32 +1134,13 @@ mod tests {
     }
 
     #[test]
-    fn probe_budget_is_500_per_slot_with_final_partial_batch() {
-        let mut cursor = 0;
-        let mut batches = Vec::new();
-        for round in 0..20 {
-            let size = probe_batch_size(round, cursor, 2000);
-            if size == 0 {
-                break;
-            }
-            batches.push(size);
-            cursor += size;
+    fn urgent_probes_stay_at_ten_and_background_probes_stay_at_one() {
+        assert_eq!(probe_batch_size(ProviderTurnStateSlot::Active, true), 1);
+        for _ in 0..600 {
+            assert_eq!(probe_batch_size(ProviderTurnStateSlot::Active, false), 10);
+            assert_eq!(probe_batch_size(ProviderTurnStateSlot::Standby, false), 1);
         }
-        assert_eq!(batches, [1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 49]);
-        assert_eq!(cursor, MAX_PROBES);
-        assert_eq!(
-            probe_batch_size(0, cursor, 2000),
-            0,
-            "the slot stops at 500"
-        );
-        assert_eq!(probe_batch_size(12, 0, 2000), MAX_BATCH);
-        assert_eq!(probe_batch_size(5, 498, 2000), 2);
-        assert_eq!(probe_batch_size(5, 2, 3), 1);
-        assert_eq!(
-            probe_batch_size(0, 1, 500),
-            1,
-            "new slot starts its own batch schedule"
-        );
+        assert_eq!(probe_batch_size(ProviderTurnStateSlot::Standby, true), 1);
     }
 
     #[test]
@@ -1186,6 +1162,83 @@ mod tests {
             Some("invalid_state"),
         ] {
             assert!(!is_state_rejection_code(code));
+        }
+    }
+
+    #[tokio::test]
+    async fn header_only_probe_closes_stalled_bodies_and_requires_http_200() {
+        use crate::transport::CodexRequestContext;
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+            net::TcpListener,
+        };
+
+        for status in [200, 204, 429, 500] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let state = format!("gAAAAA{}", "x".repeat(286));
+            let expected = state.clone();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut content_length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        content_length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                reader
+                    .read_exact(&mut vec![0; content_length])
+                    .await
+                    .unwrap();
+                let mut socket = reader.into_inner();
+                socket.write_all(format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: text/event-stream\r\nContent-Length: 100000\r\nX-Codex-Turn-State: {state}\r\n\r\n"
+                ).as_bytes()).await.unwrap();
+                // Never send the body. A header-only probe must close without waiting.
+                let mut byte = [0];
+                tokio::time::timeout(Duration::from_secs(3), socket.read(&mut byte))
+                    .await
+                    .expect("probe must release the connection")
+            });
+            let client = CodexBackendClient::new(
+                reqwest::Client::new(),
+                format!("http://{address}"),
+                crate::OpenAiConfig::default().wire_profile_state(),
+            );
+            let request = CodexResponsesRequest::from_body(
+                serde_json::from_value(
+                    json!({"model":"model-a","input":"yes","stream":true,"store":false}),
+                )
+                .unwrap(),
+            );
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                client.probe_turn_state_headers(
+                    &request,
+                    CodexRequestContext::auxiliary("Bearer synthetic", None, "probe-test", None),
+                ),
+            )
+            .await
+            .expect("headers must complete independently of the body");
+            if status == 200 {
+                assert_eq!(result.unwrap(), Some(expected));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(crate::transport::CodexClientError::Upstream { .. })
+                ));
+            }
+            drop(client);
+            let closed = server.await.unwrap();
+            assert!(matches!(closed, Ok(0) | Err(_)));
         }
     }
 
@@ -1598,12 +1651,7 @@ mod tests {
             now,
         );
         manager.observe(&account, &model, None, Some("different-model"), &value, now);
-        for invalid in [
-            "unknown".to_owned(),
-            token(1_700_000_000, 192),
-            token(1_700_001_000, 160),
-            token(1_600_000_000, 160),
-        ] {
+        for invalid in ["unknown".to_owned(), token(1_700_000_000, 192)] {
             manager.observe(&account, &model, None, None, &invalid, now);
         }
         manager
@@ -1611,6 +1659,23 @@ mod tests {
             .publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
         manager.observe(&account, &model, None, None, &value, now);
         assert!(manager.pending.values.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn observation_uses_capture_time_not_the_opaque_timestamp() {
+        let (manager, model) = manager();
+        let account = managed_account("capture");
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_002);
+        for timestamp in [1_600_000_000, 1_700_001_000] {
+            manager.observe(&account, &model, None, None, &token(timestamp, 160), now);
+            let pending = manager.pending.values.lock().unwrap();
+            let TurnStateObservation::Candidate(candidate) = pending.values().next().unwrap()
+            else {
+                panic!("expected captured candidate");
+            };
+            assert_eq!(candidate.value.issued_at(), now);
+            assert_eq!(candidate.value.expires_at(), now + TURN_STATE_TTL);
+        }
     }
 
     #[tokio::test]
@@ -1670,18 +1735,19 @@ mod tests {
     }
 
     #[test]
-    fn fernet_shape_extracts_timestamp_and_one_hour_expiry() {
+    fn prefix_validation_does_not_decode_or_require_a_timestamp() {
         let value = token(1_700_000_000, 160);
         assert_eq!(value.len(), 292);
-        let parsed = ParsedCodexTurnState::parse(&value).expect("valid Fernet shape");
+        let parsed = ParsedCodexTurnState::parse(&value).expect("recognized prefix");
         assert_eq!(parsed.encoded_length(), 292);
+        let opaque = format!("gAAAAA{}", "!".repeat(286));
         assert_eq!(
-            parsed
-                .expires_at()
-                .duration_since(parsed.issued_at())
-                .unwrap(),
-            TURN_STATE_TTL
+            ParsedCodexTurnState::parse(&opaque)
+                .unwrap()
+                .encoded_length(),
+            292
         );
+        assert!(ParsedCodexTurnState::parse(&format!("gAAAAA{}", "x".repeat(4096))).is_none());
         assert_eq!(
             classify_length(INDIVIDUAL_NORMAL_LENGTH, parsed.encoded_length()),
             CodexTurnStateShape::Normal
@@ -1713,7 +1779,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_non_fernet_values_are_rejected() {
+    fn missing_or_wrong_prefix_values_are_rejected() {
         assert!(ParsedCodexTurnState::parse("turn-state").is_none());
         let mut invalid = vec![0x81];
         invalid.extend_from_slice(&[0; 72]);

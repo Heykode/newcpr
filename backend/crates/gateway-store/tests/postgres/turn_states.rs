@@ -4,8 +4,8 @@ use gateway_core::{
     account::{CredentialRevision, ProviderAccountId},
     provider_ports::{
         OpaqueTurnState, ProviderTurnStateAnomaly, ProviderTurnStateCandidate,
-        ProviderTurnStatePort, ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
-        ProviderTurnStateValue,
+        ProviderTurnStatePort, ProviderTurnStatePromotion, ProviderTurnStateRefreshStatus,
+        ProviderTurnStateSlot, ProviderTurnStateValue,
     },
     routing::UpstreamModelId,
 };
@@ -146,6 +146,153 @@ fn candidate(
         ),
         observed_at: issued_at,
     }
+}
+
+#[tokio::test]
+async fn proactive_promotion_preserves_clock_and_rejects_late_or_short_lived_standby() {
+    let Some(database) = TestDatabase::create("turn_state_proactive").await else {
+        return;
+    };
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    accounts
+        .insert_provider_account(account("acct_promote", "promote-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_promote").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let now = SystemTime::now();
+    let active = candidate(
+        &id,
+        &model,
+        &"a".repeat(292),
+        now - Duration::from_secs(3100),
+        ProviderTurnStateSlot::Active,
+        292,
+    );
+    let standby = candidate(
+        &id,
+        &model,
+        &"b".repeat(292),
+        now - Duration::from_secs(1800),
+        ProviderTurnStateSlot::Standby,
+        292,
+    );
+    store.put_candidate(active).await.unwrap();
+    let before = store.put_candidate(standby.clone()).await.unwrap();
+    let promotion = ProviderTurnStatePromotion {
+        account_id: id.clone(),
+        expected_revision: revision(),
+        expected_active_version: before.state_version(),
+        upstream_model: model.clone(),
+        normal_length: 292,
+        observed_at: now,
+        minimum_remaining: Duration::from_secs(600),
+    };
+    let mut too_late = promotion.clone();
+    too_late.observed_at = now + Duration::from_secs(1300);
+    assert!(store.promote_standby(too_late).await.unwrap().is_none());
+    let promoted = store
+        .promote_standby(promotion.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(promoted.active(), before.standby());
+    assert!(promoted.standby().is_none());
+    assert_eq!(promoted.state_version(), before.state_version() + 1);
+    assert!(
+        store
+            .promote_standby(promotion.clone())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let echo = candidate(
+        &id,
+        &model,
+        &"b".repeat(292),
+        now,
+        ProviderTurnStateSlot::Active,
+        292,
+    );
+    let echoed = store.put_candidate(echo).await.unwrap();
+    assert_eq!(echoed.active(), promoted.active());
+    assert_eq!(echoed.state_version(), promoted.state_version());
+    sqlx::query("update provider_accounts set credential_revision = 2")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(store.promote_standby(promotion).await.is_err());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn a_standby_echo_cannot_renew_its_original_capture_lifetime() {
+    let Some(database) = TestDatabase::create("turn_state_echo_clock").await else {
+        return;
+    };
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    accounts
+        .insert_provider_account(account("acct_echo_clock", "echo-clock-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_echo_clock").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let now = SystemTime::now();
+    store
+        .put_candidate(candidate(
+            &id,
+            &model,
+            &"a".repeat(292),
+            now - Duration::from_secs(3100),
+            ProviderTurnStateSlot::Active,
+            292,
+        ))
+        .await
+        .unwrap();
+    let before = store
+        .put_candidate(candidate(
+            &id,
+            &model,
+            &"b".repeat(292),
+            now - Duration::from_secs(1800),
+            ProviderTurnStateSlot::Standby,
+            292,
+        ))
+        .await
+        .unwrap();
+    let echoed = store
+        .put_candidate(candidate(
+            &id,
+            &model,
+            &"b".repeat(292),
+            now,
+            ProviderTurnStateSlot::Active,
+            292,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(echoed.active(), before.standby());
+    let old = store
+        .put_candidate(candidate(
+            &id,
+            &model,
+            &"a".repeat(292),
+            now + Duration::from_secs(4000),
+            ProviderTurnStateSlot::Active,
+            292,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        old.active(),
+        echoed.active(),
+        "expired standby echo cannot be renewed"
+    );
+    database.close().await;
 }
 
 #[tokio::test]
