@@ -151,6 +151,10 @@ export interface Account {
   errorMessage: string | null
   enabled: boolean
   turnStateInjectionEnabled: boolean
+  turnState?: {
+    requiredModels: string[]
+    readyModels: { model: string, expiresAt: string }[]
+  } | null
   inFlight: number | null
   concurrencyLimit: number | null
   effectiveConcurrencyLimit: number

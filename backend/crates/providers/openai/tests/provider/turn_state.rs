@@ -104,19 +104,41 @@ impl ProviderEgressStorePort for LoopbackEgress {
 }
 
 #[derive(Default)]
-struct ProbeStates {
-    record: Mutex<Option<ProviderTurnStateRecord>>,
+pub(super) struct ProbeStates {
+    pub(super) records:
+        Mutex<BTreeMap<(ProviderAccountId, UpstreamModelId), ProviderTurnStateRecord>>,
     writes: AtomicUsize,
+    failed: AtomicUsize,
+    cancelled: AtomicUsize,
 }
 
 impl ProviderTurnStatePort for ProbeStates {
     fn read<'a>(
         &'a self,
+        account: &'a ProviderAccountId,
+        model: &'a UpstreamModelId,
+        _: CredentialRevision,
+    ) -> BoxFuture<'a, Result<Option<ProviderTurnStateRecord>, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .records
+                .lock()
+                .unwrap()
+                .get(&(account.clone(), model.clone()))
+                .cloned())
+        })
+    }
+
+    fn cancel_refresh<'a>(
+        &'a self,
         _: &'a ProviderAccountId,
         _: &'a UpstreamModelId,
         _: CredentialRevision,
-    ) -> BoxFuture<'a, Result<Option<ProviderTurnStateRecord>, ProviderStoreError>> {
-        Box::pin(async { Ok(self.record.lock().unwrap().clone()) })
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.cancelled.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
     }
 
     fn put_candidate(
@@ -124,19 +146,36 @@ impl ProviderTurnStatePort for ProbeStates {
         candidate: ProviderTurnStateCandidate,
     ) -> BoxFuture<'_, Result<ProviderTurnStateRecord, ProviderStoreError>> {
         Box::pin(async move {
-            assert_eq!(candidate.slot, ProviderTurnStateSlot::Active);
             self.writes.fetch_add(1, Ordering::SeqCst);
+            let key = (
+                candidate.account_id.clone(),
+                candidate.upstream_model.clone(),
+            );
+            let mut records = self.records.lock().unwrap();
+            let previous = records.get(&key);
+            let (active, standby, status) = match candidate.slot {
+                ProviderTurnStateSlot::Active => (
+                    Some(candidate.value),
+                    None,
+                    ProviderTurnStateRefreshStatus::Refreshing,
+                ),
+                ProviderTurnStateSlot::Standby => (
+                    previous.and_then(|r| r.active().cloned()),
+                    Some(candidate.value),
+                    ProviderTurnStateRefreshStatus::Ready,
+                ),
+            };
             let record = ProviderTurnStateRecord::new(
                 candidate.account_id,
                 candidate.upstream_model,
                 candidate.normal_length,
-                Some(candidate.value),
-                None,
+                active,
+                standby,
                 1,
-                ProviderTurnStateRefreshStatus::Refreshing,
+                status,
                 Some(candidate.normal_length),
             );
-            *self.record.lock().unwrap() = Some(record.clone());
+            records.insert(key, record.clone());
             Ok(record)
         })
     }
@@ -158,18 +197,27 @@ impl ProviderTurnStatePort for ProbeStates {
         _: SystemTime,
     ) -> BoxFuture<'a, Result<ProviderTurnStateRecord, ProviderStoreError>> {
         Box::pin(async move {
-            Ok(self.record.lock().unwrap().clone().unwrap_or_else(|| {
-                ProviderTurnStateRecord::new(
-                    account.clone(),
-                    model.clone(),
-                    normal_length,
-                    None,
-                    None,
-                    0,
-                    status,
-                    None,
-                )
-            }))
+            if status == ProviderTurnStateRefreshStatus::Failed {
+                self.failed.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(self
+                .records
+                .lock()
+                .unwrap()
+                .get(&(account.clone(), model.clone()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    ProviderTurnStateRecord::new(
+                        account.clone(),
+                        model.clone(),
+                        normal_length,
+                        None,
+                        None,
+                        0,
+                        status,
+                        None,
+                    )
+                }))
         })
     }
 }
@@ -262,7 +310,7 @@ async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .respond_with(ProbeResponder(calls.clone()))
-        .expect(2)
+        .expect(2..)
         .mount(&server)
         .await;
     let tuning = RequestTuningHandle::default();
@@ -311,21 +359,19 @@ async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight
     tuning.publish_openai_turn_state_policy(policy.clone());
     leases.busy.store(1, Ordering::SeqCst);
     discover.run_cycle(cycle.clone()).await.unwrap();
-    wait_count(&leases.reads, 1).await;
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        0,
-        "busy account yields to business traffic"
-    );
-    leases.busy.store(0, Ordering::SeqCst);
-    discover.run_cycle(cycle.clone()).await.unwrap();
     wait_count(&calls, 1).await;
+    assert_eq!(
+        leases.reads.load(Ordering::SeqCst),
+        0,
+        "collection is independent of business leases"
+    );
     tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(states.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(states.cancelled.load(Ordering::SeqCst), 1);
     tuning.publish_openai_turn_state_policy(policy);
     discover.run_cycle(cycle).await.unwrap();
-    // A serial collector can start this second probe only after the first was cancelled.
+    // Cancellation released the same-key collector before another generation can start.
     wait_count(&calls, 2).await;
     wait_count(&states.writes, 1).await;
     cancellation.cancel();
@@ -334,4 +380,216 @@ async fn turn_state_worker_is_read_only_to_scheduler_and_switch_cancels_inflight
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[derive(Clone)]
+struct BudgetResponder {
+    calls: Arc<Mutex<BTreeMap<(String, String), usize>>>,
+    succeed: bool,
+}
+
+impl Respond for BudgetResponder {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        assert!(!request.headers.contains_key("x-codex-turn-state"));
+        let body = if request
+            .headers
+            .get("content-encoding")
+            .is_some_and(|v| v == "zstd")
+        {
+            zstd::stream::decode_all(request.body.as_slice()).unwrap()
+        } else {
+            request.body.clone()
+        };
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let model = body["model"].as_str().unwrap().to_owned();
+        let owner = request
+            .headers
+            .get("chatgpt-account-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let count = {
+            let mut calls = self.calls.lock().unwrap();
+            if !self.succeed && calls.get(&(owner.clone(), model.clone())) == Some(&1) {
+                assert_eq!(
+                    calls.len(),
+                    4,
+                    "all keys must start before any key completes its first round"
+                );
+            }
+            let count = calls.entry((owner, model.clone())).or_default();
+            *count += 1;
+            *count
+        };
+        if !self.succeed {
+            let response = ResponseTemplate::new(if count % 2 == 0 { 429 } else { 500 })
+                .set_body_json(serde_json::json!({"error":{"code":"synthetic_failure"}}));
+            return if count == 1 {
+                response.set_delay(Duration::from_millis(400))
+            } else {
+                response
+            };
+        }
+        let mut bytes = vec![0x80];
+        bytes.extend_from_slice(
+            &SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .to_be_bytes(),
+        );
+        bytes.extend(std::iter::repeat_n(
+            u8::try_from(count).unwrap(),
+            16 + 160 + 32,
+        ));
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .insert_header("x-codex-turn-state", URL_SAFE.encode(bytes))
+            .set_body_string(format!("event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_probe\",\"model\":\"{model}\",\"status\":\"completed\",\"output\":[]}}}}\n\n"))
+    }
+}
+
+async fn independent_collectors(succeed: bool) {
+    let accounts = Arc::new(MemoryAccountStore::default());
+    for index in 0..2 {
+        let mut imported = CodexCredentialAdmin
+            .prepare_import(ImportCodexOAuthCredential {
+                account_id: format!("acct_parallel_{index}"),
+                name: format!("Parallel {index}"),
+                secret: secret(&format!("parallel-{index}")),
+                verified_account: profile(&format!("parallel-owner-{index}")),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .unwrap();
+        imported.account = imported.account.with_turn_state_injection_enabled(true);
+        accounts.create_account(imported).await.unwrap();
+    }
+    let base = provider_ports_with_accounts(accounts);
+    let states = Arc::new(ProbeStates::default());
+    let ports = ProviderStorePorts::new(
+        base.accounts(),
+        Arc::new(ReadOnlyLeases::default()),
+        base.session_affinity(),
+        base.session_exclusions(),
+        base.catalog_cache(),
+        base.artifact_profiles(),
+        base.credential_state(),
+        base.cooldowns(),
+        base.runtime_policy(),
+        base.oauth_pending(),
+    )
+    .with_turn_states(states.clone())
+    .with_egress(Arc::new(LoopbackEgress(ProviderEgressConfig {
+        revision: 1,
+        addresses: vec![ProviderEgressAddress {
+            id: "loopback".to_owned(),
+            address: Ipv6Addr::LOCALHOST,
+            enabled: true,
+        }],
+        ..ProviderEgressConfig::default()
+    })));
+    let server = MockServer::builder()
+        .listener(std::net::TcpListener::bind("[::1]:0").unwrap())
+        .start()
+        .await;
+    let responder = BudgetResponder {
+        calls: Arc::default(),
+        succeed,
+    };
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(responder.clone())
+        .expect(if succeed { 8 } else { 2000 })
+        .mount(&server)
+        .await;
+    let tuning = RequestTuningHandle::default();
+    tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::new(
+        true,
+        ["model-a", "model-b"]
+            .into_iter()
+            .map(|model| UpstreamModelId::new(model).unwrap())
+            .collect(),
+    ));
+    let mut config = valid_config();
+    config.config.api.base_url = server.uri();
+    let mut bundle = provider_openai::initialize_with_request_tuning(config.config, ports, tuning)
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let mut discover = None;
+    let mut collector = None;
+    for contribution in bundle.take_worker_contributions() {
+        if let WorkerContribution::Registration(registration) = contribution {
+            match registration.runnable {
+                WorkerRunnable::Scheduled { task, .. }
+                    if registration.id.owner() == "openai-turn-state" =>
+                {
+                    discover = Some((registration.id, task))
+                }
+                WorkerRunnable::Daemon { task, .. }
+                    if registration.id.owner() == "openai-turn-state-collector" =>
+                {
+                    collector = Some(task)
+                }
+                _ => {}
+            }
+        }
+    }
+    let runner_cancel = cancel.clone();
+    let handle = tokio::spawn(async move { collector.unwrap().run(runner_cancel).await });
+    let (id, task) = discover.unwrap();
+    task.run_cycle(WorkerCycleContext::new(id, None, cancel.clone()))
+        .await
+        .unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(300), async {
+        while if succeed {
+            states.writes.load(Ordering::SeqCst) < 8
+        } else {
+            states.failed.load(Ordering::SeqCst) < 4
+        } {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    cancel.cancel();
+    handle.await.unwrap().unwrap();
+    let calls = responder.calls.lock().unwrap();
+    assert!(
+        completed.is_ok(),
+        "independent tasks timed out: calls={calls:?}, failed={}, cancelled={}",
+        states.failed.load(Ordering::SeqCst),
+        states.cancelled.load(Ordering::SeqCst),
+    );
+    assert_eq!(calls.len(), 4, "each account and model owns its own task");
+    assert!(
+        calls
+            .values()
+            .all(|count| *count == if succeed { 2 } else { 500 })
+    );
+    if succeed {
+        let records = states.records.lock().unwrap();
+        assert_eq!(records.len(), 4);
+        for record in records.values() {
+            assert_eq!(
+                record.refresh_status(),
+                ProviderTurnStateRefreshStatus::Ready
+            );
+            assert_ne!(
+                record.active().unwrap().state(),
+                record.standby().unwrap().state()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn independent_accounts_and_models_exhaust_500_even_with_one_ipv6_and_upstream_errors() {
+    independent_collectors(false).await;
+}
+
+#[tokio::test]
+async fn independent_accounts_and_models_immediately_acquire_distinct_standby() {
+    independent_collectors(true).await;
 }

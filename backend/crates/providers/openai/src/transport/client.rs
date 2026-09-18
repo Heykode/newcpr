@@ -255,6 +255,8 @@ impl fmt::Debug for CodexClientVisibleUpstreamResponse {
 /// Codex 上游 HTTP 客户端错误。
 #[derive(Error)]
 pub enum CodexClientError {
+    #[error("managed turn state is no longer ready")]
+    TurnStateUnavailable,
     /// Reqwest 传输失败。
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
@@ -336,6 +338,9 @@ pub enum CodexClientError {
 impl fmt::Debug for CodexClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TurnStateUnavailable => {
+                formatter.write_str("CodexClientError::TurnStateUnavailable")
+            }
             Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
             Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
             Self::ErrorBodyRead {
@@ -404,6 +409,7 @@ impl CodexClientError {
                 Some(*transport)
             }
             Self::CustomCa(_)
+            | Self::TurnStateUnavailable
             | Self::Egress(_)
             | Self::InvalidHeaderName(_)
             | Self::InvalidHeaderValue(_)

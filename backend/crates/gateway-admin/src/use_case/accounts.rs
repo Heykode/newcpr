@@ -372,6 +372,12 @@ impl DefaultAccountsService {
             .and_then(|(window, _)| window.local_usage.clone());
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
+            turn_state: self
+                .accounts
+                .load_turn_state_status(std::slice::from_ref(&stored.account.id))
+                .await
+                .unwrap_or_default()
+                .remove(&stored.account.id),
             effective_concurrency_limit: stored
                 .account
                 .concurrency_limit
@@ -489,6 +495,11 @@ impl AccountsService for DefaultAccountsService {
         self.attach_quota_local_usage(&page.items, &mut quotas)
             .await?;
         let default_concurrency = self.default_concurrency_limit().await?;
+        let mut turn_states = self
+            .accounts
+            .load_turn_state_status(&ids)
+            .await
+            .unwrap_or_default();
         let items = page
             .items
             .into_iter()
@@ -502,6 +513,7 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
+                    turn_state: turn_states.remove(&item.account.id),
                     effective_concurrency_limit: item
                         .account
                         .concurrency_limit

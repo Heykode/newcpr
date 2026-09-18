@@ -110,6 +110,13 @@ pub trait ProviderEgressStore: Send + Sync {
 /// 账号目录与公共账号写操作。
 #[async_trait]
 pub trait AccountStore: Send + Sync {
+    async fn load_turn_state_status(
+        &self,
+        _account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, crate::model::accounts::AccountTurnStateStatus>> {
+        Ok(BTreeMap::new())
+    }
+
     async fn list_accounts(
         &self,
         query: AccountListQuery,

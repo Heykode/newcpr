@@ -1,7 +1,7 @@
 //! Account-and-model scoped managed Codex turn state.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -17,15 +17,15 @@ use futures::{StreamExt as _, stream};
 use gateway_core::{
     account::{ProviderAccount, ProviderAccountId},
     provider_ports::{
-        OpaqueTurnState, ProviderLeasePort, ProviderTurnStateAnomaly, ProviderTurnStateCandidate,
+        OpaqueTurnState, ProviderTurnStateAnomaly, ProviderTurnStateCandidate,
         ProviderTurnStatePort, ProviderTurnStateRecord, ProviderTurnStateRefreshStatus,
         ProviderTurnStateSlot, ProviderTurnStateValue,
     },
-    routing::{ProviderKind, UpstreamModelId},
+    routing::UpstreamModelId,
     runtime::RequestTuningHandle,
 };
 use serde_json::{Map, Value, json};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use uuid::Uuid;
 
 use crate::{
@@ -47,10 +47,10 @@ const TEAM_NORMAL_LENGTH: u16 = 332;
 const TEAM_DEGRADED_LENGTH: u16 = 356;
 const MAX_PENDING_OBSERVATIONS: usize = 256;
 const STATE_STORE_TIMEOUT: Duration = Duration::from_secs(1);
-const MAINTENANCE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROBES: usize = 500;
 const MAX_BATCH: usize = 100;
+const MAX_COLLECTORS: usize = 32;
 
 type ObservationKey = (ProviderAccountId, UpstreamModelId);
 
@@ -120,11 +120,10 @@ impl MaintenanceQueue {
         true
     }
 
-    fn pop(&self) -> Option<(ObservationKey, bool)> {
-        self.values
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pop_front()
+    fn pop_available(&self, running: &HashSet<ObservationKey>) -> Option<(ObservationKey, bool)> {
+        let mut values = self.values.lock().unwrap_or_else(|e| e.into_inner());
+        let index = values.iter().position(|(key, _)| !running.contains(key))?;
+        values.remove(index)
     }
 }
 
@@ -266,6 +265,26 @@ impl CodexTurnStateManager {
             record.state_version(),
             active.expires_at(),
         ))
+    }
+
+    pub(crate) async fn allows_new_request(&self, account: &ProviderAccount, model: &str) -> bool {
+        let Ok(model) = UpstreamModelId::new(model) else {
+            return false;
+        };
+        if !self.feature_enabled_for(account, &model) {
+            return true;
+        }
+        if self
+            .active(account, &model, SystemTime::now())
+            .await
+            .is_some()
+        {
+            return true;
+        }
+        self.maintenance
+            .enqueue((account.id().clone(), model.clone()), false);
+        // Opt-out during the read restores ordinary scheduling immediately.
+        !self.feature_enabled_for(account, &model)
     }
 
     pub(crate) fn models(&self) -> Vec<UpstreamModelId> {
@@ -605,28 +624,27 @@ fn refresh_slots(
 #[derive(Clone)]
 pub(crate) struct CodexTurnStateMaintenanceService {
     repository: CodexCredentialRepository,
-    leases: Arc<dyn ProviderLeasePort>,
     client: CodexBackendClient,
     egress: Option<Arc<CodexEgressRuntime>>,
     manager: CodexTurnStateManager,
     discovery_cursor: Arc<AtomicUsize>,
+    probe_capacity: Arc<Semaphore>,
 }
 
 impl CodexTurnStateMaintenanceService {
     pub(crate) fn new(
         repository: CodexCredentialRepository,
-        leases: Arc<dyn ProviderLeasePort>,
         client: CodexBackendClient,
         egress: Option<Arc<CodexEgressRuntime>>,
         manager: CodexTurnStateManager,
     ) -> Self {
         Self {
             repository,
-            leases,
             client,
             egress,
             manager,
             discovery_cursor: Arc::default(),
+            probe_capacity: Arc::new(Semaphore::new(MAX_BATCH)),
         }
     }
 
@@ -679,26 +697,52 @@ impl CodexTurnStateMaintenanceService {
     }
 
     pub(crate) async fn run_maintenance(&self) {
+        let mut running = HashSet::new();
+        let mut tasks = stream::FuturesUnordered::new();
         loop {
-            self.manager.maintenance.ready.notified().await;
-            while let Some(((account_id, model), force_standby)) = self.manager.maintenance.pop() {
-                let _ = tokio::time::timeout(MAINTENANCE_TIMEOUT, async {
-                    let Some(egress) = &self.egress else { return };
-                    let Ok(Some(account)) = self.repository.store().get_account(&account_id).await
-                    else {
-                        return;
-                    };
-                    if !self.target_current(&account, &model).await {
-                        return;
-                    }
-                    tokio::select! {
-                        () = self.maintain_target(&account, &model, egress, force_standby) => {},
-                        () = self.wait_until_invalid(&account, &model) => {},
-                    }
-                })
-                .await;
+            while tasks.len() < MAX_COLLECTORS {
+                let Some((key, force)) = self.manager.maintenance.pop_available(&running) else {
+                    break;
+                };
+                running.insert(key.clone());
+                tasks.push(async move {
+                    self.run_target(&key.0, &key.1, force).await;
+                    key
+                });
+            }
+            tokio::select! {
+                Some(key) = tasks.next(), if !tasks.is_empty() => { running.remove(&key); },
+                () = self.manager.maintenance.ready.notified(), if tasks.len() < MAX_COLLECTORS => {},
             }
         }
+    }
+
+    async fn run_target(
+        &self,
+        account_id: &ProviderAccountId,
+        model: &UpstreamModelId,
+        force: bool,
+    ) {
+        let Some(egress) = &self.egress else { return };
+        let Ok(Some(account)) = self.repository.store().get_account(account_id).await else {
+            return;
+        };
+        if !self.target_current(&account, model).await {
+            return;
+        }
+        tokio::select! {
+            () = self.maintain_target(&account, model, egress, force) => {},
+            () = self.wait_until_invalid(&account, model) => {},
+        }
+        // A batch-boundary check can observe cancellation before the watcher does.
+        // The store only closes a still-refreshing row for this credential revision.
+        let _ = tokio::time::timeout(
+            STATE_STORE_TIMEOUT,
+            self.manager
+                .store
+                .cancel_refresh(account.id(), model, account.revision()),
+        )
+        .await;
     }
 
     async fn target_current(&self, account: &ProviderAccount, model: &UpstreamModelId) -> bool {
@@ -744,22 +788,6 @@ impl CodexTurnStateMaintenanceService {
         if !active_due && !standby_due {
             return;
         }
-        let provider = match ProviderKind::new("openai") {
-            Ok(provider) => provider,
-            Err(_) => return,
-        };
-        let signals = self
-            .leases
-            .load_signals(&provider, std::slice::from_ref(account.id()))
-            .await;
-        if signals.is_err()
-            || signals
-                .ok()
-                .and_then(|signals| signals.get(account.id()).cloned())
-                .is_some_and(|signals| signals.in_flight > 0)
-        {
-            return;
-        }
         let Ok(mut sources) = egress.probe_sources() else {
             return;
         };
@@ -771,7 +799,6 @@ impl CodexTurnStateMaintenanceService {
             Ok(runtime) => Arc::new(runtime),
             Err(_) => return,
         };
-        let mut cursor = 0_usize;
         if active_due
             && self
                 .collect_slot(
@@ -781,11 +808,10 @@ impl CodexTurnStateMaintenanceService {
                     ProviderTurnStateSlot::Active,
                     &runtime,
                     &sources,
-                    &mut cursor,
                 )
                 .await
         {
-            // A freshly promoted active is immediately paired with a standby from unused sources.
+            // Standby has its own acquisition budget after a fresh active is committed.
             let _ = self
                 .collect_slot(
                     account,
@@ -794,10 +820,9 @@ impl CodexTurnStateMaintenanceService {
                     ProviderTurnStateSlot::Standby,
                     &runtime,
                     &sources,
-                    &mut cursor,
                 )
                 .await;
-        } else if standby_due {
+        } else if !active_due && standby_due {
             let _ = self
                 .collect_slot(
                     account,
@@ -806,13 +831,11 @@ impl CodexTurnStateMaintenanceService {
                     ProviderTurnStateSlot::Standby,
                     &runtime,
                     &sources,
-                    &mut cursor,
                 )
                 .await;
         }
     }
 
-    #[expect(clippy::too_many_arguments)]
     async fn collect_slot(
         &self,
         account: &ProviderAccount,
@@ -821,7 +844,6 @@ impl CodexTurnStateMaintenanceService {
         slot: ProviderTurnStateSlot,
         runtime: &Arc<crate::credential::CodexRuntimeCredential>,
         sources: &[std::net::Ipv6Addr],
-        cursor: &mut usize,
     ) -> bool {
         if !self
             .manager
@@ -837,27 +859,40 @@ impl CodexTurnStateMaintenanceService {
             return false;
         }
         let mut round = 0_usize;
-        while *cursor < sources.len().min(MAX_PROBES) {
+        let mut cursor = 0_usize;
+        let mut failures = HashMap::<&'static str, usize>::new();
+        while cursor < MAX_PROBES {
             if !self.target_current(account, model).await {
                 return false;
             }
-            let batch_size = probe_batch_size(round, *cursor, sources.len());
-            let batch = sources[*cursor..*cursor + batch_size].to_vec();
-            *cursor += batch_size;
+            let batch_size = probe_batch_size(round, cursor, MAX_PROBES);
+            let batch = (cursor..cursor + batch_size).map(|index| sources[index % sources.len()]);
+            cursor += batch_size;
             round += 1;
-            let results = stream::iter(batch.into_iter().map(|source| async move {
+            let results = stream::iter(batch.map(|source| async move {
+                // Waiting for shared transport capacity does not spend a probe timeout.
+                let _permit = self
+                    .probe_capacity
+                    .acquire()
+                    .await
+                    .map_err(|_| "capacity_closed")?;
                 tokio::time::timeout(
                     PROBE_TIMEOUT,
                     self.probe(account.clone(), model.clone(), Arc::clone(runtime), source),
                 )
                 .await
-                .ok()
-                .flatten()
+                .unwrap_or(Err("timeout"))
             }))
             .buffer_unordered(batch_size);
             tokio::pin!(results);
             while let Some(value) = results.next().await {
-                let Some(value) = value else { continue };
+                let value = match value {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        *failures.entry(reason).or_default() += 1;
+                        continue;
+                    }
+                };
                 if !self.target_current(account, model).await {
                     return false;
                 }
@@ -873,9 +908,16 @@ impl CodexTurnStateMaintenanceService {
                     )
                     .await
                 {
+                    tracing::info!(
+                        model = model.as_str(),
+                        ?slot,
+                        allocated = cursor,
+                        "Turn state acquisition succeeded"
+                    );
                     // Dropping the bounded batch cancels its remaining probes.
                     return true;
                 }
+                *failures.entry("unusable_state").or_default() += 1;
             }
         }
         self.manager
@@ -887,6 +929,13 @@ impl CodexTurnStateMaintenanceService {
                 SystemTime::now(),
             )
             .await;
+        tracing::warn!(
+            model = model.as_str(),
+            ?slot,
+            attempted = cursor,
+            ?failures,
+            "Turn state acquisition exhausted request budget"
+        );
         false
     }
 
@@ -896,10 +945,16 @@ impl CodexTurnStateMaintenanceService {
         model: UpstreamModelId,
         runtime: Arc<crate::credential::CodexRuntimeCredential>,
         source: std::net::Ipv6Addr,
-    ) -> Option<String> {
-        let client = self.client.for_probe_source(&account, source).ok()?;
-        let authorization = runtime.authentication.authorization_header().ok()?;
-        let cookie = build_cookie_header(&runtime.cookies).ok()?;
+    ) -> Result<String, &'static str> {
+        let client = self
+            .client
+            .for_probe_source(&account, source)
+            .map_err(|_| "egress_unavailable")?;
+        let authorization = runtime
+            .authentication
+            .authorization_header()
+            .map_err(|_| "authorization")?;
+        let cookie = build_cookie_header(&runtime.cookies).map_err(|_| "cookie")?;
         let request_id = Uuid::now_v7().to_string();
         let mut body = Map::new();
         body.insert("model".to_owned(), Value::String(model.as_str().to_owned()));
@@ -933,17 +988,25 @@ impl CodexTurnStateMaintenanceService {
         let mut response = client
             .create_response_stream_http_sse(&request, context)
             .await
-            .ok()?;
+            .map_err(|error| match error {
+                crate::transport::CodexClientError::Upstream { status, .. }
+                    if status.as_u16() == 429 =>
+                {
+                    "upstream_429"
+                }
+                crate::transport::CodexClientError::Upstream { .. } => "upstream_error",
+                _ => "transport_error",
+            })?;
         let state = response.turn_state.take();
         let mut decoder = crate::transport::canonical::CodexCanonicalDecoder::new(model.as_str())
             .with_reported_model(response.response_metadata.effective_model.as_deref());
         while let Some(chunk) = response.body.next().await {
-            let chunk = chunk.ok()?;
+            let chunk = chunk.map_err(|_| "stream_error")?;
             if matches!(
                 decoder.push(&chunk),
                 crate::transport::canonical::CodexCanonicalOutcome::Failed(_)
             ) {
-                return None;
+                return Err("response_failed");
             }
         }
         if matches!(
@@ -953,9 +1016,9 @@ impl CodexTurnStateMaintenanceService {
             .response_model()
             .is_some_and(|reported| reported != model.as_str())
         {
-            return None;
+            return Err("response_failed_or_model_mismatch");
         }
-        state
+        state.ok_or("missing_state")
     }
 }
 
@@ -980,8 +1043,9 @@ fn is_state_rejection_code(code: Option<&str>) -> bool {
 mod tests {
     use super::*;
     use gateway_core::{
-        account::CredentialRevision, provider_ports::NoopProviderTurnStatePort,
-        routing::OpenAiTurnStatePolicy,
+        account::CredentialRevision,
+        provider_ports::NoopProviderTurnStatePort,
+        routing::{OpenAiTurnStatePolicy, ProviderKind},
     };
 
     fn managed_account(id: &str) -> ProviderAccount {
@@ -1025,15 +1089,57 @@ mod tests {
         queue.enqueue(key(0), true);
         queue.enqueue(key(0), false);
         assert_eq!(queue.values.lock().unwrap().len(), MAX_PENDING_OBSERVATIONS);
-        assert_eq!(queue.pop(), Some((key(0), true)));
+        assert_eq!(queue.pop_available(&HashSet::new()), Some((key(0), true)));
         for index in 1..MAX_PENDING_OBSERVATIONS {
-            assert_eq!(queue.pop(), Some((key(index), false)));
+            assert_eq!(
+                queue.pop_available(&HashSet::new()),
+                Some((key(index), false))
+            );
         }
-        assert!(queue.pop().is_none());
+        assert!(queue.pop_available(&HashSet::new()).is_none());
     }
 
     #[test]
-    fn probe_budget_is_shared_by_active_and_standby_and_never_reuses_a_source() {
+    fn maintenance_queue_skips_only_running_keys_and_keeps_their_followup() {
+        let queue = MaintenanceQueue::default();
+        let first = (
+            managed_account("one").id().clone(),
+            UpstreamModelId::new("model-a").unwrap(),
+        );
+        let other_model = (first.0.clone(), UpstreamModelId::new("model-b").unwrap());
+        let other_account = (managed_account("two").id().clone(), first.1.clone());
+        queue.enqueue(first.clone(), true);
+        queue.enqueue(other_model.clone(), false);
+        queue.enqueue(other_account.clone(), false);
+        let running = HashSet::from([first.clone()]);
+        assert_eq!(queue.pop_available(&running), Some((other_model, false)));
+        assert_eq!(queue.pop_available(&running), Some((other_account, false)));
+        assert!(queue.pop_available(&running).is_none());
+        assert_eq!(queue.pop_available(&HashSet::new()), Some((first, true)));
+    }
+
+    #[tokio::test]
+    async fn missing_state_blocks_only_opted_in_models_and_disabling_restores_scheduling() {
+        let (manager, model) = manager();
+        let account = managed_account("gated");
+        assert!(!manager.allows_new_request(&account, model.as_str()).await);
+        assert!(manager.allows_new_request(&account, "excluded-model").await);
+        assert!(
+            manager
+                .allows_new_request(
+                    &account.clone().with_turn_state_injection_enabled(false),
+                    model.as_str()
+                )
+                .await
+        );
+        manager
+            .request_tuning
+            .publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
+        assert!(manager.allows_new_request(&account, model.as_str()).await);
+    }
+
+    #[test]
+    fn probe_budget_is_500_per_slot_with_final_partial_batch() {
         let mut cursor = 0;
         let mut batches = Vec::new();
         for round in 0..20 {
@@ -1049,7 +1155,7 @@ mod tests {
         assert_eq!(
             probe_batch_size(0, cursor, 2000),
             0,
-            "standby shares the task budget"
+            "the slot stops at 500"
         );
         assert_eq!(probe_batch_size(12, 0, 2000), MAX_BATCH);
         assert_eq!(probe_batch_size(5, 498, 2000), 2);
@@ -1057,7 +1163,7 @@ mod tests {
         assert_eq!(
             probe_batch_size(0, 1, 500),
             1,
-            "standby starts at the next unused source"
+            "new slot starts its own batch schedule"
         );
     }
 
@@ -1084,7 +1190,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_managed_state_is_injected_and_expired_state_is_removed_before_sending() {
+    async fn http_managed_state_is_injected_and_expired_state_is_blocked_before_sending() {
         use crate::transport::{CodexRequestContext, request::apply_managed_turn_state};
         use wiremock::{
             Mock, MockServer, ResponseTemplate,
@@ -1095,7 +1201,7 @@ mod tests {
         Mock::given(method("POST")).and(path("/codex/responses"))
             .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/event-stream")
                 .set_body_string("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n"))
-            .expect(3).mount(&server).await;
+            .expect(2).mount(&server).await;
         let client = CodexBackendClient::new(
             reqwest::Client::new(),
             server.uri(),
@@ -1128,10 +1234,18 @@ mod tests {
                 Some("synthetic-installation"),
             );
             context.turn_state = request.turn_state.as_deref();
-            let mut response = client
+            let response = client
                 .create_response_stream_with_pool_account(&request, context, Some("acct_synthetic"))
-                .await
-                .unwrap();
+                .await;
+            if expiry == Some(UNIX_EPOCH) {
+                assert!(matches!(
+                    response,
+                    Err(crate::transport::CodexClientError::TurnStateUnavailable)
+                ));
+                assert!(capture.snapshot().is_none());
+                continue;
+            }
+            let mut response = response.unwrap();
             while let Some(chunk) = response.body.next().await {
                 chunk.unwrap();
             }
@@ -1147,7 +1261,11 @@ mod tests {
         let received = server.received_requests().await.unwrap();
         assert!(!received[0].headers.contains_key("x-codex-turn-state"));
         assert_eq!(received[1].headers.get("x-codex-turn-state").unwrap(), raw);
-        assert!(!received[2].headers.contains_key("x-codex-turn-state"));
+        assert_eq!(
+            received.len(),
+            2,
+            "expired managed state must not reach upstream"
+        );
         let decode = |request: &wiremock::Request| {
             let body = if request
                 .headers
@@ -1164,14 +1282,8 @@ mod tests {
             decode(&received[1]).pointer("/client_metadata/x-codex-turn-state"),
             Some(&Value::String(raw.to_owned()))
         );
-        assert!(
-            decode(&received[2])
-                .pointer("/client_metadata/x-codex-turn-state")
-                .is_none()
-        );
         for name in ["user-agent", "originator"] {
             assert_eq!(received[0].headers.get(name), received[1].headers.get(name));
-            assert_eq!(received[0].headers.get(name), received[2].headers.get(name));
         }
     }
 

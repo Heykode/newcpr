@@ -594,16 +594,34 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
+        if context.continuation_attempt() != ContinuationAttempt::Native
+            && let Some(manager) = &self.turn_states
+            && !manager
+                .allows_new_request(lease.account(), upstream_model.as_str())
+                .await
+        {
+            return Err(provider_error(
+                ProviderErrorKind::Unavailable,
+                UpstreamSendState::NotSent,
+            ));
+        }
         if context.continuation_attempt() == ContinuationAttempt::None
             && !continuation_requested
             && upstream_request.previous_response_id().is_none()
             && upstream_request.turn_state.is_none()
             && let Some(turn_states) = &self.turn_states
-            && let Some((state, version, expires_at)) = turn_states
+        {
+            if let Some((state, version, expires_at)) = turn_states
                 .active(lease.account(), upstream_model, SystemTime::now())
                 .await
-        {
-            apply_managed_turn_state(&mut upstream_request, state, version, expires_at);
+            {
+                apply_managed_turn_state(&mut upstream_request, state, version, expires_at);
+            } else if turn_states.feature_enabled_for(lease.account(), upstream_model) {
+                return Err(provider_error(
+                    ProviderErrorKind::Unavailable,
+                    UpstreamSendState::NotSent,
+                ));
+            }
         }
         // Preserve the established identity/affinity inputs above. Only the
         // selected account's outbound copy receives the effective location.

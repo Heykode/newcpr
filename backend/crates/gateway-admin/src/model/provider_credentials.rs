@@ -1140,6 +1140,7 @@ impl fmt::Debug for ProviderExport {
 /// 统一账号目录的一行完整结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountDirectoryItem {
+    pub turn_state: Option<super::accounts::AccountTurnStateStatus>,
     pub account: AccountRecord,
     /// 账号覆盖值优先，否则继承本次查询读取的运行时默认值；不回写账号配置。
     pub effective_concurrency_limit: NonZeroU32,

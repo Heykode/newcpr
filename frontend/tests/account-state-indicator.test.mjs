@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
-import { createSSRApp, defineComponent, h } from 'vue'
+import { createSSRApp, defineComponent, h, ref } from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { renderToString } from 'vue/server-renderer'
 
@@ -37,6 +37,8 @@ function loadSource(filename) {
     require(name) {
       if (name === '@lucide/vue' || name === '@boxicons/vue')
         return icons
+      if (name === '@vueuse/core')
+        return { createSharedComposable: fn => fn, useNow: () => ref(new Date()) }
       if (name.startsWith('@/') || name.startsWith('.')) {
         const path = name.endsWith('.vue') ? name : `${name}.ts`
         return loadSource(name.startsWith('@/')
@@ -127,4 +129,28 @@ test('State styling is derived anew from the account switch and preserves other 
   assert.match(on, /data-account-totp-mark/)
   assert.equal(await render({ turnStateInjectionEnabled: false }, props), off)
   assert.doesNotMatch(off, /data-account-state/)
+})
+
+test('a valid active makes the frame green and names ready versus pending models', async () => {
+  const html = await render({
+    turnStateInjectionEnabled: true,
+    turnState: {
+      requiredModels: ['model-a', 'model-b'],
+      readyModels: [{ model: 'model-a', expiresAt: new Date(Date.now() + 3600000).toISOString() }],
+    },
+  })
+  assert.match(mark(html, 'state-avatar'), /ring-emerald-500/)
+  assert.match(html, /data-account-state-ready/)
+  assert.match(mark(html, 'state-avatar'), /已就绪：model-a；待采集：model-b/)
+})
+
+test('expired, missing, or disabled active never turns the frame green', async () => {
+  for (const turnState of [null, { requiredModels: ['model-a'], readyModels: [] }, {
+    requiredModels: ['model-a'],
+    readyModels: [{ model: 'model-a', expiresAt: new Date(0).toISOString() }],
+  }]) {
+    const html = await render({ turnStateInjectionEnabled: true, turnState })
+    assert.doesNotMatch(html, /data-account-state-ready|ring-emerald/)
+    assert.match(mark(html, 'state-avatar'), /ring-amber-500/)
+  }
 })

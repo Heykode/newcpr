@@ -18,6 +18,7 @@ async function main() {
   const errors = []
   const mutations = []
   let enabled = true
+  let ready = true
   page.on('pageerror', error => errors.push(error.message))
   await page.route('**/dev/api/admin/accounts?*', async (route) => {
     assert.equal(route.request().method(), 'GET')
@@ -25,6 +26,12 @@ async function main() {
       ...account,
       provider: index === 2 ? 'xai' : account.provider,
       turnStateInjectionEnabled: index === 0 ? enabled : index === 2,
+      turnState: index === 0 && enabled
+        ? {
+            requiredModels: ['model-a', 'model-b'],
+            readyModels: ready ? [{ model: 'model-a', expiresAt: new Date(Date.now() + 3600000).toISOString() }] : [],
+          }
+        : null,
     }))
     await route.fulfill({ json: {
       code: 200,
@@ -52,7 +59,9 @@ async function main() {
     assert.equal(await mark.count(), 1)
     const identity = avatar.locator('..')
     await identity.locator('[data-account-totp-mark]').waitFor()
-    assert.match(await mark.getAttribute('title'), /账号级 State 注入已开启.*总开关.*模型名单.*可用 State/)
+    assert.match(await mark.getAttribute('title'), /已就绪：model-a；待采集：model-b/)
+    assert.equal(await page.locator('[data-account-state-ready]').count(), 1)
+    assert.match(await avatar.getAttribute('class'), /ring-emerald-500/)
     assert.equal(await mark.getAttribute('title'), await mark.getAttribute('aria-label'))
     for (const theme of ['light', 'dark']) {
       await page.setViewportSize({ width: 1440, height: 900 })
@@ -97,6 +106,12 @@ async function main() {
         await page.screenshot({ path: `${output}/${theme}-${width}.png`, fullPage: true })
       }
     }
+    ready = false
+    await page.reload()
+    await mark.waitFor()
+    assert.equal(await page.locator('[data-account-state-ready]').count(), 0)
+    assert.match(await avatar.getAttribute('class'), /ring-amber-500/)
+    assert.match(await mark.getAttribute('title'), /待采集/)
     await page.setViewportSize({ width: 1440, height: 900 })
     const more = page.getByRole('button', { name: '更多操作', exact: true }).first()
     for (const next of [false, true]) {
@@ -107,7 +122,7 @@ async function main() {
     }
     assert.equal(mutations.length, 2)
     assert.deepEqual(errors, [])
-    process.stdout.write('Passed: State menu toggle, partial update, gold avatar, 2FA coexistence, provider guard, light/dark and 1440/390/320px.\n')
+    process.stdout.write('Passed: State readiness, green/gold avatar, menu toggle, partial update, 2FA coexistence, provider guard, light/dark and 1440/390/320px.\n')
   }
   finally {
     await browser.close()
