@@ -200,7 +200,8 @@ async fn initialize_with_request_tuning_mode(
             Arc::clone(&account_feedback),
             CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
         )
-        .with_account_concurrency(request_tuning.account_concurrency()),
+        .with_account_concurrency(request_tuning.account_concurrency())
+        .with_turn_states(turn_state_manager.clone()),
     );
     let core_provider = CodexProvider::new(
         selector,
@@ -290,7 +291,6 @@ async fn initialize_with_request_tuning_mode(
         desktop_release,
         Arc::new(provider::CodexTurnStateMaintenanceService::new(
             repository,
-            leases,
             turn_state_client,
             egress_runtime.clone(),
             turn_state_manager,

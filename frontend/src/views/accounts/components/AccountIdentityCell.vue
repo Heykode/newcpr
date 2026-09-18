@@ -4,13 +4,14 @@ import { KeyRound, ShieldCheck } from '@lucide/vue'
 import { computed } from 'vue'
 
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { useUiClock } from '@/composables/useUiClock'
 import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
-  & Partial<Pick<AccountRow, 'accountId' | 'turnStateInjectionEnabled'>>
+  & Partial<Pick<AccountRow, 'accountId' | 'turnStateInjectionEnabled' | 'turnState'>>
 
 const props = withDefaults(
   defineProps<{
@@ -63,9 +64,23 @@ const hasTurnStateInjection = computed(() =>
   props.account.provider === 'openai' && props.account.turnStateInjectionEnabled === true,
 )
 
-const turnStateTitle = '账号级 State 注入已开启；实际注入仍取决于总开关、模型名单和可用 State'
+const now = useUiClock()
+const readyModels = computed(() => props.account.turnState?.readyModels
+  .filter(item => Date.parse(item.expiresAt) > now.value.getTime())
+  .map(item => item.model) ?? [])
+const hasReadyState = computed(() => hasTurnStateInjection.value && readyModels.value.length > 0)
+const turnStateTitle = computed(() => {
+  if (!props.account.turnState)
+    return '账号级 State 注入已开启；总开关关闭、账号停用或状态暂不可用'
+  if (!readyModels.value.length)
+    return 'State 待采集；维护名单中的模型暂不参与新请求调度'
+  const pending = props.account.turnState.requiredModels.filter(model => !readyModels.value.includes(model))
+  return `State 已就绪：${readyModels.value.join('、')}${pending.length ? `；待采集：${pending.join('、')}` : '；全部维护模型已就绪'}`
+})
 
 const avatarToneClass = computed(() => {
+  if (hasReadyState.value)
+    return 'bg-emerald-100 text-emerald-900 ring-2 ring-inset ring-emerald-500 [html[data-theme=dark]_&]:bg-emerald-950 [html[data-theme=dark]_&]:text-emerald-200 [html[data-theme=dark]_&]:ring-emerald-400'
   if (hasTurnStateInjection.value)
     return 'bg-amber-100 text-amber-900 ring-2 ring-inset ring-amber-500 [html[data-theme=dark]_&]:bg-amber-950 [html[data-theme=dark]_&]:text-amber-200 [html[data-theme=dark]_&]:ring-amber-400'
 
@@ -80,6 +95,7 @@ const avatarToneClass = computed(() => {
       <span
         data-swipe-select-handle
         :data-account-state-avatar="hasTurnStateInjection ? '' : undefined"
+        :data-account-state-ready="hasReadyState ? '' : undefined"
         :title="hasTurnStateInjection ? turnStateTitle : undefined"
         class="inline-flex items-center justify-center rounded-lg"
         :class="[avatarSizeClass, avatarToneClass]"
@@ -106,7 +122,8 @@ const avatarToneClass = computed(() => {
         v-if="hasTurnStateInjection"
         data-account-state-mark
         data-swipe-select-handle
-        class="absolute -bottom-1 -right-1 z-10 inline-flex size-4 items-center justify-center rounded-full border-2 border-cp-bg-container bg-amber-400 text-amber-950 shadow-sm"
+        class="absolute -bottom-1 -right-1 z-10 inline-flex size-4 items-center justify-center rounded-full border-2 border-cp-bg-container shadow-sm"
+        :class="hasReadyState ? 'bg-emerald-400 text-emerald-950' : 'bg-amber-400 text-amber-950'"
         :title="turnStateTitle"
         :aria-label="turnStateTitle"
         role="img"

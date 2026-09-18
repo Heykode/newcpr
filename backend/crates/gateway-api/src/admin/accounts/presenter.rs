@@ -61,6 +61,7 @@ pub(super) fn account_models_data(result: ProviderModels) -> AccountModelsData {
 
 pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
     let AccountDirectoryItem {
+        turn_state,
         account,
         effective_concurrency_limit,
         plan_type_display,
@@ -110,6 +111,17 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         error_message: projection.error_message,
         enabled: account.enabled,
         turn_state_injection_enabled: account.turn_state_injection_enabled,
+        turn_state: turn_state.map(|status| AccountTurnStateView {
+            required_models: status.required_models,
+            ready_models: status
+                .ready_models
+                .into_iter()
+                .map(|(model, expires_at)| AccountTurnStateModelView {
+                    model,
+                    expires_at: china_rfc3339(&expires_at),
+                })
+                .collect(),
+        }),
         in_flight,
         health_timeline: account_health_timeline_view(health_timeline, in_flight, now),
         concurrency_limit: account.concurrency_limit.map(|limit| limit.get()),

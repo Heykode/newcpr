@@ -1,6 +1,148 @@
 use super::*;
 use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
 
+#[tokio::test]
+async fn managed_state_gates_both_selectors_by_account_model_and_restores_when_disabled() {
+    use crate::provider::turn_state::ProbeStates;
+    use gateway_core::provider_ports::{
+        OpaqueTurnState, ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStateSlot,
+        ProviderTurnStateValue,
+    };
+    use gateway_core::routing::OpenAiTurnStatePolicy;
+    use gateway_core::runtime::RequestTuningHandle;
+    use provider_openai::credential::CodexCredentialAdmin;
+
+    for wait in [false, true] {
+        let accounts = Arc::new(MemoryAccountStore::default());
+        let mut imported = CodexCredentialAdmin
+            .prepare_import(ImportCodexOAuthCredential {
+                account_id: "acct_provider_contract".to_owned(),
+                name: "Managed test".to_owned(),
+                secret: secret("managed-test"),
+                verified_account: profile("managed-owner"),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .unwrap();
+        imported.account = imported.account.with_turn_state_injection_enabled(true);
+        let account = imported.account.clone();
+        accounts.create_account(imported).await.unwrap();
+        let states = Arc::new(ProbeStates::default());
+        let ports =
+            crate::admin::provider_ports_with_accounts(accounts).with_turn_states(states.clone());
+        let server = local_server().await;
+        let mut config = crate::admin::valid_config();
+        config.config.api.base_url = server.uri();
+        let tuning = RequestTuningHandle::default();
+        let model = UpstreamModelId::new("gpt-5.4").unwrap();
+        tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::new(
+            true,
+            [model.clone()].into(),
+        ));
+        tuning.account_concurrency().publish(
+            ConfigRevision::new(1).unwrap(),
+            [(
+                account.id().as_str().to_owned(),
+                NonZeroU32::new(3).unwrap(),
+            )]
+            .into(),
+        );
+        let bundle =
+            provider_openai::initialize_with_request_tuning(config.config, ports, tuning.clone())
+                .await
+                .unwrap();
+        let provider = bundle.core_provider();
+        let attempt = || {
+            context("req_managed_gate", CancellationToken::new()).with_request_tuning(
+                gateway_core::routing::RequestTuning {
+                    account_busy_wait_enabled: wait,
+                    ..Default::default()
+                },
+            )
+        };
+        let candidate = |model: UpstreamModelId, issued: SystemTime| ProviderTurnStateCandidate {
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            expected_active_version: None,
+            upstream_model: model,
+            normal_length: 292,
+            slot: ProviderTurnStateSlot::Active,
+            value: ProviderTurnStateValue::new(
+                OpaqueTurnState::new("s".repeat(292)),
+                issued,
+                issued + Duration::from_secs(3600),
+            ),
+            observed_at: SystemTime::now(),
+        };
+        states
+            .put_candidate(candidate(
+                UpstreamModelId::new("other-model").unwrap(),
+                SystemTime::now(),
+            ))
+            .await
+            .unwrap();
+        let result = provider
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                attempt(),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "a different model's state must not permit scheduling"
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        states
+            .put_candidate(candidate(model.clone(), SystemTime::now()))
+            .await
+            .unwrap();
+        let mut stream = provider
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                attempt(),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        drop(stream);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].headers.get("x-codex-turn-state").unwrap(),
+            "s".repeat(292).as_str()
+        );
+        states.records.lock().unwrap().clear();
+        let result = provider
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                attempt(),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "lost active must immediately exclude the account"
+        );
+        tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
+        // Preserve the original scheduling policy's 10ms interval between business requests.
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        let mut stream = provider
+            .execute(
+                planned_request("openai", http_generate_operation()),
+                attempt(),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[1].headers.contains_key("x-codex-turn-state"));
+    }
+}
+
 fn hint_context(id: &str) -> Map<String, Value> {
     Map::from_iter([(
         "openai_scheduling_session_hint".to_owned(),

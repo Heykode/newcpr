@@ -526,6 +526,7 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
     ) -> Result<Vec<AccountCandidate>, CredentialSelectionError> {
         let mut candidates = Vec::new();
+        let accounts = self.state_ready_accounts(accounts, request).await;
         self.quota.prepare_scheduling(&accounts).await;
         for account in accounts {
             if account.provider() != &self.provider_kind

@@ -309,6 +309,7 @@ pub struct AccountView {
     pub error_message: Option<String>,
     pub enabled: bool,
     pub turn_state_injection_enabled: bool,
+    pub turn_state: Option<AccountTurnStateView>,
     pub in_flight: Option<u64>,
     pub health_timeline: Vec<AccountHealthBucketView>,
     pub concurrency_limit: Option<u32>,
@@ -325,6 +326,20 @@ pub struct AccountView {
     pub quota: AccountQuotaView,
     pub usage: AccountUsageView,
     pub cumulative_costs: Vec<CurrencyCostView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountTurnStateView {
+    pub required_models: Vec<String>,
+    pub ready_models: Vec<AccountTurnStateModelView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountTurnStateModelView {
+    pub model: String,
+    pub expires_at: String,
 }
 
 /// Capacity estimates are display-only, not account balances or billing facts.

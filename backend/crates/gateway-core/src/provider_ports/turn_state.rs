@@ -216,6 +216,15 @@ pub struct ProviderTurnStateAnomaly {
 }
 
 pub trait ProviderTurnStatePort: Send + Sync {
+    fn cancel_refresh<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _upstream_model: &'a UpstreamModelId,
+        _expected_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn read<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,

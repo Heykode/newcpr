@@ -84,6 +84,13 @@ pub enum AccountGroupFilter {
     Ungrouped,
 }
 
+/// Safe account/model readiness projection; never contains opaque State values.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AccountTurnStateStatus {
+    pub required_models: Vec<String>,
+    pub ready_models: Vec<(String, DateTime<Utc>)>,
+}
+
 /// 账号公共存储投影；Provider 专属字段不进入此结构。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {

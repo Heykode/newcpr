@@ -245,27 +245,19 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        let mut request = std::borrow::Cow::Borrowed(request);
-        let mut context = context;
-        loop {
-            if self.managed_request_expired(&request, pool_account_id.or(context.account_id)) {
-                super::request::clear_managed_turn_state(request.to_mut());
-                context.turn_state = None;
-            }
-            let prepared = self
-                .prepare_response_transport_with_pool_account(&request, context, pool_account_id)
-                .await;
-            // Opening/capacity waits may cross expiry. No business payload has been sent.
-            if self.managed_request_expired(&request, pool_account_id.or(context.account_id)) {
-                drop(prepared);
-                super::request::clear_managed_turn_state(request.to_mut());
-                context.turn_state = None;
-                continue;
-            }
-            return self
-                .create_response_stream_with_prepared(&request, context, prepared?)
-                .await;
+        if self.managed_request_expired(request, pool_account_id.or(context.account_id)) {
+            return Err(CodexClientError::TurnStateUnavailable);
         }
+        let prepared = self
+            .prepare_response_transport_with_pool_account(request, context, pool_account_id)
+            .await;
+        // Opening/capacity waits may cross expiry. Never silently send an unprotected new chain.
+        if self.managed_request_expired(request, pool_account_id.or(context.account_id)) {
+            drop(prepared);
+            return Err(CodexClientError::TurnStateUnavailable);
+        }
+        self.create_response_stream_with_prepared(request, context, prepared?)
+            .await
     }
 
     fn managed_request_expired(
