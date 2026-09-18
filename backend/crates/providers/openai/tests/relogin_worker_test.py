@@ -40,11 +40,30 @@ def login():
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_known_plan_aliases_normalize_to_policy_tiers(self):
+        aliases = {
+            "prolite": "pro",
+            "team": "business",
+            "self_serve_business_prolite": "business",
+            "self_serve_business_usage_based": "business",
+            "education": "edu",
+            "edu_plus": "edu",
+            "edu_pro": "edu",
+            "ent26": "enterprise",
+            "enterprise_cbp_automation": "enterprise",
+            "enterprise_cbp_usage_based": "enterprise",
+            "hc": "enterprise",
+        }
+        for raw, expected in aliases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(worker.normalize_plan(raw), expected)
+        self.assertIsNone(worker.normalize_plan("future-plan"))
+
     def test_team_is_preferred_over_personal_and_free(self):
         accounts = {name: {"account": {"plan_type": plan}} for name, plan in [
             ("personal", "pro"), ("team-id", "team"), ("free-id", "free"),
         ]}
-        self.assertEqual(worker.select_workspace(accounts), {"id": "team-id", "plan": "team"})
+        self.assertEqual(worker.select_workspace(accounts), {"id": "team-id", "plan": "business"})
         self.assertEqual(worker.select_workspace(accounts, "personal")["id"], "personal")
 
     def test_free_only_and_explicit_workspace(self):
@@ -68,16 +87,28 @@ class WorkspaceTests(unittest.TestCase):
             {"id": "team-id", "plan_type": "team"},
             {"id": "team-id", "plan_type": "team"},
         ]
-        self.assertEqual(worker.select_workspace(accounts), {"id": "team-id", "plan": "team"})
+        self.assertEqual(worker.select_workspace(accounts), {"id": "team-id", "plan": "business"})
 
     def test_team_business_aliases_merge_independently_of_order(self):
         accounts = [
             {"id": "team-id", "plan_type": "team"},
-            {"id": "team-id", "plan_type": "business"},
+            {"id": "team-id", "plan_type": "self_serve_business_prolite"},
         ]
         for entries in (accounts, accounts[::-1]):
             self.assertEqual(worker.select_workspace(entries),
                              {"id": "team-id", "plan": "business"})
+
+    def test_business_and_enterprise_aliases_keep_paid_priority(self):
+        accounts = [
+            {"id": "free-id", "plan_type": "free"},
+            {"id": "pro-id", "plan_type": "prolite"},
+            {"id": "business-id", "plan_type": "self_serve_business_prolite"},
+        ]
+        self.assertEqual(worker.select_workspace(accounts),
+                         {"id": "business-id", "plan": "business"})
+        accounts.append({"id": "enterprise-id", "plan_type": "ent26"})
+        self.assertEqual(worker.select_workspace(accounts),
+                         {"id": "enterprise-id", "plan": "enterprise"})
 
     def test_conflicting_duplicate_plans_fail_closed(self):
         accounts = [
@@ -247,7 +278,8 @@ class FlowTests(unittest.TestCase):
 
 
 class CredentialTests(unittest.TestCase):
-    def run_login(self, override=None, usage_override=None, identity_override=None):
+    def run_login(self, override=None, usage_override=None, identity_override=None,
+                  membership_plan="team"):
         instance = login()
         instance.request["workspace_id"] = None
         instance.flow = lambda url, **kwargs: "fixture-code"
@@ -261,7 +293,8 @@ class CredentialTests(unittest.TestCase):
         bodies = iter([
             {"csrfToken": "fixture-csrf"}, {"url": worker.AUTH + "/log-in"},
             {"accessToken": "fixture-web-token"},
-            {"accounts": {"personal": {"account": {"plan_type": "free"}}, "team-id": {"account": {"plan_type": "team"}}}},
+            {"accounts": {"personal": {"account": {"plan_type": "free"}},
+                          "team-id": {"account": {"plan_type": membership_plan}}}},
             tokens, usage_override if usage_override is not None else {"rate_limit": {}, "plan_type": "team"},
         ])
         instance.fetch = lambda method, url, **kwargs: response(url, next(bodies))
@@ -274,8 +307,22 @@ class CredentialTests(unittest.TestCase):
         self.assertNotIn("password", json.dumps(result))
         self.assertNotIn("mfa", json.dumps(result))
 
+    def test_business_aliases_agree_across_membership_claims_and_usage(self):
+        result = self.run_login(
+            {"chatgpt_plan_type": "self_serve_business_prolite"},
+            {"rate_limit": {}, "plan_type": "team"},
+            {"chatgpt_plan_type": "business"},
+            membership_plan="self_serve_business_usage_based",
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["document"]["account_id"], "team-id")
+
     def test_wrong_workspace_or_downgraded_plan_never_returns_document(self):
-        for override in [{"chatgpt_account_id": "personal"}, {"chatgpt_plan_type": "free"}]:
+        for override in [
+            {"chatgpt_account_id": "personal"},
+            {"chatgpt_plan_type": "free"},
+            {"chatgpt_plan_type": "future-plan"},
+        ]:
             with self.assertRaises(worker.LoginError):
                 self.run_login(override)
 
@@ -285,7 +332,12 @@ class CredentialTests(unittest.TestCase):
                 self.run_login(identity_override=identity)
 
     def test_usage_must_be_recognizable_and_match_workspace_and_plan(self):
-        for usage in [{}, {"rate_limit": {}, "account_id": "other"}, {"rate_limit": {}, "plan_type": "free"}]:
+        for usage in [
+            {},
+            {"rate_limit": {}, "account_id": "other"},
+            {"rate_limit": {}, "plan_type": "free"},
+            {"rate_limit": {}, "plan_type": "future-plan"},
+        ]:
             with self.assertRaises(worker.LoginError):
                 self.run_login(usage_override=usage)
 
