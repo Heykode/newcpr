@@ -86,7 +86,6 @@ pub struct MonitorAccountEstimate {
     pub used_slots: Option<u64>,
     pub total_slots: u64,
     pub remaining_usd: Option<f64>,
-    pub incomplete: bool,
     pub unavailable: bool,
     pub low_sample: bool,
     pub reset_at: Option<DateTime<Utc>>,
@@ -175,7 +174,7 @@ pub fn project_group_monitor(
         remaining_status: "learning",
         expected_expiry_usd: None,
         expiry_status: "learning",
-        consume_usd_per_minute: known_usage(group_usage),
+        consume_usd_per_minute: usable_usage(group_usage),
         quota_consume_usd_per_minute: Some(0.0),
         eta_minutes: None,
         eta_status: "learning",
@@ -186,7 +185,6 @@ pub fn project_group_monitor(
     let mut expiry = Some(0.0);
     let mut calculable_expiry = 0;
     let mut free_slots = Some(0_u64);
-    let mut partial = false;
     let mut unavailable = false;
     for account in eligible {
         free_slots = free_slots
@@ -194,10 +192,9 @@ pub fn project_group_monitor(
             .map(|(free, used)| free.saturating_add(account.total_slots.saturating_sub(used)));
         item.quota_consume_usd_per_minute = item
             .quota_consume_usd_per_minute
-            .zip(known_usage(&account.consumption))
+            .zip(usable_usage(&account.consumption))
             .map(|(left, right)| left + right);
         item.low_sample |= account.low_sample;
-        partial |= account.incomplete;
         unavailable |= account.unavailable;
         if let Some(reset) = account.reset_at {
             item.earliest_reset_at = Some(
@@ -218,7 +215,7 @@ pub fn project_group_monitor(
                 Some(minutes) if minutes <= 0.0 => {}
                 Some(minutes) => {
                     expiry = expiry
-                        .zip(known_usage(&account.consumption))
+                        .zip(usable_usage(&account.consumption))
                         .map(|(total, rate)| total + (amount - rate * minutes).max(0.0));
                     calculable_expiry += 1;
                 }
@@ -241,10 +238,8 @@ pub fn project_group_monitor(
         item.eta_status = "disabled";
         return item;
     }
-    let complete = item.estimated_accounts == item.eligible_accounts
-        && !partial
-        && !unavailable
-        && remaining.is_finite();
+    let complete =
+        item.estimated_accounts == item.eligible_accounts && !unavailable && remaining.is_finite();
     if item.estimated_accounts > 0 || item.eligible_accounts == 0 {
         item.remaining_usd = remaining.is_finite().then_some(remaining);
         item.remaining_status = if complete { "ready" } else { "partial" };
@@ -292,6 +287,7 @@ pub fn project_group_monitor(
     item
 }
 
-fn known_usage(usage: &MonitorUsage) -> Option<f64> {
-    (usage.missing_costs == 0 && usage.usd.is_finite() && usage.usd >= 0.0).then_some(usage.usd)
+fn usable_usage(usage: &MonitorUsage) -> Option<f64> {
+    (usage.usd.is_finite() && usage.usd >= 0.0 && (usage.usd > 0.0 || usage.missing_costs == 0))
+        .then_some(usage.usd)
 }

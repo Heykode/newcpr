@@ -58,7 +58,8 @@ fn live_window(quota: &ProviderQuota, now: DateTime<Utc>) -> Option<&ProviderQuo
     .then_some(window)
 }
 
-/// Prefer own current-window estimate. Only genuine, complete estimates feed peers.
+/// Prefer own current-window estimate. Positive known USD can feed peers even
+/// when other requests in the same window have unavailable costs.
 #[must_use]
 pub fn monitor_quota_estimates(
     peers: &[MonitorQuotaPeer],
@@ -76,12 +77,7 @@ pub fn monitor_quota_estimates(
         };
         if let Some(estimate) = current_window_estimate(window, now) {
             result.insert(peer.id.clone(), estimate);
-            if !estimate.incomplete_cost
-                && window
-                    .local_usage
-                    .as_ref()
-                    .is_some_and(|usage| usage.cost_coverage.partial_count == 0)
-                && live_window(quota, now).is_some()
+            if live_window(quota, now).is_some()
                 && let Some(key) = peer_key(peer, window)
             {
                 sources

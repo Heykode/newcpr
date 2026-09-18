@@ -121,7 +121,6 @@ impl DefaultGroupMonitorService {
                         .map(|slots| slots.get(id).copied().unwrap_or(0)),
                     total_slots: fact.member.total_slots,
                     remaining_usd: None,
-                    incomplete: false,
                     unavailable: false,
                     low_sample: lifespan.is_some_and(|life| life.samples < 5),
                     reset_at: None,
@@ -181,7 +180,6 @@ impl DefaultGroupMonitorService {
                 && let Some((window, AccountUsagePeriod::Weekly)) = account.usage_window()
             {
                 estimate.remaining_usd = current.get(id).map(|value| value.remaining_usd);
-                estimate.incomplete = current.get(id).is_some_and(|value| value.incomplete_cost);
                 estimate.reset_at = window.reset_at;
             }
         }

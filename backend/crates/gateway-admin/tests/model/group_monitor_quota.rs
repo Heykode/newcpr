@@ -84,7 +84,7 @@ fn subsecond_reset_rounding_is_live_but_older_observations_stay_unknown() {
 }
 
 #[test]
-fn incompatible_or_incomplete_sources_never_supply_a_fallback() {
+fn incompatible_sources_never_supply_a_fallback() {
     for mode in [
         "provider",
         "plan",
@@ -93,8 +93,6 @@ fn incompatible_or_incomplete_sources_never_supply_a_fallback() {
         "duration",
         "limit",
         "role",
-        "partial",
-        "missing-cost",
         "expired",
         "old-observation",
         "no-observation",
@@ -113,22 +111,6 @@ fn incompatible_or_incomplete_sources_never_supply_a_fallback() {
                     gateway_admin::model::provider_credentials::ProviderQuotaWindowRole::Primary,
                 )
             }
-            "partial" => {
-                donor.windows[0]
-                    .local_usage
-                    .as_mut()
-                    .unwrap()
-                    .cost_coverage
-                    .partial_count = 1
-            }
-            "missing-cost" => {
-                donor.windows[0]
-                    .local_usage
-                    .as_mut()
-                    .unwrap()
-                    .cost_coverage
-                    .unavailable_count = 1
-            }
             "expired" => donor.windows[0].reset_at = Some(now()),
             "old-observation" => donor.observed_at = Some(now() - Duration::days(8)),
             "no-observation" => donor.observed_at = None,
@@ -142,6 +124,27 @@ fn incompatible_or_incomplete_sources_never_supply_a_fallback() {
             !monitor_quota_estimates(&peers, &quotas, now()).contains_key("new"),
             "{mode}"
         );
+    }
+}
+
+#[test]
+fn positive_known_cost_with_missing_requests_can_supply_a_fallback() {
+    let peers = vec![peer("new", 0), peer("source", 1)];
+    for mode in ["partial", "missing-cost"] {
+        let mut donor = source("10", 10.0);
+        let coverage = &mut donor.windows[0].local_usage.as_mut().unwrap().cost_coverage;
+        match mode {
+            "partial" => coverage.partial_count = 1,
+            "missing-cost" => coverage.unavailable_count = 1,
+            _ => unreachable!(),
+        }
+        let quotas = BTreeMap::from([
+            ("new".to_owned(), source("0", 0.0)),
+            ("source".to_owned(), donor),
+        ]);
+        let estimates = monitor_quota_estimates(&peers, &quotas, now());
+        assert_eq!(estimates["new"].total_usd, 100.0, "{mode}");
+        assert_eq!(estimates["new"].remaining_usd, 100.0, "{mode}");
     }
 }
 
