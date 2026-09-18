@@ -20,7 +20,9 @@ use crate::lifecycle::CancellationToken;
 use crate::routing::snapshot::{
     RuntimeSnapshot, RuntimeSnapshotCompileError, RuntimeSnapshotCompiler,
 };
-use crate::routing::{ConfigRevision, ProviderCatalogGeneration, RequestTuning};
+use crate::routing::{
+    ConfigRevision, OpenAiTurnStatePolicy, ProviderCatalogGeneration, RequestTuning,
+};
 use crate::task::{
     DaemonRestartPolicy, DaemonTask, ScheduledTask, WorkerContribution, WorkerCycleContext,
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerRegistration, WorkerRunnable,
@@ -87,6 +89,7 @@ struct RuntimeSnapshotState {
 #[derive(Clone, Default)]
 pub struct RequestTuningHandle {
     current: Arc<RwLock<RequestTuning>>,
+    openai_turn_state_policy: Arc<RwLock<OpenAiTurnStatePolicy>>,
     account_concurrency: AccountConcurrencyHandle,
 }
 
@@ -95,6 +98,7 @@ impl RequestTuningHandle {
     pub fn new(initial: RequestTuning) -> Self {
         Self {
             current: Arc::new(RwLock::new(initial)),
+            openai_turn_state_policy: Arc::new(RwLock::new(OpenAiTurnStatePolicy::default())),
             account_concurrency: AccountConcurrencyHandle::default(),
         }
     }
@@ -106,6 +110,15 @@ impl RequestTuningHandle {
 
     pub fn publish(&self, tuning: RequestTuning) {
         *write_unpoisoned(&self.current) = tuning;
+    }
+
+    #[must_use]
+    pub fn openai_turn_state_policy(&self) -> OpenAiTurnStatePolicy {
+        read_unpoisoned(&self.openai_turn_state_policy).clone()
+    }
+
+    pub fn publish_openai_turn_state_policy(&self, policy: OpenAiTurnStatePolicy) {
+        *write_unpoisoned(&self.openai_turn_state_policy) = policy;
     }
 
     #[must_use]
@@ -286,6 +299,8 @@ impl RuntimeSnapshotPublisher {
         };
         let revision = snapshot.revision();
         self.request_tuning.publish(snapshot.request_tuning());
+        self.request_tuning
+            .publish_openai_turn_state_policy(snapshot.openai_turn_state_policy().clone());
         self.snapshots.publish(snapshot);
         Ok(revision)
     }

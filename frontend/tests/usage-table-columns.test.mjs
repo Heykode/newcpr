@@ -23,6 +23,14 @@ function load(filename, dependencies = {}) {
 const { usageRecordColumns, opsErrorColumns } = load(new URL('../src/views/usage/constants.ts', import.meta.url), {
   './utils/format': { formatProvider: value => value },
 })
+const { resolveColumns } = load(new URL('../src/components/base/BaseTable/columns.ts', import.meta.url))
+
+test('State preview uses a compact column without widening adjacent numeric columns', () => {
+  const columns = resolveColumns(usageRecordColumns)
+  assert.equal(columns.find(column => column.key === 'turnState').basisWidth, 144)
+  assert.equal(columns.find(column => column.key === 'tokenDetails').basisWidth, 184)
+  assert.equal(columns.find(column => column.key === 'billing').basisWidth, 144)
+})
 
 class MemoryStorage {
   values = new Map()

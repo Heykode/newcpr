@@ -109,6 +109,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
             .map(|reason| reason.as_str().to_owned()),
         error_message: projection.error_message,
         enabled: account.enabled,
+        turn_state_injection_enabled: account.turn_state_injection_enabled,
         in_flight,
         health_timeline: account_health_timeline_view(health_timeline, in_flight, now),
         concurrency_limit: account.concurrency_limit.map(|limit| limit.get()),

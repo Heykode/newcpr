@@ -132,6 +132,7 @@ impl PgProviderAccountRepository {
         account_id: &str,
         expected_revision: u64,
         replacement_identity: Option<&ProviderAccountIdentity>,
+        replacement_email: Option<&str>,
         incoming: &JsonObject,
     ) -> StoreResult<JsonObject> {
         if self.device_codecs.is_empty()? {
@@ -139,7 +140,7 @@ impl PgProviderAccountRepository {
         }
         lock_device_mutation(transaction).await?;
         let row = sqlx::query(
-            "select provider_kind, upstream_user_id, upstream_account_id,
+            "select provider_kind, upstream_user_id, upstream_account_id, email,
                     provider_credentials_json
              from provider_accounts where id = $1 and credential_revision = $2 for update",
         )
@@ -159,6 +160,7 @@ impl PgProviderAccountRepository {
         };
         let old_user: Option<String> = get(&row, "upstream_user_id")?;
         let old_account: Option<String> = get(&row, "upstream_account_id")?;
+        let old_email: Option<String> = get(&row, "email")?;
         let user = replacement_identity
             .map(ProviderAccountIdentity::upstream_user_id)
             .or(old_user.as_deref());
@@ -167,13 +169,12 @@ impl PgProviderAccountRepository {
             None => old_account.as_deref(),
         };
         if replacement_identity.is_some()
-            && (old_user.as_deref().is_some_and(|known| Some(known) != user)
-                || old_account
-                    .as_deref()
-                    .is_some_and(|known| Some(known) != account))
+            && old_account
+                .as_deref()
+                .is_some_and(|known| Some(known) != account)
         {
             return Err(device_conflict(
-                "reauthorization cannot move a device to another upstream principal",
+                "reauthorization cannot move a device to another upstream workspace",
             ));
         }
         let (Some(user), Some(account)) = (
@@ -183,6 +184,41 @@ impl PgProviderAccountRepository {
             return Ok(incoming.clone());
         };
         let current = row_credential(&row)?;
+        let old_user = old_user.as_deref().filter(|value| !value.is_empty());
+        let old_account = old_account.as_deref().filter(|value| !value.is_empty());
+        if let (Some(old_user), Some(old_account), Some(new_user), Some(new_account)) =
+            (old_user, old_account, Some(user), Some(account))
+            && old_user != new_user
+        {
+            let emails_match = old_email
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .zip(
+                    replacement_email
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .is_some_and(|(old, new)| old.eq_ignore_ascii_case(new));
+            if !emails_match {
+                return Err(device_conflict(
+                    "reauthorization cannot rebind a device without a matching email",
+                ));
+            }
+            let installation_id = codec
+                .installation_id(&current)
+                .map_err(device_codec_error)?;
+            rebind_identity(
+                transaction,
+                &provider,
+                old_user,
+                old_account,
+                new_user,
+                new_account,
+                &installation_id,
+            )
+            .await?;
+        }
         bind_material(
             transaction,
             codec.as_ref(),
@@ -235,6 +271,54 @@ impl PgProviderAccountRepository {
         }
         Ok(())
     }
+}
+
+async fn rebind_identity(
+    transaction: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    old_user: &str,
+    old_account: &str,
+    new_user: &str,
+    new_account: &str,
+    installation_id: &str,
+) -> StoreResult<()> {
+    let rebound = sqlx::query_scalar::<_, String>(
+        "update provider_device_identities
+         set upstream_user_id = $4, upstream_account_id = $5, updated_at = now()
+         where provider_kind = $1 and upstream_user_id = $2 and upstream_account_id = $3
+           and installation_id = $6
+         returning installation_id",
+    )
+    .bind(provider)
+    .bind(old_user)
+    .bind(old_account)
+    .bind(new_user)
+    .bind(new_account)
+    .bind(installation_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| {
+        if error
+            .as_database_error()
+            .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+        {
+            device_conflict("device is already bound to another upstream principal")
+        } else {
+            postgres_unavailable("rebind provider device identity")
+        }
+    })?;
+    if rebound.as_deref() == Some(installation_id) {
+        return Ok(());
+    }
+    claim_identity(
+        transaction,
+        provider,
+        new_user,
+        Some(new_account),
+        installation_id,
+    )
+    .await
+    .map(|_| ())
 }
 
 // Account mutation only, never request dispatch. A single transaction-scoped

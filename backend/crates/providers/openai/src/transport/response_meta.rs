@@ -3,7 +3,9 @@
 use std::fmt;
 
 use bytes::Bytes;
-use gateway_protocol::openai::events::{is_codex_quota_header_name, is_rate_limit_header_name};
+use gateway_protocol::openai::events::{
+    is_codex_quota_header_name, is_rate_limit_header_name, observed_model_name,
+};
 use reqwest::header::{HeaderMap, SET_COOKIE};
 
 use super::diagnostics::CodexUpstreamDiagnostics;
@@ -119,11 +121,34 @@ fn observe_typed_response_header(metadata: &mut CodexResponseMetadata, name: &st
         return;
     }
     match name.trim().to_ascii_lowercase().as_str() {
-        "openai-model" => metadata.effective_model = Some(value.to_string()),
+        "openai-model" | "x-openai-model" => {
+            metadata.effective_model = observed_model_name(value).map(str::to_owned)
+        }
         "x-models-etag" => metadata.models_etag = Some(value.to_string()),
         "x-reasoning-included" => metadata.reasoning_included = true,
         _ => {}
     }
+}
+
+/// 与官方Codex一致，优先读取response.headers，再读取WS metadata的顶层headers。
+pub(super) fn reported_model_from_event(value: &serde_json::Value) -> Option<&str> {
+    [value.pointer("/response/headers"), value.get("headers")]
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_object)
+        .find_map(|headers| {
+            headers.iter().find_map(|(name, value)| {
+                if !name.eq_ignore_ascii_case("openai-model")
+                    && !name.eq_ignore_ascii_case("x-openai-model")
+                {
+                    return None;
+                }
+                value
+                    .as_str()
+                    .or_else(|| value.as_array()?.first()?.as_str())
+                    .and_then(observed_model_name)
+            })
+        })
 }
 
 fn filter_client_headers(

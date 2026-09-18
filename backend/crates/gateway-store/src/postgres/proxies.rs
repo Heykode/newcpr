@@ -96,6 +96,8 @@ fn invalid() -> StoreError {
 fn record(row: PgRow) -> StoreResult<ProxyRecord> {
     let success: Option<bool> = row.try_get("last_test_success").map_err(|_| invalid())?;
     let ip: Option<String> = row.try_get("last_test_ip").map_err(|_| invalid())?;
+    let ipv4: Option<String> = row.try_get("last_test_ipv4").map_err(|_| invalid())?;
+    let ipv6: Option<String> = row.try_get("last_test_ipv6").map_err(|_| invalid())?;
     let latency: Option<i64> = row.try_get("last_test_latency_ms").map_err(|_| invalid())?;
     Ok(ProxyRecord {
         request_location: row
@@ -129,6 +131,12 @@ fn record(row: PgRow) -> StoreResult<ProxyRecord> {
                     latency_ms: u64::try_from(latency.ok_or_else(invalid)?)
                         .map_err(|_| invalid())?,
                     exit_ip: ip.map(|ip| ip.parse().map_err(|_| invalid())).transpose()?,
+                    exit_ipv4: ipv4
+                        .map(|ip| ip.parse().map_err(|_| invalid()))
+                        .transpose()?,
+                    exit_ipv6: ipv6
+                        .map(|ip| ip.parse().map_err(|_| invalid()))
+                        .transpose()?,
                     message: row
                         .try_get::<Option<String>, _>("last_test_message")
                         .map_err(|_| invalid())?
@@ -582,6 +590,8 @@ impl ProxyStore for PgProxyRepository {
              last_test_success = case when $4 is not null and $4 <> proxy_url then null else last_test_success end,
              last_test_latency_ms = case when $4 is not null and $4 <> proxy_url then null else last_test_latency_ms end,
              last_test_ip = case when $4 is not null and $4 <> proxy_url then null else last_test_ip end,
+             last_test_ipv4 = case when $4 is not null and $4 <> proxy_url then null else last_test_ipv4 end,
+             last_test_ipv6 = case when $4 is not null and $4 <> proxy_url then null else last_test_ipv6 end,
              last_test_message = case when $4 is not null and $4 <> proxy_url then null else last_test_message end,
              request_location_json = case when $5 then $6 else request_location_json end
              where id = $1 and revision = $2")
@@ -682,10 +692,13 @@ impl ProxyStore for PgProxyRepository {
         exclude_active_imports(&mut transaction, id)
             .await
             .map_err(store_error)?;
-        let updated = sqlx::query("update outbound_proxies set last_test_at = now(), last_test_success = $3, last_test_latency_ms = $4, last_test_ip = $5, last_test_message = $6 where id = $1 and revision = $2")
+        let updated = sqlx::query("update outbound_proxies set last_test_at = now(), last_test_success = $3, last_test_latency_ms = $4, last_test_ip = $5, last_test_ipv4 = $6, last_test_ipv6 = $7, last_test_message = $8 where id = $1 and revision = $2")
             .bind(id).bind(i64::try_from(revision.get()).map_err(|_| store_error(invalid()))?)
             .bind(result.success).bind(i64::try_from(result.latency_ms).map_err(|_| store_error(invalid()))?)
-            .bind(result.exit_ip.map(|ip| ip.to_string())).bind(result.message)
+            .bind(result.exit_ip.map(|ip| ip.to_string()))
+            .bind(result.exit_ipv4.map(|ip| ip.to_string()))
+            .bind(result.exit_ipv6.map(|ip| ip.to_string()))
+            .bind(result.message)
             .execute(&mut *transaction).await.map_err(|_| store_error(unavailable()))?;
         if updated.rows_affected() != 1 {
             return Err(store_error(conflict(id)));

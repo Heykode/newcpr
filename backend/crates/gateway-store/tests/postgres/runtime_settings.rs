@@ -13,6 +13,14 @@ use super::TestDatabase;
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         admin_api_key: None,
+        disable_fast: None,
+        turn_state_injection_enabled: None,
+        turn_state_models: vec![
+            "gpt-6-astra".to_owned(),
+            "gpt-5.6-sol".to_owned(),
+            "gpt-5.6-terra".to_owned(),
+        ],
+        responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         refresh_margin_seconds,
         refresh_concurrency: 2,
         max_concurrent_per_account: 3,
@@ -283,6 +291,96 @@ async fn persisted_request_tuning_should_still_reject_unrelated_unknown_fields()
             .load_runtime_snapshot()
             .await
             .is_err()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn decompression_limit_round_trips_to_settings_and_snapshot() {
+    let Some(database) = TestDatabase::create("decompression_limit_settings").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let mut update = settings_with_margin(3_600);
+    update.responses_max_decompressed_body_bytes = 128 * 1024 * 1024;
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("update decompression limit");
+
+    let loaded = repository
+        .load_runtime_settings()
+        .await
+        .expect("load decompression limit");
+    assert_eq!(
+        loaded.responses_max_decompressed_body_bytes,
+        128 * 1024 * 1024
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .expect("load snapshot");
+    assert_eq!(
+        snapshot.settings.responses_max_decompressed_body_bytes,
+        128 * 1024 * 1024
+    );
+
+    for invalid in [0, 256 * 1024 * 1024 + 1] {
+        let mut update = settings_with_margin(3_600);
+        update.responses_max_decompressed_body_bytes = invalid;
+        assert!(repository.update_runtime_settings(update).await.is_err());
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn disable_fast_persists_and_omitted_updates_preserve_the_policy() {
+    let Some(database) = TestDatabase::create("disable_fast_settings").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert!(
+        !repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .disable_fast
+    );
+
+    let mut update = settings_with_margin(3_600);
+    update.disable_fast = Some(true);
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("enable disable-fast");
+    assert!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .disable_fast
+    );
+
+    let mut update = settings_with_margin(3_600);
+    update.disable_fast = None;
+    repository
+        .update_runtime_settings(update)
+        .await
+        .expect("preserve disable-fast");
+    assert!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .disable_fast
+    );
+    assert!(
+        PgRuntimeSnapshotRepository::new(database.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap()
+            .settings
+            .disable_fast
     );
     database.close().await;
 }

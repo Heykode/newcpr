@@ -342,20 +342,33 @@ pub fn decode_request_with_headers(
     body: &[u8],
     headers: &HeaderMap,
 ) -> Result<DecodedResponsesRequest, RequestDecodeError> {
-    let body = decompress_request_body(body, headers)?;
+    decode_request_with_headers_limit(
+        body,
+        headers,
+        gateway_core::routing::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES as usize,
+    )
+}
+
+pub(in crate::openai) fn decode_request_with_headers_limit(
+    body: &[u8],
+    headers: &HeaderMap,
+    max_decompressed_bytes: usize,
+) -> Result<DecodedResponsesRequest, RequestDecodeError> {
+    let body = decompress_request_body_limit(body, headers, max_decompressed_bytes)?;
     decode_request_inner(&body, &OpenAiRequestHeaders::from_headers(headers))
 }
 
-/// 下游请求体解压后的最大字节数；防御解压炸弹。
-const MAX_DECOMPRESSED_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+/// zstd 回溯窗口独立于输出上限，调大管理设置不能放大解码器内部分配。
+const MAX_ZSTD_WINDOW_LOG: u32 = 26;
 
 /// 按 `Content-Encoding` 解压下游请求体。
 ///
 /// 未压缩与 `identity` 借用原始正文；压缩正文在读取过程中限制展开大小，
 /// 避免先完整分配再检查。只接受单一编码，重复头和叠加编码不能只解释第一项。
-pub(in crate::openai) fn decompress_request_body<'a>(
+pub(in crate::openai) fn decompress_request_body_limit<'a>(
     body: &'a [u8],
     headers: &HeaderMap,
+    max_decompressed_bytes: usize,
 ) -> Result<Cow<'a, [u8]>, RequestDecodeError> {
     let encoding = headers
         .get_all(axum::http::header::CONTENT_ENCODING)
@@ -371,20 +384,20 @@ pub(in crate::openai) fn decompress_request_body<'a>(
         "" | "identity" => Ok(Cow::Borrowed(body)),
         "gzip" => {
             let decoder = flate2::read::MultiGzDecoder::new(body);
-            read_bounded(decoder).map(Cow::Owned)
+            read_bounded(decoder, max_decompressed_bytes).map(Cow::Owned)
         }
         "deflate" => {
             let decoder = flate2::read::ZlibDecoder::new(body);
-            read_bounded(decoder).map(Cow::Owned)
+            read_bounded(decoder, max_decompressed_bytes).map(Cow::Owned)
         }
         "zstd" => {
             let mut decoder = zstd::stream::read::Decoder::with_buffer(body)
                 .map_err(|_| RequestDecodeError::MalformedJson)?;
             // 输出有界之外，也限制压缩帧声明的回溯窗口，防止解码器内部过量分配。
             decoder
-                .window_log_max(MAX_DECOMPRESSED_REQUEST_BYTES.ilog2())
+                .window_log_max(MAX_ZSTD_WINDOW_LOG)
                 .map_err(|_| RequestDecodeError::MalformedJson)?;
-            read_bounded(decoder).map(Cow::Owned)
+            read_bounded(decoder, max_decompressed_bytes).map(Cow::Owned)
         }
         other => Err(RequestDecodeError::UnsupportedContentEncoding {
             encoding: other.to_owned(),
@@ -392,12 +405,15 @@ pub(in crate::openai) fn decompress_request_body<'a>(
     }
 }
 
-fn read_bounded<R: std::io::Read>(mut reader: R) -> Result<Vec<u8>, RequestDecodeError> {
+fn read_bounded<R: std::io::Read>(
+    mut reader: R,
+    max_decompressed_bytes: usize,
+) -> Result<Vec<u8>, RequestDecodeError> {
     let mut decoded = Vec::new();
     let mut chunk = [0; 8192];
     loop {
-        let remaining = MAX_DECOMPRESSED_REQUEST_BYTES - decoded.len();
-        let read_limit = chunk.len().min(remaining + 1);
+        let remaining = max_decompressed_bytes.saturating_sub(decoded.len());
+        let read_limit = chunk.len().min(remaining.saturating_add(1));
         let read = reader
             .read(&mut chunk[..read_limit])
             .map_err(|_| RequestDecodeError::MalformedJson)?;
@@ -411,9 +427,11 @@ fn read_bounded<R: std::io::Read>(mut reader: R) -> Result<Vec<u8>, RequestDecod
         // 容量增长也受相同边界约束，越界探测只使用栈上分块缓冲区。
         let required = decoded.len() + read;
         if required > decoded.capacity() {
-            let capacity = (decoded.capacity() * 2)
+            let capacity = decoded
+                .capacity()
+                .saturating_mul(2)
                 .max(required)
-                .min(MAX_DECOMPRESSED_REQUEST_BYTES);
+                .min(max_decompressed_bytes);
             decoded.reserve_exact(capacity - decoded.len());
         }
         decoded.extend_from_slice(&chunk[..read]);

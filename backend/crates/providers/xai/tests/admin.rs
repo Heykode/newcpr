@@ -734,6 +734,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         access_token_expires_at: account.access_token_expires_at().map(DateTime::<Utc>::from),
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
+        turn_state_injection_enabled: false,
         concurrency_limit: account.concurrency_limit(),
         weight: account.weight(),
         credential_state: account.credential_state(),

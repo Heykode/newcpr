@@ -72,6 +72,7 @@ mod affinity;
 mod compact;
 mod generate_compat;
 mod identity_isolation;
+mod quota_continuation;
 mod raw_identity;
 mod scheduling;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
@@ -503,6 +504,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_header_old",
         "acct_header_same",
         "acct_http_sse_exhausted",
+        "acct_image_metering",
         "acct_local_affinity",
         "acct_metadata_new",
         "acct_metadata_old",
@@ -706,8 +708,29 @@ async fn capture_scoped_http_request_with_tuning(
     selected_account_id: &str,
     owner_account_id: &str,
     body: Map<String, serde_json::Value>,
+    protocol_context: Map<String, serde_json::Value>,
+    tuning: gateway_core::routing::RequestTuning,
+) -> wiremock::Request {
+    capture_scoped_http_request_with_policy(
+        request_id,
+        selected_account_id,
+        owner_account_id,
+        body,
+        protocol_context,
+        tuning,
+        false,
+    )
+    .await
+}
+
+async fn capture_scoped_http_request_with_policy(
+    request_id: &str,
+    selected_account_id: &str,
+    owner_account_id: &str,
+    body: Map<String, serde_json::Value>,
     mut protocol_context: Map<String, serde_json::Value>,
     tuning: gateway_core::routing::RequestTuning,
+    disable_fast: bool,
 ) -> wiremock::Request {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, selected_account_id).await;
@@ -731,7 +754,8 @@ async fn capture_scoped_http_request_with_tuning(
     let mut stream = provider_with_base_url(&store, server.uri())
         .execute(
             planned_request("openai", operation),
-            context_with_state_owner(request_id, owner_account_id).with_request_tuning(tuning),
+            context_with_state_owner_and_fast_policy(request_id, owner_account_id, disable_fast)
+                .with_request_tuning(tuning),
         )
         .await
         .expect("prepare scoped provider stream");
@@ -744,6 +768,31 @@ async fn capture_scoped_http_request_with_tuning(
         .expect("captured scoped request");
     assert_eq!(requests.len(), 1);
     requests.pop().expect("single scoped request")
+}
+
+fn context_with_state_owner_and_fast_policy(
+    request_id: &str,
+    owner_account_id: &str,
+    disable_fast: bool,
+) -> AttemptContext {
+    let owner = ProviderAccountStateOwner::new(
+        ProviderKind::new("openai").expect("provider"),
+        ProviderAccountId::new(owner_account_id).expect("owner account id"),
+    );
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(request_id).expect("request id"),
+            ClientApiKeyId::new("key_openai_contract").expect("client key id"),
+        )
+        .with_disable_fast(disable_fast),
+        NonZeroU32::new(1).expect("attempt"),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, Some(owner))
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
 }
 
 #[tokio::test]
@@ -1543,7 +1592,9 @@ async fn image_metering_events(
     model: &str,
 ) -> Vec<gateway_core::event::ProviderEvent> {
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_provider_contract").await;
+    const ACCOUNT_ID: &str = "acct_image_metering";
+    create_account(&store, ACCOUNT_ID).await;
+    provider_openai::transport::evict_account_http_clients(ACCOUNT_ID);
     let server = MockServer::start().await;
     let endpoint = match kind {
         ImageRequestKind::Generation => "/codex/images/generations",

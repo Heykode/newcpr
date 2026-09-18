@@ -226,6 +226,8 @@ impl ProxyProbe for SuccessfulProbe {
             success: true,
             latency_ms: 15,
             exit_ip: Some("203.0.113.2".parse().unwrap()),
+            exit_ipv4: Some("203.0.113.2".parse().unwrap()),
+            exit_ipv6: None,
             message: "Connected".to_owned(),
         }
     }
@@ -478,7 +480,14 @@ async fn proxy_probe_returns_result_without_creating_a_saved_proxy() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         tested["data"],
-        json!({"success":true,"latencyMs":15,"exitIp":"203.0.113.2","message":"Connected"})
+        json!({
+            "success": true,
+            "latencyMs": 15,
+            "exitIp": "203.0.113.2",
+            "exitIpv4": "203.0.113.2",
+            "exitIpv6": null,
+            "message": "Connected"
+        })
     );
     let (status, listed) = request(&fixture, "/api/admin/proxies", None, true).await;
     assert_eq!(status, StatusCode::OK);

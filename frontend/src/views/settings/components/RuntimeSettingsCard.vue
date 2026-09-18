@@ -14,6 +14,10 @@ const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', {
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
 const refreshConcurrency = defineModel<string>('refreshConcurrency', { required: true })
 const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
+const responsesMaxDecompressedBodyBytes = defineModel<string>('responsesMaxDecompressedBodyBytes', { required: true })
+const disableFast = defineModel<boolean>('disableFast', { required: true })
+const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
+const turnStateModelsText = defineModel<string>('turnStateModelsText', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
 const customLocation = computed({
@@ -124,7 +128,65 @@ const tuningValues = {
           </template>
         </BaseInput>
       </BaseFormItem>
+
+      <BaseFormItem
+        label="请求解压上限（字节）"
+        description="gzip、deflate、zstd 展开后的最大正文，范围 1–268435456"
+      >
+        <BaseInput
+          v-model="responsesMaxDecompressedBodyBytes"
+          aria-label="请求解压上限（字节）"
+          type="number"
+          min="1"
+          max="268435456"
+          step="1"
+        >
+          <template #prefix>
+            <Gauge class="size-4" />
+          </template>
+        </BaseInput>
+      </BaseFormItem>
     </BaseForm>
+
+    <div class="mt-5 border-t border-(--cp-border-color) pt-4">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <h3 class="m-0 text-sm font-medium text-cp-text-secondary">
+            全局关闭 Fast 档位
+          </h3>
+          <p class="mt-1 mb-0 text-cp-xs text-cp-text-tertiary">
+            把顶层 priority/fast 收敛为 default，默认关闭
+          </p>
+        </div>
+        <BaseSwitch v-model="disableFast" label="全局关闭 Fast 档位" />
+      </div>
+    </div>
+
+    <div class="mt-5 border-t border-(--cp-border-color) pt-4">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <h3 class="m-0 text-sm font-medium text-cp-text-secondary">
+            OpenAI Turn State 注入
+          </h3>
+          <p class="mt-1 mb-0 text-cp-xs text-cp-text-tertiary">
+            默认关闭；账号还需单独开启才会生效
+          </p>
+        </div>
+        <BaseSwitch v-model="turnStateInjectionEnabled" label="OpenAI Turn State 注入" />
+      </div>
+      <BaseForm class="mt-4 max-w-6xl">
+        <BaseFormItem
+          label="维护模型名单"
+          description="使用逗号或换行分隔，按路由后的上游模型匹配"
+        >
+          <BaseInput
+            v-model="turnStateModelsText"
+            aria-label="Turn State 维护模型名单"
+            placeholder="gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra"
+          />
+        </BaseFormItem>
+      </BaseForm>
+    </div>
 
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">
       <div class="flex items-center justify-between gap-3">

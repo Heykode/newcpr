@@ -184,6 +184,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 &account_id,
                 expected_revision.get(),
                 None,
+                None,
                 &credentials,
             )
             .await

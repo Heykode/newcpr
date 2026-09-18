@@ -28,6 +28,8 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    disable_fast: bool,
+    responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
     max_concurrent_per_account: u32,
     request_interval_ms: u64,
@@ -36,9 +38,23 @@ pub struct SnapshotSettingsFacts {
     min_codex_desktop_version: Option<String>,
     min_codex_cli_version: Option<String>,
     request_tuning: super::RequestTuning,
+    turn_state_injection_enabled: bool,
+    turn_state_models: Vec<String>,
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_responses_max_decompressed_body_bytes(mut self, bytes: u64) -> Self {
+        self.responses_max_decompressed_body_bytes = bytes;
+        self
+    }
+
     #[must_use]
     pub fn with_request_location(
         mut self,
@@ -58,6 +74,9 @@ impl SnapshotSettingsFacts {
         min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
+            disable_fast: false,
+            responses_max_decompressed_body_bytes:
+                super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES,
             max_concurrent_per_account,
             request_location: None,
             request_interval_ms,
@@ -66,12 +85,25 @@ impl SnapshotSettingsFacts {
             min_codex_desktop_version,
             min_codex_cli_version,
             request_tuning: super::RequestTuning::default(),
+            turn_state_injection_enabled: false,
+            turn_state_models: vec![
+                "gpt-6-astra".to_owned(),
+                "gpt-5.6-sol".to_owned(),
+                "gpt-5.6-terra".to_owned(),
+            ],
         }
     }
 
     #[must_use]
     pub const fn with_request_tuning(mut self, request_tuning: super::RequestTuning) -> Self {
         self.request_tuning = request_tuning;
+        self
+    }
+
+    #[must_use]
+    pub fn with_openai_turn_state_policy(mut self, enabled: bool, models: Vec<String>) -> Self {
+        self.turn_state_injection_enabled = enabled;
+        self.turn_state_models = models;
         self
     }
 }
@@ -108,12 +140,24 @@ pub struct SnapshotAccountGroupFacts {
     id: AccountGroupId,
     name: String,
     enabled: bool,
+    disable_fast: bool,
 }
 
 impl SnapshotAccountGroupFacts {
     #[must_use]
     pub fn new(id: AccountGroupId, name: String, enabled: bool) -> Self {
-        Self { id, name, enabled }
+        Self {
+            id,
+            name,
+            enabled,
+            disable_fast: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
     }
 }
 
@@ -376,6 +420,17 @@ async fn compile_runtime_snapshot(
     }
     let account_directory = Arc::new(RuntimeAccountDirectory::new(accounts));
 
+    let decompressed_body_limit =
+        usize::try_from(facts.settings.responses_max_decompressed_body_bytes)
+            .ok()
+            .and_then(std::num::NonZeroUsize::new)
+            .filter(|bytes| {
+                bytes.get()
+                    <= usize::try_from(super::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES)
+                        .unwrap_or(usize::MAX)
+            })
+            .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
+
     let model_mappings = facts.settings.model_mappings;
     let request_tuning = facts.settings.request_tuning;
     let min_client_versions = CodexClientMinVersions::new(
@@ -396,6 +451,20 @@ async fn compile_runtime_snapshot(
     );
     let rotation_strategy = RotationStrategy::parse(facts.settings.rotation_strategy.as_str())
         .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
+    let turn_state_models = facts
+        .settings
+        .turn_state_models
+        .into_iter()
+        .map(UpstreamModelId::new)
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
+    if turn_state_models.is_empty() || turn_state_models.len() > 64 {
+        return Err(RuntimeSnapshotCompileError::InvalidData);
+    }
+    let turn_state_policy = super::OpenAiTurnStatePolicy::new(
+        facts.settings.turn_state_injection_enabled,
+        turn_state_models,
+    );
     let selection_policy = AccountSelectionPolicy::new(
         rotation_strategy,
         default_concurrency,
@@ -403,6 +472,7 @@ async fn compile_runtime_snapshot(
     );
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
+        let mut disable_fast = false;
         let account_scope = if policy.group_ids.is_empty() {
             FrozenAccountScope::new(
                 Arc::clone(&account_directory),
@@ -419,6 +489,8 @@ async fn compile_runtime_snapshot(
                 let group = groups
                     .get(&group_id)
                     .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
+                // 禁用分组仅影响选号；Key 仍继承该分组的 Fast 限制。
+                disable_fast |= group.disable_fast;
                 bound_groups.push(RoutingGroupSnapshot::new(
                     group.id.clone(),
                     group.name.clone(),
@@ -438,7 +510,7 @@ async fn compile_runtime_snapshot(
         client_policies.push(ClientPolicy::new(
             policy.key_id,
             policy.plaintext_key,
-            Arc::new(account_scope),
+            Arc::new(account_scope.with_disable_fast(disable_fast)),
             true,
             policy.limits,
         ));
@@ -454,11 +526,14 @@ async fn compile_runtime_snapshot(
     .map_err(|_| RuntimeSnapshotCompileError::InvalidData)
     .map(|snapshot| {
         snapshot
+            .with_disable_fast(facts.settings.disable_fast)
+            .with_responses_max_decompressed_body_bytes(decompressed_body_limit)
             .with_model_mappings(model_mappings)
             .with_account_directory(account_directory)
             .with_exhaustive_provider_catalogs(exhaustive_provider_catalogs)
             .with_min_codex_client_versions(min_client_versions)
             .with_request_tuning(request_tuning)
+            .with_openai_turn_state_policy(turn_state_policy)
             .with_request_location(facts.settings.request_location)
             .with_account_concurrency_limits(account_limits)
     })
@@ -467,6 +542,8 @@ async fn compile_runtime_snapshot(
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    disable_fast: bool,
+    responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
     revision: ConfigRevision,
     account_selection_policy: AccountSelectionPolicy,
@@ -481,10 +558,31 @@ pub struct RuntimeSnapshot {
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
     min_codex_client_versions: CodexClientMinVersions,
     request_tuning: super::RequestTuning,
+    openai_turn_state_policy: super::OpenAiTurnStatePolicy,
     account_concurrency: Arc<AccountConcurrencySnapshot>,
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
+        self.disable_fast = disable_fast;
+        self
+    }
+
+    #[must_use]
+    pub const fn responses_max_decompressed_body_bytes(&self) -> usize {
+        self.responses_max_decompressed_body_bytes.get()
+    }
+
+    #[must_use]
+    pub const fn with_responses_max_decompressed_body_bytes(
+        mut self,
+        bytes: std::num::NonZeroUsize,
+    ) -> Self {
+        self.responses_max_decompressed_body_bytes = bytes;
+        self
+    }
+
     #[must_use]
     pub fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()
@@ -567,6 +665,11 @@ impl RuntimeSnapshot {
         client_policy_map.retain(|_, policy| policy.enabled());
 
         Ok(Self {
+            disable_fast: false,
+            responses_max_decompressed_body_bytes: std::num::NonZeroUsize::new(
+                super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES as usize,
+            )
+            .expect("positive default limit"),
             revision,
             request_location: None,
             account_selection_policy,
@@ -580,6 +683,7 @@ impl RuntimeSnapshot {
             client_policies: Arc::new(client_policy_map),
             min_codex_client_versions: CodexClientMinVersions::default(),
             request_tuning: super::RequestTuning::defaults(),
+            openai_turn_state_policy: super::OpenAiTurnStatePolicy::default(),
             account_concurrency: Arc::new(AccountConcurrencySnapshot::new(
                 revision,
                 BTreeMap::new(),
@@ -608,6 +712,12 @@ impl RuntimeSnapshot {
     #[must_use]
     pub const fn with_request_tuning(mut self, request_tuning: super::RequestTuning) -> Self {
         self.request_tuning = request_tuning;
+        self
+    }
+
+    #[must_use]
+    pub fn with_openai_turn_state_policy(mut self, policy: super::OpenAiTurnStatePolicy) -> Self {
+        self.openai_turn_state_policy = policy;
         self
     }
 
@@ -660,6 +770,11 @@ impl RuntimeSnapshot {
     #[must_use]
     pub const fn request_tuning(&self) -> super::RequestTuning {
         self.request_tuning
+    }
+
+    #[must_use]
+    pub fn openai_turn_state_policy(&self) -> &super::OpenAiTurnStatePolicy {
+        &self.openai_turn_state_policy
     }
 
     /// 返回目录发现模型与设置映射的并集，仅用于公开模型展示。
@@ -893,6 +1008,7 @@ impl RuntimeSnapshot {
         }
 
         Ok(RoutingPlan {
+            disable_fast: self.disable_fast || account_scope.disable_fast(),
             config_revision: self.revision,
             account_selection_policy: self.account_selection_policy,
             operation: operation.kind(),
@@ -935,6 +1051,7 @@ impl RuntimeSnapshot {
             account_scope: Arc::clone(&account_scope),
         };
         Ok(RoutingPlan {
+            disable_fast: self.disable_fast || account_scope.disable_fast(),
             config_revision: self.revision,
             account_selection_policy: self.account_selection_policy,
             operation: operation.kind(),

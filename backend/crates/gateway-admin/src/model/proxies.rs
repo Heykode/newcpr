@@ -60,6 +60,8 @@ pub struct ProxyTestResult {
     pub success: bool,
     pub latency_ms: u64,
     pub exit_ip: Option<std::net::IpAddr>,
+    pub exit_ipv4: Option<std::net::Ipv4Addr>,
+    pub exit_ipv6: Option<std::net::Ipv6Addr>,
     pub message: String,
 }
 

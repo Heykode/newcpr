@@ -27,6 +27,12 @@ pub use capacity_wait::{
 };
 
 pub mod egress;
+mod turn_state;
+pub use turn_state::{
+    NoopProviderTurnStatePort, OpaqueTurnState, ProviderTurnStateAnomaly,
+    ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStateRecord,
+    ProviderTurnStateRefreshStatus, ProviderTurnStateSlot, ProviderTurnStateValue,
+};
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);
 
@@ -1123,6 +1129,7 @@ pub struct ProviderStorePorts {
     cooldowns: Arc<dyn ProviderCooldownPort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
     oauth_pending: Arc<dyn OAuthPendingFlowPort>,
+    turn_states: Arc<dyn ProviderTurnStatePort>,
     egress: Option<Arc<dyn egress::ProviderEgressStorePort>>,
 }
 
@@ -1154,6 +1161,7 @@ impl ProviderStorePorts {
             cooldowns,
             runtime_policy,
             oauth_pending,
+            turn_states: Arc::new(NoopProviderTurnStatePort),
             egress: None,
         }
     }
@@ -1211,6 +1219,17 @@ impl ProviderStorePorts {
     #[must_use]
     pub fn oauth_pending(&self) -> Arc<dyn OAuthPendingFlowPort> {
         Arc::clone(&self.oauth_pending)
+    }
+
+    #[must_use]
+    pub fn with_turn_states(mut self, turn_states: Arc<dyn ProviderTurnStatePort>) -> Self {
+        self.turn_states = turn_states;
+        self
+    }
+
+    #[must_use]
+    pub fn turn_states(&self) -> Arc<dyn ProviderTurnStatePort> {
+        Arc::clone(&self.turn_states)
     }
 
     #[must_use]

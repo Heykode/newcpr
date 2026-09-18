@@ -1,6 +1,38 @@
 use super::*;
 
 #[tokio::test]
+async fn disable_fast_rewrites_only_the_top_level_known_fast_tier() {
+    for (disable_fast, requested, expected) in [
+        (false, "priority", "priority"),
+        (true, "priority", "default"),
+        (true, "fast", "default"),
+        (true, "auto", "auto"),
+    ] {
+        let captured = capture_scoped_http_request_with_policy(
+            "req_disable_fast",
+            "acct_scope_same",
+            "acct_scope_same",
+            json!({
+                "model":"gpt-5.4",
+                "input":"hello",
+                "service_tier":requested,
+                "metadata":{"service_tier":"priority"}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            Map::new(),
+            Default::default(),
+            disable_fast,
+        )
+        .await;
+        let body = captured_request_body(&captured);
+        assert_eq!(body["service_tier"], expected);
+        assert_eq!(body["metadata"]["service_tier"], "priority");
+    }
+}
+
+#[tokio::test]
 async fn standalone_item_ids_are_adapted_without_rewriting_tool_links_or_encrypted_history() {
     let (input, expected) = item_id_fixture();
     let captured = capture_scoped_http_request(

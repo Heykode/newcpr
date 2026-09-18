@@ -754,6 +754,13 @@ impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             config_revision: Revision::new(1).expect("revision"),
+            disable_fast: false,
+            turn_state_injection_enabled: false,
+            turn_state_models: vec![
+                gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
+                    .expect("model"),
+            ],
+            responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             model_mappings: Default::default(),
             refresh_margin_seconds: 300,
             refresh_concurrency: 2,
@@ -849,6 +856,8 @@ fn total_record(
         provider_account_authentication_kind: None,
         upstream_model_id: Some("gpt-5.5".to_owned()),
         upstream_transport: None,
+        upstream_response_model: None,
+        turn_state_summary_json: None,
         service_tier: None,
         input_tokens: Some(800),
         output_tokens: Some(200),

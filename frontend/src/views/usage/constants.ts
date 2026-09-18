@@ -25,6 +25,7 @@ export const usageRecordColumns: ConfigurableTableColumn<UsageDisplayRecord>[] =
   { key: 'route', label: '端点', kind: 'mono' },
   { key: 'upstreamTransport', label: '上游', kind: 'status', size: 'md' },
   { key: 'clientTransport', label: '接入', kind: 'status', size: 'md' },
+  { key: 'turnState', label: 'State 注入', kind: 'custom', size: 'lg' },
   { key: 'tokenDetails', label: 'TOKEN', kind: 'numeric', size: 'xl' },
   { key: 'billing', label: '费用', kind: 'numeric', size: 'lg' },
   { key: 'latency', label: '延迟', kind: 'numeric', size: 'xl' },

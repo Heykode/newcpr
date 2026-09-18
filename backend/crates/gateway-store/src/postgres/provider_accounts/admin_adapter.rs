@@ -874,11 +874,15 @@ impl AccountStore for PgAdminAccountStore {
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
+        if command.turn_state_injection_enabled.is_some() {
+            changed_fields.push("turn_state_injection_enabled".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 account_ids: vec![command.account_id.clone()],
                 enabled: Some(command.enabled),
+                turn_state_injection_enabled: command.turn_state_injection_enabled,
                 concurrency_limit: Some(command.concurrency_limit),
                 weight: Some(command.weight),
                 group_ids: Some(command.group_ids),
@@ -960,6 +964,7 @@ impl AccountStore for PgAdminAccountStore {
         };
         let mut changed_fields = vec![
             "enabled".to_owned(),
+            "turn_state_injection_enabled".to_owned(),
             "concurrency_limit".to_owned(),
             "weight".to_owned(),
             "groups".to_owned(),
@@ -972,6 +977,7 @@ impl AccountStore for PgAdminAccountStore {
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 account_ids: command.account_ids,
                 enabled: command.enabled,
+                turn_state_injection_enabled: command.turn_state_injection_enabled,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
                 group_ids: command.group_ids,

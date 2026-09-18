@@ -936,6 +936,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
                     UpdateAccount {
                         account_id: id.clone(),
                         enabled,
+                        turn_state_injection_enabled: Some(false),
                         concurrency_limit: None,
                         weight: gateway_core::account::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),
@@ -1662,6 +1663,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
                 outbound_proxy: None,
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
+                turn_state_injection_enabled: None,
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -1740,6 +1742,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     let command = UpdateAccount {
         account_id: "acct_proxy".to_owned(),
         enabled: true,
+        turn_state_injection_enabled: Some(false),
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
         group_ids: vec![],
@@ -1954,6 +1957,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: Some(false),
+                turn_state_injection_enabled: None,
                 concurrency_limit: Some(gateway_core::account::AccountConcurrencyLimit::new(7)),
                 weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
                 group_ids: Some(vec![AccountGroupId::new(GROUP_ID).expect("group ID")]),
@@ -1990,6 +1994,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: Some(true),
+                turn_state_injection_enabled: None,
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(vec![
@@ -2263,6 +2268,8 @@ async fn authorization_import_rejects_a_saved_proxy_changed_during_oauth() {
         success: true,
         latency_ms: 1,
         exit_ip: Some("203.0.113.5".parse().unwrap()),
+        exit_ipv4: Some("203.0.113.5".parse().unwrap()),
+        exit_ipv6: None,
         message: "Connected".to_owned(),
     };
     proxies
@@ -2691,6 +2698,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             outbound_proxy: None,
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: Some(false),
+            turn_state_injection_enabled: None,
             concurrency_limit: None,
             weight: Some(gateway_core::account::AccountWeight::DEFAULT),
             group_ids: Some(Vec::new()),
@@ -3264,6 +3272,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
             UpdateAccount {
                 account_id: id.as_str().to_owned(),
                 enabled: true,
+                turn_state_injection_enabled: Some(false),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![],

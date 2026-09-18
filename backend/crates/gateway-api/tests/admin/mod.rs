@@ -380,6 +380,16 @@ impl SettingsStore for MemorySettingsStore {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
             config_revision: next_revision(settings.config_revision),
+            disable_fast: command.disable_fast.unwrap_or(settings.disable_fast),
+            turn_state_injection_enabled: command
+                .turn_state_injection_enabled
+                .unwrap_or(settings.turn_state_injection_enabled),
+            turn_state_models: command
+                .turn_state_models
+                .unwrap_or_else(|| settings.turn_state_models.clone()),
+            responses_max_decompressed_body_bytes: command
+                .responses_max_decompressed_body_bytes
+                .unwrap_or(settings.responses_max_decompressed_body_bytes),
             model_mappings: command.model_mappings,
             refresh_margin_seconds: command.refresh_margin_seconds,
             refresh_concurrency: command.refresh_concurrency,
@@ -453,6 +463,7 @@ impl MemoryAccountGroupStore {
                     description: Some("Primary traffic".to_owned()),
                     color: group_color("#2563ebff"),
                     enabled: true,
+                    disable_fast: false,
                     member_count: 2,
                     provider_counts: BTreeMap::from([
                         ("openai".to_owned(), 1),
@@ -474,6 +485,7 @@ impl MemoryAccountGroupStore {
                     description: None,
                     color: group_color("#64748B80"),
                     enabled: false,
+                    disable_fast: false,
                     member_count: 0,
                     provider_counts: BTreeMap::new(),
                     client_key_count: 0,
@@ -647,6 +659,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
             description: command.description,
             color: command.color,
             enabled: true,
+            disable_fast: command.disable_fast,
             member_count: 0,
             provider_counts: BTreeMap::new(),
             client_key_count: 0,
@@ -673,6 +686,9 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         record.name = command.name;
         record.description = command.description;
         record.color = command.color;
+        if let Some(disable_fast) = command.disable_fast {
+            record.disable_fast = disable_fast;
+        }
         record.updated_at = Utc::now();
         mutation(&mut state, command.id, true)
     }
@@ -1326,6 +1342,14 @@ fn test_runtime_settings() -> RuntimeSettings {
     ]);
     RuntimeSettings {
         config_revision: Revision::new(7).expect("revision"),
+        disable_fast: false,
+        turn_state_injection_enabled: false,
+        turn_state_models: vec![
+            UpstreamModelId::new("gpt-6-astra").expect("turn state model"),
+            UpstreamModelId::new("gpt-5.6-sol").expect("turn state model"),
+            UpstreamModelId::new("gpt-5.6-terra").expect("turn state model"),
+        ],
+        responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         model_mappings: mappings,
         refresh_margin_seconds: 3_600,
         refresh_concurrency: 2,

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use gateway_protocol::openai::events;
+use tokio::io::BufWriter;
 use tokio::time::timeout;
 use tokio_tungstenite::{
     Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
@@ -81,6 +82,16 @@ impl CodexWebSocketConnection {
             connection: Self::responses(base_url, websocket_key, business_headers),
             payload_text: websocket_response_create_payload_text(request)?,
             continuation: WebSocketContinuationRequirement::from_request(request),
+            injected_turn_state: request.managed_turn_state_version.and_then(|_| {
+                request
+                    .body()
+                    .get("client_metadata")?
+                    .get("x-codex-turn-state")?
+                    .as_str()
+                    .map(|value| {
+                        gateway_core::provider_ports::OpaqueTurnState::new(value.to_owned())
+                    })
+            }),
         })
     }
 }
@@ -185,7 +196,7 @@ async fn connect_websocket(
             )
         {
             let (websocket, response) =
-                connect_async_tls_with_config(request, Some(websocket_config()), false, connector)
+                connect_async_tls_with_config(request, Some(websocket_config()), true, connector)
                     .await?;
             return Ok((Box::new(websocket) as RawWsStream, response));
         }
@@ -302,8 +313,9 @@ async fn dial_account(
     } else {
         host.to_owned()
     };
-    tokio_tungstenite::proxy::connect_via_proxy(stream, &config, &target, port)
+    tokio_tungstenite::proxy::connect_via_proxy(BufWriter::new(stream), &config, &target, port)
         .await
+        .map(BufWriter::into_inner)
         .map_err(|_| invalid())
 }
 
@@ -320,6 +332,7 @@ async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tun
         .parse::<hyper::Uri>()
         .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
     let mut connector = HttpConnector::new();
+    connector.set_nodelay(true);
     connector
         .call(uri)
         .await

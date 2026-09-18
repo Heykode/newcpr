@@ -171,6 +171,12 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
+        // Opaque-state parsing and the bounded passive-observation queue remain private.
+        ("crates/providers/openai", Some("provider/turn_state.rs"), Item::Mod(module)) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         (
             "crates/providers/openai",
             Some("transport/websocket/coordinator.rs"),
@@ -404,6 +410,16 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
     assert!(!is_audited_private_test(
         "crates/gateway-core",
         Path::new("runtime/mod.rs"),
+        &item,
+    ));
+    assert!(is_audited_private_test(
+        "crates/providers/openai",
+        Path::new("provider/turn_state.rs"),
+        &item,
+    ));
+    assert!(!is_audited_private_test(
+        "crates/providers/openai",
+        Path::new("provider/mod.rs"),
         &item,
     ));
 

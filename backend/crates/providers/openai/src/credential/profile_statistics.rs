@@ -290,14 +290,13 @@ impl CodexCredentialProfileService {
             runtime
                 .http_client(&route, &profile)
                 .map_err(|_| CodexProfileAvatarError::TransportUnavailable)?
-        } else if account.outbound_proxy().is_some() {
+        } else {
             crate::transport::client::build_account_http_client(
                 account.id().as_str(),
                 account.outbound_proxy(),
+                &profile.user_agent(),
             )
             .map_err(|_| CodexProfileAvatarError::TransportUnavailable)?
-        } else {
-            self.http.clone()
         };
         fetch_profile_avatar(
             &http,

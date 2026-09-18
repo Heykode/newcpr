@@ -61,6 +61,11 @@ pub struct CodexResponsesRequest {
     pub force_http_sse: bool,
     /// turn state 透传头。
     pub turn_state: Option<String>,
+    /// 代理托管 state 的版本；只参与本地 WS 新链连接隔离，不发送上游。
+    pub(crate) managed_turn_state_version: Option<u64>,
+    pub(crate) managed_turn_state_expires_at: Option<std::time::SystemTime>,
+    pub(crate) turn_state_capture:
+        Option<std::sync::Arc<crate::transport::turn_state_capture::TurnStateCapture>>,
     /// turn metadata 透传头。
     pub turn_metadata: Option<String>,
     /// beta features 透传头。
@@ -520,6 +525,9 @@ impl CodexResponsesRequest {
             use_websocket: false,
             force_http_sse: false,
             turn_state: None,
+            managed_turn_state_version: None,
+            managed_turn_state_expires_at: None,
+            turn_state_capture: None,
             turn_metadata: None,
             beta_features: None,
             version: None,
@@ -615,6 +623,21 @@ impl CodexResponsesRequest {
     /// service tier（透传原值）。
     pub fn service_tier(&self) -> Option<&str> {
         self.body.get("service_tier").and_then(Value::as_str)
+    }
+
+    /// 只覆盖顶层 Fast 请求，显式使用官方标准档退出值。
+    pub(crate) fn apply_fast_policy(&mut self, disable_fast: bool) {
+        if disable_fast
+            && self.service_tier().is_some_and(|tier| {
+                let tier = tier.trim();
+                tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
+            })
+        {
+            self.body.insert(
+                "service_tier".to_owned(),
+                Value::String("default".to_owned()),
+            );
+        }
     }
 
     /// 前一个 response ID。

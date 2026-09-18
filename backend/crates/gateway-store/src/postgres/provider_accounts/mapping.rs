@@ -29,6 +29,7 @@ pub(crate) fn admin_account_record(
         access_token_expires_at: summary.access_token_expires_at,
         next_refresh_at: summary.next_refresh_at,
         enabled: summary.enabled,
+        turn_state_injection_enabled: summary.turn_state_injection_enabled,
         concurrency_limit: summary.concurrency_limit,
         weight: summary.weight,
         credential_state: summary.credential_state,

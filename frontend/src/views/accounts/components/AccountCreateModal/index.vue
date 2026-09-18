@@ -3,12 +3,17 @@ import type { AccountRow } from '../../constants'
 import type { AccountCreateForm, AccountImportMode } from './model'
 import type { AccountGroup } from '@/api'
 import { Openai, Xai } from '@boxicons/vue'
-import { LayoutGrid, Settings2 } from '@lucide/vue'
+import { Copy, LayoutGrid, Settings2 } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { useCopyText } from '@/composables/useCopyText'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
+import AccountIdentityCell from '../AccountIdentityCell.vue'
+import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountImportFields from './AccountImportFields.vue'
 import AccountOAuthFields from './AccountOAuthFields.vue'
 import AccountSetupFields from './AccountSetupFields.vue'
@@ -27,6 +32,13 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ create: [], generateOauth: [] }>()
 const open = defineModel<boolean>({ default: false })
 const form = defineModel<AccountCreateForm>('form', { required: true })
+const copyWithToast = useCopyText()
+const accountCopyValue = computed(() =>
+  props.account?.email?.trim()
+  || props.account?.accountId?.trim()
+  || props.account?.id
+  || '',
+)
 const busy = computed(() => props.saving || props.oauthLoading)
 const proxyError = computed(() => accountProxyError(form.value))
 const scheduling = computed(() => parseAccountSchedulingForm(form.value.concurrencyLimit, form.value.weight))
@@ -75,6 +87,37 @@ function continueToImport() {
     </template>
 
     <div class="grid gap-4">
+      <div
+        v-if="reauthorizing && account"
+        class="flex flex-wrap items-center justify-between gap-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5"
+      >
+        <AccountIdentityCell
+          class="min-w-0 flex-1"
+          :account="account"
+          size="lg"
+        />
+        <div class="flex shrink-0 items-center gap-3">
+          <AccountPlanBadge
+            :plan-type="account.planType"
+            :plan-type-display="account.planTypeDisplay"
+            size="sm"
+          />
+          <ProviderIconGroup
+            :provider="account.provider"
+            :authentication-kind="account.authenticationKind"
+          />
+          <BaseIconButton
+            variant="secondary"
+            size="sm"
+            label="复制账号"
+            :disabled="busy || !accountCopyValue"
+            @click="copyWithToast(accountCopyValue, { successText: '账号已复制' })"
+          >
+            <Copy class="size-3.5" />
+          </BaseIconButton>
+        </div>
+      </div>
+
       <AccountSetupFields
         v-if="view.configuring"
         v-model="form"

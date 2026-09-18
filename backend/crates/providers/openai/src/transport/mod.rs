@@ -21,6 +21,7 @@ pub(crate) mod session;
 pub mod subscription;
 mod time;
 pub mod tls;
+pub(crate) mod turn_state_capture;
 pub mod usage;
 pub mod websocket;
 
@@ -35,7 +36,8 @@ pub use self::{
         CodexAccountSelectionTelemetry, CodexBackendClient, CodexBackendJsonResponse,
         CodexBackendSseStream, CodexBackendStreamingResponse, CodexBackendTransport,
         CodexClientError, CodexClientResult, CodexRateLimitUpdates, CodexRequestContext,
-        CodexTransportDecision, CodexTransportMetrics, CodexTurnStateUpdate, build_reqwest_client,
+        CodexResponseMetadataUpdates, CodexTransportDecision, CodexTransportMetrics,
+        build_reqwest_client, evict_account_http_clients, evict_all_account_http_clients,
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{

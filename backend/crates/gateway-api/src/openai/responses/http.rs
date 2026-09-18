@@ -33,7 +33,7 @@ use crate::openai::{
     },
 };
 
-use super::{ResponseEncodeError, request::decode_request_with_headers};
+use super::{ResponseEncodeError, request::decode_request_with_headers_limit};
 
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -50,7 +50,11 @@ pub(crate) async fn responses(
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
-    let decoded = match decode_request_with_headers(&body, &headers) {
+    let decoded = match decode_request_with_headers_limit(
+        &body,
+        &headers,
+        client.snapshot().responses_max_decompressed_body_bytes(),
+    ) {
         Ok(decoded) => decoded,
         Err(error) => {
             return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());

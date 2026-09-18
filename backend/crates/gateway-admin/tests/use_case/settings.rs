@@ -61,6 +61,13 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 request_id: "request-settings".to_owned(),
             },
             ReplaceRuntimeSettings {
+                disable_fast: None,
+                turn_state_injection_enabled: None,
+                turn_state_models: Some(vec![
+                    gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
+                        .expect("model"),
+                ]),
+                responses_max_decompressed_body_bytes: Some(64 * 1024 * 1024),
                 model_mappings: Default::default(),
                 refresh_margin_seconds: 0,
                 refresh_concurrency: 1,
@@ -122,6 +129,13 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
                         request_id: "request-account-busy-wait-settings".to_owned(),
                     },
                     ReplaceRuntimeSettings {
+                        disable_fast: None,
+                        turn_state_injection_enabled: None,
+                        turn_state_models: Some(vec![
+                            gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
+                                .expect("model"),
+                        ]),
+                        responses_max_decompressed_body_bytes: Some(64 * 1024 * 1024),
                         model_mappings: Default::default(),
                         refresh_margin_seconds: 3600,
                         refresh_concurrency: 1,

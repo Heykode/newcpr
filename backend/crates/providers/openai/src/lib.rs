@@ -28,7 +28,7 @@ use crate::transport::egress::CodexEgressRuntime;
 use crate::transport::profile::{
     CodexArtifactProfileCache, CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport,
 };
-use crate::transport::{CodexWebSocketPool, build_reqwest_client};
+use crate::transport::{CodexBackendClient, CodexWebSocketPool, build_reqwest_client};
 
 pub use config::{CodexWireProfileConfig, OpenAiConfig, OpenAiConfigError};
 pub use provider::{
@@ -128,6 +128,14 @@ async fn initialize_with_request_tuning_mode(
         .session_identity()
         .map_err(|_| OpenAiInitializeError::SessionIdentity)?;
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
+    let turn_state_manager =
+        provider::CodexTurnStateManager::new(ports.turn_states(), request_tuning.clone());
+    let mut turn_state_client =
+        CodexBackendClient::new(http.clone(), config.base_url().to_owned(), profile.clone())
+            .with_request_tuning(request_tuning.clone());
+    if let Some(runtime) = &egress_runtime {
+        turn_state_client = turn_state_client.with_egress_runtime(Arc::clone(runtime));
+    }
     let desktop_release = Arc::new(CodexDesktopReleaseService::new(
         profile.clone(),
         Arc::new(
@@ -147,6 +155,7 @@ async fn initialize_with_request_tuning_mode(
             pool.with_request_tuning_without_account_concurrency(request_tuning.clone())
         }
     });
+    let turn_state_manager = turn_state_manager.with_websocket_pool(Arc::clone(&websocket_pool));
     let catalog = CodexCredentialCatalogService::new(
         repository.clone(),
         profile.clone(),
@@ -205,7 +214,8 @@ async fn initialize_with_request_tuning_mode(
         config.stream_max_retries(),
     )
     .map_err(OpenAiInitializeError::Provider)?
-    .with_request_tuning(request_tuning)
+    .with_request_tuning(request_tuning.clone())
+    .with_turn_state_manager(turn_state_manager.clone())
     .with_session_identity(session_identity);
     let core_provider: Arc<dyn Provider> = Arc::new(match &egress_runtime {
         Some(runtime) => core_provider.with_egress_runtime(Arc::clone(runtime)),
@@ -229,7 +239,7 @@ async fn initialize_with_request_tuning_mode(
         .with_personal_access_token_client(token_client),
     );
     let refresh = CodexCredentialRefreshService::new(
-        repository,
+        repository.clone(),
         refresher,
         Arc::clone(&leases),
         credential_state,
@@ -267,8 +277,8 @@ async fn initialize_with_request_tuning_mode(
         websocket_pool,
         desktop_release_status,
     );
-    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(match egress_runtime {
-        Some(runtime) => admin_provider.with_egress_runtime(runtime),
+    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(match &egress_runtime {
+        Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
         None => admin_provider,
     });
     let worker_contributions = provider::worker_contributions(
@@ -278,6 +288,13 @@ async fn initialize_with_request_tuning_mode(
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
         desktop_release,
+        Arc::new(provider::CodexTurnStateMaintenanceService::new(
+            repository,
+            leases,
+            turn_state_client,
+            egress_runtime.clone(),
+            turn_state_manager,
+        )),
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
 

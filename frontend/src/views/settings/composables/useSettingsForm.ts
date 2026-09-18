@@ -40,6 +40,10 @@ export function useSettingsForm() {
   const error = shallowRef('')
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
+    disableFast: false,
+    turnStateInjectionEnabled: false,
+    turnStateModelsText: 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra',
+    responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
@@ -71,6 +75,14 @@ export function useSettingsForm() {
   const refreshConcurrencyValue = numericModel('refreshConcurrency')
   const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
   const requestIntervalMsValue = numericModel('requestIntervalMs')
+  const responsesMaxDecompressedBodyBytesValue = computed({
+    get: () => String(form.responsesMaxDecompressedBodyBytes),
+    set: (value: string) => {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed))
+        form.responsesMaxDecompressedBodyBytes = parsed
+    },
+  })
   const minCodexDesktopVersionError = computed(() => versionError(form.minCodexDesktopVersion))
   const minCodexCliVersionError = computed(() => versionError(form.minCodexCliVersion))
 
@@ -80,6 +92,15 @@ export function useSettingsForm() {
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
+    form.disableFast = data.disableFast ?? false
+    form.turnStateInjectionEnabled = data.turnStateInjectionEnabled ?? false
+    form.turnStateModelsText = (data.turnStateModels ?? [
+      'gpt-6-astra',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+    ]).join(', ')
+    form.responsesMaxDecompressedBodyBytes
+      = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
@@ -165,7 +186,27 @@ export function useSettingsForm() {
       toast.warning('请修正客户端最低版本格式')
       return
     }
+    const turnStateModels = [...new Set(
+      form.turnStateModelsText
+        .split(/[\n,]/u)
+        .map(model => model.trim().toLowerCase())
+        .filter(Boolean),
+    )]
+    if (turnStateModels.length === 0 || turnStateModels.length > 64
+      || turnStateModels.some(model => model.length > 256 || [...model].some((character) => {
+        const code = character.charCodeAt(0)
+        return code < 0x20 || code === 0x7F
+      }))) {
+      toast.warning('Turn State 模型名单须包含 1–64 个有效模型名称')
+      return
+    }
     const tuning = form.requestTuning
+    if (!Number.isInteger(form.responsesMaxDecompressedBodyBytes)
+      || form.responsesMaxDecompressedBodyBytes < 1
+      || form.responsesMaxDecompressedBodyBytes > 256 * 1024 * 1024) {
+      toast.warning('请求解压上限须为 1–268435456 的整数字节数')
+      return
+    }
     if (!Number.isInteger(tuning.websocketLargeRequestThresholdBytes)
       || tuning.websocketLargeRequestThresholdBytes < 0
       || tuning.websocketLargeRequestThresholdBytes > 64 * 1024 * 1024) {
@@ -186,6 +227,10 @@ export function useSettingsForm() {
     }
     await saveAction.run(async () => {
       const result = await updateSettings({
+        disableFast: form.disableFast,
+        turnStateInjectionEnabled: form.turnStateInjectionEnabled,
+        turnStateModels,
+        responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,
         refreshConcurrency,
@@ -227,6 +272,7 @@ export function useSettingsForm() {
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
     requestIntervalMsValue,
+    responsesMaxDecompressedBodyBytesValue,
     minCodexDesktopVersionError,
     minCodexCliVersionError,
     saveSettings,

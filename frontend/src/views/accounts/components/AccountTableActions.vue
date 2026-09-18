@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import { KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Trash2, Wifi } from '@lucide/vue'
+import { KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldOff, Trash2, Wifi } from '@lucide/vue'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
@@ -11,6 +11,7 @@ defineProps<{
   deleting: boolean
   recovering: boolean
   refreshing: boolean
+  togglingTurnState: boolean
   testing: boolean
 }>()
 
@@ -21,6 +22,7 @@ const emit = defineEmits<{
   test: [account: AccountRow]
   refresh: [accountId: string]
   reauthorize: [account: AccountRow]
+  toggleTurnState: [account: AccountRow, enabled: boolean]
 }>()
 </script>
 
@@ -92,6 +94,18 @@ const emit = defineEmits<{
               <RotateCcw class="size-3.5 text-cp-text-quaternary" />
             </template>
             恢复状态
+          </BaseMenuItem>
+          <BaseMenuItem
+            v-if="account.provider === 'openai'"
+            :loading="togglingTurnState"
+            :disabled="togglingTurnState"
+            @click.stop="(close(), emit('toggleTurnState', account, !account.turnStateInjectionEnabled))"
+          >
+            <template #icon>
+              <ShieldOff v-if="account.turnStateInjectionEnabled" class="size-3.5 text-cp-text-quaternary" />
+              <ShieldCheck v-else class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            {{ account.turnStateInjectionEnabled ? '关闭 State 注入' : '开启 State 注入' }}
           </BaseMenuItem>
         </div>
       </template>

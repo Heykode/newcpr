@@ -56,7 +56,6 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
-            direct_client: client.clone(),
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
             outbound_proxy: None,
@@ -132,6 +131,12 @@ impl CodexBackendClient {
         } else {
             body
         };
+        if let Some(capture) = &upstream_request.turn_state_capture {
+            let injected = upstream_request
+                .managed_turn_state_version
+                .and_then(|_| headers.get("x-codex-turn-state")?.to_str().ok());
+            capture.dispatch(CodexBackendTransport::HttpSse, injected);
+        }
         let response = self
             .send_profiled(&profile, false, |client| {
                 let builder = client.post(endpoint).headers(headers).body(body);
@@ -158,6 +163,9 @@ impl CodexBackendClient {
         );
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let turn_state = response_meta::turn_state(response.headers());
+        if let Some(capture) = &upstream_request.turn_state_capture {
+            capture.returned(turn_state.as_deref());
+        }
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
         let response_metadata = response_meta::response_metadata(response.headers());
@@ -218,7 +226,7 @@ impl CodexBackendClient {
             set_cookie_headers,
             rate_limit_headers,
             rate_limit_updates: Some(rate_limit_updates),
-            turn_state_update: None,
+            response_metadata_updates: None,
             websocket_pool_decision: None,
             diagnostics,
             response_metadata,
@@ -237,11 +245,47 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        let prepared = self
-            .prepare_response_transport_with_pool_account(request, context, pool_account_id)
-            .await?;
-        self.create_response_stream_with_prepared(request, context, prepared)
-            .await
+        let mut request = std::borrow::Cow::Borrowed(request);
+        let mut context = context;
+        loop {
+            if self.managed_request_expired(&request, pool_account_id.or(context.account_id)) {
+                super::request::clear_managed_turn_state(request.to_mut());
+                context.turn_state = None;
+            }
+            let prepared = self
+                .prepare_response_transport_with_pool_account(&request, context, pool_account_id)
+                .await;
+            // Opening/capacity waits may cross expiry. No business payload has been sent.
+            if self.managed_request_expired(&request, pool_account_id.or(context.account_id)) {
+                drop(prepared);
+                super::request::clear_managed_turn_state(request.to_mut());
+                context.turn_state = None;
+                continue;
+            }
+            return self
+                .create_response_stream_with_prepared(&request, context, prepared?)
+                .await;
+        }
+    }
+
+    fn managed_request_expired(
+        &self,
+        request: &CodexResponsesRequest,
+        account: Option<&str>,
+    ) -> bool {
+        let Some(version) = request.managed_turn_state_version else {
+            return false;
+        };
+        request
+            .managed_turn_state_expires_at
+            .is_some_and(|expiry| expiry <= std::time::SystemTime::now())
+            || self
+                .websocket_pool
+                .as_ref()
+                .zip(account)
+                .is_some_and(|(pool, account)| {
+                    pool.managed_version_retired(account, request.model(), version)
+                })
     }
 
     /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening。
@@ -611,6 +655,15 @@ impl CodexBackendClient {
                     request: websocket_request,
                     prepared,
                 } = *route;
+                if let Some(capture) = &request.turn_state_capture {
+                    capture.dispatch(
+                        CodexBackendTransport::WebSocket,
+                        websocket_request
+                            .injected_turn_state
+                            .as_ref()
+                            .map(gateway_core::provider_ports::OpaqueTurnState::expose_to_provider),
+                    );
+                }
                 let mut exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
                     prepared,
@@ -650,7 +703,7 @@ impl CodexBackendClient {
                     set_cookie_headers: exchange.set_cookie_headers,
                     rate_limit_headers: exchange.rate_limit_headers,
                     rate_limit_updates: Some(exchange.rate_limit_updates),
-                    turn_state_update: Some(exchange.turn_state_update),
+                    response_metadata_updates: Some(exchange.response_metadata_updates),
                     websocket_pool_decision: exchange.pool_decision,
                     diagnostics: exchange.diagnostics,
                     response_metadata: exchange.response_metadata,
@@ -680,6 +733,11 @@ impl CodexBackendClient {
             .with_client_scope(request.client_api_key_id.as_deref().unwrap_or_default())
             .with_egress_key(&self.egress_key)
             .with_connection_profile(connection_profile);
+        if let Some(version) = request.managed_turn_state_version {
+            key = key
+                .with_model_state(request.model(), version)
+                .with_state_expiry(request.managed_turn_state_expires_at);
+        }
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);
         }

@@ -18,19 +18,23 @@ export function useAccountBatchEditor(options: {
 }) {
   const selectedAccountsById = new Map<string, AccountRow>()
   const showBatchEditModal = shallowRef(false)
+  const turnStateAvailable = shallowRef(false)
   const schedulingEnabled = shallowRef(true)
+  const turnStateInjectionEnabled = shallowRef(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const updateEnabled = ref(false)
+  const updateTurnStateInjectionEnabled = ref(false)
   const updateConcurrencyLimit = ref(false)
   const updateWeight = ref(false)
   const updateGroups = ref(false)
   const updateProxy = ref(false)
   const hasUpdates = computed(() =>
     updateEnabled.value
+    || (turnStateAvailable.value && updateTurnStateInjectionEnabled.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
     || updateGroups.value
@@ -41,6 +45,7 @@ export function useAccountBatchEditor(options: {
 
   function resetUpdateSelection() {
     updateEnabled.value = false
+    updateTurnStateInjectionEnabled.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
     updateGroups.value = false
@@ -53,6 +58,8 @@ export function useAccountBatchEditor(options: {
       return
 
     schedulingEnabled.value = accounts.every(account => account.enabled)
+    turnStateAvailable.value = accounts.every(account => account.provider === 'openai')
+    turnStateInjectionEnabled.value = accounts.every(account => account.turnStateInjectionEnabled)
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -89,6 +96,8 @@ export function useAccountBatchEditor(options: {
       }
       if (updateEnabled.value)
         payload.enabled = schedulingEnabled.value
+      if (turnStateAvailable.value && updateTurnStateInjectionEnabled.value)
+        payload.turnStateInjectionEnabled = turnStateInjectionEnabled.value
       if (updateConcurrencyLimit.value)
         payload.concurrencyLimit = scheduling.values.concurrencyLimit
       if (updateWeight.value)
@@ -134,6 +143,8 @@ export function useAccountBatchEditor(options: {
     if (open || isSaving)
       return
     schedulingEnabled.value = true
+    turnStateAvailable.value = false
+    turnStateInjectionEnabled.value = false
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = ''
@@ -144,13 +155,16 @@ export function useAccountBatchEditor(options: {
 
   return {
     showBatchEditModal,
+    turnStateAvailable,
     schedulingEnabled,
+    turnStateInjectionEnabled,
     concurrencyLimit,
     weight,
     proxyMode,
     proxyId,
     selectedGroupIds,
     updateEnabled,
+    updateTurnStateInjectionEnabled,
     updateConcurrencyLimit,
     updateWeight,
     updateGroups,

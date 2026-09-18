@@ -859,6 +859,7 @@ fn usage_record_with_account(
         upstream_transport: Some("http_sse".to_owned()),
         http_version: Some("h2".to_owned()),
         websocket_pool: None,
+        upstream_response_model: None,
         service_tier: None,
         provider_metadata_json: None,
         attempt_count: 1,
@@ -982,6 +983,15 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             provider_account_authentication_kind: Some("oauth".to_owned()),
             upstream_model_id: Some("grok-4.5".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
+            upstream_response_model: None,
+            turn_state_summary_json: Some(
+                serde_json::json!({
+                    "injected": true, "preview": "syntheti...-state", "chars": 332,
+                    "returnedChars": 356, "returnedSame": false, "transport": "http_sse",
+                    "injectedState": "sensitive-should-not-appear"
+                })
+                .to_string(),
+            ),
             service_tier: Some("default".to_owned()),
             input_tokens: Some(1),
             output_tokens: Some(1),
@@ -1144,6 +1154,14 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         })
     );
     assert!(value["data"]["items"][0].get("metadata").is_none());
+    assert_eq!(value["data"]["items"][0]["turnState"]["chars"], 332);
+    assert_eq!(value["data"]["items"][0]["turnState"]["returnedChars"], 356);
+    assert!(
+        value["data"]["items"][0]["turnState"]
+            .get("injectedState")
+            .is_none()
+    );
+    assert!(!value.to_string().contains("sensitive-should-not-appear"));
     assert_eq!(
         value["data"]["items"][1]["billing"]["totalAmountDisplay"],
         "≈ $0.007"

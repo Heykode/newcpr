@@ -475,9 +475,19 @@ impl CodexCredentialCatalogService {
             .ok_or(CodexCredentialCatalogError::NoEligibleCredential)?;
         let scope = CodexCatalogScope::for_account(&account)?;
         let mut candidates =
-            catalog_candidates_by_scope(self.repository.list_for_provider().await?)?
-                .remove(&scope)
-                .unwrap_or_default();
+            match catalog_candidates_by_scope(self.repository.list_for_provider().await?) {
+                Ok(mut groups) => groups.remove(&scope).unwrap_or_default(),
+                // 常规调度列表会过滤停用账号；管理端的定向刷新仍应使用
+                // 目标账号自身，不应因其已停用而回退到其他账号。
+                Err(CodexCredentialCatalogError::NoEligibleCredential) => Vec::new(),
+                Err(error) => return Err(error),
+            };
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.id() == account_id)
+        {
+            candidates.push(account.clone());
+        }
         if candidates.is_empty() {
             return Err(CodexCredentialCatalogError::NoEligibleCredential);
         }

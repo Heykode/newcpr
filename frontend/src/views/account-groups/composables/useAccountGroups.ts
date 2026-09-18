@@ -24,6 +24,7 @@ export interface AccountGroupFormValue {
   name: string
   description: string
   color: string
+  disableFast: boolean
 }
 
 export function useAccountGroups() {
@@ -111,6 +112,7 @@ export function useAccountGroups() {
       name: group.name,
       description: group.description ?? '',
       color: group.color,
+      disableFast: group.disableFast,
     }
     showFormModal.value = true
   }
@@ -133,13 +135,20 @@ export function useAccountGroups() {
       const updating = Boolean(editingGroup.value)
       const description = form.value.description.trim() || null
       if (editingGroup.value) {
-        await updateAccountGroup({ id: editingGroup.value.id, name, description, color })
+        await updateAccountGroup({
+          id: editingGroup.value.id,
+          name,
+          description,
+          color,
+          disableFast: form.value.disableFast,
+        })
       }
       else {
         await createAccountGroup({
           name,
           description,
           color,
+          disableFast: form.value.disableFast,
         })
       }
       showFormModal.value = false
@@ -309,5 +318,10 @@ export function useAccountGroups() {
 }
 
 function emptyForm(): AccountGroupFormValue {
-  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR }
+  return {
+    name: '',
+    description: '',
+    color: DEFAULT_ACCOUNT_GROUP_COLOR,
+    disableFast: false,
+  }
 }

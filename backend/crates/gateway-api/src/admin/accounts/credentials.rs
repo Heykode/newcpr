@@ -202,6 +202,7 @@ pub struct UpdateAccountRequest {
     pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
     pub enabled: bool,
+    pub turn_state_injection_enabled: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -226,6 +227,7 @@ impl UpdateAccountRequest {
             )?,
             account_id: self.account_id,
             enabled: self.enabled,
+            turn_state_injection_enabled: self.turn_state_injection_enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             group_ids: validate_wire_group_ids(&self.group_ids)?,

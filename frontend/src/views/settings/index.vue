@@ -50,6 +50,7 @@ const {
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   requestIntervalMsValue,
+  responsesMaxDecompressedBodyBytesValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
   saveSettings,
@@ -128,6 +129,10 @@ watch(
         v-model:refresh-margin-seconds="refreshMarginSecondsValue"
         v-model:refresh-concurrency="refreshConcurrencyValue"
         v-model:request-interval-ms="requestIntervalMsValue"
+        v-model:responses-max-decompressed-body-bytes="responsesMaxDecompressedBodyBytesValue"
+        v-model:disable-fast="form.disableFast"
+        v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
+        v-model:turn-state-models-text="form.turnStateModelsText"
         v-model:request-tuning="form.requestTuning"
       />
 

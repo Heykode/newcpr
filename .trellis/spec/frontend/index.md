@@ -15,6 +15,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Account Management](./account-management.md) | Diagnostic lifetimes, opt-in batch editing, persisted preferences, table sorting and IPv6 paging | Implemented |
+| [Usage State Diagnostics](./usage-state-diagnostics.md) | Request-local State summaries, lazy sensitive detail and dismissal lifetime | Implemented |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |

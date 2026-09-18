@@ -579,29 +579,24 @@ impl CodexCredentialAdmin {
         }
         let metadata = candidate_oauth_metadata(&secret)
             .map_err(|()| CodexCredentialAdminError::PrincipalConflict)?;
-        let old_user = current
-            .account
-            .upstream_user_id()
-            .filter(|value| !value.trim().is_empty());
-        let old_account = current
-            .account
-            .upstream_account_id()
-            .filter(|value| !value.trim().is_empty());
-        if conflicting_claims(old_user, metadata.chatgpt_user_id.as_deref())
-            || conflicting_claims(old_account, metadata.chatgpt_account_id.as_deref())
+        let old_email = normalized_email(current.account.email());
+        let new_email = normalized_email(metadata.email.as_deref());
+        let old_account = normalized_identity(current.account.upstream_account_id());
+        let new_account = normalized_identity(metadata.chatgpt_account_id.as_deref());
+        if matches!((&old_email, &new_email), (Some(old), Some(new)) if old != new)
+            || conflicting_claims(old_account, new_account)
         {
             return Err(CodexCredentialAdminError::PrincipalConflict);
         }
-        let (Some(old_user), Some(user), Some(account)) = (
-            old_user,
+        let (Some(_old_email), Some(_new_email), Some(_old_account), Some(account), Some(user)) = (
+            old_email,
+            new_email,
+            old_account,
+            new_account,
             metadata.chatgpt_user_id.as_deref(),
-            metadata.chatgpt_account_id.as_deref(),
         ) else {
             return Err(CodexCredentialAdminError::PrincipalUnconfirmed);
         };
-        if old_user != user {
-            return Err(CodexCredentialAdminError::PrincipalConflict);
-        }
         let identity = ProviderAccountIdentity::new(user.to_owned(), Some(account.to_owned()));
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
@@ -774,6 +769,17 @@ impl CodexCredentialAdmin {
     }
 }
 
+fn normalized_email(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+fn normalized_identity(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 /// 有状态的 Codex 手工刷新边界；消费调用方刚读取的当前 credential 并准备 CAS。
 pub struct CodexCredentialAdminService {
     refresher: Arc<dyn TokenRefresher>,
@@ -871,7 +877,8 @@ impl CodexCredentialAdminService {
         };
         let tokens = self
             .refresher
-            .refresh_with_proxy(
+            .refresh_for_account(
+                &account_id,
                 refresh_token.expose_secret(),
                 current.account.outbound_proxy(),
             )

@@ -32,6 +32,10 @@ export type RequestTuningOverrides = {
 }
 
 export interface RuntimeSettings {
+  disableFast?: boolean
+  turnStateInjectionEnabled?: boolean
+  turnStateModels?: string[]
+  responsesMaxDecompressedBodyBytes?: number
   modelMappings: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number

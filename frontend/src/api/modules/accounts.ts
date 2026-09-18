@@ -150,6 +150,7 @@ export interface Account {
   errorReason: AccountErrorReason | null
   errorMessage: string | null
   enabled: boolean
+  turnStateInjectionEnabled: boolean
   inFlight: number | null
   concurrencyLimit: number | null
   effectiveConcurrencyLimit: number
@@ -395,6 +396,7 @@ interface AccountUpdateParam {
   outboundProxyId?: string
   accountId: string
   enabled: boolean
+  turnStateInjectionEnabled?: boolean
   concurrencyLimit: number | null
   weight: number
   groupIds: string[]
@@ -405,6 +407,7 @@ interface AccountBatchUpdateParam {
   outboundProxyId?: string
   accountIds: string[]
   enabled?: boolean
+  turnStateInjectionEnabled?: boolean
   concurrencyLimit?: number | null
   weight?: number
   groupIds?: string[]

@@ -17,7 +17,7 @@ use crate::openai::{
     error::{gateway_error_response, protocol_error_response, runtime_unavailable_response},
     responses::{
         ProtocolError, ProtocolErrorBody, RequestDecodeError, collect_execution_response_as,
-        decode_object_with_headers, decompress_request_body, request_client_context,
+        decode_object_with_headers, decompress_request_body_limit, request_client_context,
         stream_execution_response_as,
     },
 };
@@ -34,7 +34,11 @@ pub(crate) async fn chat_completions(
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
-    let body = match decompress_request_body(&body, &headers) {
+    let body = match decompress_request_body_limit(
+        &body,
+        &headers,
+        client.snapshot().responses_max_decompressed_body_bytes(),
+    ) {
         Ok(body) => body,
         Err(error) => {
             return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());

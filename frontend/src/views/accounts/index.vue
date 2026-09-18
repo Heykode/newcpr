@@ -145,6 +145,7 @@ const {
   refreshingAccountIds,
   refreshingQuotaAccountIds,
   togglingAccountIds,
+  togglingTurnStateAccountIds,
   deletingAccount,
   creatingAccount,
   authorizingOAuth,
@@ -165,6 +166,7 @@ const {
   handleRefresh,
   handleRefreshQuota,
   handleToggleEnabled,
+  handleToggleTurnState,
 } = useAccountMutations({
   accounts,
   selectedIds,
@@ -209,13 +211,16 @@ const {
 
 const {
   showBatchEditModal,
+  turnStateAvailable: batchTurnStateAvailable,
   schedulingEnabled: batchSchedulingEnabled,
+  turnStateInjectionEnabled: batchTurnStateInjectionEnabled,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
   proxyMode: batchProxyMode,
   proxyId: batchProxyId,
   selectedGroupIds: batchGroupIds,
   updateEnabled: batchUpdateEnabled,
+  updateTurnStateInjectionEnabled: batchUpdateTurnStateInjectionEnabled,
   updateConcurrencyLimit: batchUpdateConcurrencyLimit,
   updateWeight: batchUpdateWeight,
   updateGroups: batchUpdateGroups,
@@ -235,6 +240,7 @@ const {
   showEditModal,
   editingAccount,
   schedulingEnabled,
+  turnStateInjectionEnabled,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   proxyMode: editingProxyMode,
@@ -483,6 +489,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :deleting="deletingAccount"
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
+                :toggling-turn-state="togglingTurnStateAccountIds.has(row.id)"
                 :testing="testingConnectionIds.has(row.id)"
                 @edit="openAccountEdit"
                 @delete="requestDeleteAccount"
@@ -490,6 +497,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 @refresh="handleRefresh"
                 @reauthorize="openReauthorizeAccount"
                 @test="openConnectionTest"
+                @toggle-turn-state="handleToggleTurnState"
               />
             </template>
 
@@ -587,6 +595,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <AccountEditModal
       v-model="showEditModal"
       v-model:enabled="schedulingEnabled"
+      v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:proxy-mode="editingProxyMode"
@@ -602,17 +611,20 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <AccountBatchEditModal
       v-model="showBatchEditModal"
       v-model:enabled="batchSchedulingEnabled"
+      v-model:turn-state-injection-enabled="batchTurnStateInjectionEnabled"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
       v-model:proxy-mode="batchProxyMode"
       v-model:proxy-id="batchProxyId"
       v-model:selected-group-ids="batchGroupIds"
       v-model:update-enabled="batchUpdateEnabled"
+      v-model:update-turn-state-injection-enabled="batchUpdateTurnStateInjectionEnabled"
       v-model:update-concurrency-limit="batchUpdateConcurrencyLimit"
       v-model:update-weight="batchUpdateWeight"
       v-model:update-groups="batchUpdateGroups"
       v-model:update-proxy="batchUpdateProxy"
       :has-updates="batchHasUpdates"
+      :turn-state-available="batchTurnStateAvailable"
       :selected-count="selectedIds.size"
       :groups="groups"
       :groups-loading="groupsLoading"

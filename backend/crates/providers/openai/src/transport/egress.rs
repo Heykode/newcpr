@@ -91,6 +91,50 @@ pub struct CodexEgressRuntime {
 }
 
 impl CodexEgressRuntime {
+    /// Return a randomized snapshot of enabled local sources for a maintenance task.
+    pub(crate) fn probe_sources(&self) -> Result<Vec<Ipv6Addr>, CodexEgressError> {
+        let mut sources = self
+            .snapshot()?
+            .addresses
+            .iter()
+            .filter(|item| item.enabled && !self.source_temporarily_blocked(item.address))
+            .map(|item| item.address)
+            .collect::<Vec<_>>();
+        for index in (1..sources.len()).rev() {
+            let mut bytes = [0_u8; 8];
+            getrandom::fill(&mut bytes).map_err(|_| CodexEgressError::Unavailable)?;
+            let swap = usize::try_from(u64::from_ne_bytes(bytes) % (index as u64 + 1))
+                .map_err(|_| CodexEgressError::Unavailable)?;
+            sources.swap(index, swap);
+        }
+        Ok(sources)
+    }
+
+    pub(crate) fn probe_http_client(&self, source: Ipv6Addr) -> Result<Client, CodexEgressError> {
+        let state = self.snapshot()?;
+        if !state
+            .addresses
+            .iter()
+            .any(|item| item.enabled && item.address == source)
+        {
+            return Err(CodexEgressError::SourceDisabled);
+        }
+        self.ensure_source_ready(source)?;
+        build_reqwest_native_client_with_custom_ca(
+            Client::builder()
+                .no_proxy()
+                .local_address(IpAddr::V6(source))
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(15))
+                .tcp_keepalive(Duration::from_secs(30))
+                .http2_keep_alive_interval(Duration::from_secs(30))
+                .http2_keep_alive_timeout(Duration::from_secs(5))
+                .http2_keep_alive_while_idle(true)
+                .pool_max_idle_per_host(0),
+        )
+        .map_err(|_| CodexEgressError::ClientConfiguration)
+    }
+
     pub async fn load(
         store: Arc<dyn ProviderEgressStorePort>,
     ) -> Result<Arc<Self>, CodexEgressError> {
@@ -434,6 +478,9 @@ pub(crate) async fn connect_source_bound(
             .bind(SocketAddr::new(IpAddr::V6(source), 0))
             .map_err(|_| CodexEgressError::SourceUnavailable)?;
         if let Ok(stream) = socket.connect(destination).await {
+            stream
+                .set_nodelay(true)
+                .map_err(|_| CodexEgressError::ConnectFailed)?;
             return Ok(stream);
         }
     }

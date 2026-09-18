@@ -132,7 +132,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
@@ -260,6 +260,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                 &mut transaction,
                 &update.account_id,
                 update.expected_revision.get(),
+                None,
                 None,
                 &update.provider_credentials_json,
             )
@@ -645,6 +646,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     Some(settings.concurrency_limit),
                     Some(settings.weight),
                     None,
+                    None,
                 )
                 .await?;
                 replace_account_group_assignments_in_transaction(
@@ -704,6 +706,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     &credential.account_id,
                     credential.expected_revision.get(),
                     command.replacement_identity.as_ref(),
+                    command.profile.email.as_deref(),
                     &credential.provider_credentials_json,
                 )
                 .await?;
@@ -780,6 +783,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 command.enabled,
                 command.concurrency_limit,
                 command.weight,
+                command.turn_state_injection_enabled,
                 command.outbound_proxy.as_ref(),
             )
             .await?;
@@ -1113,6 +1117,7 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     enabled: Option<bool>,
     concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     weight: Option<AccountWeight>,
+    turn_state_injection_enabled: Option<bool>,
     outbound_proxy: Option<&gateway_admin::model::proxies::AccountProxySelection>,
 ) -> StoreResult<()> {
     lock_account_egress_in_transaction(transaction).await?;
@@ -1126,9 +1131,11 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
         "update provider_accounts
          set enabled = coalesce($2, enabled),
              concurrency_limit = case when $3 then $4 else concurrency_limit end,
-             weight = coalesce($5, weight), updated_at = greatest(now(), updated_at),
-             outbound_proxy_url = case when $6 then $7 else outbound_proxy_url end,
-             outbound_proxy_id = case when $6 then $8 else outbound_proxy_id end
+             weight = coalesce($5, weight),
+             turn_state_injection_enabled = coalesce($6, turn_state_injection_enabled),
+             updated_at = greatest(now(), updated_at),
+             outbound_proxy_url = case when $7 then $8 else outbound_proxy_url end,
+             outbound_proxy_id = case when $7 then $9 else outbound_proxy_id end
          where id = any($1::text[])
          returning id",
     )
@@ -1142,6 +1149,7 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
             .transpose()
             .map_err(|_| invalid("invalid weight"))?,
     )
+    .bind(turn_state_injection_enabled)
     .bind(outbound_proxy.is_some())
     .bind(
         proxy
