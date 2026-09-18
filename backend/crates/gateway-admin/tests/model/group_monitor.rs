@@ -25,7 +25,6 @@ fn account(id: &str) -> MonitorAccountEstimate {
         used_slots: Some(2),
         total_slots: 4,
         remaining_usd: Some(100.0),
-        incomplete: false,
         unavailable: false,
         low_sample: false,
         reset_at: None,
@@ -114,7 +113,7 @@ fn monitor_distinguishes_unknown_partial_learning_idle_and_disabled() {
 }
 
 #[test]
-fn missing_cost_or_runtime_is_never_reported_as_zero_and_nonfinite_is_rejected() {
+fn known_cost_survives_missing_costs_but_all_missing_stays_unknown() {
     let mut a = account("a");
     a.used_slots = None;
     a.consumption.missing_costs = 1;
@@ -128,9 +127,29 @@ fn missing_cost_or_runtime_is_never_reported_as_zero_and_nonfinite_is_rejected()
         Some(2),
     );
     assert_eq!(item.used_slots, None);
-    assert_eq!(item.consume_usd_per_minute, None);
-    assert_eq!(item.quota_consume_usd_per_minute, None);
-    assert_eq!(item.eta_status, "unknown");
+    assert_eq!(item.remaining_status, "ready");
+    assert_eq!(item.consume_usd_per_minute, Some(1.0));
+    assert_eq!(item.quota_consume_usd_per_minute, Some(2.0));
+    assert_eq!(item.eta_minutes, Some(50.0));
+    assert_eq!(item.eta_status, "ready");
+    assert_eq!(item.expected_expiry_usd, Some(80.0));
+    assert_eq!(item.expiry_status, "ready");
+
+    a.consumption.usd = 0.0;
+    let all_missing = project_group_monitor(
+        group(),
+        &[a.clone()],
+        &MonitorUsage {
+            usd: 0.0,
+            missing_costs: 1,
+        },
+        Some(2),
+    );
+    assert_eq!(all_missing.consume_usd_per_minute, None);
+    assert_eq!(all_missing.quota_consume_usd_per_minute, None);
+    assert_eq!(all_missing.eta_status, "unknown");
+    assert_eq!(all_missing.expected_expiry_usd, None);
+
     a.remaining_usd = Some(f64::INFINITY);
     assert_eq!(
         project_group_monitor(group(), &[a], &MonitorUsage::default(), Some(2)).remaining_usd,

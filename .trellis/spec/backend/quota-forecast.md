@@ -45,7 +45,9 @@
   Rank by account `created_at` descending and ID ascending. Match provider,
   normalized explicit Plan, window key/group/role/limit ID and exact duration.
   New explicit Plan names work without registration.
-- References require a live weekly observation and complete costs. Recipients
+- References require a live weekly observation and a finite positive known USD
+  subtotal. Other unavailable or partial request costs do not disqualify the
+  account or mark the group partial. Recipients
   require a valid current percentage and zero known local USD consumption,
   without missing/partial costs. Remaining is peer mean times unused fraction.
   Upstream reset timestamps have whole-second precision, so an observation at
@@ -65,6 +67,9 @@
   Own the deduplicated quota IDs before building the buffered async stream:
   a borrowed mapped peer iterator fails `async_trait`'s `Send` generalization
   in this toolchain. Keep that ownership boundary during collection cleanup.
+- Group burn-rate inputs use a finite positive known USD subtotal even when
+  other requests lack cost. A complete zero remains idle; zero known USD with
+  missing costs stays unknown. Missing costs alone add no card warning.
 
 
 ## 1. Scope / Trigger
@@ -213,9 +218,10 @@ Correct: classify new prewarm requests from the provider's actual
 - `routing_group_refs` records authorized scope, not exclusive group selection.
   Group rates can overlap. ETA uses deduplicated eligible accounts' all-group
   rate; shared balances/concurrency must not be added across groups.
-- Do not sum weekly/monthly extrapolated balances. Preserve incomplete windows,
-  missing fees, failed reads and missing runtime as distinct unknown/partial
-  states. An idle known rate is not infinite ETA.
+- Do not sum weekly/monthly extrapolated balances. Failed reads, missing account
+  estimates and missing runtime retain distinct unknown/partial states. Known
+  positive USD remains usable despite other missing fees; an all-missing rate is
+  unknown, and an idle complete rate is not infinite ETA.
 - Expiry waste is a qualified observed-lifespan estimate, never token/reset
   expiry. Only durable `banned` plus `account_banned` rows are samples. Device
   first-seen timestamps survive reimport; absent/deleted history is not invented.
