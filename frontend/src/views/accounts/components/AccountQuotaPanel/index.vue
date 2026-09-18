@@ -7,6 +7,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountProfileModal from '../AccountProfileModal/index.vue'
+import AccountTurnStatePanel from '../AccountTurnStatePanel.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import AccountResetCredits from './ResetCredits.vue'
 
@@ -88,6 +89,8 @@ const profileOpen = shallowRef(false)
         额度待观测
       </p>
     </div>
+
+    <AccountTurnStatePanel :account="account" />
   </section>
 
   <AccountProfileModal

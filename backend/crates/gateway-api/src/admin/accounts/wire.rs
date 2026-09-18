@@ -333,12 +333,29 @@ pub struct AccountView {
 pub struct AccountTurnStateView {
     pub required_models: Vec<String>,
     pub ready_models: Vec<AccountTurnStateModelView>,
+    pub models: Vec<AccountTurnStateModelStatusView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountTurnStateModelView {
     pub model: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountTurnStateModelStatusView {
+    pub model: String,
+    pub refresh_status: String,
+    pub active: Option<AccountTurnStateSlotView>,
+    pub standby: Option<AccountTurnStateSlotView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountTurnStateSlotView {
+    pub chars: u16,
     pub expires_at: String,
 }
 

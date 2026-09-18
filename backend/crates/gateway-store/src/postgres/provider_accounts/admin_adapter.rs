@@ -8,6 +8,27 @@ use gateway_core::provider_ports::ProviderCooldownPort;
 use super::*;
 use crate::postgres::ObservabilityQueryBudget;
 
+#[derive(sqlx::FromRow)]
+struct AccountTurnStateStatusRow {
+    account_id: String,
+    model: String,
+    refresh_status: Option<String>,
+    active_chars: Option<i16>,
+    active_expires_at: Option<chrono::DateTime<Utc>>,
+    standby_chars: Option<i16>,
+    standby_expires_at: Option<chrono::DateTime<Utc>>,
+}
+
+fn turn_state_slot_status(
+    chars: Option<i16>,
+    expires_at: Option<chrono::DateTime<Utc>>,
+) -> Option<gateway_admin::model::accounts::AccountTurnStateSlotStatus> {
+    Some(gateway_admin::model::accounts::AccountTurnStateSlotStatus {
+        chars: u16::try_from(chars?).ok()?,
+        expires_at: expires_at?,
+    })
+}
+
 /// Admin 账号用例所需的公共账号、留存观测与 revision 事务能力。
 ///
 /// 三个 PostgreSQL adapter 都保持私有，调用方只能取得 [`AccountStore`] 暴露的领域能力。
@@ -395,22 +416,48 @@ impl AccountStore for PgAdminAccountStore {
         account_ids: &[String],
     ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountTurnStateStatus>>
     {
-        let rows = sqlx::query_as::<_, (String, String, Option<chrono::DateTime<Utc>>)>(
-            "select a.id, m.model,
+        let rows = sqlx::query_as::<_, AccountTurnStateStatusRow>(
+            "select a.id as account_id, m.model,
+                case when s.credential_revision = a.credential_revision
+                  and s.normal_length = case when lower(trim(a.plan_type)) in
+                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
+                    then 332 else 292 end
+                then s.refresh_status else null end as refresh_status,
                 case when s.credential_revision = a.credential_revision
                   and s.normal_length = case when lower(trim(a.plan_type)) in
                     ('team','self_serve_business_prolite','self_serve_business_usage_based')
                     then 332 else 292 end
                   and length(s.active_state) = s.normal_length
                   and s.active_issued_at <= now() and s.active_expires_at > now()
-                then s.active_expires_at else null end
+                then s.normal_length else null end as active_chars,
+                case when s.credential_revision = a.credential_revision
+                  and s.normal_length = case when lower(trim(a.plan_type)) in
+                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
+                    then 332 else 292 end
+                  and length(s.active_state) = s.normal_length
+                  and s.active_issued_at <= now() and s.active_expires_at > now()
+                then s.active_expires_at else null end as active_expires_at,
+                case when s.credential_revision = a.credential_revision
+                  and s.normal_length = case when lower(trim(a.plan_type)) in
+                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
+                    then 332 else 292 end
+                  and length(s.standby_state) = s.normal_length
+                  and s.standby_issued_at <= now() and s.standby_expires_at > now()
+                then s.normal_length else null end as standby_chars,
+                case when s.credential_revision = a.credential_revision
+                  and s.normal_length = case when lower(trim(a.plan_type)) in
+                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
+                    then 332 else 292 end
+                  and length(s.standby_state) = s.normal_length
+                  and s.standby_issued_at <= now() and s.standby_expires_at > now()
+                then s.standby_expires_at else null end as standby_expires_at
              from provider_accounts a cross join runtime_settings r
-             cross join lateral unnest(r.turn_state_models) m(model)
+             cross join lateral unnest(r.turn_state_models) with ordinality m(model, position)
              left join provider_turn_states s on s.provider_account_id = a.id
                and s.upstream_model = m.model
              where a.id = any($1) and a.provider_kind = 'openai'
                and a.enabled and a.turn_state_injection_enabled and r.turn_state_injection_enabled
-             order by a.id, m.model",
+             order by a.id, m.position",
         )
         .bind(account_ids)
         .fetch_all(&self.pool)
@@ -423,12 +470,24 @@ impl AccountStore for PgAdminAccountStore {
         })?;
         let mut statuses =
             BTreeMap::<String, gateway_admin::model::accounts::AccountTurnStateStatus>::new();
-        for (id, model, expires_at) in rows {
-            let status = statuses.entry(id).or_default();
-            status.required_models.push(model.clone());
-            if let Some(expires_at) = expires_at {
-                status.ready_models.push((model, expires_at));
+        for row in rows {
+            let status = statuses.entry(row.account_id).or_default();
+            status.required_models.push(row.model.clone());
+            let active = turn_state_slot_status(row.active_chars, row.active_expires_at);
+            let standby = turn_state_slot_status(row.standby_chars, row.standby_expires_at);
+            if let Some(active) = &active {
+                status
+                    .ready_models
+                    .push((row.model.clone(), active.expires_at));
             }
+            status.models.push(
+                gateway_admin::model::accounts::AccountTurnStateModelStatus {
+                    model: row.model,
+                    refresh_status: row.refresh_status.unwrap_or_else(|| "missing".to_owned()),
+                    active,
+                    standby,
+                },
+            );
         }
         Ok(statuses)
     }

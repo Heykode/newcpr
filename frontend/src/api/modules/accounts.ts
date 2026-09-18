@@ -154,6 +154,12 @@ export interface Account {
   turnState?: {
     requiredModels: string[]
     readyModels: { model: string, expiresAt: string }[]
+    models?: {
+      model: string
+      refreshStatus: 'missing' | 'ready' | 'refreshing' | 'failed'
+      active: { chars: number, expiresAt: string } | null
+      standby: { chars: number, expiresAt: string } | null
+    }[]
   } | null
   inFlight: number | null
   concurrencyLimit: number | null

@@ -432,6 +432,26 @@ regressions and `browser/account-state-indicator.mjs` with the read-only preview
 plus intercepted synthetic mutations for menu toggles and both themes at narrow
 widths. These UI checks do not validate upstream State acceptance.
 
+The expanded account row places a persistent `State 注入` summary below the
+left quota area; do not rely on avatar hover for operational detail. For every
+configured model, show the safe active/standby slots, character counts, current
+capture count, refresh/readiness label and local expiry countdown. The header
+summarizes ready models and total valid slots. Missing slots say `未获取`, while
+disabled, globally unavailable and empty-model states remain distinct.
+Use `turnState.models` when available and preserve `requiredModels` /
+`readyModels` as a compatibility fallback for older servers. Countdown aging
+uses the shared UI clock and never creates per-account timers. Desktop uses two
+slot columns; narrow screens stack slots and constrain the panel to the viewport
+even though the surrounding account table remains horizontally scrollable.
+Keep the summary outside the scroll region. Model rows use a stable 56px desktop
+height or 76px narrow-screen height; cap the list at three rows and scroll further
+models internally. One/two-model lists retain their natural height. Overflowing
+lists are named keyboard-focusable regions; long model names retain full titles.
+Neither the panel nor its title attributes may contain the opaque State value.
+Cover the real SFC, legacy fallback, totals and countdowns in
+`account-state-detail-panel.test.mjs`; the account browser regression expands a
+real row and checks both themes at 1440/390/320px for clipping and overflow.
+
 ## Relogin Templates and Account Actions
 
 - Keep the key badge independent from the account action's busy/blocked state.
