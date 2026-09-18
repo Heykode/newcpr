@@ -19,8 +19,18 @@ CLIENT = "app_EMoamEEZ73f0CkXaXp7hrann"
 CALLBACK = "http://localhost:1455/auth/callback"
 # Business policy, not a universal comparison of subscriptions.
 PLAN_PRIORITY = {
-    "enterprise": 60, "edu": 55, "business": 50, "team": 50,
+    "enterprise": 60, "edu": 55, "business": 50,
     "pro": 40, "plus": 30, "go": 20, "free": 10,
+}
+PLAN_ALIASES = {
+    "free": "free", "go": "go", "plus": "plus", "pro": "pro", "prolite": "pro",
+    "team": "business", "business": "business",
+    "self_serve_business_prolite": "business",
+    "self_serve_business_usage_based": "business",
+    "edu": "edu", "education": "edu", "edu_plus": "edu", "edu_pro": "edu",
+    "enterprise": "enterprise", "hc": "enterprise", "ent26": "enterprise",
+    "enterprise_cbp_automation": "enterprise",
+    "enterprise_cbp_usage_based": "enterprise",
 }
 
 
@@ -39,6 +49,10 @@ def claims(token):
         raise LoginError("invalid_token") from None
 
 
+def normalize_plan(value):
+    return PLAN_ALIASES.get(str(value or "").strip().lower())
+
+
 def select_workspace(accounts, preferred=None):
     by_id = {}
     if isinstance(accounts, dict):
@@ -54,14 +68,12 @@ def select_workspace(accounts, preferred=None):
         if not isinstance(account, dict):
             continue
         identifier = account.get("account_id") or account.get("id") or key
-        plan = str(account.get("plan_type") or "").lower()
+        plan = normalize_plan(account.get("plan_type"))
         if identifier:
             identifier = str(identifier)
             previous = by_id.get(identifier)
             if previous and previous["plan"] != plan:
-                if {previous["plan"], plan} != {"team", "business"}:
-                    raise LoginError("workspace_plan_unknown")
-                plan = "business"
+                raise LoginError("workspace_plan_unknown")
             # The membership map may expose the same workspace under an alias.
             by_id[identifier] = {"id": identifier, "plan": plan}
     items = list(by_id.values())
@@ -331,23 +343,24 @@ class Login:
         for key in ("chatgpt_account_id", "chatgpt_user_id"):
             if auth.get(key) and id_auth.get(key) and auth[key] != id_auth[key]:
                 raise LoginError("identity_mismatch")
-        access_plan, identity_plan = auth.get("chatgpt_plan_type"), id_auth.get("chatgpt_plan_type")
-        if (access_plan and identity_plan and access_plan != identity_plan
-                and {access_plan, identity_plan} != {"team", "business"}):
+        access_plan_raw = auth.get("chatgpt_plan_type")
+        identity_plan_raw = id_auth.get("chatgpt_plan_type")
+        access_plan = normalize_plan(access_plan_raw)
+        identity_plan = normalize_plan(identity_plan_raw)
+        if ((access_plan_raw and not access_plan) or (identity_plan_raw and not identity_plan)
+                or (access_plan and identity_plan and access_plan != identity_plan)):
             raise LoginError("plan_mismatch")
         profile_email = access.get("https://api.openai.com/profile", {}).get("email")
         if identity.get("email") and profile_email and identity["email"].lower() != profile_email.lower():
             raise LoginError("identity_mismatch")
         workspace = auth.get("chatgpt_account_id") or id_auth.get("chatgpt_account_id")
         user = auth.get("chatgpt_user_id") or id_auth.get("chatgpt_user_id")
-        plan = auth.get("chatgpt_plan_type") or id_auth.get("chatgpt_plan_type")
+        plan = access_plan or identity_plan
         email = identity.get("email") or profile_email
         if workspace != self.selected["id"] or str(email).lower() != self.request["email"].lower() or not user:
             raise LoginError("identity_mismatch")
         if not plan or (self.selected["plan"] and plan != self.selected["plan"]):
-            # team/business are aliases, but never accept a paid -> free fallback.
-            if {plan, self.selected["plan"]} != {"team", "business"}:
-                raise LoginError("plan_mismatch")
+            raise LoginError("plan_mismatch")
         if not tokens.get("refresh_token") or access.get("exp", 0) <= time.time():
             raise LoginError("invalid_token")
         usage = self.body(self.fetch("GET", WEB + "/backend-api/wham/usage",
@@ -355,8 +368,10 @@ class Login:
                                              "ChatGPT-Account-Id": workspace}))
         if usage.get("account_id") and usage["account_id"] != workspace:
             raise LoginError("identity_mismatch")
-        if usage.get("plan_type") and usage["plan_type"] != plan and {usage["plan_type"], plan} != {"team", "business"}:
-            raise LoginError("plan_mismatch")
+        if usage.get("plan_type"):
+            usage_plan = normalize_plan(usage["plan_type"])
+            if not usage_plan or usage_plan != plan:
+                raise LoginError("plan_mismatch")
         if not any(isinstance(usage.get(key), (dict, list))
                    for key in ("rate_limit", "additional_rate_limits", "spend_control", "credits")):
             raise LoginError("verification_failed")

@@ -61,7 +61,10 @@
 - Login proxy propagation is distinct from managed account device/IPv6/UA state.
   The Python runner does not implement the pool's IPv6 source-binding policy.
 - Deduplicate membership aliases by the real workspace ID before ranking or matching
-  a locked workspace. Conflicting plans for one ID fail closed; team/business are aliases.
+  a locked workspace. Normalize the official plan wire aliases consistently across
+  memberships, access/id token claims and usage verification: self-serve Business,
+  enterprise CBP/ent26/hc, education and prolite retain their paid policy tier.
+  Conflicting plans for one ID, unknown plans and equal top-tier workspaces fail closed.
 - During OAuth account selection, the authentication transaction `session_id` is not
   a selectable login session. Use `unified_sessions` or an explicit selected-session
   field; never use a transaction ID to resolve missing or ambiguous login choices.

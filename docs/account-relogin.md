@@ -22,7 +22,11 @@ test@example.invalid----example-password----JBSWY3DPEHPK3PXP
 - 已在池中的账号重登锁定其原工作区；同邮箱多工作区必须先指定工作区。
 - 新账号自动选择业务优先级：Enterprise、Edu、Business/Team、Pro、Plus、Go、Free。
   这只是本功能的选择策略，不是套餐能力的通用排名；未知套餐或并列最高需指定工作区。
-  上游成员表中的别名按真实工作区 ID 去重，同一 ID 套餐冲突时停止。
+  上游成员表、OAuth 令牌和 usage 验证统一识别官方套餐别名：
+  `self_serve_business_prolite` / `self_serve_business_usage_based` 归为 Business，
+  `ent26` / `enterprise_cbp_automation` / `enterprise_cbp_usage_based` / `hc`
+  归为 Enterprise，`education` 归为 Edu，
+  `prolite` 归为 Pro。别名按真实工作区 ID 去重，同一 ID 套餐冲突时停止。
   Team 授权失败绝不自动换成个人 Free。
 - 新增入池复用原导入初始化（设备指纹、默认调度、出口绑定等），并在事务内拒绝
   并发出现的同邮箱或同身份账号。更新已有账号复用原凭据替换和版本比较，
