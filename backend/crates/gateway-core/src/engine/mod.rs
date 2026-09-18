@@ -319,6 +319,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    request_profile: Option<Arc<crate::account::OpaqueProviderData>>,
     disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
     request_id: ModelRequestId,
@@ -328,6 +329,15 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_request_profile(
+        mut self,
+        profile: Option<Arc<crate::account::OpaqueProviderData>>,
+    ) -> Self {
+        self.request_profile = profile;
+        self
+    }
+
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
         self.disable_fast = disable_fast;
@@ -350,6 +360,7 @@ impl RequestAttemptContext {
             client_api_key_ref,
             disable_fast: false,
             request_location: None,
+            request_profile: None,
             timing_started_at: Instant::now(),
             trace: crate::diagnostics::TraceContext::default(),
         }
@@ -402,6 +413,11 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn request_profile(&self) -> Option<&crate::account::OpaqueProviderData> {
+        self.request.request_profile.as_deref()
+    }
+
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.request.disable_fast

@@ -83,11 +83,21 @@ fn fallback_includes_string_input_and_normalizes_equivalent_text_messages() {
 }
 
 fn scoped_context(request_id: &str, client_key: &str, account: &str) -> AttemptContext {
+    scoped_context_with_profile(request_id, client_key, account, None)
+}
+
+fn scoped_context_with_profile(
+    request_id: &str,
+    client_key: &str,
+    account: &str,
+    profile: Option<Arc<OpaqueProviderData>>,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(format!("req_{request_id}")).unwrap(),
             ClientApiKeyId::new(client_key).unwrap(),
-        ),
+        )
+        .with_request_profile(profile),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
@@ -99,6 +109,135 @@ fn scoped_context(request_id: &str, client_key: &str, account: &str) -> AttemptC
         None,
         CancellationToken::new(),
     )
+}
+
+#[tokio::test]
+async fn frozen_request_profile_survives_publication_without_reusing_account_identity() {
+    for websocket in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        for account in ["acct_profile_first", "acct_profile_second"] {
+            create_account(&store, account).await;
+        }
+        let http = MockServer::start().await;
+        let (url, ws_server) = if websocket {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let mut captures = Vec::new();
+                for _ in 0..3 {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let headers = Arc::new(Mutex::new(None));
+                    let captured = headers.clone();
+                    let mut socket = crate::transport::accept_codex_test_websocket_with(
+                        socket,
+                        move |request, response| {
+                            *captured.lock().unwrap() = Some(request.headers().clone());
+                            response.headers_mut().insert(
+                                "sec-websocket-extensions",
+                                "permessage-deflate".parse().unwrap(),
+                            );
+                        },
+                    )
+                    .await;
+                    let frame = socket.next().await.unwrap().unwrap();
+                    let body: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                    super::generate_compat::send_completion(&mut socket, "resp_profile").await;
+                    captures.push((headers.lock().unwrap().take().unwrap(), body));
+                }
+                captures
+            });
+            (url, Some(server))
+        } else {
+            Mock::given(method("POST"))
+                .and(path("/codex/responses"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(CAPTURE_COMPLETED_SSE),
+                )
+                .expect(3)
+                .mount(&http)
+                .await;
+            (http.uri(), None)
+        };
+        let state = wire_profile();
+        let old_ua = state.snapshot().user_agent();
+        let provider = provider_and_quota_with_profile(
+            &store,
+            Arc::new(MemorySessionAffinity::default()),
+            url,
+            Arc::new(TestLeaseCoordinator::default()),
+            0,
+            state.clone(),
+        )
+        .0;
+        let frozen = Arc::new(provider.resolve_request_profile().unwrap().unwrap());
+        for (index, account) in [
+            "acct_profile_first",
+            "acct_profile_second",
+            "acct_profile_second",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index == 1 {
+                state.update_bundled_release(
+                    &provider_openai::transport::profile::CodexBundledReleaseProfile {
+                        codex_version: "0.155.0".to_owned(),
+                        desktop_version: "26.999.12345".to_owned(),
+                        desktop_build: "2".to_owned(),
+                        verified_at: Utc::now(),
+                    },
+                );
+            }
+            let profile = if index < 2 {
+                Arc::clone(&frozen)
+            } else {
+                Arc::new(provider.resolve_request_profile().unwrap().unwrap())
+            };
+            consume_identity_request(
+                &provider,
+                identity_request(json!("hello"), true, websocket),
+                scoped_context_with_profile("profile-retry", "key-profile", account, Some(profile)),
+            )
+            .await;
+        }
+        let captures = if let Some(server) = ws_server {
+            timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap()
+        } else {
+            http.received_requests()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|request| (request.headers.clone(), captured_request_body(&request)))
+                .collect()
+        };
+        assert_eq!(captures[0].0["user-agent"], old_ua);
+        assert_eq!(captures[1].0["user-agent"], old_ua);
+        assert_eq!(captures[2].0["user-agent"], state.snapshot().user_agent());
+        assert_ne!(
+            captures[0].0["authorization"],
+            captures[1].0["authorization"]
+        );
+        assert_ne!(
+            captures[0].0["x-codex-installation-id"],
+            captures[1].0["x-codex-installation-id"]
+        );
+        assert_ne!(captures[0].0["thread-id"], captures[1].0["thread-id"]);
+        assert_eq!(
+            captures[1].0["x-codex-installation-id"],
+            captures[2].0["x-codex-installation-id"]
+        );
+        for (headers, body) in &captures {
+            assert_eq!(
+                body["client_metadata"]["installation_id"],
+                headers["x-codex-installation-id"].to_str().unwrap()
+            );
+        }
+    }
 }
 
 #[tokio::test]

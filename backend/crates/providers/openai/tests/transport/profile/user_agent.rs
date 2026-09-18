@@ -9,6 +9,52 @@ const CUSTOM: &str =
     "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)";
 
 #[test]
+fn request_profile_snapshot_keeps_custom_ua_and_auxiliary_desktop_across_updates() {
+    for custom in [
+        None,
+        Some(CUSTOM),
+        Some("codex_cli_rs/0.153.4 (Linux 6.8; x86_64) xterm"),
+    ] {
+        let state = CodexWireProfileState::new(wire_profile());
+        if let Some(user_agent) = custom {
+            state
+                .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+                    user_agent: user_agent.to_owned(),
+                })
+                .unwrap();
+        }
+        let original = state.snapshot();
+        let desktop = state.desktop_snapshot();
+        let frozen = state.request_snapshot().unwrap();
+        state.update_bundled_release(&CodexBundledReleaseProfile {
+            codex_version: "0.154.0".to_owned(),
+            desktop_version: "26.912.12345".to_owned(),
+            desktop_build: "9012".to_owned(),
+            verified_at: Utc::now(),
+        });
+        state
+            .apply_user_agent_override(&ProviderUserAgentOverride::Default)
+            .unwrap();
+        for _ in 0..3 {
+            let retry = CodexWireProfileState::from_request_snapshot(&frozen).unwrap();
+            assert_eq!(retry.snapshot(), original);
+            assert_eq!(retry.desktop_snapshot(), desktop);
+        }
+        let next_request =
+            CodexWireProfileState::from_request_snapshot(&state.request_snapshot().unwrap())
+                .unwrap();
+        assert_eq!(next_request.snapshot().codex_version, "0.154.0");
+        assert_ne!(next_request.snapshot(), original);
+        let keys: Vec<_> = frozen
+            .expose_to_provider()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["selection"]);
+    }
+}
+
+#[test]
 fn custom_user_agent_preserves_coherent_core_and_desktop_surfaces() {
     let profile = CodexWireProfile::parse_user_agent(CUSTOM).expect("supported UA");
     assert_eq!(profile.user_agent(), CUSTOM);

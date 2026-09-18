@@ -1,3 +1,4 @@
+mod capacity;
 mod chat;
 mod chat_cpa;
 mod http;

@@ -145,6 +145,31 @@ fn upstream_failure(
 }
 
 #[tokio::test]
+async fn initial_capacity_error_projects_status_and_preserves_current_request_headers() {
+    for code in ["server_is_overloaded", "slow_down"] {
+        let provider = upstream_failure(
+            429,
+            b"synthetic",
+            vec![
+                header("x-request-id", b"req_capacity"),
+                header("retry-after", b"2"),
+            ],
+        )
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            "synthetic capacity",
+            Some(code.to_owned()),
+            Some("service_unavailable_error".to_owned()),
+        ));
+        let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
+        assert_eq!(error["status"], 503);
+        assert_eq!(error["error"]["code"], "server_error");
+        assert_eq!(error["error"]["message"], "synthetic capacity");
+        assert_eq!(error["headers"]["x-request-id"], "req_capacity");
+        assert_eq!(error["headers"]["retry-after"], "2");
+    }
+}
+
+#[tokio::test]
 async fn initial_http_or_opening_failure_preserves_status_and_structured_error() {
     // 分类故意都用 Unavailable：不能把收到的 401/429/500 等按网关分类改成 502。
     for status in [302, 400, 401, 403, 429, 500, 502, 503] {
@@ -404,7 +429,7 @@ async fn errors_on_a_reused_connection_keep_their_own_upstream_ids() {
 }
 
 #[tokio::test]
-async fn deliverable_business_failures_are_not_rewritten_or_followed_by_a_second_error() {
+async fn deliverable_business_failures_only_project_capacity_without_a_second_error() {
     for raw in [
         json!({
             "type": "error",
@@ -461,7 +486,11 @@ async fn deliverable_business_failures_are_not_rewritten_or_followed_by_a_second
         let (mut socket, _server) = connect(Arc::clone(&trace), Vec::new()).await;
         send_request(&mut socket).await;
         assert_eq!(next_event(&mut socket).await["type"], "response.metadata");
-        assert_eq!(next_event(&mut socket).await, raw);
+        let mut expected = raw.clone();
+        if expected["error"]["code"] == "server_is_overloaded" {
+            expected["error"]["code"] = json!("server_error");
+        }
+        assert_eq!(next_event(&mut socket).await, expected);
         assert_no_duplicate_failure(&mut socket).await;
         assert!(trace.committed.load(Ordering::Acquire));
         assert!(trace.finalized.load(Ordering::Acquire));
@@ -504,7 +533,7 @@ fn websocket_bare_errors_preserve_snapshot_and_metadata_without_success() {
             let mut raw = json!({
                 "type": "error",
                 "error": {
-                    "code": "server_is_overloaded",
+                    "code": "synthetic_upstream_error",
                     "type": "service_unavailable_error",
                     "message": "synthetic overloaded",
                     "future": {"keep": true},
@@ -555,7 +584,7 @@ fn websocket_error_projection_keeps_existing_sse_policy() {
         );
         let mut raw = json!({
             "type": "error",
-            "error": {"code": "server_is_overloaded", "message": "synthetic"},
+            "error": {"code": "synthetic_upstream_error", "message": "synthetic"},
         });
         raw.as_object_mut()
             .unwrap()
@@ -611,7 +640,7 @@ async fn websocket_bare_errors_are_projected_once_and_finalize_as_failures() {
         }
         let raw = json!({
             "type": "error",
-            "error": {"code": "server_is_overloaded", "message": "synthetic overloaded"},
+            "error": {"code": "synthetic_upstream_error", "message": "synthetic overloaded"},
             "sequence_number": 2,
         });
         events.push(wire_event(Some("error"), raw.clone()));

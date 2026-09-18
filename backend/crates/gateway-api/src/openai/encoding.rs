@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use gateway_core::{
-    error::{GatewayError, GatewayErrorKind},
+    error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
     event::ProviderEvent,
 };
 use gateway_protocol::openai::{
@@ -13,7 +13,7 @@ use gateway_protocol::openai::{
 use serde_json::{Value, json};
 
 use super::{
-    error::gateway_error_contract,
+    error::{client_error_code, gateway_error_contract},
     responses::{OpenAiResponsesEncoder, ProtocolError, ProtocolErrorBody, ResponseEncodeError},
 };
 
@@ -61,6 +61,9 @@ impl HttpResponseEncoder {
         else {
             return Ok(Vec::new());
         };
+        if let Some(error) = chat_capacity_error(event) {
+            return Err(error);
+        }
         chat.push(wire.event_type(), wire.data())
             .map(|chunks| chunks.into_iter().map(chat_sse_frame).collect())
             .map_err(HttpEncodeError::Chat)
@@ -83,6 +86,9 @@ impl HttpResponseEncoder {
         events: &[ProviderEvent],
     ) -> Result<Value, HttpEncodeError> {
         if self.chat.is_some() {
+            if let Some(error) = events.iter().find_map(chat_capacity_error) {
+                return Err(error);
+            }
             return chat_response_from_events(events.iter().filter_map(|event| {
                 let wire = event
                     .wire_event()
@@ -117,7 +123,7 @@ impl HttpResponseEncoder {
     pub(in crate::openai) fn error_frame(&self, error: &GatewayError) -> Bytes {
         let (_, default_type, default_code) = gateway_error_contract(error.kind());
         let error_type = error.client_error_type().unwrap_or(default_type);
-        let code = error.client_error_code().unwrap_or(default_code);
+        let code = client_error_code(error.client_error_code().unwrap_or(default_code));
         if self.is_chat() {
             chat_sse_frame(json!({
                 "error": {
@@ -141,15 +147,57 @@ fn chat_sse_frame(value: Value) -> Bytes {
     Bytes::from(format!("data: {value}\n\n"))
 }
 
+fn chat_capacity_error(event: &ProviderEvent) -> Option<HttpEncodeError> {
+    let wire = event
+        .wire_event()
+        .filter(|wire| wire.protocol() == "openai")?;
+    if ![
+        wire.event_type(),
+        wire.data().get("type").and_then(Value::as_str),
+    ]
+    .into_iter()
+    .any(|kind| matches!(kind, Some("error" | "response.failed")))
+    {
+        return None;
+    }
+    let error = ["/response/error", "/error"]
+        .into_iter()
+        .filter_map(|path| wire.data().pointer(path))
+        .find(|error| {
+            error
+                .get("code")
+                .and_then(Value::as_str)
+                .is_some_and(|code| client_error_code(code) != code)
+        })?;
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("upstream capacity is temporarily unavailable");
+    Some(HttpEncodeError::Capacity(ClientVisibleUpstreamError::new(
+        message,
+        error.get("code").and_then(Value::as_str).map(str::to_owned),
+        error.get("type").and_then(Value::as_str).map(str::to_owned),
+    )))
+}
+
 #[derive(Debug)]
 pub(in crate::openai) enum HttpEncodeError {
     Responses(ResponseEncodeError),
     Chat(ChatConversionError),
+    Capacity(ClientVisibleUpstreamError),
 }
 
 impl HttpEncodeError {
     pub(in crate::openai) fn protocol_body(&self) -> ProtocolErrorBody {
         match self {
+            Self::Capacity(error) => ProtocolErrorBody {
+                error: ProtocolError {
+                    kind: "server_error",
+                    code: "server_error",
+                    message: error.message().to_owned(),
+                    param: None,
+                },
+            },
             Self::Responses(error) => error.protocol_body(),
             Self::Chat(error) => ProtocolErrorBody {
                 error: ProtocolError {
@@ -163,6 +211,13 @@ impl HttpEncodeError {
     }
 
     pub(in crate::openai) fn gateway_error(&self) -> GatewayError {
+        if let Self::Capacity(error) = self {
+            return GatewayError::new(
+                GatewayErrorKind::UpstreamUnavailable,
+                "upstream capacity is temporarily unavailable",
+            )
+            .with_client_visible_upstream_error(error.clone());
+        }
         GatewayError::new(
             GatewayErrorKind::UpstreamUnavailable,
             "upstream response could not be converted to the requested format",

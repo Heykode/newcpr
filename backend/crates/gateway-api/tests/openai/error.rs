@@ -12,6 +12,79 @@ use gateway_api::openai::error::{
 };
 
 #[tokio::test]
+async fn final_capacity_errors_project_http_status_without_mutating_upstream_facts() {
+    use gateway_api::openai::error::engine_error_response;
+    use gateway_core::error::ClientVisibleUpstreamResponse;
+    use gateway_core::event::ProviderResponseHeader;
+    use serde_json::{Value, json};
+
+    for code in [
+        "server_is_overloaded",
+        "slow_down",
+        "rate_limit_exceeded",
+        "invalid_request",
+    ] {
+        let capacity = matches!(code, "server_is_overloaded" | "slow_down");
+        let raw = json!({"error":{
+            "code":code, "message":"synthetic capacity failure",
+            "type":"service_unavailable_error", "future":{"keep":true}
+        }})
+        .to_string();
+        let error = EngineError::Provider(
+            ProviderError::new(
+                if capacity {
+                    ProviderErrorKind::UpstreamCapacityUnavailable
+                } else {
+                    ProviderErrorKind::RateLimited
+                },
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_client_visible_upstream_response(
+                ClientVisibleUpstreamResponse::new(
+                    429,
+                    Some(b"application/json".to_vec()),
+                    bytes::Bytes::from(raw.clone()),
+                )
+                .with_headers(vec![
+                    ProviderResponseHeader::new("retry-after", bytes::Bytes::from_static(b"2")),
+                    ProviderResponseHeader::new(
+                        "x-request-id",
+                        bytes::Bytes::from_static(b"req_capacity"),
+                    ),
+                ]),
+            ),
+        );
+        let response = engine_error_response(&error);
+        assert_eq!(response.status().as_u16(), if capacity { 503 } else { 429 });
+        assert_eq!(response.headers()["retry-after"], "2");
+        assert_eq!(response.headers()["x-request-id"], "req_capacity");
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let actual: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            actual["error"]["code"],
+            if capacity { "server_error" } else { code }
+        );
+        assert_eq!(actual["error"]["future"], json!({"keep":true}));
+        let EngineError::Provider(provider) = &error else {
+            unreachable!()
+        };
+        assert_eq!(provider.upstream_status(), Some(429));
+        assert_eq!(
+            provider
+                .client_visible_upstream_response()
+                .unwrap()
+                .body()
+                .as_ref(),
+            raw.as_bytes()
+        );
+        if !capacity {
+            assert_eq!(body.as_ref(), raw.as_bytes());
+        }
+    }
+}
+
+#[tokio::test]
 async fn key_budget_errors_preserve_limit_code_and_retry_after() {
     for code in ["key_daily_budget_exceeded", "key_weekly_budget_exceeded"] {
         let error = GatewayError::new(GatewayErrorKind::RateLimited, "key budget exhausted")

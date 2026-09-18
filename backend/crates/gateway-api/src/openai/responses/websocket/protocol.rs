@@ -6,7 +6,7 @@ use gateway_core::event::ProviderResponseHeader;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
-use crate::openai::error::{gateway_error_contract, gateway_error_from_engine};
+use crate::openai::error::{client_error_code, gateway_error_contract, gateway_error_from_engine};
 
 use super::super::{
     DecodedResponsesRequest, ProtocolErrorBody, RequestDecodeError,
@@ -152,12 +152,17 @@ pub(super) fn initial_engine_error_event(
         headers.remove("x-request-id");
         headers.remove("x-oai-request-id");
     }
-    let status = upstream
+    let mut status = upstream
         .map(|response| response.status())
         .or_else(|| provider.and_then(|error| error.upstream_status()))
         .and_then(|value| StatusCode::from_u16(value).ok())
         .filter(|value| !value.is_success() && !value.is_informational())
         .unwrap_or(default_status);
+    if provider.is_some_and(|error| {
+        error.kind() == gateway_core::error::ProviderErrorKind::UpstreamCapacityUnavailable
+    }) {
+        status = StatusCode::SERVICE_UNAVAILABLE;
+    }
     // 无原响应关联头时使用 Provider 的失败事实；不能让旧会话 ID 遮住当前失败。
     if !has_request_id(&headers)
         && let Some(request_id) = provider.and_then(|error| error.upstream_request_id())
@@ -192,9 +197,15 @@ pub(super) fn error_event(
     request_id: Option<&str>,
     mut headers: Map<String, Value>,
 ) -> String {
+    let projected_code = client_error_code(code);
+    let status = if projected_code != code {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        status
+    };
     let mut error = Map::new();
     error.insert("type".to_owned(), Value::String(error_type.to_owned()));
-    error.insert("code".to_owned(), Value::String(code.to_owned()));
+    error.insert("code".to_owned(), Value::String(projected_code.to_owned()));
     error.insert("message".to_owned(), Value::String(message.to_owned()));
     if let Some(param) = param {
         error.insert("param".to_owned(), Value::String(param.to_owned()));

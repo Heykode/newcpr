@@ -74,6 +74,14 @@ editing prior entries.
   default profile. Parsing custom text is not artifact or TLS verification.
 - Freeze one effective profile for a prepared request and its permitted fallback.
   Do not mix a newly published version header with an older opening UA.
+- The coordinator captures the optional provider-owned public profile once on
+  first provider entry and shares it across all attempts, including account
+  switches and HTTP fallback. New executions capture current settings again.
+  Snapshot default and custom selections atomically, retaining the independent
+  Desktop auxiliary profile for CLI UA. Never include authentication, cookies,
+  installation IDs, connection owners or conversation state in this snapshot.
+  Provider account rebinding and exact-continuation socket ownership remain
+  authoritative; background account operations still use their own profile path.
 - Device recovery requires complete provider/upstream user/upstream account
   identity. Never match by email or a newly generated local ID. Restore only
   device facts; preserve freshly supplied authentication material.

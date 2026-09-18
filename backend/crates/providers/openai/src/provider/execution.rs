@@ -158,9 +158,12 @@ impl CodexProvider {
             lease.installation_id(),
         );
         let events = cold_json_response_stream(ColdJsonResponse {
-            client: self.client.for_account(lease.account()).map_err(|_| {
-                provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-            })?,
+            client: self
+                .client_for_request(&context)?
+                .for_account(lease.account())
+                .map_err(|_| {
+                    provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                })?,
             response_origin: request.response_origin,
             endpoint_path: request.endpoint_path,
             body,
