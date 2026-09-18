@@ -1,6 +1,9 @@
 //! Provider-owned opaque turn-state storage boundary.
 
-use std::{fmt, time::SystemTime};
+use std::{
+    fmt,
+    time::{Duration, SystemTime},
+};
 
 use futures::future::BoxFuture;
 
@@ -36,6 +39,7 @@ impl fmt::Debug for OpaqueTurnState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderTurnStateValue {
     state: OpaqueTurnState,
+    /// Provider-local capture clock; the historical field name is not an upstream claim.
     issued_at: SystemTime,
     expires_at: SystemTime,
 }
@@ -215,7 +219,26 @@ pub struct ProviderTurnStateAnomaly {
     pub observed_at: SystemTime,
 }
 
+#[derive(Debug, Clone)]
+pub struct ProviderTurnStatePromotion {
+    pub account_id: ProviderAccountId,
+    pub expected_revision: CredentialRevision,
+    pub expected_active_version: u64,
+    pub upstream_model: UpstreamModelId,
+    pub normal_length: u16,
+    pub observed_at: SystemTime,
+    pub minimum_remaining: Duration,
+}
+
 pub trait ProviderTurnStatePort: Send + Sync {
+    /// Promote a still-valid standby atomically without restarting its capture clock.
+    fn promote_standby(
+        &self,
+        _promotion: ProviderTurnStatePromotion,
+    ) -> BoxFuture<'_, Result<Option<ProviderTurnStateRecord>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn cancel_refresh<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,

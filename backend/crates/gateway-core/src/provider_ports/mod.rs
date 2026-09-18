@@ -30,8 +30,9 @@ pub mod egress;
 mod turn_state;
 pub use turn_state::{
     NoopProviderTurnStatePort, OpaqueTurnState, ProviderTurnStateAnomaly,
-    ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStateRecord,
-    ProviderTurnStateRefreshStatus, ProviderTurnStateSlot, ProviderTurnStateValue,
+    ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStatePromotion,
+    ProviderTurnStateRecord, ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
+    ProviderTurnStateValue,
 };
 
 const MAX_PENDING_FLOW_TTL: Duration = Duration::from_secs(30 * 60);

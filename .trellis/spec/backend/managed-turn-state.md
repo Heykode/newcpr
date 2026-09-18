@@ -18,11 +18,12 @@
 
 ## Observation and Storage
 
-- Parse the opaque value's Fernet-shaped envelope, not its plaintext. Timestamp
-  and length checks are local policy, not cryptographic verification or proof of
-  an upstream risk classification.
-- Reject malformed, unknown-shape, future-issued or expired observations. Only
-  the explicitly recognized degraded shape can request standby promotion.
+- Validate the case-sensitive `gAAAAA` prefix and plan-specific encoded length.
+  Do not decode the opaque envelope or infer its upstream expiry. Locally assign
+  a first-capture timestamp and a one-hour lifetime; these are policy, not proof
+  of acceptance, cryptographic validity or upstream lifetime.
+- Unknown prefixes/shapes cannot replace stored values. Only the explicitly
+  recognized degraded shape can request standby promotion.
 - Compare the final reported model before learning a completed/failed response's
   state. Preserve the existing immediate per-client state forwarding separately.
   Cancellation or missing state cannot invalidate stored active state.
@@ -30,10 +31,18 @@
   process-local, account/model-coalesced queue, bounded to 256 keys, and a Host
   daemon with cancellation and a one-second timeout per store operation.
   Queue saturation drops supplemental observations, not user requests.
-- Repeated identical active values never increment `state_version`. Older
+- Repeated identical active values never increment `state_version` or restart
+  expiry. An echoed standby also retains its original capture/expiry. Older
   candidates cannot replace newer active values. Preserve valid old active as
   standby on replacement; standby-only writes do not advance the version.
-- Promote only a standby valid at the observation time. Plan-shape changes clear
+  Deduplication covers the persisted slots, not a permanent history of all
+  previously discarded values. Do not claim detection of arbitrary historical
+  replays or an upstream-guaranteed lifetime.
+- Rejection promotes only a standby valid at the observation time. Proactive
+  refresh promotes a standby only when it has over ten minutes left and active
+  has at most ten minutes left (or is absent). Check version, policy, credential,
+  and remaining lifetime under the row lock; preserve the promoted clock.
+  Plan-shape changes clear
   both slots and the old observed length, and advance the version.
 - State reads and writes are fenced by credential revision. Writes lock current
   global/model policy and account opt-in before locking the state row. A rotated
@@ -47,7 +56,7 @@
   a normal echo at the same version.
 - Normal replacement leaves refresh status pending until a new standby is
   stored. Repeated identical values do not clear this pending work or restart
-  the token's issuance clock.
+  the token's local capture clock. Existing pre-upgrade expiry is never extended.
 - Opaque values must not appear in Debug, ordinary logs or admin list responses.
 
 ## Request-Level Admin Diagnostics
@@ -98,27 +107,37 @@
 - The scheduled leader cycle discovers targets; a separately supervised daemon
   drains a bounded, coalescing FIFO. Discovery resumes fairly after saturation.
   Passive active replacement wakes acquisition without waiting for discovery.
-- Up to 32 account/model tasks run concurrently per replica. A key never overlaps
-  itself; pending followups stay coalesced. A shared 100-probe semaphore bounds
-  transport resources without sharing per-key acquisition budgets.
-- Each active or standby acquisition has its own 500-attempt budget. Batch sizes
-  are 1, 10, 20, ..., capped at 100, with the last batch truncated to the remainder.
-  A smaller IPv6 pool is cycled rather than silently shortening the budget. Only
-  configured enabled addresses are used; 500 globally unique addresses cannot be
-  promised when fewer are configured.
+- Account/model tasks run independently without the former 32-task cap. A key
+  never overlaps itself. Running-key wakeups coalesce separately so they cannot
+  fill the bounded pending discovery queue; restart clears stale running ownership.
+- Urgent acquisition sends one probe, then batches of ten until success or
+  invalidation. Healthy-active standby acquisition sends one immediately, then
+  one every six seconds after a miss. Re-evaluate current state/expiry between
+  batches and during standby waits; active changes restart immediate refill.
+  There is no 500-attempt or whole-task lifetime limit.
+- The IPv6 transport owns a separate 240-connection guard, not the former
+  collector-level 100-probe semaphore. It is not an account business limit.
+  Waiting for capacity spends no per-request timeout. Each probe creates a
+  non-reused source-bound client. Cycle shuffled enabled addresses; do not
+  promise unlimited unique addresses from a finite pool.
 - Never read/acquire business scheduling leases, advance rotation, write affinity
   or update business account feedback. Business load cannot starve maintenance.
 - Individual probes are bounded to thirty seconds, excluding semaphore waiting.
-  There is no whole-task ten-minute cutoff. HTTP errors, missing states and unusable
-  candidates continue until success or 500 attempts.
+  HTTP errors, missing states and unusable candidates continue on the applicable
+  urgent/background cadence without special 429 backoff or an attempt budget.
   Poll account/revision/policy every second and recheck before each batch and
   persistence. Switch disable, model removal or credential replacement cancels
   outstanding probes. Cancellation performs revision-fenced status cleanup even
   after opt-out; it cannot finish a newer credential's task. Store unavailability
   prevents starting collection.
+- Probes accept HTTP 200 and eligible headers only, then drop both success and
+  error bodies without draining them or checking SSE/model output. This is
+  capture, not proof that generation completed. Business response processing
+  and its final-model observation checks remain unchanged.
 - Stop a batch at the first accepted fresh state and cancel remaining probes.
-  A repeated active/standby is not a new acquisition. Require over ten minutes
-  of remaining lifetime for active and over thirty minutes for standby.
+  A repeated active/standby is not a new acquisition. No decoded candidate-age
+  gates remain. Both slots use the ten-minute refresh threshold; a newly
+  captured distinct value receives its local one-hour clock.
 - These are Tokio tasks under the existing Host, not dedicated per-account OS
   threads or resource-isolated processes. Their network/CPU cost still exists.
 - The explicit local rejection-code allowlist is `invalid_turn_state`,
@@ -132,7 +151,7 @@
   never expose production test hooks or exempt a directory.
 - PostgreSQL tests must actually run: enable CI fail-on-missing-environment
   checks and supply isolated test-schema endpoints.
-- Cover concurrent duplicate observations, older values, expiry/future time,
+- Cover concurrent duplicate observations, older values, local capture/expiry,
   plan reset, model/account separation, bounded observation handling, exact WS
   ownership across version updates and switch disable, and mixed-provider UI.
 

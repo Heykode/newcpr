@@ -13,6 +13,7 @@ use gateway_core::{
 };
 use reqwest::Client;
 use tokio::net::{TcpSocket, TcpStream, lookup_host};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::{
     profile::CodexWireProfile,
@@ -23,6 +24,8 @@ const MAX_CACHED_HTTP_CLIENTS: usize = 128;
 const MAX_ACCOUNT_HTTP_CLIENTS: usize = 8;
 const SOURCE_HEALTH_TTL: Duration = Duration::from_secs(30);
 const SOURCE_FAILURE_COOLDOWN: Duration = Duration::from_secs(15);
+// Dedicated probe connections, never business leases or account concurrency.
+const MAX_PROBE_CONNECTIONS: usize = 240;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CodexEgressError {
@@ -88,9 +91,19 @@ pub struct CodexEgressRuntime {
     state: RwLock<Option<Arc<ProviderEgressConfig>>>,
     clients: Mutex<VecDeque<CachedClient>>,
     source_health: Mutex<HashMap<Ipv6Addr, SourceHealth>>,
+    probe_connections: Semaphore,
 }
 
 impl CodexEgressRuntime {
+    pub(crate) async fn acquire_probe_connection(
+        &self,
+    ) -> Result<SemaphorePermit<'_>, &'static str> {
+        self.probe_connections
+            .acquire()
+            .await
+            .map_err(|_| "transport_closed")
+    }
+
     /// Return a randomized snapshot of enabled local sources for a maintenance task.
     pub(crate) fn probe_sources(&self) -> Result<Vec<Ipv6Addr>, CodexEgressError> {
         let mut sources = self
@@ -148,6 +161,7 @@ impl CodexEgressRuntime {
             state: RwLock::new(Some(state)),
             clients: Mutex::new(VecDeque::new()),
             source_health: Mutex::new(HashMap::new()),
+            probe_connections: Semaphore::new(MAX_PROBE_CONNECTIONS),
         }))
     }
 
