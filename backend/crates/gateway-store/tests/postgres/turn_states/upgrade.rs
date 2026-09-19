@@ -65,8 +65,13 @@ async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
             .await
             .unwrap();
     assert_eq!(proxy, None);
+    // A failed SQLx migration can retain its session advisory lock. Production
+    // closes the migration pool on error; discard this test connection likewise.
+    let mut connection = database.pool.acquire().await.unwrap();
+    let downgrade = old.run(&mut *connection).await;
+    connection.close().await.unwrap();
     assert!(matches!(
-        old.run(&database.pool).await,
+        downgrade,
         Err(sqlx::migrate::MigrateError::VersionMissing(28 | 29))
     ));
     super::super::TEST_MIGRATOR
