@@ -96,7 +96,7 @@ class MigrationRolloutTests(unittest.TestCase):
             scripts.append(script)
             if script.startswith("pg_dump"):
                 kwargs["stdout"].write(b"synthetic archive")
-            return subprocess.CompletedProcess([], 0, stdout=b"")
+            return subprocess.CompletedProcess([], 0, stdout=b"1024")
         with patch.object(migration_backup, "database_container", return_value="db"), \
                 patch.object(migration_backup, "check_schema"), \
                 patch.object(migration_backup, "database_command", side_effect=command):

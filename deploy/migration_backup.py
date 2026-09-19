@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 from urllib.parse import unquote, urlsplit
@@ -67,6 +68,25 @@ def prepare(worker):
     container = database_container(worker.old, worker.protected)
     worker.migration_database = container
     check_schema(container, worker.upgrade["before"])
+    mounts = [mount for mount in worker.old.get("Mounts", [])
+              if mount["Destination"] == "/app/.runtime/data" and mount["Type"] == "bind"]
+    if len(mounts) != 1:
+        raise RuntimeError("Migration backup requires a single application data bind mount")
+    data = Path(mounts[0]["Source"])
+    if not data.is_dir() or data.is_symlink():
+        raise RuntimeError("Application data mount is not a regular directory")
+    size = database_command(
+        container,
+        'psql -X -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At '
+        '-v ON_ERROR_STOP=1 -c "select pg_database_size(current_database())"',
+        stdout=subprocess.PIPE,
+    )
+    if size.returncode:
+        raise RuntimeError("Cannot estimate database backup space")
+    runtime_size = sum(path.stat().st_size for path in data.rglob("*")
+                       if not path.is_symlink() and path.is_file())
+    if shutil.disk_usage(worker.backup).free < int(size.stdout) + runtime_size + 1024**3:
+        raise RuntimeError("Insufficient free space for migration backups and safety reserve")
     archive = worker.backup / "database.dump"
     with archive.open("xb") as output:
         result = database_command(
@@ -85,13 +105,6 @@ def prepare(worker):
         )
     if result.returncode:
         raise RuntimeError("Database backup could not be read in full")
-    mounts = [mount for mount in worker.old.get("Mounts", [])
-              if mount["Destination"] == "/app/.runtime/data" and mount["Type"] == "bind"]
-    if len(mounts) != 1:
-        raise RuntimeError("Migration backup requires a single application data bind mount")
-    data = Path(mounts[0]["Source"])
-    if not data.is_dir() or data.is_symlink():
-        raise RuntimeError("Application data mount is not a regular directory")
     runtime = worker.backup / "runtime-data.tar"
     # This is an online copy, not an atomic application/database recovery point.
     with tarfile.open(runtime, "w") as output:
