@@ -682,21 +682,109 @@ async fn relogin_auto_only_recovers_expired_credentials_and_locks_workspace() {
 
 #[tokio::test]
 async fn relogin_does_not_recover_generic_errors_disabled_or_non_expired_accounts() {
-    for variant in 0..4 {
+    for variant in 0..3 {
         let mut record = account(true);
         match variant {
             0 => record.enabled = false,
             1 => record.credential_state = CredentialState::Ready,
             2 => record.last_error_reason = None,
-            _ => {
-                record.has_refresh_token = true;
-                record.last_error_reason = Some(AccountErrorReason::AccessTokenExpired);
-            }
+            _ => unreachable!("fixed relogin regression variants"),
         }
         let h = Harness::new(vec![record]).await;
         h.import("test@example.invalid").await;
         h.cycle().await;
         assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn relogin_auto_recovers_access_token_expiry_with_refresh_token_when_totp_is_available() {
+    let mut record = account(true);
+    record.has_refresh_token = true;
+    record.last_error_reason = Some(AccountErrorReason::AccessTokenExpired);
+    let h = Harness::new(vec![record]).await;
+    let id = h.import("test@example.invalid").await;
+
+    h.cycle().await;
+
+    assert!(h.row(&id).await.synced_at.is_some());
+    assert_eq!(
+        *h.provider.relogin_requests.lock().unwrap(),
+        vec![Some("workspace-team".into())]
+    );
+    assert_eq!(h.accounts.audit_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn relogin_access_token_expiry_still_requires_valid_material_and_automatic_enabled() {
+    for variant in 0..4 {
+        let mut record = account(true);
+        record.has_refresh_token = true;
+        record.last_error_reason = Some(AccountErrorReason::AccessTokenExpired);
+        let h = Harness::new(vec![record]).await;
+        if variant != 0 {
+            let id = h.import("test@example.invalid").await;
+            match variant {
+                1 => h
+                    .store
+                    .rows
+                    .lock()
+                    .unwrap()
+                    .get_mut(&id)
+                    .unwrap()
+                    .mfa_secret
+                    .clear(),
+                2 => {
+                    h.services
+                        .relogin()
+                        .automatic(std::slice::from_ref(&id), false)
+                        .await
+                        .unwrap();
+                }
+                3 => {
+                    h.services
+                        .relogin()
+                        .configure(ReloginSettings {
+                            concurrency: 1,
+                            paused: true,
+                        })
+                        .await
+                        .unwrap();
+                }
+                _ => unreachable!("fixed relogin regression variants"),
+            }
+        }
+
+        h.cycle().await;
+
+        assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+        assert!(h.accounts.audit_requests().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn relogin_access_token_expiry_does_not_overwrite_recovered_or_rotated_credentials() {
+    for recovered in [true, false] {
+        let mut record = account(true);
+        record.has_refresh_token = true;
+        record.last_error_reason = Some(AccountErrorReason::AccessTokenExpired);
+        let h = Harness::new(vec![record.clone()]).await;
+        let id = h.import("test@example.invalid").await;
+        *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_millis(100);
+        let task = h.task.clone();
+        let running = tokio::spawn(async move { task.run_cycle(cycle_context()).await });
+        h.wait_running().await;
+        if recovered {
+            record.credential_state = CredentialState::Ready;
+            record.last_error_reason = None;
+        } else {
+            record.credential_revision = revision(record.credential_revision.get() + 1);
+        }
+        h.accounts.set_accounts(vec![record]);
+        running.await.unwrap().unwrap();
+
+        assert!(h.accounts.audit_requests().is_empty());
+        assert!(h.row(&id).await.synced_at.is_none());
     }
 }
 
