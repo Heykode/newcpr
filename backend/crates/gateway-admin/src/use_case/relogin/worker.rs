@@ -10,13 +10,15 @@ use gateway_core::{
 };
 use std::time::Duration;
 
+const RELOGIN_SCAN_INTERVAL: Duration = Duration::from_secs(2);
+
 pub(crate) fn contribution(
     service: Arc<DefaultReloginService>,
 ) -> Result<WorkerContribution, AdminError> {
     let id = WorkerId::try_new(WorkerKind::OAuthRefresh, "admin_relogin")
         .map_err(|_| AdminError::internal("重登 worker ID 不合法"))?;
     let schedule = WorkerSchedule::try_new(
-        Duration::from_secs(2),
+        RELOGIN_SCAN_INTERVAL,
         Duration::from_secs(2),
         Duration::from_secs(30),
         Duration::from_secs(600),
@@ -52,11 +54,11 @@ impl ScheduledTask for ReloginWorker {
 }
 
 pub fn needs_relogin(account: &AccountRecord) -> bool {
+    // 调用方筛选有效 2FA 和自动重登开关；refresh token 不应阻止失效重登。
+    // OAuth refresh 仍可恢复账号，推送前会重查账号状态和凭据版本。
     account.enabled
         && account.authentication_kind == "oauth"
         && account.credential_state == CredentialState::Expired
-        && !(account.has_refresh_token
-            && account.last_error_reason == Some(AccountErrorReason::AccessTokenExpired))
         && matches!(
             account.last_error_reason,
             Some(AccountErrorReason::AccessTokenExpired | AccountErrorReason::CredentialExpired)
