@@ -24,6 +24,7 @@ pub struct SnapshotRuntimeSettings {
     pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
+    pub turn_state_probe_proxy: Option<gateway_core::account::OutboundProxy>,
     pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -165,7 +166,8 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             .with_openai_turn_state_policy(
                 data.settings.turn_state_injection_enabled,
                 data.settings.turn_state_models,
-            );
+            )
+            .with_turn_state_probe_proxy(data.settings.turn_state_probe_proxy);
             let client_policies = data
                 .client_api_keys
                 .into_iter()
@@ -322,6 +324,7 @@ async fn load_settings(
             i64,
             bool,
             Vec<String>,
+            Option<String>,
         ),
     >(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
@@ -329,7 +332,8 @@ async fn load_settings(
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, disable_fast,
                 responses_max_decompressed_body_bytes, turn_state_injection_enabled,
-                turn_state_models
+                turn_state_models,
+                (select proxy_url from outbound_proxies where id = turn_state_probe_proxy_id)
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -357,6 +361,17 @@ async fn load_settings(
             responses_max_decompressed_body_bytes: to_u64(row.11)?,
             turn_state_injection_enabled: row.12,
             turn_state_models: row.13,
+            turn_state_probe_proxy: row
+                .14
+                .map(|value| {
+                    gateway_core::account::OutboundProxy::parse(&value).map_err(|_| {
+                        StoreError::InvalidData {
+                            entity: "runtime settings",
+                            message: "invalid State probe proxy".to_owned(),
+                        }
+                    })
+                })
+                .transpose()?,
         },
     ))
 }

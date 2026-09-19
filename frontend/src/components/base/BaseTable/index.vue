@@ -128,8 +128,13 @@ function rowBackgroundClass(row: Row, index: number) {
   return 'bg-(--cp-table-row-bg)'
 }
 
-function rowClass() {
-  return [bodyRowClass.value, 'hover:[&>td]:bg-(--cp-table-row-hover-bg)']
+function rowClass(row: Row, index: number) {
+  return [
+    bodyRowClass.value,
+    isRowSelected(row, index)
+      ? 'hover:[&>td]:bg-(--cp-table-row-selected-bg)'
+      : 'hover:[&>td]:bg-(--cp-table-row-hover-bg)',
+  ]
 }
 
 function stickyClass(column: ResolvedTableColumn<Row>, header = false) {
@@ -267,12 +272,12 @@ defineExpose({
           </thead>
           <tbody>
             <template v-for="(row, index) in displayRows" :key="getRowKey(row, index)">
-              <tr :class="rowClass()" :data-row-key="getRowKey(row, index)" :aria-selected="isRowSelected(row, index) || undefined">
+              <tr :class="rowClass(row, index)" :data-row-key="getRowKey(row, index)" :aria-selected="isRowSelected(row, index) || undefined">
                 <td
                   v-for="(column, columnIndex) in computedColumns"
                   :key="column.key"
                   :data-column-key="column.key"
-                  class="min-w-0"
+                  class="min-w-0 transition-[background-color] duration-150 ease-out motion-reduce:transition-none"
                   :class="[
                     column.paddingClass ?? cellPaddingClass,
                     bodyTextClass,

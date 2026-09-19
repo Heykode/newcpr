@@ -9,7 +9,9 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
+import TurnStateProbeProxyField from './TurnStateProbeProxyField.vue'
 
+defineProps<{ disabled?: boolean }>()
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
 const refreshConcurrency = defineModel<string>('refreshConcurrency', { required: true })
@@ -18,6 +20,7 @@ const responsesMaxDecompressedBodyBytes = defineModel<string>('responsesMaxDecom
 const disableFast = defineModel<boolean>('disableFast', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
 const turnStateModelsText = defineModel<string>('turnStateModelsText', { required: true })
+const turnStateProbeProxyId = defineModel<string>('turnStateProbeProxyId', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
 const customLocation = computed({
@@ -175,6 +178,7 @@ const tuningValues = {
         <BaseSwitch v-model="turnStateInjectionEnabled" label="OpenAI Turn State 注入" />
       </div>
       <BaseForm class="mt-4 max-w-6xl">
+        <TurnStateProbeProxyField v-model="turnStateProbeProxyId" :disabled="disabled" />
         <BaseFormItem
           label="维护模型名单"
           description="使用逗号或换行分隔，按路由后的上游模型匹配"

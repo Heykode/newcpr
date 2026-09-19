@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
@@ -25,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      reused: ${{ steps.reuse.outputs.reused == 'true' }}
       backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
       frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
       container: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.container == 'true' }}
@@ -34,6 +36,18 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+
+      - name: Reuse matching PR validation after merge
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          python3 release/verified_image.py resolve \
+            --repository "$REPOSITORY" --commit "$COMMIT" \
+            --output "$RUNNER_TEMP/cpr-reused-image.json" --optional
 
       - name: Detect affected checks
         if: github.event_name != 'workflow_dispatch'
@@ -57,9 +71,12 @@ jobs:
               - '.github/actions/**'
               - '.github/workflows/_container.yml'
               - '.github/workflows/ci.yml'
+              - 'release/verified_image.py'
+              - 'release/deploy.py'
 
   quality:
     needs: changes
+    if: needs.changes.outputs.reused != 'true'
     uses: ./.github/workflows/_quality.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -68,10 +85,57 @@ jobs:
 
   container:
     needs: changes
-    if: needs.changes.outputs.container == 'true'
+    if: needs.changes.outputs.container == 'true' && needs.changes.outputs.reused != 'true'
     permissions:
       contents: read
       security-events: write
     uses: ./.github/workflows/_container.yml
     with:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      save_image: true
+
+  deployment-tools:
+    needs: changes
+    if: needs.changes.outputs.reused != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Test verified image deployment
+        run: |
+          python3 -m unittest discover -s release/tests -p 'test_*.py' -v
+          python3 -m venv "$RUNNER_TEMP/deployment-tests"
+          "$RUNNER_TEMP/deployment-tests/bin/pip" install -r deploy/rollout-requirements.txt
+          "$RUNNER_TEMP/deployment-tests/bin/python" -m unittest discover -s deploy/tests -p 'test_*.py' -v
+
+  validated:
+    if: always()
+    needs: [changes, quality, container, deployment-tools]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require reuse evidence or successful applicable checks
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          REUSED: ${{ needs.changes.outputs.reused }}
+          QUALITY: ${{ needs.quality.result }}
+          CONTAINER_REQUIRED: ${{ needs.changes.outputs.container }}
+          CONTAINER: ${{ needs.container.result }}
+          DEPLOYMENT: ${{ needs.deployment-tools.result }}
+        run: |
+          set -euo pipefail
+          test "$CHANGES" = success
+          if [ "$REUSED" = true ]; then
+            test "$QUALITY" = skipped
+            test "$CONTAINER" = skipped
+            test "$DEPLOYMENT" = skipped
+          else
+            test "$QUALITY" = success
+            test "$DEPLOYMENT" = success
+            if [ "$CONTAINER_REQUIRED" = true ]; then
+              test "$CONTAINER" = success
+            fi
+          fi

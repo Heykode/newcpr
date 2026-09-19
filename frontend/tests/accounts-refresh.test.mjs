@@ -194,6 +194,43 @@ test('initial and ordinary list loads block manual and automatic refresh until s
   assert.deepEqual(h.errors, [])
 })
 
+test('active State collection speeds up the existing list timer and stops on readiness or opt-out', async (t) => {
+  const h = createHarness(t)
+  const result = accountResponse()
+  Object.assign(result.items[0], {
+    enabled: true,
+    turnStateInjectionEnabled: true,
+    turnState: { enabled: true, models: [{ refreshStatus: 'queued' }] },
+  })
+  await mountLoaded(h, result)
+  const delay = () => {
+    assert.equal(h.timers.size, 1)
+    return [...h.timers.values()][0].delay
+  }
+  assert.equal(delay(), 3_000)
+  const activeTimer = [...h.timers.values()][0]
+  const refresh = activeTimer.callback()
+  assert.equal(h.requests.length, 2)
+  await activeTimer.callback()
+  assert.equal(h.requests.length, 2, 'fast refresh must not overlap')
+  const updated = structuredClone(result)
+  updated.items[0].turnState.models[0].refreshStatus = 'ready'
+  await h.settle(updated)
+  await refresh
+  assert.equal(delay(), 30_000)
+  for (const changes of [
+    { enabled: false },
+    { status: 'error' },
+    { turnStateInjectionEnabled: false },
+    { turnState: { ...result.items[0].turnState, enabled: false } },
+  ]) {
+    const request = h.query.refreshAccounts()
+    await h.settle({ ...result, items: [{ ...result.items[0], ...changes }] })
+    await request
+    assert.equal(delay(), 30_000)
+  }
+})
+
 test('manual and automatic refresh share one timer and never overlap or queue repeated clicks', async (t) => {
   const h = createHarness(t)
   const { query, requests } = h

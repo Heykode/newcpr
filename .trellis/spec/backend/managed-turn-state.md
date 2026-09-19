@@ -18,29 +18,34 @@
 
 ## Observation and Storage
 
-- Validate the case-sensitive `gAAAAA` prefix and plan-specific encoded length.
-  Do not decode the opaque envelope or infer its upstream expiry. Locally assign
-  a first-capture timestamp and a one-hour lifetime; these are policy, not proof
-  of acceptance, cryptographic validity or upstream lifetime.
-- Unknown prefixes/shapes cannot replace stored values. Only the explicitly
-  recognized degraded shape can request standby promotion.
-- Compare the final reported model before learning a completed/failed response's
-  state. Preserve the existing immediate per-client state forwarding separately.
-  Cancellation or missing state cannot invalidate stored active state.
+- Validate the URL-safe base64 envelope, version, cipher-block count and timestamp.
+  Personal/team plans use ten/twelve blocks; optional padding does not change qualification.
+  Team shape includes `team`, `business`, `self_serve_business_prolite` and
+  `self_serve_business_usage_based`, case-insensitively after trimming; keep the
+  provider qualifier and store admin projection aligned.
+  Estimate expiry as issuance plus one hour, tolerating thirty seconds of future clock skew.
+  This cannot prove signature validity, upstream lifetime or quality.
+- Probe publication requires HTTP 200 and explicit SSE `response.completed`.
+  Failures, including a later error in the same stream, win over completion.
+  Do not reject solely because the reported response model differs.
+- Business observations never publish candidates. Missing State does not invalidate.
+  Two consecutive suspect observations for the injected version invalidate it;
+  a healthy observation resets one strike. Explicit State rejection is immediate.
 - Passive learning never awaits PostgreSQL on the streaming path. Use the
   process-local, account/model-coalesced queue, bounded to 256 keys, and a Host
   daemon with cancellation and a one-second timeout per store operation.
   Queue saturation drops supplemental observations, not user requests.
 - Repeated identical active values never increment `state_version` or restart
   expiry. An echoed standby also retains its original capture/expiry. Older
-  candidates cannot replace newer active values. Preserve valid old active as
+  candidates cannot replace newer active values. Do not recycle old active as
   standby on replacement; standby-only writes do not advance the version.
   Deduplication covers the persisted slots, not a permanent history of all
   previously discarded values. Do not claim detection of arbitrary historical
   replays or an upstream-guaranteed lifetime.
-- Rejection promotes only a standby valid at the observation time. Proactive
-  refresh promotes a standby only when it has over ten minutes left and active
-  has at most ten minutes left (or is absent). Check version, policy, credential,
+- Rejection promotes only a standby with more than one minute remaining.
+  Proactive refresh starts at fifteen minutes remaining and promotes a newer
+  standby only when active has at most one minute left (or is absent).
+  Check version, policy, credential,
   and remaining lifetime under the row lock; preserve the promoted clock.
   Plan-shape changes clear
   both slots and the old observed length, and advance the version.
@@ -49,13 +54,20 @@
   `credential_revision` stores this binding generation from migration 0027.
   Writes lock current
   global/model policy and account opt-in before locking the state row. A rotated
-  credential cannot inherit the previous credential's active or standby.
+  credential cannot accept the previous credential's late writes.
 - Identical accepted Cookie sets do not write. Provider-verified identical
-  credentials or `__cf_bm`-only changes may preserve binding, clocks, slots and
-  pool version. Other cookies, tokens, principal/device/client/scope changes
-  remain hard invalidations. Only trusted provider code can request preservation;
-  ordinary import/rotation paths default to hard invalidation. Generic credential
-  CAS and device locking remain unchanged.
+  credentials or response Cookie material changes may preserve binding, clocks,
+  slots and pool version. Token changes still advance the authentication binding.
+  ProviderDeviceCodec authorizes same-owner retention independently: require a
+  resolved principal, same installation/client/scope, and Store-verified nonempty
+  user/workspace and unchanged normalized plan. Rebind slots in the credential
+  transaction from the immediately previous binding to the new binding; bump
+  state_version, stop old refresh ownership and discard expired slots, without
+  renewing any clock or clearing State rejection evidence. Apply this to Core
+  refresh CAS, Store CAS, admin JSON upsert and admin OAuth/relogin rotation.
+  Unknown codecs/identity/plan deny retention. Cookie soft CAS retains its cheap
+  path and does not run State retention queries. Generic credential CAS and
+  device locking remain unchanged.
 - Response State observations always use the original request lease's binding,
   not the account reloaded after response Cookie persistence. Maintenance checks
   binding ownership but reloads current request material between batches when
@@ -71,11 +83,11 @@
   valid standby exists, clear the rejected active and block new chains until acquisition.
 - Normal passive observations carry the same injected-version fence. A late
   normal echo must not restore a rejected active or undo standby promotion.
-  Coalescing prefers newer credential/version observations, then rejection over
-  a normal echo at the same version.
-- Normal replacement leaves refresh status pending until a new standby is
-  stored. Repeated identical values do not clear this pending work or restart
-  the token's local capture clock. Existing pre-upgrade expiry is never extended.
+  Coalescing prefers newer credential/version observations and retains two ordered outcomes.
+  Two strikes or explicit rejection cannot be erased by a later same-version echo.
+- Active publication finishes acquisition immediately. A healthy active does not
+  trigger permanent standby refill. Save capture timestamps independently of issue/expiry.
+  Publication carries the version seen before the batch, not a newly read version.
 - Opaque values must not appear in Debug, ordinary logs or admin list responses.
 
 ## Account-List Safe Projection
@@ -83,13 +95,14 @@
 - The authenticated account list may expose only per-model control metadata:
   refresh status, active/standby presence, character count and local expiry.
   Preserve the existing required/ready model fields for compatible clients.
-- Project a slot only when global/account policy, enabled status, model,
-  State binding revision, plan length, issuance and local expiry all still match.
+- Cached slot projection requires model, binding revision, plan shape, issuance and
+  expiry to match. Off/error accounts can still inspect these cached clocks.
   Invalid, expired or mismatched rows appear as missing slots; never expose the
   opaque value, its prefix, preview, hash or any reversible derivative.
-- `readyModels` remains active-only scheduling readiness. The detailed model
+- `readyModels` additionally requires enabled policy/account, healthy credentials,
+  quota, no shared cooldown, and more than one minute remaining. The detailed model
   list may include a valid standby and the current refresh status so the UI can
-  distinguish ready, standby refill and acquisition. Slot counts are display
+  distinguish ready, queued, collecting, cooldown and awaiting switch. Slot counts are display
   metadata, not proof of upstream acceptance or future validity.
 - Keep configured model order from the runtime allowlist. PostgreSQL regression
   must cover active-only and active-plus-standby projection together with the
@@ -127,6 +140,11 @@
 - Model/version partitions new chains. Exact response ownership still resolves
   the original physical connection using the existing account, downstream Key,
   conversation, route and response-ID boundaries, including after policy disable.
+- WS opening profiles additionally partition by a full digest of authentication
+  headers, never raw Tokens. This applies to unmanaged new chains too, so keeping
+  an unchanged State cannot reuse a previous Token's connection. It does not
+  alter thread or prompt-cache identity. Exact owners bypass opening-profile
+  changes under the existing continuation lifetime/capacity rules.
 - Never globally evict an account's sockets on a state update. Previous owners
   remain under ordinary pool capacity and lifecycle rules; active continuations
   must not be migrated merely to apply a new state.
@@ -140,40 +158,90 @@
 
 ## Maintenance Isolation
 
+- `turnStateProbeProxyId` is a nullable saved-proxy reference: null selects IPv6,
+  omission during settings replacement preserves selection. Resolve credentials
+  from the catalog at snapshot compilation; never duplicate them into settings.
+  A selected proxy must have passed its catalog test. The FK restricts deletion.
+  Take the runtime settings lock before the proxy row lock, matching proxy edits.
+- Proxy-mode probes need no IPv6 runtime and never advance its cursor. Cache one
+  dedicated HTTP client keyed by proxy value and custom-CA configuration, separate
+  from business clients. Use HTTP/1, no idle pool and `Connection: close` for a new
+  connection on every probe. Keep TLS validation; never copy insecure TLS options.
+  New connections do not guarantee a different provider-assigned public IP.
+- Freeze the resolved proxy per collector; recheck policy on dispatch, response
+  processing and the cancellation watcher. Changed egress requeues collection,
+  but does not invalidate usable State. These provider-side checks are not a
+  database-atomic proxy-revision fence. Identity/policy/state-version fences in
+  the store remain authoritative. Proxy failures must never fall back to direct
+  or account business egress.
+- The settings UI persists only the proxy ID and preserves it when catalog loading
+  fails. Disabled/untested catalog entries cannot be newly selected.
+
 - The scheduled leader cycle discovers targets; a separately supervised daemon
   drains a bounded, coalescing FIFO. Discovery resumes fairly after saturation.
   Passive active replacement wakes acquisition without waiting for discovery.
-- Account/model tasks run independently without the former 32-task cap. A key
-  never overlaps itself. Running-key wakeups coalesce separately so they cannot
-  fill the bounded pending discovery queue; restart clears stale running ownership.
-- Urgent acquisition sends one probe, then batches of ten until success or
-  invalidation. Healthy-active standby acquisition sends one immediately, then
-  one every six seconds after a miss. Re-evaluate current state/expiry between
-  batches and during standby waits; active changes restart immediate refill.
-  There is no 500-attempt or whole-task lifetime limit.
-- The IPv6 transport owns a separate 240-connection guard, not the former
-  collector-level 100-probe semaphore. It is not an account business limit.
-  Waiting for capacity spends no per-request timeout. Each probe creates a
-  non-reused source-bound client. Cycle shuffled enabled addresses; do not
-  promise unlimited unique addresses from a finite pool.
+- Existing account-facts callbacks after import, rotation and relogin also queue
+  eligible targets immediately. Preserve a follow-up when the old binding's task
+  is still running; callbacks must not create a second collector or bypass admission.
+  Periodic discovery remains the fallback for automatic recovery and missed callbacks.
+- At most five distinct collecting accounts run concurrently, with FIFO dynamic refill.
+  Needed models within an admitted account may run concurrently; keys never overlap.
+  One completed model cannot release its account's slot while siblings are running.
+  Running-key wakeups coalesce separately; restart clears stale running ownership.
+- Each model uses batches of 1,5,10,10,... with at most ten concurrent requests per batch,
+  sequential batches and no 500-request or whole-task lifetime limit.
+  Do not add a hidden model-task cap or six-second pacing. Recheck eligibility
+  before each probe and between batches. Misses may hold the five slots indefinitely.
+- Each request allocates one enabled/nonblocked source from the process-wide
+  sequential IPv6 cursor, independently of business egress. Each probe creates
+  a source-bound client; a finite pool wraps and cannot guarantee unique inflight addresses.
 - Never read/acquire business scheduling leases, advance rotation, write affinity
   or update business account feedback. Business load cannot starve maintenance.
-- Individual probes are bounded to thirty seconds, excluding semaphore waiting.
-  HTTP errors, missing states and unusable candidates continue on the applicable
-  urgent/background cadence without special 429 backoff or an attempt budget.
+- Reuse the Responses encoder, account scoping, request profile, QX body/header
+  projection and native TLS/custom-CA implementation. Fixed maintenance prompts
+  have no client environment/tool metadata; retain independent source-bound
+  connections and never inject an old State or enter the business WS pool.
+- Use the normal provider failure classifier and revision-fenced account writes
+  for confirmed authentication, identity-verification, ban, quota and 429 facts.
+  Expired refreshable access tokens retain automatic OAuth recovery; revoked
+  credentials require reauthorization. Do not invoke business `apply_failure`
+  or its feedback, session exclusion or account-wide WS eviction.
+  A real 429 uses existing shared cooldown, stops siblings and releases the account
+  slot after cancellation. Discovery requeues it after cooldown.
+- Exclude non-ready credentials, expired access tokens and exhausted quota at
+  discovery, batch boundaries and the one-second cancellation watcher. Store
+  reads/writes also enforce this under the existing owner lock. A late response
+  cannot resurrect readiness after failure or invalidate replacement credentials.
+  Recovery re-enters through ordinary discovery; it does not reset State clocks.
+- Individual probes are bounded to thirty seconds.
+  Transient HTTP errors, missing states and unusable candidates continue on the
+  next batch without an attempt budget. Confirmed account rejection ends that task; other models of that account
+  stop at the next eligibility check. Other accounts remain independent.
   Poll account/binding/policy every second and recheck before each batch and
   persistence. Switch disable, model removal or credential replacement cancels
   outstanding probes. Cancellation performs revision-fenced status cleanup even
   after opt-out; it cannot finish a newer credential's task. Store unavailability
   prevents starting collection.
-- Probes accept HTTP 200 and eligible headers only, then drop both success and
-  error bodies without draining them or checking SSE/model output. This is
-  capture, not proof that generation completed. Business response processing
-  and its final-model observation checks remain unchanged.
-- Stop a batch at the first accepted fresh state and cancel remaining probes.
-  A repeated active/standby is not a new acquisition. No decoded candidate-age
-  gates remain. Both slots use the ten-minute refresh threshold; a newly
-  captured distinct value receives its local one-hour clock.
+- A lightweight existing SSE decoder checks explicit completion and errors without
+  billing/content projection; bound the full probe response to 1 MiB.
+  Error bodies have a 16 KiB
+  and one-second bound for authentication classification. Oversize, truncated,
+  unreadable or timed-out bodies are discarded, keeping status/header evidence;
+  do not classify partial text. Failed/truncated streams never publish candidates.
+- Observe response quota metadata and allowlisted Cookies through the existing
+  provider handlers. Cookie material saves retain normal write CAS and hard/soft
+  State-binding rules. Supplemental Cookie CAS conflicts do not discard captured
+  State on their own; the current binding/eligibility checks and transaction
+  fence still reject late candidates after hard changes or authentication failure.
+  Progress/terminal logs include account ID and safe failure category, not tokens.
+- Stop at the first committed qualified value and cancel remaining probes.
+  Repeated values are not new captures; next must expire later than current.
+  Display attempts and safe last-failure codes, never raw State or source addresses.
+  Publish changing attempt counts at most once per second during waiting batches.
+  Record the winning attempt's dispatch ordinal separately from all attempts started;
+  reset this per-task success marker only when a new collection starts or binding changes.
+  A Cookie material CAS during a probe must not hide a rejection: reload only the
+  same binding generation before recording account failure. Hard identity changes stay fenced.
 - These are Tokio tasks under the existing Host, not dedicated per-account OS
   threads or resource-isolated processes. Their network/CPU cost still exists.
 - The explicit local rejection-code allowlist is `invalid_turn_state`,
@@ -190,6 +258,11 @@
 - Cover concurrent duplicate observations, older values, local capture/expiry,
   plan reset, model/account separation, bounded observation handling, exact WS
   ownership across version updates and switch disable, and mixed-provider UI.
+- Cover probe/business wire identity equivalence, bounded error-body stalls,
+  revocation versus refreshable expiry, late 401 after rotation, independent
+  healthy accounts, recovery, and transient errors that must not invalidate
+  credentials. PostgreSQL checks must reject candidates and hide readiness while
+  credentials/quota are ineligible, retaining their clocks on same-binding recovery.
 
 ## Scenario: Concurrent Responses and Independent Switches
 
@@ -201,7 +274,7 @@ changing an account's State switch while other requests or administrators act.
 ### 2. Signatures
 
 - `ProviderTurnStateCandidate.expected_active_version: Option<u64>` carries the
-  managed version injected into a business request; independent probes use `None`.
+  version read before probe dispatch. Business responses cannot publish candidates.
 - `PendingObservations::enqueue` orders by credential revision, optional injected
   version and anomaly priority.
 - `POST /api/admin/accounts/batch-update` accepts a single `accountIds` entry and
@@ -209,7 +282,7 @@ changing an account's State switch while other requests or administrators act.
 
 ### 3. Contracts
 
-Check the passive candidate's expected version while holding the state-row lock,
+Check the probe candidate's expected version while holding the state-row lock,
 before changing slots, status or timestamps. Keep existing credential/policy
 fences and probe behavior. Menu toggles patch only the State field and reread the
 authoritative account list. Ordinary enable/disable omits the State field.
@@ -220,7 +293,7 @@ authoritative account list. Ordinary enable/disable omits the State field.
 | --- | --- |
 | Late normal echo after promotion or clearing | Return unchanged current record |
 | Same-version rejection followed by normal echo | Keep queued rejection |
-| Newer-version candidate followed by old rejection | Keep newer candidate |
+| Newer-version observation followed by old rejection | Keep newer observation |
 | Independent fresh probe | Existing candidate validation and replacement |
 | Stale account row during State toggle | Do not submit old scheduling fields |
 | Repeated menu click while pending | One mutation; existing guard remains |
@@ -228,7 +301,7 @@ authoritative account list. Ordinary enable/disable omits the State field.
 ### 5. Good / Base / Bad Cases
 
 Good: rejecting A promotes B, and A's delayed normal echo cannot restore A.
-Base: a current-version normal observation retains existing learning behavior.
+Base: a current-version normal observation resets one suspect strike without publishing a value.
 Bad: accepting an echo merely because its issue timestamp equals B's timestamp.
 
 ### 6. Tests Required

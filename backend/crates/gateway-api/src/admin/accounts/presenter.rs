@@ -113,11 +113,13 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         turn_state_injection_enabled: account.turn_state_injection_enabled,
         turn_state: turn_state.map(|status| {
             let gateway_admin::model::accounts::AccountTurnStateStatus {
+                enabled,
                 required_models,
                 ready_models,
                 models,
             } = status;
             AccountTurnStateView {
+                enabled,
                 required_models,
                 ready_models: ready_models
                     .into_iter()
@@ -131,12 +133,17 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
                     .map(|status| AccountTurnStateModelStatusView {
                         model: status.model,
                         refresh_status: status.refresh_status,
+                        probe_attempts: status.probe_attempts,
+                        successful_probe_attempt: status.successful_probe_attempt,
+                        last_probe_reason: status.last_probe_reason,
                         active: status.active.map(|slot| AccountTurnStateSlotView {
                             chars: slot.chars,
+                            captured_at: slot.captured_at.as_ref().map(china_rfc3339),
                             expires_at: china_rfc3339(&slot.expires_at),
                         }),
                         standby: status.standby.map(|slot| AccountTurnStateSlotView {
                             chars: slot.chars,
+                            captured_at: slot.captured_at.as_ref().map(china_rfc3339),
                             expires_at: china_rfc3339(&slot.expires_at),
                         }),
                     })

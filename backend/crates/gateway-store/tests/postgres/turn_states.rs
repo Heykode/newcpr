@@ -20,7 +20,256 @@ fn revision() -> CredentialRevision {
 }
 
 #[tokio::test]
-async fn invalid_credentials_fence_late_candidates_and_hide_existing_slots_until_recovery() {
+async fn business_aliases_and_personal_plans_project_their_own_state_and_success_attempt() {
+    use gateway_admin::ports::store::AccountStore;
+    let Some(database) = TestDatabase::create("state_plan_progress").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_plan_progress", "plan-progress-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let id = ProviderAccountId::new("acct_plan_progress").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let states = PgProviderTurnStateRepository::new(database.pool.clone());
+    let admin = super::admin_account_store(&database.pool);
+    let ids = [id.as_str().to_owned()];
+    for (plan, length) in [
+        ("business", 332),
+        ("team", 332),
+        (" Business ", 332),
+        ("self_serve_business_prolite", 332),
+        ("self_serve_business_usage_based", 332),
+        ("plus", 292),
+        ("free", 292),
+    ] {
+        sqlx::query("update provider_accounts set plan_type=$1 where id=$2")
+            .bind(plan)
+            .bind(id.as_str())
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        states
+            .mark_refresh_status(
+                &id,
+                &model,
+                revision(),
+                length,
+                ProviderTurnStateRefreshStatus::Refreshing,
+                SystemTime::now(),
+            )
+            .await
+            .unwrap();
+        states
+            .put_candidate(candidate(
+                &id,
+                &model,
+                &"a".repeat(usize::from(length)),
+                SystemTime::now(),
+                ProviderTurnStateSlot::Active,
+                length,
+            ))
+            .await
+            .unwrap();
+        states
+            .record_probe_progress(&id, &model, revision(), 11, None, Some(2))
+            .await
+            .unwrap();
+        let projection = admin.load_turn_state_status(&ids).await.unwrap();
+        let state = &projection[id.as_str()];
+        assert_eq!(state.ready_models.len(), 1, "plan {plan}");
+        let row = state
+            .models
+            .iter()
+            .find(|row| row.model == model.as_str())
+            .unwrap();
+        assert_eq!(row.active.as_ref().unwrap().chars, length);
+        assert_eq!(row.probe_attempts, 11);
+        assert_eq!(row.successful_probe_attempt, Some(2));
+        states
+            .mark_refresh_status(
+                &id,
+                &model,
+                revision(),
+                length,
+                ProviderTurnStateRefreshStatus::Refreshing,
+                SystemTime::now(),
+            )
+            .await
+            .unwrap();
+        let projection = admin.load_turn_state_status(&ids).await.unwrap();
+        let row = projection[id.as_str()]
+            .models
+            .iter()
+            .find(|row| row.model == model.as_str())
+            .unwrap();
+        assert_eq!(row.probe_attempts, 0);
+        assert_eq!(row.successful_probe_attempt, None);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn lifecycle_observations_clocks_cutoff_and_cached_projection_remain_consistent() {
+    use gateway_admin::ports::store::AccountStore;
+    let Some(database) = TestDatabase::create("state_lifecycle").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_lifecycle", "lifecycle-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let id = ProviderAccountId::new("acct_lifecycle").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    let now = SystemTime::now();
+    let active = candidate(
+        &id,
+        &model,
+        &"a".repeat(290),
+        now - Duration::from_secs(2800),
+        ProviderTurnStateSlot::Active,
+        292,
+    );
+    let initial = store.put_candidate(active.clone()).await.unwrap();
+    let mut next = candidate(
+        &id,
+        &model,
+        &"b".repeat(290),
+        now,
+        ProviderTurnStateSlot::Standby,
+        292,
+    );
+    next.expected_active_version = Some(initial.state_version());
+    let paired = store.put_candidate(next.clone()).await.unwrap();
+    assert_eq!(paired.active(), initial.active());
+    let promotion = ProviderTurnStatePromotion {
+        account_id: id.clone(),
+        expected_revision: revision(),
+        expected_active_version: initial.state_version(),
+        upstream_model: model.clone(),
+        normal_length: 292,
+        observed_at: now,
+        minimum_remaining: Duration::from_secs(60),
+    };
+    assert!(
+        store
+            .promote_standby(promotion.clone())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut suspect = ProviderTurnStateAnomaly {
+        account_id: id.clone(),
+        expected_revision: revision(),
+        expected_active_version: 1,
+        upstream_model: model.clone(),
+        normal_length: 292,
+        observed_length: Some(312),
+        suspect: true,
+        promote_standby: false,
+        observed_at: now,
+    };
+    let first = store.record_anomaly(suspect.clone()).await.unwrap();
+    assert_eq!(first.active(), initial.active());
+    let mut healthy = suspect.clone();
+    healthy.suspect = false;
+    healthy.observed_length = Some(290);
+    store.record_anomaly(healthy).await.unwrap();
+    assert_eq!(
+        store
+            .record_anomaly(suspect.clone())
+            .await
+            .unwrap()
+            .state_version(),
+        1
+    );
+    let replaced = store.record_anomaly(suspect.clone()).await.unwrap();
+    assert_eq!(replaced.state_version(), 2);
+    assert_eq!(replaced.active(), paired.standby());
+    assert!(replaced.standby().is_none());
+    assert_eq!(
+        store.record_anomaly(suspect.clone()).await.unwrap(),
+        replaced
+    );
+    // A late batch cannot publish against the pre-switch version.
+    next.slot = ProviderTurnStateSlot::Active;
+    next.value = ProviderTurnStateValue::new(
+        OpaqueTurnState::new("c".repeat(290)),
+        now,
+        now + Duration::from_secs(3600),
+    );
+    assert_eq!(store.put_candidate(next).await.unwrap(), replaced);
+    let admin = super::admin_account_store(&database.pool);
+    let ids = [id.as_str().to_owned()];
+    store
+        .record_probe_progress(&id, &model, revision(), 571, Some("missing_state"), None)
+        .await
+        .unwrap();
+    let projection = admin.load_turn_state_status(&ids).await.unwrap();
+    let before = projection[id.as_str()]
+        .models
+        .iter()
+        .find(|model| model.model == "model-a")
+        .unwrap();
+    assert_eq!(before.probe_attempts, 571);
+    assert_eq!(before.last_probe_reason.as_deref(), Some("missing_state"));
+    assert_eq!(before.active.as_ref().unwrap().chars, 290);
+    let captured = before.active.as_ref().unwrap().captured_at;
+    assert!(captured.is_some());
+    for switch in [
+        "update runtime_settings set turn_state_injection_enabled=false",
+        "update provider_accounts set turn_state_injection_enabled=false",
+    ] {
+        sqlx::query(switch).execute(&database.pool).await.unwrap();
+        assert!(store.read(&id, &model, revision()).await.unwrap().is_none());
+        let projection = admin.load_turn_state_status(&ids).await.unwrap();
+        let status = &projection[id.as_str()];
+        assert!(!status.enabled);
+        assert!(status.ready_models.is_empty());
+        let cached = status
+            .models
+            .iter()
+            .find(|model| model.model == "model-a")
+            .unwrap()
+            .active
+            .as_ref()
+            .unwrap();
+        assert_eq!(cached.captured_at, captured);
+        enable(&database).await;
+        assert_eq!(
+            store
+                .read(&id, &model, revision())
+                .await
+                .unwrap()
+                .unwrap()
+                .active(),
+            replaced.active()
+        );
+    }
+    // At the final minute, projection blocks new chains even while the cache remains visible.
+    sqlx::query("update provider_turn_states set active_expires_at=now()+interval '59 seconds' where provider_account_id=$1")
+        .bind(id.as_str()).execute(&database.pool).await.unwrap();
+    let projection = admin.load_turn_state_status(&ids).await.unwrap();
+    assert!(projection[id.as_str()].ready_models.is_empty());
+    assert!(
+        projection[id.as_str()]
+            .models
+            .iter()
+            .any(|model| model.active.is_some())
+    );
+    suspect.expected_active_version = 2;
+    suspect.promote_standby = true;
+    let invalid = store.record_anomaly(suspect).await.unwrap();
+    assert!(invalid.active().is_none());
+    assert_eq!(invalid.state_version(), 3);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn invalid_credentials_fence_late_candidates_without_deleting_cached_slots() {
     use gateway_admin::ports::store::AccountStore;
     let Some(database) = TestDatabase::create("turn_state_credential_gate").await else {
         return;
@@ -76,12 +325,7 @@ async fn invalid_credentials_fence_late_candidates_and_hide_existing_slots_until
         assert!(states.put_candidate(value.clone()).await.is_err());
         let status = &admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()];
         assert!(status.ready_models.is_empty());
-        assert!(
-            status
-                .models
-                .iter()
-                .all(|model| model.active.is_none() && model.standby.is_none())
-        );
+        assert!(status.models.iter().any(|model| model.active.is_some()));
     }
     sqlx::query(
         "update provider_accounts set credential_state='ready', quota_access_state='allowed',
@@ -322,7 +566,7 @@ async fn binding_migration_preserves_current_rows_without_reviving_stale_rows() 
     database.close().await;
 }
 
-async fn enable(database: &TestDatabase) {
+pub(super) async fn enable(database: &TestDatabase) {
     sqlx::query(
         "update runtime_settings set turn_state_injection_enabled = true,
         turn_state_models = array['gpt-6-astra', 'gpt-5.6-sol', 'model-a', 'model-b']",
@@ -377,7 +621,8 @@ async fn admin_readiness_and_cancel_cleanup_are_model_revision_and_policy_fenced
         .iter()
         .find(|status| status.model == "model-a")
         .unwrap();
-    assert_eq!(model_status.refresh_status, "refreshing");
+    assert_eq!(model_status.refresh_status, "ready");
+    assert!(model_status.active.as_ref().unwrap().captured_at.is_some());
     assert_eq!(model_status.active.as_ref().unwrap().chars, 292);
     assert!(model_status.standby.is_none());
     store
@@ -416,12 +661,20 @@ async fn admin_readiness_and_cancel_cleanup_are_model_revision_and_policy_fenced
         .await
         .unwrap();
     store.cancel_refresh(&id, &model, revision()).await.unwrap();
-    assert!(admin.load_turn_state_status(&ids).await.unwrap().is_empty());
+    let disabled = admin.load_turn_state_status(&ids).await.unwrap();
+    assert!(!disabled[id.as_str()].enabled);
+    assert!(disabled[id.as_str()].ready_models.is_empty());
+    assert!(
+        disabled[id.as_str()]
+            .models
+            .iter()
+            .any(|model| model.active.is_some())
+    );
     let status: String = sqlx::query_scalar("select refresh_status from provider_turn_states")
         .fetch_one(&database.pool)
         .await
         .unwrap();
-    assert_eq!(status, "failed");
+    assert_eq!(status, "missing");
     enable(&database).await;
     sqlx::query(
         "update provider_accounts set credential_revision=2, turn_state_binding_revision=2",
@@ -457,7 +710,7 @@ async fn admin_readiness_and_cancel_cleanup_are_model_revision_and_policy_fenced
     database.close().await;
 }
 
-fn candidate(
+pub(super) fn candidate(
     account_id: &ProviderAccountId,
     model: &UpstreamModelId,
     value: &str,
@@ -500,7 +753,7 @@ async fn proactive_promotion_preserves_clock_and_rejects_late_or_short_lived_sta
         &id,
         &model,
         &"a".repeat(292),
-        now - Duration::from_secs(3100),
+        now - Duration::from_secs(3550),
         ProviderTurnStateSlot::Active,
         292,
     );
@@ -521,10 +774,10 @@ async fn proactive_promotion_preserves_clock_and_rejects_late_or_short_lived_sta
         upstream_model: model.clone(),
         normal_length: 292,
         observed_at: now,
-        minimum_remaining: Duration::from_secs(600),
+        minimum_remaining: Duration::from_secs(60),
     };
     let mut too_late = promotion.clone();
-    too_late.observed_at = now + Duration::from_secs(1300);
+    too_late.observed_at = now + Duration::from_secs(1750);
     assert!(store.promote_standby(too_late).await.unwrap().is_none());
     let promoted = store
         .promote_standby(promotion.clone())
@@ -582,7 +835,7 @@ async fn a_standby_echo_cannot_renew_its_original_capture_lifetime() {
             &id,
             &model,
             &"a".repeat(292),
-            now - Duration::from_secs(3100),
+            now - Duration::from_secs(3550),
             ProviderTurnStateSlot::Active,
             292,
         ))
@@ -611,17 +864,16 @@ async fn a_standby_echo_cannot_renew_its_original_capture_lifetime() {
         .await
         .unwrap();
     assert_eq!(echoed.active(), before.standby());
-    let old = store
-        .put_candidate(candidate(
-            &id,
-            &model,
-            &"a".repeat(292),
-            now + Duration::from_secs(4000),
-            ProviderTurnStateSlot::Active,
-            292,
-        ))
-        .await
-        .unwrap();
+    let mut expired_echo = candidate(
+        &id,
+        &model,
+        &"b".repeat(292),
+        now,
+        ProviderTurnStateSlot::Active,
+        292,
+    );
+    expired_echo.observed_at = now + Duration::from_secs(2000);
+    let old = store.put_candidate(expired_echo).await.unwrap();
     assert_eq!(
         old.active(),
         echoed.active(),
@@ -631,7 +883,7 @@ async fn a_standby_echo_cannot_renew_its_original_capture_lifetime() {
 }
 
 #[tokio::test]
-async fn repeated_active_is_idempotent_and_new_active_preserves_a_valid_standby() {
+async fn repeated_active_is_idempotent_and_replacement_does_not_recycle_old_active() {
     let Some(database) = TestDatabase::create("turn_state_active").await else {
         return;
     };
@@ -678,7 +930,7 @@ async fn repeated_active_is_idempotent_and_new_active_preserves_a_valid_standby(
         "same state must not retire WS pools"
     );
 
-    let replaced = store
+    let early = store
         .put_candidate(candidate(
             &account_id,
             &model,
@@ -689,15 +941,28 @@ async fn repeated_active_is_idempotent_and_new_active_preserves_a_valid_standby(
         ))
         .await
         .unwrap();
+    assert_eq!(
+        early.active(),
+        first.active(),
+        "a fresh active cannot be replaced early"
+    );
+    let replaced = store
+        .put_candidate(candidate(
+            &account_id,
+            &model,
+            &second_value,
+            issued_at + Duration::from_secs(3550),
+            ProviderTurnStateSlot::Active,
+            292,
+        ))
+        .await
+        .unwrap();
     assert_eq!(replaced.state_version(), 2);
     assert_eq!(
         replaced.active().unwrap().state().expose_to_provider(),
         second_value
     );
-    assert_eq!(
-        replaced.standby().unwrap().state().expose_to_provider(),
-        first_value
-    );
+    assert!(replaced.standby().is_none());
     assert!(!format!("{replaced:?}").contains(&second_value));
     database.close().await;
 }
@@ -750,6 +1015,7 @@ async fn anomaly_promotes_valid_standby_and_shape_change_clears_old_tokens() {
             upstream_model: model.clone(),
             normal_length: 292,
             observed_length: Some(312),
+            suspect: true,
             promote_standby: true,
             observed_at: issued_at + Duration::from_secs(2),
         })
@@ -763,7 +1029,7 @@ async fn anomaly_promotes_valid_standby_and_shape_change_clears_old_tokens() {
     assert!(promoted.standby().is_none());
     assert_eq!(
         promoted.refresh_status(),
-        ProviderTurnStateRefreshStatus::Refreshing
+        ProviderTurnStateRefreshStatus::Ready
     );
 
     let reset = store
@@ -853,7 +1119,7 @@ async fn concurrent_repeated_observations_keep_one_version_and_older_values_cann
 }
 
 #[tokio::test]
-async fn expired_or_not_yet_issued_standby_is_never_promoted() {
+async fn empty_active_cannot_acquire_a_standby_and_future_skew_is_bounded() {
     let Some(database) = TestDatabase::create("turn_state_expired").await else {
         return;
     };
@@ -879,7 +1145,7 @@ async fn expired_or_not_yet_issued_standby_is_never_promoted() {
         .await
         .unwrap();
     for observed_at in [
-        now - Duration::from_secs(1),
+        now - Duration::from_secs(31),
         now + Duration::from_secs(3601),
     ] {
         let record = store
@@ -890,6 +1156,7 @@ async fn expired_or_not_yet_issued_standby_is_never_promoted() {
                 upstream_model: model.clone(),
                 normal_length: 292,
                 observed_length: Some(312),
+                suspect: true,
                 promote_standby: true,
                 observed_at,
             })
@@ -902,7 +1169,7 @@ async fn expired_or_not_yet_issued_standby_is_never_promoted() {
         &account_id,
         &model,
         &"f".repeat(292),
-        now + Duration::from_secs(1),
+        now + Duration::from_secs(31),
         ProviderTurnStateSlot::Active,
         292,
     );
@@ -1016,7 +1283,14 @@ async fn late_anomaly_cannot_rotate_new_active_and_rejection_without_standby_cle
         ("b", ProviderTurnStateSlot::Standby),
     ] {
         store
-            .put_candidate(candidate(&id, &model, &value.repeat(292), now, slot, 292))
+            .put_candidate(candidate(
+                &id,
+                &model,
+                &value.repeat(292),
+                now + Duration::from_secs(u64::from(slot == ProviderTurnStateSlot::Standby)),
+                slot,
+                292,
+            ))
             .await
             .unwrap();
     }
@@ -1027,6 +1301,7 @@ async fn late_anomaly_cannot_rotate_new_active_and_rejection_without_standby_cle
         expected_active_version: 1,
         normal_length: 292,
         observed_length: Some(312),
+        suspect: true,
         promote_standby: true,
         observed_at: now,
     };
@@ -1067,7 +1342,14 @@ async fn late_normal_echo_cannot_resurrect_rejected_active_after_standby_promoti
         ("b", ProviderTurnStateSlot::Standby),
     ] {
         store
-            .put_candidate(candidate(&id, &model, &value.repeat(292), now, slot, 292))
+            .put_candidate(candidate(
+                &id,
+                &model,
+                &value.repeat(292),
+                now + Duration::from_secs(u64::from(slot == ProviderTurnStateSlot::Standby)),
+                slot,
+                292,
+            ))
             .await
             .unwrap();
     }
@@ -1079,6 +1361,7 @@ async fn late_normal_echo_cannot_resurrect_rejected_active_after_standby_promoti
             upstream_model: model.clone(),
             normal_length: 292,
             observed_length: Some(312),
+            suspect: true,
             promote_standby: true,
             observed_at: now,
         })
@@ -1107,6 +1390,7 @@ async fn late_normal_echo_cannot_resurrect_rejected_active_after_standby_promoti
             upstream_model: model.clone(),
             normal_length: 292,
             observed_length: Some(312),
+            suspect: true,
             promote_standby: true,
             observed_at: now + Duration::from_secs(2),
         })

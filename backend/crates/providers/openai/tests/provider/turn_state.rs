@@ -39,7 +39,7 @@ use wiremock::{
 
 use crate::{
     admin::{provider_ports_with_accounts, valid_config},
-    support::{MemoryAccountStore, profile, secret},
+    support::{MemoryAccountStore, MemoryCooldownPort, profile, secret},
 };
 
 #[derive(Default)]
@@ -117,9 +117,30 @@ pub(super) struct ProbeStates {
     failed: AtomicUsize,
     cancelled: AtomicUsize,
     promoted: AtomicUsize,
+    progress: Mutex<BTreeMap<(ProviderAccountId, UpstreamModelId), ProbeProgress>>,
 }
 
+type ProbeProgress = (u64, Option<&'static str>, Option<u64>);
+
 impl ProviderTurnStatePort for ProbeStates {
+    fn record_probe_progress<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        model: &'a UpstreamModelId,
+        _: CredentialRevision,
+        attempts: u64,
+        reason: Option<&'static str>,
+        successful_attempt: Option<u64>,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.progress.lock().unwrap().insert(
+                (account.clone(), model.clone()),
+                (attempts, reason, successful_attempt),
+            );
+            Ok(())
+        })
+    }
+
     fn promote_standby(
         &self,
         promotion: ProviderTurnStatePromotion,
@@ -136,6 +157,10 @@ impl ProviderTurnStatePort for ProbeStates {
             if current.state_version() != promotion.expected_active_version
                 || !standby.is_valid_at(promotion.observed_at)
                 || standby.expires_at() <= promotion.observed_at + promotion.minimum_remaining
+                || current.active().is_some_and(|active| {
+                    active.expires_at() > promotion.observed_at + promotion.minimum_remaining
+                        || standby.expires_at() <= active.expires_at()
+                })
             {
                 return Ok(None);
             }
@@ -146,7 +171,7 @@ impl ProviderTurnStatePort for ProbeStates {
                 Some(standby.clone()),
                 None,
                 current.state_version() + 1,
-                ProviderTurnStateRefreshStatus::Refreshing,
+                ProviderTurnStateRefreshStatus::Ready,
                 None,
             );
             records.insert(key, next.clone());
@@ -195,11 +220,16 @@ impl ProviderTurnStatePort for ProbeStates {
             );
             let mut records = self.records.lock().unwrap();
             let previous = records.get(&key);
+            if candidate.expected_active_version.is_some_and(|expected| {
+                previous.map_or(0, ProviderTurnStateRecord::state_version) != expected
+            }) {
+                return Ok(previous.unwrap().clone());
+            }
             let (active, standby, status) = match candidate.slot {
                 ProviderTurnStateSlot::Active => (
                     Some(candidate.value),
                     None,
-                    ProviderTurnStateRefreshStatus::Refreshing,
+                    ProviderTurnStateRefreshStatus::Ready,
                 ),
                 ProviderTurnStateSlot::Standby => (
                     previous.and_then(|r| r.active().cloned()),
@@ -244,24 +274,21 @@ impl ProviderTurnStatePort for ProbeStates {
             if status == ProviderTurnStateRefreshStatus::Failed {
                 self.failed.fetch_add(1, Ordering::SeqCst);
             }
-            Ok(self
-                .records
-                .lock()
-                .unwrap()
-                .get(&(account.clone(), model.clone()))
-                .cloned()
-                .unwrap_or_else(|| {
-                    ProviderTurnStateRecord::new(
-                        account.clone(),
-                        model.clone(),
-                        normal_length,
-                        None,
-                        None,
-                        0,
-                        status,
-                        None,
-                    )
-                }))
+            let mut records = self.records.lock().unwrap();
+            let key = (account.clone(), model.clone());
+            let old = records.get(&key);
+            let record = ProviderTurnStateRecord::new(
+                account.clone(),
+                model.clone(),
+                normal_length,
+                old.and_then(|old| old.active().cloned()),
+                old.and_then(|old| old.standby().cloned()),
+                old.map_or(0, ProviderTurnStateRecord::state_version),
+                status,
+                None,
+            );
+            records.insert(key, record.clone());
+            Ok(record)
         })
     }
 }
@@ -412,20 +439,11 @@ async fn collector_cancellation(hard_rotation: bool) {
     tuning.publish_openai_turn_state_policy(policy.clone());
     leases.busy.store(1, Ordering::SeqCst);
     discover.run_cycle(cycle.clone()).await.unwrap();
-    wait_count(&leases.reads, 1).await;
-    wait_count(&states.cancelled, 1).await;
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        0,
-        "busy accounts defer collection"
-    );
-    leases.busy.store(0, Ordering::SeqCst);
-    discover.run_cycle(cycle.clone()).await.unwrap();
     wait_count(&calls, 1).await;
     assert_eq!(
         leases.reads.load(Ordering::SeqCst),
-        2,
-        "collection only reads business activity; it never acquires a lease"
+        0,
+        "collection ignores business concurrency and never acquires a lease"
     );
     if hard_rotation {
         let account = accounts.get_account(&account_id).await.unwrap().unwrap();
@@ -445,7 +463,7 @@ async fn collector_cancellation(hard_rotation: bool) {
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(states.writes.load(Ordering::SeqCst), 0);
-    assert_eq!(states.cancelled.load(Ordering::SeqCst), 2);
+    assert_eq!(states.cancelled.load(Ordering::SeqCst), 1);
     tuning.publish_openai_turn_state_policy(policy);
     discover.run_cycle(cycle).await.unwrap();
     // Cancellation released the same-key collector before another generation can start.
@@ -493,15 +511,6 @@ impl Respond for BudgetResponder {
             .to_owned();
         let count = {
             let mut calls = self.calls.lock().unwrap();
-            if !self.succeed
-                && !self.start_only
-                && !calls.contains_key(&(owner.clone(), model.clone()))
-            {
-                assert!(
-                    calls.values().all(|count| *count == 500),
-                    "previous keys must exhaust before the next starts"
-                );
-            }
             let count = calls.entry((owner, model.clone())).or_default();
             *count += 1;
             *count
@@ -510,9 +519,9 @@ impl Respond for BudgetResponder {
             .lock()
             .unwrap()
             .push((count, std::time::Instant::now()));
-        if !self.succeed {
+        if !self.succeed || (self.soft_cookie && count == 1) {
             let response = match count % 6 {
-                0 => ResponseTemplate::new(429),
+                0 => ResponseTemplate::new(502),
                 1 => ResponseTemplate::new(500),
                 2 => ResponseTemplate::new(200),
                 3 => {
@@ -528,20 +537,19 @@ impl Respond for BudgetResponder {
                 response.set_delay(if self.start_only {
                     Duration::from_secs(30)
                 } else {
-                    Duration::from_millis(400)
+                    Duration::from_millis(250)
                 })
             } else {
                 response
             };
         }
-        let value = if self.repeat_first && count == 2 {
-            1
-        } else {
-            count
-        };
+        let repeated = self.repeat_first && count <= 2;
+        let value = if repeated { 1 } else { count };
         let response = ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .insert_header("x-codex-turn-state", state_at(value, self.issued_at))
+            .insert_header("x-codex-turn-state", state_at(value, if repeated {
+                self.issued_at - Duration::from_secs(2800)
+            } else { self.issued_at }))
             .set_body_string(format!(
                 "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_probe\",\"model\":\"{model}\",\"status\":\"completed\",\"output\":[]}}}}\n\n"
             ));
@@ -587,7 +595,7 @@ enum AcquisitionScenario {
     ContinuousMisses,
     ImmediateStandby,
     RepeatedStandby,
-    SerialStarts,
+    SerialStarts(usize),
     RefreshActive,
     SoftCookieRefresh,
 }
@@ -601,12 +609,16 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
             | AcquisitionScenario::SoftCookieRefresh
     );
     let soft_cookie = matches!(scenario, AcquisitionScenario::SoftCookieRefresh);
-    let repeat_first = matches!(scenario, AcquisitionScenario::RepeatedStandby) || soft_cookie;
-    let start_only = matches!(scenario, AcquisitionScenario::SerialStarts);
+    let repeat_first = matches!(scenario, AcquisitionScenario::RepeatedStandby);
+    let start_only = matches!(scenario, AcquisitionScenario::SerialStarts(_));
     let refresh = matches!(scenario, AcquisitionScenario::RefreshActive);
     let accounts = Arc::new(MemoryAccountStore::default());
-    let account_count = if start_only { 20 } else { 2 };
+    let account_count = match scenario {
+        AcquisitionScenario::SerialStarts(count) => count,
+        _ => 2,
+    };
     let key_count = account_count * 2;
+    let running_key_count = account_count.min(5) * 2;
     for index in 0..account_count {
         let mut imported = CodexCredentialAdmin
             .prepare_import(ImportCodexOAuthCredential {
@@ -623,27 +635,26 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
     }
     let base = provider_ports_with_accounts(accounts.clone());
     let states = Arc::new(ProbeStates::default());
-    let captured = SystemTime::now() - Duration::from_secs(1200);
-    if refresh {
+    let issued_at = SystemTime::now();
+    let captured = issued_at - Duration::from_secs(2800);
+    if refresh || repeat_first {
         for index in 0..account_count {
             for model in ["model-a", "model-b"] {
                 let id = ProviderAccountId::new(format!("acct_parallel_{index}")).unwrap();
                 let model = UpstreamModelId::new(model).unwrap();
-                let state = |ch: char, captured: SystemTime| {
-                    ProviderTurnStateValue::new(
-                        OpaqueTurnState::new(format!("gAAAAA{}", ch.to_string().repeat(286))),
-                        captured,
-                        captured + Duration::from_secs(3600),
-                    )
-                };
+                let state = ProviderTurnStateValue::new(
+                    OpaqueTurnState::new(state_at(1, captured)),
+                    captured,
+                    captured + Duration::from_secs(3600),
+                );
                 states.records.lock().unwrap().insert(
                     (id.clone(), model.clone()),
                     ProviderTurnStateRecord::new(
                         id,
                         model,
                         292,
-                        Some(state('a', captured - Duration::from_secs(1900))),
-                        Some(state('b', captured)),
+                        Some(state),
+                        None,
                         1,
                         ProviderTurnStateRefreshStatus::Ready,
                         None,
@@ -676,7 +687,7 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
         .await;
     let responder = BudgetResponder {
         calls: Arc::default(),
-        issued_at: SystemTime::now(),
+        issued_at,
         succeed,
         repeat_first,
         start_only,
@@ -687,13 +698,15 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
         .and(path("/codex/responses"))
         .respond_with(responder.clone())
         .expect(if start_only {
-            1..=1
+            running_key_count as u64..=running_key_count as u64
         } else if !succeed {
-            2000..=2000
+            2200..=usize::MAX as u64
         } else if repeat_first {
-            12..=48
+            12..=24
+        } else if soft_cookie {
+            8..=24
         } else {
-            8..=8
+            4..=4
         })
         .mount(&server)
         .await;
@@ -746,7 +759,7 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
                         .lock()
                         .unwrap()
                         .iter()
-                        .any(|((account, _), count)| account == &owner && *count >= 2);
+                        .any(|((account, _), count)| account == &owner && *count >= 1);
                     if seen {
                         break;
                     }
@@ -782,20 +795,25 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
             );
         }
     }
-    let completed = tokio::time::timeout(
-        Duration::from_secs(if start_only { 20 } else { 300 }),
-        async {
-            while if start_only {
-                responder.calls.lock().unwrap().is_empty()
-            } else if succeed {
-                states.writes.load(Ordering::SeqCst) < 8
-            } else {
-                states.failed.load(Ordering::SeqCst) < key_count
-            } {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        },
-    )
+    // This verifies continued acquisition, not requests/second. Linux rebuilds
+    // native TLS clients for all 2,200+ probes; the per-probe timeout is separate.
+    let completion_budget = if matches!(scenario, AcquisitionScenario::ContinuousMisses) {
+        Duration::from_secs(120)
+    } else {
+        Duration::from_secs(30)
+    };
+    let completed = tokio::time::timeout(completion_budget, async {
+        while if start_only {
+            responder.calls.lock().unwrap().len() < running_key_count
+        } else if succeed {
+            states.writes.load(Ordering::SeqCst) < key_count
+        } else {
+            let calls = responder.calls.lock().unwrap();
+            calls.len() < key_count || calls.values().any(|count| *count < 550)
+        } {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
     .await;
     if start_only {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -814,26 +832,28 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
     );
     assert_eq!(
         calls.len(),
-        if start_only { 1 } else { key_count },
-        "account/model tasks must be processed serially"
+        if start_only {
+            running_key_count
+        } else {
+            key_count
+        },
+        "five accounts run at once, with both models concurrent"
     );
     assert!(calls.values().all(|count| if start_only {
         *count == 1
     } else if !succeed {
-        *count == 500
+        *count >= 550
     } else if repeat_first {
-        (3..=12).contains(count)
+        (3..=6).contains(count)
+    } else if soft_cookie {
+        (2..=6).contains(count)
     } else {
-        *count == 2
+        *count == 1
     }));
     assert_eq!(
         states.failed.load(Ordering::SeqCst),
-        if !succeed && !start_only {
-            key_count
-        } else {
-            0
-        },
-        "ordinary misses stop at the source budget"
+        0,
+        "ordinary misses never terminate at a fixed request budget"
     );
     if repeat_first {
         let times = responder.times.lock().unwrap();
@@ -858,17 +878,16 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
         let records = states.records.lock().unwrap();
         assert_eq!(records.len(), 4);
         for record in records.values() {
-            if refresh {
-                assert!(record.active().unwrap().issued_at() > captured);
-                assert_eq!(record.state_version(), 2);
+            if refresh || repeat_first {
+                assert!(record.active().unwrap().issued_at() <= captured);
+                assert!(record.standby().unwrap().issued_at() > captured);
+                assert_eq!(record.state_version(), 1);
+            } else {
+                assert!(record.standby().is_none(), "no permanent spare acquisition");
             }
             assert_eq!(
                 record.refresh_status(),
                 ProviderTurnStateRefreshStatus::Ready
-            );
-            assert_ne!(
-                record.active().unwrap().state(),
-                record.standby().unwrap().state()
             );
         }
     }
@@ -901,13 +920,14 @@ async fn soft_cookie_updates_keep_collectors_alive_and_reload_next_batch_materia
     bounded_collectors(AcquisitionScenario::SoftCookieRefresh).await;
 }
 
-#[tokio::test]
-async fn account_model_tasks_stop_at_500_and_then_process_the_next_key() {
+// Match the service runtime: native TLS client construction is synchronous on Linux.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn account_model_tasks_continue_past_500_with_reusable_sources() {
     bounded_collectors(AcquisitionScenario::ContinuousMisses).await;
 }
 
 #[tokio::test]
-async fn serial_account_model_tasks_immediately_acquire_distinct_standby() {
+async fn parallel_account_model_tasks_only_acquire_active_initially() {
     bounded_collectors(AcquisitionScenario::ImmediateStandby).await;
 }
 
@@ -917,19 +937,24 @@ async fn standby_repeats_are_rejected_and_retried_with_escalating_batches() {
 }
 
 #[tokio::test]
-async fn other_account_model_tasks_wait_until_the_running_task_finishes() {
-    bounded_collectors(AcquisitionScenario::SerialStarts).await;
+async fn first_five_accounts_run_all_models_while_later_accounts_wait() {
+    for count in [1, 4, 5, 7] {
+        bounded_collectors(AcquisitionScenario::SerialStarts(count)).await;
+    }
 }
 
 #[tokio::test]
-async fn expiring_active_is_recollected_then_paired_with_a_new_standby() {
+async fn fifteen_minute_refresh_keeps_active_until_switch_cutoff() {
     bounded_collectors(AcquisitionScenario::RefreshActive).await;
 }
 
 struct CredentialRecoveryFixture {
+    admin: Arc<dyn gateway_admin::ports::provider::ProviderAdmin>,
     accounts: Arc<MemoryAccountStore>,
     states: Arc<ProbeStates>,
     leases: Arc<ReadOnlyLeases>,
+    cooldowns: Arc<MemoryCooldownPort>,
+    tuning: RequestTuningHandle,
     server: MockServer,
     discovery: Box<dyn ScheduledTask>,
     cycle: WorkerCycleContext,
@@ -939,6 +964,10 @@ struct CredentialRecoveryFixture {
 
 impl CredentialRecoveryFixture {
     async fn new() -> Self {
+        Self::with_probe_proxy(None).await
+    }
+
+    async fn with_probe_proxy(proxy: Option<gateway_core::account::OutboundProxy>) -> Self {
         let accounts = Arc::new(MemoryAccountStore::default());
         let mut imported = CodexCredentialAdmin
             .prepare_import(ImportCodexOAuthCredential {
@@ -955,6 +984,7 @@ impl CredentialRecoveryFixture {
         let base = provider_ports_with_accounts(accounts.clone());
         let states = Arc::new(ProbeStates::default());
         let leases = Arc::new(ReadOnlyLeases::default());
+        let cooldowns = Arc::new(MemoryCooldownPort::new());
         let ports = ProviderStorePorts::new(
             base.accounts(),
             leases.clone(),
@@ -963,16 +993,20 @@ impl CredentialRecoveryFixture {
             base.catalog_cache(),
             base.artifact_profiles(),
             base.credential_state(),
-            base.cooldowns(),
+            cooldowns.clone(),
             base.runtime_policy(),
             base.oauth_pending(),
         )
-        .with_turn_states(states.clone())
-        .with_egress(Arc::new(LoopbackEgress(ProviderEgressConfig {
-            revision: 1,
-            addresses: loopback_sources(12),
-            ..ProviderEgressConfig::default()
-        })));
+        .with_turn_states(states.clone());
+        let ports = if proxy.is_none() {
+            ports.with_egress(Arc::new(LoopbackEgress(ProviderEgressConfig {
+                revision: 1,
+                addresses: loopback_sources(12),
+                ..ProviderEgressConfig::default()
+            })))
+        } else {
+            ports
+        };
         let server = MockServer::builder()
             .listener(std::net::TcpListener::bind("[::1]:0").unwrap())
             .start()
@@ -980,17 +1014,24 @@ impl CredentialRecoveryFixture {
         let mut config = valid_config();
         config.config.api.base_url = server.uri();
         let tuning = RequestTuningHandle::default();
-        tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::new(
-            true,
-            ["model-a", "model-b"]
-                .map(|model| UpstreamModelId::new(model).unwrap())
-                .into(),
-        ));
-        let mut bundle =
-            provider_openai::initialize_with_request_tuning(config.config.clone(), ports, tuning)
-                .await
-                .unwrap();
+        tuning.publish_openai_turn_state_policy(
+            OpenAiTurnStatePolicy::new(
+                true,
+                ["model-a", "model-b"]
+                    .map(|model| UpstreamModelId::new(model).unwrap())
+                    .into(),
+            )
+            .with_probe_proxy(proxy),
+        );
+        let mut bundle = provider_openai::initialize_with_request_tuning(
+            config.config.clone(),
+            ports,
+            tuning.clone(),
+        )
+        .await
+        .unwrap();
         let cancellation = CancellationToken::new();
+        let admin = bundle.admin_provider();
         let mut discovery = None;
         let mut cycle = None;
         let mut worker = None;
@@ -1018,9 +1059,12 @@ impl CredentialRecoveryFixture {
             }
         }
         Self {
+            admin,
             accounts,
             states,
             leases,
+            cooldowns,
+            tuning,
             server,
             cancellation,
             discovery: discovery.unwrap(),
@@ -1040,8 +1084,7 @@ impl CredentialRecoveryFixture {
             .unwrap()
             .unwrap()
             .unwrap();
-        // The lease fixture panics on scheduling/acquisition; read-only activity checks are allowed.
-        let _ = self.leases.reads.load(Ordering::SeqCst);
+        assert_eq!(self.leases.reads.load(Ordering::SeqCst), 0);
     }
 }
 
@@ -1113,10 +1156,227 @@ async fn authentication_rejection_stops_all_models_and_recovery_resumes_discover
             .apply_state(&account, CredentialState::Ready, SystemTime::now())
             .await
             .unwrap();
-        fixture.discover().await;
-        wait_count(&fixture.states.writes, 4).await;
+        fixture
+            .admin
+            .account_facts_changed(std::slice::from_ref(account.id()))
+            .await;
+        wait_count(&fixture.states.writes, 2).await;
         fixture.stop().await;
     }
+}
+
+#[tokio::test]
+async fn probe_proxy_works_without_ipv6_and_closes_each_connection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let fixture = CredentialRecoveryFixture::with_probe_proxy(Some(proxy)).await;
+    let response_state = fresh_state(1);
+    let server = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 65536);
+            }
+            let headers = String::from_utf8(request).unwrap().to_lowercase();
+            assert!(headers.starts_with("post http://"));
+            assert!(headers.contains("connection: close"));
+            assert!(headers.contains("authorization: bearer "));
+            assert!(headers.contains("user-agent: "));
+            let body = "data: {\"type\":\"response.completed\"}\n\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nX-Codex-Turn-State: {response_state}\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            // Keep the peer socket open: the next probe must still open a new one.
+            sockets.push(socket);
+        }
+    });
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .unwrap()
+        .unwrap();
+    wait_count(&fixture.states.writes, 2).await;
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn changing_probe_proxy_discards_old_response_and_collects_via_new_proxy() {
+    let old = MockServer::start().await;
+    let new = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n")
+                .set_delay(Duration::from_secs(5)),
+        )
+        .mount(&old)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(2))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&new)
+        .await;
+    let fixture = CredentialRecoveryFixture::with_probe_proxy(Some(
+        gateway_core::account::OutboundProxy::parse(&old.uri()).unwrap(),
+    ))
+    .await;
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while old.received_requests().await.unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture.tuning.publish_openai_turn_state_policy(
+        OpenAiTurnStatePolicy::new(
+            true,
+            ["model-a", "model-b"]
+                .map(|m| UpstreamModelId::new(m).unwrap())
+                .into(),
+        )
+        .with_probe_proxy(Some(
+            gateway_core::account::OutboundProxy::parse(&new.uri()).unwrap(),
+        )),
+    );
+    wait_count(&fixture.states.writes, 2).await;
+    assert_eq!(new.received_requests().await.unwrap().len(), 2);
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn proxy_failure_never_falls_back_to_direct_or_invalidates_credentials() {
+    let proxy = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(502))
+        .mount(&proxy)
+        .await;
+    let fixture = CredentialRecoveryFixture::with_probe_proxy(Some(
+        gateway_core::account::OutboundProxy::parse(&proxy.uri()).unwrap(),
+    ))
+    .await;
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while proxy.received_requests().await.unwrap().len() < 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+    let account = fixture
+        .accounts
+        .get_account(&ProviderAccountId::new("acct_recovery_probe").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn restored_binding_wakes_after_old_collectors_exit_without_another_discovery_cycle() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.server.received_requests().await.unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let old = fixture.accounts.account("acct_recovery_probe").unwrap();
+    let repository = fixture.accounts.repository();
+    let mut data = repository.load_complete_data(&old).await.unwrap();
+    data.oauth_mut().unwrap().access_token = "synthetic-restored-inflight".into();
+    repository.compare_and_swap_data(&old, data).await.unwrap();
+    let restored = fixture.accounts.account("acct_recovery_probe").unwrap();
+    assert_ne!(
+        restored.turn_state_binding_revision(),
+        old.turn_state_binding_revision()
+    );
+    fixture.server.reset().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(2))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture
+        .admin
+        .account_facts_changed(std::slice::from_ref(restored.id()))
+        .await;
+    wait_count(&fixture.states.writes, 2).await;
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn pending_probe_counts_are_visible_before_response_and_success_keeps_its_attempt_number() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n")
+                .set_delay(Duration::from_secs(3)),
+        )
+        .expect(2)
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while fixture.states.progress.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+    assert!(
+        fixture
+            .states
+            .progress
+            .lock()
+            .unwrap()
+            .values()
+            .all(|value| *value == (1, None, None))
+    );
+    wait_count(&fixture.states.cancelled, 2).await;
+    assert!(
+        fixture
+            .states
+            .progress
+            .lock()
+            .unwrap()
+            .values()
+            .all(|value| *value == (1, None, Some(1)))
+    );
+    fixture.stop().await;
 }
 
 #[tokio::test]
@@ -1217,7 +1477,7 @@ async fn authentication_rejection_is_account_scoped_and_other_accounts_keep_coll
         .mount(&fixture.server)
         .await;
     fixture.discover().await;
-    wait_count(&fixture.states.writes, 4).await;
+    wait_count(&fixture.states.writes, 2).await;
     wait_count(&fixture.states.cancelled, 3).await;
     assert_eq!(
         fixture
@@ -1236,15 +1496,18 @@ async fn authentication_rejection_is_account_scoped_and_other_accounts_keep_coll
         CredentialState::Ready
     );
     for ((account, _), record) in fixture.states.records.lock().unwrap().iter() {
-        assert_eq!(account.as_str(), "acct_healthy_probe");
-        assert!(record.active().is_some() && record.standby().is_some());
+        if account.as_str() == "acct_healthy_probe" {
+            assert!(record.active().is_some() && record.standby().is_none());
+        } else {
+            assert!(record.active().is_none());
+        }
     }
     fixture.stop().await;
 }
 
 #[tokio::test]
 async fn transient_errors_keep_credentials_ready_and_do_not_become_authentication_failures() {
-    for status in [400, 403, 429, 503] {
+    for status in [400, 403, 503] {
         let fixture = CredentialRecoveryFixture::new().await;
         Mock::given(method("POST"))
             .respond_with(
@@ -1270,19 +1533,28 @@ async fn transient_errors_keep_credentials_ready_and_do_not_become_authenticatio
 }
 
 #[tokio::test]
-async fn valid_state_headers_are_rejected_on_failed_or_mismatched_model_streams() {
-    for (body, reported_model) in [
+async fn probe_requires_completion_but_not_an_exact_reported_model() {
+    for (body, reported_model, accept) in [
         (
             "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\",\"message\":\"synthetic failure\"}}}\n\n",
             None,
+            false,
         ),
         (
             "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_probe\",\"model\":\"different-model\",\"status\":\"completed\",\"output\":[]}}\n\n",
             None,
+            true,
         ),
         (
             "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_probe\",\"status\":\"completed\",\"output\":[]}}\n\n",
             Some("different-model"),
+            true,
+        ),
+        ("data: [DONE]\n\n", None, false),
+        (
+            "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\nevent: error\ndata: {\"error\":{\"code\":\"server_error\"}}\n\n",
+            None,
+            false,
         ),
     ] {
         let fixture = CredentialRecoveryFixture::new().await;
@@ -1298,10 +1570,19 @@ async fn valid_state_headers_are_rejected_on_failed_or_mismatched_model_streams(
             .mount(&fixture.server)
             .await;
         fixture.discover().await;
-        wait_count(&fixture.states.cancelled, 2).await;
-        assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
-        assert_eq!(fixture.states.failed.load(Ordering::SeqCst), 2);
-        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 24);
+        if accept {
+            wait_count(&fixture.states.writes, 2).await;
+        } else {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while fixture.server.received_requests().await.unwrap().len() < 22 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+        }
+        assert_eq!(fixture.states.failed.load(Ordering::SeqCst), 0);
         assert_eq!(
             fixture
                 .accounts
@@ -1326,7 +1607,7 @@ async fn authentication_failure_inside_sse_stops_collection_without_accepting_it
     fixture.discover().await;
     wait_count(&fixture.states.cancelled, 1).await;
     assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
-    assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
+    assert!((1..=2).contains(&fixture.server.received_requests().await.unwrap().len()));
     assert_eq!(
         fixture
             .accounts
@@ -1335,5 +1616,222 @@ async fn authentication_failure_inside_sse_stops_collection_without_accepting_it
             .credential_state(),
         CredentialState::Expired
     );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn rate_limit_stops_sibling_models_and_requeues_only_after_shared_cooldown() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "60")
+                .set_body_json(serde_json::json!({"error":{"code":"rate_limit_exceeded"}})),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.cancelled, 1).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let calls = fixture.server.received_requests().await.unwrap().len();
+    assert!((1..=2).contains(&calls));
+    assert!(!fixture.cooldowns.cooldowns.lock().unwrap().is_empty());
+    fixture.discover().await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        fixture.server.received_requests().await.unwrap().len(),
+        calls
+    );
+    assert_eq!(
+        fixture
+            .accounts
+            .account("acct_recovery_probe")
+            .unwrap()
+            .credential_state(),
+        CredentialState::Ready
+    );
+
+    fixture.server.reset().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture.cooldowns.cooldowns.lock().unwrap().clear();
+    fixture.discover().await;
+    wait_count(&fixture.states.writes, 2).await;
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn disable_and_reenable_reuses_valid_capture_without_starting_another_probe() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.writes, 2).await;
+    wait_count(&fixture.states.cancelled, 2).await;
+    let original = fixture.states.records.lock().unwrap().clone();
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
+    fixture.discover().await;
+    assert_eq!(*fixture.states.records.lock().unwrap(), original);
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(OpenAiTurnStatePolicy::new(
+            true,
+            ["model-a", "model-b"]
+                .map(|model| UpstreamModelId::new(model).unwrap())
+                .into(),
+        ));
+    fixture.discover().await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(*fixture.states.records.lock().unwrap(), original);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn soft_cookie_save_does_not_hide_an_inflight_authentication_rejection() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    Mock::given(method("POST"))
+        .respond_with(move |_: &Request| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({"error":{"code":"token_invalidated"}}))
+                .set_delay(Duration::from_millis(350))
+        })
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&calls, 1).await;
+    let account = fixture.accounts.account("acct_recovery_probe").unwrap();
+    let repository = fixture.accounts.repository();
+    let mut data = repository.load_complete_data(&account).await.unwrap();
+    data.cookies_mut()
+        .push(provider_openai::credential::CodexCookie {
+            name: "__Secure-next-auth.session-token".into(),
+            value: "synthetic-soft-cookie".into(),
+            domain: "::1".into(),
+            path: "/".into(),
+            host_only: true,
+            secure: false,
+            expires_at: None,
+        });
+    repository
+        .compare_and_swap_data(&account, data)
+        .await
+        .unwrap();
+    let changed = fixture.accounts.account("acct_recovery_probe").unwrap();
+    assert_ne!(changed.revision(), account.revision());
+    assert_eq!(
+        changed.turn_state_binding_revision(),
+        account.turn_state_binding_revision()
+    );
+    wait_count(&fixture.states.cancelled, 1).await;
+    assert_eq!(
+        fixture
+            .accounts
+            .account("acct_recovery_probe")
+            .unwrap()
+            .credential_state(),
+        CredentialState::Expired
+    );
+    assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn account_slots_refill_without_waiting_for_other_accounts_or_releasing_on_one_model() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    // Together with the fixture's account: five admitted, two queued.
+    for index in 0..6 {
+        let mut imported = CodexCredentialAdmin
+            .prepare_import(ImportCodexOAuthCredential {
+                account_id: format!("acct_queue_{index}"),
+                name: format!("Queue {index}"),
+                secret: secret(&format!("queue-{index}")),
+                verified_account: profile(&format!("queue-owner-{index}")),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .unwrap();
+        imported.account = imported.account.with_turn_state_injection_enabled(true);
+        fixture.accounts.create_account(imported).await.unwrap();
+    }
+    let calls = Arc::new(Mutex::new(BTreeMap::<String, usize>::new()));
+    let seen = calls.clone();
+    Mock::given(method("POST"))
+        .respond_with(move |request: &Request| {
+            let owner = request.headers["chatgpt-account-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            *seen.lock().unwrap().entry(owner.clone()).or_default() += 1;
+            let raw = if request
+                .headers
+                .get("content-encoding")
+                .is_some_and(|v| v == "zstd")
+            {
+                zstd::stream::decode_all(request.body.as_slice()).unwrap()
+            } else {
+                request.body.clone()
+            };
+            let body: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+            let delay = match (owner.as_str(), body["model"].as_str()) {
+                ("queue-owner-0", Some("model-a")) => Duration::ZERO,
+                ("queue-owner-0", _) => Duration::from_millis(700),
+                ("queue-owner-1", _) => Duration::from_millis(1300),
+                _ => Duration::from_secs(30),
+            };
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n")
+                .set_delay(delay)
+        })
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.writes, 1).await;
+    // Repeated discovery must neither duplicate a key nor admit a sixth account early.
+    fixture.discover().await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(calls.lock().unwrap().len(), 5);
+    assert!(calls.lock().unwrap().values().all(|count| *count == 2));
+    wait_count(&fixture.states.writes, 2).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while calls.lock().unwrap().len() < 6 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 6);
+    wait_count(&fixture.states.writes, 4).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        // Account admission is visible after its first model arrives; wait for
+        // both model requests before checking that neither key was duplicated.
+        while {
+            let counts = calls.lock().unwrap();
+            counts.len() < 7 || counts.values().any(|count| *count < 2)
+        } {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(calls.lock().unwrap().values().all(|count| *count == 2));
     fixture.stop().await;
 }

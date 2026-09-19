@@ -20,7 +20,7 @@ impl DeviceCodecs {
             .map_err(|_| invalid("provider device codecs are unavailable"))
     }
 
-    fn get(&self, provider: &str) -> StoreResult<Option<Arc<dyn ProviderDeviceCodec>>> {
+    pub(super) fn get(&self, provider: &str) -> StoreResult<Option<Arc<dyn ProviderDeviceCodec>>> {
         self.0
             .read()
             .map(|codecs| codecs.get(provider).cloned())

@@ -4,6 +4,10 @@ use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
+use gateway_admin::model::{
+    MutationContext,
+    client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget},
+};
 use gateway_core::{
     engine::budget::{
         ClientBudgetCharge, ClientBudgetError, ClientBudgetLimits, ClientBudgetPort,
@@ -15,7 +19,78 @@ use gateway_core::{
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
-use crate::{StoreResult, postgres_unavailable};
+use crate::{StoreError, StoreResult, mutation_audit, postgres_unavailable};
+
+pub(super) async fn reset_client_key_budget(
+    pool: &PgPool,
+    command: ResetClientKeyBudget,
+    context: &MutationContext,
+) -> StoreResult<()> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .map_err(|_| postgres_unavailable("begin budget reset"))?;
+    // 与准入和结算使用相同的 Key 行锁，锁定后再确定重置时间。
+    let exists =
+        sqlx::query_scalar::<_, String>("select id from client_api_keys where id = $1 for update")
+            .bind(command.id.as_str())
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| postgres_unavailable("lock budget reset key"))?;
+    if exists.is_none() {
+        return Err(StoreError::NotFound {
+            entity: "client API key",
+            id: command.id.as_str().to_owned(),
+        });
+    }
+    let daily = matches!(
+        command.period,
+        ClientKeyBudgetPeriod::Daily | ClientKeyBudgetPeriod::All
+    );
+    let weekly = matches!(
+        command.period,
+        ClientKeyBudgetPeriod::Weekly | ClientKeyBudgetPeriod::All
+    );
+    let reset_at = Utc::now();
+    // 已完成但延迟落盘的旧费用不回扣；不为从未使用的 Key 开启窗口。
+    sqlx::query(
+        "update client_key_budget_windows set
+         daily_used_usd = case when $2 then 0 else daily_used_usd end,
+         daily_start = case when $2 and daily_end > $4 then $4 else daily_start end,
+         weekly_used_usd = case when $3 then 0 else weekly_used_usd end,
+         weekly_start = case when $3 and weekly_end > $4 then $4 else weekly_start end
+         where client_api_key_id = $1",
+    )
+    .bind(command.id.as_str())
+    .bind(daily)
+    .bind(weekly)
+    .bind(reset_at)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|_| postgres_unavailable("reset client budget"))?;
+    let mut fields = Vec::new();
+    if daily {
+        fields.extend(["daily_used_usd".to_owned(), "daily_start".to_owned()]);
+    }
+    if weekly {
+        fields.extend(["weekly_used_usd".to_owned(), "weekly_start".to_owned()]);
+    }
+    super::admin_security_audit::insert_admin_audit_event(
+        &mut transaction,
+        mutation_audit(
+            context,
+            "reset_budget",
+            "client_api_key",
+            command.id.as_str(),
+            fields,
+        ),
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| postgres_unavailable("commit budget reset"))
+}
 
 pub struct PgClientBudgetStore {
     pool: PgPool,

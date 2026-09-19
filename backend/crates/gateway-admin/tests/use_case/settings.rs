@@ -61,6 +61,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 request_id: "request-settings".to_owned(),
             },
             ReplaceRuntimeSettings {
+                turn_state_probe_proxy_id: None,
                 disable_fast: None,
                 turn_state_injection_enabled: None,
                 turn_state_models: Some(vec![
@@ -129,6 +130,7 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
                         request_id: "request-account-busy-wait-settings".to_owned(),
                     },
                     ReplaceRuntimeSettings {
+                        turn_state_probe_proxy_id: None,
                         disable_fast: None,
                         turn_state_injection_enabled: None,
                         turn_state_models: Some(vec![

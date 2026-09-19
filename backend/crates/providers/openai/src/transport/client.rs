@@ -1,7 +1,7 @@
 //! Codex HTTP/SSE 上游客户端、请求头构造、TLS 与自定义 CA。
 
 use std::{
-    collections::VecDeque,
+    collections::HashMap,
     fmt,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
@@ -49,77 +49,62 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
-const MAX_CACHED_REQWEST_CLIENTS: usize = 128;
-type ReqwestClientCacheKey = (Option<String>, String, String);
+type ReqwestClientCacheKey = (Option<String>, String);
+type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
+type ProbeProxyClientCache = Mutex<Option<(ReqwestClientCacheKey, Client)>>;
 
-struct ReqwestClientCacheEntry {
-    account_id: String,
-    key: ReqwestClientCacheKey,
-    client: Client,
-}
-
-#[derive(Default)]
-struct ReqwestClientCache {
-    entries: VecDeque<ReqwestClientCacheEntry>,
-}
-
-impl ReqwestClientCache {
-    fn get(&mut self, key: &ReqwestClientCacheKey) -> Option<Client> {
-        let index = self.entries.iter().position(|entry| &entry.key == key)?;
-        let entry = self.entries.remove(index)?;
-        let client = entry.client.clone();
-        self.entries.push_back(entry);
-        Some(client)
+fn probe_proxy_http_client(
+    proxy: &gateway_core::account::OutboundProxy,
+) -> Result<Client, CodexClientError> {
+    static CLIENT: OnceLock<ProbeProxyClientCache> = OnceLock::new();
+    let key = (
+        custom_ca_env_cache_key(),
+        egress_key("turn-state-probe", Some(proxy)),
+    );
+    let mut cached = CLIENT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((cached_key, client)) = cached.as_ref()
+        && cached_key == &key
+    {
+        return Ok(client.clone());
     }
-
-    fn insert(&mut self, entry: ReqwestClientCacheEntry) -> Client {
-        if let Some(client) = self.get(&entry.key) {
-            return client;
-        }
-        while self.entries.len() >= MAX_CACHED_REQWEST_CLIENTS {
-            self.entries.pop_front();
-        }
-        let client = entry.client.clone();
-        self.entries.push_back(entry);
-        client
-    }
-
-    fn evict_account(&mut self, account_id: &str) {
-        self.entries.retain(|entry| entry.account_id != account_id);
-    }
-
-    fn evict_account_entries(&mut self) {
-        self.entries.retain(|entry| entry.account_id.is_empty());
-    }
-}
-
-static REQWEST_CLIENTS: OnceLock<Mutex<ReqwestClientCache>> = OnceLock::new();
-
-fn reqwest_clients() -> &'static Mutex<ReqwestClientCache> {
-    REQWEST_CLIENTS.get_or_init(|| Mutex::new(ReqwestClientCache::default()))
+    // Cache TLS/client configuration, never a live probe connection or business pool.
+    let client = build_reqwest_native_client_with_custom_ca(
+        Client::builder()
+            .no_proxy()
+            .proxy(
+                reqwest::Proxy::all(proxy.expose_url())
+                    .map_err(|_| CodexEgressError::ClientConfiguration)?,
+            )
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
+            .http1_only()
+            .pool_max_idle_per_host(0),
+    )?;
+    *cached = Some((key, client.clone()));
+    Ok(client)
 }
 
 /// 构建带缓存、自动协商 HTTP/2 的 reqwest Client。
 pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
-    build_account_http_client("", None, "")
+    build_account_http_client("", None)
 }
 
 pub fn build_account_http_client(
     account_id: &str,
     proxy: Option<&gateway_core::account::OutboundProxy>,
-    profile_identity: &str,
 ) -> Result<Client, CustomCaError> {
-    let cache_key = (
-        custom_ca_env_cache_key(),
-        egress_key(account_id, proxy),
-        profile_identity.to_owned(),
-    );
-    if let Some(client) = reqwest_clients()
+    let cache_key = (custom_ca_env_cache_key(), egress_key(account_id, proxy));
+    static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
+    let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(client) = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(&cache_key)
     {
-        return Ok(client);
+        return Ok(client.clone());
     }
 
     let mut builder = Client::builder()
@@ -139,28 +124,13 @@ pub fn build_account_http_client(
         );
     }
     let client = build_reqwest_native_client_with_custom_ca(builder)?;
-    let mut clients = reqwest_clients()
+    let mut clients = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    Ok(clients.insert(ReqwestClientCacheEntry {
-        account_id: account_id.to_owned(),
-        key: cache_key,
-        client,
-    }))
-}
-
-pub fn evict_account_http_clients(account_id: &str) {
-    reqwest_clients()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .evict_account(account_id);
-}
-
-pub fn evict_all_account_http_clients() {
-    reqwest_clients()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .evict_account_entries();
+    if clients.len() >= 256 {
+        clients.clear();
+    }
+    Ok(clients.entry(cache_key).or_insert(client).clone())
 }
 
 fn egress_key(account_id: &str, proxy: Option<&gateway_core::account::OutboundProxy>) -> String {
@@ -727,6 +697,7 @@ pub struct CodexBackendJsonResponse {
 #[derive(Clone)]
 pub struct CodexBackendClient {
     pub(super) client: Client,
+    pub(super) direct_client: Client,
     pub(super) base_url: String,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
@@ -772,12 +743,11 @@ impl CodexBackendClient {
             websocket_origin_key(&self.base_url),
             client.egress_key
         );
-        let profile_identity = client.profile.snapshot().user_agent();
-        client.client = build_account_http_client(
-            account.id().as_str(),
-            account.outbound_proxy(),
-            &profile_identity,
-        )?;
+        client.client = if account.outbound_proxy().is_some() {
+            build_account_http_client(account.id().as_str(), account.outbound_proxy())?
+        } else {
+            self.direct_client.clone()
+        };
         Ok(client)
     }
 
@@ -807,6 +777,24 @@ impl CodexBackendClient {
     pub fn with_egress_runtime(mut self, runtime: Arc<CodexEgressRuntime>) -> Self {
         self.egress_runtime = Some(runtime);
         self
+    }
+
+    pub(crate) fn for_probe_proxy(
+        &self,
+        proxy: &gateway_core::account::OutboundProxy,
+    ) -> Result<Self, CodexClientError> {
+        let mut client = self.clone();
+        client.profile = self.profile.frozen();
+        client.client = probe_proxy_http_client(proxy)?;
+        client.outbound_proxy = Some(proxy.clone());
+        client.egress_key = "turn-state-probe-proxy".to_owned();
+        client.egress_runtime = None;
+        client.egress_route = None;
+        client.egress_account = None;
+        client.attempt_pinned = true;
+        client.forced_pool_key = None;
+        client.websocket_pool = None;
+        Ok(client)
     }
 
     pub fn with_request_tuning(mut self, request_tuning: RequestTuningHandle) -> Self {

@@ -67,7 +67,9 @@ function account(fields = {}) {
         {
           model: 'gpt-6-astra',
           refreshStatus: 'ready',
-          active: { chars: 332, expiresAt: '2026-09-18T12:50:00Z' },
+          active: { chars: 332, capturedAt: '2026-09-18T11:50:05Z', expiresAt: '2026-09-18T12:50:00Z' },
+          probeAttempts: 11,
+          successfulProbeAttempt: 2,
           standby: { chars: 332, expiresAt: '2026-09-18T12:55:00Z' },
         },
         {
@@ -103,7 +105,13 @@ test('expanded account State panel lists model slots, lengths, totals, and count
   assert.equal((html.match(/>332 字符 ·/g) ?? []).length, 3)
   assert.match(html, /332 字符 · 50m/)
   assert.match(html, /332 字符 · 55m/)
-  assert.match(html, /补充备用/)
+  assert.match(html, /刷新中/)
+  assert.match(html, /等待切换/)
+  assert.match(html, /采集时间 2026\/9\/18 19:50:05/)
+  assert.match(html, /本轮 11 次/)
+  assert.match(html, /第 2 次成功/)
+  assert.doesNotMatch(html, /第 11 次成功/)
+  assert.doesNotMatch(html, /备用/)
   assert.match(html, /采集中/)
   assert.match(html, /data-icon="ShieldCheck"/)
 })
@@ -111,7 +119,10 @@ test('expanded account State panel lists model slots, lengths, totals, and count
 test('State panel explains disabled and unavailable states without inventing captured values', async () => {
   const disabled = await render({ turnStateInjectionEnabled: false })
   assert.match(disabled, /账号级开关已关闭/)
-  assert.doesNotMatch(disabled, /个 State/)
+  assert.match(disabled, />3<\/strong> 个 State/)
+  assert.match(disabled, />0\/3<\/strong> 模型/)
+  assert.match(disabled, /缓存保留/)
+  assert.match(disabled, /332 字符 · 50m/)
 
   const unavailable = await render({ turnState: null })
   assert.match(unavailable, /全局未启用、账号已暂停或状态暂不可用/)
@@ -133,9 +144,10 @@ test('credential errors and paused accounts override historical ready or refresh
     const html = await render(fields)
     assert.match(html, new RegExp(label))
     assert.match(html, /data-account-turn-state-blocked/)
-    assert.doesNotMatch(html, /采集中|主备就绪|332 字符|个 State/)
+    assert.doesNotMatch(html, /采集中|等待切换|刷新中/)
+    assert.match(html, />0\/3<\/strong> 模型/)
   }
-  assert.match(await render({ status: 'normal', errorReason: null }), /主备就绪/)
+  assert.match(await render({ status: 'normal', errorReason: null }), /等待切换/)
 })
 
 test('model list retains every model in a bounded region, keyboard-focusable only when overflowing', async () => {
@@ -151,9 +163,36 @@ test('model list retains every model in a bounded region, keyboard-focusable onl
     })
     assert.equal((html.match(/data-account-turn-state-model/g) ?? []).length, count)
     assert.match(html, /data-account-turn-state-list[^>]*role="region"[^>]*aria-label="模型 State 状态"/)
-    assert.match(html, /max-h-\[10\.5rem\].*overflow-y-auto/)
-    assert.match(html, /max-sm:max-h-\[14\.25rem\]/)
+    assert.match(html, /max-h-60.*overflow-y-auto/)
+    assert.match(html, /max-sm:max-h-72/)
     assert.equal(/tabindex="0"/.test(html), count > 3)
     assert.match(html, new RegExp(`>0/${count}</strong> 模型`))
   }
+})
+
+test('global disable retains cached countdowns and the last minute is not ready', async () => {
+  const state = account().turnState
+  const disabled = await render({ turnState: { ...state, enabled: false } })
+  assert.match(disabled, /总开关已关闭/)
+  assert.match(disabled, />0\/3<\/strong> 模型/)
+  assert.match(disabled, /332 字符 · 50m/)
+  const cutoff = await render({
+    turnState: {
+      enabled: true,
+      requiredModels: ['model-a'],
+      readyModels: [],
+      models: [{
+        model: 'model-a',
+        refreshStatus: 'queued',
+        active: { chars: 332, expiresAt: '2026-09-18T12:00:59Z' },
+        standby: null,
+        probeAttempts: 71,
+        lastProbeReason: 'missing_completed',
+      }],
+    },
+  })
+  assert.match(cutoff, />0\/1<\/strong> 模型/)
+  assert.match(cutoff, /排队中/)
+  assert.match(cutoff, /本轮 71 次/)
+  assert.doesNotMatch(cutoff, /已就绪/)
 })

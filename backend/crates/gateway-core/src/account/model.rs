@@ -1095,6 +1095,16 @@ pub trait ProviderDeviceCodec: Send + Sync {
         credential: &PlaintextCredential,
         installation_id: &str,
     ) -> Result<PlaintextCredential, ProviderDeviceCodecError>;
+
+    /// Authorize slot retention, not reuse of the old authentication generation.
+    /// The Store separately verifies the persisted account identity and plan.
+    fn can_retain_turn_state(
+        &self,
+        _existing: &PlaintextCredential,
+        _incoming: &PlaintextCredential,
+    ) -> bool {
+        false
+    }
 }
 
 impl fmt::Debug for NewProviderAccount {

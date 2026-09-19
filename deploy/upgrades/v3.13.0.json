@@ -1,0 +1,8 @@
+{
+  "from_version": "3.12.2",
+  "to_version": "3.13.0",
+  "from_migrations_tree": "823ce1259d61b048bfca89766f9539a054626f55",
+  "to_migrations_tree": "b55651d36c2911ab2a5b9e3c87099277645e9410",
+  "added": ["0028_turn_state_lifecycle.sql", "0029_turn_state_probe_proxy.sql"],
+  "recovery": "manual"
+}

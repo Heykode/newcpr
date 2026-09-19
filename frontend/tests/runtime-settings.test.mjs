@@ -257,6 +257,29 @@ const busyWaitDefaults = {
   accountBusyWaitFallbackTimeoutSeconds: 30,
 }
 
+test('State probe proxy defaults to IPv6 and only saves a catalog reference', async () => {
+  for (const initialId of [undefined, null, 'proxy-test']) {
+    const query = mountSettings({ ...settings(), turnStateProbeProxyId: initialId })
+    try {
+      await query.state.loadSettings()
+      assert.equal(query.state.form.turnStateProbeProxyId, initialId ?? '')
+      for (const id of ['proxy-test', '', 'proxy-other']) {
+        query.state.form.turnStateProbeProxyId = id
+        await query.state.saveSettings()
+        const saved = query.requests.at(-1)
+        assert.equal(saved.turnStateProbeProxyId, id || null)
+        assert.equal(Object.hasOwn(saved, 'proxyUrl'), false)
+        await query.state.loadSettings()
+        assert.equal(query.state.form.turnStateProbeProxyId, id)
+        assert.equal(saved.rotationStrategy, 'smart')
+      }
+    }
+    finally {
+      query.stop()
+    }
+  }
+})
+
 test('location override defaults off and persists independently of scheduling', async () => {
   const query = mountSettings(settings())
   try {

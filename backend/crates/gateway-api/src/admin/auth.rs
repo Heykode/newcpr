@@ -15,7 +15,7 @@ use axum::{
 };
 use gateway_admin::{
     AdminServices,
-    model::auth::{AdminPrincipal, AdminRequestContext, LoginCommand, LoginError},
+    model::auth::{AdminPrincipal, AdminRequestContext, ChangePassword, LoginCommand, LoginError},
 };
 use serde::{Deserialize, Serialize};
 use tower_http::request_id::RequestId;
@@ -222,6 +222,50 @@ where
         .route("/api/admin/auth/login", post(login::<S>))
         .route("/api/admin/auth/status", get(session_status::<S>))
         .route("/api/admin/auth/logout", post(logout::<S>))
+        .route("/api/admin/auth/password", post(change_password::<S>))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password<S>(
+    State(state): State<S>,
+    headers: HeaderMap,
+    AdminJson(payload): AdminJson<ChangePasswordRequest>,
+) -> Result<Response, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .auth()
+        .change_password(
+            admin_session_cookie(&headers).as_deref(),
+            ChangePassword {
+                current_password: payload.current_password,
+                new_password: payload.new_password,
+            },
+        )
+        .await
+        .map_err(super::wire::map_admin_service_error)?;
+    let mut response = AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({ "message": "Password changed" })),
+    )
+    .into_response();
+    response.headers_mut().insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&format!(
+            "{ADMIN_SESSION_COOKIE}=; {}; Max-Age=0",
+            admin_session_cookie_attrs(&headers),
+        ))
+        .map_err(|_| AdminError::internal())?,
+    );
+    Ok(response)
 }
 
 async fn login<S>(

@@ -12,6 +12,7 @@ use super::TestDatabase;
 
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
+        turn_state_probe_proxy_id: None,
         admin_api_key: None,
         disable_fast: None,
         turn_state_injection_enabled: None,
@@ -43,6 +44,118 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
 fn runtime_settings_keep_account_rotation_global() {
     let settings = settings_with_margin(3_600);
     assert!(settings.validate().is_ok());
+}
+
+#[tokio::test]
+async fn probe_proxy_selection_is_validated_preserved_and_resolved_from_catalog() {
+    let Some(database) = TestDatabase::create("probe_proxy_settings").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .turn_state_probe_proxy_id
+            .is_none()
+    );
+    sqlx::query(
+        "insert into outbound_proxies (id, name, proxy_url, last_test_success)
+         values ('probe-proxy', 'Probe proxy', 'http://127.0.0.1:18080', true),
+                ('untested-proxy', 'Untested', 'http://127.0.0.1:18081', null)",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let before = repository
+        .load_runtime_settings()
+        .await
+        .unwrap()
+        .config_revision;
+    for id in ["missing-proxy", "untested-proxy"] {
+        let mut update = settings_with_margin(3_600);
+        update.turn_state_probe_proxy_id = Some(Some(id.to_owned()));
+        assert!(repository.update_runtime_settings(update).await.is_err());
+        assert_eq!(
+            repository
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .config_revision,
+            before
+        );
+    }
+    let mut update = settings_with_margin(3_600);
+    update.turn_state_probe_proxy_id = Some(Some("probe-proxy".to_owned()));
+    repository.update_runtime_settings(update).await.unwrap();
+    repository
+        .update_runtime_settings(settings_with_margin(3_600))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .turn_state_probe_proxy_id
+            .as_deref(),
+        Some("probe-proxy")
+    );
+    let snapshots = PgRuntimeSnapshotRepository::new(database.pool.clone());
+    assert_eq!(
+        snapshots
+            .load_runtime_snapshot()
+            .await
+            .unwrap()
+            .settings
+            .turn_state_probe_proxy
+            .as_ref()
+            .unwrap()
+            .expose_url(),
+        "http://127.0.0.1:18080/"
+    );
+    assert!(
+        sqlx::query("delete from outbound_proxies where id = 'probe-proxy'")
+            .execute(&database.pool)
+            .await
+            .is_err()
+    );
+    sqlx::query(
+        "update outbound_proxies set proxy_url = 'http://127.0.0.1:18082' where id = 'probe-proxy'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        snapshots
+            .load_runtime_snapshot()
+            .await
+            .unwrap()
+            .settings
+            .turn_state_probe_proxy
+            .as_ref()
+            .unwrap()
+            .expose_url(),
+        "http://127.0.0.1:18082/"
+    );
+    let mut update = settings_with_margin(3_600);
+    update.turn_state_probe_proxy_id = Some(None);
+    repository.update_runtime_settings(update).await.unwrap();
+    assert!(
+        snapshots
+            .load_runtime_snapshot()
+            .await
+            .unwrap()
+            .settings
+            .turn_state_probe_proxy
+            .is_none()
+    );
+    sqlx::query("delete from outbound_proxies where id = 'probe-proxy'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    database.close().await;
 }
 
 #[test]

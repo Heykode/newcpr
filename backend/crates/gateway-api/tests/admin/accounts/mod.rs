@@ -545,6 +545,7 @@ mod response {
     #[test]
     fn account_turn_state_projection_serializes_only_safe_slot_metadata() {
         let value = serde_json::to_value(AccountTurnStateView {
+            enabled: true,
             required_models: vec!["model-a".to_owned()],
             ready_models: vec![AccountTurnStateModelView {
                 model: "model-a".to_owned(),
@@ -553,12 +554,17 @@ mod response {
             models: vec![AccountTurnStateModelStatusView {
                 model: "model-a".to_owned(),
                 refresh_status: "ready".to_owned(),
+                probe_attempts: 11,
+                successful_probe_attempt: Some(2),
+                last_probe_reason: None,
                 active: Some(AccountTurnStateSlotView {
                     chars: 332,
+                    captured_at: Some("2026-09-18T12:00:05+08:00".to_owned()),
                     expires_at: "2026-09-18T13:00:00+08:00".to_owned(),
                 }),
                 standby: Some(AccountTurnStateSlotView {
                     chars: 332,
+                    captured_at: None,
                     expires_at: "2026-09-18T13:05:00+08:00".to_owned(),
                 }),
             }],
@@ -567,6 +573,7 @@ mod response {
         assert_eq!(
             value,
             json!({
+                "enabled": true,
                 "requiredModels": ["model-a"],
                 "readyModels": [{
                     "model": "model-a",
@@ -575,12 +582,17 @@ mod response {
                 "models": [{
                     "model": "model-a",
                     "refreshStatus": "ready",
+                    "probeAttempts": 11,
+                    "successfulProbeAttempt": 2,
+                    "lastProbeReason": null,
                     "active": {
                         "chars": 332,
+                        "capturedAt": "2026-09-18T12:00:05+08:00",
                         "expiresAt": "2026-09-18T13:00:00+08:00"
                     },
                     "standby": {
                         "chars": 332,
+                        "capturedAt": null,
                         "expiresAt": "2026-09-18T13:05:00+08:00"
                     }
                 }]

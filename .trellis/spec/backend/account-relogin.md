@@ -141,6 +141,19 @@
 
 ## Verification
 
+### Interactive OAuth Reauthorization
+
+- Require matching, nonempty old and new upstream user IDs in addition to the
+  existing email/workspace checks. Preserve existing error precedence and reject
+  before persisting any account or credential mutation.
+- Scope this check to `complete_claimed_authorization`, not the shared
+  `prepare_candidate_oauth_rotation`: trusted administrator file imports
+  intentionally retain their existing metadata-update contract.
+- Keep automatic relogin identity checks, token refresh, installation identity
+  and State binding rules unchanged. Test rejection releases the pending claim,
+  leaves storage unchanged, and successful same-user reauthorization preserves
+  the device and fallback refresh token.
+
 Run the relogin model/service tests, API auth/wire tests, isolated PostgreSQL relogin
 tests and existing device-registry regressions. Run `relogin_worker_test.py` offline.
 Verify both new push and original in-place rotation paths. Never use real credentials

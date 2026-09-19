@@ -47,6 +47,7 @@ pub(crate) const MAX_REDIS_EXACT_INTEGER: u64 = (1_u64 << 53) - 1;
 pub struct AdminSessionRecord {
     pub admin_user_id: String,
     pub expires_at: DateTime<Utc>,
+    pub credential_fingerprint: String,
 }
 
 impl AdminSessionRecord {
@@ -71,6 +72,13 @@ impl AdminSessionRecord {
 /// 管理员会话的 Redis 基础设施端口。
 #[async_trait]
 pub trait AdminAuthStateRepository: Send + Sync {
+    async fn consume_password_change_attempt(
+        &self,
+        admin_user_id: &str,
+        limit: u32,
+        window_seconds: u64,
+    ) -> StoreResult<bool>;
+
     async fn load_admin_session(&self, session_id: &str)
     -> StoreResult<Option<AdminSessionRecord>>;
     async fn store_admin_session(
@@ -107,6 +115,34 @@ impl RedisAdminAuthStateRepository {
 
 #[async_trait]
 impl AdminAuthStateRepository for RedisAdminAuthStateRepository {
+    async fn consume_password_change_attempt(
+        &self,
+        admin_user_id: &str,
+        limit: u32,
+        window_seconds: u64,
+    ) -> StoreResult<bool> {
+        if limit == 0 || window_seconds == 0 || window_seconds > 86_400 {
+            return Err(admin_auth_invalid("invalid password change limit"));
+        }
+        let fingerprint = resource_fingerprint("admin user", admin_user_id)?;
+        let key = format!("{}:password-change:{{{fingerprint}}}", self.namespace);
+        let mut connection = self.connection.clone();
+        let allowed: bool = redis::Script::new(
+            "local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+             if count >= tonumber(ARGV[1]) then return 0 end
+             count = redis.call('INCR', KEYS[1])
+             if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
+             return 1",
+        )
+        .key(key)
+        .arg(limit)
+        .arg(window_seconds)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|_| redis_unavailable("consume password change attempt"))?;
+        Ok(allowed)
+    }
+
     async fn load_admin_session(
         &self,
         session_id: &str,
@@ -165,11 +201,14 @@ impl AdminAuthStateRepository for RedisAdminAuthStateRepository {
 struct AdminSessionWire {
     admin_user_id: String,
     expires_at: String,
+    #[serde(default)]
+    credential_fingerprint: String,
 }
 
 fn encode_admin_session(session: &AdminSessionRecord) -> StoreResult<String> {
     serde_json::to_string(&AdminSessionWire {
         admin_user_id: session.admin_user_id.clone(),
+        credential_fingerprint: session.credential_fingerprint.clone(),
         expires_at: session
             .expires_at
             .to_rfc3339_opts(SecondsFormat::Nanos, true),
@@ -187,6 +226,7 @@ fn decode_admin_session(value: &str) -> StoreResult<AdminSessionRecord> {
     Ok(AdminSessionRecord {
         admin_user_id: wire.admin_user_id,
         expires_at,
+        credential_fingerprint: wire.credential_fingerprint,
     })
 }
 

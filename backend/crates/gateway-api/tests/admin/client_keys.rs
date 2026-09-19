@@ -10,6 +10,70 @@ use serde_json::json;
 
 use super::{AdminTestFixture, AdminTestState};
 
+#[tokio::test]
+async fn budget_reset_requires_auth_and_explicit_valid_period() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("budget-reset-session");
+    let app = client_keys::router::<AdminTestState>().with_state(AdminTestState(fixture.services));
+    for (authenticated, payload, status) in [
+        (
+            false,
+            json!({"id":"key_test","period":"all"}),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            true,
+            json!({"id":"key_test","period":"all"}),
+            StatusCode::OK,
+        ),
+        (
+            true,
+            json!({"id":"key_test","period":"daily"}),
+            StatusCode::OK,
+        ),
+        (
+            true,
+            json!({"id":"key_test","period":"weekly"}),
+            StatusCode::OK,
+        ),
+        (
+            true,
+            json!({"id":"key_test"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            true,
+            json!({"id":"key_test","period":"forever"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            true,
+            json!({"id":"key_test","period":"all","amount":0}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/admin/client-keys/reset-budget")
+            .header("content-type", "application/json")
+            .header("x-request-id", "budget-reset-test");
+        if authenticated {
+            request = request.header("cookie", "cpr_admin_session=budget-reset-session");
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(payload.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "payload {payload}");
+    }
+}
+
 #[test]
 fn budget_inputs_preserve_decimal_precision_and_omitted_updates() {
     let payload = json!({"name": "budget", "groupIds": [], "maxConcurrency": 3,

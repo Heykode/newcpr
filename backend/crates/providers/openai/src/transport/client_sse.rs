@@ -12,6 +12,7 @@ use reqwest::{
     Client, Response as ReqwestResponse,
     header::{CONTENT_ENCODING, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
+use sha2::{Digest, Sha256};
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 
 use crate::transport::{
@@ -83,6 +84,7 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            direct_client: client.clone(),
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
             outbound_proxy: None,
@@ -139,7 +141,13 @@ impl CodexBackendClient {
         probe: bool,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let profile = self.profile.snapshot();
-        let headers = self.request_headers_for_http_response(upstream_request, context)?;
+        let mut headers = self.request_headers_for_http_response(upstream_request, context)?;
+        if probe && self.outbound_proxy.is_some() {
+            headers.insert(
+                reqwest::header::CONNECTION,
+                reqwest::header::HeaderValue::from_static("close"),
+            );
+        }
         let headers_started_at = Instant::now();
         // 身份投影先完成，再按最终 JSON 大小决定是否使用 zstd。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
@@ -924,7 +932,16 @@ fn websocket_connection_profile(headers: &HeaderMap) -> String {
         .get("thread-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    format!("qx-session-v1\0{identity}\0{session}\0{thread}")
+    // A renewed Token may retain State, but a new chain must authenticate again.
+    // Keep secrets out of the pool key/Debug; exact owners still resolve normally.
+    let mut auth = Sha256::new();
+    for name in ["authorization", "chatgpt-account-id"] {
+        let value = headers.get(name).map_or(&[][..], HeaderValue::as_bytes);
+        auth.update((value.len() as u64).to_be_bytes());
+        auth.update(value);
+    }
+    let auth = hex::encode(auth.finalize());
+    format!("qx-session-v1\0{identity}\0{session}\0{thread}\0{auth}")
 }
 
 fn http_sse_stream(

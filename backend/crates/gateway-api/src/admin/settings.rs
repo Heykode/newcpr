@@ -36,6 +36,7 @@ pub struct RuntimeSettingsView {
     pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
+    pub turn_state_probe_proxy_id: Option<String>,
     pub responses_max_decompressed_body_bytes: u64,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
@@ -59,6 +60,8 @@ pub struct UpdateRuntimeSettingsRequest {
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_probe_proxy_selection")]
+    pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub responses_max_decompressed_body_bytes: Option<u64>,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
@@ -78,6 +81,13 @@ pub struct UpdateRuntimeSettingsRequest {
 impl UpdateRuntimeSettingsRequest {
     /// 校验公共运行参数。
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(Some(id)) = &self.turn_state_probe_proxy_id
+            && (id.is_empty()
+                || id.len() > 256
+                || id.chars().any(|c| c.is_whitespace() || c.is_control()))
+        {
+            return Err(WireValidationError::new("turnStateProbeProxyId"));
+        }
         validate_model_mappings(&self.model_mappings)?;
         if let Some(models) = &self.turn_state_models {
             validate_turn_state_models(models)?;
@@ -129,6 +139,7 @@ impl UpdateRuntimeSettingsRequest {
         Ok(ReplaceRuntimeSettings {
             disable_fast: self.disable_fast,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
+            turn_state_probe_proxy_id: self.turn_state_probe_proxy_id,
             turn_state_models: self
                 .turn_state_models
                 .map(|models| {
@@ -167,6 +178,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
         Self {
             disable_fast: settings.disable_fast,
             turn_state_injection_enabled: settings.turn_state_injection_enabled,
+            turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,
             turn_state_models: settings
                 .turn_state_models
                 .into_iter()
@@ -188,6 +200,15 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             updated_at: settings.updated_at,
         }
     }
+}
+
+fn deserialize_probe_proxy_selection<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 fn validate_turn_state_models(models: &[String]) -> Result<(), WireValidationError> {

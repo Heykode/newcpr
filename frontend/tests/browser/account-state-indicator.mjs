@@ -55,8 +55,9 @@ async function main() {
       ...(index === 0 && errorReason ? { status: 'error', errorReason } : {}),
       provider: index === 2 ? 'xai' : account.provider,
       turnStateInjectionEnabled: index === 0 ? enabled : index === 2,
-      turnState: index === 0 && enabled
+      turnState: index === 0
         ? {
+            enabled,
             requiredModels: ['model-a', 'model-b', ...Array.from({ length: modelCount - 2 }, (_, index) => `model-extra-${index}-with-a-long-name-for-overflow-checks`)],
             readyModels: ready ? [{ model: 'model-a', expiresAt: expiresAt(50) }] : [],
             models: ready
@@ -64,12 +65,16 @@ async function main() {
                   {
                     model: 'model-a',
                     refreshStatus: 'ready',
-                    active: { chars: 332, expiresAt: expiresAt(50) },
+                    probeAttempts: 11,
+                    successfulProbeAttempt: 2,
+                    active: { chars: 332, capturedAt: new Date(Date.now() - 10 * 60_000).toISOString(), expiresAt: expiresAt(50) },
                     standby: { chars: 332, expiresAt: expiresAt(55) },
                   },
                   {
                     model: 'model-b',
                     refreshStatus: 'refreshing',
+                    probeAttempts: 121,
+                    lastProbeReason: 'missing_state',
                     active: null,
                     standby: null,
                   },
@@ -129,6 +134,24 @@ async function main() {
         }).click()
       }
       await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme)
+      const rowSelection = page.getByRole('checkbox', { name: '选择账号', exact: true }).first()
+      await rowSelection.press('Space')
+      assert.equal(await rowSelection.isChecked(), true)
+      const selectedRow = page.locator('tr[aria-selected="true"]').first()
+      await selectedRow.hover()
+      await page.waitForFunction(() => {
+        const cell = document.querySelector('tr[aria-selected="true"] td')
+        if (!cell)
+          return false
+        const probe = document.createElement('div')
+        probe.style.backgroundColor = 'var(--cp-table-row-selected-bg)'
+        cell.appendChild(probe)
+        const expected = getComputedStyle(probe).backgroundColor
+        probe.remove()
+        return getComputedStyle(cell).backgroundColor === expected
+      })
+      await rowSelection.press('Space')
+      assert.equal(await rowSelection.isChecked(), false)
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: 900 })
         await avatar.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'center' }))
@@ -205,7 +228,7 @@ async function main() {
               headerTop: element.parentElement.firstElementChild.getBoundingClientRect().top,
             }
           })
-          const rowHeight = width < 640 ? 76 : 56
+          const rowHeight = width < 640 ? 96 : 80
           assert.equal(metrics.count, count)
           assert.ok(metrics.rowHeights.every(height => height === rowHeight), JSON.stringify(metrics))
           assert.equal(metrics.height, 3 * rowHeight)
@@ -246,7 +269,8 @@ async function main() {
       assert.equal(await mark.getAttribute('title'), `State：${label}`)
       await page.locator('button[title="展开统计"]').first().click()
       await panel.locator('[data-account-turn-state-blocked]').waitFor()
-      assert.equal(await panel.locator('[data-account-turn-state-model]').count(), 0)
+      assert.equal(await panel.locator('[data-account-turn-state-model]').count(), 2)
+      assert.ok((await panel.textContent()).includes('0/2 模型'))
       assert.ok((await panel.textContent()).includes(label))
       for (const width of [1440, 320]) {
         await page.setViewportSize({ width, height: 900 })

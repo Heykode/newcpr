@@ -24,6 +24,7 @@ pub struct RuntimeSettings {
     pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
+    pub turn_state_probe_proxy_id: Option<String>,
     pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -84,6 +85,7 @@ pub struct RuntimeSettingsUpdate {
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Vec<String>,
+    pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -196,7 +198,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+            "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
@@ -249,7 +251,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+        "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
@@ -271,6 +273,18 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     update: &RuntimeSettingsUpdate,
 ) -> StoreResult<Revision> {
     update.validate()?;
+    if let Some(Some(id)) = &update.turn_state_probe_proxy_id {
+        // Match proxy edits: lock runtime settings before the referenced proxy row.
+        sqlx::query("select id from runtime_settings where id = 1 for update")
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| postgres_unavailable("lock runtime settings for proxy selection"))?;
+        super::proxies::resolve_proxy_selection(
+            transaction,
+            &gateway_admin::model::proxies::AccountProxySelection::Saved(id.clone()),
+        )
+        .await?;
+    }
     let refresh_margin_seconds =
         i64::try_from(update.refresh_margin_seconds).map_err(|_| invalid_numeric())?;
     let next = sqlx::query_scalar::<_, i64>(
@@ -293,6 +307,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 disable_fast = coalesce($15, disable_fast),
 	                 turn_state_injection_enabled = coalesce($16, turn_state_injection_enabled),
 	                 turn_state_models = $17,
+	                 turn_state_probe_proxy_id = case when $18 then $19 else turn_state_probe_proxy_id end,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -317,6 +332,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.disable_fast)
     .bind(update.turn_state_injection_enabled)
     .bind(&update.turn_state_models)
+    .bind(update.turn_state_probe_proxy_id.is_some())
+    .bind(update.turn_state_probe_proxy_id.as_ref().and_then(Option::as_deref))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -371,6 +388,7 @@ struct RuntimeSettingsRow {
     disable_fast: bool,
     turn_state_injection_enabled: bool,
     turn_state_models: Vec<String>,
+    turn_state_probe_proxy_id: Option<String>,
     responses_max_decompressed_body_bytes: i64,
     refresh_margin_seconds: i64,
     refresh_concurrency: i64,
@@ -394,6 +412,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         disable_fast: row.disable_fast,
         turn_state_injection_enabled: row.turn_state_injection_enabled,
         turn_state_models: row.turn_state_models,
+        turn_state_probe_proxy_id: row.turn_state_probe_proxy_id,
         responses_max_decompressed_body_bytes: to_u64(row.responses_max_decompressed_body_bytes)?,
         refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,
         refresh_concurrency: to_u32(row.refresh_concurrency)?,

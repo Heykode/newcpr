@@ -45,7 +45,10 @@ async fn http_exit(label: &'static str) -> (String, tokio::task::JoinHandle<Stri
 async fn pooled_http_exit(
     expected_connections: usize,
     expected_requests: usize,
-) -> (String, tokio::task::JoinHandle<Vec<usize>>) {
+) -> (
+    String,
+    tokio::task::JoinHandle<Vec<(usize, hyper::HeaderMap)>>,
+) {
     use std::convert::Infallible;
 
     use http_body_util::Full;
@@ -62,10 +65,10 @@ async fn pooled_http_exit(
                 let (stream, _) = listener.accept().await.unwrap();
                 let seen_tx = seen_tx.clone();
                 tasks.push(tokio::spawn(async move {
-                    let service = hyper::service::service_fn(move |_request| {
+                    let service = hyper::service::service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
                         let seen_tx = seen_tx.clone();
                         async move {
-                            seen_tx.send(connection_id).unwrap();
+                            seen_tx.send((connection_id, request.headers().clone())).unwrap();
                             let body = concat!(
                                 "event: response.completed\n",
                                 "data: {\"type\":\"response.completed\",\"response\":{",
@@ -101,8 +104,8 @@ async fn pooled_http_exit(
 }
 
 #[tokio::test]
-async fn direct_http_accounts_use_distinct_connection_pools() {
-    let (base_url, server) = pooled_http_exit(2, 2).await;
+async fn direct_http_accounts_reuse_the_base_connection_pool() {
+    let (base_url, server) = pooled_http_exit(1, 2).await;
     let base = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         base_url,
@@ -110,19 +113,29 @@ async fn direct_http_accounts_use_distinct_connection_pools() {
     );
     let mut request = codex_request("gpt-5.5", "", Vec::new());
     request.force_http_sse = true;
-    for (id, request_id) in [("direct-a", "direct-a"), ("direct-b", "direct-b")] {
+    for id in ["direct-a", "direct-b"] {
+        let authorization = format!("Bearer synthetic-{id}");
+        let cookie = format!("__cf_bm=synthetic-{id}");
+        let mut context = request_context(id, Some(id));
+        context.authorization = &authorization;
+        context.cookie_header = Some(&cookie);
         base.for_account(&account(id, None))
             .unwrap()
-            .create_response(&request, request_context(request_id, Some(id)))
+            .create_response(&request, context)
             .await
             .unwrap();
     }
 
     let connection_ids = timeout(Duration::from_secs(5), server)
         .await
-        .expect("two account-scoped connections")
+        .expect("shared direct connection")
         .unwrap();
-    assert_ne!(connection_ids[0], connection_ids[1]);
+    assert_eq!(connection_ids[0].0, connection_ids[1].0);
+    for ((_, headers), id) in connection_ids.iter().zip(["direct-a", "direct-b"]) {
+        assert_eq!(headers["chatgpt-account-id"], id);
+        assert_eq!(headers["authorization"], format!("Bearer synthetic-{id}"));
+        assert_eq!(headers["cookie"], format!("__cf_bm=synthetic-{id}"));
+    }
 }
 
 #[tokio::test]
@@ -170,13 +183,13 @@ async fn direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change
         .await
         .expect("default and custom profile connections")
         .unwrap();
-    assert_eq!(connection_ids[0], connection_ids[1]);
-    assert_ne!(connection_ids[0], connection_ids[2]);
+    assert_eq!(connection_ids[0].0, connection_ids[1].0);
+    assert_ne!(connection_ids[0].0, connection_ids[2].0);
 }
 
 #[tokio::test]
-async fn account_http_pool_eviction_forces_a_fresh_connection() {
-    let (base_url, server) = pooled_http_exit(2, 2).await;
+async fn recreating_account_client_preserves_the_direct_pool() {
+    let (base_url, server) = pooled_http_exit(1, 2).await;
     let account = account("evicted", None);
     let base = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
@@ -190,7 +203,6 @@ async fn account_http_pool_eviction_forces_a_fresh_connection() {
         .create_response(&request, request_context("before-evict", Some("evicted")))
         .await
         .unwrap();
-    provider_openai::transport::evict_account_http_clients(account.id().as_str());
     base.for_account(&account)
         .unwrap()
         .create_response(&request, request_context("after-evict", Some("evicted")))
@@ -199,9 +211,9 @@ async fn account_http_pool_eviction_forces_a_fresh_connection() {
 
     let connection_ids = timeout(Duration::from_secs(5), server)
         .await
-        .expect("connection after account eviction")
+        .expect("connection after recreating account client")
         .unwrap();
-    assert_ne!(connection_ids[0], connection_ids[1]);
+    assert_eq!(connection_ids[0].0, connection_ids[1].0);
 }
 
 #[tokio::test]
@@ -265,7 +277,7 @@ async fn websocket_exit(label: &'static str) -> (String, tokio::task::JoinHandle
             .unwrap();
         connect
     });
-    (format!("http://user:pass@{address}"), task)
+    (format!("http://user:$example@{address}"), task)
 }
 
 #[tokio::test]
@@ -298,7 +310,7 @@ async fn websocket_connect_and_pool_are_isolated_when_account_proxy_changes() {
     for head in [a.await.unwrap(), b.await.unwrap()] {
         assert_eq!(
             read_header_value(&head, "Proxy-Authorization"),
-            Some("Basic dXNlcjpwYXNz")
+            Some("Basic dXNlcjokZXhhbXBsZQ==")
         );
     }
 }

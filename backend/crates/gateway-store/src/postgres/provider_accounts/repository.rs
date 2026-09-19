@@ -265,6 +265,9 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                 &update.provider_credentials_json,
             )
             .await?;
+        let state_owner =
+            state_retention::StateOwnerSnapshot::capture(&mut transaction, &update.account_id)
+                .await?;
         let next = sqlx::query_scalar::<_, i64>(
             "update provider_accounts
              set provider_credentials_json = $3,
@@ -292,6 +295,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             kind: ConflictKind::StaleRevision,
         })?;
         let revision = Revision::new(to_u64(next)?)?;
+        self.retain_turn_state(&mut transaction, state_owner)
+            .await?;
         transaction
             .commit()
             .await
@@ -628,10 +633,15 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 account.provider_credentials_json = self
                     .prepare_account_device(&mut transaction, &account)
                     .await?;
+                let state_owner =
+                    state_retention::StateOwnerSnapshot::capture_import(&mut transaction, &account)
+                        .await?;
                 account_ids.push(
                     upsert_provider_account_in_transaction(&mut transaction, &account, require_new)
                         .await?,
                 );
+                self.retain_turn_state(&mut transaction, state_owner)
+                    .await?;
             }
             if let Some(settings) = &command.settings {
                 let unique_ids = account_ids
@@ -711,6 +721,11 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     &credential.provider_credentials_json,
                 )
                 .await?;
+            let state_owner = state_retention::StateOwnerSnapshot::capture(
+                &mut transaction,
+                &credential.account_id,
+            )
+            .await?;
             let credential_revision = rotate_provider_account_in_transaction(
                 &mut transaction,
                 &command.scope,
@@ -719,6 +734,8 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &credential,
             )
             .await?;
+            self.retain_turn_state(&mut transaction, state_owner)
+                .await?;
             if let Some(operation_id) = &command.relogin_operation_id {
                 // The event and counter share the credential CAS transaction, not the library save.
                 sqlx::query(

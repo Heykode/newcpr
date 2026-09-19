@@ -573,6 +573,8 @@ pub(super) struct FakeAccountStore {
     quota_learning_failure: Mutex<bool>,
     cumulative_costs: Mutex<BTreeMap<String, Vec<AccountCumulativeCost>>>,
     cumulative_cost_queries: Mutex<Vec<Vec<String>>>,
+    turn_states: Mutex<BTreeMap<String, gateway_admin::model::accounts::AccountTurnStateStatus>>,
+    projection_override: Mutex<Option<gateway_core::account::AccountStatus>>,
 }
 
 impl FakeAccountStore {
@@ -596,6 +598,8 @@ impl FakeAccountStore {
             quota_learning_failure: Mutex::new(false),
             cumulative_costs: Mutex::new(BTreeMap::new()),
             cumulative_cost_queries: Mutex::new(Vec::new()),
+            turn_states: Mutex::default(),
+            projection_override: Mutex::default(),
         })
     }
 
@@ -685,6 +689,21 @@ impl FakeAccountStore {
 
 #[async_trait]
 impl AccountStore for FakeAccountStore {
+    async fn load_turn_state_status(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountTurnStateStatus>>
+    {
+        Ok(self
+            .turn_states
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| account_ids.contains(id))
+            .map(|(id, state)| (id.clone(), state.clone()))
+            .collect())
+    }
+
     async fn list_accounts(
         &self,
         _: AccountListQuery,
@@ -695,7 +714,16 @@ impl AccountStore for FakeAccountStore {
         let total = accounts.len() as u64;
         Ok(AccountPage {
             config_revision: revision(1),
-            items: accounts.into_iter().map(Self::page_item).collect(),
+            items: accounts
+                .into_iter()
+                .map(|account| {
+                    let mut item = Self::page_item(account);
+                    if let Some(status) = *self.projection_override.lock().unwrap() {
+                        item.projection.status = status;
+                    }
+                    item
+                })
+                .collect(),
             total,
             summary: AccountSummary {
                 total,
@@ -729,7 +757,13 @@ impl AccountStore for FakeAccountStore {
                     .find(|account| account.id == account_id)
                     .cloned()
             });
-        Ok(account.map(Self::page_item))
+        Ok(account.map(|account| {
+            let mut item = Self::page_item(account);
+            if let Some(status) = *self.projection_override.lock().unwrap() {
+                item.projection.status = status;
+            }
+            item
+        }))
     }
 
     async fn load_account_usage(
@@ -1057,6 +1091,7 @@ struct StaticSettingsStore;
 impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
+            turn_state_probe_proxy_id: None,
             config_revision: revision(1),
             disable_fast: false,
             turn_state_injection_enabled: false,
@@ -2101,6 +2136,74 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
         page.items.first().expect("account item").projection.status,
         gateway_admin::model::accounts::AccountStatus::Normal,
     );
+}
+
+#[tokio::test]
+async fn account_state_readiness_respects_runtime_cooldown_without_hiding_cached_metadata() {
+    use gateway_admin::model::accounts::{
+        AccountStatus, AccountTurnStateModelStatus, AccountTurnStateSlotStatus,
+        AccountTurnStateStatus,
+    };
+    let provider = FakeProviderAdmin::new("openai", events());
+    let store = FakeAccountStore::new("openai", events());
+    let id = account_record("openai").id;
+    let captured_at = Utc::now();
+    let expires_at = captured_at + TimeDelta::hours(1);
+    let model = AccountTurnStateModelStatus {
+        model: "model-a".into(),
+        refresh_status: "ready".into(),
+        probe_attempts: 11,
+        successful_probe_attempt: Some(2),
+        last_probe_reason: None,
+        active: Some(AccountTurnStateSlotStatus {
+            chars: 292,
+            captured_at: Some(captured_at),
+            expires_at,
+        }),
+        standby: None,
+    };
+    store.turn_states.lock().unwrap().insert(
+        id.clone(),
+        AccountTurnStateStatus {
+            enabled: true,
+            required_models: vec!["model-a".into()],
+            ready_models: vec![("model-a".into(), expires_at)],
+            models: vec![model.clone()],
+        },
+    );
+    let services = accounts_service(provider, store.clone()).await;
+    for status in [
+        AccountStatus::Normal,
+        AccountStatus::RateLimited,
+        AccountStatus::Error,
+        AccountStatus::QuotaExhausted,
+        AccountStatus::Disabled,
+        AccountStatus::Normal,
+    ] {
+        *store.projection_override.lock().unwrap() = Some(status);
+        let page = services
+            .accounts()
+            .list(account_list_query())
+            .await
+            .unwrap();
+        let detail = services
+            .accounts()
+            .quota(&ProviderAccountId::new(id.clone()).unwrap(), false)
+            .await
+            .unwrap();
+        for state in [
+            page.items[0].turn_state.as_ref().unwrap(),
+            detail.turn_state.as_ref().unwrap(),
+        ] {
+            assert!(state.enabled);
+            assert_eq!(state.required_models, ["model-a"]);
+            assert_eq!(
+                state.ready_models.len(),
+                usize::from(status == AccountStatus::Normal)
+            );
+            assert_eq!(state.models.as_slice(), std::slice::from_ref(&model));
+        }
+    }
 }
 
 #[tokio::test]

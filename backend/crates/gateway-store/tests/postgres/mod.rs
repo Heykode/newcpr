@@ -35,6 +35,7 @@ mod runtime_settings;
 mod schema_integrity;
 mod snapshot;
 mod snapshots;
+mod turn_state_upgrade;
 mod turn_states;
 
 static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
@@ -64,6 +65,10 @@ pub(super) fn admin_account_store(pool: &PgPool) -> PgAdminAccountStore {
 
 impl TestDatabase {
     pub(super) async fn create(label: &str) -> Option<Self> {
+        Self::create_with_migrator(label, &TEST_MIGRATOR).await
+    }
+
+    async fn create_with_migrator(label: &str, migrator: &sqlx::migrate::Migrator) -> Option<Self> {
         let database_url = crate::support::test_env("CPR_TEST_DATABASE_URL")?;
         let schema = format!("cpr_store_{label}_{}", Uuid::new_v4().simple());
         let admin = PgPoolOptions::new()
@@ -91,10 +96,7 @@ impl TestDatabase {
             .connect(&database_url)
             .await
             .expect("connect isolated test schema");
-        TEST_MIGRATOR
-            .run(&pool)
-            .await
-            .expect("apply test migrations");
+        migrator.run(&pool).await.expect("apply test migrations");
         Some(Self {
             admin,
             pool,

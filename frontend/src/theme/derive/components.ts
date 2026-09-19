@@ -134,8 +134,17 @@ export function deriveThemeComponentMap(
 
   // 实心按钮单独承担小字号白字的可读性，不改写品牌 Seed 或全局主色。
   const buttonPrimaryBg = ensureContrast(primary.colorPrimary, primary.colorTextLightSolid, 4.5)
+  const inputInteractionBg = theme === 'light' ? surfaces.colorBgContainer : components.inputHoverBg
+  // 焦点属于可访问性反馈，不随装饰阴影强度消失。
+  const inputInteractionShadow = theme === 'light'
+    ? `0 0 0 3px ${withAlpha(primary.colorPrimary, 0.16)}`
+    : components.inputActiveShadow
   return {
     ...components,
+    inputHoverBg: inputInteractionBg,
+    inputActiveBg: inputInteractionBg,
+    inputHoverShadow: inputInteractionShadow,
+    inputActiveShadow: inputInteractionShadow,
     buttonPrimaryColor: primary.colorTextLightSolid,
     buttonPrimaryBg,
     buttonPrimaryHoverBg: mix(buttonPrimaryBg, BLACK, 0.08),

@@ -40,6 +40,7 @@ fn update_body() -> Value {
         "disableFast": false,
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
+        "turnStateProbeProxyId": null,
         "responsesMaxDecompressedBodyBytes": 67108864,
         "modelMappings": {
             "gpt-5.4": "gpt-5.5",
@@ -88,6 +89,59 @@ fn settings_request_should_reject_unknown_rotation_strategy() {
         serde_json::from_value(body).expect("decode settings");
 
     assert_eq!(request.validate().unwrap_err().field(), "rotationStrategy");
+}
+
+#[tokio::test]
+async fn probe_proxy_selection_preserves_omitted_and_clears_explicit_null() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let app = app(fixture.state());
+    for (value, expected) in [
+        (Some(json!("proxy-test")), json!("proxy-test")),
+        (None, json!("proxy-test")),
+        (Some(Value::Null), Value::Null),
+    ] {
+        let mut body = update_body();
+        if let Some(value) = value {
+            body["turnStateProbeProxyId"] = value;
+        } else {
+            body.as_object_mut()
+                .unwrap()
+                .remove("turnStateProbeProxyId");
+        }
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            response_json(response).await["data"]["turnStateProbeProxyId"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn probe_proxy_selection_rejects_invalid_ids() {
+    for id in ["", " ", "proxy\nid", "proxy id", &"a".repeat(257)] {
+        let mut body = update_body();
+        body["turnStateProbeProxyId"] = json!(id);
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(
+            request.validate().unwrap_err().field(),
+            "turnStateProbeProxyId"
+        );
+    }
 }
 
 #[test]
@@ -210,6 +264,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
+        turn_state_probe_proxy_id: None,
         config_revision: Revision::new(7).expect("revision"),
         disable_fast: false,
         turn_state_injection_enabled: false,
@@ -274,6 +329,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "disableFast": false,
             "turnStateInjectionEnabled": false,
             "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
+            "turnStateProbeProxyId": null,
             "responsesMaxDecompressedBodyBytes": 67108864,
             "modelMappings": {
                 "gpt-5.4": "gpt-5.5",
@@ -338,6 +394,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .collect();
     let settings = RuntimeSettings {
         config_revision: Revision::new(7).expect("revision"),
+        turn_state_probe_proxy_id: request.turn_state_probe_proxy_id.clone().flatten(),
         disable_fast: request.disable_fast.unwrap_or(false),
         turn_state_injection_enabled: request.turn_state_injection_enabled.unwrap_or(false),
         turn_state_models: request

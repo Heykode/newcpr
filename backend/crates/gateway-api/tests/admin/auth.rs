@@ -134,3 +134,89 @@ async fn audit_failure_should_revoke_new_session_before_returning_it() {
     );
     assert_eq!(fixture.auth.session_count(), 0);
 }
+
+#[tokio::test]
+async fn change_password_route_requires_session_and_revokes_it_after_commit() {
+    use super::AdminTestState;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("password-session");
+    let key = format!("admin-{}", "b".repeat(64));
+    fixture.auth.set_api_key(&key);
+    let app = gateway_api::admin::auth::router::<AdminTestState>()
+        .with_state(AdminTestState(fixture.services.clone()));
+    let request = |cookie: Option<&str>, password: &str| {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/api/admin/auth/password")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-api-key", &key)
+            .header(header::ORIGIN, "http://localhost");
+        if let Some(cookie) = cookie {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        builder
+            .body(Body::from(
+                json!({
+                    "currentPassword": password,
+                    "newPassword": "replacement-admin-password",
+                })
+                .to_string(),
+            ))
+            .expect("request")
+    };
+    let response = app
+        .clone()
+        .oneshot(request(None, "strong-admin-password"))
+        .await
+        .expect("response");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "API key alone cannot change password"
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            Some("cpr_admin_session=password-session"),
+            "incorrect",
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app
+        .clone()
+        .oneshot(request(
+            Some("cpr_admin_session=password-session"),
+            "strong-admin-password",
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.headers()[header::SET_COOKIE]
+            .to_str()
+            .expect("cookie")
+            .contains("Max-Age=0")
+    );
+    let response = app
+        .oneshot(request(
+            Some("cpr_admin_session=password-session"),
+            "replacement-admin-password",
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        fixture
+            .services
+            .auth()
+            .verify_admin_api_key(&key)
+            .await
+            .expect("API key unchanged")
+    );
+}

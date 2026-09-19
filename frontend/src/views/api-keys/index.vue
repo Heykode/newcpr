@@ -12,6 +12,7 @@ import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { usePageSelection } from '@/composables/usePageSelection'
 import ApiKeyActions from './components/ApiKeyActions.vue'
 import ApiKeyBudgetCell from './components/ApiKeyBudgetCell.vue'
+import ApiKeyBudgetResetModal from './components/ApiKeyBudgetResetModal.vue'
 import ApiKeyCreateModal from './components/ApiKeyCreateModal.vue'
 import ApiKeyFilters from './components/ApiKeyFilters.vue'
 import ApiKeyIdentityCell from './components/ApiKeyIdentityCell.vue'
@@ -44,6 +45,12 @@ const {
 } = useAccountGroupCatalog({ immediate: false })
 
 const {
+  showBudgetResetModal,
+  pendingBudgetKey,
+  budgetPeriod,
+  resettingBudget,
+  requestBudgetReset,
+  handleBudgetReset,
   showFormModal,
   showDeleteModal,
   showSingleDeleteModal,
@@ -189,6 +196,7 @@ watch(
                 :revealing="revealingKeyIds.has(row.id)"
                 :updating-status="updatingStatusKeyIds.has(row.id)"
                 @edit="openEdit"
+                @reset-budget="requestBudgetReset"
                 @delete="requestDeleteKey"
                 @import-ccs="importToCcs"
                 @toggle="handleToggleStatus"
@@ -205,6 +213,14 @@ watch(
         </div>
       </template>
     </BaseCard>
+
+    <ApiKeyBudgetResetModal
+      v-model="showBudgetResetModal"
+      v-model:period="budgetPeriod"
+      :api-key="pendingBudgetKey"
+      :loading="resettingBudget"
+      @confirm="handleBudgetReset"
+    />
 
     <ApiKeyCreateModal
       v-model="showFormModal"

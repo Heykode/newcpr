@@ -264,24 +264,6 @@ async fn initialize_with_request_tuning_mode(
         )
         .with_oauth_client_id(config.oauth_client_id()),
     );
-    let admin_provider = OpenAiAdminProvider::new(
-        provider_kind,
-        profile,
-        accounts,
-        OpenAiAdminServices {
-            credentials: credential_admin,
-            oauth: oauth_admin,
-            profile_statistics,
-            quota: Arc::clone(&quota),
-            catalog: Arc::clone(&catalog),
-        },
-        websocket_pool,
-        desktop_release_status,
-    );
-    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(match &egress_runtime {
-        Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
-        None => admin_provider,
-    });
     let turn_state_maintenance = Arc::new(provider::CodexTurnStateMaintenanceService::new(
         repository,
         leases,
@@ -296,6 +278,25 @@ async fn initialize_with_request_tuning_mode(
         ))
         .map_err(|_| OpenAiInitializeError::Transport)?,
     ));
+    let admin_provider = OpenAiAdminProvider::new(
+        provider_kind,
+        profile,
+        accounts,
+        OpenAiAdminServices {
+            credentials: credential_admin,
+            oauth: oauth_admin,
+            profile_statistics,
+            quota: Arc::clone(&quota),
+            catalog: Arc::clone(&catalog),
+            turn_state_maintenance: Arc::clone(&turn_state_maintenance),
+        },
+        websocket_pool,
+        desktop_release_status,
+    );
+    let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(match &egress_runtime {
+        Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
+        None => admin_provider,
+    });
     let worker_contributions = provider::worker_contributions(
         refresh,
         quota,

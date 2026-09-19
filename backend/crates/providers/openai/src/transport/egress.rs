@@ -88,26 +88,24 @@ pub struct CodexEgressRuntime {
     state: RwLock<Option<Arc<ProviderEgressConfig>>>,
     clients: Mutex<VecDeque<CachedClient>>,
     source_health: Mutex<HashMap<Ipv6Addr, SourceHealth>>,
+    probe_cursor: Mutex<usize>,
 }
 
 impl CodexEgressRuntime {
-    /// Return a randomized snapshot of enabled local sources for a maintenance task.
-    pub(crate) fn probe_sources(&self) -> Result<Vec<Ipv6Addr>, CodexEgressError> {
-        let mut sources = self
-            .snapshot()?
-            .addresses
-            .iter()
-            .filter(|item| item.enabled && !self.source_temporarily_blocked(item.address))
-            .map(|item| item.address)
-            .collect::<Vec<_>>();
-        for index in (1..sources.len()).rev() {
-            let mut bytes = [0_u8; 8];
-            getrandom::fill(&mut bytes).map_err(|_| CodexEgressError::Unavailable)?;
-            let swap = usize::try_from(u64::from_ne_bytes(bytes) % (index as u64 + 1))
-                .map_err(|_| CodexEgressError::Unavailable)?;
-            sources.swap(index, swap);
+    /// Request-level round robin shared by every maintenance account and model.
+    pub(crate) fn next_probe_source(&self) -> Result<Ipv6Addr, CodexEgressError> {
+        let mut cursor = self.probe_cursor.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.snapshot()?;
+        let count = state.addresses.len();
+        for _ in 0..count {
+            let index = *cursor % count;
+            *cursor = (index + 1) % count;
+            let item = &state.addresses[index];
+            if item.enabled && !self.source_temporarily_blocked(item.address) {
+                return Ok(item.address);
+            }
         }
-        Ok(sources)
+        Err(CodexEgressError::EmptyPool)
     }
 
     pub(crate) fn probe_http_client(&self, source: Ipv6Addr) -> Result<Client, CodexEgressError> {
@@ -148,6 +146,7 @@ impl CodexEgressRuntime {
             state: RwLock::new(Some(state)),
             clients: Mutex::new(VecDeque::new()),
             source_health: Mutex::new(HashMap::new()),
+            probe_cursor: Mutex::new(0),
         }))
     }
 

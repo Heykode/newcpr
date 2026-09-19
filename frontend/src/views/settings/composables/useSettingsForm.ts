@@ -43,6 +43,7 @@ export function useSettingsForm() {
     disableFast: false,
     turnStateInjectionEnabled: false,
     turnStateModelsText: 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra',
+    turnStateProbeProxyId: '',
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
@@ -94,6 +95,7 @@ export function useSettingsForm() {
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     form.disableFast = data.disableFast ?? false
     form.turnStateInjectionEnabled = data.turnStateInjectionEnabled ?? false
+    form.turnStateProbeProxyId = data.turnStateProbeProxyId ?? ''
     form.turnStateModelsText = (data.turnStateModels ?? [
       'gpt-6-astra',
       'gpt-5.6-sol',
@@ -230,6 +232,7 @@ export function useSettingsForm() {
         disableFast: form.disableFast,
         turnStateInjectionEnabled: form.turnStateInjectionEnabled,
         turnStateModels,
+        turnStateProbeProxyId: form.turnStateProbeProxyId || null,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,

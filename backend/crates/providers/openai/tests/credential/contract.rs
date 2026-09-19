@@ -1730,8 +1730,11 @@ fn routine_cookie_saves_preserve_binding_and_identical_headers_are_noops() {
     ))
     .unwrap();
     let changed = store.account("acct_primary").unwrap();
-    assert_eq!(changed.turn_state_binding_revision(), changed.revision());
     assert_eq!(changed.revision().get(), 4);
+    assert_eq!(
+        changed.turn_state_binding_revision(),
+        original.turn_state_binding_revision()
+    );
 }
 
 #[test]
@@ -1781,7 +1784,7 @@ fn cookie_capture_deduplicates_scopes_and_preserves_unrelated_cookie_order() {
 }
 
 #[test]
-fn state_binding_changes_for_tokens_device_principal_and_nonroutine_cookies() {
+fn state_binding_changes_for_tokens_device_principal_client_and_scope() {
     for field in [
         "access_token",
         "refresh_token",
@@ -1790,7 +1793,6 @@ fn state_binding_changes_for_tokens_device_principal_and_nonroutine_cookies() {
         "principal",
         "oauth_client_id",
         "oauth_scope",
-        "cookie",
     ] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_primary", "synthetic-binding");
@@ -1805,17 +1807,6 @@ fn state_binding_changes_for_tokens_device_principal_and_nonroutine_cookies() {
             "principal" => oauth.principal.as_mut().unwrap().poid = Some("synthetic-other".into()),
             "oauth_client_id" => oauth.oauth_client_id = Some("synthetic-client".into()),
             "oauth_scope" => oauth.oauth_scope = Some("synthetic-scope".into()),
-            "cookie" => oauth
-                .cookies
-                .push(provider_openai::credential::CodexCookie {
-                    name: "oai-did".into(),
-                    value: "synthetic-device".into(),
-                    domain: "chatgpt.com".into(),
-                    path: "/".into(),
-                    host_only: true,
-                    secure: true,
-                    expires_at: None,
-                }),
             _ => unreachable!(),
         }
         block_on(store.repository().compare_and_swap_data(&account, data)).unwrap();
@@ -1824,6 +1815,34 @@ fn state_binding_changes_for_tokens_device_principal_and_nonroutine_cookies() {
             changed.turn_state_binding_revision(),
             account.turn_state_binding_revision(),
             "{field}"
+        );
+    }
+}
+
+#[test]
+fn state_binding_ignores_cookie_material_updates() {
+    for name in ["__cf_bm", "__Secure-next-auth.session-token", "oai-did"] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "synthetic-cookie-binding");
+        let account = store.account("acct_primary").unwrap();
+        let mut data = block_on(store.repository().load_complete_data(&account)).unwrap();
+        data.cookies_mut()
+            .push(provider_openai::credential::CodexCookie {
+                name: name.into(),
+                value: "synthetic-cookie".into(),
+                domain: "chatgpt.com".into(),
+                path: "/".into(),
+                host_only: name != "__cf_bm",
+                secure: true,
+                expires_at: None,
+            });
+        block_on(store.repository().compare_and_swap_data(&account, data)).unwrap();
+        let changed = store.account("acct_primary").unwrap();
+        assert_ne!(changed.revision(), account.revision(), "{name}");
+        assert_eq!(
+            changed.turn_state_binding_revision(),
+            account.turn_state_binding_revision(),
+            "{name}"
         );
     }
 }
