@@ -54,6 +54,9 @@ release and deployment require the user's applicable authorization.
   drain. Keep the old image and backups. Never use `docker compose down` to update.
 - The fast path refuses database migration changes and major-version changes.
   Plan those separately; do not force an image rollback across a changed schema.
+  A reviewed version-specific plan under `deploy/upgrades/` may be selected with
+  `--migration-plan`; it requires verified online backups and never automatically
+  restores a database or rolls back the image across migrations.
 - Formal multi-platform releases (`release/publish`) are separate from normal
   deployment. Do not invoke the release workflow merely to update one server.
 - Report the actual deployed source/merge commits and measured health gap.

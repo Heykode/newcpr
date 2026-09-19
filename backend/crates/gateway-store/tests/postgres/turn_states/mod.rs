@@ -531,7 +531,7 @@ async fn binding_migration_preserves_current_rows_without_reviving_stale_rows() 
         .await
         .unwrap();
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0027_turn_state_binding_revision.sql"
+        "../../../../../migrations/0027_turn_state_binding_revision.sql"
     ))
     .execute(&mut *tx)
     .await

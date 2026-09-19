@@ -1,4 +1,4 @@
-"""Server-side, application-only Compose rollout. No build, migration, or database restore."""
+"""Application-only rollout; reviewed upgrades back up before application migrations."""
 
 import argparse
 import copy
@@ -66,6 +66,7 @@ class Rollout:
         self.selected = request["selected"]
         self.proof = self.selected["proof"]
         self.old_image = request["expected_old_image"]
+        self.upgrade = request.get("migration_upgrade")
         self.archive = Path(archive)
         self.compose = Path(self.profile["compose_file"])
         self.backup = self.compose.parent / ".deployment-backups" / (
@@ -174,6 +175,9 @@ class Rollout:
         shutil.copystat(self.compose, rollback)
         os.chown(rollback, stat.st_uid, stat.st_gid)
         (self.backup / "selected.json").write_text(json.dumps(self.selected, indent=2))
+        if self.upgrade:
+            import migration_backup
+            migration_backup.prepare(self)
 
     def check_unchanged(self):
         if inspect(self.profile["container"])["Id"] != self.old["Id"]:
@@ -182,12 +186,19 @@ class Rollout:
             raise RuntimeError("Compose configuration changed during preparation")
         if any(digest(path) != expected for path, expected in self.configs.items()):
             raise RuntimeError("Application configuration changed during preparation")
+        if self.upgrade:
+            import migration_backup
+            if any(inspect(name)["Id"] != old["Id"] for name, old in self.protected.items()):
+                raise RuntimeError("A protected service changed during preparation")
+            migration_backup.check_schema(self.migration_database, self.upgrade["before"])
 
     def switch(self):
         self.check_unchanged()
         switched = False
         result = {"status": "not_switched", "target_commit": self.selected["target_commit"],
-                  "tested_commit": self.proof["source_commit"], "image": self.new_image}
+                  "tested_commit": self.proof["source_commit"], "image": self.new_image,
+                  "previous_image": self.old_image, "version": self.proof["version"],
+                  "migrations_changed": self.upgrade is not None}
         self.samples.append((time.monotonic(), True))
         monitor = threading.Thread(target=self.monitor)
         monitor.start()
@@ -198,6 +209,9 @@ class Rollout:
             print("Prepared image and backups; switching application only.", flush=True)
             self.up("upgrade.log")
             current = self.ready(self.new_image)
+            if self.upgrade:
+                import migration_backup
+                migration_backup.check_schema(self.migration_database, self.upgrade["after"])
             if current["RestartCount"]:
                 raise RuntimeError("New container restarted unexpectedly")
             for name, previous in self.protected.items():
@@ -216,7 +230,11 @@ class Rollout:
             result["failure_type"] = type(error).__name__
             import traceback
             (self.backup / "failure.txt").write_text(traceback.format_exc())
-            if switched:
+            if switched and self.upgrade:
+                # SQLx refuses unknown migrations in the old binary. Never
+                # restart it against a possibly upgraded schema or erase new data.
+                result["status"] = "migration_recovery_required"
+            elif switched:
                 try:
                     atomic_copy(self.backup / "rollback.yaml", self.compose)
                     self.up("rollback.log")
@@ -230,6 +248,7 @@ class Rollout:
             self.stop_monitor.set()
             monitor.join()
         result["verification_seconds"] = round(time.monotonic() - started, 3)
+        result["recorded_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         result["health_gap_seconds_upper_estimate"] = health_gap(self.samples)
         (self.backup / "result.json").write_text(json.dumps(result, indent=2))
         (self.backup / "health-samples.json").write_text(json.dumps(self.samples))

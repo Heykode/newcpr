@@ -1,6 +1,7 @@
 """Deploy a verified CI image; default mode is a read-only deployment plan."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,10 @@ from urllib.parse import urlsplit
 import verified_image as images
 
 ROOT = Path(__file__).resolve().parent.parent
-DEPLOY_FILES = ["release/deploy.py", "release/verified_image.py", "deploy/rollout.py"]
+DEPLOY_FILES = [
+    "release/deploy.py", "release/verified_image.py", "deploy/rollout.py",
+    "deploy/migration_backup.py",
+]
 
 
 def ssh(host, *args):
@@ -79,6 +83,41 @@ def validate_upgrade(old_labels, proof):
         raise images.Unavailable("Major-version changes are not eligible for automatic rollback")
 
 
+def reviewed_upgrade(name, old_labels, proof, commit):
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", name):
+        raise images.Unavailable("Invalid reviewed upgrade name")
+    path = "deploy/upgrades/" + name + ".json"
+    plan_text = images.git("show", commit + ":" + path)
+    if plan_text != images.git("show", "origin/main:" + path):
+        raise images.Unavailable("Upgrade plan differs from main")
+    plan = json.loads(plan_text)
+    source = old_labels.get("org.opencontainers.image.revision", "")
+    if not images.SHA.fullmatch(source):
+        raise images.Unavailable("Current image lacks a reviewed source revision")
+    if (plan["from_version"] != old_labels.get("org.opencontainers.image.version")
+            or plan["to_version"] != proof["version"]
+            or plan["from_version"].split(".")[0] != plan["to_version"].split(".")[0]
+            or plan["from_migrations_tree"] != images.git("rev-parse", source + ":backend/migrations")
+            or plan["to_migrations_tree"] != proof["migrations_tree"]
+            or plan["recovery"] != "manual"):
+        raise images.Unavailable("Deployment does not match the reviewed migration plan")
+    changes = images.git("diff", "--name-status", source, commit, "--", "backend/migrations").splitlines()
+    expected = {"A\tbackend/migrations/" + item for item in plan["added"]}
+    expected.add("M\tbackend/migrations/.frozen-sha256")
+    if set(changes) != expected:
+        raise images.Unavailable("Migration changes differ from the reviewed additions")
+    # Preserve exact bytes: git() strips trailing whitespace, SQLx checksums do not.
+    def checksums(ref):
+        paths = images.git("ls-tree", "-r", "--name-only", ref, "backend/migrations").splitlines()
+        return {
+            str(int(Path(path).name.split("_", 1)[0])): hashlib.sha384(
+                subprocess.check_output(["git", "show", ref + ":" + path])
+            ).hexdigest()
+            for path in paths if path.endswith(".sql")
+        }
+    return {**plan, "before": checksums(source), "after": checksums(commit)}
+
+
 def require_target_ci(repository, commit):
     workflow = images.api(f"repos/{repository}/actions/workflows/ci.yml")["id"]
     runs = images.api(
@@ -89,7 +128,7 @@ def require_target_ci(repository, commit):
         raise images.Unavailable("Latest main CI must succeed before deployment")
 
 
-def run(profile, commit, apply):
+def run(profile, commit, apply, migration_plan=None):
     os.chdir(ROOT)
     images.git("fetch", "origin", "main")
     # Do not silently execute a stale or locally edited deployment implementation.
@@ -104,12 +143,17 @@ def run(profile, commit, apply):
     images.require_security(repository, commit)
     selected = images.resolve(repository, commit)
     old_id, old_labels = current_image(profile)
-    validate_upgrade(old_labels, selected["proof"])
+    upgrade = None
+    if migration_plan:
+        upgrade = reviewed_upgrade(migration_plan, old_labels, selected["proof"], commit)
+    else:
+        validate_upgrade(old_labels, selected["proof"])
     print(json.dumps({
         "mode": "apply" if apply else "plan",
         "target_commit": commit, "tested_commit": selected["proof"]["source_commit"],
         "ci_run": selected["proof"]["run_id"], "platform": selected["proof"]["platform"],
-        "build_required": False, "migrations_changed": False,
+        "build_required": False, "migrations_changed": upgrade is not None,
+        "automatic_image_rollback": upgrade is None,
     }), flush=True)
     if not apply:
         return
@@ -122,6 +166,8 @@ def run(profile, commit, apply):
         if images.sha256(archive) != selected["proof"]["archive_sha256"]:
             raise images.Unavailable("Image archive checksum mismatch")
         request = {"profile": profile, "selected": selected, "expected_old_image": old_id}
+        if upgrade:
+            request["migration_upgrade"] = upgrade
         request_path = directory / "request.json"
         request_path.write_text(json.dumps(request))
         request_path.chmod(0o600)
@@ -130,9 +176,12 @@ def run(profile, commit, apply):
             raise images.Unavailable("Unexpected remote staging directory")
         subprocess.run([
             "scp", str(archive), str(request_path), str(ROOT / "deploy/rollout.py"),
+            str(ROOT / "deploy/migration_backup.py"),
             host + ":" + remote + "/",
         ], check=True)
-        print("Image staged. Starting locked deployment with rollback enabled.", flush=True)
+        print("Image staged. Starting locked deployment"
+              + (" with reviewed migrations and manual recovery." if upgrade
+                 else " with image rollback enabled."), flush=True)
         # Keep SSH alive during graceful drain; never kill it to force a short outage.
         result = subprocess.run([
             "ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", host,
@@ -148,6 +197,7 @@ def main():
     parser.add_argument("--profile", required=True, type=Path)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--migration-plan", help="Reviewed upgrade name, for example v3.13.0")
     args = parser.parse_args()
     if not images.SHA.fullmatch(args.commit):
         parser.error("--commit requires the full commit SHA")
@@ -158,7 +208,7 @@ def main():
         parser.error("Deployment profile must be private (chmod 600)")
     try:
         profile = validate_profile(json.loads(profile_path.read_text()))
-        run(profile, args.commit, args.apply)
+        run(profile, args.commit, args.apply, args.migration_plan)
     except (images.Unavailable, subprocess.SubprocessError, OSError, ValueError, KeyError) as error:
         # Never echo subprocess commands that may contain private deployment paths.
         message = str(error) if isinstance(error, images.Unavailable) else type(error).__name__

@@ -45,6 +45,50 @@ class DeployTests(unittest.TestCase):
         labels = {"org.opencontainers.image.revision": SOURCE, "org.opencontainers.image.version": "1.1.0"}
         with patch.object(images, "git", return_value=MIGRATIONS):
             deploy.validate_upgrade(labels, proof)
+
+    def test_reviewed_upgrade_is_bound_to_exact_versions_and_trees(self):
+        import json
+        _, proof, _ = fixtures()
+        plan = {
+            "from_version": "1.1.0", "to_version": proof["version"],
+            "from_migrations_tree": MIGRATIONS, "to_migrations_tree": MIGRATIONS,
+            "added": ["0028_example.sql"], "recovery": "manual",
+        }
+        labels = {"org.opencontainers.image.revision": SOURCE, "org.opencontainers.image.version": "1.1.0"}
+        def git(*args):
+            if args[0] == "show":
+                return json.dumps(plan)
+            if args[0] == "rev-parse":
+                return MIGRATIONS
+            if args[0] == "diff":
+                return "A\tbackend/migrations/0028_example.sql\nM\tbackend/migrations/.frozen-sha256"
+            return "backend/migrations/0001_example.sql"
+        with patch.object(images, "git", side_effect=git), \
+                patch.object(deploy.subprocess, "check_output", return_value=b"select 1;\n"):
+            result = deploy.reviewed_upgrade("v1.1.1", labels, proof, SOURCE)
+            self.assertEqual(result["before"], result["after"])
+            self.assertEqual(len(result["before"]["1"]), 96)
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("../invalid", labels, proof, SOURCE)
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("v1.1.1", {}, proof, SOURCE)
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("v1.1.1", {**labels, "org.opencontainers.image.version": "9.0.0"}, proof, SOURCE)
+
+    def test_reviewed_upgrade_rejects_modified_migration(self):
+        import json
+        _, proof, _ = fixtures()
+        plan = {
+            "from_version": "1.1.0", "to_version": proof["version"],
+            "from_migrations_tree": MIGRATIONS, "to_migrations_tree": MIGRATIONS,
+            "added": ["0028_example.sql"], "recovery": "manual",
+        }
+        labels = {"org.opencontainers.image.revision": SOURCE, "org.opencontainers.image.version": "1.1.0"}
+        with patch.object(images, "git", side_effect=[
+            json.dumps(plan), json.dumps(plan), MIGRATIONS,
+            "M\tbackend/migrations/0001_example.sql",
+        ]), self.assertRaises(images.Unavailable):
+            deploy.reviewed_upgrade("v1.1.1", labels, proof, SOURCE)
             with self.assertRaises(images.Unavailable):
                 deploy.validate_upgrade({}, proof)
             with self.assertRaises(images.Unavailable):
