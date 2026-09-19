@@ -913,7 +913,8 @@ async fn soft_cookie_updates_keep_collectors_alive_and_reload_next_batch_materia
     bounded_collectors(AcquisitionScenario::SoftCookieRefresh).await;
 }
 
-#[tokio::test]
+// Match the service runtime: native TLS client construction is synchronous on Linux.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn account_model_tasks_continue_past_500_with_reusable_sources() {
     bounded_collectors(AcquisitionScenario::ContinuousMisses).await;
 }
