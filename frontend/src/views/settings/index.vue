@@ -135,7 +135,9 @@ watch(
         v-model:disable-fast="form.disableFast"
         v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
         v-model:turn-state-models-text="form.turnStateModelsText"
+        v-model:turn-state-probe-proxy-id="form.turnStateProbeProxyId"
         v-model:request-tuning="form.requestTuning"
+        :disabled="loading || saving"
       />
 
       <ClientVersionSettings

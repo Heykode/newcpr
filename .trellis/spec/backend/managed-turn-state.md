@@ -146,6 +146,25 @@
 
 ## Maintenance Isolation
 
+- `turnStateProbeProxyId` is a nullable saved-proxy reference: null selects IPv6,
+  omission during settings replacement preserves selection. Resolve credentials
+  from the catalog at snapshot compilation; never duplicate them into settings.
+  A selected proxy must have passed its catalog test. The FK restricts deletion.
+  Take the runtime settings lock before the proxy row lock, matching proxy edits.
+- Proxy-mode probes need no IPv6 runtime and never advance its cursor. Cache one
+  dedicated HTTP client keyed by proxy value and custom-CA configuration, separate
+  from business clients. Use HTTP/1, no idle pool and `Connection: close` for a new
+  connection on every probe. Keep TLS validation; never copy insecure TLS options.
+  New connections do not guarantee a different provider-assigned public IP.
+- Freeze the resolved proxy per collector; recheck policy on dispatch, response
+  processing and the cancellation watcher. Changed egress requeues collection,
+  but does not invalidate usable State. These provider-side checks are not a
+  database-atomic proxy-revision fence. Identity/policy/state-version fences in
+  the store remain authoritative. Proxy failures must never fall back to direct
+  or account business egress.
+- The settings UI persists only the proxy ID and preserves it when catalog loading
+  fails. Disabled/untested catalog entries cannot be newly selected.
+
 - The scheduled leader cycle discovers targets; a separately supervised daemon
   drains a bounded, coalescing FIFO. Discovery resumes fairly after saturation.
   Passive active replacement wakes acquisition without waiting for discovery.

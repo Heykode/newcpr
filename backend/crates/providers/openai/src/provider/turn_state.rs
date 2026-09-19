@@ -699,7 +699,7 @@ impl CodexTurnStateMaintenanceService {
         {
             return;
         }
-        if self.egress.is_none() {
+        if self.egress.is_none() && self.probe_proxy().is_none() {
             return;
         }
         let Ok(accounts) = self.repository.list_for_provider().await else {
@@ -714,7 +714,7 @@ impl CodexTurnStateMaintenanceService {
             .request_tuning
             .openai_turn_state_policy()
             .enabled()
-            || self.egress.is_none()
+            || (self.egress.is_none() && self.probe_proxy().is_none())
         {
             return;
         }
@@ -831,7 +831,10 @@ impl CodexTurnStateMaintenanceService {
         model: &UpstreamModelId,
         force: bool,
     ) {
-        let Some(egress) = &self.egress else { return };
+        let proxy = self.probe_proxy();
+        if self.egress.is_none() && proxy.is_none() {
+            return;
+        }
         let Ok(Ok(Some(account))) = tokio::time::timeout(
             STATE_STORE_TIMEOUT,
             self.repository.store().get_account(account_id),
@@ -844,8 +847,8 @@ impl CodexTurnStateMaintenanceService {
             return;
         }
         tokio::select! {
-            () = self.maintain_target(&account, model, egress, force) => {},
-            () = self.wait_until_invalid(&account, model) => {},
+            () = self.maintain_target(&account, model, proxy.as_ref(), force) => {},
+            () = self.wait_until_invalid(&account, model, proxy.as_ref()) => {},
         }
         if matches!(
             tokio::time::timeout(
@@ -876,6 +879,17 @@ impl CodexTurnStateMaintenanceService {
             ),
         )
         .await;
+        if self.probe_proxy().as_ref() != proxy.as_ref() {
+            self.enqueue_accounts(&[account], true).await;
+        }
+    }
+
+    fn probe_proxy(&self) -> Option<gateway_core::account::OutboundProxy> {
+        self.manager
+            .request_tuning
+            .openai_turn_state_policy()
+            .probe_proxy()
+            .cloned()
     }
 
     async fn target_current(&self, account: &ProviderAccount, model: &UpstreamModelId) -> bool {
@@ -915,10 +929,15 @@ impl CodexTurnStateMaintenanceService {
         })
     }
 
-    async fn wait_until_invalid(&self, account: &ProviderAccount, model: &UpstreamModelId) {
+    async fn wait_until_invalid(
+        &self,
+        account: &ProviderAccount,
+        model: &UpstreamModelId,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if !self.target_current(account, model).await {
+            if self.probe_proxy().as_ref() != proxy || !self.target_current(account, model).await {
                 return;
             }
         }
@@ -928,7 +947,7 @@ impl CodexTurnStateMaintenanceService {
         &self,
         account: &ProviderAccount,
         model: &UpstreamModelId,
-        egress: &CodexEgressRuntime,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
         _force_refresh: bool,
     ) {
         let now = SystemTime::now();
@@ -938,7 +957,7 @@ impl CodexTurnStateMaintenanceService {
         if !active_due && !standby_due {
             return;
         }
-        self.collect_slot(account, model, normal_length, egress)
+        self.collect_slot(account, model, normal_length, proxy)
             .await;
     }
 
@@ -947,7 +966,7 @@ impl CodexTurnStateMaintenanceService {
         account: &ProviderAccount,
         model: &UpstreamModelId,
         normal_length: u16,
-        egress: &CodexEgressRuntime,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> bool {
         if !self.target_current(account, model).await
             || !self
@@ -968,6 +987,9 @@ impl CodexTurnStateMaintenanceService {
         let mut runtime = None;
         let mut failures = HashMap::<&'static str, usize>::new();
         loop {
+            if self.probe_proxy().as_ref() != proxy {
+                return false;
+            }
             let Some(current_account) = self.current_target(account, model).await else {
                 return false;
             };
@@ -1008,12 +1030,24 @@ impl CodexTurnStateMaintenanceService {
             let sent_ref = &sent;
             let before_batch = attempted;
             let results = stream::iter((0..batch_size).map(|_| async move {
-                if !self.target_current(probe_account, model).await {
+                if self.probe_proxy().as_ref() != proxy
+                    || !self.target_current(probe_account, model).await
+                {
                     return Err("account_stopped");
                 }
-                let source = egress
-                    .next_probe_source()
-                    .map_err(|_| "egress_unavailable")?;
+                let client = match proxy {
+                    Some(proxy) => self.client.for_probe_proxy(proxy),
+                    None => {
+                        let source = self
+                            .egress
+                            .as_ref()
+                            .ok_or("egress_unavailable")?
+                            .next_probe_source()
+                            .map_err(|_| "egress_unavailable")?;
+                        self.client.for_probe_source(probe_account, source)
+                    }
+                }
+                .map_err(|_| "egress_unavailable")?;
                 let attempt = before_batch
                     .saturating_add(sent_ref.fetch_add(1, Ordering::Relaxed) as u64 + 1);
                 tokio::time::timeout(
@@ -1022,7 +1056,7 @@ impl CodexTurnStateMaintenanceService {
                         probe_account.clone(),
                         model.clone(),
                         Arc::clone(runtime),
-                        source,
+                        client,
                     ),
                 )
                 .await
@@ -1068,7 +1102,9 @@ impl CodexTurnStateMaintenanceService {
                         continue;
                     }
                 };
-                if !self.target_current(account, model).await {
+                if self.probe_proxy().as_ref() != proxy
+                    || !self.target_current(account, model).await
+                {
                     return false;
                 }
                 let Some(parsed) = ParsedCodexTurnState::parse(&value) else {
@@ -1164,12 +1200,8 @@ impl CodexTurnStateMaintenanceService {
         account: ProviderAccount,
         model: UpstreamModelId,
         runtime: Arc<crate::credential::CodexRuntimeCredential>,
-        source: std::net::Ipv6Addr,
+        client: CodexBackendClient,
     ) -> Result<String, &'static str> {
-        let client = self
-            .client
-            .for_probe_source(&account, source)
-            .map_err(|_| "egress_unavailable")?;
         let authorization = runtime
             .authentication
             .authorization_header()

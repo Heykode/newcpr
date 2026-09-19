@@ -134,6 +134,14 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
         && command.usage_retention_days >= 31
         && command.ops_event_retention_days > 0
         && command.audit_retention_days > 0
+        && command.turn_state_probe_proxy_id.as_ref().is_none_or(|id| {
+            id.as_ref().is_none_or(|id| {
+                !id.is_empty()
+                    && id.len() <= 256
+                    && !id.chars().any(char::is_whitespace)
+                    && !id.chars().any(char::is_control)
+            })
+        })
         && command.turn_state_models.as_ref().is_none_or(|models| {
             !models.is_empty()
                 && models.len() <= 64

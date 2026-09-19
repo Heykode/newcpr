@@ -956,6 +956,10 @@ struct CredentialRecoveryFixture {
 
 impl CredentialRecoveryFixture {
     async fn new() -> Self {
+        Self::with_probe_proxy(None).await
+    }
+
+    async fn with_probe_proxy(proxy: Option<gateway_core::account::OutboundProxy>) -> Self {
         let accounts = Arc::new(MemoryAccountStore::default());
         let mut imported = CodexCredentialAdmin
             .prepare_import(ImportCodexOAuthCredential {
@@ -985,12 +989,16 @@ impl CredentialRecoveryFixture {
             base.runtime_policy(),
             base.oauth_pending(),
         )
-        .with_turn_states(states.clone())
-        .with_egress(Arc::new(LoopbackEgress(ProviderEgressConfig {
-            revision: 1,
-            addresses: loopback_sources(12),
-            ..ProviderEgressConfig::default()
-        })));
+        .with_turn_states(states.clone());
+        let ports = if proxy.is_none() {
+            ports.with_egress(Arc::new(LoopbackEgress(ProviderEgressConfig {
+                revision: 1,
+                addresses: loopback_sources(12),
+                ..ProviderEgressConfig::default()
+            })))
+        } else {
+            ports
+        };
         let server = MockServer::builder()
             .listener(std::net::TcpListener::bind("[::1]:0").unwrap())
             .start()
@@ -998,12 +1006,15 @@ impl CredentialRecoveryFixture {
         let mut config = valid_config();
         config.config.api.base_url = server.uri();
         let tuning = RequestTuningHandle::default();
-        tuning.publish_openai_turn_state_policy(OpenAiTurnStatePolicy::new(
-            true,
-            ["model-a", "model-b"]
-                .map(|model| UpstreamModelId::new(model).unwrap())
-                .into(),
-        ));
+        tuning.publish_openai_turn_state_policy(
+            OpenAiTurnStatePolicy::new(
+                true,
+                ["model-a", "model-b"]
+                    .map(|model| UpstreamModelId::new(model).unwrap())
+                    .into(),
+            )
+            .with_probe_proxy(proxy),
+        );
         let mut bundle = provider_openai::initialize_with_request_tuning(
             config.config.clone(),
             ports,
@@ -1144,6 +1155,134 @@ async fn authentication_rejection_stops_all_models_and_recovery_resumes_discover
         wait_count(&fixture.states.writes, 2).await;
         fixture.stop().await;
     }
+}
+
+#[tokio::test]
+async fn probe_proxy_works_without_ipv6_and_closes_each_connection() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let fixture = CredentialRecoveryFixture::with_probe_proxy(Some(proxy)).await;
+    let response_state = fresh_state(1);
+    let server = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 65536);
+            }
+            let headers = String::from_utf8(request).unwrap().to_lowercase();
+            assert!(headers.starts_with("post http://"));
+            assert!(headers.contains("connection: close"));
+            assert!(headers.contains("authorization: bearer "));
+            assert!(headers.contains("user-agent: "));
+            let body = "data: {\"type\":\"response.completed\"}\n\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nX-Codex-Turn-State: {response_state}\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            // Keep the peer socket open: the next probe must still open a new one.
+            sockets.push(socket);
+        }
+    });
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .unwrap()
+        .unwrap();
+    wait_count(&fixture.states.writes, 2).await;
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn changing_probe_proxy_discards_old_response_and_collects_via_new_proxy() {
+    let old = MockServer::start().await;
+    let new = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n")
+                .set_delay(Duration::from_secs(5)),
+        )
+        .mount(&old)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(2))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&new)
+        .await;
+    let fixture = CredentialRecoveryFixture::with_probe_proxy(Some(
+        gateway_core::account::OutboundProxy::parse(&old.uri()).unwrap(),
+    ))
+    .await;
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while old.received_requests().await.unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture.tuning.publish_openai_turn_state_policy(
+        OpenAiTurnStatePolicy::new(
+            true,
+            ["model-a", "model-b"]
+                .map(|m| UpstreamModelId::new(m).unwrap())
+                .into(),
+        )
+        .with_probe_proxy(Some(
+            gateway_core::account::OutboundProxy::parse(&new.uri()).unwrap(),
+        )),
+    );
+    wait_count(&fixture.states.writes, 2).await;
+    assert_eq!(new.received_requests().await.unwrap().len(), 2);
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn proxy_failure_never_falls_back_to_direct_or_invalidates_credentials() {
+    let proxy = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(502))
+        .mount(&proxy)
+        .await;
+    let fixture = CredentialRecoveryFixture::with_probe_proxy(Some(
+        gateway_core::account::OutboundProxy::parse(&proxy.uri()).unwrap(),
+    ))
+    .await;
+    fixture.discover().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while proxy.received_requests().await.unwrap().len() < 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+    let account = fixture
+        .accounts
+        .get_account(&ProviderAccountId::new("acct_recovery_probe").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(account.credential_state(), CredentialState::Ready);
+    fixture.stop().await;
 }
 
 #[tokio::test]

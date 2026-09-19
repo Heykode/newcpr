@@ -140,7 +140,13 @@ impl CodexBackendClient {
         probe: bool,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let profile = self.profile.snapshot();
-        let headers = self.request_headers_for_http_response(upstream_request, context)?;
+        let mut headers = self.request_headers_for_http_response(upstream_request, context)?;
+        if probe && self.outbound_proxy.is_some() {
+            headers.insert(
+                reqwest::header::CONNECTION,
+                reqwest::header::HeaderValue::from_static("close"),
+            );
+        }
         let headers_started_at = Instant::now();
         // 身份投影先完成，再按最终 JSON 大小决定是否使用 zstd。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，

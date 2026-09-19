@@ -32,6 +32,7 @@ pub const MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 = 256 * 1024 * 1024;
 pub struct OpenAiTurnStatePolicy {
     enabled: bool,
     models: Arc<BTreeSet<UpstreamModelId>>,
+    probe_proxy: Option<crate::account::OutboundProxy>,
 }
 
 impl Default for OpenAiTurnStatePolicy {
@@ -43,6 +44,7 @@ impl Default for OpenAiTurnStatePolicy {
         Self {
             enabled: false,
             models: Arc::new(models),
+            probe_proxy: None,
         }
     }
 }
@@ -53,6 +55,7 @@ impl OpenAiTurnStatePolicy {
         Self {
             enabled,
             models: Arc::new(models),
+            probe_proxy: None,
         }
     }
 
@@ -69,6 +72,17 @@ impl OpenAiTurnStatePolicy {
     #[must_use]
     pub fn models(&self) -> &BTreeSet<UpstreamModelId> {
         &self.models
+    }
+
+    #[must_use]
+    pub fn with_probe_proxy(mut self, proxy: Option<crate::account::OutboundProxy>) -> Self {
+        self.probe_proxy = proxy;
+        self
+    }
+
+    #[must_use]
+    pub fn probe_proxy(&self) -> Option<&crate::account::OutboundProxy> {
+        self.probe_proxy.as_ref()
     }
 }
 

@@ -35,6 +35,7 @@ export interface RuntimeSettings {
   disableFast?: boolean
   turnStateInjectionEnabled?: boolean
   turnStateModels?: string[]
+  turnStateProbeProxyId?: string | null
   responsesMaxDecompressedBodyBytes?: number
   modelMappings: Record<string, string>
   refreshMarginSeconds: number

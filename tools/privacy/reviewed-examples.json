@@ -1382,5 +1382,45 @@
     "file_sha256": "8573338f27bd4bc26bef9870575c4d588fe964a9a519fd43fa1149c81ec1d933",
     "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
     "reason": "Manually re-reviewed the unchanged synthetic escaped Unicode Windows workspace fixture against the parent commit. The new diff only isolates a separate capacity stream test client and adds assertion diagnostics; this fixture contains no real identity."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 234,
+    "file_sha256": "37d4f83e0c8998c9419487e60609bc9c7d6807d1850d1915919ad15bcc26c76c",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Manually re-reviewed unchanged synthetic loopback batch-update fixture; only migration test setup removes the new State proxy reference."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 339,
+    "file_sha256": "37d4f83e0c8998c9419487e60609bc9c7d6807d1850d1915919ad15bcc26c76c",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Manually re-reviewed unchanged synthetic loopback account-removal fixture against the parent commit."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 806,
+    "file_sha256": "37d4f83e0c8998c9419487e60609bc9c7d6807d1850d1915919ad15bcc26c76c",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Manually re-reviewed unchanged synthetic loopback managed-proxy fixture against the parent commit."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 963,
+    "file_sha256": "37d4f83e0c8998c9419487e60609bc9c7d6807d1850d1915919ad15bcc26c76c",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Manually re-reviewed unchanged synthetic loopback legacy proxy fixture against the parent commit."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1033,
+    "file_sha256": "37d4f83e0c8998c9419487e60609bc9c7d6807d1850d1915919ad15bcc26c76c",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Manually re-reviewed unchanged synthetic loopback migration SQL fixture; new preceding statement drops only the State proxy reference in an isolated test schema."
   }
 ]

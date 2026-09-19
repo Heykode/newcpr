@@ -753,6 +753,7 @@ struct FixtureSettingsStore;
 impl SettingsStore for FixtureSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
+            turn_state_probe_proxy_id: None,
             config_revision: Revision::new(1).expect("revision"),
             disable_fast: false,
             turn_state_injection_enabled: false,

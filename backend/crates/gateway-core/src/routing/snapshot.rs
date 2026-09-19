@@ -40,6 +40,7 @@ pub struct SnapshotSettingsFacts {
     request_tuning: super::RequestTuning,
     turn_state_injection_enabled: bool,
     turn_state_models: Vec<String>,
+    turn_state_probe_proxy: Option<crate::account::OutboundProxy>,
 }
 
 impl SnapshotSettingsFacts {
@@ -86,6 +87,7 @@ impl SnapshotSettingsFacts {
             min_codex_cli_version,
             request_tuning: super::RequestTuning::default(),
             turn_state_injection_enabled: false,
+            turn_state_probe_proxy: None,
             turn_state_models: vec![
                 "gpt-6-astra".to_owned(),
                 "gpt-5.6-sol".to_owned(),
@@ -104,6 +106,15 @@ impl SnapshotSettingsFacts {
     pub fn with_openai_turn_state_policy(mut self, enabled: bool, models: Vec<String>) -> Self {
         self.turn_state_injection_enabled = enabled;
         self.turn_state_models = models;
+        self
+    }
+
+    #[must_use]
+    pub fn with_turn_state_probe_proxy(
+        mut self,
+        proxy: Option<crate::account::OutboundProxy>,
+    ) -> Self {
+        self.turn_state_probe_proxy = proxy;
         self
     }
 }
@@ -464,7 +475,8 @@ async fn compile_runtime_snapshot(
     let turn_state_policy = super::OpenAiTurnStatePolicy::new(
         facts.settings.turn_state_injection_enabled,
         turn_state_models,
-    );
+    )
+    .with_probe_proxy(facts.settings.turn_state_probe_proxy);
     let selection_policy = AccountSelectionPolicy::new(
         rotation_strategy,
         default_concurrency,
