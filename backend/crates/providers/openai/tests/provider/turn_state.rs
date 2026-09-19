@@ -412,11 +412,20 @@ async fn collector_cancellation(hard_rotation: bool) {
     tuning.publish_openai_turn_state_policy(policy.clone());
     leases.busy.store(1, Ordering::SeqCst);
     discover.run_cycle(cycle.clone()).await.unwrap();
+    wait_count(&leases.reads, 1).await;
+    wait_count(&states.cancelled, 1).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "busy accounts defer collection"
+    );
+    leases.busy.store(0, Ordering::SeqCst);
+    discover.run_cycle(cycle.clone()).await.unwrap();
     wait_count(&calls, 1).await;
     assert_eq!(
         leases.reads.load(Ordering::SeqCst),
-        0,
-        "collection is independent of business leases"
+        2,
+        "collection only reads business activity; it never acquires a lease"
     );
     if hard_rotation {
         let account = accounts.get_account(&account_id).await.unwrap().unwrap();
@@ -436,7 +445,7 @@ async fn collector_cancellation(hard_rotation: bool) {
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(states.writes.load(Ordering::SeqCst), 0);
-    assert_eq!(states.cancelled.load(Ordering::SeqCst), 1);
+    assert_eq!(states.cancelled.load(Ordering::SeqCst), 2);
     tuning.publish_openai_turn_state_policy(policy);
     discover.run_cycle(cycle).await.unwrap();
     // Cancellation released the same-key collector before another generation can start.
@@ -453,9 +462,11 @@ async fn collector_cancellation(hard_rotation: bool) {
 #[derive(Clone)]
 struct BudgetResponder {
     calls: Arc<Mutex<BTreeMap<(String, String), usize>>>,
+    issued_at: SystemTime,
     succeed: bool,
     repeat_first: bool,
     start_only: bool,
+    soft_cookie: bool,
     times: Arc<Mutex<Vec<(usize, std::time::Instant)>>>,
 }
 
@@ -484,15 +495,14 @@ impl Respond for BudgetResponder {
             let mut calls = self.calls.lock().unwrap();
             if !self.succeed
                 && !self.start_only
-                && calls.get(&(owner.clone(), model.clone())) == Some(&1)
+                && !calls.contains_key(&(owner.clone(), model.clone()))
             {
-                assert_eq!(
-                    calls.len(),
-                    4,
-                    "all keys must start before any key completes its first round"
+                assert!(
+                    calls.values().all(|count| *count == 500),
+                    "previous keys must exhaust before the next starts"
                 );
             }
-            let count = calls.entry((owner, model)).or_default();
+            let count = calls.entry((owner, model.clone())).or_default();
             *count += 1;
             *count
         };
@@ -529,11 +539,47 @@ impl Respond for BudgetResponder {
         } else {
             count
         };
-        ResponseTemplate::new(200)
+        let response = ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
-            .insert_header("x-codex-turn-state", format!("gAAAAA{value:0286}"))
-            .set_body_string("event: response.failed\ndata: {\"type\":\"response.failed\"}\n\n")
+            .insert_header("x-codex-turn-state", state_at(value, self.issued_at))
+            .set_body_string(format!(
+                "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_probe\",\"model\":\"{model}\",\"status\":\"completed\",\"output\":[]}}}}\n\n"
+            ));
+        if self.soft_cookie && count == 2 {
+            response.set_delay(Duration::from_millis(250))
+        } else {
+            response
+        }
     }
+}
+
+fn fresh_state(value: usize) -> String {
+    state_at(value, SystemTime::now())
+}
+
+fn state_at(value: usize, issued_at: SystemTime) -> String {
+    let mut bytes = vec![0x80];
+    bytes.extend_from_slice(
+        &issued_at
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(&value.to_be_bytes());
+    bytes.resize(9 + 16 + 160 + 32, 0x22);
+    URL_SAFE.encode(bytes)
+}
+
+fn loopback_sources(count: usize) -> Vec<ProviderEgressAddress> {
+    // Synthetic duplicate addresses exercise batch budgets using only local sockets.
+    (0..count)
+        .map(|index| ProviderEgressAddress {
+            id: format!("loopback-{index}"),
+            address: Ipv6Addr::LOCALHOST,
+            enabled: true,
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -541,23 +587,23 @@ enum AcquisitionScenario {
     ContinuousMisses,
     ImmediateStandby,
     RepeatedStandby,
-    ConcurrentStarts,
-    PromoteStandby,
+    SerialStarts,
+    RefreshActive,
     SoftCookieRefresh,
 }
 
-async fn independent_collectors(scenario: AcquisitionScenario) {
+async fn bounded_collectors(scenario: AcquisitionScenario) {
     let succeed = matches!(
         scenario,
         AcquisitionScenario::ImmediateStandby
             | AcquisitionScenario::RepeatedStandby
-            | AcquisitionScenario::PromoteStandby
+            | AcquisitionScenario::RefreshActive
             | AcquisitionScenario::SoftCookieRefresh
     );
     let soft_cookie = matches!(scenario, AcquisitionScenario::SoftCookieRefresh);
     let repeat_first = matches!(scenario, AcquisitionScenario::RepeatedStandby) || soft_cookie;
-    let start_only = matches!(scenario, AcquisitionScenario::ConcurrentStarts);
-    let promote = matches!(scenario, AcquisitionScenario::PromoteStandby);
+    let start_only = matches!(scenario, AcquisitionScenario::SerialStarts);
+    let refresh = matches!(scenario, AcquisitionScenario::RefreshActive);
     let accounts = Arc::new(MemoryAccountStore::default());
     let account_count = if start_only { 20 } else { 2 };
     let key_count = account_count * 2;
@@ -578,7 +624,7 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
     let base = provider_ports_with_accounts(accounts.clone());
     let states = Arc::new(ProbeStates::default());
     let captured = SystemTime::now() - Duration::from_secs(1200);
-    if promote {
+    if refresh {
         for index in 0..account_count {
             for model in ["model-a", "model-b"] {
                 let id = ProviderAccountId::new(format!("acct_parallel_{index}")).unwrap();
@@ -621,11 +667,7 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
     .with_turn_states(states.clone())
     .with_egress(Arc::new(LoopbackEgress(ProviderEgressConfig {
         revision: 1,
-        addresses: vec![ProviderEgressAddress {
-            id: "loopback".to_owned(),
-            address: Ipv6Addr::LOCALHOST,
-            enabled: true,
-        }],
+        addresses: loopback_sources(510),
         ..ProviderEgressConfig::default()
     })));
     let server = MockServer::builder()
@@ -634,22 +676,22 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
         .await;
     let responder = BudgetResponder {
         calls: Arc::default(),
+        issued_at: SystemTime::now(),
         succeed,
         repeat_first,
         start_only,
+        soft_cookie,
         times: Arc::default(),
     };
     Mock::given(method("POST"))
         .and(path("/codex/responses"))
         .respond_with(responder.clone())
-        .expect(if promote {
-            4..=4
-        } else if start_only {
-            40..=40
+        .expect(if start_only {
+            1..=1
         } else if !succeed {
-            2044..=u64::MAX
+            2000..=2000
         } else if repeat_first {
-            12..=12
+            12..=48
         } else {
             8..=8
         })
@@ -695,28 +737,29 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
         .await
         .unwrap();
     if soft_cookie {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let ready = {
-                    let calls = responder.calls.lock().unwrap();
-                    calls.len() == key_count && calls.values().all(|count| *count >= 2)
-                };
-                if ready {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
         for index in 0..account_count {
-            let id = format!("acct_parallel_{index}");
-            let account = accounts.account(&id).unwrap();
-            let mut data = accounts
-                .repository()
-                .load_complete_data(&account)
-                .await
-                .unwrap();
+            let owner = format!("parallel-owner-{index}");
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let seen = responder
+                        .calls
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|((account, _), count)| account == &owner && *count >= 2);
+                    if seen {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            // Real response-cookie allowlists exclude loopback origins. Simulate the
+            // committed routine Cookie save without weakening production validation.
+            let account = accounts.account(&format!("acct_parallel_{index}")).unwrap();
+            let repository = accounts.repository();
+            let mut data = repository.load_complete_data(&account).await.unwrap();
             data.cookies_mut()
                 .push(provider_openai::credential::CodexCookie {
                     name: "__cf_bm".into(),
@@ -727,29 +770,36 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
                     secure: false,
                     expires_at: None,
                 });
-            accounts
-                .repository()
+            repository
                 .compare_and_swap_data(&account, data)
                 .await
                 .unwrap();
+            let changed = accounts.account(&format!("acct_parallel_{index}")).unwrap();
+            assert_ne!(changed.revision(), account.revision());
+            assert_eq!(
+                changed.turn_state_binding_revision(),
+                account.turn_state_binding_revision()
+            );
         }
     }
     let completed = tokio::time::timeout(
         Duration::from_secs(if start_only { 20 } else { 300 }),
         async {
             while if start_only {
-                responder.calls.lock().unwrap().len() < key_count
+                responder.calls.lock().unwrap().is_empty()
             } else if succeed {
-                states.writes.load(Ordering::SeqCst) < if promote { 4 } else { 8 }
+                states.writes.load(Ordering::SeqCst) < 8
             } else {
-                let calls = responder.calls.lock().unwrap();
-                calls.len() < 4 || calls.values().any(|count| *count < 511)
+                states.failed.load(Ordering::SeqCst) < key_count
             } {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         },
     )
     .await;
+    if start_only {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     if soft_cookie && completed.is_ok() {
         wait_count(&states.cancelled, key_count).await;
     }
@@ -758,36 +808,40 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
     let calls = responder.calls.lock().unwrap().clone();
     assert!(
         completed.is_ok(),
-        "independent tasks timed out: calls={calls:?}, failed={}, cancelled={}",
+        "bounded tasks timed out: calls={calls:?}, failed={}, cancelled={}",
         states.failed.load(Ordering::SeqCst),
         states.cancelled.load(Ordering::SeqCst),
     );
     assert_eq!(
         calls.len(),
-        key_count,
-        "each account and model owns its own task"
+        if start_only { 1 } else { key_count },
+        "account/model tasks must be processed serially"
     );
-    assert!(calls.values().all(|count| if start_only || promote {
+    assert!(calls.values().all(|count| if start_only {
         *count == 1
     } else if !succeed {
-        *count >= 511
+        *count == 500
     } else if repeat_first {
-        *count == 3
+        (3..=12).contains(count)
     } else {
         *count == 2
     }));
     assert_eq!(
         states.failed.load(Ordering::SeqCst),
-        0,
-        "ordinary misses do not exhaust a task"
+        if !succeed && !start_only {
+            key_count
+        } else {
+            0
+        },
+        "ordinary misses stop at the source budget"
     );
     if repeat_first {
         let times = responder.times.lock().unwrap();
-        let latest_second = times
+        let first_second = times
             .iter()
             .filter(|(n, _)| *n == 2)
             .map(|(_, at)| *at)
-            .max()
+            .min()
             .unwrap();
         let earliest_third = times
             .iter()
@@ -796,20 +850,16 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
             .min()
             .unwrap();
         assert!(
-            earliest_third.duration_since(latest_second) >= Duration::from_secs(5),
-            "standby misses must not use the urgent retry loop"
+            earliest_third.duration_since(first_second) < Duration::from_secs(5),
+            "standby retries use the restored escalating batches without six-second pacing"
         );
     }
     if succeed {
         let records = states.records.lock().unwrap();
         assert_eq!(records.len(), 4);
         for record in records.values() {
-            if promote {
-                assert_eq!(record.active().unwrap().issued_at(), captured);
-                assert_eq!(
-                    record.active().unwrap().expires_at(),
-                    captured + Duration::from_secs(3600)
-                );
+            if refresh {
+                assert!(record.active().unwrap().issued_at() > captured);
                 assert_eq!(record.state_version(), 2);
             }
             assert_eq!(
@@ -822,12 +872,10 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
             );
         }
     }
-    if promote {
-        assert_eq!(states.promoted.load(Ordering::SeqCst), 4);
-    }
+    assert_eq!(states.promoted.load(Ordering::SeqCst), 0);
     if soft_cookie {
         let requests = server.received_requests().await.unwrap();
-        assert_eq!(
+        assert!(
             requests
                 .iter()
                 .filter(|request| {
@@ -836,8 +884,8 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
                         .get("cookie")
                         .is_some_and(|value| value == "__cf_bm=synthetic-fresh")
                 })
-                .count(),
-            4,
+                .count()
+                >= 4,
             "the next batch must reload each account's Cookie material"
         );
         assert_eq!(
@@ -850,32 +898,32 @@ async fn independent_collectors(scenario: AcquisitionScenario) {
 
 #[tokio::test]
 async fn soft_cookie_updates_keep_collectors_alive_and_reload_next_batch_material() {
-    independent_collectors(AcquisitionScenario::SoftCookieRefresh).await;
+    bounded_collectors(AcquisitionScenario::SoftCookieRefresh).await;
 }
 
 #[tokio::test]
-async fn independent_accounts_and_models_continue_past_500_with_one_ipv6_and_upstream_errors() {
-    independent_collectors(AcquisitionScenario::ContinuousMisses).await;
+async fn account_model_tasks_stop_at_500_and_then_process_the_next_key() {
+    bounded_collectors(AcquisitionScenario::ContinuousMisses).await;
 }
 
 #[tokio::test]
-async fn independent_accounts_and_models_immediately_acquire_distinct_standby() {
-    independent_collectors(AcquisitionScenario::ImmediateStandby).await;
+async fn serial_account_model_tasks_immediately_acquire_distinct_standby() {
+    bounded_collectors(AcquisitionScenario::ImmediateStandby).await;
 }
 
 #[tokio::test]
-async fn standby_repeats_are_rejected_and_retried_on_the_background_interval() {
-    independent_collectors(AcquisitionScenario::RepeatedStandby).await;
+async fn standby_repeats_are_rejected_and_retried_with_escalating_batches() {
+    bounded_collectors(AcquisitionScenario::RepeatedStandby).await;
 }
 
 #[tokio::test]
-async fn more_than_32_account_model_collectors_start_without_waiting_for_other_keys() {
-    independent_collectors(AcquisitionScenario::ConcurrentStarts).await;
+async fn other_account_model_tasks_wait_until_the_running_task_finishes() {
+    bounded_collectors(AcquisitionScenario::SerialStarts).await;
 }
 
 #[tokio::test]
-async fn expiring_active_promotes_standby_without_renewal_then_immediately_refills() {
-    independent_collectors(AcquisitionScenario::PromoteStandby).await;
+async fn expiring_active_is_recollected_then_paired_with_a_new_standby() {
+    bounded_collectors(AcquisitionScenario::RefreshActive).await;
 }
 
 struct CredentialRecoveryFixture {
@@ -922,11 +970,7 @@ impl CredentialRecoveryFixture {
         .with_turn_states(states.clone())
         .with_egress(Arc::new(LoopbackEgress(ProviderEgressConfig {
             revision: 1,
-            addresses: vec![ProviderEgressAddress {
-                id: "loopback".into(),
-                address: Ipv6Addr::LOCALHOST,
-                enabled: true,
-            }],
+            addresses: loopback_sources(12),
             ..ProviderEgressConfig::default()
         })));
         let server = MockServer::builder()
@@ -996,7 +1040,8 @@ impl CredentialRecoveryFixture {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(self.leases.reads.load(Ordering::SeqCst), 0);
+        // The lease fixture panics on scheduling/acquisition; read-only activity checks are allowed.
+        let _ = self.leases.reads.load(Ordering::SeqCst);
     }
 }
 
@@ -1046,9 +1091,11 @@ async fn authentication_rejection_stops_all_models_and_recovery_resumes_discover
         Mock::given(method("POST"))
             .respond_with(BudgetResponder {
                 calls: Arc::default(),
+                issued_at: SystemTime::now(),
                 succeed: true,
                 repeat_first: false,
                 start_only: false,
+                soft_cookie: false,
                 times: Arc::default(),
             })
             .mount(&fixture.server)
@@ -1109,7 +1156,7 @@ async fn late_authentication_rejection_cannot_invalidate_replaced_credentials() 
         .mount(&fixture.server)
         .await;
     fixture.discover().await;
-    wait_count(&calls, 2).await;
+    wait_count(&calls, 1).await;
     let account = fixture.accounts.account("acct_recovery_probe").unwrap();
     let repository = fixture.accounts.repository();
     let mut data = repository.load_complete_data(&account).await.unwrap();
@@ -1118,7 +1165,7 @@ async fn late_authentication_rejection_cannot_invalidate_replaced_credentials() 
         .compare_and_swap_data(&account, data)
         .await
         .unwrap();
-    wait_count(&fixture.states.cancelled, 2).await;
+    wait_count(&fixture.states.cancelled, 1).await;
     let current = fixture.accounts.account("acct_recovery_probe").unwrap();
     assert_ne!(current.revision(), account.revision());
     assert_eq!(current.credential_state(), CredentialState::Ready);
@@ -1160,9 +1207,11 @@ async fn authentication_rejection_is_account_scoped_and_other_accounts_keep_coll
         ))
         .respond_with(BudgetResponder {
             calls: Arc::default(),
+            issued_at: SystemTime::now(),
             succeed: true,
             repeat_first: false,
             start_only: false,
+            soft_cookie: false,
             times: Arc::default(),
         })
         .mount(&fixture.server)
@@ -1218,4 +1267,73 @@ async fn transient_errors_keep_credentials_ready_and_do_not_become_authenticatio
         assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
         fixture.stop().await;
     }
+}
+
+#[tokio::test]
+async fn valid_state_headers_are_rejected_on_failed_or_mismatched_model_streams() {
+    for (body, reported_model) in [
+        (
+            "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\",\"message\":\"synthetic failure\"}}}\n\n",
+            None,
+        ),
+        (
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_probe\",\"model\":\"different-model\",\"status\":\"completed\",\"output\":[]}}\n\n",
+            None,
+        ),
+        (
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_probe\",\"status\":\"completed\",\"output\":[]}}\n\n",
+            Some("different-model"),
+        ),
+    ] {
+        let fixture = CredentialRecoveryFixture::new().await;
+        let mut response = ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .insert_header("x-codex-turn-state", fresh_state(1))
+            .set_body_string(body);
+        if let Some(model) = reported_model {
+            response = response.insert_header("openai-model", model);
+        }
+        Mock::given(method("POST"))
+            .respond_with(response)
+            .mount(&fixture.server)
+            .await;
+        fixture.discover().await;
+        wait_count(&fixture.states.cancelled, 2).await;
+        assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.states.failed.load(Ordering::SeqCst), 2);
+        assert_eq!(fixture.server.received_requests().await.unwrap().len(), 24);
+        assert_eq!(
+            fixture
+                .accounts
+                .account("acct_recovery_probe")
+                .unwrap()
+                .credential_state(),
+            CredentialState::Ready
+        );
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn authentication_failure_inside_sse_stops_collection_without_accepting_its_state() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    Mock::given(method("POST")).respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .insert_header("x-codex-turn-state", fresh_state(1))
+            .set_body_string("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"token_invalidated\",\"message\":\"Token revoked\"}}}\n\n")
+    ).mount(&fixture.server).await;
+    fixture.discover().await;
+    wait_count(&fixture.states.cancelled, 1).await;
+    assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .accounts
+            .account("acct_recovery_probe")
+            .unwrap()
+            .credential_state(),
+        CredentialState::Expired
+    );
+    fixture.stop().await;
 }
