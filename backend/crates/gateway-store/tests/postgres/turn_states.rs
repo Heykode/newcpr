@@ -15,9 +15,6 @@ use gateway_store::postgres::{
 
 use super::{TestDatabase, provider_accounts::account};
 
-mod retention;
-mod upgrade;
-
 fn revision() -> CredentialRevision {
     CredentialRevision::new(1).unwrap()
 }
@@ -532,7 +529,7 @@ async fn binding_migration_preserves_current_rows_without_reviving_stale_rows() 
         .await
         .unwrap();
     sqlx::raw_sql(include_str!(
-        "../../../../../migrations/0027_turn_state_binding_revision.sql"
+        "../../../../migrations/0027_turn_state_binding_revision.sql"
     ))
     .execute(&mut *tx)
     .await
@@ -569,7 +566,7 @@ async fn binding_migration_preserves_current_rows_without_reviving_stale_rows() 
     database.close().await;
 }
 
-async fn enable(database: &TestDatabase) {
+pub(super) async fn enable(database: &TestDatabase) {
     sqlx::query(
         "update runtime_settings set turn_state_injection_enabled = true,
         turn_state_models = array['gpt-6-astra', 'gpt-5.6-sol', 'model-a', 'model-b']",
@@ -713,7 +710,7 @@ async fn admin_readiness_and_cancel_cleanup_are_model_revision_and_policy_fenced
     database.close().await;
 }
 
-fn candidate(
+pub(super) fn candidate(
     account_id: &ProviderAccountId,
     model: &UpstreamModelId,
     value: &str,

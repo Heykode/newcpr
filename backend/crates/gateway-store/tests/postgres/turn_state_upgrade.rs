@@ -1,9 +1,11 @@
-use super::*;
+use gateway_store::postgres::{PgProviderAccountRepository, ProviderAccountRepository};
+
+use super::{TestDatabase, provider_accounts::account};
 
 #[tokio::test]
 async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
     let old = sqlx::migrate::Migrator {
-        migrations: super::super::TEST_MIGRATOR
+        migrations: super::TEST_MIGRATOR
             .iter()
             .filter(|migration| migration.version <= 27)
             .cloned()
@@ -39,10 +41,7 @@ async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
     .fetch_one(&database.pool)
     .await
     .unwrap();
-    super::super::TEST_MIGRATOR
-        .run(&database.pool)
-        .await
-        .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     let after: (String, String, String, String) = sqlx::query_as(
         "select active_state, standby_state, active_expires_at::text,
                 standby_expires_at::text from provider_turn_states",
@@ -74,9 +73,6 @@ async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
         downgrade,
         Err(sqlx::migrate::MigrateError::VersionMissing(28 | 29))
     ));
-    super::super::TEST_MIGRATOR
-        .run(&database.pool)
-        .await
-        .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     database.close().await;
 }

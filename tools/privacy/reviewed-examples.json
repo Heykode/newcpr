@@ -1422,5 +1422,21 @@
     "file_sha256": "37d4f83e0c8998c9419487e60609bc9c7d6807d1850d1915919ad15bcc26c76c",
     "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
     "reason": "Manually re-reviewed unchanged synthetic loopback migration SQL fixture; new preceding statement drops only the State proxy reference in an isolated test schema."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1734,
+    "file_sha256": "38600b5e9c2c2dd449b5b3d5ccf3a7fae3bedac1bc47e45eca616eb92974c419",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Manually re-reviewed unchanged synthetic loopback proxy fixture; only the State retention module declaration was added."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1761,
+    "file_sha256": "38600b5e9c2c2dd449b5b3d5ccf3a7fae3bedac1bc47e45eca616eb92974c419",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Manually re-reviewed unchanged synthetic normalized loopback proxy assertion after the module declaration moved its line by one."
   }
 ]

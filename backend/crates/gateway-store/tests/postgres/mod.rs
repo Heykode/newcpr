@@ -35,6 +35,7 @@ mod runtime_settings;
 mod schema_integrity;
 mod snapshot;
 mod snapshots;
+mod turn_state_upgrade;
 mod turn_states;
 
 static TEST_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
