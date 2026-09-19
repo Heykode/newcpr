@@ -5,6 +5,7 @@ import { computed } from 'vue'
 
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useUiClock } from '@/composables/useUiClock'
+import { turnStateBlockReason } from '../utils/turnState'
 import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
@@ -12,6 +13,7 @@ type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
   & Partial<Pick<AccountRow, 'accountId' | 'turnStateInjectionEnabled' | 'turnState'>>
+  & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
 
 const props = withDefaults(
   defineProps<{
@@ -68,8 +70,11 @@ const now = useUiClock()
 const readyModels = computed(() => props.account.turnState?.readyModels
   .filter(item => Date.parse(item.expiresAt) > now.value.getTime())
   .map(item => item.model) ?? [])
-const hasReadyState = computed(() => hasTurnStateInjection.value && readyModels.value.length > 0)
+const blockedReason = computed(() => turnStateBlockReason(props.account))
+const hasReadyState = computed(() => hasTurnStateInjection.value && !blockedReason.value && readyModels.value.length > 0)
 const turnStateTitle = computed(() => {
+  if (blockedReason.value)
+    return `State：${blockedReason.value}`
   if (!props.account.turnState)
     return '账号级 State 注入已开启；总开关关闭、账号停用或状态暂不可用'
   if (!readyModels.value.length)
@@ -79,6 +84,8 @@ const turnStateTitle = computed(() => {
 })
 
 const avatarToneClass = computed(() => {
+  if (hasTurnStateInjection.value && blockedReason.value)
+    return 'bg-cp-error-container text-cp-error-text ring-2 ring-inset ring-cp-error'
   if (hasReadyState.value)
     return 'bg-emerald-100 text-emerald-900 ring-2 ring-inset ring-emerald-500 [html[data-theme=dark]_&]:bg-emerald-950 [html[data-theme=dark]_&]:text-emerald-200 [html[data-theme=dark]_&]:ring-emerald-400'
   if (hasTurnStateInjection.value)
@@ -123,7 +130,7 @@ const avatarToneClass = computed(() => {
         data-account-state-mark
         data-swipe-select-handle
         class="absolute -bottom-1 -right-1 z-10 inline-flex size-4 items-center justify-center rounded-full border-2 border-cp-bg-container shadow-sm"
-        :class="hasReadyState ? 'bg-emerald-400 text-emerald-950' : 'bg-amber-400 text-amber-950'"
+        :class="blockedReason ? 'bg-cp-error text-cp-error-on-container' : hasReadyState ? 'bg-emerald-400 text-emerald-950' : 'bg-amber-400 text-amber-950'"
         :title="turnStateTitle"
         :aria-label="turnStateTitle"
         role="img"

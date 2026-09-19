@@ -20,6 +20,96 @@ fn revision() -> CredentialRevision {
 }
 
 #[tokio::test]
+async fn invalid_credentials_fence_late_candidates_and_hide_existing_slots_until_recovery() {
+    use gateway_admin::ports::store::AccountStore;
+    let Some(database) = TestDatabase::create("turn_state_credential_gate").await else {
+        return;
+    };
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    accounts
+        .insert_provider_account(account("acct_gate", "gate-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let id = ProviderAccountId::new("acct_gate").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let states = PgProviderTurnStateRepository::new(database.pool.clone());
+    let admin = super::admin_account_store(&database.pool);
+    let ids = [id.as_str().to_owned()];
+    let value = candidate(
+        &id,
+        &model,
+        &"a".repeat(292),
+        SystemTime::now(),
+        ProviderTurnStateSlot::Active,
+        292,
+    );
+    states.put_candidate(value.clone()).await.unwrap();
+    for (state, quota, expired) in [
+        ("expired", "allowed", false),
+        ("invalid", "allowed", false),
+        ("banned", "allowed", false),
+        ("ready", "allowed", true),
+        ("ready", "exhausted", false),
+    ] {
+        sqlx::query(
+            "update provider_accounts set credential_state=$1, quota_access_state=$2,
+            quota_access_observed_at=now(), updated_at=now(),
+            quota_evidence=case when $2='exhausted' then 'payment_required' else null end,
+            access_token_expires_at=case when $3 then now()-interval '1 second' else null end
+            where id=$4",
+        )
+        .bind(state)
+        .bind(quota)
+        .bind(expired)
+        .bind(id.as_str())
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        assert!(
+            states
+                .read(&id, &model, revision())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(states.put_candidate(value.clone()).await.is_err());
+        let status = &admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()];
+        assert!(status.ready_models.is_empty());
+        assert!(
+            status
+                .models
+                .iter()
+                .all(|model| model.active.is_none() && model.standby.is_none())
+        );
+    }
+    sqlx::query(
+        "update provider_accounts set credential_state='ready', quota_access_state='allowed',
+        quota_evidence=null, access_token_expires_at=null where id=$1",
+    )
+    .bind(id.as_str())
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    assert!(
+        states
+            .read(&id, &model, revision())
+            .await
+            .unwrap()
+            .unwrap()
+            .active()
+            .is_some()
+    );
+    assert_eq!(
+        admin.load_turn_state_status(&ids).await.unwrap()[id.as_str()]
+            .ready_models
+            .len(),
+        1
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn soft_credential_cas_keeps_both_slots_clocks_readiness_and_hard_rotation_fence() {
     use gateway_admin::ports::store::AccountStore;
     use gateway_core::account::{

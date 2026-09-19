@@ -20,6 +20,7 @@ async function main() {
   let enabled = true
   let ready = true
   let modelCount = 2
+  let errorReason = null
   page.on('pageerror', error => errors.push(error.message))
   const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
   await page.route('**/dev/api/admin/auth/status', route => fulfill(route, { authenticated: true }))
@@ -51,6 +52,7 @@ async function main() {
     const expiresAt = minutes => new Date(Date.now() + minutes * 60_000).toISOString()
     const items = accounts.map((account, index) => ({
       ...account,
+      ...(index === 0 && errorReason ? { status: 'error', errorReason } : {}),
       provider: index === 2 ? 'xai' : account.provider,
       turnStateInjectionEnabled: index === 0 ? enabled : index === 2,
       turnState: index === 0 && enabled
@@ -190,7 +192,7 @@ async function main() {
           await page.setViewportSize({ width, height: 900 })
           await panel.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }))
           const list = panel.locator('[data-account-turn-state-list]')
-          await list.evaluate(element => element.scrollTop = 0)
+          await list.evaluate(element => element.scrollTo({ top: 0, behavior: 'instant' }))
           const metrics = await list.evaluate((element) => {
             const rows = [...element.querySelectorAll('[data-account-turn-state-model]')]
             return {
@@ -210,8 +212,7 @@ async function main() {
           assert.equal(metrics.overflow, false)
           assert.equal(metrics.contentHeight > metrics.height, count > 3)
           if (count > 3) {
-            await list.focus()
-            await page.keyboard.press('End')
+            await list.press('End')
             await page.waitForFunction(() => {
               const element = document.querySelector('[data-account-turn-state-list]')
               return element.scrollTop + element.clientHeight >= element.scrollHeight - 1
@@ -223,7 +224,7 @@ async function main() {
             assert.equal(after.panelHeight, metrics.panelHeight)
             assert.equal(after.headerTop, metrics.headerTop)
           }
-          await list.evaluate(element => element.scrollTop = 0)
+          await list.evaluate(element => element.scrollTo({ top: 0, behavior: 'instant' }))
           if (count === 4)
             await page.screenshot({ path: `${output}/${theme}-${width}-four-models.png`, fullPage: true })
         }
@@ -233,6 +234,32 @@ async function main() {
       await page.locator('button[title="展开统计"]').first().click()
       await panel.waitFor()
     }
+    for (const [reason, label] of [
+      ['credential_expired', '凭据已失效，需要重新登录'],
+      ['access_token_expired', '凭据已过期，等待自动刷新'],
+    ]) {
+      errorReason = reason
+      await page.reload()
+      await mark.waitFor()
+      assert.equal(await page.locator('[data-account-state-ready]').count(), 0)
+      assert.match(await avatar.getAttribute('class'), /ring-cp-error/)
+      assert.equal(await mark.getAttribute('title'), `State：${label}`)
+      await page.locator('button[title="展开统计"]').first().click()
+      await panel.locator('[data-account-turn-state-blocked]').waitFor()
+      assert.equal(await panel.locator('[data-account-turn-state-model]').count(), 0)
+      assert.ok((await panel.textContent()).includes(label))
+      for (const width of [1440, 320]) {
+        await page.setViewportSize({ width, height: 900 })
+        await panel.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }))
+        assert.ok(await panel.evaluate(element => element.scrollWidth <= element.clientWidth))
+        await page.screenshot({ path: `${output}/${reason}-${width}.png`, fullPage: true })
+      }
+    }
+    errorReason = null
+    await page.reload()
+    await mark.waitFor()
+    assert.equal(await page.locator('[data-account-state-ready]').count(), 1)
+    assert.match(await avatar.getAttribute('class'), /ring-emerald-500/)
     ready = false
     await page.reload()
     await mark.waitFor()
@@ -249,7 +276,7 @@ async function main() {
     }
     assert.equal(mutations.length, 2)
     assert.deepEqual(errors, [])
-    process.stdout.write('Passed: State readiness panel, 2/3/4/10 models, bounded scrolling and keyboard access, slot lengths/countdowns, green/gold avatar, menu toggle, partial update, 2FA coexistence, provider guard, light/dark and 1440/390/320px.\n')
+    process.stdout.write('Passed: State readiness panel, credential error/recovery, 2/3/4/10 models, bounded scrolling and keyboard access, slot lengths/countdowns, green/gold/error avatar, menu toggle, partial update, 2FA coexistence, provider guard, light/dark and 1440/390/320px.\n')
   }
   finally {
     await browser.close()

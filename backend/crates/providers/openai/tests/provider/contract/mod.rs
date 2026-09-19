@@ -5838,7 +5838,20 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
             } else {
                 http_generate_operation()
             };
-            let mut stream = provider_with_base_url(&store, base_url)
+            // Each fixture owns its runtime and must not reuse another test's HTTP client.
+            let mut profile = wire_profile().snapshot();
+            profile.raw_user_agent =
+                Some(format!("capacity-stream-contract/{}", uuid::Uuid::new_v4()));
+            let provider = provider_and_quota_with_profile(
+                &store,
+                Arc::new(MemorySessionAffinity::default()),
+                base_url,
+                Arc::new(TestLeaseCoordinator::default()),
+                u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
+                CodexWireProfileState::new(profile),
+            )
+            .0;
+            let mut stream = provider
                 .execute(
                     planned_request("openai", operation),
                     context("req_capacity_stream", CancellationToken::new()),
@@ -5857,8 +5870,16 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
                     None => panic!("expected capacity failure"),
                 }
             };
-            assert_eq!(error.replay_is_safe(), !semantic_output);
-            assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
+            assert_eq!(
+                error.kind(),
+                ProviderErrorKind::UpstreamCapacityUnavailable,
+                "use_websocket={use_websocket}, semantic_output={semantic_output}: {error:?}"
+            );
+            assert_eq!(
+                error.replay_is_safe(),
+                !semantic_output,
+                "use_websocket={use_websocket}, semantic_output={semantic_output}, client_events={client_events:?}: {error:?}"
+            );
             assert_eq!(error.pre_delivery_retry().is_some(), !semantic_output);
             assert!(!provider_openai::openai_failure_affects_account_score(
                 &error

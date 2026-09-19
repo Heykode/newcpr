@@ -455,6 +455,9 @@ impl AccountStore for PgAdminAccountStore {
              cross join lateral unnest(r.turn_state_models) with ordinality m(model, position)
              left join provider_turn_states s on s.provider_account_id = a.id
                and s.upstream_model = m.model
+               and a.credential_state = 'ready'
+               and (a.access_token_expires_at is null or a.access_token_expires_at > now())
+               and a.quota_access_state <> 'exhausted'
              where a.id = any($1) and a.provider_kind = 'openai'
                and a.enabled and a.turn_state_injection_enabled and r.turn_state_injection_enabled
              order by a.id, m.position",

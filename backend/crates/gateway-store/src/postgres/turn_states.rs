@@ -159,6 +159,9 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                    and exists (select 1 from provider_accounts a
                      where a.id = s.provider_account_id and a.enabled
                        and a.turn_state_injection_enabled
+                       and a.credential_state = 'ready'
+                       and (a.access_token_expires_at is null or a.access_token_expires_at > now())
+                       and a.quota_access_state <> 'exhausted'
                        and a.turn_state_binding_revision = s.credential_revision)
                    and exists (select 1 from runtime_settings r
                      where r.turn_state_injection_enabled
@@ -433,6 +436,9 @@ async fn ensure_row(
     .unwrap_or(false);
     let owner = sqlx::query_scalar::<_, bool>(
         "select enabled and turn_state_injection_enabled and turn_state_binding_revision = $2
+           and credential_state = 'ready'
+           and (access_token_expires_at is null or access_token_expires_at > now())
+           and quota_access_state <> 'exhausted'
          from provider_accounts where id = $1 for share",
     )
     .bind(account_id.as_str())
