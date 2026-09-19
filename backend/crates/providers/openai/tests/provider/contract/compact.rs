@@ -12,6 +12,21 @@ fn compact_operation(body: Bytes, context: Map<String, Value>) -> Operation {
     ))
 }
 
+fn isolated_compact_provider(store: &Arc<MemoryAccountStore>, base_url: String) -> CodexProvider {
+    // Keep the routing fixture intact while isolating the process-wide HTTP cache.
+    let mut profile = wire_profile().snapshot();
+    profile.raw_user_agent = Some(format!("compact-contract/{}", uuid::Uuid::new_v4()));
+    provider_and_quota_with_profile(
+        store,
+        Arc::new(MemorySessionAffinity::default()),
+        base_url,
+        Arc::new(TestLeaseCoordinator::default()),
+        u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
+        CodexWireProfileState::new(profile),
+    )
+    .0
+}
+
 #[tokio::test]
 async fn compact_uses_model_aware_http_json_and_preserves_output_and_usage() {
     let store = Arc::new(MemoryAccountStore::default());
@@ -97,9 +112,7 @@ async fn compact_uses_model_aware_http_json_and_preserves_output_and_usage() {
 async fn compact_missing_or_partial_usage_is_not_filled_with_zero() {
     for usage in [None, Some(json!({"input_tokens":12}))] {
         let store = Arc::new(MemoryAccountStore::default());
-        // A fixture must not inherit pooled HTTP clients from a dropped runtime.
-        let account_id = format!("acct_compact_usage_{}", uuid::Uuid::new_v4());
-        create_account(&store, &account_id).await;
+        create_account(&store, "acct_provider_contract").await;
         let server = MockServer::start().await;
         let mut response = json!({"output":[{"type":"compaction","encrypted_content":"opaque"}]});
         if let Some(usage) = &usage {
@@ -111,7 +124,7 @@ async fn compact_missing_or_partial_usage_is_not_filled_with_zero() {
             .expect(1)
             .mount(&server)
             .await;
-        let provider = provider_with_base_url(&store, server.uri());
+        let provider = isolated_compact_provider(&store, server.uri());
         let mut stream = provider
             .execute(
                 planned_request(
@@ -296,8 +309,7 @@ async fn compact_propagates_upstream_rejection_and_rejects_false_success() {
         (200, b"not JSON".as_slice()),
     ] {
         let store = Arc::new(MemoryAccountStore::default());
-        let account_id = format!("acct_compact_error_{}", uuid::Uuid::new_v4());
-        create_account(&store, &account_id).await;
+        create_account(&store, "acct_provider_contract").await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/codex/responses/compact"))
@@ -305,7 +317,7 @@ async fn compact_propagates_upstream_rejection_and_rejects_false_success() {
             .expect(1)
             .mount(&server)
             .await;
-        let provider = provider_with_base_url(&store, server.uri());
+        let provider = isolated_compact_provider(&store, server.uri());
         let mut stream = provider.execute(
             planned_request("openai", compact_operation(
                 Bytes::from_static(br#"{"model":"gpt-5.4","input":[]}"#),
