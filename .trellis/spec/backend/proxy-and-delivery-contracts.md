@@ -26,6 +26,10 @@ profiles or random fingerprint generation.
 
 ## 3. Contracts
 
+- A stale proxy-test result must finish transaction rollback before returning
+  its conflict, releasing the import-exclusion advisory lock. Transaction drop
+  alone queues rollback and can spuriously reject the next valid operation on
+  another pooled connection. Cover stale-then-current writes without retry sleeps.
 - `stream=false` must not force HTTP. Preserve transport override, fallback and
   continuation ownership. Both HTTP and WebSocket send streaming upstream copies;
   only the downstream HTTP response is buffered into complete JSON.

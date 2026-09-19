@@ -26,6 +26,7 @@ mod ops_events;
 mod outbound_user_agent;
 mod provider_accounts;
 mod proxies;
+mod proxy_test_locks;
 mod query_budget;
 mod quota_learning;
 mod relogin;
