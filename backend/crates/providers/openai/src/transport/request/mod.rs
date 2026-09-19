@@ -125,14 +125,21 @@ pub fn encode_generate_request_with_location(
     if payload.protocol() != "openai" {
         return Err(CodexRequestEncodeError::InvalidProtocolPayload);
     }
-    let mut body = payload.body().clone();
-    adapt_codex_responses_body(&mut body, upstream_model, location);
+    let mut encoded = encode_responses_body(payload.body().clone(), upstream_model, location);
+    apply_protocol_context(&mut encoded, payload.context());
+    Ok(encoded)
+}
 
+pub(crate) fn encode_responses_body(
+    mut body: Map<String, Value>,
+    upstream_model: &str,
+    location: Option<&CodexRequestLocation>,
+) -> CodexResponsesRequest {
+    adapt_codex_responses_body(&mut body, upstream_model, location);
     let mut encoded = CodexResponsesRequest::from_body(body);
     encoded.explicit_prompt_cache_key = encoded.prompt_cache_key().is_some();
     extract_request_context(&mut encoded);
-    apply_protocol_context(&mut encoded, payload.context());
-    Ok(encoded)
+    encoded
 }
 
 fn adapt_codex_responses_body(

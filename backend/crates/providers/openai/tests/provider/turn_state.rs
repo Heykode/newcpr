@@ -37,6 +37,8 @@ use crate::{
     support::{MemoryAccountStore, profile, secret},
 };
 
+mod credential_recovery;
+
 #[derive(Default)]
 struct ReadOnlyLeases {
     reads: AtomicUsize,

@@ -204,7 +204,7 @@ async fn initialize_with_request_tuning_mode(
         .with_turn_states(turn_state_manager.clone()),
     );
     let core_provider = CodexProvider::new(
-        selector,
+        Arc::clone(&selector),
         Arc::clone(&catalog),
         Arc::clone(&quota),
         account_feedback,
@@ -282,6 +282,19 @@ async fn initialize_with_request_tuning_mode(
         Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
         None => admin_provider,
     });
+    let turn_state_maintenance = Arc::new(provider::CodexTurnStateMaintenanceService::new(
+        repository,
+        turn_state_client,
+        egress_runtime.clone(),
+        turn_state_manager,
+        selector,
+        Arc::clone(&quota),
+        url::Url::parse(&transport::endpoints::endpoint_url(
+            config.base_url(),
+            transport::endpoints::CODEX_RESPONSES_PATH,
+        ))
+        .map_err(|_| OpenAiInitializeError::Transport)?,
+    ));
     let worker_contributions = provider::worker_contributions(
         refresh,
         quota,
@@ -289,12 +302,7 @@ async fn initialize_with_request_tuning_mode(
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
         desktop_release,
-        Arc::new(provider::CodexTurnStateMaintenanceService::new(
-            repository,
-            turn_state_client,
-            egress_runtime.clone(),
-            turn_state_manager,
-        )),
+        turn_state_maintenance,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
 

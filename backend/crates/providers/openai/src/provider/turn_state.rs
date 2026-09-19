@@ -11,7 +11,7 @@ use std::{
 
 use futures::{StreamExt as _, stream};
 use gateway_core::{
-    account::{ProviderAccount, ProviderAccountId},
+    account::{CredentialState, ProviderAccount, ProviderAccountId},
     provider_ports::{
         OpaqueTurnState, ProviderTurnStateAnomaly, ProviderTurnStateCandidate,
         ProviderTurnStatePort, ProviderTurnStatePromotion, ProviderTurnStateRecord,
@@ -19,22 +19,28 @@ use gateway_core::{
     },
     routing::UpstreamModelId,
     runtime::RequestTuningHandle,
+    upstream::UpstreamSendState,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::{
-    credential::CodexCredentialRepository,
+    credential::{
+        CodexAccountFailure, CodexCredentialQuotaService, CodexCredentialRepository,
+        CodexCredentialSelector,
+    },
     transport::{
         CodexAccountSelectionTelemetry, CodexBackendClient,
         egress::CodexEgressRuntime,
-        protocol::responses::CodexResponsesRequest,
-        request::{RequestAccountScope, scope_request_to_account},
+        request::{RequestAccountScope, encode_responses_body, scope_request_to_account},
     },
 };
 
-use super::{build_cookie_header, codex_request_context};
+use super::{
+    build_cookie_header, codex_request_context, failure::map_client_error,
+    observation::synchronize_passive_quota_headers,
+};
 
 const TURN_STATE_TTL: Duration = Duration::from_secs(60 * 60);
 const INDIVIDUAL_NORMAL_LENGTH: u16 = 292;
@@ -603,6 +609,9 @@ pub(crate) struct CodexTurnStateMaintenanceService {
     client: CodexBackendClient,
     egress: Option<Arc<CodexEgressRuntime>>,
     manager: CodexTurnStateManager,
+    selector: Arc<CodexCredentialSelector>,
+    quota: Arc<CodexCredentialQuotaService>,
+    response_origin: url::Url,
     discovery_cursor: Arc<AtomicUsize>,
 }
 
@@ -612,12 +621,18 @@ impl CodexTurnStateMaintenanceService {
         client: CodexBackendClient,
         egress: Option<Arc<CodexEgressRuntime>>,
         manager: CodexTurnStateManager,
+        selector: Arc<CodexCredentialSelector>,
+        quota: Arc<CodexCredentialQuotaService>,
+        response_origin: url::Url,
     ) -> Self {
         Self {
             repository,
             client,
             egress,
             manager,
+            selector,
+            quota,
+            response_origin,
             discovery_cursor: Arc::default(),
         }
     }
@@ -640,7 +655,11 @@ impl CodexTurnStateMaintenanceService {
         let models = self.manager.models();
         let targets = accounts
             .iter()
-            .filter(|account| account.enabled() && account.turn_state_injection_enabled())
+            .filter(|account| {
+                account.enabled()
+                    && account.turn_state_injection_enabled()
+                    && maintenance_credential_ready(account, SystemTime::now())
+            })
             .flat_map(|account| {
                 models
                     .iter()
@@ -747,6 +766,7 @@ impl CodexTurnStateMaintenanceService {
             current.turn_state_binding_revision() == account.turn_state_binding_revision()
                 && current.plan_type() == account.plan_type()
                 && self.manager.feature_enabled_for(current, model)
+                && maintenance_credential_ready(current, SystemTime::now())
         })
     }
 
@@ -893,6 +913,9 @@ impl CodexTurnStateMaintenanceService {
                     Ok(value) => value,
                     Err(reason) => {
                         *failures.entry(reason).or_default() += 1;
+                        if reason == "account_rejected" {
+                            return;
+                        }
                         continue;
                     }
                 };
@@ -912,6 +935,7 @@ impl CodexTurnStateMaintenanceService {
                     .await
                 {
                     tracing::info!(
+                        account_id = account.id().as_str(),
                         model = model.as_str(),
                         ?slot,
                         attempted,
@@ -947,6 +971,7 @@ impl CodexTurnStateMaintenanceService {
             }
             if attempted % 100 < batch_size as u64 && !accepted {
                 tracing::info!(
+                    account_id = account.id().as_str(),
                     model = model.as_str(),
                     ?slot,
                     attempted,
@@ -982,7 +1007,8 @@ impl CodexTurnStateMaintenanceService {
         );
         body.insert("stream".to_owned(), Value::Bool(true));
         body.insert("store".to_owned(), Value::Bool(false));
-        let mut request = CodexResponsesRequest::from_body(body);
+        // The fixed maintenance prompt has no location/tool fields or client metadata.
+        let mut request = encode_responses_body(body, model.as_str(), None);
         request.force_http_sse = true;
         request.client_api_key_id = Some("turn-state-maintenance".to_owned());
         request.identity_seed = Some(crate::transport::qx_application::identity_seed(
@@ -1003,22 +1029,97 @@ impl CodexTurnStateMaintenanceService {
             cookie.as_ref(),
             CodexAccountSelectionTelemetry::NONE,
         );
-        client
-            .probe_turn_state_headers(&request, context)
-            .await
-            .map_err(|error| match error {
-                crate::transport::CodexClientError::Upstream { status, .. }
-                    if status.as_u16() == 429 =>
-                {
-                    "upstream_429"
+        let response = match client.probe_turn_state_headers(&request, context).await {
+            Ok(response) => response,
+            Err(error) => {
+                let reason = probe_error_reason(&error);
+                let failure = map_client_error(error, UpstreamSendState::Ambiguous, false);
+                // Only account facts belong here. Do not enter business scoring,
+                // session exclusions, cooldowns or WS account eviction.
+                if let Some(account_failure) = failure.account_failure.filter(|failure| {
+                    matches!(
+                        failure,
+                        CodexAccountFailure::CredentialExpired
+                            | CodexAccountFailure::CredentialRevoked
+                            | CodexAccountFailure::IdentityVerificationRequired
+                            | CodexAccountFailure::Banned
+                            | CodexAccountFailure::QuotaExhausted
+                            | CodexAccountFailure::UsageLimitExhausted { .. }
+                    )
+                }) {
+                    self.selector
+                        .record_failure(&account, account_failure, failure.error_message)
+                        .await
+                        .map_err(|_| "account_observation_failed")?;
+                    tracing::warn!(
+                        account_id = account.id().as_str(),
+                        model = model.as_str(),
+                        status = failure.error.upstream_status(),
+                        reason,
+                        "Turn state acquisition stopped after account rejection"
+                    );
+                    return Err("account_rejected");
                 }
-                crate::transport::CodexClientError::Upstream { .. } => "upstream_error",
-                _ => "transport_error",
-            })?
-            .ok_or("missing_state")
+                synchronize_passive_quota_headers(
+                    &self.quota,
+                    &account,
+                    &failure.rate_limit_headers,
+                )
+                .await;
+                if failure.capture_response_cookies {
+                    self.observe_response_cookies(&account, &failure.set_cookie_headers)
+                        .await;
+                }
+                return Err(reason);
+            }
+        };
+        synchronize_passive_quota_headers(&self.quota, &account, &response.rate_limit_headers)
+            .await;
+        self.observe_response_cookies(&account, &response.set_cookie_headers)
+            .await;
+        response.turn_state.ok_or("missing_state")
+    }
+
+    async fn observe_response_cookies(&self, account: &ProviderAccount, headers: &[String]) {
+        // Like business responses, a concurrent Cookie save is supplemental.
+        // The caller and store still fence State writes by current binding and eligibility.
+        if let Err(error) = self
+            .selector
+            .capture_response_cookies(account, &self.response_origin, headers)
+            .await
+        {
+            tracing::debug!(
+                account_id = account.id().as_str(),
+                error = %error,
+                "Turn state probe response Cookie observation skipped"
+            );
+        }
     }
 }
 
+fn maintenance_credential_ready(account: &ProviderAccount, now: SystemTime) -> bool {
+    account.credential_state() == CredentialState::Ready
+        && account
+            .access_token_expires_at()
+            .is_none_or(|expiry| expiry > now)
+        && !account.quota().is_exhausted()
+}
+
+fn probe_error_reason(error: &crate::transport::CodexClientError) -> &'static str {
+    match error {
+        crate::transport::CodexClientError::Upstream { status, .. } => match status.as_u16() {
+            400 => "upstream_400",
+            401 => "upstream_401",
+            402 => "upstream_402",
+            403 => "upstream_403",
+            404 => "upstream_404",
+            429 => "upstream_429",
+            500..=599 => "upstream_5xx",
+            _ => "upstream_error",
+        },
+        _ => "transport_error",
+    }
+}
 fn probe_batch_size(slot: ProviderTurnStateSlot, first: bool) -> usize {
     if first || slot == ProviderTurnStateSlot::Standby {
         1
@@ -1038,6 +1139,7 @@ fn is_state_rejection_code(code: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::protocol::responses::CodexResponsesRequest;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE};
     use gateway_core::{
         account::CredentialRevision,
@@ -1201,7 +1303,15 @@ mod tests {
             net::TcpListener,
         };
 
-        for status in [200, 204, 429, 500] {
+        for (status, framing) in [
+            (200, "Content-Length: 100000"),
+            (204, "Content-Length: 100000"),
+            (401, "Content-Length: 100000"),
+            (429, "Content-Length: 100000"),
+            (500, "Content-Length: 100000"),
+            (401, "Transfer-Encoding: chunked"),
+            (401, "Content-Length: 100"),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let state = format!("gAAAAA{}", "x".repeat(286));
@@ -1228,9 +1338,9 @@ mod tests {
                     .unwrap();
                 let mut socket = reader.into_inner();
                 socket.write_all(format!(
-                    "HTTP/1.1 {status} Test\r\nContent-Type: text/event-stream\r\nContent-Length: 100000\r\nX-Codex-Turn-State: {state}\r\n\r\n"
+                    "HTTP/1.1 {status} Test\r\nContent-Type: text/event-stream\r\n{framing}\r\nX-Codex-Turn-State: {state}\r\n\r\n"
                 ).as_bytes()).await.unwrap();
-                // Never send the body. A header-only probe must close without waiting.
+                // Never send the body. Error inspection must also have a finite bound.
                 let mut byte = [0];
                 tokio::time::timeout(Duration::from_secs(3), socket.read(&mut byte))
                     .await
@@ -1257,7 +1367,7 @@ mod tests {
             .await
             .expect("headers must complete independently of the body");
             if status == 200 {
-                assert_eq!(result.unwrap(), Some(expected));
+                assert_eq!(result.unwrap().turn_state, Some(expected));
             } else {
                 assert!(matches!(
                     result,
@@ -1268,6 +1378,126 @@ mod tests {
             let closed = server.await.unwrap();
             assert!(matches!(closed, Ok(0) | Err(_)));
         }
+    }
+
+    #[tokio::test]
+    async fn probe_errors_keep_bounded_authentication_details_and_discard_oversized_bodies() {
+        use crate::transport::{CodexClientError, CodexRequestContext};
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        for body in [
+            r#"{"error":{"code":"token_invalidated","message":"Token revoked"}}"#.to_owned(),
+            "x".repeat(20 * 1024),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(401).set_body_string(body.clone()))
+                .mount(&server)
+                .await;
+            let client = CodexBackendClient::new(
+                reqwest::Client::new(),
+                server.uri(),
+                crate::OpenAiConfig::default().wire_profile_state(),
+            );
+            let request = encode_responses_body(
+                serde_json::from_value(json!({"input":"yes","temperature":0.5,"store":true}))
+                    .unwrap(),
+                "model-a",
+                None,
+            );
+            assert!(request.body().get("temperature").is_none());
+            assert_eq!(request.body().get("store"), Some(&Value::Bool(false)));
+            let result = client
+                .probe_turn_state_headers(
+                    &request,
+                    CodexRequestContext::auxiliary("Bearer synthetic", None, "probe-error", None),
+                )
+                .await;
+            let Err(CodexClientError::Upstream {
+                status,
+                body: captured,
+                ..
+            }) = result
+            else {
+                panic!("expected an upstream status, never a generated success");
+            };
+            assert_eq!(status.as_u16(), 401);
+            assert_eq!(captured, if body.len() > 16 * 1024 { "" } else { &body });
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_and_business_sse_share_wire_identity_and_body_projection() {
+        use crate::transport::CodexRequestContext;
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("set-cookie", "__cf_bm=synthetic; Path=/")
+                    .insert_header("x-codex-primary-used-percent", "10")
+                    .set_body_string("data: [DONE]\n\n"),
+            )
+            .mount(&server)
+            .await;
+        let client = CodexBackendClient::new(
+            reqwest::Client::new(),
+            server.uri(),
+            crate::OpenAiConfig::default().wire_profile_state(),
+        );
+        let mut request = encode_responses_body(
+            serde_json::from_value(json!({
+                "input": [{"role":"user", "content":[{"type":"input_text", "text":"yes"}]}],
+                "temperature": 0.5,
+                "store": true
+            }))
+            .unwrap(),
+            "model-a",
+            None,
+        );
+        request.identity_seed = Some(crate::transport::qx_application::identity_seed(
+            &request,
+            "synthetic-request",
+        ));
+        scope_request_to_account(&mut request, "synthetic-device", RequestAccountScope::Same);
+        let mut context = CodexRequestContext::auxiliary(
+            "Bearer synthetic",
+            Some("synthetic-owner"),
+            "synthetic-request",
+            Some("synthetic-device"),
+        );
+        context.cookie_header = Some("__cf_bm=synthetic");
+        let probe = client
+            .probe_turn_state_headers(&request, context)
+            .await
+            .unwrap();
+        let business = client
+            .create_response_stream_http_sse(&request, context)
+            .await
+            .unwrap();
+        assert_eq!(probe.set_cookie_headers, business.set_cookie_headers);
+        assert_eq!(probe.rate_limit_headers, business.rate_limit_headers);
+        assert!(!probe.set_cookie_headers.is_empty());
+        assert!(!probe.rate_limit_headers.is_empty());
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].headers, requests[1].headers);
+        assert_eq!(requests[0].body, requests[1].body);
+        for name in [
+            "authorization",
+            "chatgpt-account-id",
+            "user-agent",
+            "x-codex-installation-id",
+            "cookie",
+        ] {
+            assert!(requests[0].headers.contains_key(name), "{name}");
+        }
+        assert!(!requests[0].headers.contains_key("x-codex-turn-state"));
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["store"], false);
+        assert_eq!(body["stream"], true);
+        assert!(body.get("temperature").is_none());
     }
 
     #[tokio::test]

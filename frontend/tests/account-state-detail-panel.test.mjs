@@ -122,6 +122,22 @@ test('non-OpenAI accounts do not render the managed State panel', async () => {
   assert.doesNotMatch(await render({ provider: 'xai' }), /data-account-turn-state-panel/)
 })
 
+test('credential errors and paused accounts override historical ready or refreshing slots', async () => {
+  for (const [fields, label] of [
+    [{ status: 'error', errorReason: 'access_token_expired' }, '等待自动刷新'],
+    [{ status: 'error', errorReason: 'credential_expired' }, '需要重新登录'],
+    [{ status: 'error', errorReason: 'account_banned' }, '账号已封禁'],
+    [{ status: 'quota_exhausted' }, '额度已耗尽'],
+    [{ enabled: false }, '账号已暂停'],
+  ]) {
+    const html = await render(fields)
+    assert.match(html, new RegExp(label))
+    assert.match(html, /data-account-turn-state-blocked/)
+    assert.doesNotMatch(html, /采集中|主备就绪|332 字符|个 State/)
+  }
+  assert.match(await render({ status: 'normal', errorReason: null }), /主备就绪/)
+})
+
 test('model list retains every model in a bounded region, keyboard-focusable only when overflowing', async () => {
   for (const count of [2, 3, 4, 10]) {
     const models = Array.from({ length: count }, (_, index) => ({

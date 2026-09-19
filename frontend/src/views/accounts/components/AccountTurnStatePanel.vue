@@ -4,12 +4,14 @@ import { ShieldCheck } from '@lucide/vue'
 import { computed } from 'vue'
 
 import { useUiClock } from '@/composables/useUiClock'
+import { turnStateBlockReason } from '../utils/turnState'
 
 const props = defineProps<{
   account: AccountRow
 }>()
 
 const now = useUiClock()
+const blockedReason = computed(() => turnStateBlockReason(props.account))
 
 interface StateSlot {
   chars: number | null
@@ -131,7 +133,7 @@ function slotTitle(label: string, slot: StateSlot | null) {
         </div>
       </div>
       <p
-        v-if="account.turnStateInjectionEnabled && rows.length"
+        v-if="account.turnStateInjectionEnabled && !blockedReason && rows.length"
         class="m-0 shrink-0 text-right text-cp-xs font-emphasis text-cp-text-secondary max-sm:w-full max-sm:text-left"
       >
         <strong class="font-mono font-heavy tabular-nums text-cp-text">{{ readyCount }}/{{ rows.length }}</strong> 模型
@@ -145,6 +147,13 @@ function slotTitle(label: string, slot: StateSlot | null) {
       class="m-0 mt-3 text-cp-xs font-emphasis text-cp-text-quaternary"
     >
       账号级开关已关闭
+    </p>
+    <p
+      v-else-if="blockedReason"
+      data-account-turn-state-blocked
+      class="m-0 mt-3 text-cp-xs font-emphasis text-cp-error-text"
+    >
+      {{ blockedReason }}
     </p>
     <p
       v-else-if="!account.turnState"

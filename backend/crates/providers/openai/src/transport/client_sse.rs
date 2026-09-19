@@ -46,6 +46,33 @@ use crate::transport::{
 use super::client::*;
 
 const HTTP_ZSTD_MIN_BYTES: usize = 1024;
+const PROBE_ERROR_BODY_LIMIT: usize = 16 * 1024;
+const PROBE_ERROR_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+async fn read_probe_error_body(response: ReqwestResponse) -> bytes::Bytes {
+    if response
+        .content_length()
+        .is_some_and(|length| length > PROBE_ERROR_BODY_LIMIT as u64)
+    {
+        return bytes::Bytes::new();
+    }
+    tokio::time::timeout(PROBE_ERROR_BODY_TIMEOUT, async move {
+        let mut stream = response.bytes_stream();
+        let mut body = bytes::BytesMut::new();
+        while let Some(chunk) = stream.next().await {
+            let Ok(chunk) = chunk else {
+                return bytes::Bytes::new();
+            };
+            if chunk.len() > PROBE_ERROR_BODY_LIMIT.saturating_sub(body.len()) {
+                return bytes::Bytes::new();
+            }
+            body.extend_from_slice(&chunk);
+        }
+        body.freeze()
+    })
+    .await
+    .unwrap_or_default()
+}
 
 impl CodexBackendClient {
     /// 构造客户端。
@@ -100,11 +127,9 @@ impl CodexBackendClient {
         &self,
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<Option<String>> {
-        let response = self
-            .send_response_http_sse(upstream_request, context, true)
-            .await?;
-        Ok(response.turn_state)
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        self.send_response_http_sse(upstream_request, context, true)
+            .await
     }
 
     async fn send_response_http_sse(
@@ -199,8 +224,7 @@ impl CodexBackendClient {
                 .map(|value| value.as_bytes().to_vec());
             let client_headers = response_meta::client_headers(response.headers());
             let raw_body = if headers_only {
-                drop(response);
-                bytes::Bytes::new()
+                read_probe_error_body(response).await
             } else {
                 read_error_response_body(response).await.map_err(|source| {
                     CodexClientError::ErrorBodyRead {

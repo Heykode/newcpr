@@ -154,3 +154,19 @@ test('expired, missing, or disabled active never turns the frame green', async (
     assert.match(mark(html, 'state-avatar'), /ring-amber-500/)
   }
 })
+
+test('invalid credentials override ready State and recover with the account status', async () => {
+  const fields = {
+    turnStateInjectionEnabled: true,
+    turnState: {
+      requiredModels: ['model-a'],
+      readyModels: [{ model: 'model-a', expiresAt: new Date(Date.now() + 3600000).toISOString() }],
+    },
+  }
+  for (const errorReason of ['access_token_expired', 'credential_expired', 'account_banned']) {
+    const html = await render({ ...fields, status: 'error', errorReason })
+    assert.match(mark(html, 'state-avatar'), /ring-cp-error/)
+    assert.doesNotMatch(html, /data-account-state-ready|ring-emerald|State 待采集/)
+  }
+  assert.match(await render({ ...fields, status: 'normal', errorReason: null }), /data-account-state-ready/)
+})
