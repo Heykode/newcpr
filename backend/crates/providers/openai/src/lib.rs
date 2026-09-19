@@ -284,6 +284,7 @@ async fn initialize_with_request_tuning_mode(
     });
     let turn_state_maintenance = Arc::new(provider::CodexTurnStateMaintenanceService::new(
         repository,
+        leases,
         turn_state_client,
         egress_runtime.clone(),
         turn_state_manager,

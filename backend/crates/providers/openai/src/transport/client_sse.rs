@@ -123,7 +123,7 @@ impl CodexBackendClient {
             .await
     }
 
-    pub(crate) async fn probe_turn_state_headers(
+    pub(crate) async fn probe_turn_state_response(
         &self,
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
@@ -136,7 +136,7 @@ impl CodexBackendClient {
         &self,
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
-        headers_only: bool,
+        probe: bool,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let profile = self.profile.snapshot();
         let headers = self.request_headers_for_http_response(upstream_request, context)?;
@@ -217,13 +217,13 @@ impl CodexBackendClient {
         let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
-        if !status.is_success() || (headers_only && status != reqwest::StatusCode::OK) {
+        if !status.is_success() || (probe && status != reqwest::StatusCode::OK) {
             let content_type = response
                 .headers()
                 .get(CONTENT_TYPE)
                 .map(|value| value.as_bytes().to_vec());
             let client_headers = response_meta::client_headers(response.headers());
-            let raw_body = if headers_only {
+            let raw_body = if probe {
                 read_probe_error_body(response).await
             } else {
                 read_error_response_body(response).await.map_err(|source| {
@@ -268,12 +268,7 @@ impl CodexBackendClient {
         }
 
         let rate_limit_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let body = if headers_only {
-            drop(response);
-            Box::pin(futures::stream::empty()) as _
-        } else {
-            http_sse_stream(response, Arc::clone(&rate_limit_updates), trace)
-        };
+        let body = http_sse_stream(response, Arc::clone(&rate_limit_updates), trace);
         Ok(CodexBackendStreamingResponse {
             body,
             transport: CodexBackendTransport::HttpSse,
