@@ -68,6 +68,7 @@ mod quota_learning;
 mod repository;
 mod rows;
 mod runtime;
+mod state_retention;
 
 pub use admin_adapter::*;
 pub(crate) use admin_queries::*;

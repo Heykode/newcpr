@@ -209,6 +209,13 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         let message = account_state
             .as_ref()
             .and_then(|state| state.message.as_deref());
+        let state_owner = if preserve_profile && preserve_turn_state_binding {
+            None
+        } else {
+            state_retention::StateOwnerSnapshot::capture(&mut transaction, &account_id)
+                .await
+                .map_err(core_store_error)?
+        };
         let next = sqlx::query_scalar::<_, i64>(
             "update provider_accounts
              set name = case when $14 then name else $3 end,
@@ -254,6 +261,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        self.retain_turn_state(&mut transaction, state_owner)
+            .await
+            .map_err(core_store_error)?;
         transaction
             .commit()
             .await

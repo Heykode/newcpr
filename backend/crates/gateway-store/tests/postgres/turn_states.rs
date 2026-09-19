@@ -15,6 +15,8 @@ use gateway_store::postgres::{
 
 use super::{TestDatabase, provider_accounts::account};
 
+mod retention;
+
 fn revision() -> CredentialRevision {
     CredentialRevision::new(1).unwrap()
 }

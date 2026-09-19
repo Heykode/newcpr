@@ -54,13 +54,20 @@
   `credential_revision` stores this binding generation from migration 0027.
   Writes lock current
   global/model policy and account opt-in before locking the state row. A rotated
-  credential cannot inherit the previous credential's active or standby.
+  credential cannot accept the previous credential's late writes.
 - Identical accepted Cookie sets do not write. Provider-verified identical
   credentials or response Cookie material changes may preserve binding, clocks,
-  slots and pool version. Tokens, principal/device/client/scope changes
-  remain hard invalidations. Only trusted provider code can request preservation;
-  ordinary import/rotation paths default to hard invalidation. Generic credential
-  CAS and device locking remain unchanged.
+  slots and pool version. Token changes still advance the authentication binding.
+  ProviderDeviceCodec authorizes same-owner retention independently: require a
+  resolved principal, same installation/client/scope, and Store-verified nonempty
+  user/workspace and unchanged normalized plan. Rebind slots in the credential
+  transaction from the immediately previous binding to the new binding; bump
+  state_version, stop old refresh ownership and discard expired slots, without
+  renewing any clock or clearing State rejection evidence. Apply this to Core
+  refresh CAS, Store CAS, admin JSON upsert and admin OAuth/relogin rotation.
+  Unknown codecs/identity/plan deny retention. Cookie soft CAS retains its cheap
+  path and does not run State retention queries. Generic credential CAS and
+  device locking remain unchanged.
 - Response State observations always use the original request lease's binding,
   not the account reloaded after response Cookie persistence. Maintenance checks
   binding ownership but reloads current request material between batches when
@@ -133,6 +140,11 @@
 - Model/version partitions new chains. Exact response ownership still resolves
   the original physical connection using the existing account, downstream Key,
   conversation, route and response-ID boundaries, including after policy disable.
+- WS opening profiles additionally partition by a full digest of authentication
+  headers, never raw Tokens. This applies to unmanaged new chains too, so keeping
+  an unchanged State cannot reuse a previous Token's connection. It does not
+  alter thread or prompt-cache identity. Exact owners bypass opening-profile
+  changes under the existing continuation lifetime/capacity rules.
 - Never globally evict an account's sockets on a state update. Previous owners
   remain under ordinary pool capacity and lifecycle rules; active continuations
   must not be migrated merely to apply a new state.

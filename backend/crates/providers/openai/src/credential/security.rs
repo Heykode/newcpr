@@ -81,7 +81,7 @@ pub enum CodexCredentialDataError {
 pub struct CodexCredentialCodec;
 
 /// Adapter exposed to the generic Store without leaking the Codex credential
-/// schema. Only the stable installation fact crosses this boundary.
+/// schema. Stable device and State-owner decisions cross this boundary.
 #[derive(Debug, Default)]
 pub struct CodexDeviceCodec;
 
@@ -110,6 +110,46 @@ impl ProviderDeviceCodec for CodexDeviceCodec {
             CodexCredentialData::OAuth(data) => data.installation_id = installation_id.to_owned(),
         }
         CodexCredentialCodec::encode_complete(data).map_err(|_| ProviderDeviceCodecError::Invalid)
+    }
+
+    fn can_retain_turn_state(
+        &self,
+        existing: &PlaintextCredential,
+        incoming: &PlaintextCredential,
+    ) -> bool {
+        let (
+            Ok(CodexCredentialData::OAuth(mut existing)),
+            Ok(CodexCredentialData::OAuth(mut incoming)),
+        ) = (
+            CodexCredentialCodec::decode_complete(existing),
+            CodexCredentialCodec::decode_complete(incoming),
+        )
+        else {
+            return false;
+        };
+        if existing.principal.as_ref().is_none_or(|principal| {
+            principal.oauth_subject.trim().is_empty()
+                || principal
+                    .poid
+                    .as_ref()
+                    .is_some_and(|id| id.trim().is_empty())
+        }) {
+            return false;
+        }
+        // Only authentication and response Cookies may change. Keep principal,
+        // installation, OAuth client and scope comparisons provider-owned.
+        incoming.access_token.clone_from(&existing.access_token);
+        incoming.refresh_token.clone_from(&existing.refresh_token);
+        incoming.id_token.clone_from(&existing.id_token);
+        existing.cookies.clear();
+        incoming.cookies.clear();
+        matches!(
+            (
+                CodexCredentialCodec::encode_complete(CodexCredentialData::OAuth(existing)),
+                CodexCredentialCodec::encode_complete(CodexCredentialData::OAuth(incoming)),
+            ),
+            (Ok(existing), Ok(incoming)) if existing == incoming
+        )
     }
 }
 

@@ -2,6 +2,91 @@ use super::*;
 use provider_openai::transport::websocket::PreviousResponseUnavailableReason;
 
 #[tokio::test]
+async fn renewed_auth_opens_new_chains_but_preserves_the_exact_inflight_owner() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut first = accept_codex_test_websocket(stream).await;
+        first.next().await.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_old_auth", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        let (stream, _) = timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .expect("new authentication must open a different connection")
+            .unwrap();
+        let mut second = accept_codex_test_websocket(stream).await;
+        second.next().await.unwrap().unwrap();
+        second
+            .send(Message::Text(
+                completed_websocket_response("resp_new_auth", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        // The old physical owner remains available only to its exact continuation.
+        first.next().await.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_old_continued", 2, 1).into(),
+            ))
+            .await
+            .unwrap();
+        first.close(None).await.unwrap();
+        second.close(None).await.unwrap();
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(Arc::clone(&pool));
+    let mut request = pooled_websocket_request("auth-renewal");
+    request.set_previous_response_id(None);
+    request.previous_response_scope = None;
+    let request = websocket_only_request(request);
+    let first = backend
+        .create_response(
+            &request,
+            request_context("req_old", Some("chatgpt-account")),
+        )
+        .await
+        .unwrap();
+    let second = backend
+        .create_response(
+            &request,
+            CodexRequestContext {
+                authorization: "Bearer synthetic-renewed",
+                ..request_context("req_new", Some("chatgpt-account"))
+            },
+        )
+        .await
+        .unwrap();
+    let mut continued = request;
+    continued.set_previous_response_id(Some("resp_old_auth".into()));
+    continued.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);
+    let third = backend
+        .create_response(
+            &continued,
+            CodexRequestContext {
+                authorization: "Bearer synthetic-renewed",
+                ..request_context("req_continued", Some("chatgpt-account"))
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
+    assert_eq!(third.websocket_pool_decision.unwrap().kind(), "reuse");
+    server.await.unwrap();
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn codex_backend_client_should_reuse_pooled_websocket_for_same_account_and_conversation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -12,6 +12,7 @@ use reqwest::{
     Client, Response as ReqwestResponse,
     header::{CONTENT_ENCODING, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
+use sha2::{Digest, Sha256};
 use tokio_tungstenite::tungstenite::handshake::client::generate_key;
 
 use crate::transport::{
@@ -931,7 +932,16 @@ fn websocket_connection_profile(headers: &HeaderMap) -> String {
         .get("thread-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    format!("qx-session-v1\0{identity}\0{session}\0{thread}")
+    // A renewed Token may retain State, but a new chain must authenticate again.
+    // Keep secrets out of the pool key/Debug; exact owners still resolve normally.
+    let mut auth = Sha256::new();
+    for name in ["authorization", "chatgpt-account-id"] {
+        let value = headers.get(name).map_or(&[][..], HeaderValue::as_bytes);
+        auth.update((value.len() as u64).to_be_bytes());
+        auth.update(value);
+    }
+    let auth = hex::encode(auth.finalize());
+    format!("qx-session-v1\0{identity}\0{session}\0{thread}\0{auth}")
 }
 
 fn http_sse_stream(
