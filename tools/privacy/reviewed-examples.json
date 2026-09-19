@@ -1374,5 +1374,13 @@
     "file_sha256": "6a56129e425b334892ec4dcc9dd9fb529ac7ba3972e504ab3d740215d7010930",
     "line_sha256": "1f4e54601e99cfed60e0375d1c5bc9324fa74ea5b88ebe97e8805f00df10bbf2",
     "reason": "Reviewed synthetic private-network address in the static theme preview; no request is made."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/provider/contract/mod.rs",
+    "rule": "personal-home-path",
+    "line": 4091,
+    "file_sha256": "8573338f27bd4bc26bef9870575c4d588fe964a9a519fd43fa1149c81ec1d933",
+    "line_sha256": "d6d50d6bee8dc3a8567356fc08a8ac61e46255a73e0baf2bf464da8eb7ba5fe3",
+    "reason": "Manually re-reviewed the unchanged synthetic escaped Unicode Windows workspace fixture against the parent commit. The new diff only isolates a separate capacity stream test client and adds assertion diagnostics; this fixture contains no real identity."
   }
 ]
