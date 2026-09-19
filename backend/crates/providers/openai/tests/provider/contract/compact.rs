@@ -97,7 +97,9 @@ async fn compact_uses_model_aware_http_json_and_preserves_output_and_usage() {
 async fn compact_missing_or_partial_usage_is_not_filled_with_zero() {
     for usage in [None, Some(json!({"input_tokens":12}))] {
         let store = Arc::new(MemoryAccountStore::default());
-        create_account(&store, "acct_provider_contract").await;
+        // A fixture must not inherit pooled HTTP clients from a dropped runtime.
+        let account_id = format!("acct_compact_usage_{}", uuid::Uuid::new_v4());
+        create_account(&store, &account_id).await;
         let server = MockServer::start().await;
         let mut response = json!({"output":[{"type":"compaction","encrypted_content":"opaque"}]});
         if let Some(usage) = &usage {
@@ -294,7 +296,8 @@ async fn compact_propagates_upstream_rejection_and_rejects_false_success() {
         (200, b"not JSON".as_slice()),
     ] {
         let store = Arc::new(MemoryAccountStore::default());
-        create_account(&store, "acct_provider_contract").await;
+        let account_id = format!("acct_compact_error_{}", uuid::Uuid::new_v4());
+        create_account(&store, &account_id).await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/codex/responses/compact"))
