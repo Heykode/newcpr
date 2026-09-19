@@ -678,6 +678,16 @@ impl PgAdminClientKeyStore {
 
 #[async_trait]
 impl ClientKeyStore for PgAdminClientKeyStore {
+    async fn reset_client_key_budget(
+        &self,
+        command: gateway_admin::model::client_keys::ResetClientKeyBudget,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        super::client_budgets::reset_client_key_budget(&self.keys.pool, command, context)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
     async fn list_client_keys(
         &self,
         query: AdminClientKeyListQuery,

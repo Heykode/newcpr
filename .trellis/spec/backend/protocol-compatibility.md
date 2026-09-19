@@ -349,6 +349,11 @@ events, then use the existing encoder and single execution finalization.
 
 ## Codex Generate Compatibility
 
+- Normalize explicit `input[]` items with `type=message` and `role=system`
+  to `role=developer` in `adapt_codex_responses_body`, on the encoded copy.
+  Preserve the original protocol payload, item order/content/extensions,
+  nested roles, shorthand messages and top-level instructions. HTTP and WS
+  share this encoding owner; do not duplicate role conversion in send paths.
 - Ordinary OAuth Generate is sent with `store=false`, regardless of a
   downstream `store` value. The encoded request, transport requirement and
   captured session state must observe the same effective value; do not only
@@ -367,6 +372,8 @@ events, then use the existing encoder and single execution finalization.
 
 ### Validation
 
+- Assert role normalization immediately after encoding, original payload
+  immutability, and matching HTTP/WS loopback wire bodies.
 - Test effective `store=false` through HTTP SSE and WebSocket, including
   session capture and downstream WebSocket transport requirements.
 - Test unsupported-field removal, string/list input equivalence, tool-call/result

@@ -245,6 +245,12 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 `traceparent`、`tracestate`、未知业务头及正文不受新增过滤影响，原始入站头仍供本地鉴权、
 CORS 和观测读取。这不是正文匿名化或风控效果保证。
 
+OpenAI Responses 在统一请求编码阶段，将 `input` 数组中显式指定
+`type: "message"` 且 `role: "system"` 的消息转换为 `role: "developer"`。
+仅修改编码副本，原始入站请求保持不变；消息内容、顺序、扩展字段和顶层
+`instructions` 保留，不递归修改嵌套角色，也不修改省略 `type` 的消息。
+HTTP/SSE 与 WebSocket 共用此规则，发送阶段不再重复转换角色。
+
 Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行。当前响应期间收到的后续业务帧
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 这对齐 Codex 客户端 `stream_request` 持锁至本轮结束的串行行为，不表示支持额外控制消息类型。
@@ -294,6 +300,14 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 | `POST` | `/api/admin/auth/login` | `{ username?, password }` | 创建管理员会话并设置 Cookie |
 | `GET` | `/api/admin/auth/status` | 无 | 返回当前 Cookie 是否已认证 |
 | `POST` | `/api/admin/auth/logout` | 无 | 删除当前会话并清除 Cookie |
+| `POST` | `/api/admin/auth/password` | `{ currentPassword, newPassword }` | 仅管理员会话可修改密码，成功后撤销所有旧后台会话 |
+
+改密必须提供当前密码，单独的管理员 API Key 不授予改密权限。新密码去除首尾空白后至少
+12 个字符，原文最多 1024 字节，不接受控制字符、常见弱口令或与当前密码相同的值。
+每位管理员的所有会话共用 15 分钟内 10 次改密尝试额度；存储不可用时拒绝改密。
+密码与安全审计在一个 PostgreSQL 事务中提交，并检查原密码哈希未被并发修改。
+后台会话绑定已加盐密码哈希的摘要，密码更改后旧会话即使仍在 Redis 中也不再通过认证。
+不含该摘要的旧版后台会话需要重新登录；管理员／客户端 API Key、上游账号 Cookie 和凭据不受影响。
 
 ## 5. 账号
 
@@ -519,6 +533,26 @@ RT-only 使用同一形状，只提交 `refreshToken`。不得把真实 token �
 旧 OAuth 链接失效。文件中显式的出站配置优先于表单代理，未指定时使用表单代理。
 账号列表的每个 item 返回轻量 `groups: [{ id, name, enabled }]`。
 
+### 受管 State
+
+运行设置的 `turnStateInjectionEnabled`、账号的 `turnStateInjectionEnabled` 和
+`turnStateModels` 模型范围共同决定是否启用。关闭停止注入及采集，不删除已有缓存或延长计时。
+账号开关用 `POST /api/admin/accounts/batch-update` 的最小补丁修改，不携带其他调度字段。
+
+账号列表和详情的 `turnState` 只返回安全元数据：
+
+- `enabled`：全局及账号 State 开关是否同时启用。
+- `requiredModels`：设置中的受管模型；`readyModels`：当前账号可用、距离 State 到期超过一分钟的模型。
+- `models[]`：`model`、`refreshStatus`、`probeAttempts`、`successfulProbeAttempt`、`lastProbeReason`、`active`、`standby`。
+- `probeAttempts` 为本次采集任务累计尝试数，等待响应期间也定期更新；`successfulProbeAttempt` 为采集成功的那一次尝试序号，未成功或旧记录未知时为 `null`，不等同于并发批次总尝试数。
+- 槽位为 `null` 或 `{ chars, capturedAt, expiresAt }`，不包含原始 State。旧记录采集时间未知时为 `null`。
+- `standby` 沿用存储字段名，仅表示刷新期间的待切换值，不代表常驻备用。
+- `refreshStatus` 为 `missing/queued/refreshing/cooldown/ready/failed`；诊断原因是安全代码，
+  不是上游原文。`probeAttempts` 是本次采集任务累计发起的尝试数，不是成功数或终身总数。
+
+关闭开关或账号异常时仍可显示绑定匹配且未过期的缓存，但 `readyModels` 为空。
+字符数和回包是否相同仅是诊断事实，不保证上游接受、模型质量或实际寿命。
+
 ### 后台导入任务
 
 | 方法 | 路径 | 作用 |
@@ -610,6 +644,8 @@ OAuth start 使用：
 - OpenAI 已耗尽账号每 30 分钟主动复核一次，也会在最早未恢复窗口的 `resetAt + 2 分钟` 到期后
   提前复核。后台每 30 秒检查触发条件；同一重置边界复核后仍未恢复时回到 30 分钟重试，
   避免旧 reset 持续触发请求。各窗口独立确认恢复，时间到期本身不会直接解除账号耗尽。
+- OpenAI 未耗尽账号的非零用量窗口超过 `resetAt + 2 分钟` 后也会主动刷新，并沿用 30 分钟重试节流；
+  零用量窗口不触发这类额外刷新。以成功上游观测更新额度，不因时间到期直接清零本地用量。
 - 同一已知 `resetAt` 的账号级窗口也可通过连续两次新鲜观测确认未触顶后恢复。
   缺失窗口、未知用量、再次触顶或重置时间不匹配会中断该窗口证据；旧观测、重复观测、
   耗尽前观测不推进恢复。新一轮耗尽不复用旧进度，额度恢复不改变凭据错误或启停状态。
@@ -834,6 +870,7 @@ Store 统计使用同一只读重复读快照，每条 SQL 最多 2 秒。监控
 | `POST` | `/api/admin/client-keys/enable` | `{ id }` | 启用 |
 | `POST` | `/api/admin/client-keys/disable` | `{ id }` | 禁用 |
 | `POST` | `/api/admin/client-keys/delete` | `{ id }` | 删除 |
+| `POST` | `/api/admin/client-keys/reset-budget` | `{ id, period: "daily" | "weekly" | "all" }` | 清零指定日／周窗口的已用金额 |
 
 创建字段为 `name`、可选 `label`、`groupIds`、`maxConcurrency`、`requestsPerMinute`、可选
 `dailyLimitUsd` 和 `weeklyLimitUsd`，更新请求再增加
@@ -863,6 +900,11 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 自动结算按网关请求 ID 幂等执行。账本独立于使用统计日志，记录保留至删除 Key，
 不受 `usageRetentionDays` 影响。
+
+手动重置预算与准入、结算共用 Key 行锁，并在同一个事务内写审计。不更改限额、到期时间、
+启停状态或历史费用记录；从未使用的 Key 不因此开启窗口。所选有效窗口的计费起点推进至重置
+时刻，重置前完成但延迟结算的请求不再回扣该窗口，重置后完成的请求照常计费。
+前端不自动重试重置操作；响应不明确时先刷新列表确认已用金额，再决定是否重新操作。
 
 ## 8. 运行设置
 

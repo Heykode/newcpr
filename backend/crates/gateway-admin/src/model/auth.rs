@@ -78,6 +78,22 @@ pub enum LoginError {
 pub struct AdminSession {
     pub admin_user_id: String,
     pub expires_at: DateTime<Utc>,
+    pub credential_fingerprint: String,
+}
+
+/// 修改后台管理员密码；不得记录明文密码。
+#[derive(Clone)]
+pub struct ChangePassword {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+impl std::fmt::Debug for ChangePassword {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ChangePassword")
+            .finish_non_exhaustive()
+    }
 }
 
 /// 安全审计事件类型。

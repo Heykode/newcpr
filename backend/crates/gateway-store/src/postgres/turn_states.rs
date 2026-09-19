@@ -1,6 +1,6 @@
 //! PostgreSQL owner for opaque Provider turn-state values.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use gateway_core::{
@@ -41,9 +41,44 @@ struct TurnStateRow {
     state_version: i64,
     refresh_status: String,
     last_observed_length: Option<i16>,
+    suspect_count: i16,
 }
 
 impl ProviderTurnStatePort for PgProviderTurnStateRepository {
+    fn record_probe_progress<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        upstream_model: &'a UpstreamModelId,
+        expected_revision: CredentialRevision,
+        attempts: u64,
+        reason: Option<&'static str>,
+        successful_attempt: Option<u64>,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            sqlx::query(
+                "update provider_turn_states set probe_attempts = $4, last_probe_reason = $5,
+                     successful_probe_attempt = $6,
+                     last_probe_at = now(), updated_at = now()
+                 where provider_account_id = $1 and upstream_model = $2
+                   and credential_revision = $3",
+            )
+            .bind(account_id.as_str())
+            .bind(upstream_model.as_str())
+            .bind(revision_value(expected_revision)?)
+            .bind(i64::try_from(attempts).unwrap_or(i64::MAX))
+            .bind(reason)
+            .bind(
+                successful_attempt
+                    .and_then(|value| i64::try_from(value).ok())
+                    .filter(|value| *value > 0),
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(|_| unavailable("record provider turn state progress"))?;
+            Ok(())
+        })
+    }
+
     fn promote_standby(
         &self,
         promotion: ProviderTurnStatePromotion,
@@ -79,21 +114,27 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                 || current
                     .active_expires_at
                     .is_some_and(|expires| SystemTime::from(expires) > deadline)
-                || !current
-                    .standby_issued_at
-                    .is_some_and(|issued| SystemTime::from(issued) <= promotion.observed_at)
+                || !current.standby_issued_at.is_some_and(|issued| {
+                    SystemTime::from(issued) <= promotion.observed_at + Duration::from_secs(30)
+                })
                 || !current
                     .standby_expires_at
                     .is_some_and(|expires| SystemTime::from(expires) > deadline)
+                || current
+                    .active_expires_at
+                    .zip(current.standby_expires_at)
+                    .is_some_and(|(active, next)| next <= active)
             {
                 return Ok(None);
             }
             sqlx::query(
                 "update provider_turn_states
                  set active_state = standby_state, active_issued_at = standby_issued_at,
-                     active_expires_at = standby_expires_at,
+                    active_expires_at = standby_expires_at,
+                     active_captured_at = standby_captured_at,
                      standby_state = null, standby_issued_at = null, standby_expires_at = null,
-                     state_version = state_version + 1, refresh_status = 'refreshing',
+                     standby_captured_at = null, suspect_count = 0,
+                     state_version = state_version + 1, refresh_status = 'ready',
                      updated_at = $3
                  where provider_account_id = $1 and upstream_model = $2",
             )
@@ -126,7 +167,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
         Box::pin(async move {
             // Cancellation must work after opt-out, but must not touch a newer credential's task.
             sqlx::query(
-                "update provider_turn_states set refresh_status = 'failed', updated_at = now()
+                "update provider_turn_states set refresh_status = 'missing', updated_at = now()
                  where provider_account_id = $1 and upstream_model = $2
                    and credential_revision = $3 and refresh_status = 'refreshing'",
             )
@@ -152,7 +193,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                 "select provider_account_id, upstream_model, normal_length,
                         active_state, active_issued_at, active_expires_at,
                         standby_state, standby_issued_at, standby_expires_at,
-                        state_version, refresh_status, last_observed_length
+                        state_version, refresh_status, last_observed_length, suspect_count
                  from provider_turn_states s
                  where provider_account_id = $1 and upstream_model = $2
                    and s.credential_revision = $3
@@ -228,14 +269,18 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
             let (same_value, replace) = match candidate.slot {
                 ProviderTurnStateSlot::Active => (
                     current.active_state.as_deref() == Some(candidate_value),
-                    current.active_issued_at.is_none_or(|issued| {
+                    current.active_expires_at.is_none_or(|expires| {
+                        SystemTime::from(expires) <= candidate.observed_at + Duration::from_secs(60)
+                    }) && current.active_issued_at.is_none_or(|issued| {
                         candidate.value.issued_at() >= SystemTime::from(issued)
                     }),
                 ),
                 ProviderTurnStateSlot::Standby => (
                     current.active_state.as_deref() == Some(candidate_value)
                         || current.standby_state.as_deref() == Some(candidate_value),
-                    current.standby_issued_at.is_none_or(|issued| {
+                    current.active_expires_at.is_some_and(|expires| {
+                        SystemTime::from(expires) < candidate.value.expires_at()
+                    }) && current.standby_issued_at.is_none_or(|issued| {
                         candidate.value.issued_at() >= SystemTime::from(issued)
                     }),
                 ),
@@ -294,23 +339,33 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
             if u64::try_from(current.state_version).ok() != Some(anomaly.expected_active_version) {
                 return decode_row(current);
             }
-            let promote = anomaly.promote_standby
-                && current
-                    .standby_issued_at
-                    .is_some_and(|issued| SystemTime::from(issued) <= anomaly.observed_at)
-                && current
-                    .standby_expires_at
-                    .is_some_and(|expires| SystemTime::from(expires) > anomaly.observed_at);
+            let strikes = if anomaly.suspect {
+                (current.suspect_count + 1).min(2)
+            } else {
+                0
+            };
+            let invalidate = anomaly.promote_standby || strikes >= 2;
+            let promote = invalidate
+                && current.standby_issued_at.is_some_and(|issued| {
+                    SystemTime::from(issued) <= anomaly.observed_at + Duration::from_secs(30)
+                })
+                && current.standby_expires_at.is_some_and(|expires| {
+                    SystemTime::from(expires) > anomaly.observed_at + Duration::from_secs(60)
+                });
             sqlx::query(
                 "update provider_turn_states
                  set active_state = case when $4 then standby_state when $6 then null else active_state end,
                      active_issued_at = case when $4 then standby_issued_at when $6 then null else active_issued_at end,
                      active_expires_at = case when $4 then standby_expires_at when $6 then null else active_expires_at end,
+                     active_captured_at = case when $4 then standby_captured_at when $6 then null else active_captured_at end,
                      standby_state = case when $4 then null else standby_state end,
                      standby_issued_at = case when $4 then null else standby_issued_at end,
                      standby_expires_at = case when $4 then null else standby_expires_at end,
+                     standby_captured_at = case when $4 then null else standby_captured_at end,
+                     suspect_count = case when $6 then 0 else $7 end,
                      state_version = state_version + case when $4 or ($6 and active_state is not null) then 1 else 0 end,
-                     refresh_status = 'refreshing', last_observed_length = $3,
+                     refresh_status = case when $4 then 'ready' when $6 then 'queued' else refresh_status end,
+                     last_observed_length = $3,
                      last_probe_at = $5, updated_at = $5
                  where provider_account_id = $1 and upstream_model = $2",
             )
@@ -319,7 +374,8 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
             .bind(anomaly.observed_length.map(|value| i16::try_from(value).unwrap_or(i16::MAX)))
             .bind(promote)
             .bind(DateTime::<Utc>::from(anomaly.observed_at))
-            .bind(anomaly.promote_standby)
+            .bind(invalidate)
+            .bind(strikes)
             .execute(&mut *transaction)
             .await
             .map_err(|_| unavailable("record provider turn state anomaly"))?;
@@ -395,6 +451,9 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                      when provider_turn_states.normal_length <> excluded.normal_length then null
                      else provider_turn_states.last_observed_length end,
                    refresh_status = excluded.refresh_status,
+                   probe_attempts = case when excluded.refresh_status = 'refreshing' then 0 else provider_turn_states.probe_attempts end,
+                   last_probe_reason = case when excluded.refresh_status = 'refreshing' then null else provider_turn_states.last_probe_reason end,
+                   successful_probe_attempt = case when excluded.refresh_status = 'refreshing' then null else provider_turn_states.successful_probe_attempt end,
                    last_probe_at = excluded.last_probe_at,
                    updated_at = excluded.updated_at",
             )
@@ -459,6 +518,8 @@ async fn ensure_row(
            normal_length = excluded.normal_length,
            active_state = null, active_issued_at = null, active_expires_at = null,
            standby_state = null, standby_issued_at = null, standby_expires_at = null,
+           active_captured_at = null, standby_captured_at = null,
+           suspect_count = 0, probe_attempts = 0, last_probe_reason = null, successful_probe_attempt = null,
            state_version = provider_turn_states.state_version + 1,
            refresh_status = 'missing', last_observed_length = null,
            last_probe_at = excluded.last_probe_at, updated_at = excluded.updated_at
@@ -489,7 +550,7 @@ async fn load_locked(
         "select provider_account_id, upstream_model, normal_length,
                 active_state, active_issued_at, active_expires_at,
                 standby_state, standby_issued_at, standby_expires_at,
-                state_version, refresh_status, last_observed_length
+                state_version, refresh_status, last_observed_length, suspect_count
          from provider_turn_states
          where provider_account_id = $1 and upstream_model = $2 for update",
     )
@@ -515,20 +576,20 @@ async fn update_candidate(
              active_state = case when $4 then $6 else active_state end,
              active_issued_at = case when $4 then $7 else active_issued_at end,
              active_expires_at = case when $4 then $8 else active_expires_at end,
+             active_captured_at = case when $4 then $9 else active_captured_at end,
              standby_state = case
-               when $4 and active_state is not null and active_state <> $6
-                    and active_expires_at > $9 then active_state
+               when $4 then null
                when $5 then $6 else standby_state end,
              standby_issued_at = case
-               when $4 and active_state is not null and active_state <> $6
-                    and active_expires_at > $9 then active_issued_at
+               when $4 then null
                when $5 then $7 else standby_issued_at end,
              standby_expires_at = case
-               when $4 and active_state is not null and active_state <> $6
-                    and active_expires_at > $9 then active_expires_at
+               when $4 then null
                when $5 then $8 else standby_expires_at end,
+             standby_captured_at = case when $4 then null when $5 then $9 else standby_captured_at end,
+             suspect_count = case when $4 then 0 else suspect_count end,
              state_version = state_version + case when $4 then 1 else 0 end,
-             refresh_status = case when $4 then 'refreshing' else 'ready' end, last_observed_length = $3,
+             refresh_status = 'ready', last_observed_length = length($6),
              last_probe_at = $9, last_success_at = $9, updated_at = $9
          where provider_account_id = $1 and upstream_model = $2",
     )
@@ -621,7 +682,14 @@ fn validate_normal_length(value: u16) -> Result<(), ProviderStoreError> {
 
 fn validate_candidate(candidate: &ProviderTurnStateCandidate) -> Result<(), ProviderStoreError> {
     validate_normal_length(candidate.normal_length)?;
-    if candidate.value.state().expose_to_provider().len() != usize::from(candidate.normal_length)
+    let value = candidate.value.state().expose_to_provider();
+    let core_len = value.trim_end_matches('=').len();
+    let expected_core_len = match candidate.normal_length {
+        292 => 290,
+        _ => 332,
+    };
+    if (value.len() != usize::from(candidate.normal_length) && core_len != expected_core_len)
+        || value.len() - core_len > 2
         || candidate.value.issued_at() >= candidate.value.expires_at()
         || !candidate.value.is_valid_at(candidate.observed_at)
     {

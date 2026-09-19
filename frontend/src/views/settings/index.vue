@@ -9,6 +9,7 @@ import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
+import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
@@ -113,6 +114,7 @@ watch(
     </div>
 
     <div v-if="section === 'runtime'" class="mt-5 grid w-full gap-5">
+      <AdminPasswordCard />
       <AdminApiKeyCard
         :status="adminApiKeyStatus"
         :loading="adminKeyLoading"

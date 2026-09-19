@@ -152,13 +152,17 @@ export interface Account {
   enabled: boolean
   turnStateInjectionEnabled: boolean
   turnState?: {
+    enabled?: boolean
     requiredModels: string[]
     readyModels: { model: string, expiresAt: string }[]
     models?: {
       model: string
-      refreshStatus: 'missing' | 'ready' | 'refreshing' | 'failed'
-      active: { chars: number, expiresAt: string } | null
-      standby: { chars: number, expiresAt: string } | null
+      refreshStatus: 'missing' | 'ready' | 'queued' | 'refreshing' | 'cooldown' | 'failed'
+      probeAttempts?: number
+      successfulProbeAttempt?: number | null
+      lastProbeReason?: string | null
+      active: { chars: number, capturedAt?: string | null, expiresAt: string } | null
+      standby: { chars: number, capturedAt?: string | null, expiresAt: string } | null
     }[]
   } | null
   inFlight: number | null

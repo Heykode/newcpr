@@ -128,3 +128,71 @@ async fn periodic_checks_continue_when_reset_is_unknown_or_far_in_the_future() {
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
     }
 }
+
+#[tokio::test]
+async fn allowed_nonzero_expired_windows_refresh_once_without_resetting_local_usage() {
+    for (used, reset_offset, expected_refreshes) in
+        [(74, -180, 1), (0, -180, 0), (74, -30, 0), (74, 3600, 0)]
+    {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_allowed_window").await;
+        let account = store.account("acct_allowed_window").unwrap();
+        let server = MockServer::start().await;
+        let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+        let usage = json!({"rate_limit": {
+            "allowed": true,
+            "primary_window": {
+                "used_percent": used,
+                "reset_at": Utc::now().timestamp() + reset_offset,
+                "limit_window_seconds": 18_000,
+            }
+        }});
+        mount_usage(&server, usage.clone()).await;
+        service.refresh_account(account.id()).await.unwrap();
+        mount_usage(&server, usage).await;
+        let first = service.synchronize().await.unwrap();
+        assert_eq!(first.updated, expected_refreshes);
+        service.synchronize().await.unwrap();
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            expected_refreshes as usize
+        );
+        let snapshot = service.read_account(account.id()).await.unwrap().unwrap();
+        assert_eq!(snapshot.windows()[0].used_percent(), Some(f64::from(used)));
+    }
+}
+
+#[tokio::test]
+async fn allowed_expired_window_uses_authoritative_replacement_after_grace() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_allowed_replacement").await;
+    let account = store.account("acct_allowed_replacement").unwrap();
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
+    let usage = |used, reset| {
+        json!({"rate_limit": {
+            "allowed": true,
+            "primary_window": {
+                "used_percent": used,
+                "reset_at": reset,
+                "limit_window_seconds": 18_000,
+            }
+        }})
+    };
+    mount_usage(&server, usage(74, Utc::now().timestamp() - 180)).await;
+    service.refresh_account(account.id()).await.unwrap();
+    mount_usage(&server, usage(0, Utc::now().timestamp() + 18_000)).await;
+    assert_eq!(service.synchronize().await.unwrap().updated, 1);
+    service.synchronize().await.unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(
+        service
+            .read_account(account.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .windows()[0]
+            .used_percent(),
+        Some(0.0)
+    );
+}

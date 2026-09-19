@@ -87,6 +87,7 @@ pub enum AccountGroupFilter {
 /// Safe account/model readiness projection; never contains opaque State values.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AccountTurnStateStatus {
+    pub enabled: bool,
     pub required_models: Vec<String>,
     pub ready_models: Vec<(String, DateTime<Utc>)>,
     pub models: Vec<AccountTurnStateModelStatus>,
@@ -96,6 +97,9 @@ pub struct AccountTurnStateStatus {
 pub struct AccountTurnStateModelStatus {
     pub model: String,
     pub refresh_status: String,
+    pub probe_attempts: u64,
+    pub successful_probe_attempt: Option<u64>,
+    pub last_probe_reason: Option<String>,
     pub active: Option<AccountTurnStateSlotStatus>,
     pub standby: Option<AccountTurnStateSlotStatus>,
 }
@@ -103,6 +107,7 @@ pub struct AccountTurnStateModelStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountTurnStateSlotStatus {
     pub chars: u16,
+    pub captured_at: Option<DateTime<Utc>>,
     pub expires_at: DateTime<Utc>,
 }
 

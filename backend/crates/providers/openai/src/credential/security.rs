@@ -114,20 +114,16 @@ impl ProviderDeviceCodec for CodexDeviceCodec {
 }
 
 impl CodexCredentialCodec {
-    /// Only routine bot-management material is independent of State ownership.
-    /// Auth, device, workspace and all other credential fields must match.
+    /// Response Cookie material is independent of State ownership. Auth, device,
+    /// workspace and other non-cookie credential fields must match.
     pub(crate) fn same_turn_state_binding(
         existing: &PlaintextCredential,
         incoming: &PlaintextCredential,
     ) -> Result<bool, CodexCredentialDataError> {
         let mut existing = Self::decode_complete(existing)?;
         let mut incoming = Self::decode_complete(incoming)?;
-        existing
-            .cookies_mut()
-            .retain(|cookie| cookie.name != "__cf_bm");
-        incoming
-            .cookies_mut()
-            .retain(|cookie| cookie.name != "__cf_bm");
+        existing.cookies_mut().clear();
+        incoming.cookies_mut().clear();
         Ok(Self::encode_complete(existing)? == Self::encode_complete(incoming)?)
     }
 

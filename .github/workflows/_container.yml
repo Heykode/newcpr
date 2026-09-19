@@ -7,6 +7,11 @@ on:
         description: Exact commit SHA to build and validate
         required: true
         type: string
+      save_image:
+        description: Retain the tested amd64 image for deployment without rebuilding
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -29,6 +34,17 @@ jobs:
       - name: Setup Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Image identity
+        id: identity
+        shell: bash
+        run: |
+          ruby -ryaml -rtime <<'RUBY' >> "$GITHUB_OUTPUT"
+          version = YAML.load_file("release/version.yaml").fetch("version").delete_prefix("v")
+          abort("invalid version") unless version.match?(/\A\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?\z/)
+          puts "version=#{version}"
+          puts "build_time=#{Time.now.utc.iso8601}"
+          RUBY
 
       - name: Cache Cargo mounts
         id: cargo-cache
@@ -65,6 +81,13 @@ jobs:
           target: runtime
           load: true
           tags: ${{ env.CPR_IMAGE }}
+          build-args: |
+            CPR_VERSION=${{ steps.identity.outputs.version }}
+            CPR_GIT_SHA=${{ inputs.ref }}
+            CPR_BUILD_TIME=${{ steps.identity.outputs.build_time }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.ref }}
+            org.opencontainers.image.version=${{ steps.identity.outputs.version }}
           no-cache-filters: |
             runtime-base
             runtime
@@ -77,3 +100,34 @@ jobs:
           image: ${{ env.CPR_IMAGE }}
           platform: linux/amd64
           artifact-name: container-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-amd64
+
+      - name: Save the verified image
+        if: inputs.save_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cpr-image"
+          docker image save "$CPR_IMAGE" | gzip -1 > "$RUNNER_TEMP/cpr-image/image.tar.gz"
+          python3 release/verified_image.py create \
+            --image "$CPR_IMAGE" \
+            --archive "$RUNNER_TEMP/cpr-image/image.tar.gz" \
+            --output "$RUNNER_TEMP/cpr-image/manifest.json"
+
+      - name: Upload immutable image
+        if: inputs.save_image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cpr-image-linux-amd64-${{ inputs.ref }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cpr-image/image.tar.gz
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload image proof
+        if: inputs.save_image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cpr-proof-${{ inputs.ref }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cpr-image/manifest.json
+          retention-days: 14
+          if-no-files-found: error

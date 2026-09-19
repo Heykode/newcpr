@@ -63,12 +63,13 @@ const secondaryClass = computed(() =>
 const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
 
 const hasTurnStateInjection = computed(() =>
-  props.account.provider === 'openai' && props.account.turnStateInjectionEnabled === true,
+  props.account.provider === 'openai' && props.account.turnStateInjectionEnabled === true
+  && props.account.turnState?.enabled !== false,
 )
 
 const now = useUiClock()
 const readyModels = computed(() => props.account.turnState?.readyModels
-  .filter(item => Date.parse(item.expiresAt) > now.value.getTime())
+  .filter(item => Date.parse(item.expiresAt) > now.value.getTime() + 60_000)
   .map(item => item.model) ?? [])
 const blockedReason = computed(() => turnStateBlockReason(props.account))
 const hasReadyState = computed(() => hasTurnStateInjection.value && !blockedReason.value && readyModels.value.length > 0)

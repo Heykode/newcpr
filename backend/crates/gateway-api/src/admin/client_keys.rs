@@ -698,6 +698,59 @@ where
             "/api/admin/client-keys/delete",
             post(delete_client_key::<S>),
         )
+        .route(
+            "/api/admin/client-keys/reset-budget",
+            post(reset_client_key_budget::<S>),
+        )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResetClientKeyBudgetRequest {
+    id: String,
+    period: BudgetPeriod,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BudgetPeriod {
+    Daily,
+    Weekly,
+    All,
+}
+
+async fn reset_client_key_budget<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(payload): AdminJson<ResetClientKeyBudgetRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    use gateway_admin::model::client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget};
+    let id = ClientApiKeyId::new(payload.id)
+        .map_err(|_| AdminError::bad_request("Client API Key ID 不合法"))?;
+    let period = match payload.period {
+        BudgetPeriod::Daily => ClientKeyBudgetPeriod::Daily,
+        BudgetPeriod::Weekly => ClientKeyBudgetPeriod::Weekly,
+        BudgetPeriod::All => ClientKeyBudgetPeriod::All,
+    };
+    state
+        .admin_services()
+        .client_keys()
+        .reset_budget(
+            &auth.context().mutation_context(),
+            ResetClientKeyBudget {
+                id: id.clone(),
+                period,
+            },
+        )
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({ "id": id.as_str() })),
+    ))
 }
 
 async fn list_client_keys<S>(

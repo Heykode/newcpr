@@ -1594,7 +1594,6 @@ async fn image_metering_events(
     let store = Arc::new(MemoryAccountStore::default());
     const ACCOUNT_ID: &str = "acct_image_metering";
     create_account(&store, ACCOUNT_ID).await;
-    provider_openai::transport::evict_account_http_clients(ACCOUNT_ID);
     let server = MockServer::start().await;
     let endpoint = match kind {
         ImageRequestKind::Generation => "/codex/images/generations",
@@ -4088,7 +4087,7 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
         body
     });
     // Official Codex keeps embedded turn metadata ASCII even for Unicode workspaces.
-    let raw = r#"{"installation_id":"client-installation","workspaces":{"C:\\Users\\\u9879\u76ee\\\ud83d\ude80":{"label":"caf\u00e9","literal":"\\u4e2d","quoted":"\"line\n"}}}"#;
+    let raw = r#"{"installation_id":"client-installation","workspaces":{"C:\\Workspace\\\u9879\u76ee\\\ud83d\ude80":{"label":"caf\u00e9","literal":"\\u4e2d","quoted":"\"line\n"}}}"#;
     let input = json!([{"role": "user", "content": "中文正文 🚀"}]);
     let payload = ProtocolPayload::json_object(
         "openai",

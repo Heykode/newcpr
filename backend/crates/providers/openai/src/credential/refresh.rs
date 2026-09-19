@@ -299,11 +299,7 @@ impl CodexCredentialRefreshService {
             .ok_or(CodexCredentialRefreshError::InvalidRefreshResponse)?;
         let refresh_result = self
             .refresher
-            .refresh_for_account(
-                due.account.id(),
-                refresh_token.expose_secret(),
-                due.account.outbound_proxy(),
-            )
+            .refresh_with_proxy(refresh_token.expose_secret(), due.account.outbound_proxy())
             .await;
         if recovery_window_exhausted && let Err(failure) = &refresh_result {
             let message = failure.message().map(str::to_owned);

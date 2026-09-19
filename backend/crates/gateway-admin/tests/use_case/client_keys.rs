@@ -17,6 +17,13 @@ struct UnusedClientKeyStore;
 
 #[async_trait]
 impl ClientKeyStore for UnusedClientKeyStore {
+    async fn reset_client_key_budget(
+        &self,
+        _: gateway_admin::model::client_keys::ResetClientKeyBudget,
+        _: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        Ok(())
+    }
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         assert_eq!(query.page_size.get(), u16::MAX);
         Ok(ClientKeyPage {

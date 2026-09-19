@@ -1,11 +1,12 @@
 import type { Ref } from 'vue'
-import type { getApiKeys } from '@/api'
+import type { ApiKeyBudgetPeriod, getApiKeys } from '@/api'
 import { ref, shallowRef, watch } from 'vue'
 import {
   createApiKey,
   deleteApiKey,
   disableApiKey,
   enableApiKey,
+  resetApiKeyBudget,
   revealApiKey,
   updateApiKey,
 } from '@/api'
@@ -51,6 +52,32 @@ export function useApiKeyMutations(options: {
   const updatingStatusKeyIds = updatingStatusKeys.ids
   const revealingKeyIds = revealingKeys.ids
   const form = ref<ApiKeyFormValue>(emptyForm())
+  const showBudgetResetModal = shallowRef(false)
+  const pendingBudgetKey = shallowRef<ApiKeyRow | null>(null)
+  const budgetPeriod = shallowRef<ApiKeyBudgetPeriod>('all')
+  const resetBudgetAction = useAsyncAction()
+  const resettingBudget = resetBudgetAction.loading
+
+  function requestBudgetReset(key: ApiKeyRow) {
+    if (resettingBudget.value)
+      return
+    pendingBudgetKey.value = key
+    budgetPeriod.value = 'all'
+    showBudgetResetModal.value = true
+  }
+
+  async function handleBudgetReset() {
+    const key = pendingBudgetKey.value
+    if (!key || resettingBudget.value)
+      return
+    await resetBudgetAction.run(async () => {
+      await resetApiKeyBudget({ id: key.id, period: budgetPeriod.value })
+      showBudgetResetModal.value = false
+      pendingBudgetKey.value = null
+      toast.success('已用额度已重置')
+      await options.reload()
+    }, { onError: () => void options.reload() })
+  }
 
   function openCreate() {
     editingKey.value = null
@@ -254,6 +281,12 @@ export function useApiKeyMutations(options: {
   })
 
   return {
+    showBudgetResetModal,
+    pendingBudgetKey,
+    budgetPeriod,
+    resettingBudget,
+    requestBudgetReset,
+    handleBudgetReset,
     showFormModal,
     showDeleteModal,
     showSingleDeleteModal,

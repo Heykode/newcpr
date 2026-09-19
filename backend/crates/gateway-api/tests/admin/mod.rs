@@ -266,6 +266,14 @@ impl MemoryAuthStore {
             AdminSession {
                 admin_user_id: "admin_1".to_owned(),
                 expires_at: Utc::now() + Duration::hours(1),
+                credential_fingerprint: {
+                    use base64::Engine as _;
+                    use sha2::Digest as _;
+                    let stored = self.password_hash.lock().expect("hash");
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(
+                        stored.as_deref().expect("initialized hash").as_bytes(),
+                    ))
+                },
             },
         );
     }
@@ -289,6 +297,32 @@ impl MemoryAuthStore {
 
 #[async_trait]
 impl AuthStore for MemoryAuthStore {
+    async fn change_password(
+        &self,
+        _: &str,
+        expected: &str,
+        hash: &str,
+        audit: AdminAuditEvent,
+    ) -> AdminStoreResult<bool> {
+        let mut stored = self.password_hash.lock().expect("hash");
+        if self.fail_audit.load(Ordering::SeqCst) {
+            return Err(unavailable("auth audit"));
+        }
+        if stored.as_deref() != Some(expected) {
+            return Ok(false);
+        }
+        *stored = Some(hash.to_owned());
+        self.audits.lock().expect("audits").push(audit);
+        Ok(true)
+    }
+    async fn consume_password_change_attempt(
+        &self,
+        _: &str,
+        _: u32,
+        _: u64,
+    ) -> AdminStoreResult<bool> {
+        Ok(true)
+    }
     async fn load_password_hash(&self, _: &str) -> AdminStoreResult<Option<String>> {
         Ok(self.password_hash.lock().expect("password hash").clone())
     }
@@ -740,6 +774,13 @@ fn mutation(
 
 #[async_trait]
 impl ClientKeyStore for MemoryClientKeyStore {
+    async fn reset_client_key_budget(
+        &self,
+        _: gateway_admin::model::client_keys::ResetClientKeyBudget,
+        _: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        Ok(())
+    }
     async fn list_client_keys(&self, _: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         Ok(ClientKeyPage {
             config_revision: Revision::new(1).expect("revision"),

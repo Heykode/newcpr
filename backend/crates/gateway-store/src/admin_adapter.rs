@@ -256,6 +256,40 @@ pub(crate) fn store_model_mappings(
 
 #[async_trait::async_trait]
 impl AuthStore for AdminAuthStoreAdapter {
+    async fn change_password(
+        &self,
+        admin_user_id: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: AdminAuditModel,
+    ) -> AdminStoreResult<bool> {
+        postgres::AdminSecurityAuditRepository::change_password(
+            &self.security,
+            admin_user_id,
+            expected_hash,
+            password_hash,
+            store_auth_audit(audit)?,
+        )
+        .await
+        .map_err(|error| admin_store_error("administrator password", error))
+    }
+
+    async fn consume_password_change_attempt(
+        &self,
+        admin_user_id: &str,
+        limit: u32,
+        window_seconds: u64,
+    ) -> AdminStoreResult<bool> {
+        redis::AdminAuthStateRepository::consume_password_change_attempt(
+            &self.state,
+            admin_user_id,
+            limit,
+            window_seconds,
+        )
+        .await
+        .map_err(|error| admin_store_error("password change limit", error))
+    }
+
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>> {
         postgres::AdminSecurityAuditRepository::password_hash(&self.security, admin_user_id)
             .await
@@ -290,6 +324,7 @@ impl AuthStore for AdminAuthStoreAdapter {
                 session.map(|record| AdminSession {
                     admin_user_id: record.admin_user_id,
                     expires_at: record.expires_at,
+                    credential_fingerprint: record.credential_fingerprint,
                 })
             })
             .map_err(|error| admin_store_error("admin session", error))
@@ -306,6 +341,7 @@ impl AuthStore for AdminAuthStoreAdapter {
             &redis::AdminSessionRecord {
                 admin_user_id: session.admin_user_id.clone(),
                 expires_at: session.expires_at,
+                credential_fingerprint: session.credential_fingerprint.clone(),
             },
         )
         .await
@@ -319,54 +355,57 @@ impl AuthStore for AdminAuthStoreAdapter {
                 session.map(|record| AdminSession {
                     admin_user_id: record.admin_user_id,
                     expires_at: record.expires_at,
+                    credential_fingerprint: record.credential_fingerprint,
                 })
             })
             .map_err(|error| admin_store_error("admin session", error))
     }
 
     async fn append_audit_event(&self, event: AdminAuditModel) -> AdminStoreResult<()> {
-        let config_revision = event
-            .config_revision
-            .map(|revision| i64::try_from(revision.get()))
-            .transpose()
-            .map_err(|_| {
-                AdminStoreError::new(
-                    AdminStoreErrorKind::Invalid,
-                    "admin audit",
-                    "config revision is outside the supported range",
-                )
-            })?;
-        let actor_kind = match event.actor_kind {
-            gateway_admin::model::auth::AuditActorKind::AdminSession => {
-                postgres::AdminAuditActorKind::AdminSession
-            }
-            gateway_admin::model::auth::AuditActorKind::AdminApiKey => {
-                postgres::AdminAuditActorKind::AdminApiKey
-            }
-            gateway_admin::model::auth::AuditActorKind::System => {
-                postgres::AdminAuditActorKind::System
-            }
-            gateway_admin::model::auth::AuditActorKind::Anonymous => {
-                postgres::AdminAuditActorKind::Anonymous
-            }
-        };
         postgres::AdminSecurityAuditRepository::append_admin_audit_event(
             &self.security,
-            postgres::AdminAuditEvent {
-                id: event.id,
-                actor_kind,
-                actor_admin_user_id: event.actor_admin_user_id,
-                actor_ref: event.actor_ref,
-                admin_request_id: event.request_id,
-                action: event.action,
-                entity_kind: event.entity_kind,
-                entity_ref: event.entity_ref,
-                config_revision,
-                changed_fields: event.changed_fields,
-                created_at: event.occurred_at,
-            },
+            store_auth_audit(event)?,
         )
         .await
         .map_err(|error| admin_store_error("admin audit", error))
     }
+}
+
+fn store_auth_audit(event: AdminAuditModel) -> AdminStoreResult<postgres::AdminAuditEvent> {
+    let config_revision = event
+        .config_revision
+        .map(|revision| i64::try_from(revision.get()))
+        .transpose()
+        .map_err(|_| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::Invalid,
+                "admin audit",
+                "config revision is outside the supported range",
+            )
+        })?;
+    let actor_kind = match event.actor_kind {
+        gateway_admin::model::auth::AuditActorKind::AdminSession => {
+            postgres::AdminAuditActorKind::AdminSession
+        }
+        gateway_admin::model::auth::AuditActorKind::AdminApiKey => {
+            postgres::AdminAuditActorKind::AdminApiKey
+        }
+        gateway_admin::model::auth::AuditActorKind::System => postgres::AdminAuditActorKind::System,
+        gateway_admin::model::auth::AuditActorKind::Anonymous => {
+            postgres::AdminAuditActorKind::Anonymous
+        }
+    };
+    Ok(postgres::AdminAuditEvent {
+        id: event.id,
+        actor_kind,
+        actor_admin_user_id: event.actor_admin_user_id,
+        actor_ref: event.actor_ref,
+        admin_request_id: event.request_id,
+        action: event.action,
+        entity_kind: event.entity_kind,
+        entity_ref: event.entity_ref,
+        config_revision,
+        changed_fields: event.changed_fields,
+        created_at: event.occurred_at,
+    })
 }

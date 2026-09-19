@@ -279,6 +279,23 @@ struct BootstrapAuthStore {
 
 #[async_trait]
 impl AuthStore for BootstrapAuthStore {
+    async fn change_password(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: AdminAuditEvent,
+    ) -> AdminStoreResult<bool> {
+        Err(unavailable("password change"))
+    }
+    async fn consume_password_change_attempt(
+        &self,
+        _: &str,
+        _: u32,
+        _: u64,
+    ) -> AdminStoreResult<bool> {
+        Err(unavailable("password change limit"))
+    }
     async fn load_password_hash(&self, _: &str) -> AdminStoreResult<Option<String>> {
         Ok(self.password_hash.lock().expect("password hash").clone())
     }
@@ -555,6 +572,13 @@ impl AccountRuntimeStore for UnavailableStore {
 
 #[async_trait]
 impl ClientKeyStore for UnavailableStore {
+    async fn reset_client_key_budget(
+        &self,
+        _: gateway_admin::model::client_keys::ResetClientKeyBudget,
+        _: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        Err(unavailable("budget reset"))
+    }
     async fn list_client_keys(&self, _: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage> {
         Err(unavailable("client key list"))
     }

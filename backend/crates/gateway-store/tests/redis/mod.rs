@@ -24,6 +24,7 @@ fn admin_auth_state_rejects_invalid_ttl_boundaries() {
     let session = AdminSessionRecord {
         admin_user_id: "admin".to_owned(),
         expires_at: Utc::now() - chrono::Duration::seconds(1),
+        credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
     };
     let runtime = tokio::runtime::Runtime::new().expect("test runtime");
     let Some((repository, _connection, _namespace)) = runtime.block_on(admin_auth_repository())
@@ -48,6 +49,7 @@ async fn admin_auth_state_keeps_fixed_ttl_and_opaque_keys() {
     let session = AdminSessionRecord {
         admin_user_id: "default-admin".to_owned(),
         expires_at: Utc::now() + chrono::Duration::seconds(60),
+        credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
     };
 
     repository
@@ -114,4 +116,41 @@ async fn admin_auth_repository()
     let repository = RedisAdminAuthStateRepository::new(connection.clone(), &namespace)
         .expect("valid test namespace");
     Some((repository, connection, namespace))
+}
+
+#[tokio::test]
+async fn password_change_limit_is_atomic_and_expires() {
+    let Some((repository, mut connection, namespace)) = admin_auth_repository().await else {
+        return;
+    };
+    let results = futures::future::join_all(
+        (0..20).map(|_| repository.consume_password_change_attempt("admin-test", 10, 1)),
+    )
+    .await;
+    assert_eq!(
+        results
+            .into_iter()
+            .filter(|result| *result.as_ref().expect("limit"))
+            .count(),
+        10
+    );
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{namespace}:*"))
+        .query_async(&mut connection)
+        .await
+        .expect("keys");
+    assert_eq!(keys.len(), 1);
+    let ttl: i64 = redis::cmd("TTL")
+        .arg(&keys[0])
+        .query_async(&mut connection)
+        .await
+        .expect("ttl");
+    assert!((0..=1).contains(&ttl));
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert!(
+        repository
+            .consume_password_change_attempt("admin-test", 10, 1)
+            .await
+            .expect("new window")
+    );
 }

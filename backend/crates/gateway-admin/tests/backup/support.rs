@@ -615,6 +615,23 @@ impl FakeAuthStore {
 
 #[async_trait]
 impl AuthStore for FakeAuthStore {
+    async fn change_password(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: AdminAuditEvent,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+    async fn consume_password_change_attempt(
+        &self,
+        _: &str,
+        _: u32,
+        _: u64,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
     async fn load_password_hash(&self, _admin_user_id: &str) -> AdminStoreResult<Option<String>> {
         Ok(None)
     }

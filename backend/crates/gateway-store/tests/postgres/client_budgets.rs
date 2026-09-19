@@ -335,3 +335,146 @@ async fn budget_database_outage_fails_closed() {
     assert!(store.settle(charge("key", "offline", "1")).await.is_err());
     database.close().await;
 }
+
+#[tokio::test]
+async fn manual_budget_reset_preserves_history_limits_and_window_end_and_fences_late_charges() {
+    use gateway_admin::model::client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget};
+    let Some(database) = TestDatabase::create("budget_reset").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    seed(&database, "unused", "1", "5").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    store.admit(key_id("key")).await.unwrap();
+    let original = charge("key", "original", "1");
+    store.settle(original.clone()).await.unwrap();
+    let late = charge("key", "late", "0.25");
+    let before = status(&database, "key").await;
+    assert!(store.admit(key_id("key")).await.is_err());
+    admin
+        .reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("key"),
+                period: ClientKeyBudgetPeriod::Daily,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let after = status(&database, "key").await;
+    assert_eq!(after.daily_used_usd.canonical(), "0");
+    assert_eq!(after.weekly_used_usd.canonical(), "1");
+    assert_eq!(after.limits, before.limits);
+    assert_eq!(after.daily_resets_at, before.daily_resets_at);
+    assert_eq!(after.weekly_resets_at, before.weekly_resets_at);
+    store.admit(key_id("key")).await.unwrap();
+    store.settle(original).await.unwrap();
+    store.settle(late).await.unwrap();
+    let after_late = status(&database, "key").await;
+    assert_eq!(after_late.daily_used_usd.canonical(), "0");
+    assert_eq!(after_late.weekly_used_usd.canonical(), "1.25");
+    store.settle(charge("key", "new", "0.5")).await.unwrap();
+    assert_eq!(
+        status(&database, "key").await.daily_used_usd.canonical(),
+        "0.5"
+    );
+    admin
+        .reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("key"),
+                period: ClientKeyBudgetPeriod::Weekly,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let after_weekly = status(&database, "key").await;
+    assert_eq!(after_weekly.daily_used_usd.canonical(), "0.5");
+    assert_eq!(after_weekly.weekly_used_usd.canonical(), "0");
+    admin
+        .reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("key"),
+                period: ClientKeyBudgetPeriod::All,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    admin
+        .reset_client_key_budget(
+            ResetClientKeyBudget {
+                id: key_id("unused"),
+                period: ClientKeyBudgetPeriod::All,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(status(&database, "unused").await.daily_resets_at.is_none());
+    let events: i64 = sqlx::query_scalar("select count(*) from client_key_charge_events")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(events, 3, "historical charge ledger is preserved");
+    let audit_count: i64 =
+        sqlx::query_scalar("select count(*) from admin_audit_events where action = 'reset_budget'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(audit_count, 4);
+    assert!(
+        admin
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: key_id("missing"),
+                    period: ClientKeyBudgetPeriod::All,
+                },
+                &context()
+            )
+            .await
+            .is_err()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn manual_budget_reset_rolls_back_when_audit_fails() {
+    use gateway_admin::model::client_keys::{ClientKeyBudgetPeriod, ResetClientKeyBudget};
+    let Some(database) = TestDatabase::create("budget_reset_audit").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let admin = PgAdminClientKeyStore::new(database.pool.clone());
+    store.admit(key_id("key")).await.unwrap();
+    store.settle(charge("key", "original", "1")).await.unwrap();
+    sqlx::raw_sql(
+        "create function reject_reset_audit() returns trigger language plpgsql as $$
+         begin raise exception 'synthetic audit failure'; end $$;
+         create trigger reject_reset_audit before insert on admin_audit_events
+         for each row execute function reject_reset_audit();",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    assert!(
+        admin
+            .reset_client_key_budget(
+                ResetClientKeyBudget {
+                    id: key_id("key"),
+                    period: ClientKeyBudgetPeriod::All,
+                },
+                &context()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        status(&database, "key").await.daily_used_usd.canonical(),
+        "1"
+    );
+    assert!(store.admit(key_id("key")).await.is_err());
+    database.close().await;
+}

@@ -419,8 +419,14 @@ The identity avatar uses an inset ring and bottom-right shield only when
 without a ready model. Green requires an unexpired model in the authenticated
 account list's `turnState.readyModels`; its tooltip names both ready and pending
 models. Partial readiness must not claim that every model can be scheduled.
-The server projection checks global/account policy, enabled status, model list,
-credential revision, plan length, issuance and expiry without exposing raw State.
+Disabled, credential-error and quota-exhausted account status overrides historical
+ready or refreshing State metadata. The avatar uses the error tone and the panel
+shows the shared blocked reason while retaining valid cached slots. Distinguish refreshable access
+token expiry from revoked credentials requiring relogin. Recovery uses the next
+ordinary account-list snapshot; no optimistic readiness or extra polling.
+The server readiness projection checks global/account policy, enabled status, model list,
+binding revision, plan shape, credentials/quota/cooldown and the one-minute cutoff.
+Cached metadata remains visible when switches are off; `enabled:false` restores the ordinary avatar.
 Use the shared UI clock to age the projection, not a per-row timer or probe.
 Missing projection or global-off never renders green. Missing opt-in fields and
 non-OpenAI providers retain the original identity tone.
@@ -434,20 +440,27 @@ widths. These UI checks do not validate upstream State acceptance.
 
 The expanded account row places a persistent `State 注入` summary below the
 left quota area; do not rely on avatar hover for operational detail. For every
-configured model, show the safe active/standby slots, character counts, current
-capture count, refresh/readiness label and local expiry countdown. The header
+configured model, show the safe current/next slots, character counts, capture time,
+attempt count, safe failure reason, refresh/readiness label and local expiry countdown. The header
 summarizes ready models and total valid slots. Missing slots say `未获取`, while
 disabled, globally unavailable and empty-model states remain distinct.
+Show the successful attempt ordinal separately from total attempts. Prioritize both
+counts before the capture time in narrow rows, with full detail in the title.
+The existing account-list timer uses three seconds while visible enabled healthy
+accounts have queued/refreshing State models, otherwise thirty seconds. Keep one
+timer, prevent overlapping reads, and dispose it with the page; never probe upstream.
 Use `turnState.models` when available and preserve `requiredModels` /
 `readyModels` as a compatibility fallback for older servers. Countdown aging
 uses the shared UI clock and never creates per-account timers. Desktop uses two
 slot columns; narrow screens stack slots and constrain the panel to the viewport
 even though the surrounding account table remains horizontally scrollable.
-Keep the summary outside the scroll region. Model rows use a stable 56px desktop
-height or 76px narrow-screen height; cap the list at three rows and scroll further
+Keep the summary outside the scroll region. Model rows use a stable 80px desktop
+height or 96px narrow-screen height; cap the list at three rows and scroll further
 models internally. One/two-model lists retain their natural height. Overflowing
 lists are named keyboard-focusable regions; long model names retain full titles.
 Neither the panel nor its title attributes may contain the opaque State value.
+There is no permanent spare placeholder. Show `待切换` only when a next slot exists;
+off retains original countdowns, while cached slots do not imply scheduling readiness.
 Cover the real SFC, legacy fallback, totals and countdowns in
 `account-state-detail-panel.test.mjs`; the account browser regression expands a
 real row and checks both themes at 1440/390/320px for clipping and overflow.

@@ -157,6 +157,19 @@ fn adapt_codex_responses_body(
         tracing::debug!(field = "store", "Codex Generate storage option normalized");
     }
     body.insert("store".to_owned(), Value::Bool(false));
+    // Codex uses developer for explicit instruction messages; nested content is opaque.
+    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
+        for item in input {
+            let Some(item) = item.as_object_mut() else {
+                continue;
+            };
+            if item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("system")
+            {
+                item.insert("role".to_owned(), Value::String("developer".to_owned()));
+            }
+        }
+    }
     for field in UNSUPPORTED_CODEX_RESPONSES_FIELDS {
         if body.remove(*field).is_some() {
             tracing::debug!(field = *field, "Unsupported Codex Generate option omitted");

@@ -377,7 +377,13 @@ impl DefaultAccountsService {
                 .load_turn_state_status(std::slice::from_ref(&stored.account.id))
                 .await
                 .unwrap_or_default()
-                .remove(&stored.account.id),
+                .remove(&stored.account.id)
+                .map(|mut state| {
+                    if stored.projection.status != gateway_core::account::AccountStatus::Normal {
+                        state.ready_models.clear();
+                    }
+                    state
+                }),
             effective_concurrency_limit: stored
                 .account
                 .concurrency_limit
@@ -513,7 +519,12 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
-                    turn_state: turn_states.remove(&item.account.id),
+                    turn_state: turn_states.remove(&item.account.id).map(|mut state| {
+                        if item.projection.status != gateway_core::account::AccountStatus::Normal {
+                            state.ready_models.clear();
+                        }
+                        state
+                    }),
                     effective_concurrency_limit: item
                         .account
                         .concurrency_limit

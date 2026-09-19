@@ -11,20 +11,29 @@ use crate::postgres::ObservabilityQueryBudget;
 #[derive(sqlx::FromRow)]
 struct AccountTurnStateStatusRow {
     account_id: String,
+    injection_enabled: bool,
+    schedulable: bool,
     model: String,
     refresh_status: Option<String>,
     active_chars: Option<i16>,
+    active_captured_at: Option<chrono::DateTime<Utc>>,
     active_expires_at: Option<chrono::DateTime<Utc>>,
     standby_chars: Option<i16>,
+    standby_captured_at: Option<chrono::DateTime<Utc>>,
     standby_expires_at: Option<chrono::DateTime<Utc>>,
+    probe_attempts: Option<i64>,
+    successful_probe_attempt: Option<i64>,
+    last_probe_reason: Option<String>,
 }
 
 fn turn_state_slot_status(
     chars: Option<i16>,
+    captured_at: Option<chrono::DateTime<Utc>>,
     expires_at: Option<chrono::DateTime<Utc>>,
 ) -> Option<gateway_admin::model::accounts::AccountTurnStateSlotStatus> {
     Some(gateway_admin::model::accounts::AccountTurnStateSlotStatus {
         chars: u16::try_from(chars?).ok()?,
+        captured_at,
         expires_at: expires_at?,
     })
 }
@@ -418,48 +427,31 @@ impl AccountStore for PgAdminAccountStore {
     {
         let rows = sqlx::query_as::<_, AccountTurnStateStatusRow>(
             "select a.id as account_id, m.model,
-                case when s.credential_revision = a.turn_state_binding_revision
-                  and s.normal_length = case when lower(trim(a.plan_type)) in
-                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
-                    then 332 else 292 end
-                then s.refresh_status else null end as refresh_status,
-                case when s.credential_revision = a.turn_state_binding_revision
-                  and s.normal_length = case when lower(trim(a.plan_type)) in
-                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
-                    then 332 else 292 end
-                  and length(s.active_state) = s.normal_length
-                  and s.active_issued_at <= now() and s.active_expires_at > now()
-                then s.normal_length else null end as active_chars,
-                case when s.credential_revision = a.turn_state_binding_revision
-                  and s.normal_length = case when lower(trim(a.plan_type)) in
-                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
-                    then 332 else 292 end
-                  and length(s.active_state) = s.normal_length
-                  and s.active_issued_at <= now() and s.active_expires_at > now()
-                then s.active_expires_at else null end as active_expires_at,
-                case when s.credential_revision = a.turn_state_binding_revision
-                  and s.normal_length = case when lower(trim(a.plan_type)) in
-                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
-                    then 332 else 292 end
-                  and length(s.standby_state) = s.normal_length
-                  and s.standby_issued_at <= now() and s.standby_expires_at > now()
-                then s.normal_length else null end as standby_chars,
-                case when s.credential_revision = a.turn_state_binding_revision
-                  and s.normal_length = case when lower(trim(a.plan_type)) in
-                    ('team','self_serve_business_prolite','self_serve_business_usage_based')
-                    then 332 else 292 end
-                  and length(s.standby_state) = s.normal_length
-                  and s.standby_issued_at <= now() and s.standby_expires_at > now()
-                then s.standby_expires_at else null end as standby_expires_at
+                (a.turn_state_injection_enabled and r.turn_state_injection_enabled) as injection_enabled,
+                (a.enabled and a.credential_state = 'ready'
+                  and (a.access_token_expires_at is null or a.access_token_expires_at > now())
+                  and a.quota_access_state <> 'exhausted') as schedulable,
+                s.refresh_status, s.probe_attempts, s.last_probe_reason, s.successful_probe_attempt,
+                case when (length(s.active_state) = s.normal_length
+                    or length(rtrim(s.active_state, '=')) = case when s.normal_length = 292 then 290 else 332 end)
+                  and s.active_issued_at <= now() + interval '30 seconds' and s.active_expires_at > now()
+                then length(s.active_state)::smallint else null end as active_chars,
+                s.active_captured_at, s.active_expires_at,
+                case when (length(s.standby_state) = s.normal_length
+                    or length(rtrim(s.standby_state, '=')) = case when s.normal_length = 292 then 290 else 332 end)
+                  and s.standby_issued_at <= now() + interval '30 seconds' and s.standby_expires_at > now()
+                then length(s.standby_state)::smallint else null end as standby_chars,
+                s.standby_captured_at, s.standby_expires_at
              from provider_accounts a cross join runtime_settings r
              cross join lateral unnest(r.turn_state_models) with ordinality m(model, position)
              left join provider_turn_states s on s.provider_account_id = a.id
                and s.upstream_model = m.model
-               and a.credential_state = 'ready'
-               and (a.access_token_expires_at is null or a.access_token_expires_at > now())
-               and a.quota_access_state <> 'exhausted'
+               and s.credential_revision = a.turn_state_binding_revision
+               and s.normal_length = case when lower(trim(a.plan_type)) in
+                 ('team','business','self_serve_business_prolite','self_serve_business_usage_based') then 332 else 292 end
              where a.id = any($1) and a.provider_kind = 'openai'
-               and a.enabled and a.turn_state_injection_enabled and r.turn_state_injection_enabled
+               and (a.turn_state_injection_enabled or exists (
+                 select 1 from provider_turn_states cached where cached.provider_account_id = a.id))
              order by a.id, m.position",
         )
         .bind(account_ids)
@@ -475,10 +467,23 @@ impl AccountStore for PgAdminAccountStore {
             BTreeMap::<String, gateway_admin::model::accounts::AccountTurnStateStatus>::new();
         for row in rows {
             let status = statuses.entry(row.account_id).or_default();
+            status.enabled = row.injection_enabled;
             status.required_models.push(row.model.clone());
-            let active = turn_state_slot_status(row.active_chars, row.active_expires_at);
-            let standby = turn_state_slot_status(row.standby_chars, row.standby_expires_at);
-            if let Some(active) = &active {
+            let active = turn_state_slot_status(
+                row.active_chars,
+                row.active_captured_at,
+                row.active_expires_at,
+            );
+            let standby = turn_state_slot_status(
+                row.standby_chars,
+                row.standby_captured_at,
+                row.standby_expires_at,
+            );
+            if let Some(active) = &active
+                && row.injection_enabled
+                && row.schedulable
+                && active.expires_at > Utc::now() + chrono::TimeDelta::seconds(60)
+            {
                 status
                     .ready_models
                     .push((row.model.clone(), active.expires_at));
@@ -487,6 +492,12 @@ impl AccountStore for PgAdminAccountStore {
                 gateway_admin::model::accounts::AccountTurnStateModelStatus {
                     model: row.model,
                     refresh_status: row.refresh_status.unwrap_or_else(|| "missing".to_owned()),
+                    probe_attempts: u64::try_from(row.probe_attempts.unwrap_or_default())
+                        .unwrap_or_default(),
+                    last_probe_reason: row.last_probe_reason,
+                    successful_probe_attempt: row
+                        .successful_probe_attempt
+                        .and_then(|value| u64::try_from(value).ok()),
                     active,
                     standby,
                 },

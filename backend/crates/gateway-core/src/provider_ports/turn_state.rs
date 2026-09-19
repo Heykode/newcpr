@@ -39,7 +39,7 @@ impl fmt::Debug for OpaqueTurnState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderTurnStateValue {
     state: OpaqueTurnState,
-    /// Provider-local capture clock; the historical field name is not an upstream claim.
+    /// Parsed envelope timestamp; not a verified signature or guaranteed upstream lifetime.
     issued_at: SystemTime,
     expires_at: SystemTime,
 }
@@ -75,7 +75,7 @@ impl ProviderTurnStateValue {
 
     #[must_use]
     pub fn is_valid_at(&self, observed_at: SystemTime) -> bool {
-        self.issued_at <= observed_at && self.expires_at > observed_at
+        self.issued_at <= observed_at + Duration::from_secs(30) && self.expires_at > observed_at
     }
 }
 
@@ -83,7 +83,9 @@ impl ProviderTurnStateValue {
 pub enum ProviderTurnStateRefreshStatus {
     Missing,
     Ready,
+    Queued,
     Refreshing,
+    Cooldown,
     Failed,
 }
 
@@ -93,7 +95,9 @@ impl ProviderTurnStateRefreshStatus {
         match self {
             Self::Missing => "missing",
             Self::Ready => "ready",
+            Self::Queued => "queued",
             Self::Refreshing => "refreshing",
+            Self::Cooldown => "cooldown",
             Self::Failed => "failed",
         }
     }
@@ -103,7 +107,9 @@ impl ProviderTurnStateRefreshStatus {
         match value {
             "missing" => Some(Self::Missing),
             "ready" => Some(Self::Ready),
+            "queued" => Some(Self::Queued),
             "refreshing" => Some(Self::Refreshing),
+            "cooldown" => Some(Self::Cooldown),
             "failed" => Some(Self::Failed),
             _ => None,
         }
@@ -216,6 +222,9 @@ pub struct ProviderTurnStateAnomaly {
     pub upstream_model: UpstreamModelId,
     pub normal_length: u16,
     pub observed_length: Option<u16>,
+    /// A non-fatal observation contributes one strike; healthy observations reset it.
+    pub suspect: bool,
+    /// Explicit rejection invalidates immediately instead of waiting for two strikes.
     pub promote_standby: bool,
     pub observed_at: SystemTime,
 }
@@ -233,6 +242,19 @@ pub struct ProviderTurnStatePromotion {
 
 /// Every expected_revision here is the account's State binding generation.
 pub trait ProviderTurnStatePort: Send + Sync {
+    /// Best-effort, bounded diagnostics. Reason must be a static provider diagnostic code.
+    fn record_probe_progress<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _upstream_model: &'a UpstreamModelId,
+        _expected_revision: CredentialRevision,
+        _attempts: u64,
+        _reason: Option<&'static str>,
+        _successful_attempt: Option<u64>,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Promote a still-valid standby atomically without restarting its capture clock.
     fn promote_standby(
         &self,

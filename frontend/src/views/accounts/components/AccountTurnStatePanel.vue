@@ -4,7 +4,7 @@ import { ShieldCheck } from '@lucide/vue'
 import { computed } from 'vue'
 
 import { useUiClock } from '@/composables/useUiClock'
-import { turnStateBlockReason } from '../utils/turnState'
+import { turnStateBlockReason, turnStateProbeReason } from '../utils/turnState'
 
 const props = defineProps<{
   account: AccountRow
@@ -12,15 +12,20 @@ const props = defineProps<{
 
 const now = useUiClock()
 const blockedReason = computed(() => turnStateBlockReason(props.account))
+const enabled = computed(() => props.account.turnStateInjectionEnabled && props.account.turnState?.enabled !== false)
 
 interface StateSlot {
   chars: number | null
+  capturedAt?: string | null
   expiresAt: string
 }
 
 interface StateModel {
   model: string
   refreshStatus: string
+  probeAttempts?: number
+  successfulProbeAttempt?: number | null
+  lastProbeReason?: string | null
   active: StateSlot | null
   standby: StateSlot | null
 }
@@ -54,19 +59,31 @@ const models = computed<StateModel[]>(() => {
 const rows = computed(() => models.value.map((model) => {
   const active = activeSlot(model.active)
   const standby = activeSlot(model.standby)
+  const ready = Boolean(active && validTimestamp(active.expiresAt)! > now.value.getTime() + 60_000)
   let status = '待采集'
   let statusClass = 'text-cp-warning-text'
-  if (active && standby) {
-    status = '主备就绪'
+  if (!enabled.value) {
+    status = '缓存保留'
+    statusClass = 'text-cp-text-quaternary'
+  }
+  else if (blockedReason.value || model.refreshStatus === 'cooldown') {
+    status = model.refreshStatus === 'cooldown' ? '冷却中' : '已停止'
+    statusClass = 'text-cp-error-text'
+  }
+  else if (ready && standby) {
+    status = '等待切换'
     statusClass = 'text-cp-success-text'
   }
-  else if (active) {
-    status = model.refreshStatus === 'refreshing' ? '补充备用' : '已就绪'
+  else if (ready) {
+    status = model.refreshStatus === 'refreshing' ? '刷新中' : model.refreshStatus === 'queued' ? '刷新排队' : '已就绪'
     statusClass = 'text-cp-success-text'
   }
   else if (model.refreshStatus === 'refreshing') {
     status = '采集中'
     statusClass = 'text-cp-warning-text'
+  }
+  else if (model.refreshStatus === 'queued') {
+    status = '排队中'
   }
   else if (model.refreshStatus === 'failed') {
     status = '等待重试'
@@ -78,12 +95,13 @@ const rows = computed(() => models.value.map((model) => {
     active,
     standby,
     captured: Number(Boolean(active)) + Number(Boolean(standby)),
+    ready: ready && enabled.value && !blockedReason.value,
     status,
     statusClass,
   }
 }))
 
-const readyCount = computed(() => rows.value.filter(row => row.active).length)
+const readyCount = computed(() => rows.value.filter(row => row.ready).length)
 const capturedCount = computed(() => rows.value.reduce((total, row) => total + row.captured, 0))
 
 function slotCountdown(slot: StateSlot | null) {
@@ -110,7 +128,17 @@ function slotTitle(label: string, slot: StateSlot | null) {
   const absolute = expiresAt === null
     ? slot.expiresAt
     : new Date(expiresAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
-  return `${label}：${slot.chars ?? '未知'} 字符；到期时间 ${absolute} (UTC+8)`
+  return `${label}：${slot.chars ?? '未知'} 字符；采集时间 ${captureTime(slot, true)}；到期时间 ${absolute} (UTC+8)`
+}
+
+function captureTime(slot: StateSlot | null, full = false) {
+  const timestamp = slot?.capturedAt ? validTimestamp(slot.capturedAt) : null
+  if (timestamp === null)
+    return '未知'
+  const date = new Date(timestamp)
+  return full
+    ? date.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
+    : date.toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
 }
 </script>
 
@@ -127,13 +155,10 @@ function slotTitle(label: string, slot: StateSlot | null) {
           <h4 class="m-0 text-cp-sm font-heavy text-cp-text">
             State 注入
           </h4>
-          <p class="m-0 mt-0.5 text-[10px] leading-3.5 font-emphasis text-cp-text-quaternary">
-            按账号与模型独立维护
-          </p>
         </div>
       </div>
       <p
-        v-if="account.turnStateInjectionEnabled && !blockedReason && rows.length"
+        v-if="rows.length"
         class="m-0 shrink-0 text-right text-cp-xs font-emphasis text-cp-text-secondary max-sm:w-full max-sm:text-left"
       >
         <strong class="font-mono font-heavy tabular-nums text-cp-text">{{ readyCount }}/{{ rows.length }}</strong> 模型
@@ -156,6 +181,12 @@ function slotTitle(label: string, slot: StateSlot | null) {
       {{ blockedReason }}
     </p>
     <p
+      v-else-if="account.turnState?.enabled === false"
+      class="m-0 mt-3 text-cp-xs font-emphasis text-cp-text-quaternary"
+    >
+      总开关已关闭
+    </p>
+    <p
       v-else-if="!account.turnState"
       class="m-0 mt-3 text-cp-xs font-emphasis text-cp-warning-text"
     >
@@ -169,19 +200,19 @@ function slotTitle(label: string, slot: StateSlot | null) {
     </p>
 
     <div
-      v-else
+      v-if="rows.length"
       data-account-turn-state-list
       role="region"
       aria-label="模型 State 状态"
       :tabindex="rows.length > 3 ? 0 : undefined"
-      class="mt-2 max-h-[10.5rem] overflow-y-auto overscroll-contain pr-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cp-border-secondary max-sm:max-h-[14.25rem]"
+      class="mt-2 max-h-60 overflow-y-auto overscroll-contain pr-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cp-border-secondary max-sm:max-h-72"
     >
       <ul class="m-0 list-none p-0">
         <li
           v-for="row in rows"
           :key="row.model"
           data-account-turn-state-model
-          class="h-14 border-t border-cp-border-secondary py-2 first:border-t-0 max-sm:h-[4.75rem]"
+          class="h-20 border-t border-cp-border-secondary py-2 first:border-t-0 max-sm:h-24"
         >
           <div class="flex min-w-0 items-center justify-between gap-3">
             <span class="min-w-0 truncate font-mono text-cp-xs font-heavy text-cp-text" :title="row.model">
@@ -194,8 +225,8 @@ function slotTitle(label: string, slot: StateSlot | null) {
           <div class="mt-1.5 grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-3.5 max-sm:grid-cols-1">
             <div
               v-for="slot in [
-                { key: 'active', label: 'Active', value: row.active },
-                { key: 'standby', label: 'Standby', value: row.standby },
+                { key: 'active', label: '当前', value: row.active },
+                ...(row.standby ? [{ key: 'standby', label: '待切换', value: row.standby }] : []),
               ]"
               :key="slot.key"
               class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-1.5"
@@ -211,6 +242,15 @@ function slotTitle(label: string, slot: StateSlot | null) {
                 </template>
               </span>
             </div>
+          </div>
+          <div
+            class="mt-1 truncate text-[10px] leading-3.5 text-cp-text-quaternary"
+            :title="`${slotTitle('当前', row.active)}；本轮尝试 ${row.probeAttempts ?? 0} 次${row.successfulProbeAttempt ? `；第 ${row.successfulProbeAttempt} 次尝试采集成功` : ''}${row.lastProbeReason ? `；${turnStateProbeReason(row.lastProbeReason)}` : ''}`"
+          >
+            本轮 {{ row.probeAttempts ?? 0 }} 次
+            <span v-if="row.successfulProbeAttempt"> · 第 {{ row.successfulProbeAttempt }} 次成功</span>
+            <span v-if="row.active"> · 采集 {{ captureTime(row.active) }}</span>
+            <span v-if="row.lastProbeReason"> · {{ turnStateProbeReason(row.lastProbeReason) }}</span>
           </div>
         </li>
       </ul>

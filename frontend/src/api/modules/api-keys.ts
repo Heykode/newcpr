@@ -3,6 +3,7 @@ import type { AccountGroupRef } from './account-groups'
 import request from '../request'
 
 export type ApiKeyRoutingScope = 'all' | 'groups'
+export type ApiKeyBudgetPeriod = 'daily' | 'weekly' | 'all'
 
 export interface ApiKey {
   id: string
@@ -131,6 +132,18 @@ export function disableApiKey(data: ApiKeyIdParam, options: RequestOptions = {})
 export function enableApiKey(data: ApiKeyIdParam, options: RequestOptions = {}) {
   return request<ApiKeyMutationResponse>({
     url: '/api/admin/client-keys/enable',
+    method: 'POST',
+    data,
+    ...options,
+  })
+}
+
+export function resetApiKeyBudget(
+  data: ApiKeyIdParam & { period: ApiKeyBudgetPeriod },
+  options: RequestOptions = {},
+) {
+  return request<ApiKeyMutationResponse>({
+    url: '/api/admin/client-keys/reset-budget',
     method: 'POST',
     data,
     ...options,

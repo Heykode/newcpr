@@ -7,14 +7,16 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
 use rand_core::{OsRng, RngCore as _};
+use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
 
 use crate::{
     model::{
-        AdminError,
+        AdminError, AdminErrorKind,
         auth::{
-            AdminAuditEvent, AdminSession, AuditActorKind, LoginCommand, LoginError, LoginResult,
+            AdminAuditEvent, AdminSession, AuditActorKind, ChangePassword, LoginCommand,
+            LoginError, LoginResult,
         },
     },
     ports::store::AuthStore,
@@ -25,6 +27,11 @@ use super::map_store_error;
 /// API 鉴权与管理员登录消费的统一服务。
 #[async_trait]
 pub trait AuthService: Send + Sync {
+    async fn change_password(
+        &self,
+        session_id: Option<&str>,
+        command: ChangePassword,
+    ) -> Result<(), AdminError>;
     async fn ensure_default_admin(&self, password: &str) -> Result<bool, AdminError>;
     async fn resolve_admin_user_id(
         &self,
@@ -83,6 +90,69 @@ impl DefaultAuthService {
 
 #[async_trait]
 impl AuthService for DefaultAuthService {
+    async fn change_password(
+        &self,
+        session_id: Option<&str>,
+        command: ChangePassword,
+    ) -> Result<(), AdminError> {
+        let session = match session_id {
+            Some(id) => self
+                .store
+                .load_session(id)
+                .await
+                .map_err(|error| map_store_error(error, "administrator session"))?,
+            None => None,
+        }
+        .filter(|session| session.expires_at > Utc::now())
+        .ok_or_else(|| AdminError::new(AdminErrorKind::Unauthorized, "请先登录"))?;
+        let hash = self
+            .store
+            .load_password_hash(&session.admin_user_id)
+            .await
+            .map_err(|error| map_store_error(error, "administrator"))?
+            .filter(|hash| password_fingerprint(hash) == session.credential_fingerprint)
+            .ok_or_else(|| {
+                AdminError::new(AdminErrorKind::Unauthorized, "登录已失效，请重新登录")
+            })?;
+        // 按管理员限速，多个浏览器会话不能分别获得额外的尝试额度。
+        if !self
+            .store
+            .consume_password_change_attempt(&session.admin_user_id, 10, 900)
+            .await
+            .map_err(|error| map_store_error(error, "password change limit"))?
+        {
+            return Err(AdminError::new(
+                AdminErrorKind::RateLimited,
+                "尝试过于频繁，请稍后再试",
+            ));
+        }
+        validate_new_password(&command.new_password)?;
+        if command.current_password.len() > 4096
+            || !verify_admin_password(&command.current_password, &hash)?
+        {
+            return Err(AdminError::invalid("当前密码不正确"));
+        }
+        if command.current_password == command.new_password {
+            return Err(AdminError::invalid("新密码不能与当前密码相同"));
+        }
+        let replacement = hash_admin_password(&command.new_password)?;
+        let mut audit = self.auth_audit("admin.password_changed", Utc::now());
+        audit.actor_admin_user_id = Some(session.admin_user_id.clone());
+        audit.actor_ref = crate::model::auth::admin_session_actor_ref(&session.admin_user_id);
+        audit.entity_kind = "admin_user".to_owned();
+        audit.entity_ref = session.admin_user_id.clone();
+        audit.changed_fields = vec!["password".to_owned()];
+        if !self
+            .store
+            .change_password(&session.admin_user_id, &hash, &replacement, audit)
+            .await
+            .map_err(|error| map_store_error(error, "administrator password"))?
+        {
+            return Err(AdminError::conflict("密码已变更，请重新登录"));
+        }
+        Ok(())
+    }
+
     async fn ensure_default_admin(&self, password: &str) -> Result<bool, AdminError> {
         let hash = hash_admin_password(password)?;
         self.store
@@ -98,15 +168,24 @@ impl AuthService for DefaultAuthService {
         let Some(session_id) = session_id else {
             return Ok(None);
         };
-        self.store
+        let Some(session) = self
+            .store
             .load_session(session_id)
             .await
-            .map(|session| {
-                session
-                    .filter(|session| session.expires_at > Utc::now())
-                    .map(|session| session.admin_user_id)
-            })
-            .map_err(|error| map_store_error(error, "administrator session"))
+            .map_err(|error| map_store_error(error, "administrator session"))?
+            .filter(|session| session.expires_at > Utc::now())
+        else {
+            return Ok(None);
+        };
+        let hash = self
+            .store
+            .load_password_hash(&session.admin_user_id)
+            .await
+            .map_err(|error| map_store_error(error, "administrator"))?;
+        // PostgreSQL 的当前哈希是撤销权威，不依赖 Redis 删除成功。
+        Ok(hash
+            .filter(|hash| password_fingerprint(hash) == session.credential_fingerprint)
+            .map(|_| session.admin_user_id))
     }
 
     async fn verify_admin_api_key(&self, key: &str) -> Result<bool, AdminError> {
@@ -151,6 +230,7 @@ impl AuthService for DefaultAuthService {
                 &AdminSession {
                     admin_user_id: self.default_admin_user_id.clone(),
                     expires_at,
+                    credential_fingerprint: password_fingerprint(&hash),
                 },
             )
             .await
@@ -199,6 +279,28 @@ fn hash_admin_password(password: &str) -> Result<String, AdminError> {
         .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
         .map_err(|_| AdminError::internal("管理员密码哈希失败"))
+}
+
+fn validate_new_password(password: &str) -> Result<(), AdminError> {
+    let normalized = password.trim().to_ascii_lowercase();
+    if password.trim().chars().count() < 12
+        || password.len() > 1024
+        || password.chars().any(char::is_control)
+        || crate::WEAK_INITIAL_PASSWORDS.contains(&normalized.as_str())
+        || matches!(
+            normalized.as_str(),
+            "password123456" | "123456789012" | "administrator"
+        )
+    {
+        return Err(AdminError::invalid(
+            "新密码至少需要 12 个字符，最多 1024 字节，不能使用常见弱口令或控制字符",
+        ));
+    }
+    Ok(())
+}
+
+fn password_fingerprint(password_hash: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(password_hash.as_bytes()))
 }
 
 fn verify_admin_password(password: &str, encoded: &str) -> Result<bool, AdminError> {

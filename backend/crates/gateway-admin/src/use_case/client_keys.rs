@@ -15,7 +15,8 @@ use crate::{
         client_keys::{
             ClientKeyCursorValue, ClientKeyListQuery, ClientKeyMutation, ClientKeyPage,
             ClientKeySecret, ClientKeySortField, CreateClientKey, CreatedClientKey,
-            DeleteClientKey, NewClientKey, SetClientKeyEnabled, UpdateClientKey,
+            DeleteClientKey, NewClientKey, ResetClientKeyBudget, SetClientKeyEnabled,
+            UpdateClientKey,
         },
     },
     ports::store::ClientKeyStore,
@@ -26,6 +27,12 @@ use super::{map_store_error, publish_committed};
 /// API 消费的 Client Key 管理服务。
 #[async_trait]
 pub trait ClientKeyService: Send + Sync {
+    async fn reset_budget(
+        &self,
+        context: &MutationContext,
+        command: ResetClientKeyBudget,
+    ) -> Result<(), AdminError>;
+
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError>;
     async fn reveal(&self, id: &ClientApiKeyId) -> Result<ClientKeySecret, AdminError>;
     async fn create(
@@ -64,6 +71,17 @@ impl DefaultClientKeyService {
 
 #[async_trait]
 impl ClientKeyService for DefaultClientKeyService {
+    async fn reset_budget(
+        &self,
+        context: &MutationContext,
+        command: ResetClientKeyBudget,
+    ) -> Result<(), AdminError> {
+        self.store
+            .reset_client_key_budget(command, context)
+            .await
+            .map_err(|error| map_store_error(error, "client API key budget"))
+    }
+
     async fn list(&self, query: ClientKeyListQuery) -> Result<ClientKeyPage, AdminError> {
         validate_cursor(&query)?;
         self.store

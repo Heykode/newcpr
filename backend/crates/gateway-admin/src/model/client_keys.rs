@@ -200,6 +200,19 @@ pub struct DeleteClientKey {
     pub id: ClientApiKeyId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKeyBudgetPeriod {
+    Daily,
+    Weekly,
+    All,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResetClientKeyBudget {
+    pub id: ClientApiKeyId,
+    pub period: ClientKeyBudgetPeriod,
+}
+
 /// Client Key 创建结果；完整明文仅存在于该一次性结果中。
 pub struct CreatedClientKey {
     pub config_revision: Revision,

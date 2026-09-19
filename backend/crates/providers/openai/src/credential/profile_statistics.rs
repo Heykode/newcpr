@@ -294,7 +294,6 @@ impl CodexCredentialProfileService {
             crate::transport::client::build_account_http_client(
                 account.id().as_str(),
                 account.outbound_proxy(),
-                &profile.user_agent(),
             )
             .map_err(|_| CodexProfileAvatarError::TransportUnavailable)?
         };

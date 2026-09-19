@@ -6,7 +6,7 @@ use provider_openai::encode_generate_request;
 use super::*;
 
 fn cases() -> Vec<(Value, Value)> {
-    [
+    let mut cases: Vec<_> = [
         (json!("fast"), None),
         (json!("priority"), Some(json!(true))),
         (json!("default"), Some(json!(false))),
@@ -82,7 +82,30 @@ fn cases() -> Vec<(Value, Value)> {
         }
         (original, expected)
     })
-    .collect()
+    .collect();
+    let original = json!({
+        "model": "client-model",
+        "stream": false,
+        "instructions": "Existing instructions",
+        "input": [
+            {"type":"message","role":"system","content":"Keep this instruction","future_item":{"preserve":true}},
+            {"type":"message","role":"system","content":[{"type":"input_text","text":"Keep nested roles","role":"system"}]},
+            {"type":"message","role":"developer","content":"Existing developer instruction"},
+            {"type":"message","role":"user","content":"Hello"},
+            {"role":"system","content":"Preserve shorthand"},
+            {"type":"future_item","role":"system","content":"Opaque content"},
+            "opaque-input"
+        ],
+        "future_field":{"preserve":true}
+    });
+    let mut expected = original.clone();
+    expected["model"] = json!("gpt-test");
+    expected["stream"] = json!(true);
+    expected["store"] = json!(false);
+    expected["input"][0]["role"] = json!("developer");
+    expected["input"][1]["role"] = json!("developer");
+    cases.push((original, expected));
+    cases
 }
 
 fn encoded_request(body: &Value, websocket: bool) -> CodexResponsesRequest {
@@ -103,9 +126,28 @@ fn encoded_request(body: &Value, websocket: bool) -> CodexResponsesRequest {
         generate.protocol_payload().body(),
         body.as_object().unwrap()
     );
-    assert_eq!(encoded.body().get("input"), body.get("input"));
     assert_eq!(encoded.body().get("service_tier"), body.get("service_tier"));
     encoded
+}
+
+#[test]
+fn encoder_normalizes_explicit_system_roles_before_transport_and_preserves_original_input() {
+    for (original, expected) in cases() {
+        for websocket in [false, true] {
+            let encoded = encoded_request(&original, websocket);
+            // Role conversion belongs to encoding; string input conversion stays outbound-only.
+            let expected_input = if original["input"].is_array() {
+                &expected["input"]
+            } else {
+                &original["input"]
+            };
+            assert_eq!(encoded.body().get("input"), Some(expected_input));
+            assert_eq!(
+                encoded.body().get("instructions"),
+                original.get("instructions")
+            );
+        }
+    }
 }
 
 fn assert_identity_header(name: &str, value: Option<&str>) {
@@ -148,7 +190,7 @@ fn compat_context() -> CodexRequestContext<'static> {
 }
 
 #[tokio::test]
-async fn http_generate_compat_normalizes_only_the_outbound_copy() {
+async fn http_generate_compat_preserves_the_encoded_request_when_sending() {
     for (original, expected) in cases() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

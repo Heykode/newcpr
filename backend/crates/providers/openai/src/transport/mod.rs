@@ -37,7 +37,7 @@ pub use self::{
         CodexBackendSseStream, CodexBackendStreamingResponse, CodexBackendTransport,
         CodexClientError, CodexClientResult, CodexRateLimitUpdates, CodexRequestContext,
         CodexResponseMetadataUpdates, CodexTransportDecision, CodexTransportMetrics,
-        build_reqwest_client, evict_account_http_clients, evict_all_account_http_clients,
+        build_reqwest_client,
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::{

@@ -331,6 +331,7 @@ pub struct AccountView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountTurnStateView {
+    pub enabled: bool,
     pub required_models: Vec<String>,
     pub ready_models: Vec<AccountTurnStateModelView>,
     pub models: Vec<AccountTurnStateModelStatusView>,
@@ -348,6 +349,9 @@ pub struct AccountTurnStateModelView {
 pub struct AccountTurnStateModelStatusView {
     pub model: String,
     pub refresh_status: String,
+    pub probe_attempts: u64,
+    pub successful_probe_attempt: Option<u64>,
+    pub last_probe_reason: Option<String>,
     pub active: Option<AccountTurnStateSlotView>,
     pub standby: Option<AccountTurnStateSlotView>,
 }
@@ -356,6 +360,7 @@ pub struct AccountTurnStateModelStatusView {
 #[serde(rename_all = "camelCase")]
 pub struct AccountTurnStateSlotView {
     pub chars: u16,
+    pub captured_at: Option<String>,
     pub expires_at: String,
 }
 

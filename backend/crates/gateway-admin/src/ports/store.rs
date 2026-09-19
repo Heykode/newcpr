@@ -284,6 +284,22 @@ pub trait AccountRuntimeStore: Send + Sync {
 pub trait AuthStore: Send + Sync {
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>>;
 
+    /// 密码比较交换与审计必须在同一个事务中提交。
+    async fn change_password(
+        &self,
+        admin_user_id: &str,
+        expected_hash: &str,
+        password_hash: &str,
+        audit: AdminAuditEvent,
+    ) -> AdminStoreResult<bool>;
+
+    async fn consume_password_change_attempt(
+        &self,
+        admin_user_id: &str,
+        limit: u32,
+        window_seconds: u64,
+    ) -> AdminStoreResult<bool>;
+
     async fn create_password_hash_if_absent(
         &self,
         admin_user_id: &str,
@@ -305,6 +321,12 @@ pub trait AuthStore: Send + Sync {
 /// Client API Key 管理写入。
 #[async_trait]
 pub trait ClientKeyStore: Send + Sync {
+    async fn reset_client_key_budget(
+        &self,
+        command: crate::model::client_keys::ResetClientKeyBudget,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()>;
+
     async fn list_client_keys(&self, query: ClientKeyListQuery) -> AdminStoreResult<ClientKeyPage>;
 
     async fn reveal_client_key(

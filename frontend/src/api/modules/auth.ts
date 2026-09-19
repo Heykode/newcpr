@@ -42,3 +42,15 @@ export function logout(options: RequestOptions = {}) {
     ...options,
   })
 }
+
+export function changeAdminPassword(
+  data: { currentPassword: string, newPassword: string },
+  options: RequestOptions = {},
+) {
+  return request<{ message: string }>({
+    url: '/api/admin/auth/password',
+    method: 'POST',
+    data,
+    ...options,
+  })
+}

@@ -85,6 +85,7 @@ pub(crate) struct OpenAiAdminProvider {
     catalog: Arc<CodexCredentialCatalogService>,
     websocket_pool: Arc<CodexWebSocketPool>,
     desktop_release: CodexDesktopReleaseStatus,
+    turn_state_maintenance: Arc<crate::provider::CodexTurnStateMaintenanceService>,
 }
 
 pub(crate) struct OpenAiAdminServices {
@@ -93,6 +94,7 @@ pub(crate) struct OpenAiAdminServices {
     pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
     pub(crate) quota: Arc<CodexCredentialQuotaService>,
     pub(crate) catalog: Arc<CodexCredentialCatalogService>,
+    pub(crate) turn_state_maintenance: Arc<crate::provider::CodexTurnStateMaintenanceService>,
 }
 
 impl OpenAiAdminProvider {
@@ -115,6 +117,7 @@ impl OpenAiAdminProvider {
             profile_statistics: services.profile_statistics,
             quota: services.quota,
             catalog: services.catalog,
+            turn_state_maintenance: services.turn_state_maintenance,
             websocket_pool,
             desktop_release,
         }
@@ -182,10 +185,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         selection: gateway_admin::model::user_agent::ProviderUserAgentOverride,
     ) -> Result<gateway_admin::model::user_agent::OutboundUserAgentView, ProviderAdminError> {
-        let view = crate::admin_user_agent::apply(&self.profile, &selection)?;
-        crate::transport::client::evict_all_account_http_clients();
-        crate::credential::token_client::evict_all_account_token_clients();
-        Ok(view)
+        crate::admin_user_agent::apply(&self.profile, &selection)
     }
 
     fn plan_type_display(&self, plan_type: &str) -> String {
@@ -214,8 +214,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {
         self.websocket_pool.evict_account(account_id.as_str()).await;
-        crate::transport::client::evict_account_http_clients(account_id.as_str());
-        crate::credential::token_client::evict_account_token_clients(account_id.as_str());
         if self.reload_egress().await.is_err() {
             tracing::warn!("OpenAI egress state could not reload after account unavailability");
         }
@@ -228,10 +226,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
         if self.reload_egress().await.is_err() {
             tracing::warn!("OpenAI egress state could not reload after account mutation");
         }
-        for account_id in account_ids {
-            crate::transport::client::evict_account_http_clients(account_id.as_str());
-            crate::credential::token_client::evict_account_token_clients(account_id.as_str());
-        }
         self.quota.invalidate_scheduling(account_ids);
         if let Err(error) = self.catalog.invalidate() {
             tracing::warn!(
@@ -240,6 +234,9 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 "OpenAI model catalog invalidation failed after account commit"
             );
         }
+        self.turn_state_maintenance
+            .accounts_changed(account_ids)
+            .await;
     }
 
     async fn egress_configuration_changed(&self) -> Result<(), ProviderAdminError> {
