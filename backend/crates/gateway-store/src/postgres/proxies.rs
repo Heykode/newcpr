@@ -701,6 +701,12 @@ impl ProxyStore for PgProxyRepository {
             .bind(result.message)
             .execute(&mut *transaction).await.map_err(|_| store_error(unavailable()))?;
         if updated.rows_affected() != 1 {
+            // Release the import-exclusion lock before a caller retries with
+            // the current revision on another pooled connection.
+            transaction
+                .rollback()
+                .await
+                .map_err(|_| store_error(unavailable()))?;
             return Err(store_error(conflict(id)));
         }
         let current: i64 =

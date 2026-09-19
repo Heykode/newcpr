@@ -2708,7 +2708,10 @@ mod errors {
             })
             .await;
         let mut config = valid_config();
-        config.config.auth.oauth_token_endpoint = format!("{}/oauth/token", server.uri());
+        // MockServer ports are reused across tests with separate Tokio runtimes.
+        // Keep the process-wide token-client cache scoped to this fixture.
+        config.config.auth.oauth_token_endpoint =
+            format!("{}/oauth/token?fixture={}", server.uri(), Uuid::new_v4());
         let bundle =
             provider_openai::initialize(config.config.clone(), refresh_ports(store.clone(), busy))
                 .await
