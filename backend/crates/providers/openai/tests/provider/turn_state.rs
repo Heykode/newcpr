@@ -795,7 +795,14 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
             );
         }
     }
-    let completed = tokio::time::timeout(Duration::from_secs(30), async {
+    // This verifies continued acquisition, not requests/second. Linux rebuilds
+    // native TLS clients for all 2,200+ probes; the per-probe timeout is separate.
+    let completion_budget = if matches!(scenario, AcquisitionScenario::ContinuousMisses) {
+        Duration::from_secs(120)
+    } else {
+        Duration::from_secs(30)
+    };
+    let completed = tokio::time::timeout(completion_budget, async {
         while if start_only {
             responder.calls.lock().unwrap().len() < running_key_count
         } else if succeed {
