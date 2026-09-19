@@ -1821,7 +1821,12 @@ async fn account_slots_refill_without_waiting_for_other_accounts_or_releasing_on
     assert_eq!(calls.lock().unwrap().len(), 6);
     wait_count(&fixture.states.writes, 4).await;
     tokio::time::timeout(Duration::from_secs(2), async {
-        while calls.lock().unwrap().len() < 7 {
+        // Account admission is visible after its first model arrives; wait for
+        // both model requests before checking that neither key was duplicated.
+        while {
+            let counts = calls.lock().unwrap();
+            counts.len() < 7 || counts.values().any(|count| *count < 2)
+        } {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
