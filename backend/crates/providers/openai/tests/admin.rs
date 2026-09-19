@@ -1659,6 +1659,13 @@ async fn reauthorization_entry_rejects_conflicts_and_unknown_and_releases_claim(
             Some("user-A"),
             Some("A"),
             "opaque-new".to_owned(),
+            anchored_principal_token("A@example.com", Some("user-B"), Some("A")),
+            "账号主体",
+        ),
+        (
+            Some("user-A"),
+            Some("A"),
+            "opaque-new".to_owned(),
             principal_token(Some("user-B"), Some("B")),
             "账号主体",
         ),
@@ -1819,7 +1826,7 @@ async fn reauthorization_entry_accepts_opaque_access_and_uses_current_revision()
                 "id_token": principal_jwt(json!({
                     "email": "A@example.com",
                     "https://api.openai.com/auth": {
-                        "chatgpt_user_id": "user-B", "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
+                        "chatgpt_user_id": "user-A", "chatgpt_account_id": "A", "chatgpt_plan_type": "plus"
                     }
                 }))
             }))).expect(1).mount(&server).await;
@@ -1901,7 +1908,7 @@ async fn reauthorization_entry_accepts_opaque_access_and_uses_current_revision()
                 .as_ref()
                 .unwrap()
                 .upstream_user_id(),
-            "user-B"
+            "user-A"
         );
         let runtime =
             CodexCredentialCodec::decode(&gateway_core::account::PlaintextCredential::new(

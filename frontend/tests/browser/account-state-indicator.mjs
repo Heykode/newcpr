@@ -134,6 +134,24 @@ async function main() {
         }).click()
       }
       await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme)
+      const rowSelection = page.getByRole('checkbox', { name: '选择账号', exact: true }).first()
+      await rowSelection.press('Space')
+      assert.equal(await rowSelection.isChecked(), true)
+      const selectedRow = page.locator('tr[aria-selected="true"]').first()
+      await selectedRow.hover()
+      await page.waitForFunction(() => {
+        const cell = document.querySelector('tr[aria-selected="true"] td')
+        if (!cell)
+          return false
+        const probe = document.createElement('div')
+        probe.style.backgroundColor = 'var(--cp-table-row-selected-bg)'
+        cell.appendChild(probe)
+        const expected = getComputedStyle(probe).backgroundColor
+        probe.remove()
+        return getComputedStyle(cell).backgroundColor === expected
+      })
+      await rowSelection.press('Space')
+      assert.equal(await rowSelection.isChecked(), false)
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: 900 })
         await avatar.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'center' }))

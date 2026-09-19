@@ -545,16 +545,37 @@ impl CodexOAuthAdminService {
             parse_access_token_expiration(secret.access_token.expose_secret());
         secret.id_token = Some(id_token.clone());
         let credential = if let Some(current) = current {
-            CompletedCodexOAuthCredential::Reauthorize(
-                self.credentials
-                    .prepare_candidate_oauth_rotation(
-                        current,
-                        secret,
-                        access_token_expires_at,
-                        fallback_refresh_token,
-                    )
-                    .map_err(map_admin_error)?,
-            )
+            let metadata = candidate_oauth_metadata(&secret)
+                .map_err(|()| CodexOAuthAdminError::PrincipalConflict)?;
+            let old_user = current
+                .account
+                .upstream_user_id()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
+            let new_user = metadata
+                .chatgpt_user_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty());
+            let prepared = self
+                .credentials
+                .prepare_candidate_oauth_rotation(
+                    current,
+                    secret,
+                    access_token_expires_at,
+                    fallback_refresh_token,
+                )
+                .map_err(map_admin_error)?;
+            let (Some(old_user), Some(new_user)) = (old_user.as_deref(), new_user) else {
+                return Err(CodexOAuthAdminError::PrincipalUnconfirmed);
+            };
+            // Interactive reauthorization cannot replace the selected user's identity.
+            // Trusted file import and automatic refresh retain their own contracts.
+            if old_user != new_user {
+                return Err(CodexOAuthAdminError::PrincipalConflict);
+            }
+            CompletedCodexOAuthCredential::Reauthorize(prepared)
         } else {
             parse_chatgpt_jwt_claims(id_token.expose_secret())
                 .map_err(|_| CodexOAuthAdminError::TokenRejected)?;

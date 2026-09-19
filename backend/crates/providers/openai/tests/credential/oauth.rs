@@ -555,7 +555,25 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
     use gateway_core::account::ProviderAccountStore;
     use secrecy::ExposeSecret;
 
-    for same_user in [false, true] {
+    for (candidate_account, candidate_user, expected_error) in [
+        (
+            "B",
+            Some("user-A"),
+            Some(CodexOAuthAdminError::PrincipalConflict),
+        ),
+        (
+            "A",
+            Some("user-B"),
+            Some(CodexOAuthAdminError::PrincipalConflict),
+        ),
+        ("A", None, Some(CodexOAuthAdminError::PrincipalUnconfirmed)),
+        (
+            "A",
+            Some(""),
+            Some(CodexOAuthAdminError::PrincipalUnconfirmed),
+        ),
+        ("A", Some("user-A"), None),
+    ] {
         let store = Arc::new(MemoryAccountStore::default());
         store
             .seed_oauth_credential(ImportCodexOAuthCredential {
@@ -577,8 +595,8 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
                 id_token: id_token(serde_json::json!({
                     "email": "A@example.com",
                     "https://api.openai.com/auth": {
-                        "chatgpt_user_id": "user-A",
-                        "chatgpt_account_id": if same_user { "A" } else { "B" }
+                        "chatgpt_user_id": candidate_user,
+                        "chatgpt_account_id": candidate_account
                     }
                 })),
             }),
@@ -610,7 +628,9 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
                 )),
             })
             .await;
-        if same_user {
+        if let Some(expected_error) = expected_error {
+            assert_eq!(result.unwrap_err(), expected_error);
+        } else {
             let CompletedCodexOAuthCredential::Reauthorize(prepared) = result.unwrap().credential
             else {
                 panic!("expected reauthorization");
@@ -636,10 +656,10 @@ async fn reauthorization_checks_candidate_before_reusing_a_missing_refresh_token
                     .unwrap()
                     .installation_id
             );
-        } else {
-            assert_eq!(result.unwrap_err(), CodexOAuthAdminError::PrincipalConflict);
         }
         assert_eq!(store.account(account_id.as_str()).unwrap(), before.account);
+        let after = store.load_current_credential(&account_id).await.unwrap();
+        assert_eq!(after.credential, before.credential);
     }
 }
 
