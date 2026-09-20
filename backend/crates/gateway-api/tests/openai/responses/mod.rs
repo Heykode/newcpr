@@ -453,6 +453,64 @@ fn decoder_should_preserve_ordinary_request_headers_as_opaque_multivalues() {
 }
 
 #[test]
+fn organization_extension_headers_preserve_values_but_not_managed_identity_or_hop_headers() {
+    const EXTENSIONS: &[&str] = &[
+        "chatgpt-organization-id",
+        "chatgpt-org-id",
+        "x-openai-organization",
+        "x-openai-project",
+    ];
+    for hop in [None, Some("X-OpenAI-Project")] {
+        let mut headers = HeaderMap::new();
+        for name in EXTENSIONS {
+            headers.append(*name, HeaderValue::from_static("extension-one"));
+            headers.append(*name, HeaderValue::from_bytes(b"extension-\x80").unwrap());
+        }
+        for name in [
+            "chatgpt-project-id",
+            "openai-organization",
+            "openai-project",
+        ] {
+            headers.insert(name, HeaderValue::from_static("untrusted-identity"));
+        }
+        if let Some(hop) = hop {
+            headers.insert("connection", HeaderValue::from_static(hop));
+        }
+        let decoded =
+            decode_request_with_headers(br#"{"model":"smart-code","input":"hello"}"#, &headers)
+                .unwrap();
+        let entries = openai_protocol_context(&decoded)["opaque_request_headers"]
+            .as_array()
+            .unwrap();
+        let values = |name: &str| {
+            entries
+                .iter()
+                .filter(|entry| entry[0] == name)
+                .map(|entry| STANDARD.decode(entry[1].as_str().unwrap()).unwrap())
+                .collect::<Vec<_>>()
+        };
+        for name in EXTENSIONS {
+            if hop.is_some_and(|hop| hop.eq_ignore_ascii_case(name)) {
+                assert!(values(name).is_empty(), "hop header {name}");
+            } else {
+                assert_eq!(
+                    values(name),
+                    vec![b"extension-one".to_vec(), b"extension-\x80".to_vec()],
+                    "{name}"
+                );
+            }
+        }
+        for name in [
+            "chatgpt-project-id",
+            "openai-organization",
+            "openai-project",
+        ] {
+            assert!(values(name).is_empty(), "managed identity {name}");
+        }
+    }
+}
+
+#[test]
 fn downstream_environment_filter_keeps_session_semantics_and_business_bytes() {
     for canonical in [None, Some("canonical-session")] {
         let mut headers = HeaderMap::new();

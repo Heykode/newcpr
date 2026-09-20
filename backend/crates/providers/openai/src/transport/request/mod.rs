@@ -1,6 +1,5 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
-mod item_ids;
 mod raw_json;
 
 pub use raw_json::scope_raw_json_to_account;
@@ -30,15 +29,8 @@ const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
 const ENVIRONMENT_CONTEXT_CONTENT_KIND: &str = "environments.environment_context";
-const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] = &[
-    "max_output_tokens",
-    "max_completion_tokens",
-    "temperature",
-    "top_p",
-    "frequency_penalty",
-    "presence_penalty",
-    "prompt_cache_retention",
-];
+const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] =
+    &["max_output_tokens", "temperature", "prompt_cache_retention"];
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "authorization",
@@ -148,15 +140,15 @@ fn adapt_codex_responses_body(
     location: Option<&CodexRequestLocation>,
 ) {
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
-    // Store is a provider capability, not just a wire default: session capture and
-    // transport selection must observe the same value that Codex will receive.
-    if body
-        .get("store")
-        .is_some_and(|value| value != &Value::Bool(false))
-    {
-        tracing::debug!(field = "store", "Codex Generate storage option normalized");
+    body.entry("store").or_insert(Value::Bool(false));
+    if let Some(input @ Value::String(_)) = body.get_mut("input") {
+        let text = std::mem::take(input);
+        *input = serde_json::json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}]
+        }]);
     }
-    body.insert("store".to_owned(), Value::Bool(false));
     // Codex uses developer for explicit instruction messages; nested content is opaque.
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
@@ -298,15 +290,6 @@ fn align_web_search_location(tool: &mut Value, location: &CodexRequestLocation) 
 
 /// Normalize only the outbound copy, after account and session identity selection.
 pub(crate) fn normalize_generate_upstream_body(body: &mut Map<String, Value>) {
-    item_ids::normalize_standalone_item_ids(body);
-    if let Some(input @ Value::String(_)) = body.get_mut("input") {
-        let text = std::mem::take(input);
-        *input = serde_json::json!([{
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": text}]
-        }]);
-    }
     if let Some(Value::String(tier)) = body.get_mut("service_tier") {
         let upstream_tier = generate_upstream_service_tier(tier);
         if upstream_tier != tier.as_str() {
@@ -751,12 +734,13 @@ pub(crate) fn scope_request_to_account(
                 }
             }
             metadata.insert(
-                "installation_id".to_owned(),
-                Value::String(installation_id.to_owned()),
-            );
-            metadata.insert(
                 "x-codex-installation-id".to_owned(),
                 Value::String(installation_id.to_owned()),
+            );
+            replace_existing_metadata_field(
+                &mut metadata,
+                "installation_id",
+                Some(installation_id),
             );
             replace_existing_metadata_field(&mut metadata, "installationId", Some(installation_id));
             replace_metadata_field(
@@ -998,13 +982,9 @@ fn provider_managed_header(name: &str) -> bool {
                 | "cookie"
                 | "cookie2"
                 | "chatgpt-account-id"
-                | "chatgpt-organization-id"
-                | "chatgpt-org-id"
                 | "chatgpt-project-id"
                 | "openai-organization"
                 | "openai-project"
-                | "x-openai-organization"
-                | "x-openai-project"
                 | "x-codex-installation-id"
                 | "origin"
                 | "referer"

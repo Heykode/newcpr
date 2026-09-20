@@ -40,6 +40,9 @@ fn cases() -> Vec<(Value, Value)> {
             "temperature": 0.5,
             "max_completion_tokens": 200,
             "top_p": 0.8,
+            "frequency_penalty": 0.2,
+            "presence_penalty": 0.3,
+            "prompt_cache_retention": "24h",
             "context_management": [{"type":"compaction","compact_threshold":20000}],
             "parallel_tool_calls": false,
             "include": ["reasoning.encrypted_content", "future.include"],
@@ -53,7 +56,11 @@ fn cases() -> Vec<(Value, Value)> {
         let mut expected = original.clone();
         expected["model"] = json!("gpt-test");
         expected["stream"] = json!(true);
-        expected["store"] = json!(false);
+        expected
+            .as_object_mut()
+            .unwrap()
+            .entry("store")
+            .or_insert(json!(false));
         expected
             .as_object_mut()
             .unwrap()
@@ -62,8 +69,7 @@ fn cases() -> Vec<(Value, Value)> {
         expected
             .as_object_mut()
             .unwrap()
-            .remove("max_completion_tokens");
-        expected.as_object_mut().unwrap().remove("top_p");
+            .remove("prompt_cache_retention");
         expected["tools"][0]["user_location"] = json!({
             "type": "approximate",
             "country": "US",
@@ -135,13 +141,7 @@ fn encoder_normalizes_explicit_system_roles_before_transport_and_preserves_origi
     for (original, expected) in cases() {
         for websocket in [false, true] {
             let encoded = encoded_request(&original, websocket);
-            // Role conversion belongs to encoding; string input conversion stays outbound-only.
-            let expected_input = if original["input"].is_array() {
-                &expected["input"]
-            } else {
-                &original["input"]
-            };
-            assert_eq!(encoded.body().get("input"), Some(expected_input));
+            assert_eq!(encoded.body().get("input"), expected.get("input"));
             assert_eq!(
                 encoded.body().get("instructions"),
                 original.get("instructions")
@@ -244,7 +244,7 @@ async fn http_generate_compat_preserves_the_encoded_request_when_sending() {
 }
 
 #[tokio::test]
-async fn websocket_generate_compat_uses_effective_store_and_preserves_local_transport_intent() {
+async fn websocket_generate_compat_preserves_explicit_store_and_local_transport_intent() {
     for (mut original, mut expected) in cases() {
         // External continuation uses WS without the optional new-chain opening budget.
         original["previous_response_id"] = json!("resp_previous");

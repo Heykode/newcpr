@@ -120,15 +120,19 @@ fn encoder_should_remove_unsupported_fields_from_upstream_body() {
         Value::Object(encoded.body().clone()),
         json!({
             "model": "gpt-test",
-            "input": "hello",
+            "input": [{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
             "max_tokens": 256,
+            "top_p": 0.9,
+            "frequency_penalty": 0.1,
+            "presence_penalty": 0.1,
+            "max_completion_tokens": 1024,
             "store": false,
         })
     );
 }
 
 #[test]
-fn encoder_should_use_effective_codex_store_without_mutating_client_intent() {
+fn encoder_should_preserve_explicit_store_without_mutating_client_intent() {
     let request = request(Map::from_iter([
         ("model".to_owned(), json!("client-model")),
         ("input".to_owned(), json!("persist inside gateway")),
@@ -138,28 +142,47 @@ fn encoder_should_use_effective_codex_store_without_mutating_client_intent() {
     let encoded =
         encode_generate_request(&request, "gpt-test", &Default::default()).expect("encode");
 
-    assert_eq!(encoded.body().get("store"), Some(&json!(false)));
-    assert!(!encoded.store());
+    assert_eq!(encoded.body().get("store"), Some(&json!(true)));
+    assert!(encoded.store());
     assert_eq!(request.protocol_payload().body()["store"], true);
 }
 
 #[test]
-fn effective_store_prevents_http_fallback_for_a_downstream_websocket_new_chain() {
+fn explicit_store_controls_downstream_websocket_new_chain_transport() {
     use provider_openai::transport::protocol::responses::{
         TransportRequirement, transport_requirement,
     };
-    let generate = request(
-        json!({"input":"hello","store":true})
-            .as_object()
-            .unwrap()
-            .clone(),
-    );
-    let mut encoded = encode_generate_request(&generate, "gpt-test", &Default::default()).unwrap();
-    encoded.downstream_websocket_connection_id = Some("downstream-connection".to_owned());
-    let requirement = transport_requirement(&encoded);
-    assert_eq!(requirement, TransportRequirement::WebSocketNewChain);
-    assert!(!requirement.allows_pre_send_http_fallback());
-    assert_eq!(generate.protocol_payload().body()["store"], true);
+    for value in [
+        None,
+        Some(json!(false)),
+        Some(json!(true)),
+        Some(Value::Null),
+    ] {
+        let mut body = json!({"input":"hello"});
+        if let Some(value) = &value {
+            body["store"] = value.clone();
+        }
+        let generate = request(body.as_object().unwrap().clone());
+        let mut encoded =
+            encode_generate_request(&generate, "gpt-test", &Default::default()).unwrap();
+        encoded.downstream_websocket_connection_id = Some("downstream-connection".to_owned());
+        let requirement = transport_requirement(&encoded);
+        let stored = value == Some(json!(true));
+        assert_eq!(
+            requirement,
+            if stored {
+                TransportRequirement::NewChain
+            } else {
+                TransportRequirement::WebSocketNewChain
+            }
+        );
+        assert_eq!(requirement.allows_pre_send_http_fallback(), stored);
+        assert_eq!(encoded.store(), stored);
+        assert_eq!(
+            generate.protocol_payload().body(),
+            body.as_object().unwrap()
+        );
+    }
 }
 
 #[test]

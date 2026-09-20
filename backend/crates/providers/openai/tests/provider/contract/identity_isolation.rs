@@ -233,7 +233,7 @@ async fn frozen_request_profile_survives_publication_without_reusing_account_ide
         );
         for (headers, body) in &captures {
             assert_eq!(
-                body["client_metadata"]["installation_id"],
+                body["client_metadata"]["x-codex-installation-id"],
                 headers["x-codex-installation-id"].to_str().unwrap()
             );
         }
@@ -345,11 +345,8 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
             };
             assert_eq!(captured["tools"][0]["user_location"]["city"], expected);
             assert!(captured.get("prompt_cache_retention").is_none());
-            assert_eq!(
-                captured["client_metadata"]["x-codex-installation-id"],
-                captured["client_metadata"]["installation_id"]
-            );
-            assert!(captured["client_metadata"]["installation_id"].is_string());
+            assert!(captured["client_metadata"]["x-codex-installation-id"].is_string());
+            assert!(captured["client_metadata"].get("installation_id").is_none());
             if enabled {
                 identities.push(captured["prompt_cache_key"].clone());
             }
@@ -538,7 +535,10 @@ async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_
                 } else {
                     captured_request_body(&http.received_requests().await.unwrap()[0])
                 };
-                assert_eq!(captured["store"], false);
+                assert_eq!(
+                    captured.get("store"),
+                    Some(body.get("store").unwrap_or(&Value::Bool(false)))
+                );
                 assert_eq!(captured["stream"], true);
                 assert_eq!(captured["input"], expected_input);
                 assert_eq!(captured["service_tier"], "priority");
@@ -548,14 +548,20 @@ async fn generate_compatibility_matches_wire_and_session_facts_in_both_profiles_
                     "frequency_penalty",
                     "presence_penalty",
                     "max_completion_tokens",
-                    "max_output_tokens",
-                    "temperature",
                 ] {
+                    assert_eq!(captured.get(field), body.get(field), "{field}");
+                }
+                for field in ["max_output_tokens", "temperature"] {
                     assert!(captured.get(field).is_none(), "{field}");
                 }
-                // Generate is forced to store=false. Without an exact downstream
-                // continuation owner, both transports require replay.
-                assert_eq!(state.payload()["continuation_scope"], "replay_required");
+                assert_eq!(
+                    state.payload()["continuation_scope"],
+                    if captured["store"] == true {
+                        "persisted"
+                    } else {
+                        "replay_required"
+                    }
+                );
             }
         }
     }
@@ -649,7 +655,7 @@ async fn qx_provider_projects_http_identity_after_account_selection_with_trusted
         assert_eq!(request.headers["x-codex-window-id"], format!("{thread}:0"));
         assert_eq!(body["input"][0]["content"][0]["text"], "hello");
         assert_eq!(
-            body["client_metadata"]["installation_id"],
+            body["client_metadata"]["x-codex-installation-id"],
             request.headers["x-codex-installation-id"].to_str().unwrap()
         );
         threads.push(thread.to_owned());
@@ -852,21 +858,35 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             provider_with_base_url(&store, url)
         };
         for (index, key) in ["key-a", "key-a", "key-b"].into_iter().enumerate() {
-            let generate = identity_request(json!("hello"), true, true)
-                .with_provider_session_state(
-                    ProviderSessionState::new(
-                        "openai",
-                        json!({
-                            "account_id":ACCOUNT,
-                            "conversation_id":"same-local-conversation",
-                            "continuation_scope":"persisted"
-                        })
-                        .as_object()
-                        .unwrap()
-                        .clone(),
-                    )
-                    .unwrap(),
-                );
+            let body = json!({
+                "model":"gpt-5.4", "input":"hello", "instructions":"stable",
+                "session_id":"raw-session", "thread_id":"raw-thread",
+                "prompt_cache_key":"raw-client-cache",
+                "client_metadata": if index == 0 {
+                    json!({"installation_id":"old-device"})
+                } else {
+                    json!({})
+                }
+            });
+            let generate = GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(Map::from_iter([("use_websocket".into(), json!(true))])),
+            )
+            .with_provider_session_state(
+                ProviderSessionState::new(
+                    "openai",
+                    json!({
+                        "account_id":ACCOUNT,
+                        "conversation_id":"same-local-conversation",
+                        "continuation_scope":"persisted"
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )
+                .unwrap(),
+            );
             consume_identity_request(
                 &provider,
                 websocket_fixture_request(generate),
@@ -879,6 +899,22 @@ async fn provider_websocket_pool_isolates_keys_in_native_and_qx_policies() {
             .unwrap()
             .unwrap();
         assert_eq!(captures.len(), 2);
+        let (opening, frames) = &captures[0];
+        assert_eq!(
+            frames.len(),
+            2,
+            "removing the legacy alias must reuse the owning socket"
+        );
+        assert_eq!(
+            frames[0]["client_metadata"]["installation_id"],
+            opening["x-codex-installation-id"].to_str().unwrap()
+        );
+        assert!(
+            frames[1]["client_metadata"]
+                .get("installation_id")
+                .is_none()
+        );
+        assert_eq!(frames[0]["prompt_cache_key"], frames[1]["prompt_cache_key"]);
         if qx {
             let (first_headers, first_frames) = &captures[0];
             let (other_headers, other_frames) = &captures[1];

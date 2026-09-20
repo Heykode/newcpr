@@ -74,6 +74,7 @@ mod generate_compat;
 mod identity_isolation;
 mod quota_continuation;
 mod raw_identity;
+mod request_alignment;
 mod scheduling;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
     "event: response.completed\n",
@@ -3825,16 +3826,13 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
     );
     assert_eq!(
         body.get("installation_id"),
-        body.pointer("/client_metadata/installation_id")
+        body.pointer("/client_metadata/x-codex-installation-id")
     );
-    assert_eq!(
-        body.pointer("/client_metadata/x-codex-installation-id"),
-        body.pointer("/client_metadata/installation_id")
-    );
+    assert!(body.pointer("/client_metadata/installation_id").is_none());
     assert_eq!(
         captured_header_values(&request, "x-codex-installation-id"),
         vec![
-            body["client_metadata"]["installation_id"]
+            body["client_metadata"]["x-codex-installation-id"]
                 .as_str()
                 .expect("account installation")
                 .as_bytes()
@@ -4122,7 +4120,7 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
         .expect("turn metadata");
     assert!(encoded.is_ascii(), "embedded header JSON must remain ASCII");
     let mut expected: Value = serde_json::from_str(raw).expect("original metadata");
-    expected["installation_id"] = body["client_metadata"]["installation_id"].clone();
+    expected["installation_id"] = body["client_metadata"]["x-codex-installation-id"].clone();
     assert_eq!(
         serde_json::from_str::<Value>(encoded).expect("metadata JSON"),
         expected
@@ -4160,7 +4158,7 @@ async fn http_account_scoping_keeps_unicode_metadata_ascii_in_headers_and_body()
         let headers = captured_header_values(&request, "x-codex-turn-metadata");
         assert_eq!(headers.len(), 1);
         let mut expected: Value = serde_json::from_str(raw).expect("original metadata");
-        expected["installation_id"] = body["client_metadata"]["installation_id"].clone();
+        expected["installation_id"] = body["client_metadata"]["x-codex-installation-id"].clone();
         for encoded in [
             std::str::from_utf8(&headers[0]).expect("UTF-8 header"),
             body["turnMetadata"].as_str().expect("body turn metadata"),

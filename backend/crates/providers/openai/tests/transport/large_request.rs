@@ -12,21 +12,29 @@ fn context() -> CodexRequestContext<'static> {
 }
 
 fn request(input: Value) -> CodexResponsesRequest {
-    let mut request = CodexResponsesRequest::from_body(
-        json!({
-            "model": "gpt-test",
-            "instructions": "preserve instructions",
-            "input": input,
-            "stream": false,
-            "store": false,
-            "tools": [{"type": "function", "name": "lookup", "parameters": {"type":"object"}}],
-            "metadata": {"opaque": "unchanged"},
-            "client_metadata": {"session_id":"client-session", "opaque":{"keep":true}}
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
+    let generate = gateway_core::operation::GenerateRequest::from_protocol_payload(
+        gateway_core::operation::ProtocolPayload::json_object(
+            "openai",
+            json!({
+                "model": "gpt-test",
+                "instructions": "preserve instructions",
+                "input": input,
+                "stream": false,
+                "store": false,
+                "tools": [{"type": "function", "name": "lookup", "parameters": {"type":"object"}}],
+                "metadata": {"opaque": "unchanged"},
+                "client_metadata": {"session_id":"client-session", "opaque":{"keep":true}}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+        .unwrap(),
     );
+    let mut request = provider_openai::transport::request::encode_generate_request_with_location(
+        &generate, "gpt-test", None,
+    )
+    .unwrap();
     request.use_websocket = true;
     request.local_conversation_id = Some("large-request-conversation".to_owned());
     request
