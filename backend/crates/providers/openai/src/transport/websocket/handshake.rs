@@ -324,7 +324,6 @@ async fn connect_tcp(
         .parse::<hyper::Uri>()
         .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
     let mut connector = HttpConnector::new();
-    connector.set_nodelay(true);
     if ipv4_only {
         connector.set_local_address(Some(std::net::Ipv4Addr::UNSPECIFIED.into()));
     }

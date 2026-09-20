@@ -477,9 +477,6 @@ pub(crate) async fn connect_source_bound(
             .bind(SocketAddr::new(IpAddr::V6(source), 0))
             .map_err(|_| CodexEgressError::SourceUnavailable)?;
         if let Ok(stream) = socket.connect(destination).await {
-            stream
-                .set_nodelay(true)
-                .map_err(|_| CodexEgressError::ConnectFailed)?;
             return Ok(stream);
         }
     }
