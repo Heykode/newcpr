@@ -10,6 +10,7 @@ async fn default_http_egress_uses_ipv4_and_rejects_ipv6() {
     let client = provider_openai::transport::client::build_account_http_client(
         "default-ipv4-regression",
         None,
+        "",
     )
     .unwrap();
     let url = server.uri().replace("127.0.0.1", "localhost");

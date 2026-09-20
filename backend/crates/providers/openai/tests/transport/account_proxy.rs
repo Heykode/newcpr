@@ -49,6 +49,29 @@ async fn pooled_http_exit(
     String,
     tokio::task::JoinHandle<Vec<(usize, hyper::HeaderMap)>>,
 ) {
+    pooled_http_exit_with_body(
+        expected_connections,
+        expected_requests,
+        concat!(
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{",
+            "\"id\":\"resp_pool\",\"status\":\"completed\",\"output\":[],",
+            "\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+        ),
+        "text/event-stream",
+    )
+    .await
+}
+
+async fn pooled_http_exit_with_body(
+    expected_connections: usize,
+    expected_requests: usize,
+    body: &'static str,
+    content_type: &'static str,
+) -> (
+    String,
+    tokio::task::JoinHandle<Vec<(usize, hyper::HeaderMap)>>,
+) {
     use std::convert::Infallible;
 
     use http_body_util::Full;
@@ -65,24 +88,22 @@ async fn pooled_http_exit(
                 let (stream, _) = listener.accept().await.unwrap();
                 let seen_tx = seen_tx.clone();
                 tasks.push(tokio::spawn(async move {
-                    let service = hyper::service::service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
-                        let seen_tx = seen_tx.clone();
-                        async move {
-                            seen_tx.send((connection_id, request.headers().clone())).unwrap();
-                            let body = concat!(
-                                "event: response.completed\n",
-                                "data: {\"type\":\"response.completed\",\"response\":{",
-                                "\"id\":\"resp_pool\",\"status\":\"completed\",\"output\":[],",
-                                "\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
-                            );
-                            Ok::<_, Infallible>(
-                                hyper::Response::builder()
-                                    .header("content-type", "text/event-stream")
-                                    .body(Full::new(bytes::Bytes::from_static(body.as_bytes())))
-                                    .unwrap(),
-                            )
-                        }
-                    });
+                    let service = hyper::service::service_fn(
+                        move |request: hyper::Request<hyper::body::Incoming>| {
+                            let seen_tx = seen_tx.clone();
+                            async move {
+                                seen_tx
+                                    .send((connection_id, request.headers().clone()))
+                                    .unwrap();
+                                Ok::<_, Infallible>(
+                                    hyper::Response::builder()
+                                        .header("content-type", content_type)
+                                        .body(Full::new(bytes::Bytes::from_static(body.as_bytes())))
+                                        .unwrap(),
+                                )
+                            }
+                        },
+                    );
                     http1::Builder::new()
                         .serve_connection(TokioIo::new(stream), service)
                         .await
@@ -103,9 +124,39 @@ async fn pooled_http_exit(
     (format!("http://{address}"), task)
 }
 
+fn isolate_client_cache_test(name: &str) -> bool {
+    const CASE_ENV: &str = "CPR_ACCOUNT_CLIENT_CACHE_TEST";
+    if std::env::var(CASE_ENV).as_deref() == Ok(name) {
+        println!("account-cache-case:{name}");
+        return false;
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("transport::account_proxy::{name}"),
+            "--nocapture",
+        ])
+        .env(CASE_ENV, name)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(&format!("account-cache-case:{name}"))
+    );
+    true
+}
+
 #[tokio::test]
-async fn direct_http_accounts_reuse_the_base_connection_pool() {
-    let (base_url, server) = pooled_http_exit(1, 2).await;
+async fn direct_http_accounts_have_separate_connection_pools() {
+    if isolate_client_cache_test("direct_http_accounts_have_separate_connection_pools") {
+        return;
+    }
+    let (base_url, server) = pooled_http_exit(2, 3).await;
     let base = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         base_url,
@@ -113,7 +164,7 @@ async fn direct_http_accounts_reuse_the_base_connection_pool() {
     );
     let mut request = codex_request("gpt-5.5", "", Vec::new());
     request.force_http_sse = true;
-    for id in ["direct-a", "direct-b"] {
+    for id in ["direct-a", "direct-b", "direct-a"] {
         let authorization = format!("Bearer synthetic-{id}");
         let cookie = format!("__cf_bm=synthetic-{id}");
         let mut context = request_context(id, Some(id));
@@ -128,10 +179,14 @@ async fn direct_http_accounts_reuse_the_base_connection_pool() {
 
     let connection_ids = timeout(Duration::from_secs(5), server)
         .await
-        .expect("shared direct connection")
+        .expect("isolated account connections")
         .unwrap();
-    assert_eq!(connection_ids[0].0, connection_ids[1].0);
-    for ((_, headers), id) in connection_ids.iter().zip(["direct-a", "direct-b"]) {
+    assert_ne!(connection_ids[0].0, connection_ids[1].0);
+    assert_eq!(connection_ids[0].0, connection_ids[2].0);
+    for ((_, headers), id) in connection_ids
+        .iter()
+        .zip(["direct-a", "direct-b", "direct-a"])
+    {
         assert_eq!(headers["chatgpt-account-id"], id);
         assert_eq!(headers["authorization"], format!("Bearer synthetic-{id}"));
         assert_eq!(headers["cookie"], format!("__cf_bm=synthetic-{id}"));
@@ -142,12 +197,18 @@ async fn direct_http_accounts_reuse_the_base_connection_pool() {
 async fn direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change() {
     use gateway_core::provider_ports::ProviderUserAgentOverride;
 
+    if isolate_client_cache_test(
+        "direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change",
+    ) {
+        return;
+    }
     let (base_url, server) = pooled_http_exit(2, 3).await;
     let account = account("profile-pool", None);
+    let profile = test_wire_profile();
     let base = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         &base_url,
-        test_wire_profile(),
+        profile.clone(),
     );
     let default_client = base.for_account(&account).unwrap();
     let mut request = codex_request("gpt-5.5", "", Vec::new());
@@ -159,25 +220,19 @@ async fn direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change
             .unwrap();
     }
 
-    let custom_profile = test_wire_profile();
-    custom_profile
+    profile
         .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
             user_agent: "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned(),
         })
         .unwrap();
-    CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        base_url,
-        custom_profile,
-    )
-    .for_account(&account)
-    .unwrap()
-    .create_response(
-        &request,
-        request_context("profile-custom", Some("profile-pool")),
-    )
-    .await
-    .unwrap();
+    base.for_account(&account)
+        .unwrap()
+        .create_response(
+            &request,
+            request_context("profile-custom", Some("profile-pool")),
+        )
+        .await
+        .unwrap();
 
     let connection_ids = timeout(Duration::from_secs(5), server)
         .await
@@ -189,6 +244,9 @@ async fn direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change
 
 #[tokio::test]
 async fn recreating_account_client_preserves_the_direct_pool() {
+    if isolate_client_cache_test("recreating_account_client_preserves_the_direct_pool") {
+        return;
+    }
     let (base_url, server) = pooled_http_exit(1, 2).await;
     let account = account("evicted", None);
     let base = CodexBackendClient::new(
@@ -214,6 +272,386 @@ async fn recreating_account_client_preserves_the_direct_pool() {
         .expect("connection after recreating account client")
         .unwrap();
     assert_eq!(connection_ids[0].0, connection_ids[1].0);
+}
+
+#[tokio::test]
+async fn http_lru_preserves_hot_clients_and_retained_leases_at_256_entries() {
+    use provider_openai::transport::client::build_account_http_client;
+
+    if isolate_client_cache_test(
+        "http_lru_preserves_hot_clients_and_retained_leases_at_256_entries",
+    ) {
+        return;
+    }
+    let (url, server) = pooled_http_exit(3, 5).await;
+    let cold = build_account_http_client("lru-cold", None, "profile").unwrap();
+    cold.get(&url).send().await.unwrap().bytes().await.unwrap();
+    let hot = build_account_http_client("lru-hot", None, "profile").unwrap();
+    hot.get(&url).send().await.unwrap().bytes().await.unwrap();
+    for index in 2..256 {
+        build_account_http_client(&format!("lru-{index}"), None, "profile").unwrap();
+    }
+    let hot = build_account_http_client("lru-hot", None, "profile").unwrap();
+    build_account_http_client("lru-overflow", None, "profile").unwrap();
+    build_account_http_client("lru-hot", None, "profile")
+        .unwrap()
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    cold.get(&url).send().await.unwrap().bytes().await.unwrap();
+    build_account_http_client("lru-cold", None, "profile")
+        .unwrap()
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        seen[1].0, seen[2].0,
+        "overflow must preserve the recently used pool"
+    );
+    assert_eq!(
+        seen[0].0, seen[3].0,
+        "eviction must not destroy outstanding client references"
+    );
+    assert_ne!(
+        seen[0].0, seen[4].0,
+        "the oldest cache entry must be evicted"
+    );
+    drop(hot);
+}
+
+#[tokio::test]
+async fn account_http_eviction_keeps_other_accounts_and_live_clients() {
+    use provider_openai::transport::client::{
+        build_account_http_client, evict_account_http_clients,
+    };
+
+    if isolate_client_cache_test("account_http_eviction_keeps_other_accounts_and_live_clients") {
+        return;
+    }
+    let (url, server) = pooled_http_exit(3, 5).await;
+    let first = build_account_http_client("eviction-a", None, "profile").unwrap();
+    let second = build_account_http_client("eviction-b", None, "profile").unwrap();
+    first.get(&url).send().await.unwrap().bytes().await.unwrap();
+    second
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    evict_account_http_clients("eviction-a");
+    first.get(&url).send().await.unwrap().bytes().await.unwrap();
+    build_account_http_client("eviction-b", None, "profile")
+        .unwrap()
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    build_account_http_client("eviction-a", None, "profile")
+        .unwrap()
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(seen[0].0, seen[2].0);
+    assert_eq!(seen[1].0, seen[3].0);
+    assert_ne!(seen[0].0, seen[4].0);
+}
+
+#[tokio::test]
+async fn token_refresh_pools_isolate_accounts_profiles_and_eviction() {
+    use gateway_core::provider_ports::ProviderUserAgentOverride;
+    use provider_openai::credential::token_client::{
+        OpenAiTokenClient, TokenClientConfig, TokenRefresher, evict_account_token_clients,
+    };
+
+    if isolate_client_cache_test("token_refresh_pools_isolate_accounts_profiles_and_eviction") {
+        return;
+    }
+    let (url, server) = pooled_http_exit_with_body(
+        4,
+        6,
+        r#"{"access_token":"synthetic-access","refresh_token":"synthetic-refresh"}"#,
+        "application/json",
+    )
+    .await;
+    let profile = test_wire_profile();
+    let client = OpenAiTokenClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        TokenClientConfig {
+            client_id: "synthetic-client".to_owned(),
+            token_endpoint: url,
+        },
+        profile.clone(),
+    );
+    let first = ProviderAccountId::new("acct_token-pool-a").unwrap();
+    let second = ProviderAccountId::new("acct_token-pool-b").unwrap();
+    for id in [&first, &second, &first] {
+        client
+            .refresh_for_account(id, "synthetic-refresh", None)
+            .await
+            .unwrap();
+    }
+    profile
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned(),
+        })
+        .unwrap();
+    client
+        .refresh_for_account(&first, "synthetic-refresh", None)
+        .await
+        .unwrap();
+    client
+        .refresh_for_account(&first, "synthetic-refresh", None)
+        .await
+        .unwrap();
+    evict_account_token_clients(first.as_str());
+    client
+        .refresh_for_account(&first, "synthetic-refresh", None)
+        .await
+        .unwrap();
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(seen[0].0, seen[1].0);
+    assert_eq!(seen[0].0, seen[2].0);
+    assert_ne!(seen[0].0, seen[3].0);
+    assert_ne!(seen[0].1["user-agent"], seen[3].1["user-agent"]);
+    assert_eq!(seen[3].0, seen[4].0);
+    assert_ne!(seen[4].0, seen[5].0);
+}
+
+#[tokio::test]
+async fn http_lru_eviction_does_not_interrupt_an_inflight_response() {
+    use provider_openai::transport::client::build_account_http_client;
+
+    if isolate_client_cache_test("http_lru_eviction_does_not_interrupt_an_inflight_response") {
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        read_http_request_with_body(&mut first).await;
+        first
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello ")
+            .await
+            .unwrap();
+        let (mut second, _) = listener.accept().await.unwrap();
+        read_http_request_with_body(&mut second).await;
+        second
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nnew")
+            .await
+            .unwrap();
+        first.write_all(b"world").await.unwrap();
+    });
+    let client = build_account_http_client("inflight", None, "profile").unwrap();
+    let mut response = client.get(&url).send().await.unwrap();
+    assert_eq!(response.chunk().await.unwrap().unwrap(), "hello ");
+    for index in 0..256 {
+        build_account_http_client(&format!("inflight-fill-{index}"), None, "profile").unwrap();
+    }
+    let replacement = build_account_http_client("inflight", None, "profile").unwrap();
+    let body = timeout(Duration::from_secs(5), replacement.get(url).send())
+        .await
+        .unwrap()
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(body, "new");
+    assert_eq!(response.bytes().await.unwrap(), "world");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn token_client_lru_evicts_only_the_oldest_at_128_entries() {
+    use provider_openai::credential::token_client::{
+        OpenAiTokenClient, TokenClientConfig, TokenRefresher,
+    };
+
+    if isolate_client_cache_test("token_client_lru_evicts_only_the_oldest_at_128_entries") {
+        return;
+    }
+    let (url, server) = pooled_http_exit_with_body(
+        130,
+        132,
+        r#"{"access_token":"synthetic-access"}"#,
+        "application/json",
+    )
+    .await;
+    let client = OpenAiTokenClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        TokenClientConfig {
+            client_id: "synthetic-client".to_owned(),
+            token_endpoint: url,
+        },
+        test_wire_profile(),
+    );
+    let ids = (0..129)
+        .map(|index| ProviderAccountId::new(format!("acct_token-lru-{index}")).unwrap())
+        .collect::<Vec<_>>();
+    for id in &ids[..128] {
+        client
+            .refresh_for_account(id, "synthetic-refresh", None)
+            .await
+            .unwrap();
+    }
+    for id in [&ids[1], &ids[128], &ids[1], &ids[0]] {
+        client
+            .refresh_for_account(id, "synthetic-refresh", None)
+            .await
+            .unwrap();
+    }
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(seen[1].0, seen[128].0);
+    assert_eq!(seen[1].0, seen[130].0, "hot token client survives overflow");
+    assert_ne!(seen[0].0, seen[131].0, "oldest token client is rebuilt");
+}
+
+#[tokio::test]
+async fn admin_client_cache_invalidation_preserves_unchanged_ua_and_other_accounts() {
+    use gateway_core::provider_ports::ProviderUserAgentOverride;
+    use provider_openai::transport::client::build_account_http_client;
+
+    if isolate_client_cache_test(
+        "admin_client_cache_invalidation_preserves_unchanged_ua_and_other_accounts",
+    ) {
+        return;
+    }
+    let config = crate::admin::valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), crate::admin::provider_ports())
+        .await
+        .unwrap();
+    let admin = bundle.admin_provider();
+    let (url, server) = pooled_http_exit(6, 9).await;
+    let first = ProviderAccountId::new("acct_lifecycle-a").unwrap();
+    let second = ProviderAccountId::new("acct_lifecycle-b").unwrap();
+    for id in [&first, &second] {
+        build_account_http_client(id.as_str(), None, "profile")
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+    }
+    admin
+        .apply_outbound_user_agent(ProviderUserAgentOverride::Default)
+        .unwrap();
+    build_account_http_client(first.as_str(), None, "profile")
+        .unwrap()
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let custom = ProviderUserAgentOverride::Custom {
+        user_agent: "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned(),
+    };
+    admin.apply_outbound_user_agent(custom.clone()).unwrap();
+    for id in [&first, &second] {
+        build_account_http_client(id.as_str(), None, "profile")
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+    }
+    admin
+        .account_facts_changed(std::slice::from_ref(&first))
+        .await;
+    for id in [&second, &first] {
+        build_account_http_client(id.as_str(), None, "profile")
+            .unwrap()
+            .get(&url)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+    }
+    admin.account_unavailable(&second).await;
+    build_account_http_client(second.as_str(), None, "profile")
+        .unwrap()
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    admin.apply_outbound_user_agent(custom).unwrap();
+    build_account_http_client(first.as_str(), None, "profile")
+        .unwrap()
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        seen[0].0, seen[2].0,
+        "unchanged default UA must preserve the pool"
+    );
+    assert_ne!(
+        seen[0].0, seen[3].0,
+        "actual UA update evicts old account clients"
+    );
+    assert_ne!(seen[1].0, seen[4].0);
+    assert_eq!(
+        seen[4].0, seen[5].0,
+        "changing one account keeps other pools"
+    );
+    assert_ne!(seen[3].0, seen[6].0);
+    assert_ne!(
+        seen[5].0, seen[7].0,
+        "unavailable account loses cached pool"
+    );
+    assert_eq!(
+        seen[6].0, seen[8].0,
+        "unchanged custom UA must preserve the pool"
+    );
 }
 
 #[tokio::test]

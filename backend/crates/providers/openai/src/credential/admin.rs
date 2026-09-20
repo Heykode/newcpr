@@ -877,7 +877,8 @@ impl CodexCredentialAdminService {
         };
         let tokens = self
             .refresher
-            .refresh_with_proxy(
+            .refresh_for_account(
+                &account_id,
                 refresh_token.expose_secret(),
                 current.account.outbound_proxy(),
             )
