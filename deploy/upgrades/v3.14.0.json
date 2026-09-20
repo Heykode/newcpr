@@ -1,0 +1,8 @@
+{
+  "from_version": "3.13.1",
+  "to_version": "3.14.0",
+  "from_migrations_tree": "f77ccb1fd4c8b207983464b2d3c727dcbf87d035",
+  "to_migrations_tree": "f06265e1a7d0b96fbb038533eddb6d4ec21bab9b",
+  "added": ["0032_account_custom_names.sql"],
+  "recovery": "manual"
+}
