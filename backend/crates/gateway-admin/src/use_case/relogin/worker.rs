@@ -120,7 +120,11 @@ impl DefaultReloginService {
                     else {
                         continue;
                     };
-                    if entry.attempted_target.as_ref() != Some(&target) {
+                    if entry
+                        .attempted_target
+                        .as_ref()
+                        .is_none_or(|attempted| !attempted.matches_account(account))
+                    {
                         entry.automatic_attempts = 0;
                     }
                     if entry.automatic_attempts >= 3 {
@@ -144,7 +148,7 @@ impl DefaultReloginService {
                     continue;
                 }
                 if let (Some(target), Some(account)) = (&entry.target, target_account)
-                    && target.credential_revision != account.credential_revision.get()
+                    && !target.matches_account(account)
                 {
                     entry.status = ReloginStatus::Failed;
                     entry.message = "原凭据已变化，请重新发起重登".to_owned();

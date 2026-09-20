@@ -2092,6 +2092,8 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         plan_type: account.plan_type().map(str::to_owned),
         authentication_kind: account.authentication_kind().to_owned(),
         credential_revision: Revision::new(account.revision().get()).expect("revision"),
+        turn_state_binding_revision: Revision::new(account.turn_state_binding_revision().get())
+            .expect("binding revision"),
         relogin_count: 0,
         last_relogin_at: None,
         has_refresh_token: account.has_refresh_token(),

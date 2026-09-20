@@ -6,7 +6,7 @@ use gateway_admin::{
     model::{
         PageSize,
         accounts::{AccountListQuery, AccountSort, AccountSortField, SortDirection},
-        relogin::{ReloginEntry, ReloginSettings, ReloginStatus},
+        relogin::{ReloginEntry, ReloginSettings, ReloginStatus, ReloginTarget},
     },
     ports::{relogin::ReloginStore, store::AccountStore},
 };
@@ -38,6 +38,112 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
         synced_at: None,
         updated_at: chrono::Utc::now(),
     }
+}
+
+#[tokio::test]
+async fn relogin_target_projection_survives_cookie_cas_but_fences_real_replacement() {
+    use gateway_core::account::{
+        CredentialCasOutcome, CredentialCasUpdate, PlaintextCredential, ProviderAccountId,
+        ProviderAccountStore, ProviderAccountUpdate,
+    };
+    let Some(database) = TestDatabase::create("relogin_cookie_binding").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let store = admin_account_store(&database.pool);
+    let id = ProviderAccountId::new("acct_cookie_binding").unwrap();
+    let provider = gateway_core::routing::ProviderKind::new("openai").unwrap();
+    let mut seed = account(id.as_str(), "cookie-user");
+    seed.upstream_account_id = Some("cookie-workspace".into());
+    repository.insert_provider_account(seed).await.unwrap();
+    let original = store
+        .credential_details(&provider, &id)
+        .await
+        .unwrap()
+        .unwrap()
+        .credential;
+    let target = ReloginTarget::from_account(&original).unwrap();
+    let stored_target: ReloginTarget =
+        serde_json::from_value(serde_json::to_value(&target).unwrap()).unwrap();
+    for sequence in 0..3 {
+        let loaded = repository.load_current_credential(&id).await.unwrap();
+        let mut material = loaded.credential.expose_to_provider().clone();
+        material.insert(
+            "cookies".into(),
+            serde_json::json!([
+                {"name": "__cf_bm", "value": format!("synthetic-{sequence}")}
+            ]),
+        );
+        let update = CredentialCasUpdate::new(
+            id.clone(),
+            loaded.account.revision(),
+            ProviderAccountUpdate {
+                account_id: id.clone(),
+                name: loaded.account.name().into(),
+                email: loaded.account.email().map(str::to_owned),
+                plan_type: loaded.account.plan_type().map(str::to_owned),
+            },
+            PlaintextCredential::new(material),
+            false,
+            loaded.account.access_token_expires_at(),
+            None,
+        )
+        .unwrap()
+        .preserving_profile()
+        .preserving_turn_state_binding();
+        assert!(matches!(
+            repository
+                .compare_and_swap_credential(update)
+                .await
+                .unwrap(),
+            CredentialCasOutcome::Updated(_)
+        ));
+        let current = store
+            .credential_details(&provider, &id)
+            .await
+            .unwrap()
+            .unwrap()
+            .credential;
+        assert!(current.credential_revision > original.credential_revision);
+        assert_eq!(
+            current.turn_state_binding_revision,
+            original.turn_state_binding_revision
+        );
+        assert!(stored_target.matches_account(&current));
+    }
+    assert!(
+        repository
+            .rotate_provider_account(rotation(
+                id.as_str(),
+                1,
+                Some("stale-cookie-cas"),
+                "stale-cookie-audit"
+            ))
+            .await
+            .is_err(),
+        "the final CAS must still reject a stale prepared revision"
+    );
+    repository
+        .compare_and_swap_credentials(credential_update(id.as_str(), 4, "replacement"))
+        .await
+        .unwrap();
+    let replaced = store
+        .credential_details(&provider, &id)
+        .await
+        .unwrap()
+        .unwrap()
+        .credential;
+    assert_eq!(
+        replaced.turn_state_binding_revision,
+        replaced.credential_revision
+    );
+    assert!(!stored_target.matches_account(&replaced));
+    assert!(
+        ReloginTarget::from_account(&replaced)
+            .unwrap()
+            .matches_account(&replaced)
+    );
+    database.close().await;
 }
 
 #[tokio::test]

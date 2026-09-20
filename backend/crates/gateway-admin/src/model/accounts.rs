@@ -131,6 +131,7 @@ pub struct AccountRecord {
     pub plan_type: Option<String>,
     pub authentication_kind: String,
     pub credential_revision: Revision,
+    pub turn_state_binding_revision: Revision,
     pub relogin_count: u64,
     pub last_relogin_at: Option<DateTime<Utc>>,
     pub has_refresh_token: bool,

@@ -145,6 +145,7 @@ impl Harness {
         let accounts = FakeAccountStore::new("openai", log.clone());
         accounts.set_accounts(pool);
         let provider = FakeProviderAdmin::new("openai", log);
+        *provider.rotation_store.lock().unwrap() = Some(accounts.clone());
         *provider.relogin_result.lock().unwrap() = Some(credential());
         let store = Arc::new(MemoryStore::default());
         let mut bundle = AdminHarness::new()
@@ -779,6 +780,7 @@ async fn relogin_access_token_expiry_does_not_overwrite_recovered_or_rotated_cre
             record.last_error_reason = None;
         } else {
             record.credential_revision = revision(record.credential_revision.get() + 1);
+            record.turn_state_binding_revision = record.credential_revision;
         }
         h.accounts.set_accounts(vec![record]);
         running.await.unwrap().unwrap();
@@ -938,6 +940,7 @@ async fn relogin_push_fences_confirmation_and_pool_revision() {
     );
     let mut newer = account(false);
     newer.credential_revision = revision(2);
+    newer.turn_state_binding_revision = revision(2);
     h.accounts.set_accounts(vec![newer]);
     let current = BTreeMap::from([(id, row.revision)]);
     assert!(
@@ -949,6 +952,311 @@ async fn relogin_push_fences_confirmation_and_pool_revision() {
             .success
     );
     assert!(h.accounts.audit_requests().is_empty());
+}
+
+#[test]
+fn relogin_target_fences_binding_changes_without_changing_legacy_json() {
+    let mut original = account(false);
+    original.credential_revision = revision(10);
+    original.turn_state_binding_revision = revision(3);
+    let target: ReloginTarget = serde_json::from_value(serde_json::json!({
+        "account_id": original.id,
+        "credential_revision": 10,
+        "user_id": "upstream-user",
+        "workspace_id": "workspace-team"
+    }))
+    .unwrap();
+    for (binding, current, expected) in
+        [(3, 10, true), (3, 20, true), (11, 20, false), (3, 9, false)]
+    {
+        let mut updated = original.clone();
+        updated.credential_revision = revision(current);
+        updated.turn_state_binding_revision = revision(binding);
+        assert_eq!(target.matches_account(&updated), expected);
+    }
+    for field in ["id", "user", "workspace", "authentication"] {
+        let mut updated = original.clone();
+        match field {
+            "id" => updated.id = "acct_recreated".into(),
+            "user" => updated.upstream_user_id = Some("other-user".into()),
+            "workspace" => updated.upstream_account_id = Some("other-workspace".into()),
+            _ => updated.authentication_kind = "api_key".into(),
+        }
+        assert!(!target.matches_account(&updated), "{field}");
+    }
+}
+
+#[tokio::test]
+async fn relogin_library_cookie_updates_do_not_invalidate_queued_or_cached_credentials() {
+    let original = account(false);
+    let h = Harness::new(vec![original.clone()]).await;
+    let id = h.import("test@example.invalid").await;
+    h.services
+        .relogin()
+        .queue(std::slice::from_ref(&id))
+        .await
+        .unwrap();
+    let mut updated = original;
+    updated.credential_revision = revision(2);
+    h.accounts.set_accounts(vec![updated.clone()]);
+    h.cycle().await;
+    let ready = h.row(&id).await;
+    assert_eq!(ready.status, ReloginStatus::Ready);
+    updated.credential_revision = revision(5);
+    h.accounts.set_accounts(vec![updated]);
+    let revisions = BTreeMap::from([(id.clone(), ready.revision)]);
+    assert!(
+        h.services
+            .relogin()
+            .push(
+                std::slice::from_ref(&id),
+                &revisions,
+                &context("cookie-push"),
+            )
+            .await
+            .unwrap()[0]
+            .success
+    );
+    assert!(h.row(&id).await.synced_at.is_some());
+    let attempts = h.accounts.rotation_attempts.lock().unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(
+        attempts[0].prepared.expected_credential_revision,
+        revision(5)
+    );
+    assert_eq!(
+        attempts[0].relogin_operation_id.as_deref(),
+        Some("relogin:acct_test:1")
+    );
+}
+
+#[tokio::test]
+async fn account_relogin_cookie_updates_during_confirmation_and_login_still_push_once() {
+    let original = account(false);
+    let h = Harness::new(vec![original.clone()]).await;
+    let id = h.import("test@example.invalid").await;
+    let mut updated = original.clone();
+    updated.credential_revision = revision(2);
+    h.accounts.set_accounts(vec![updated.clone()]);
+    h.queue_account(&id, &original).await.unwrap();
+    *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_millis(30);
+    let task = h.task.clone();
+    let running = tokio::spawn(async move { task.run_cycle(cycle_context()).await });
+    h.wait_running().await;
+    updated.credential_revision = revision(3);
+    h.accounts.set_accounts(vec![updated]);
+    running.await.unwrap().unwrap();
+    assert!(h.row(&id).await.synced_at.is_some());
+    assert_eq!(h.accounts.rotation_attempts.lock().unwrap().len(), 1);
+    assert_eq!(
+        h.services.relogin().list().await.unwrap().items[0].relogin_count,
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn relogin_rechecks_binding_after_provider_reloads_newer_credentials() {
+    for real_replacement in [false, true] {
+        let original = account(false);
+        let h = Harness::new(vec![original.clone()]).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let before = h.row(&id).await;
+        let mut updated = original;
+        updated.credential_revision = revision(2);
+        if real_replacement {
+            updated.turn_state_binding_revision = revision(2);
+        }
+        *h.provider.rotation_update.lock().unwrap() = Some((h.accounts.clone(), updated));
+        let revisions = BTreeMap::from([(id.clone(), before.revision)]);
+        let result = h
+            .services
+            .relogin()
+            .push(
+                std::slice::from_ref(&id),
+                &revisions,
+                &context("prepare-race"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result[0].success, !real_replacement);
+        assert_eq!(h.row(&id).await.synced_at.is_some(), !real_replacement);
+        assert_eq!(
+            h.accounts.rotation_attempts.lock().unwrap().len(),
+            usize::from(!real_replacement)
+        );
+    }
+}
+
+#[tokio::test]
+async fn relogin_cookie_cas_conflicts_retry_with_fresh_revision_and_stable_operation_id() {
+    for races in [1, 3] {
+        let h = Harness::new(vec![account(false)]).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let before = h.row(&id).await;
+        *h.accounts.rotation_updates.lock().unwrap() = (2..=races + 1)
+            .map(|rev| {
+                let mut updated = account(false);
+                updated.credential_revision = revision(rev);
+                updated
+            })
+            .collect();
+        let revisions = BTreeMap::from([(id.clone(), before.revision)]);
+        let result = h
+            .services
+            .relogin()
+            .push(
+                std::slice::from_ref(&id),
+                &revisions,
+                &context("commit-cookie-race"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result[0].success, races == 1);
+        let attempts = h.accounts.rotation_attempts.lock().unwrap().clone();
+        assert_eq!(attempts.len(), if races == 1 { 2 } else { 3 });
+        for (index, attempt) in attempts.iter().enumerate() {
+            assert_eq!(
+                attempt.prepared.expected_credential_revision.get(),
+                index as u64 + 1
+            );
+            assert_eq!(
+                attempt.relogin_operation_id.as_deref(),
+                Some("relogin:acct_test:1")
+            );
+        }
+        let row = h.row(&id).await;
+        assert_eq!(row.status, ReloginStatus::Ready);
+        assert!(row.credential.is_some());
+        assert_eq!(row.synced_at.is_some(), races == 1);
+        assert_eq!(
+            h.services.relogin().list().await.unwrap().items[0].relogin_count,
+            Some(u64::from(races == 1))
+        );
+    }
+}
+
+#[tokio::test]
+async fn relogin_cookie_changes_after_preparation_retry_before_the_commit_fence() {
+    for races in [1, 3] {
+        let h = Harness::new(vec![account(false)]).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let before = h.row(&id).await;
+        *h.accounts.credential_detail_updates.lock().unwrap() = (2..=races + 1)
+            .map(|rev| {
+                let mut updated = account(false);
+                updated.credential_revision = revision(rev);
+                updated
+            })
+            .collect();
+        let revisions = BTreeMap::from([(id.clone(), before.revision)]);
+        let result = h
+            .services
+            .relogin()
+            .push(
+                std::slice::from_ref(&id),
+                &revisions,
+                &context("after-prepare"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result[0].success, races == 1);
+        assert_eq!(
+            h.accounts.rotation_attempts.lock().unwrap().len(),
+            usize::from(races == 1)
+        );
+        let row = h.row(&id).await;
+        assert_eq!(row.status, ReloginStatus::Ready);
+        if races == 3 {
+            assert_eq!(row.revision, before.revision);
+            assert!(row.synced_at.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn automatic_relogin_cookie_changes_during_login_still_push() {
+    let original = account(true);
+    let h = Harness::new(vec![original.clone()]).await;
+    let id = h.import("test@example.invalid").await;
+    *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_millis(30);
+    let task = h.task.clone();
+    let running = tokio::spawn(async move { task.run_cycle(cycle_context()).await });
+    h.wait_running().await;
+    let mut updated = original;
+    updated.credential_revision = revision(2);
+    h.accounts.set_accounts(vec![updated]);
+    running.await.unwrap().unwrap();
+    let row = h.row(&id).await;
+    assert!(row.automatic_job);
+    assert!(row.synced_at.is_some());
+    assert_eq!(row.automatic_attempts, 1);
+    assert_eq!(h.accounts.rotation_attempts.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn relogin_actual_credential_replacement_during_commit_never_retries() {
+    let h = Harness::new(vec![account(false)]).await;
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let before = h.row(&id).await;
+    let mut updated = account(false);
+    updated.credential_revision = revision(2);
+    updated.turn_state_binding_revision = revision(2);
+    *h.accounts.rotation_updates.lock().unwrap() = vec![updated];
+    let revisions = BTreeMap::from([(id.clone(), before.revision)]);
+    assert!(
+        !h.services
+            .relogin()
+            .push(
+                std::slice::from_ref(&id),
+                &revisions,
+                &context("commit-token-race"),
+            )
+            .await
+            .unwrap()[0]
+            .success
+    );
+    assert_eq!(h.accounts.rotation_attempts.lock().unwrap().len(), 1);
+    assert!(h.row(&id).await.synced_at.is_none());
+    assert_eq!(h.row(&id).await.status, ReloginStatus::Ready);
+}
+
+#[tokio::test]
+async fn relogin_cookie_updates_do_not_reset_automatic_failure_budget() {
+    let h = Harness::new(vec![account(true)]).await;
+    *h.provider.relogin_result.lock().unwrap() = None;
+    let id = h.import("test@example.invalid").await;
+    for rev in 1..=5 {
+        let mut updated = account(true);
+        updated.credential_revision = revision(rev);
+        h.accounts.set_accounts(vec![updated]);
+        h.store
+            .rows
+            .lock()
+            .unwrap()
+            .get_mut(&id)
+            .unwrap()
+            .next_attempt_at = None;
+        h.cycle().await;
+    }
+    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);
+    let mut renewed = account(true);
+    renewed.credential_revision = revision(6);
+    renewed.turn_state_binding_revision = revision(6);
+    h.accounts.set_accounts(vec![renewed]);
+    h.store
+        .rows
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .next_attempt_at = None;
+    h.cycle().await;
+    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 4);
+    assert_eq!(h.row(&id).await.automatic_attempts, 1);
 }
 
 #[tokio::test]
@@ -1452,7 +1760,10 @@ async fn account_relogin_rejects_stale_material_target_wrong_email_and_pause_bef
         let mut changed = original.clone();
         match variant {
             "material" => h.services.relogin().workspace(&id, None).await.unwrap(),
-            "revision" => changed.credential_revision = revision(2),
+            "revision" => {
+                changed.credential_revision = revision(2);
+                changed.turn_state_binding_revision = revision(2);
+            }
             "identity" => changed.upstream_user_id = Some("changed-user".into()),
             "workspace" => changed.upstream_account_id = Some("changed-workspace".into()),
             "email" => changed.email = Some("changed@example.invalid".into()),
@@ -1521,6 +1832,7 @@ async fn account_relogin_failed_verification_or_changed_pool_never_overwrites() 
             let mut newer = original;
             if variant == "revision" {
                 newer.credential_revision = revision(2);
+                newer.turn_state_binding_revision = revision(2);
             } else {
                 newer.email = Some("changed@example.invalid".into());
             }

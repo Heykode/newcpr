@@ -49,6 +49,20 @@ pub struct ReloginTarget {
 }
 
 impl ReloginTarget {
+    pub fn matches_account(&self, account: &AccountRecord) -> bool {
+        // Binding changes are stamped with their resulting credential revision.
+        // This also fences legacy targets without storing another generation.
+        self.account_id == account.id
+            && !self.user_id.is_empty()
+            && !self.workspace_id.is_empty()
+            && account.provider_kind.as_str() == "openai"
+            && account.authentication_kind == "oauth"
+            && account.upstream_user_id.as_ref() == Some(&self.user_id)
+            && account.upstream_account_id.as_ref() == Some(&self.workspace_id)
+            && account.turn_state_binding_revision.get() <= self.credential_revision
+            && self.credential_revision <= account.credential_revision.get()
+    }
+
     pub fn from_account(account: &AccountRecord) -> Result<Self, AdminError> {
         Ok(Self {
             account_id: account.id.clone(),

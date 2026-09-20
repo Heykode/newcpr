@@ -23,6 +23,7 @@ pub(crate) fn admin_account_record(
         plan_type: summary.plan_type,
         authentication_kind: summary.authentication_kind,
         credential_revision: admin_revision(summary.credential_revision)?,
+        turn_state_binding_revision: admin_revision(summary.turn_state_binding_revision)?,
         relogin_count: summary.relogin_count,
         last_relogin_at: summary.last_relogin_at,
         has_refresh_token: summary.has_refresh_token,
