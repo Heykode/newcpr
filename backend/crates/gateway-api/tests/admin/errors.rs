@@ -486,6 +486,7 @@ mod provider {
                 plan_type: None,
                 authentication_kind: "oauth".to_owned(),
                 credential_revision: Revision::new(1).unwrap(),
+                turn_state_binding_revision: Revision::new(1).unwrap(),
                 relogin_count: 0,
                 last_relogin_at: None,
                 has_refresh_token: true,

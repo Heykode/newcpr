@@ -82,6 +82,8 @@ pub(super) struct FakeProviderAdmin {
     quota: Mutex<ProviderQuota>,
     quota_refresh_account: Mutex<Option<(Arc<FakeAccountStore>, AccountRecord)>>,
     current_credential_revision: Mutex<Revision>,
+    pub(super) rotation_update: Mutex<Option<(Arc<FakeAccountStore>, AccountRecord)>>,
+    pub(super) rotation_store: Mutex<Option<Arc<FakeAccountStore>>>,
     reset_credit_commands: Mutex<Vec<ConsumeProviderResetCredit>>,
     profile_result: Mutex<Result<ProviderProfileStatistics, ProviderAdminErrorKind>>,
     subscription_result: Mutex<Result<Option<ProviderSubscription>, ProviderAdminErrorKind>>,
@@ -109,6 +111,8 @@ impl FakeProviderAdmin {
             quota: Mutex::new(empty_quota()),
             quota_refresh_account: Mutex::new(None),
             current_credential_revision: Mutex::new(revision(1)),
+            rotation_update: Mutex::new(None),
+            rotation_store: Mutex::new(None),
             reset_credit_commands: Mutex::new(Vec::new()),
             profile_result: Mutex::new(Ok(empty_profile_statistics())),
             subscription_result: Mutex::new(Ok(None)),
@@ -454,6 +458,21 @@ impl ProviderAdmin for FakeProviderAdmin {
     ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
         self.record("provider.prepare_rotation");
         self.require_available()?;
+        if let Some((store, account)) = self.rotation_update.lock().unwrap().take() {
+            store.set_accounts(vec![account]);
+        }
+        if let Some(store) = self.rotation_store.lock().unwrap().as_ref() {
+            let current = store
+                .accounts
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|account| account.id == command.account.id)
+                .cloned()
+                .ok_or_else(|| ProviderAdminError::new(ProviderAdminErrorKind::NotFound))?;
+            self.set_current_credential_revision(current.credential_revision);
+            return Ok(self.prepared_rotation(&current));
+        }
         Ok(self.prepared_rotation(&command.account))
     }
 
@@ -563,6 +582,9 @@ pub(super) struct FakeAccountStore {
     accounts: Mutex<Vec<AccountRecord>>,
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
+    pub(super) rotation_updates: Mutex<Vec<AccountRecord>>,
+    pub(super) rotation_attempts: Mutex<Vec<CredentialRotationCommit>>,
+    pub(super) credential_detail_updates: Mutex<Vec<AccountRecord>>,
     audit_requests: Mutex<Vec<String>>,
     import_settings: Mutex<Vec<Option<gateway_admin::model::accounts::AccountImportSettings>>>,
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
@@ -588,6 +610,9 @@ impl FakeAccountStore {
             accounts: Mutex::new(vec![account]),
             account_after_probe: Mutex::new(None),
             fail_commit: Mutex::new(false),
+            rotation_updates: Mutex::new(Vec::new()),
+            rotation_attempts: Mutex::new(Vec::new()),
+            credential_detail_updates: Mutex::new(Vec::new()),
             audit_requests: Mutex::new(Vec::new()),
             import_settings: Mutex::new(Vec::new()),
             quota_window_usage: Mutex::new(Vec::new()),
@@ -853,6 +878,12 @@ impl AccountStore for FakeAccountStore {
         account_id: &ProviderAccountId,
     ) -> AdminStoreResult<Option<CredentialDetails>> {
         self.record("store.credential_details");
+        {
+            let mut updates = self.credential_detail_updates.lock().unwrap();
+            if !updates.is_empty() {
+                self.set_accounts(vec![updates.remove(0)]);
+            }
+        }
         let account = self
             .accounts
             .lock()
@@ -976,18 +1007,27 @@ impl AccountStore for FakeAccountStore {
     ) -> AdminStoreResult<CredentialMutationResult> {
         self.record("store.commit_rotation");
         self.record_context(context);
+        self.rotation_attempts.lock().unwrap().push(command.clone());
         self.require_commit()?;
         if command.relogin_operation_id.is_some() {
+            let mut updates = self.rotation_updates.lock().unwrap();
+            if !updates.is_empty() {
+                self.set_accounts(vec![updates.remove(0)]);
+            }
             let mut accounts = self.accounts.lock().unwrap();
             let account = accounts
                 .iter_mut()
                 .find(|account| account.id == command.prepared.account_id.as_str())
                 .expect("relogin target");
-            assert_eq!(
-                account.credential_revision,
-                command.prepared.expected_credential_revision
-            );
+            if account.credential_revision != command.prepared.expected_credential_revision {
+                return Err(AdminStoreError::new(
+                    AdminStoreErrorKind::Conflict,
+                    "account",
+                    "credential revision changed",
+                ));
+            }
             account.credential_revision = revision(account.credential_revision.get() + 1);
+            account.turn_state_binding_revision = account.credential_revision;
             account.relogin_count += 1;
             account.last_relogin_at = Some(Utc::now());
             account.credential_state = CredentialState::Ready;
@@ -3197,6 +3237,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         plan_type: Some("test".to_owned()),
         authentication_kind: "oauth".to_owned(),
         credential_revision: revision(1),
+        turn_state_binding_revision: revision(1),
         relogin_count: 0,
         last_relogin_at: None,
         has_refresh_token: true,

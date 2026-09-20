@@ -16,6 +16,21 @@
 - Existing account recovery captures account ID, principal, workspace and credential
   revision. Recheck these at push; automatic push also rechecks recovery eligibility.
   Use the existing prepared rotation and CAS transaction, never delete/recreate.
+- A queued or cached target survives Cookie-only credential writes. Project the existing
+  `turn_state_binding_revision` into the internal admin account record and require
+  `current binding <= captured credential revision <= current credential revision`,
+  along with the original account, user, workspace and OAuth-kind checks. Binding
+  changes are stamped with the resulting credential revision, so old JSONB target
+  snapshots need no guessed generation or migration. Never compare only the emails
+  or allow a target revision from the future.
+- Use the same target check for account-menu confirmation, queued execution and
+  automatic attempt budgeting. Cookie writes must not reset the three-attempt limit.
+  After Provider preparation, reread the target and match the exact prepared revision
+  before the Store CAS; a Provider may have reloaded newer material during preparation.
+  Existing-account pushes may prepare/commit at most three times when proven-safe
+  revision movement or a definitively rolled-back conflict races the write. Keep one
+  operation ID based on the original target. Never retry unavailable/ambiguous commits,
+  publication or settlement failures. Exhausted Cookie races retain the cached result.
 - Successful prepared credential replacement updates authentication facts even for
   manually paused accounts, but preserves `enabled`. A concurrent pause must not
   be undone by a relogin push. Ordinary file import is different: its explicit
@@ -32,6 +47,9 @@
 - Persist `Pushing` before pool mutation. A crash or ambiguous failure becomes
   `Uncertain`, not an automatic retry. Library and pool commits have distinct owners;
   no distributed transaction or exactly-once claim is made.
+- A Store conflict is returned only after transaction rollback succeeds. It can restore
+  `Ready` for bounded target revalidation/retry; failed rollback or unknown commit
+  remains `Pushing`/`Uncertain`. Do not generalize this exception to all failures.
 - For existing-account push, prepare and validate rotation before persisting `Pushing`.
   A preparation error has not attempted the pool commit: retain `Ready`, the cached
   document and its revision so an explicit push can retry. New-account import still

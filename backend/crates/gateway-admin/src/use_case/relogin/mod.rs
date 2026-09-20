@@ -4,10 +4,10 @@ use super::{commit_credential_rotation, map_provider_error, map_store_error, pub
 use crate::{
     OpenAiService,
     model::{
-        AdminError, MutationContext,
+        AdminError, AdminErrorKind, MutationContext,
         accounts::{AccountRecord, CredentialState},
         provider_credentials::{
-            CredentialListQuery, CredentialListWindow, ImportCredentials,
+            CredentialListQuery, CredentialListWindow, CredentialMutationResult, ImportCredentials,
             PrepareCredentialRotation, ProviderDocument,
         },
         relogin::*,
@@ -22,7 +22,10 @@ use crate::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_core::{
-    account::{AccountStatusFacts, OpaqueProviderData, resolve_account_operational_status},
+    account::{
+        AccountStatusFacts, OpaqueProviderData, ProviderAccountId,
+        resolve_account_operational_status,
+    },
     lifecycle::CancellationToken,
     runtime::SnapshotControl,
 };
@@ -33,6 +36,8 @@ use tokio::sync::Mutex;
 mod templates;
 mod worker;
 pub(crate) use worker::contribution;
+
+const MAX_ROTATION_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -251,6 +256,104 @@ impl DefaultReloginService {
         outcome
     }
 
+    async fn current_rotation_target(
+        &self,
+        entry: &ReloginEntry,
+    ) -> Result<AccountRecord, AdminError> {
+        let target = entry
+            .target
+            .as_ref()
+            .ok_or_else(|| AdminError::conflict("指定账号任务缺少目标，不能新建账号"))?;
+        let id = ProviderAccountId::new(target.account_id.clone())
+            .map_err(|_| AdminError::invalid("目标账号 ID 无效"))?;
+        let current = self
+            .accounts
+            .credential_details(self.provider.provider_kind(), &id)
+            .await
+            .map_err(|error| map_store_error(error, "relogin target"))?
+            .ok_or_else(|| AdminError::conflict("原账号已删除，不能自动重新入池"))?
+            .credential;
+        if !target.matches_account(&current)
+            || current
+                .email
+                .as_ref()
+                .is_none_or(|email| !email.eq_ignore_ascii_case(&entry.email))
+        {
+            return Err(AdminError::conflict(
+                "原凭据或账号身份已变化，本次结果未覆盖，请重新获取凭证",
+            ));
+        }
+        if entry.automatic_job && !worker::needs_relogin(&current) {
+            return Err(AdminError::conflict(
+                "原账号已恢复或已禁用，不再自动替换凭据",
+            ));
+        }
+        Ok(current)
+    }
+
+    async fn rotate_existing(
+        &self,
+        entry: &mut ReloginEntry,
+        mut current: AccountRecord,
+        document: ProviderDocument,
+        context: &MutationContext,
+    ) -> Result<CredentialMutationResult, AdminError> {
+        let target = entry
+            .target
+            .as_ref()
+            .ok_or_else(|| AdminError::conflict("指定账号任务缺少目标，不能新建账号"))?;
+        let operation_id = format!(
+            "relogin:{}:{}",
+            target.account_id, target.credential_revision
+        );
+        for _ in 0..MAX_ROTATION_ATTEMPTS {
+            let prepared = self
+                .provider
+                .prepare_rotation(PrepareCredentialRotation {
+                    account: current,
+                    provider_material: document.clone(),
+                })
+                .await
+                .map_err(|error| map_provider_error(error, "relogin rotation"))?;
+            current = self.current_rotation_target(entry).await?;
+            let expected = prepared.facts().expected_credential_revision;
+            if prepared.facts().account_id.as_str() != current.id
+                || prepared.facts().provider_kind != current.provider_kind
+            {
+                return Err(AdminError::conflict("凭据准备结果与目标账号不一致"));
+            }
+            if expected != current.credential_revision {
+                continue;
+            }
+            // Exact CAS still owns the commit; only a definitive conflict may retry.
+            entry.status = ReloginStatus::Pushing;
+            self.save(entry).await?;
+            match commit_credential_rotation(
+                self.accounts.as_ref(),
+                prepared,
+                context,
+                "relogin rotation",
+                Some(operation_id.clone()),
+            )
+            .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) if error.kind() == AdminErrorKind::Conflict => {
+                    entry.status = ReloginStatus::Ready;
+                    self.save(entry).await?;
+                    current = self.current_rotation_target(entry).await?;
+                    if current.credential_revision == expected {
+                        return Err(error);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(AdminError::conflict(
+            "账号 Cookie 更新频繁，本次未写入，请重试推送",
+        ))
+    }
+
     async fn push_checked(
         &self,
         entry: &mut ReloginEntry,
@@ -298,7 +401,7 @@ impl DefaultReloginService {
                     "原账号已恢复或已禁用，不再自动替换凭据",
                 ));
             }
-            if current.credential_revision.get() != target.credential_revision {
+            if !target.matches_account(current) {
                 return Err(AdminError::conflict(
                     "原凭据已变化，本次结果未覆盖，请重新获取凭证",
                 ));
@@ -317,29 +420,9 @@ impl DefaultReloginService {
             if entry.synced_at.is_some() {
                 return Ok(());
             }
-            let prepared = self
-                .provider
-                .prepare_rotation(PrepareCredentialRotation {
-                    account: current.clone(),
-                    provider_material: document,
-                })
-                .await
-                .map_err(|error| map_provider_error(error, "relogin rotation"))?;
-            // Preparation cannot mutate the pool. Fence replay only before the commit attempt.
-            entry.status = ReloginStatus::Pushing;
-            self.save(entry).await?;
-            let result = commit_credential_rotation(
-                self.accounts.as_ref(),
-                prepared,
-                context,
-                "relogin rotation",
-                Some(format!(
-                    "relogin:{}:{}",
-                    current.id,
-                    current.credential_revision.get()
-                )),
-            )
-            .await?;
+            let result = self
+                .rotate_existing(entry, current.clone(), document, context)
+                .await?;
             self.provider
                 .account_facts_changed(std::slice::from_ref(&result.account_id))
                 .await;
@@ -596,7 +679,7 @@ impl ReloginService for DefaultReloginService {
             .into_iter()
             .find(|account| account.id == target.account_id)
             .ok_or_else(|| AdminError::conflict("目标账号已删除或不再匹配该邮箱"))?;
-        if &ReloginTarget::from_account(account)? != target {
+        if !target.matches_account(account) {
             return Err(AdminError::conflict(
                 "目标账号身份、工作区或凭据已变化，请重新确认",
             ));
