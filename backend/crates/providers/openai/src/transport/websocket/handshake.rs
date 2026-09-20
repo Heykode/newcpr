@@ -332,8 +332,22 @@ async fn connect_tcp(
         .call(uri)
         .await
         .map(|stream| stream.into_inner())
-        .map_err(|_| {
-            tungstenite::Error::Io(std::io::Error::other("account WebSocket connection failed"))
+        .map_err(|error| {
+            // Preserve the socket failure kind without exposing endpoint details.
+            let kind = std::iter::successors(
+                Some(&error as &(dyn std::error::Error + 'static)),
+                |error| error.source(),
+            )
+            .find_map(|error| {
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .map(std::io::Error::kind)
+            })
+            .unwrap_or(std::io::ErrorKind::Other);
+            tungstenite::Error::Io(std::io::Error::new(
+                kind,
+                "account WebSocket connection failed",
+            ))
         })
 }
 

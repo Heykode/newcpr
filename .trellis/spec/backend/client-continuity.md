@@ -110,6 +110,8 @@ editing prior entries.
   own dual-stack dial and State probes retain their independent egress.
   HTTP and WS use their existing protocol-specific TLS/ALPN. This changes TCP
   address selection, not account scheduling, identity or continuation ownership.
+  WS connector errors must retain the underlying I/O kind while redacting
+  endpoint details, so pre-send failures keep their existing diagnosis.
 - A local egress failure during a shared WebSocket opening remains a typed
   local error for every waiter; it must not become `SharedConnectFailed` or
   count against the origin breaker. After a committed policy reload, retire
