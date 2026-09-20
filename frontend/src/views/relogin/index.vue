@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import type { ReloginBatchResult, ReloginEntry, ReloginTemplate } from '@/api/modules/relogin'
+import type { AccountTemplate } from '@/api/modules/account-templates'
+import type { ReloginBatchResult, ReloginEntry } from '@/api/modules/relogin'
 import { CheckCheck, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
+import { useNow } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   configureRelogin,
@@ -12,9 +14,12 @@ import {
   setReloginAutomatic,
   setReloginWorkspace,
 } from '@/api/modules/relogin'
+import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
+import AccountTemplatesModal from '@/components/account-templates/AccountTemplatesModal.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
@@ -26,13 +31,12 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
+import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
-import { credentialLabel, matchesPool, poolPresentation, processingStatus, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
-import ReloginTemplatePicker from './ReloginTemplatePicker.vue'
-import ReloginTemplatesModal from './ReloginTemplatesModal.vue'
+import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
 const entries = shallowRef<ReloginEntry[]>([])
 const loading = shallowRef(false)
@@ -50,7 +54,8 @@ const pageSize = shallowRef(20)
 const concurrency = shallowRef('1')
 const savedConcurrency = shallowRef(1)
 const paused = shallowRef(false)
-const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
+const now = useNow({ interval: 1000 })
+const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries({ ...statusLabels, ...recoveryLabels }).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
 const poolOptions = [
   { value: '', label: '全部号池状态' },
   { value: 'absent', label: '未入池' },
@@ -234,12 +239,14 @@ function saveImport() {
 }
 const confirming = shallowRef(false)
 const templatesOpen = shallowRef(false)
-const selectedTemplate = shallowRef<ReloginTemplate | null>(null)
+const selectedTemplate = shallowRef<AccountTemplate | null>(null)
+const batchCustomName = shallowRef('')
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
 function confirm(mode: 'push' | 'delete', ids: string[]) {
   failure.value = ''
   selectedTemplate.value = null
+  batchCustomName.value = ''
   confirmMode.value = mode
   pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
   confirming.value = pendingRows.value.length > 0
@@ -255,7 +262,8 @@ function executeConfirmed() {
       const template = newPushCount.value > 0 && selectedTemplate.value
         ? { id: selectedTemplate.value.id, revision: selectedTemplate.value.revision }
         : undefined
-      batchReport(await pushRelogin(pushable.value, template))
+      const customName = newPushCount.value > 0 ? normalizeAccountName(batchCustomName.value) ?? undefined : undefined
+      batchReport(await pushRelogin(pushable.value, template, customName))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))
@@ -424,6 +432,7 @@ onBeforeUnmount(() => {
         </template>
         <template #status="{ row }">
           <span class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
+          <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
         </template>
         <template #credential="{ row }">
           <span class="block whitespace-normal break-words" :class="row.credentialStatus === 'verified' ? 'text-cp-success' : row.credentialStatus === 'expired' ? 'text-cp-warning' : 'text-cp-text-tertiary'" :title="row.verifiedAt ? `本次缓存凭据验证于 ${formatDateTime(row.verifiedAt)}；不代表已推送或号池当前正常` : '尚未通过重登获取新的 JSON；与号池已有凭据无关'">{{ credentialLabel(row) }}</span>
@@ -503,7 +512,10 @@ onBeforeUnmount(() => {
       <p v-else class="mt-0 text-cp-sm">
         新增 {{ newPushCount }} 项，更新已有账号 {{ pushable.length - newPushCount }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
       </p>
-      <ReloginTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
+      <AccountTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
+      <BaseFormItem v-if="confirmMode === 'push' && newPushCount > 0" label="本批账号名称（选填）">
+        <BaseInput v-model="batchCustomName" aria-label="本批账号名称" placeholder="默认名称" :disabled="busy" />
+      </BaseFormItem>
       <p v-if="confirmMode === 'push' && pushable.length > newPushCount" class="text-cp-sm text-cp-text-secondary">
         已有账号仅更新凭据，保留原配置。
       </p>
@@ -521,7 +533,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </BaseConfirmModal>
-    <ReloginTemplatesModal v-model="templatesOpen" />
+    <AccountTemplatesModal v-model="templatesOpen" />
     <BaseModal v-model="editing" title="选择登录工作区" :dismissible="!busy">
       <div class="grid gap-3">
         <p class="m-0 break-all text-cp-sm">

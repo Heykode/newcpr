@@ -22,6 +22,7 @@ pub mod ports;
 mod use_case;
 mod workers;
 
+pub use use_case::account_templates::AccountTemplatesService;
 pub use use_case::group_monitor::GroupMonitorService;
 pub use use_case::import_tasks::ImportTasksService;
 pub use use_case::relogin::{ReloginBatchResult, ReloginList, ReloginService, ReloginView};
@@ -156,6 +157,7 @@ pub enum AdminConfigError {
 /// 字段全部私有；调用方经 accessor 直接调用能力，不需要命名内部 `use_case` 模块。
 #[derive(Clone)]
 pub struct AdminServices {
+    account_templates: Arc<dyn AccountTemplatesService>,
     group_monitor: Arc<dyn GroupMonitorService>,
     relogin: Arc<dyn ReloginService>,
     outbound_user_agent: Arc<dyn OutboundUserAgentService>,
@@ -176,6 +178,11 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn account_templates(&self) -> &dyn AccountTemplatesService {
+        self.account_templates.as_ref()
+    }
+
     #[must_use]
     pub fn import_tasks(&self) -> &dyn ImportTasksService {
         self.import_tasks.as_ref()
@@ -353,6 +360,12 @@ pub async fn initialize(
         store.proxies(),
         snapshot.clone(),
     ));
+    let account_templates = Arc::new(
+        use_case::account_templates::DefaultAccountTemplatesService::new(
+            store.relogin(),
+            accounts.clone(),
+        ),
+    );
     let relogin = Arc::new(use_case::relogin::DefaultReloginService::new(
         store.relogin(),
         store.accounts(),
@@ -360,6 +373,7 @@ pub async fn initialize(
         openai,
         openai_service.clone(),
         snapshot.clone(),
+        account_templates.clone(),
     ));
     let xai_service = Arc::new(DefaultXaiService::new(
         xai,
@@ -373,6 +387,7 @@ pub async fn initialize(
     );
     let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
     let services = AdminServices {
+        account_templates,
         group_monitor: group_monitor.clone(),
         relogin: relogin.clone(),
         outbound_user_agent: outbound_user_agent.clone(),

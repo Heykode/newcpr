@@ -11,7 +11,7 @@ use crate::{
             PrepareCredentialRotation, ProviderDocument,
         },
         relogin::*,
-        relogin_templates::{ReloginTemplate, ReloginTemplateConfig, ReloginTemplateSelection},
+        relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection},
     },
     ports::{
         provider::ProviderAdmin,
@@ -33,7 +33,7 @@ use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
-mod templates;
+mod recovery;
 mod worker;
 pub(crate) use worker::contribution;
 
@@ -49,6 +49,7 @@ pub struct ReloginView {
     pub automatic: bool,
     pub status: ReloginStatus,
     pub message: String,
+    pub recovery: recovery::RecoveryView,
     pub plan_type: Option<String>,
     pub workspace_id: Option<String>,
     pub preferred_workspace_id: Option<String>,
@@ -108,18 +109,12 @@ pub struct AccountReloginAction {
 
 #[async_trait]
 pub trait ReloginService: Send + Sync {
-    async fn templates(&self) -> Result<Vec<ReloginTemplate>, AdminError>;
-    async fn save_template(
-        &self,
-        selection: Option<ReloginTemplateSelection>,
-        config: ReloginTemplateConfig,
-    ) -> Result<ReloginTemplate, AdminError>;
-    async fn delete_template(&self, selection: ReloginTemplateSelection) -> Result<(), AdminError>;
     async fn push_with_template(
         &self,
         ids: &[String],
         revisions: &BTreeMap<String, u64>,
         template: Option<ReloginTemplateSelection>,
+        custom_name: Option<String>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError>;
     async fn list(&self) -> Result<ReloginList, AdminError>;
@@ -150,7 +145,12 @@ pub trait ReloginService: Send + Sync {
 
 #[derive(Default)]
 struct Gate {
-    active: BTreeMap<String, CancellationToken>,
+    active: BTreeMap<String, ActiveLogin>,
+}
+
+struct ActiveLogin {
+    cancellation: CancellationToken,
+    owner: std::sync::Weak<()>,
 }
 
 pub(crate) struct DefaultReloginService {
@@ -160,6 +160,7 @@ pub(crate) struct DefaultReloginService {
     provider: Arc<dyn ProviderAdmin>,
     openai: Arc<dyn OpenAiService>,
     snapshot: Arc<dyn SnapshotControl>,
+    templates: Arc<dyn super::account_templates::AccountTemplatesService>,
     gate: Mutex<Gate>,
 }
 
@@ -171,6 +172,7 @@ impl DefaultReloginService {
         provider: Arc<dyn ProviderAdmin>,
         openai: Arc<dyn OpenAiService>,
         snapshot: Arc<dyn SnapshotControl>,
+        templates: Arc<dyn super::account_templates::AccountTemplatesService>,
     ) -> Self {
         Self {
             store,
@@ -179,6 +181,7 @@ impl DefaultReloginService {
             provider,
             openai,
             snapshot,
+            templates,
             gate: Mutex::new(Gate::default()),
         }
     }
@@ -224,8 +227,8 @@ impl DefaultReloginService {
 
     fn stop(gate: &Gate, entry: &mut ReloginEntry) {
         entry.manual_push_context = None;
-        if let Some(cancellation) = gate.active.get(&entry.email) {
-            cancellation.cancel();
+        if let Some(active) = gate.active.get(&entry.email) {
+            active.cancellation.cancel();
         }
         if entry.status.active() {
             entry.status = ReloginStatus::Failed;
@@ -238,16 +241,20 @@ impl DefaultReloginService {
         entry: &mut ReloginEntry,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        self.push_entry_with_template(entry, None, context).await
+        self.push_entry_with_template(entry, None, None, context)
+            .await
     }
 
     async fn push_entry_with_template(
         &self,
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
+        custom_name: Option<&str>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        let outcome = self.push_checked(entry, template, context).await;
+        let outcome = self
+            .push_checked(entry, template, custom_name, context)
+            .await;
         if outcome.is_err() && entry.status == ReloginStatus::Pushing {
             entry.status = ReloginStatus::Uncertain;
             entry.message = "推送结果未确认，请检查号池并重新获取凭证后再推送".to_owned();
@@ -358,6 +365,7 @@ impl DefaultReloginService {
         &self,
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
+        custom_name: Option<&str>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
         entry.validate_totp()?;
@@ -429,12 +437,24 @@ impl DefaultReloginService {
             publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
             entry.target = Some(ReloginTarget::from_account(current)?);
         } else {
-            let settings = template.map(ReloginTemplateConfig::settings).transpose()?;
+            let mut settings = template.map(ReloginTemplateConfig::settings).transpose()?;
+            if let Some(name) = custom_name {
+                let settings =
+                    settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
+                        custom_name: None,
+                        enabled: true,
+                        turn_state_injection_enabled: None,
+                        concurrency_limit: None,
+                        weight: crate::model::accounts::AccountWeight::DEFAULT,
+                        group_ids: Vec::new(),
+                    });
+                settings.custom_name = Some(name.to_owned());
+            }
             if let Some(config) = template {
                 self.store()?
                     .validate_template_references(config)
                     .await
-                    .map_err(templates::template_error)?;
+                    .map_err(super::account_templates::template_error)?;
             }
             // Import owns both preparation and commit, so fence before entering it.
             entry.status = ReloginStatus::Pushing;
@@ -461,6 +481,9 @@ impl DefaultReloginService {
             entry.target = Some(ReloginTarget::from_account(&current.credential)?);
         }
         entry.synced_at = Some(Utc::now());
+        entry.next_attempt_at = None;
+        entry.automatic_attempts = 0;
+        entry.attempted_target = None;
         entry.status = ReloginStatus::Ready;
         entry.message = "凭据已同步到号池".to_owned();
         self.save(entry).await
@@ -548,47 +571,6 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 
 #[async_trait]
 impl ReloginService for DefaultReloginService {
-    async fn templates(&self) -> Result<Vec<ReloginTemplate>, AdminError> {
-        self.store()?
-            .templates()
-            .await
-            .map_err(templates::template_error)
-    }
-
-    async fn save_template(
-        &self,
-        selection: Option<ReloginTemplateSelection>,
-        mut config: ReloginTemplateConfig,
-    ) -> Result<ReloginTemplate, AdminError> {
-        config.name = config.name.trim().to_owned();
-        config.settings()?;
-        let (id, expected) = match selection {
-            Some(selection) => {
-                templates::validate_selection(&selection)?;
-                (selection.id, Some(selection.revision))
-            }
-            None => (format!("template_{}", uuid::Uuid::now_v7().simple()), None),
-        };
-        let template = ReloginTemplate {
-            id,
-            revision: expected.unwrap_or(0) + 1,
-            config,
-        };
-        self.store()?
-            .save_template(&template, expected)
-            .await
-            .map_err(templates::template_error)?;
-        Ok(template)
-    }
-
-    async fn delete_template(&self, selection: ReloginTemplateSelection) -> Result<(), AdminError> {
-        templates::validate_selection(&selection)?;
-        self.store()?
-            .delete_template(&selection.id, selection.revision)
-            .await
-            .map_err(templates::template_error)
-    }
-
     async fn account_actions(
         &self,
         ids: &[String],
@@ -713,6 +695,7 @@ impl ReloginService for DefaultReloginService {
         let items = entries
             .into_iter()
             .map(|entry| {
+                let recovery = recovery::view(&entry, &pool, &settings, now);
                 let imported_at = entry.import_time();
                 let matches = matching_accounts(&entry, &pool);
                 let statistics = statistics_account(&entry, &matches);
@@ -742,6 +725,7 @@ impl ReloginService for DefaultReloginService {
                     "present"
                 };
                 ReloginView {
+                    recovery,
                     id: entry.id,
                     revision: entry.revision,
                     email: entry.email,
@@ -881,6 +865,7 @@ impl ReloginService for DefaultReloginService {
                     automatic_job: false,
                     manual_push_context: None,
                     automatic_attempts: 0,
+                    automatic_started_at: Vec::new(),
                     attempted_target: None,
                     next_attempt_at: None,
                     synced_at: None,
@@ -933,7 +918,8 @@ impl ReloginService for DefaultReloginService {
         revisions: &BTreeMap<String, u64>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
-        self.push_with_template(ids, revisions, None, context).await
+        self.push_with_template(ids, revisions, None, None, context)
+            .await
     }
 
     async fn push_with_template(
@@ -941,11 +927,16 @@ impl ReloginService for DefaultReloginService {
         ids: &[String],
         revisions: &BTreeMap<String, u64>,
         template: Option<ReloginTemplateSelection>,
+        custom_name: Option<String>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         validate_ids(ids)?;
+        let custom_name = crate::model::accounts::normalize_custom_name(custom_name.as_deref())?;
         let _gate = self.gate.lock().await;
-        let template = self.resolve_template(template).await?;
+        let template = match template {
+            Some(selection) => Some(self.templates.resolve(selection).await?),
+            None => None,
+        };
         let entries = self.entries().await?;
         let mut results = Vec::new();
         for id in ids {
@@ -954,6 +945,7 @@ impl ReloginService for DefaultReloginService {
                     self.push_entry_with_template(
                         &mut entry.clone(),
                         template.as_ref().map(|template| &template.config),
+                        custom_name.as_deref(),
                         context,
                     )
                     .await

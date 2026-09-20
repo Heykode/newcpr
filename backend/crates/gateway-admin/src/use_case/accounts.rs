@@ -662,8 +662,12 @@ impl AccountsService for DefaultAccountsService {
     async fn update(
         &self,
         context: &MutationContext,
-        command: UpdateAccount,
+        mut command: UpdateAccount,
     ) -> Result<AccountUpdateResult, AdminError> {
+        command.custom_name = command
+            .custom_name
+            .map(|value| crate::model::accounts::normalize_custom_name(value.as_deref()))
+            .transpose()?;
         let account_id = ProviderAccountId::new(command.account_id.clone())
             .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
         let (_, provider) = self.provider_for_account(&account_id).await?;
@@ -686,8 +690,12 @@ impl AccountsService for DefaultAccountsService {
     async fn batch_update(
         &self,
         context: &MutationContext,
-        command: BatchUpdateAccounts,
+        mut command: BatchUpdateAccounts,
     ) -> Result<AccountsUpdateResult, AdminError> {
+        command.custom_name = command
+            .custom_name
+            .map(|value| crate::model::accounts::normalize_custom_name(value.as_deref()))
+            .transpose()?;
         let account_ids = command
             .account_ids
             .iter()
@@ -705,6 +713,13 @@ impl AccountsService for DefaultAccountsService {
         >::new();
         for account_id in &account_ids {
             let (item, provider) = self.provider_for_account(account_id).await?;
+            if command.turn_state_injection_enabled == Some(true)
+                && item.account.provider_kind.as_str() != "openai"
+            {
+                return Err(AdminError::invalid(
+                    "State 开关仅支持 OpenAI 账号，请调整选择",
+                ));
+            }
             providers
                 .entry(item.account.provider_kind)
                 .or_insert_with(|| (provider, Vec::new()))

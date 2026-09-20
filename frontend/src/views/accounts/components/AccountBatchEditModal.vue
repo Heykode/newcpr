@@ -19,6 +19,8 @@ const emit = defineEmits<{
 }>()
 
 const open = defineModel<boolean>({ required: true })
+const customName = defineModel<string>('customName', { required: true })
+const updateCustomName = defineModel<boolean>('updateCustomName', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
@@ -43,6 +45,8 @@ const updateProxy = defineModel<boolean>('updateProxy', { required: true })
     :dismissible="!saving"
   >
     <AccountSettingsFields
+      v-model:custom-name="customName"
+      v-model:update-custom-name="updateCustomName"
       v-model:enabled="enabled"
       v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
       v-model:concurrency-limit="concurrencyLimit"
@@ -56,6 +60,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { required: true })
       v-model:update-weight="updateWeight"
       v-model:update-groups="updateGroups"
       v-model:update-proxy="updateProxy"
+      name-available
       :groups="groups"
       :groups-loading="groupsLoading"
       :turn-state-available="turnStateAvailable"

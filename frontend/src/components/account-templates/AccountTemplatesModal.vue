@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { ReloginTemplate } from '@/api/modules/relogin'
+import type { AccountTemplate } from '@/api/modules/account-templates'
 import { Pencil, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
-import { deleteReloginTemplate, getReloginTemplates, saveReloginTemplate } from '@/api/modules/relogin'
+import { deleteAccountTemplate, getAccountTemplates, saveAccountTemplate } from '@/api/modules/account-templates'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
@@ -12,17 +12,17 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { errorMessage } from '@/utils/async'
-import AccountSettingsFields from '../accounts/components/AccountSettingsFields.vue'
+import AccountSettingsFields from '@/views/accounts/components/AccountSettingsFields.vue'
 import { templateConfig, templateForm } from './template-form'
 
 const open = defineModel<boolean>({ required: true })
-const templates = shallowRef<ReloginTemplate[]>([])
+const templates = shallowRef<AccountTemplate[]>([])
 const loading = shallowRef(false)
 const busy = shallowRef(false)
 const error = shallowRef('')
 const editing = shallowRef(false)
-const current = shallowRef<ReloginTemplate>()
-const deleting = shallowRef<ReloginTemplate>()
+const current = shallowRef<AccountTemplate>()
+const deleting = shallowRef<AccountTemplate>()
 const deleteOpen = shallowRef(false)
 const form = ref(templateForm())
 const { groups, loading: groupsLoading, loadGroups } = useAccountGroupCatalog({ immediate: false })
@@ -36,7 +36,7 @@ async function load() {
   controller = owner
   loading.value = true
   try {
-    const rows = await getReloginTemplates({ silent: true, signal: owner.signal })
+    const rows = await getAccountTemplates({ silent: true, signal: owner.signal })
     if (!owner.signal.aborted && !disposed) {
       templates.value = rows
       error.value = ''
@@ -51,7 +51,7 @@ async function load() {
       loading.value = false
   }
 }
-function edit(row?: ReloginTemplate) {
+function edit(row?: AccountTemplate) {
   current.value = row
   form.value = templateForm(row?.config)
   error.value = ''
@@ -65,7 +65,7 @@ async function save() {
   error.value = ''
   try {
     const selection = current.value && { id: current.value.id, revision: current.value.revision }
-    await saveReloginTemplate(templateConfig(form.value), selection)
+    await saveAccountTemplate(templateConfig(form.value), selection)
     if (disposed)
       return
     editing.value = false
@@ -78,7 +78,7 @@ async function save() {
   }
   finally { busy.value = false }
 }
-function requestDelete(row: ReloginTemplate) {
+function requestDelete(row: AccountTemplate) {
   deleting.value = row
   error.value = ''
   deleteOpen.value = true
@@ -89,7 +89,7 @@ async function remove() {
   busy.value = true
   error.value = ''
   try {
-    await deleteReloginTemplate({ id: deleting.value.id, revision: deleting.value.revision })
+    await deleteAccountTemplate({ id: deleting.value.id, revision: deleting.value.revision })
     if (disposed)
       return
     deleteOpen.value = false
@@ -132,6 +132,7 @@ onScopeDispose(() => {
       </BaseFormItem>
       <AccountSettingsFields
         v-model:enabled="form.enabled"
+        v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
         v-model:concurrency-limit="form.concurrencyLimit"
         v-model:weight="form.weight"
         v-model:selected-group-ids="form.groupIds"
@@ -140,6 +141,7 @@ onScopeDispose(() => {
         :groups="groups"
         :groups-loading="groupsLoading"
         :preserve-proxy="false"
+        turn-state-available
         :disabled="busy"
       />
       <div v-for="id in missingGroups" :key="id" class="flex min-w-0 items-center gap-2 text-cp-sm text-cp-warning">
@@ -169,7 +171,7 @@ onScopeDispose(() => {
             {{ row.config.name }}
           </div>
           <div class="mt-1 text-cp-xs text-cp-text-secondary">
-            {{ row.config.enabled ? '启用调度' : '暂停调度' }} · 并发 {{ row.config.concurrencyLimit ?? '默认' }} · 权重 {{ row.config.weight }} · {{ row.config.groupIds.length }} 个分组
+            {{ row.config.enabled ? '启用调度' : '暂停调度' }} · State {{ row.config.turnStateInjectionEnabled == null ? '未设置' : row.config.turnStateInjectionEnabled ? '开' : '关' }} · 并发 {{ row.config.concurrencyLimit ?? '默认' }} · 权重 {{ row.config.weight }} · {{ row.config.groupIds.length }} 个分组
           </div>
         </div>
         <BaseIconButton label="编辑模板" :disabled="busy" @click="edit(row)">

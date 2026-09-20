@@ -7,12 +7,11 @@
 - Manual login only caches verified credentials. Explicit push confirms the library
   revision. Automatic recovery requires enabled OAuth, expired credential state, a
   matching terminal expiry reason, and an enabled email-matched library entry.
-- OpenAI `expired` plus `access_token_expired` with a refresh token is reserved for
-  bounded token-refresh recovery, not password relogin. It remains blocked from
-  inference even when the stored access-token expiry is in the future or missing.
-  The refresh worker respects `next_refresh_at`; explicit revocation, invalid grant
-  or exhausted recovery uses terminal `credential_expired`. Do not rewrite tokens
-  from an inference request's stale snapshot.
+- OpenAI `expired` plus `access_token_expired` can trigger password/TOTP recovery
+  even when a refresh token exists. The refresh worker remains independent; recheck
+  account health and authentication generation before pushing so its successful
+  recovery is not overwritten. Expired accounts remain blocked from inference.
+  Do not rewrite tokens from an inference request's stale snapshot.
 - Existing account recovery captures account ID, principal, workspace and credential
   revision. Recheck these at push; automatic push also rechecks recovery eligibility.
   Use the existing prepared rotation and CAS transaction, never delete/recreate.
@@ -58,6 +57,20 @@
 - Manual and automatic login share bounded concurrency. Publish in-memory occupancy
   only after all fallible claim writes complete; otherwise a partial claim failure
   can permanently fill the queue with jobs that were never started.
+- Scan every two seconds while login exchanges are active and refill available slots
+  after individual completions. Poll exchanges while awaiting claim: settlement may
+  hold the gate across an asynchronous save. Awaiting claim alone can deadlock it.
+  Keep execution owned by the scheduled cycle, not detached tasks; dropped cycle
+  owners release stale occupancy and orphan persisted rows retain failure fences.
+- Confirmed push clears failure cooldown, per-generation attempts and attempted target.
+  Failed recovery keeps bounded backoff and at most three attempts per authentication
+  generation. A new binding can recover immediately; Cookie writes cannot reset it.
+  Preserve a JSONB-defaulted rolling history of automatic starts across success and
+  reimport: at most three starts in fifteen minutes, including across new bindings.
+- One shared eligibility projection drives the worker and the safe list `recovery`
+  field. Expose waiting, cooldown/retry time, pause, missing material, workspace
+  ambiguity, retry limits and loop protection without secrets. An uncertain push
+  remains blocked; manually obtained valid credentials await explicit push.
 - Pausing, deleting, editing material or changing per-entry automatic/workspace state
   cancels in-flight results using both cancellation and revision fencing.
 - The current worker assumes a single CPR instance. Multi-replica relogin requires a
@@ -101,10 +114,22 @@
   authorizes worker settlement to the selected existing account only; it cannot
   create a replacement if that account disappears. Cancel/edit/library queue paths
   clear the intent. Preserve the administrator's audit context and pool settings.
-- Relogin templates contain only named import settings and an optional saved proxy ID.
+- `AccountTemplatesService` owns the one shared template catalog; account management
+  and relogin use the existing `/api/admin/relogin/templates*` endpoints and storage.
+  Templates contain only named account settings and an optional saved proxy ID.
   `account_relogin_templates` stores independent revisions and unique normalized names.
   Updates/deletes require their confirmed revision. Changing a template never changes
   accounts that previously used it.
+- Optional `turnStateInjectionEnabled` is a boolean switch only, not State parameters.
+  Legacy missing/null preserves existing account State when applied; new imports retain
+  their default-off behavior. Newly saved UI templates use explicit true/false.
+- `POST /api/admin/accounts/apply-template` accepts frozen `accountIds` (1-1000 unique)
+  and `template: { id, revision }` only. Resolve and validate one server-side snapshot,
+  then use `AccountsService.batch_update` for atomic settings, auditing, provider
+  notification and configuration publication. Groups replace assignments, empty groups
+  clear them, null concurrency restores defaults, and no proxy explicitly selects Direct.
+  Reject State=true on any non-OpenAI target before mutation. No credential/device
+  replacement, template binding, automatic retry or schema migration is implied.
 - Manual push optionally captures template ID/revision; resolve one immutable config
   snapshot per batch. Stale/deleted templates fail before any push. Only create-only
   imports receive settings/proxy; existing account rotation never applies them.
@@ -114,6 +139,30 @@
   Races or failures after the import fence retain the existing uncertain semantics.
 - Verify template CRUD/CAS, missing references, mixed batches, default imports and
   original credential/device preservation against an isolated PostgreSQL instance.
+
+## Custom Account Names
+
+- `provider_accounts.custom_name` is nullable local display metadata, introduced by
+  additive migration `0032_account_custom_names.sql`. Never substitute it for
+  provider-owned name/email, login matching, principal, workspace, credentials,
+  installation identity or Core scheduling facts. Every SQL projection feeding
+  `account_summary_from_row` must select it, including refresh and group members.
+- `customName` is optional on imports and manual push. Normalize through the shared
+  Admin helper: trim, blank to None, max 128 Unicode scalar values, reject control
+  characters. HTTP validation and Store mutations use the same rule.
+- Single/batch updates preserve omitted names and clear explicit null/blank names.
+  Import omission/blank preserves an existing name and leaves a new row unnamed.
+  Name changes belong to the existing settings/audit transaction; audit field names
+  only. Failed group/proxy/audit validation rolls back the name too.
+- Templates never contain names. Template application explicitly omits custom_name.
+  Manual push freezes the independent batch name once and applies it only to the
+  create-only import branch. Existing/manual/automatic rotation and token refresh
+  never update the column. No-template named pushes retain ordinary new defaults.
+- Search includes custom names; real email and upstream profile fields stay intact.
+  Existing sorting and historical request snapshots are not redefined by a rename.
+- The migration is not eligible for the normal deployment fast path. Deployment is
+  separate and must follow the reviewed migration procedure; do not rewrite frozen
+  migrations or promise an automatic rollback across the schema change.
 
 ## Success Counts
 

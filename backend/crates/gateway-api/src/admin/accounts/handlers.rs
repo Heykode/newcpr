@@ -19,6 +19,10 @@ where
         .route("/api/admin/accounts/update", post(update_account::<S>))
         .route("/api/admin/accounts/delete", post(delete_accounts::<S>))
         .route(
+            "/api/admin/accounts/apply-template",
+            post(apply_account_template::<S>),
+        )
+        .route(
             "/api/admin/accounts/batch-update",
             post(batch_update_accounts::<S>),
         )
@@ -60,6 +64,30 @@ where
             "/api/admin/accounts/oauth/complete",
             post(complete_account_authorization::<S>),
         )
+}
+
+async fn apply_account_template<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<wire::ApplyAccountTemplateRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .account_templates()
+        .apply(
+            request.account_ids,
+            request.template,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(BatchUpdatedAccountsData::from(result)),
+    ))
 }
 
 async fn batch_update_accounts<S>(

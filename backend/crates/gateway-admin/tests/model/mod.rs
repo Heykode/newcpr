@@ -1,5 +1,6 @@
 //! 模型模块测试：镜像 src/model/ 中带逻辑的模块。
 
+mod accounts;
 mod backup;
 mod group_monitor;
 mod group_monitor_quota;

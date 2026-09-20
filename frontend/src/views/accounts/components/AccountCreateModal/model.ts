@@ -1,3 +1,4 @@
+import { normalizeAccountName } from '@/utils/account-name'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 
 export type AccountCreateProvider = 'batch' | 'openai' | 'xai'
@@ -5,6 +6,7 @@ export type AccountImportMode = 'oauth' | 'access_token' | 'refresh_token' | 'js
 export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
+  customName: string
   provider: AccountCreateProvider | ''
   enabled: boolean
   turnStateInjectionEnabled: boolean
@@ -23,6 +25,7 @@ export interface AccountCreateForm {
 
 export function emptyAccountCreateForm(): AccountCreateForm {
   return {
+    customName: '',
     provider: '',
     enabled: true,
     turnStateInjectionEnabled: false,
@@ -49,10 +52,12 @@ export function accountProxyError(form: AccountCreateForm): string | undefined {
 }
 
 export function accountImportSettings(form: AccountCreateForm, provider = form.provider) {
+  const customName = normalizeAccountName(form.customName)
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
     throw new Error(scheduling.message)
   return {
+    ...(customName ? { customName } : {}),
     enabled: form.enabled,
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
