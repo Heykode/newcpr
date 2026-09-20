@@ -453,11 +453,16 @@ time. Observe actual opening duration and its outcome independently.
 
 - A pool's maximum idle count is not a hard bound on total socket creation.
   The pinned Hyper client can finish speculative dials after an idle checkout wins.
-- To verify reuse deterministically, a synthetic server can bound accepted TLS
-  connections and require all sequential/concurrent streams to complete within
-  their deadlines. Keep protocol, certificate and streaming-barrier assertions;
-  do not infer connection churn solely from an exact total accepted-socket count
-  on an unconstrained server, or present a bounded fixture as a throughput result.
+- Do not cap accepted sockets to the number of concurrent requests: an unfinished
+  or unused speculative dial can occupy the cap and deadlock a streaming barrier.
+  Give each accepted connection a response-visible synthetic ID, and verify reuse
+  from connections that actually carry requests. Keep same-connection sequential
+  reuse, HTTP/2 multiplexing, concurrent HTTP/1 streaming, and reuse between waves.
+- Include an established TCP dial that deliberately sends no TLS or HTTP bytes.
+  It must not block the normal streams or count as an application connection.
+  Bound request counts, deadlines and fixture shutdown, not socket admission.
+  Separate accepted TCP counts from used connections in diagnostic output.
+  This is functional loopback verification, not upstream throughput evidence.
 
 ## Responses Compression Boundary
 
@@ -532,3 +537,8 @@ time. Observe actual opening duration and its outcome independently.
   connection tasks while another test is using its pool. Give independent
   fixtures unique account IDs and include them in the frozen request scope;
   keep reuse assertions within one runtime rather than weakening retry policy.
+- Quota seed helpers need the same isolation as conversation fixtures. Test two
+  helper instances for distinct account IDs, and characterize runtime teardown
+  with a held real response: a deliberately shared ID loses its old-runtime
+  connection, while a distinct ID's response finishes. Do not change production
+  account identity or pool keys to compensate for independent test runtimes.

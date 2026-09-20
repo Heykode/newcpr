@@ -4,8 +4,6 @@ use gateway_core::provider_ports::ProviderStorePorts;
 
 use super::*;
 
-const ACCOUNT: &str = "acct_scope_same";
-
 struct Capture {
     headers: reqwest::header::HeaderMap,
     body: Value,
@@ -15,6 +13,7 @@ struct Capture {
 
 async fn capture(
     accounts: &Arc<MemoryAccountStore>,
+    account_id: &str,
     runtime: &std::path::Path,
     body: Value,
     websocket: bool,
@@ -96,18 +95,36 @@ async fn capture(
         )
         .continuation
         .affinity_hash;
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new(account_id).unwrap(),
+            RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
+    let owner = ProviderAccountStateOwner::new(
+        ProviderKind::new("openai").unwrap(),
+        ProviderAccountId::new(if same_account {
+            account_id
+        } else {
+            "acct_scope_old"
+        })
+        .unwrap(),
+    );
+    let context = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_alignment").unwrap(),
+            ClientApiKeyId::new("key_openai_contract").unwrap(),
+        ),
+        NonZeroU32::new(1).unwrap(),
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, Some(owner)).with_account_scope(scope),
+        None,
+        CancellationToken::new(),
+    );
     let mut stream = provider
-        .execute(
-            planned_request("openai", operation.clone()),
-            context_with_state_owner(
-                "req_alignment",
-                if same_account {
-                    ACCOUNT
-                } else {
-                    "acct_scope_old"
-                },
-            ),
-        )
+        .execute(planned_request("openai", operation.clone()), context)
         .await
         .unwrap();
     let mut state = Value::Null;
@@ -126,7 +143,7 @@ async fn capture(
         }
     }
     assert!(completed);
-    assert_eq!(state["account_id"], ACCOUNT);
+    assert_eq!(state["account_id"], account_id);
     assert_eq!(state["client_api_key_id"], "key_openai_contract");
     for name in ["session", "thread"] {
         assert!(
@@ -215,7 +232,8 @@ fn stable_facts(capture: &Capture) -> Value {
 #[tokio::test]
 async fn string_and_message_inputs_keep_wire_identity_affinity_and_cache() {
     let accounts = Arc::new(MemoryAccountStore::default());
-    create_account(&accounts, ACCOUNT).await;
+    let account_id = format!("acct_alignment_{}", uuid::Uuid::new_v4());
+    create_account(&accounts, &account_id).await;
     let runtime = tempfile::tempdir().unwrap();
     for websocket in [false, true] {
         for text in ["hello", "", " \n ", "\u{4e2d}\u{6587}\ntext"] {
@@ -229,12 +247,27 @@ async fn string_and_message_inputs_keep_wire_identity_affinity_and_cache() {
                     body["thread_id"] = json!("alignment-thread");
                     body["prompt_cache_key"] = json!("alignment-cache");
                 }
-                let string =
-                    capture(&accounts, runtime.path(), body.clone(), websocket, true).await;
+                let string = capture(
+                    &accounts,
+                    &account_id,
+                    runtime.path(),
+                    body.clone(),
+                    websocket,
+                    true,
+                )
+                .await;
                 body["input"] = json!([{
                     "type":"message","role":"user","content":[{"type":"input_text","text":text}]
                 }]);
-                let message = capture(&accounts, runtime.path(), body, websocket, true).await;
+                let message = capture(
+                    &accounts,
+                    &account_id,
+                    runtime.path(),
+                    body,
+                    websocket,
+                    true,
+                )
+                .await;
                 assert_eq!(
                     stable_facts(&string),
                     stable_facts(&message),
@@ -248,7 +281,8 @@ async fn string_and_message_inputs_keep_wire_identity_affinity_and_cache() {
 #[tokio::test]
 async fn installation_alias_shape_keeps_account_fingerprint_routing_and_cache() {
     let accounts = Arc::new(MemoryAccountStore::default());
-    create_account(&accounts, ACCOUNT).await;
+    let account_id = format!("acct_alignment_{}", uuid::Uuid::new_v4());
+    create_account(&accounts, &account_id).await;
     let runtime = tempfile::tempdir().unwrap();
     for websocket in [false, true] {
         for same_account in [false, true] {
@@ -258,6 +292,7 @@ async fn installation_alias_shape_keeps_account_fingerprint_routing_and_cache() 
             });
             let clean = capture(
                 &accounts,
+                &account_id,
                 runtime.path(),
                 base.clone(),
                 websocket,
@@ -293,8 +328,15 @@ async fn installation_alias_shape_keeps_account_fingerprint_routing_and_cache() 
                     let mut body = base.clone();
                     body[alias] = old.clone();
                     body["client_metadata"] = json!({alias:old, "business":"preserve"});
-                    let result =
-                        capture(&accounts, runtime.path(), body, websocket, same_account).await;
+                    let result = capture(
+                        &accounts,
+                        &account_id,
+                        runtime.path(),
+                        body,
+                        websocket,
+                        same_account,
+                    )
+                    .await;
                     assert_eq!(result.body[alias], device);
                     assert_eq!(result.body["client_metadata"][alias], device);
                     assert_eq!(

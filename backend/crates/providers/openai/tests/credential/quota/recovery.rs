@@ -287,8 +287,9 @@ async fn seed_same_window_exhaustion(
     ProviderAccount,
 ) {
     let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_same_window").await;
-    let account = store.account("acct_same_window").expect("account");
+    let account_id = format!("acct_same_window_{}", uuid::Uuid::new_v4());
+    create_account(&store, &account_id).await;
+    let account = store.account(&account_id).expect("account");
     let server = MockServer::start().await;
     let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
     mount_same_window_usage(&server, same_window_usage(short_used, 100)).await;
@@ -297,6 +298,13 @@ async fn seed_same_window_exhaustion(
         .await
         .expect("seed exhausted quota");
     (store, server, service, account)
+}
+
+#[tokio::test]
+async fn same_window_fixtures_have_independent_cached_account_ids() {
+    let first = seed_same_window_exhaustion(50).await;
+    let second = seed_same_window_exhaustion(50).await;
+    assert_ne!(first.3.id(), second.3.id());
 }
 
 async fn replace_same_window_document(
