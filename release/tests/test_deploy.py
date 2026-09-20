@@ -40,6 +40,14 @@ class DeployTests(unittest.TestCase):
         with self.assertRaises(images.Unavailable):
             deploy.validate_profile(item)
 
+    def test_egress_profile_validation(self):
+        checks = [{"name": "ipv4", "url": "https://probe.example.test/", "family": "ipv4"},
+                  {"name": "proxy", "url": "https://probe.example.test/", "proxy_id": "proxy_example"}]
+        self.assertEqual(deploy.validate_profile({**profile(), "egress_checks": checks})["egress_checks"], checks)
+        with self.assertRaises(images.Unavailable):
+            deploy.validate_profile({**profile(), "egress_checks": [{"name": "invalid"}]})
+        self.assertIn("deploy/egress_check.py", deploy.DEPLOY_FILES)
+
     def test_upgrade_boundaries(self):
         _, proof, _ = fixtures()
         labels = {"org.opencontainers.image.revision": SOURCE, "org.opencontainers.image.version": "1.1.0"}

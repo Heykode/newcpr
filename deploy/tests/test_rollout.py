@@ -139,6 +139,41 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(self.db["Id"], "db-container")
         self.assertEqual(self.config.read_text(), "mode: test\n")
 
+    def test_failed_egress_preflight_never_switches(self):
+        with patch.object(rollout.egress_check, "verify", side_effect=RuntimeError("egress failed")), \
+                patch.object(self.worker, "up") as up, self.assertRaisesRegex(RuntimeError, "egress"):
+            self.worker.run()
+        up.assert_not_called()
+        self.assertEqual(yaml.safe_load(self.compose.read_text()), self.original)
+
+    def test_post_switch_egress_failure_rolls_back_and_checks_recovery(self):
+        with patch.object(rollout.egress_check, "verify",
+                          side_effect=[[{"name": "v4"}], RuntimeError("egress failed"), [{"name": "v4"}]]) as verify, \
+                patch.object(self.worker, "up", side_effect=self.fake_up):
+            self.assertEqual(self.worker.run(), 1)
+        result = json.loads((self.worker.backup / "result.json").read_text())
+        self.assertEqual(result["status"], "rolled_back")
+        self.assertEqual(result["egress_rollback"], [{"name": "v4"}])
+        self.assertEqual(verify.call_count, 3)
+
+    def test_egress_failure_after_rollback_is_not_reported_as_recovered(self):
+        with patch.object(rollout.egress_check, "verify",
+                          side_effect=[[], RuntimeError("egress failed"), RuntimeError("still failed")]), \
+                patch.object(self.worker, "up", side_effect=self.fake_up):
+            self.assertEqual(self.worker.run(), 1)
+        result = json.loads((self.worker.backup / "result.json").read_text())
+        self.assertEqual(result["status"], "rollback_failed")
+
+    def test_image_replacement_preserves_gateway_priorities(self):
+        self.original["services"]["app"]["networks"] = {
+            "v4": {"gw_priority": 1}, "v6": {"gw_priority": 0},
+        }
+        self.compose.write_text(yaml.safe_dump(self.original))
+        self.worker.prepare()
+        candidate = yaml.safe_load(self.worker.pending.read_text())
+        self.assertEqual(candidate["services"]["app"]["networks"],
+                         self.original["services"]["app"]["networks"])
+
     def test_failed_upgrade_rolls_back_pinned_old_image(self):
         def up(log_name):
             self.fake_up(log_name)
