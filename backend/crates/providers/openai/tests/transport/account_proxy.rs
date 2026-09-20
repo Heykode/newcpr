@@ -684,6 +684,137 @@ async fn token_client_lru_evicts_only_the_oldest_at_128_entries() {
     assert_ne!(seen[0].0, seen[131].0, "oldest token client is rebuilt");
 }
 
+async fn runtime_teardown_case(shared_account: bool) {
+    use std::convert::Infallible;
+
+    use bytes::Bytes;
+    use futures::stream;
+    use http_body_util::StreamBody;
+    use hyper::body::Frame;
+    use hyper_util::rt::TokioIo;
+    use provider_openai::transport::client::build_account_http_client;
+    use tokio::sync::{Notify, oneshot};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let tail = Arc::new(Notify::new());
+    let server_tail = Arc::clone(&tail);
+    let server = tokio::spawn(async move {
+        let mut handlers = tokio::task::JoinSet::new();
+        let mut connection = 0;
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            connection += 1;
+            let release = Arc::clone(&server_tail);
+            handlers.spawn(async move {
+                let service = hyper::service::service_fn(
+                    move |request: hyper::Request<hyper::body::Incoming>| {
+                        let hold = request.uri().path() == "/stream";
+                        let release = Arc::clone(&release);
+                        async move {
+                            let first = stream::iter([Ok::<_, Infallible>(Frame::data(
+                                Bytes::from_static(b"a"),
+                            ))]);
+                            let last = stream::once(async move {
+                                if hold {
+                                    release.notified().await;
+                                }
+                                Ok::<_, Infallible>(Frame::data(Bytes::from_static(b"b")))
+                            });
+                            Ok::<_, Infallible>(
+                                hyper::Response::builder()
+                                    .header("x-test-connection", connection)
+                                    .body(StreamBody::new(first.chain(last)))
+                                    .unwrap(),
+                            )
+                        }
+                    },
+                );
+                // Closing the other runtime deliberately disconnects the negative case.
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(socket), service)
+                    .await;
+            });
+        }
+    });
+    let account_a = format!("runtime-owner-{}", uuid::Uuid::new_v4());
+    let account_b = if shared_account {
+        account_a.clone()
+    } else {
+        format!("runtime-owner-{}", uuid::Uuid::new_v4())
+    };
+    let (warmed_tx, warmed_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+    let warm_url = url.clone();
+    let owner = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let connection = runtime.block_on(async {
+            let client = build_account_http_client(&account_a, None, "runtime-fixture").unwrap();
+            let response = client.get(format!("{warm_url}/warm")).send().await.unwrap();
+            let connection = response.headers()["x-test-connection"].clone();
+            assert_eq!(response.bytes().await.unwrap(), "ab");
+            connection
+        });
+        warmed_tx.send(connection).unwrap();
+        let _ = shutdown_rx.recv();
+        drop(runtime);
+    });
+    let warm_connection = timeout(Duration::from_secs(5), warmed_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let client = build_account_http_client(&account_b, None, "runtime-fixture").unwrap();
+    let mut response = timeout(
+        Duration::from_secs(5),
+        client.get(format!("{url}/stream")).send(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        response.headers()["x-test-connection"] == warm_connection,
+        shared_account
+    );
+    assert_eq!(response.chunk().await.unwrap().unwrap(), "a");
+    shutdown_tx.send(()).unwrap();
+    tokio::task::spawn_blocking(move || owner.join().unwrap())
+        .await
+        .unwrap();
+    if shared_account {
+        assert!(
+            timeout(Duration::from_secs(5), response.chunk())
+                .await
+                .unwrap()
+                .is_err(),
+            "a shared test account reuses a connection owned by the stopped runtime"
+        );
+    } else {
+        tail.notify_one();
+        assert_eq!(
+            timeout(Duration::from_secs(5), response.bytes())
+                .await
+                .unwrap()
+                .unwrap(),
+            "b"
+        );
+    }
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn independent_test_runtimes_require_distinct_cached_account_ids() {
+    if isolate_client_cache_test("independent_test_runtimes_require_distinct_cached_account_ids") {
+        return;
+    }
+    runtime_teardown_case(true).await;
+    runtime_teardown_case(false).await;
+}
+
 #[tokio::test]
 async fn admin_client_cache_invalidation_preserves_unchanged_ua_and_other_accounts() {
     use gateway_core::provider_ports::ProviderUserAgentOverride;

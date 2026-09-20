@@ -15,6 +15,53 @@
 - Cover real HTTP/WS outbound headers, repeated downstream WS frames, opaque
   business bytes, unchanged identity and single terminal failure delivery.
 
+### Organization Extension Headers
+
+#### Scope And Signatures
+
+API `passthrough_header_name` and Provider `provider_managed_header` own the
+existing request filters. No public API, database or runtime configuration changes.
+
+#### Contracts
+
+- Match merged upstream PR 117 (`1e6d69a3499ea67762289042aa84e22745f2cb27`)
+  for `chatgpt-organization-id`, `chatgpt-org-id`, `x-openai-organization` and
+  `x-openai-project`: preserve them as opaque request extensions at both API
+  ingress and Provider decoding. Keep duplicate values and existing transport
+  representability rules; Connection-nominated fields remain hop-by-hop.
+- Continue filtering `chatgpt-project-id`, `openai-organization`,
+  `openai-project`, authentication, cookies and account IDs. Installation,
+  session and fingerprint ownership stay unchanged.
+- This request-side alignment does not relax response metadata redaction and
+  does not grant per-frame mutation of WebSocket opening headers.
+
+#### Validation Matrix
+
+| Input | Result |
+| --- | --- |
+| Four extension names, mixed case and repeated values | Preserve normalized names and values |
+| Extension nominated by Connection | Drop at ingress |
+| Existing managed organization/project/credential header | Keep existing filter |
+| Non-ASCII header bytes | Preserve over HTTP; retain existing WS representability rule |
+
+#### Good, Base And Bad Cases
+
+Normal extensions survive both filters; ordinary requests stay unchanged.
+Relaxing all organization headers or allowing downstream account credentials is wrong.
+
+#### Tests Required
+
+- Cover API decoding and real loopback HTTP/WS output, duplicates and identity.
+- ID-preservation tests must include messages, tool calls, reasoning, encrypted
+  history, unknown/shorthand items, phase, references and explicit continuation.
+  A mock success proves outgoing
+  encoding, not upstream acceptance or production error-rate improvement.
+
+#### Wrong Versus Correct
+
+Wrong: delete the response-side redaction list or all project-related filters.
+Correct: remove only the four request-side rules verified against the pinned upstream.
+
 ## Scope
 
 Apply when modifying Chat conversion, Responses HTTP delivery, explicit compaction
@@ -354,29 +401,42 @@ events, then use the existing encoder and single execution finalization.
   Preserve the original protocol payload, item order/content/extensions,
   nested roles, shorthand messages and top-level instructions. HTTP and WS
   share this encoding owner; do not duplicate role conversion in send paths.
-- Ordinary OAuth Generate is sent with `store=false`, regardless of a
-  downstream `store` value. The encoded request, transport requirement and
-  captured session state must observe the same effective value; do not only
-  rewrite final serialized bytes.
-- Remove only fields known to be unsupported by the Codex Responses endpoint:
-  `max_output_tokens`, `max_completion_tokens`, `temperature`, `top_p`,
-  `frequency_penalty` and `presence_penalty`. Do not apply this filter to
+- Align with upstream `f3236d041098bfa49698a95d3dc4b63174563181`:
+  default absent `store` to false, preserving explicit true/false/null and
+  unknown values. Internal store interpretation, transport and session capture
+  must read this same encoded value. Explicit true follows existing persisted
+  continuation semantics; missing/false retains replay/connection-local guards.
+- Remove only `max_output_tokens`, `temperature` and `prompt_cache_retention`.
+  Preserve `max_completion_tokens`, `top_p`, `frequency_penalty` and
+  `presence_penalty`, leaving validation to the upstream. Do not apply this filter to
   Compact, Search, Images or other providers.
-- Convert string input to the existing Responses message shape on the
-  outbound copy. Preserve the original request used for affinity/content
-  fallback.
-- Standalone complete message and tool-call items may drop an invalid optional
-  item `id` when no continuation or unknown reference semantics are present.
-  Never rewrite or delete `call_id` links, item references, encrypted history
-  or unknown item shapes. Native continuation keeps complete input unchanged.
+- Convert string input during encoding on a copy, before account selection.
+  The existing string/list content-anchor equivalence must keep routing,
+  session and cache identity unchanged. Preserve the original protocol payload.
+- Do not locally validate, delete or rewrite item IDs. Preserve call_id links,
+  references, encrypted history, compaction and unknown shapes.
+- Create only client_metadata["x-codex-installation-id"]. Replace existing
+  installation_id/installationId aliases but never create missing aliases.
+  Keep the selected durable installation, credential version and all session,
+  cache and pool algorithms unchanged.
+- Retain same-account opaque metadata mirror scoping and ASCII serialization
+  after local identity projection. These prevent stale device aliases and lost
+  Unicode-bearing WS headers; they do not prove upstream error-rate improvements.
 
 ### Validation
 
 - Assert role normalization immediately after encoding, original payload
   immutability, and matching HTTP/WS loopback wire bodies.
-- Test effective `store=false` through HTTP SSE and WebSocket, including
-  session capture and downstream WebSocket transport requirements.
+- Test absent/false/true/null store through HTTP SSE and WebSocket, including
+  captured continuation scope and downstream WebSocket transport requirements.
 - Test unsupported-field removal, string/list input equivalence, tool-call/result
   linkage and encrypted/compaction history preservation.
 - Test account switching after request normalization; no normalized body may
   be reused as the source for a later account.
+- Compare missing/legacy/malformed installation aliases through real HTTP/WS
+  requests: account, device, fingerprint headers, affinity, seed and cache key.
+- Initialize the Provider with an isolated persisted identity secret when
+  verifying generated lc_ conversation IDs; comparing two null values is not
+  evidence of stable identity. Require canonical response completion.
+- Removing a legacy alias on a subsequent request must reuse the same eligible
+  socket; a different client key or account must not reuse it.

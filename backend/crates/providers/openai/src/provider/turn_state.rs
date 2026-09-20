@@ -1838,7 +1838,7 @@ mod tests {
                 None,
             );
             assert!(request.body().get("temperature").is_none());
-            assert_eq!(request.body().get("store"), Some(&Value::Bool(false)));
+            assert_eq!(request.body().get("store"), Some(&Value::Bool(true)));
             let result = client
                 .probe_turn_state_response(
                     &request,
@@ -1928,7 +1928,7 @@ mod tests {
         }
         assert!(!requests[0].headers.contains_key("x-codex-turn-state"));
         let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-        assert_eq!(body["store"], false);
+        assert_eq!(body["store"], true);
         assert_eq!(body["stream"], true);
         assert!(body.get("temperature").is_none());
     }

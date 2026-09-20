@@ -33,7 +33,7 @@ async fn disable_fast_rewrites_only_the_top_level_known_fast_tier() {
 }
 
 #[tokio::test]
-async fn standalone_item_ids_are_adapted_without_rewriting_tool_links_or_encrypted_history() {
+async fn standalone_item_ids_tool_links_and_encrypted_history_are_preserved() {
     let (input, expected) = item_id_fixture();
     let captured = capture_scoped_http_request(
         "req_safe_ids",
@@ -64,11 +64,73 @@ pub(super) fn item_id_fixture() -> (Value, Value) {
         {"type":"function_call","id":"encrypted-call-id","call_id":"call-encrypted",
             "name":"lookup","arguments":"{}","encrypted_function_args":"ciphertext"}
     ]);
-    let mut expected = input.clone();
-    for index in [0, 1, 3] {
-        expected[index].as_object_mut().unwrap().remove("id");
-    }
+    let expected = input.clone();
     (input, expected)
+}
+
+#[tokio::test]
+async fn repeated_requests_preserve_item_ids_original_payload_and_nested_business_fields() {
+    let (input, expected) = item_id_fixture();
+    let mut body = json!({
+        "model":"gpt-5.4", "input":input,
+        "metadata":{"id":"local-business-id","top_p":0.9},
+        "tools":[{
+            "type":"function","name":"lookup",
+            "parameters":{"type":"object","properties":{"id":{"type":"string"}}}
+        }]
+    });
+    for _ in 0..2 {
+        let captured = capture_scoped_http_request(
+            "req_id_cleanup_repeat",
+            "acct_scope_same",
+            "acct_scope_same",
+            body.as_object().unwrap().clone(),
+            Map::new(),
+        )
+        .await;
+        let outgoing = captured_request_body(&captured);
+        assert_eq!(outgoing["input"], expected);
+        assert_eq!(outgoing["metadata"], body["metadata"]);
+        assert_eq!(outgoing["tools"], body["tools"]);
+        body["input"] = outgoing["input"].clone();
+    }
+    assert_eq!(input[0]["id"], "local-message");
+    assert_eq!(input[1]["call_id"], "call-original");
+}
+
+#[tokio::test]
+async fn history_shapes_keep_ids_without_local_prefix_validation() {
+    let message = json!({"type":"message","id":"item_local","role":"assistant","content":"hello"});
+    let cases = [
+        json!({"input":[
+            {"type":"message","id":"item_local","role":"assistant","content":"hello","phase":"final_answer"}
+        ]}),
+        json!({"input":[
+            {"type":"reasoning","id":"item_reasoning","encrypted_content":"opaque-ciphertext","summary":[]}
+        ]}),
+        json!({"input":[message, {"role":"user","content":"shorthand"}]}),
+        json!({"input":[message, {"type":"future_item","item_id":"item_local"}]}),
+        json!({"input":[message, {"type":"item_reference","id":"item_local"}]}),
+        json!({"input":[message], "conversation":"conv_existing"}),
+        json!({"input":[message], "previous_response_id":null}),
+        json!({"input":[
+            {"type":"message","id":"msg_existing","role":"assistant","content":"hello"},
+            {"type":"function_call","id":"fc_existing","call_id":"call-original","name":"lookup","arguments":"{}"},
+            {"type":"function_call_output","call_id":"call-original","output":"done"}
+        ]}),
+    ];
+    for mut body in cases {
+        body["model"] = json!("gpt-5.4");
+        let captured = capture_scoped_http_request(
+            "req_conservative_ids",
+            "acct_scope_same",
+            "acct_scope_same",
+            body.as_object().unwrap().clone(),
+            Map::new(),
+        )
+        .await;
+        assert_eq!(captured_request_body(&captured)["input"], body["input"]);
+    }
 }
 
 #[tokio::test]

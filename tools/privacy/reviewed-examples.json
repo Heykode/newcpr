@@ -1456,6 +1456,14 @@
     "reason": "Manually re-reviewed the unchanged synthetic normalized loopback proxy assertion and confirmed its line digest matches the prior review. File changes only extend account import State settings tests."
   },
   {
+    "path": "backend/crates/providers/openai/tests/transport/headers.rs",
+    "rule": "non-example-ip",
+    "line": 14,
+    "file_sha256": "0816fd26b19361b348cd66f8a8dca39701a62b303a7500837ed1608548240742",
+    "line_sha256": "588cd1db9d80d264c927db295a3eba023dbb7a8a1addbc5c814ed3ce29390a15",
+    "reason": "Manually re-reviewed the unchanged synthetic forwarding-header fixture and verified its line digest against the prior review. HTTP and WS assertions still require stripping it; new tests only cover opaque organization extensions."
+  },
+  {
     "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
     "rule": "authenticated-url",
     "line": 1734,

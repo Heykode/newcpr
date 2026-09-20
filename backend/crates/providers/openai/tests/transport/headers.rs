@@ -34,6 +34,13 @@ const DOWNSTREAM_TRANSPORT_HEADERS: &[(&str, &str)] = &[
     ("sec-fetch-future-field", "synthetic-context"),
 ];
 
+const ORGANIZATION_EXTENSION_HEADERS: &[&str] = &[
+    "ChatGPT-Organization-ID",
+    "chatgpt-org-id",
+    "X-OpenAI-Organization",
+    "x-openai-project",
+];
+
 fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
     let mut context = Map::from_iter([
         (
@@ -77,6 +84,12 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                     STANDARD.encode(b"proxy-managed")
                 ],
                 ["chatgpt-account-id", STANDARD.encode(b"client-account")],
+                ["chatgpt-project-id", STANDARD.encode(b"client-project")],
+                [
+                    "openai-organization",
+                    STANDARD.encode(b"client-organization")
+                ],
+                ["openai-project", STANDARD.encode(b"client-project")],
                 [
                     "x-codex-installation-id",
                     STANDARD.encode(b"client-installation")
@@ -98,6 +111,16 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                 .iter()
                 .map(|(name, value)| json!([name, STANDARD.encode(value.as_bytes())])),
         );
+    let entries = context["opaque_request_headers"].as_array_mut().unwrap();
+    for name in ORGANIZATION_EXTENSION_HEADERS {
+        for value in [
+            b"extension-one".as_slice(),
+            b"extension-two",
+            b"extension-\x80",
+        ] {
+            entries.push(json!([name, STANDARD.encode(value)]));
+        }
+    }
     let payload = ProtocolPayload::json_object(
         "openai",
         json!({"model": "gpt-test", "input": "hello"})
@@ -465,6 +488,17 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         raw_header_values(&raw, "x-openai-future-mode"),
         vec![b"future-ascii".to_vec(), b"\x80\xff".to_vec()]
     );
+    for name in ORGANIZATION_EXTENSION_HEADERS {
+        assert_eq!(
+            raw_header_values(&raw, name),
+            vec![
+                b"extension-one".to_vec(),
+                b"extension-two".to_vec(),
+                b"extension-\x80".to_vec()
+            ],
+            "{name}"
+        );
+    }
     assert!(raw_header_values(&raw, "openai-beta").is_empty());
     assert_eq!(
         raw_header_values(&raw, "x-codex-turn-state"),
@@ -497,6 +531,9 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
     );
     for dropped in [
         "openai-beta",
+        "chatgpt-project-id",
+        "openai-organization",
+        "openai-project",
         "x-openai-actor-authorization",
         "x-oai-attestation",
         "x-oai-is",
@@ -611,6 +648,13 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         values("x-openai-future-mode"),
         vec![b"future-ascii".to_vec()]
     );
+    for name in ORGANIZATION_EXTENSION_HEADERS {
+        assert_eq!(
+            values(name),
+            vec![b"extension-one".to_vec(), b"extension-two".to_vec()],
+            "{name}"
+        );
+    }
     assert_eq!(
         values("openai-beta"),
         vec![b"responses_websockets=2026-02-06".to_vec()]
@@ -625,6 +669,9 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
     assert_eq!(values("version"), vec![b"1.2.3".to_vec()]);
     assert!(values("x-openai-internal-codex-residency").is_empty());
     for dropped in [
+        "chatgpt-project-id",
+        "openai-organization",
+        "openai-project",
         "x-openai-actor-authorization",
         "x-oai-attestation",
         "x-oai-is",

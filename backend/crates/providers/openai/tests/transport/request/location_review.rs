@@ -130,7 +130,12 @@ fn location_does_not_invent_search_tools_or_rewrite_unmarked_user_content() {
     ];
     for body in bodies {
         let encoded = encode(body.clone(), &west_coast());
-        assert_eq!(encoded.body()["input"], body["input"]);
+        let expected_input = if let Some(text) = body["input"].as_str() {
+            json!([{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}])
+        } else {
+            body["input"].clone()
+        };
+        assert_eq!(encoded.body()["input"], expected_input);
         assert_eq!(encoded.body().get("tools"), body.get("tools"));
     }
 }
