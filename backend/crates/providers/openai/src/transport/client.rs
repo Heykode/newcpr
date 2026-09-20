@@ -122,6 +122,9 @@ pub fn build_account_http_client(
             reqwest::Proxy::all(proxy.expose_url())
                 .map_err(|_| CustomCaError::ProxyConfiguration)?,
         );
+    } else {
+        // Explicit IPv6 and probe clients are built separately.
+        builder = builder.local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
     }
     let client = build_reqwest_native_client_with_custom_ca(builder)?;
     let mut clients = cache

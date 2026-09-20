@@ -62,7 +62,7 @@ async fn fixture(
     let runtime = CodexEgressRuntime::load(store.clone()).await.unwrap();
     let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
     let backend = CodexBackendClient::new(
-        reqwest::Client::builder().no_proxy().build().unwrap(),
+        provider_openai::transport::build_reqwest_client().unwrap(),
         base_url,
         test_wire_profile(),
     )
@@ -71,6 +71,103 @@ async fn fixture(
     .for_account(&account)
     .unwrap();
     (backend, store, runtime, pool)
+}
+
+#[tokio::test]
+async fn default_ipv4_and_explicit_ipv6_switch_real_http_and_ws_connections() {
+    for websocket in [false, true] {
+        let ipv4 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = ipv4.local_addr().unwrap().port();
+        let ipv6 = TcpListener::bind((Ipv6Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut servers = Vec::new();
+        for listener in [ipv4, ipv6] {
+            let seen_tx = seen_tx.clone();
+            servers.push(tokio::spawn(async move {
+                let mut connections = tokio::task::JoinSet::new();
+                loop {
+                    let (mut stream, peer) = listener.accept().await.unwrap();
+                    let seen_tx = seen_tx.clone();
+                    connections.spawn(async move {
+                        if websocket {
+                            let mut socket = accept_codex_test_websocket(stream).await;
+                            while let Some(Ok(Message::Text(_))) = socket.next().await {
+                                seen_tx.send(peer.ip()).unwrap();
+                                socket
+                                    .send(Message::Text(
+                                        completed_websocket_response("resp_mode", 1, 1).into(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                            }
+                        } else {
+                            read_http_request(&mut stream).await;
+                            seen_tx.send(peer.ip()).unwrap();
+                            let body = format!(
+                                "data: {}\n\n",
+                                completed_websocket_response("resp_mode", 1, 1)
+                            );
+                            stream
+                                .write_all(
+                                    format!(
+                                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                        body.len()
+                                    )
+                                    .as_bytes(),
+                                )
+                                .await
+                                .unwrap();
+                        }
+                    });
+                }
+            }));
+        }
+        let (backend, store, runtime, pool) =
+            fixture(&format!("http://localhost:{port}"), EgressMode::Unchanged).await;
+        let mut request = codex_request("gpt-test", "fixture", Vec::new());
+        request.use_websocket = websocket;
+        request.force_http_sse = !websocket;
+        request.local_conversation_id = Some("mode-switch".to_owned());
+        for mode in [
+            EgressMode::Unchanged,
+            EgressMode::FixedIpv6Reuse,
+            EgressMode::Unchanged,
+        ] {
+            {
+                let mut state = store.0.lock().unwrap();
+                state.default_mode = mode;
+                state.revision += 1;
+            }
+            runtime.reload().await.unwrap();
+            let response = timeout(
+                Duration::from_secs(5),
+                backend.create_response(&request, request_context("mode-switch", Some("review"))),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                response.transport,
+                if websocket {
+                    CodexBackendTransport::WebSocket
+                } else {
+                    CodexBackendTransport::HttpSse
+                }
+            );
+            let peer = timeout(Duration::from_secs(1), seen_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(peer.is_ipv4(), mode == EgressMode::Unchanged);
+        }
+        pool.shutdown().await;
+        for server in servers {
+            server.abort();
+            let _ = server.await;
+        }
+    }
 }
 
 #[tokio::test]

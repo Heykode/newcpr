@@ -6,9 +6,7 @@ use bytes::Bytes;
 use gateway_protocol::openai::events;
 use tokio::io::BufWriter;
 use tokio::time::timeout;
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, client_async_tls_with_config, connect_async_tls_with_config,
-};
+use tokio_tungstenite::{Connector, MaybeTlsStream, client_async_tls_with_config};
 use tungstenite::{
     self, Message,
     extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
@@ -187,19 +185,7 @@ async fn connect_websocket(
         })?
         .map(Connector::Rustls);
     let result = timeout(WEBSOCKET_CONNECT_TIMEOUT, async {
-        // Preserve the native direct handshake; explicit egress never inherits a global proxy.
-        if connection.outbound_proxy.is_none()
-            && connection.egress_source.is_none()
-            && matches!(
-                tungstenite::proxy::ProxyConfig::from_env(request.uri()),
-                Ok(None)
-            )
-        {
-            let (websocket, response) =
-                connect_async_tls_with_config(request, Some(websocket_config()), true, connector)
-                    .await?;
-            return Ok((Box::new(websocket) as RawWsStream, response));
-        }
+        // All paths retain the same TLS/WS handshake; only direct TCP is IPv4-only.
         let stream = dial_account(connection).await?;
         match stream {
             MaybeTlsStream::Plain(tcp) => {
@@ -267,7 +253,9 @@ async fn dial_account(
                     .map_err(|error| tungstenite::Error::Io(std::io::Error::other(error)))?,
             ));
         }
-        return Ok(MaybeTlsStream::Plain(connect_tcp(host, port).await?));
+        return Ok(MaybeTlsStream::Plain(
+            connect_tcp(&dns_host, port, true).await?,
+        ));
     };
     if connection.egress_source.is_some() {
         return Err(tungstenite::Error::Io(std::io::Error::other(
@@ -288,7 +276,7 @@ async fn dial_account(
         Some(url::Host::Ipv6(ip)) => ip.to_string(),
         _ => config.host.clone(),
     };
-    let tcp = connect_tcp(&proxy_host, config.port).await?;
+    let tcp = connect_tcp(&proxy_host, config.port, false).await?;
     let stream = if tls_proxy {
         let tls = tls::account_proxy_tls_config().map_err(|_| invalid())?;
         let name = rustls_pki_types::ServerName::try_from(proxy_host).map_err(|_| invalid())?;
@@ -319,7 +307,11 @@ async fn dial_account(
         .map_err(|_| invalid())
 }
 
-async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tungstenite::Error> {
+async fn connect_tcp(
+    host: &str,
+    port: u16,
+    ipv4_only: bool,
+) -> Result<tokio::net::TcpStream, tungstenite::Error> {
     use hyper_util::client::legacy::connect::HttpConnector;
     use tower_service::Service;
 
@@ -333,6 +325,9 @@ async fn connect_tcp(host: &str, port: u16) -> Result<tokio::net::TcpStream, tun
         .map_err(|_| tungstenite::Error::Io(std::io::Error::other("invalid egress endpoint")))?;
     let mut connector = HttpConnector::new();
     connector.set_nodelay(true);
+    if ipv4_only {
+        connector.set_local_address(Some(std::net::Ipv4Addr::UNSPECIFIED.into()));
+    }
     connector
         .call(uri)
         .await
@@ -415,4 +410,30 @@ fn websocket_host_header(endpoint: &str) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host.to_string(),
     })
+}
+
+#[cfg(test)]
+mod default_egress_tests {
+    use super::connect_tcp;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn default_direct_tcp_uses_ipv4() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let stream = connect_tcp("localhost", listener.local_addr().unwrap().port(), true)
+            .await
+            .unwrap();
+        assert!(stream.peer_addr().unwrap().is_ipv4());
+        assert!(stream.nodelay().unwrap());
+    }
+
+    #[tokio::test]
+    async fn default_direct_tcp_rejects_ipv6_but_proxy_dial_preserves_it() {
+        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(connect_tcp("::1", port, true).await.is_err());
+        let stream = connect_tcp("::1", port, false).await.unwrap();
+        assert!(stream.peer_addr().unwrap().is_ipv6());
+        assert!(stream.nodelay().unwrap());
+    }
 }

@@ -9,14 +9,15 @@ CPR 不修改操作系统接口、不自动安装地址，也不把地址清单�
   不是 IPv6 地址池入口。同一账号不能同时使用这两种出口策略。
 - 账号：“编辑账号”内的 IPv6 策略经单独确认后立即提交，不随外层“取消”或关闭撤销，
   也不读取表单内未保存的代理更改。底部“保存账号设置”不提交 IPv6 项。
-  可继承全局或显式“不启用 IPv6 策略”，后者保留原直连或代理设置。
+  可继承全局或显式选择“默认 IPv4”，后者将普通直连限定为 IPv4，
+  保留显式账号代理。State 探测的独立代理或 IPv6 出口不受影响。
 - `GET /api/admin/ipv6-egress`：只读快照，包含版本、默认模式、地址池、
   全部现存 OpenAI 账号的覆盖项和已解析固定地址；读取不分配地址。
 - `POST /api/admin/ipv6-egress/update`：`revision`、`defaultMode`、`addresses`；
   整体更新通过版本检查后在一个事务中提交。
 - `POST /api/admin/ipv6-egress/account`：`accountId`、`revision`、`mode`；
   `mode` 缺失、为 `null` 或空字符串（含纯空白）代表继承，
-  `"unchanged"` 为显式不启用 IPv6，不跟随全局启用。
+  `"unchanged"` 为显式默认 IPv4，不跟随全局启用 IPv6；API 字段值保持兼容。
 - `POST /api/admin/ipv6-egress/expand`：`start`、`end`；仅展开有界地址范围，
   最多 4096 个，返回规范化的禁用地址，不保存、不探测网络。
 

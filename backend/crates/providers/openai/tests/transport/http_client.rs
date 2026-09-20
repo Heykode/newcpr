@@ -1,5 +1,30 @@
 use super::*;
 
+#[tokio::test]
+async fn default_http_egress_uses_ipv4_and_rejects_ipv6() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let client = provider_openai::transport::client::build_account_http_client(
+        "default-ipv4-regression",
+        None,
+    )
+    .unwrap();
+    let url = server.uri().replace("127.0.0.1", "localhost");
+    let response = client.get(url).send().await.unwrap();
+    assert!(response.status().is_success());
+    assert!(response.remote_addr().unwrap().is_ipv4());
+
+    let ipv6 = TcpListener::bind("[::1]:0").await.unwrap();
+    let result = client
+        .get(format!("http://{}/", ipv6.local_addr().unwrap()))
+        .send()
+        .await;
+    assert!(result.unwrap_err().is_connect());
+}
+
 #[test]
 fn custom_ca_should_report_environment_cache_key_consistently() {
     const CASE_ENV: &str = "CODEX_PROXY_TEST_CUSTOM_CA_CACHE_KEY_CASE";
