@@ -69,6 +69,8 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub custom_name: Option<Option<String>>,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<AccountProxyUpdate>,
     pub account_ids: Vec<String>,
@@ -80,11 +82,14 @@ pub struct BatchUpdateAccountsRequest {
     pub group_ids: Option<Vec<String>>,
 }
 
-fn deserialize_optional_nullable<'de, D>(deserializer: D) -> Result<Option<Option<u64>>, D::Error>
+pub(super) fn deserialize_optional_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    Option::<u64>::deserialize(deserializer).map(Some)
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,6 +114,9 @@ impl From<AccountsUpdateResult> for BatchUpdatedAccountsData {
 
 impl BatchUpdateAccountsRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(value) = &self.custom_name {
+            super::credentials::parse_custom_name(value.as_deref())?;
+        }
         if self.account_ids.is_empty()
             || self.account_ids.len() > MAX_ACCOUNT_GROUP_BATCH
             || self
@@ -132,7 +140,8 @@ impl BatchUpdateAccountsRequest {
             self.outbound_proxy_id.clone(),
             self.outbound_proxy_url.clone(),
         )?;
-        if self.enabled.is_none()
+        if self.custom_name.is_none()
+            && self.enabled.is_none()
             && self.turn_state_injection_enabled.is_none()
             && self.concurrency_limit.is_none()
             && self.weight.is_none()
@@ -148,6 +157,10 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            custom_name: self
+                .custom_name
+                .map(|value| super::credentials::parse_custom_name(value.as_deref()))
+                .transpose()?,
             outbound_proxy: proxy_selection(self.outbound_proxy_id, self.outbound_proxy_url)?,
             account_ids: self.account_ids,
             enabled: self.enabled,
@@ -292,6 +305,7 @@ pub struct AccountSummaryView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
+    pub custom_name: Option<String>,
     pub outbound_proxy_endpoint: Option<String>,
     pub id: String,
     pub name: String,

@@ -662,8 +662,12 @@ impl AccountsService for DefaultAccountsService {
     async fn update(
         &self,
         context: &MutationContext,
-        command: UpdateAccount,
+        mut command: UpdateAccount,
     ) -> Result<AccountUpdateResult, AdminError> {
+        command.custom_name = command
+            .custom_name
+            .map(|value| crate::model::accounts::normalize_custom_name(value.as_deref()))
+            .transpose()?;
         let account_id = ProviderAccountId::new(command.account_id.clone())
             .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
         let (_, provider) = self.provider_for_account(&account_id).await?;
@@ -686,8 +690,12 @@ impl AccountsService for DefaultAccountsService {
     async fn batch_update(
         &self,
         context: &MutationContext,
-        command: BatchUpdateAccounts,
+        mut command: BatchUpdateAccounts,
     ) -> Result<AccountsUpdateResult, AdminError> {
+        command.custom_name = command
+            .custom_name
+            .map(|value| crate::model::accounts::normalize_custom_name(value.as_deref()))
+            .transpose()?;
         let account_ids = command
             .account_ids
             .iter()

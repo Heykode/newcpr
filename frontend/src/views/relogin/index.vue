@@ -19,6 +19,7 @@ import AccountTemplatesModal from '@/components/account-templates/AccountTemplat
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
@@ -30,6 +31,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
+import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
@@ -238,11 +240,13 @@ function saveImport() {
 const confirming = shallowRef(false)
 const templatesOpen = shallowRef(false)
 const selectedTemplate = shallowRef<AccountTemplate | null>(null)
+const batchCustomName = shallowRef('')
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
 function confirm(mode: 'push' | 'delete', ids: string[]) {
   failure.value = ''
   selectedTemplate.value = null
+  batchCustomName.value = ''
   confirmMode.value = mode
   pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
   confirming.value = pendingRows.value.length > 0
@@ -258,7 +262,8 @@ function executeConfirmed() {
       const template = newPushCount.value > 0 && selectedTemplate.value
         ? { id: selectedTemplate.value.id, revision: selectedTemplate.value.revision }
         : undefined
-      batchReport(await pushRelogin(pushable.value, template))
+      const customName = newPushCount.value > 0 ? normalizeAccountName(batchCustomName.value) ?? undefined : undefined
+      batchReport(await pushRelogin(pushable.value, template, customName))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))
@@ -508,6 +513,9 @@ onBeforeUnmount(() => {
         新增 {{ newPushCount }} 项，更新已有账号 {{ pushable.length - newPushCount }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
       </p>
       <AccountTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
+      <BaseFormItem v-if="confirmMode === 'push' && newPushCount > 0" label="本批账号名称（选填）">
+        <BaseInput v-model="batchCustomName" aria-label="本批账号名称" placeholder="默认名称" :disabled="busy" />
+      </BaseFormItem>
       <p v-if="confirmMode === 'push' && pushable.length > newPushCount" class="text-cp-sm text-cp-text-secondary">
         已有账号仅更新凭据，保留原配置。
       </p>

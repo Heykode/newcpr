@@ -102,6 +102,17 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
             }}),
         ),
         (
+            "/api/admin/relogin/templates/save",
+            json!({"config":{
+                "name":"example","enabled":true,"weight":1,"concurrencyLimit":null,
+                "groupIds":[],"outboundProxyId":null,"customName":"Never apply"
+            }}),
+        ),
+        (
+            "/api/admin/relogin/push",
+            json!({"ids":["a"],"revisions":{"a":1},"customName":42}),
+        ),
+        (
             "/api/admin/relogin/accounts/query",
             json!({"ids":["a"],"surprise":true}),
         ),
@@ -128,5 +139,32 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
         let (status, body) = request(&fixture, path, Some(body), true).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(!body.contains("test-only-private-material"));
+    }
+}
+
+#[tokio::test]
+async fn relogin_push_accepts_optional_camel_case_name_and_validates_before_store_access() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for name in [json!(null), json!("Batch A"), json!("")] {
+        let (status, _) = request(
+            &fixture,
+            "/api/admin/relogin/push",
+            Some(json!({"ids":["a"],"revisions":{"a":1},"customName":name})),
+            true,
+        )
+        .await;
+        // This fixture has no relogin store; a parsed, valid request reaches it.
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+    for name in ["x".repeat(129), "bad\nname".to_owned()] {
+        let (status, _) = request(
+            &fixture,
+            "/api/admin/relogin/push",
+            Some(json!({"ids":["a"],"revisions":{"a":1},"customName":name})),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

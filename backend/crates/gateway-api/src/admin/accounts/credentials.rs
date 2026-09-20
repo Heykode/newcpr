@@ -22,6 +22,8 @@ impl AccountProvider {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_name: Option<String>,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_state_injection_enabled: Option<bool>,
@@ -33,6 +35,7 @@ pub struct AccountImportSettingsRequest {
 
 impl AccountImportSettingsRequest {
     fn validate(&self) -> Result<(), WireValidationError> {
+        parse_custom_name(self.custom_name.as_deref())?;
         parse_concurrency_limit(self.concurrency_limit)?;
         parse_account_weight(self.weight)?;
         validate_wire_group_ids(&self.group_ids)?;
@@ -43,6 +46,7 @@ impl AccountImportSettingsRequest {
         self,
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
+            custom_name: parse_custom_name(self.custom_name.as_deref())?,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
@@ -217,6 +221,11 @@ impl CompleteAccountAuthorizationRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateAccountRequest {
+    #[serde(
+        default,
+        deserialize_with = "super::wire::deserialize_optional_nullable"
+    )]
+    pub custom_name: Option<Option<String>>,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
     pub account_id: String,
@@ -230,6 +239,9 @@ pub struct UpdateAccountRequest {
 
 impl UpdateAccountRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(value) = &self.custom_name {
+            parse_custom_name(value.as_deref())?;
+        }
         require_account_id(&self.account_id, "accountId")?;
         parse_concurrency_limit(self.concurrency_limit)?;
         parse_account_weight(self.weight)?;
@@ -240,6 +252,10 @@ impl UpdateAccountRequest {
     pub(super) fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
         Ok(UpdateAccount {
+            custom_name: self
+                .custom_name
+                .map(|value| parse_custom_name(value.as_deref()))
+                .transpose()?,
             outbound_proxy: super::wire::proxy_selection(
                 self.outbound_proxy_id,
                 self.outbound_proxy_url,
@@ -462,6 +478,13 @@ pub(super) fn parse_concurrency_limit(
                 .ok_or_else(|| WireValidationError::new("concurrencyLimit"))
         })
         .transpose()
+}
+
+pub(super) fn parse_custom_name(
+    value: Option<&str>,
+) -> Result<Option<String>, WireValidationError> {
+    gateway_admin::model::accounts::normalize_custom_name(value)
+        .map_err(|_| WireValidationError::new("customName"))
 }
 
 pub(super) fn deserialize_required_nullable<'de, D>(

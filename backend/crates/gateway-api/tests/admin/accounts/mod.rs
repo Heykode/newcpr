@@ -311,6 +311,50 @@ mod batch_update {
     use serde_json::json;
 
     #[test]
+    fn custom_name_updates_distinguish_omission_and_explicit_clear() {
+        let omitted: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds": ["acct_test"], "weight": 1
+        }))
+        .unwrap();
+        assert_eq!(omitted.custom_name, None);
+        for value in [
+            json!(null),
+            json!(""),
+            json!("  Batch one  "),
+            json!("名".repeat(128)),
+        ] {
+            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+                "accountIds": ["acct_test"], "customName": value
+            }))
+            .unwrap();
+            assert!(request.custom_name.is_some());
+            assert!(request.validate().is_ok());
+        }
+        for value in [json!("bad\nname"), json!("x".repeat(129))] {
+            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+                "accountIds": ["acct_test"], "customName": value
+            }))
+            .unwrap();
+            assert!(request.validate().is_err());
+        }
+        for value in [json!(false), json!(42), json!({})] {
+            assert!(
+                serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                    "accountIds": ["acct_test"], "customName": value
+                }))
+                .is_err()
+            );
+        }
+        let single: UpdateAccountRequest = serde_json::from_value(json!({
+            "accountId": "acct_test", "customName": null, "enabled": true,
+            "concurrencyLimit": null, "weight": 1, "groupIds": []
+        }))
+        .unwrap();
+        assert_eq!(single.custom_name, Some(None));
+        assert!(single.validate().is_ok());
+    }
+
+    #[test]
     fn batch_update_should_accept_complete_atomic_payload() {
         let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
             "accountIds": ["acct_openai", "acct_xai"],
@@ -1385,6 +1429,7 @@ mod response {
             turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                custom_name: None,
                 id: "acct_cost".to_owned(),
                 provider_kind: ProviderKind::new("openai").expect("provider"),
                 groups: vec![],
@@ -2049,6 +2094,8 @@ mod import_settings {
     #[test]
     fn import_and_oauth_apply_the_same_settings_validation() {
         for (field, value) in [
+            ("customName", json!("x".repeat(129))),
+            ("customName", json!("bad\nname")),
             ("concurrencyLimit", json!(0)),
             ("concurrencyLimit", json!(4_294_967_296_u64)),
             ("weight", json!(0)),

@@ -354,6 +354,7 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
                 std::slice::from_ref(&id),
                 &versions,
                 Some(template_selection(&template)),
+                None,
                 &context("stale-template")
             )
             .await
@@ -373,6 +374,7 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
                 std::slice::from_ref(&id),
                 &versions,
                 Some(template_selection(&updated)),
+                None,
                 &context("deleted-template")
             )
             .await
@@ -401,6 +403,7 @@ async fn relogin_templates_reject_missing_references_before_push_fence() {
             std::slice::from_ref(&id),
             &BTreeMap::from([(id.clone(), before.revision)]),
             Some(template_selection(&template)),
+            None,
             &context("invalid-reference"),
         )
         .await
@@ -443,15 +446,15 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
             &[old.clone(), new.clone()],
             &versions,
             Some(template_selection(&template)),
+            Some("  New batch  ".into()),
             &context("mixed-template"),
         )
         .await
         .unwrap();
     assert!(result.iter().all(|result| result.success), "{result:?}");
-    assert_eq!(
-        h.accounts.import_settings(),
-        vec![Some(template.config.settings().unwrap())]
-    );
+    let mut expected_settings = template.config.settings().unwrap();
+    expected_settings.custom_name = Some("New batch".into());
+    assert_eq!(h.accounts.import_settings(), vec![Some(expected_settings)]);
     assert!(h.row(&old).await.synced_at.is_some());
     assert!(h.row(&new).await.synced_at.is_some());
     assert_eq!(h.row(&old).await.target.unwrap().account_id, "acct_test");
@@ -467,6 +470,7 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
             &[old, new],
             &versions,
             Some(template_selection(&template)),
+            None,
             &context("repeat-template"),
         )
         .await
@@ -494,11 +498,63 @@ async fn relogin_existing_account_ignores_template_references_and_settings() {
             std::slice::from_ref(&id),
             &BTreeMap::from([(id.clone(), h.row(&id).await.revision)]),
             Some(template_selection(&template)),
+            Some("Must not replace existing name".into()),
             &context("existing-template"),
         )
         .await
         .unwrap();
     assert!(result[0].success);
+    assert!(h.accounts.import_settings().is_empty());
+}
+
+#[tokio::test]
+async fn relogin_new_batch_name_is_optional_and_independent_of_templates() {
+    for name in [None, Some("   "), Some("  New batch  ")] {
+        let h = Harness::new(vec![]).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let versions = BTreeMap::from([(id.clone(), h.row(&id).await.revision)]);
+        let result = h
+            .services
+            .relogin()
+            .push_with_template(
+                &[id],
+                &versions,
+                None,
+                name.map(str::to_owned),
+                &context("batch-name"),
+            )
+            .await
+            .unwrap();
+        assert!(result[0].success);
+        let settings = h.accounts.import_settings();
+        if name.is_some_and(|name| !name.trim().is_empty()) {
+            assert_eq!(
+                settings[0].as_ref().unwrap().custom_name.as_deref(),
+                Some("New batch")
+            );
+        } else {
+            assert_eq!(settings, vec![None]);
+        }
+    }
+    let h = Harness::new(vec![]).await;
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let before = h.row(&id).await;
+    assert!(
+        h.services
+            .relogin()
+            .push_with_template(
+                std::slice::from_ref(&id),
+                &BTreeMap::from([(id.clone(), before.revision)]),
+                None,
+                Some("x".repeat(129)),
+                &context("invalid-name"),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(h.row(&id).await.revision, before.revision);
     assert!(h.accounts.import_settings().is_empty());
 }
 

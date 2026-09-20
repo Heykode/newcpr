@@ -1,5 +1,29 @@
 # Account Management Contracts
 
+## Custom Account Names
+
+- `Account.customName?: string | null` is independent display metadata. Prefer it
+  in `AccountIdentityCell`; without it, preserve the old title behavior exactly.
+  Keep actual email visible under a custom title, including secondary-meta layouts.
+  Use ordinary escaped text, truncation and a full-title tooltip; do not change avatar
+  identity, sort semantics, credential documents or email-based relogin matching.
+- Single editing records the opened custom-name baseline and sends a name only
+  when changed. Editing other settings must not replay a stale name from a refreshed
+  account list. Explicit null/blank clears; imports omit blank names.
+- Batch editing has seven opt-in fields including State and custom name. Name
+  editing follows the same unchecked-by-default/reset rules as all other fields.
+  Only normalize and submit a checked name; unchecked invalid drafts are ignored.
+- Shared `AccountSettingsFields.nameAvailable` defaults false. Enable it only in
+  account editing/imports, not in templates. Template names identify templates,
+  not accounts, and applying a template must preserve every account custom name.
+- Relogin push confirmation resets the independent batch name on every open and
+  shows it only when new accounts are included. Existing-only pushes omit it.
+  Mixed pushes may send it but only the backend create-only branch applies it.
+- Mirror Admin name validation: trim, max 128 Unicode characters, no control
+  characters. Block invalid names before leaving import settings. Verify unset,
+  explicit clear, import/OAuth, reauthorization preservation, mixed pushes and
+  template preservation with synthetic-only tests and mobile/light/dark screenshots.
+
 ## Background Imports and Independent Table Preferences
 
 - Browser AT/RT and JSON imports submit server-owned tasks. Preserve JSON document

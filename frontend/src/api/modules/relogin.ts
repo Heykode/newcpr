@@ -73,10 +73,10 @@ export function importRelogin(text: string, replaceExisting: boolean) {
 export function queueRelogin(ids: string[]) {
   return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids } })
 }
-export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection) {
+export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string) {
   const ids = rows.map(row => row.id)
   const revisions = Object.fromEntries(rows.map(row => [row.id, row.revision]))
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}) }, timeout: 120000 })
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}) }, timeout: 120000 })
 }
 export function deleteRelogin(ids: string[]) {
   return request<void>({ url: '/api/admin/relogin/delete', method: 'POST', data: { ids } })

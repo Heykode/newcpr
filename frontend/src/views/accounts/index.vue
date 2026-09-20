@@ -235,6 +235,8 @@ const {
 
 const {
   showBatchEditModal,
+  customName: batchCustomName,
+  updateCustomName: batchUpdateCustomName,
   turnStateAvailable: batchTurnStateAvailable,
   schedulingEnabled: batchSchedulingEnabled,
   turnStateInjectionEnabled: batchTurnStateInjectionEnabled,
@@ -262,6 +264,7 @@ const {
 
 const {
   showEditModal,
+  customName: editingCustomName,
   editingAccount,
   schedulingEnabled,
   turnStateInjectionEnabled,
@@ -625,6 +628,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     />
 
     <AccountEditModal
+      v-model:custom-name="editingCustomName"
       v-model="showEditModal"
       v-model:enabled="schedulingEnabled"
       v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
@@ -641,6 +645,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     />
 
     <AccountBatchEditModal
+      v-model:custom-name="batchCustomName"
+      v-model:update-custom-name="batchUpdateCustomName"
       v-model="showBatchEditModal"
       v-model:enabled="batchSchedulingEnabled"
       v-model:turn-state-injection-enabled="batchTurnStateInjectionEnabled"

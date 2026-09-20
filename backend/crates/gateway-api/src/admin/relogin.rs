@@ -38,6 +38,7 @@ struct AccountQueueRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushRequest {
+    custom_name: Option<String>,
     ids: Vec<String>,
     revisions: std::collections::BTreeMap<String, u64>,
     template: Option<ReloginTemplateSelection>,
@@ -209,6 +210,7 @@ where
             &request.ids,
             &request.revisions,
             request.template,
+            request.custom_name,
             &auth.context().mutation_context(),
         )
         .await

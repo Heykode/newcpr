@@ -105,7 +105,7 @@ async function main() {
       assert.equal(current[index].turnStateInjectionEnabled, false)
       assert.equal(current[index].concurrencyLimit, null)
       assert.equal(current[index].groups.length, 0)
-      for (const field of ['accountId', 'userId', 'reloginCount', 'hasRefreshToken'])
+      for (const field of ['customName', 'accountId', 'userId', 'reloginCount', 'hasRefreshToken'])
         assert.deepEqual(current[index][field], original[index][field])
     }
     assert.equal(applications[2].template.revision, 2)

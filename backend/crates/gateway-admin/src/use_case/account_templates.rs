@@ -163,6 +163,7 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
             .batch_update(
                 context,
                 BatchUpdateAccounts {
+                    custom_name: None,
                     account_ids,
                     enabled: Some(settings.enabled),
                     turn_state_injection_enabled: settings.turn_state_injection_enabled,

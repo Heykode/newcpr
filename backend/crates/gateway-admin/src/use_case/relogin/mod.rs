@@ -114,6 +114,7 @@ pub trait ReloginService: Send + Sync {
         ids: &[String],
         revisions: &BTreeMap<String, u64>,
         template: Option<ReloginTemplateSelection>,
+        custom_name: Option<String>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError>;
     async fn list(&self) -> Result<ReloginList, AdminError>;
@@ -240,16 +241,20 @@ impl DefaultReloginService {
         entry: &mut ReloginEntry,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        self.push_entry_with_template(entry, None, context).await
+        self.push_entry_with_template(entry, None, None, context)
+            .await
     }
 
     async fn push_entry_with_template(
         &self,
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
+        custom_name: Option<&str>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        let outcome = self.push_checked(entry, template, context).await;
+        let outcome = self
+            .push_checked(entry, template, custom_name, context)
+            .await;
         if outcome.is_err() && entry.status == ReloginStatus::Pushing {
             entry.status = ReloginStatus::Uncertain;
             entry.message = "推送结果未确认，请检查号池并重新获取凭证后再推送".to_owned();
@@ -360,6 +365,7 @@ impl DefaultReloginService {
         &self,
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
+        custom_name: Option<&str>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
         entry.validate_totp()?;
@@ -431,7 +437,19 @@ impl DefaultReloginService {
             publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
             entry.target = Some(ReloginTarget::from_account(current)?);
         } else {
-            let settings = template.map(ReloginTemplateConfig::settings).transpose()?;
+            let mut settings = template.map(ReloginTemplateConfig::settings).transpose()?;
+            if let Some(name) = custom_name {
+                let settings =
+                    settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
+                        custom_name: None,
+                        enabled: true,
+                        turn_state_injection_enabled: None,
+                        concurrency_limit: None,
+                        weight: crate::model::accounts::AccountWeight::DEFAULT,
+                        group_ids: Vec::new(),
+                    });
+                settings.custom_name = Some(name.to_owned());
+            }
             if let Some(config) = template {
                 self.store()?
                     .validate_template_references(config)
@@ -900,7 +918,8 @@ impl ReloginService for DefaultReloginService {
         revisions: &BTreeMap<String, u64>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
-        self.push_with_template(ids, revisions, None, context).await
+        self.push_with_template(ids, revisions, None, None, context)
+            .await
     }
 
     async fn push_with_template(
@@ -908,9 +927,11 @@ impl ReloginService for DefaultReloginService {
         ids: &[String],
         revisions: &BTreeMap<String, u64>,
         template: Option<ReloginTemplateSelection>,
+        custom_name: Option<String>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         validate_ids(ids)?;
+        let custom_name = crate::model::accounts::normalize_custom_name(custom_name.as_deref())?;
         let _gate = self.gate.lock().await;
         let template = match template {
             Some(selection) => Some(self.templates.resolve(selection).await?),
@@ -924,6 +945,7 @@ impl ReloginService for DefaultReloginService {
                     self.push_entry_with_template(
                         &mut entry.clone(),
                         template.as_ref().map(|template| &template.config),
+                        custom_name.as_deref(),
                         context,
                     )
                     .await

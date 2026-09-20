@@ -140,6 +140,30 @@
 - Verify template CRUD/CAS, missing references, mixed batches, default imports and
   original credential/device preservation against an isolated PostgreSQL instance.
 
+## Custom Account Names
+
+- `provider_accounts.custom_name` is nullable local display metadata, introduced by
+  additive migration `0032_account_custom_names.sql`. Never substitute it for
+  provider-owned name/email, login matching, principal, workspace, credentials,
+  installation identity or Core scheduling facts. Every SQL projection feeding
+  `account_summary_from_row` must select it, including refresh and group members.
+- `customName` is optional on imports and manual push. Normalize through the shared
+  Admin helper: trim, blank to None, max 128 Unicode scalar values, reject control
+  characters. HTTP validation and Store mutations use the same rule.
+- Single/batch updates preserve omitted names and clear explicit null/blank names.
+  Import omission/blank preserves an existing name and leaves a new row unnamed.
+  Name changes belong to the existing settings/audit transaction; audit field names
+  only. Failed group/proxy/audit validation rolls back the name too.
+- Templates never contain names. Template application explicitly omits custom_name.
+  Manual push freezes the independent batch name once and applies it only to the
+  create-only import branch. Existing/manual/automatic rotation and token refresh
+  never update the column. No-template named pushes retain ordinary new defaults.
+- Search includes custom names; real email and upstream profile fields stay intact.
+  Existing sorting and historical request snapshots are not redefined by a rename.
+- The migration is not eligible for the normal deployment fast path. Deployment is
+  separate and must follow the reviewed migration procedure; do not rewrite frozen
+  migrations or promise an automatic rollback across the schema change.
+
 ## Success Counts
 
 - `provider_accounts.relogin_count` / `last_relogin_at` are pool-owned facts, not

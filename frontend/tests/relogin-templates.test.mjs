@@ -104,3 +104,21 @@ test('account application captures IDs and version without resubmitting template
     template: { id: 'template', revision: 5 },
   }))
 })
+
+test('templates never carry account names and push names are independent of templates', async () => {
+  const form = { ...templateForm(), name: 'Common settings', customName: 'Never apply' }
+  assert.equal('customName' in templateConfig(form), false)
+  assert.equal('customName' in templateForm({ ...templateConfig(form), customName: 'Never copy' }), false)
+  const calls = []
+  const api = load('../src/api/modules/relogin.ts', {
+    '../request': async request => calls.push(request),
+  })
+  await api.pushRelogin([{ id: 'new', revision: 1 }], undefined, 'Batch A')
+  assert.equal(calls[0].data.customName, 'Batch A')
+  assert.equal('template' in calls[0].data, false)
+  await api.pushRelogin([{ id: 'new', revision: 1 }], { id: 'template', revision: 2 }, 'Batch B')
+  assert.equal(calls[1].data.customName, 'Batch B')
+  assert.equal('customName' in calls[1].data.template, false)
+  await api.pushRelogin([{ id: 'old', revision: 1 }])
+  assert.equal('customName' in calls[2].data, false)
+})

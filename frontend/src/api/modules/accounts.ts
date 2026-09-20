@@ -131,6 +131,7 @@ export interface AccountHealthBucket {
 }
 
 export interface Account {
+  customName?: string | null
   outboundProxyEndpoint: string | null
   id: string
   name: string
@@ -412,6 +413,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
+  customName?: string | null
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountId: string
@@ -423,6 +425,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
+  customName?: string | null
   outboundProxyUrl?: string
   outboundProxyId?: string
   accountIds: string[]
@@ -439,6 +442,7 @@ interface AccountDeleteParams {
 }
 
 interface AccountImportSettings {
+  customName?: string
   enabled: boolean
   turnStateInjectionEnabled?: boolean
   concurrencyLimit: number | null

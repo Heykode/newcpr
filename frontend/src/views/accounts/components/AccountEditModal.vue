@@ -23,6 +23,7 @@ const emit = defineEmits<{
 }>()
 
 const open = defineModel<boolean>({ required: true })
+const customName = defineModel<string>('customName', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
@@ -60,6 +61,7 @@ const egressSaving = shallowRef(false)
       </div>
 
       <AccountSettingsFields
+        v-model:custom-name="customName"
         v-model:enabled="enabled"
         v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
         v-model:concurrency-limit="concurrencyLimit"
@@ -67,6 +69,7 @@ const egressSaving = shallowRef(false)
         v-model:selected-group-ids="selectedGroupIds"
         v-model:proxy-mode="proxyMode"
         v-model:proxy-id="proxyId"
+        name-available
         :groups="groups"
         :groups-loading="groupsLoading"
         :turn-state-available="account.provider === 'openai'"

@@ -29,6 +29,7 @@ async fn templates_apply_one_snapshot_to_one_or_many_accounts_without_credential
         assert_eq!(result.account_ids.len(), ids.len());
         let updates = h.accounts.batch_updates.lock().unwrap();
         let update = updates.last().unwrap();
+        assert_eq!(update.custom_name, None, "templates never rename accounts");
         let expected = config.settings().unwrap();
         assert_eq!(update.account_ids, ids);
         assert_eq!(update.enabled, Some(expected.enabled));

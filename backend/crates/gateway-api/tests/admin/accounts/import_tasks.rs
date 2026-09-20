@@ -307,7 +307,7 @@ async fn fingerprints_include_provider_proxy_and_all_import_settings() {
     fixture.auth.insert_session("valid-session");
     let mut body = input();
     body["items"][0]["settings"] = json!({
-        "enabled": true, "turnStateInjectionEnabled": false,
+        "customName": "Import batch", "enabled": true, "turnStateInjectionEnabled": false,
         "concurrencyLimit": null, "weight": 100, "groupIds": []
     });
     assert_eq!(
@@ -324,6 +324,7 @@ async fn fingerprints_include_provider_proxy_and_all_import_settings() {
     );
     for (pointer, value) in [
         ("/items/0/provider", json!("xai")),
+        ("/items/0/settings/customName", json!("Another batch")),
         ("/items/0/settings/enabled", json!(false)),
         ("/items/0/settings/turnStateInjectionEnabled", json!(true)),
         ("/items/0/settings/concurrencyLimit", json!(3)),
