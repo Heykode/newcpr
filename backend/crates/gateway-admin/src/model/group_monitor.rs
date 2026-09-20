@@ -190,24 +190,24 @@ pub fn project_group_monitor(
         free_slots = free_slots
             .zip(account.used_slots)
             .map(|(free, used)| free.saturating_add(account.total_slots.saturating_sub(used)));
-        item.quota_consume_usd_per_minute = item
-            .quota_consume_usd_per_minute
-            .zip(usable_usage(&account.consumption))
-            .map(|(left, right)| left + right);
-        item.low_sample |= account.low_sample;
         unavailable |= account.unavailable;
-        if let Some(reset) = account.reset_at {
-            item.earliest_reset_at = Some(
-                item.earliest_reset_at
-                    .map_or(reset, |current| current.min(reset)),
-            );
-        }
         if let Some(amount) = account
             .remaining_usd
             .filter(|amount| amount.is_finite() && *amount >= 0.0)
         {
             item.estimated_accounts += 1;
             remaining += amount;
+            item.quota_consume_usd_per_minute = item
+                .quota_consume_usd_per_minute
+                .zip(usable_usage(&account.consumption))
+                .map(|(left, right)| left + right);
+            item.low_sample |= account.low_sample;
+            if let Some(reset) = account.reset_at {
+                item.earliest_reset_at = Some(
+                    item.earliest_reset_at
+                        .map_or(reset, |current| current.min(reset)),
+                );
+            }
             match account
                 .remaining_life_minutes
                 .filter(|minutes| minutes.is_finite())
@@ -221,8 +221,6 @@ pub fn project_group_monitor(
                 }
                 None => expiry = None,
             }
-        } else {
-            expiry = None;
         }
     }
     item.used_slots = item.used_slots.zip(free_slots).map(|(used, free)| {
@@ -238,8 +236,9 @@ pub fn project_group_monitor(
         item.eta_status = "disabled";
         return item;
     }
-    let complete =
-        item.estimated_accounts == item.eligible_accounts && !unavailable && remaining.is_finite();
+    let complete = (item.estimated_accounts > 0 || item.eligible_accounts == 0)
+        && !unavailable
+        && remaining.is_finite();
     if item.estimated_accounts > 0 || item.eligible_accounts == 0 {
         item.remaining_usd = remaining.is_finite().then_some(remaining);
         item.remaining_status = if complete { "ready" } else { "partial" };

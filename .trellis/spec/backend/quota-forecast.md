@@ -62,7 +62,10 @@
 - Mixed expiry projections skip accounts that outlived their Plan average,
   while retaining calculable accounts. All-outlived groups and otherwise missing
   lifespan/rate evidence remain unknown. ETA still uses the full known remaining
-  amount and eligible accounts' deduplicated cross-group consumption.
+  amount and estimated accounts' deduplicated cross-group consumption. An
+  eligible account awaiting its first usable quota window remains visible in
+  coverage and concurrency but does not make existing group projections partial;
+  it joins remaining, ETA and expiry calculations after an estimate appears.
 - Sampling remains 10 seconds, list reads 30 seconds, without upstream refresh.
   Own the deduplicated quota IDs before building the buffered async stream:
   a borrowed mapped peer iterator fails `async_trait`'s `Send` generalization
@@ -218,10 +221,12 @@ Correct: classify new prewarm requests from the provider's actual
 - `routing_group_refs` records authorized scope, not exclusive group selection.
   Group rates can overlap. ETA uses deduplicated eligible accounts' all-group
   rate; shared balances/concurrency must not be added across groups.
-- Do not sum weekly/monthly extrapolated balances. Failed reads, missing account
-  estimates and missing runtime retain distinct unknown/partial states. Known
-  positive USD remains usable despite other missing fees; an all-missing rate is
-  unknown, and an idle complete rate is not infinite ETA.
+- Do not sum weekly/monthly extrapolated balances. Failed reads and missing
+  runtime retain distinct unknown states. A missing estimate for a newly imported
+  account does not hide projections from already estimated accounts; truthful
+  estimated/eligible coverage remains visible. Known positive USD remains usable
+  despite other missing fees; an all-missing rate is unknown, and an idle complete
+  rate is not infinite ETA.
 - Expiry waste is a qualified observed-lifespan estimate, never token/reset
   expiry. Only durable `banned` plus `account_banned` rows are samples. Device
   first-seen timestamps survive reimport; absent/deleted history is not invented.
