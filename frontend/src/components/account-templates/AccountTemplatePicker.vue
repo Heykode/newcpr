@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { ReloginTemplate } from '@/api/modules/relogin'
+import type { AccountTemplate } from '@/api/modules/account-templates'
 import { computed, onMounted, onScopeDispose, shallowRef } from 'vue'
-import { getReloginTemplates } from '@/api/modules/relogin'
+import { getAccountTemplates } from '@/api/modules/account-templates'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
@@ -9,8 +9,8 @@ import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import { errorMessage } from '@/utils/async'
 
 defineProps<{ disabled: boolean }>()
-const selected = defineModel<ReloginTemplate | null>({ required: true })
-const rows = shallowRef<ReloginTemplate[]>([])
+const selected = defineModel<AccountTemplate | null>({ required: true })
+const rows = shallowRef<AccountTemplate[]>([])
 const loading = shallowRef(true)
 const error = shallowRef('')
 const controller = new AbortController()
@@ -34,7 +34,7 @@ const proxyName = computed(() => {
 })
 onMounted(async () => {
   try {
-    const result = await getReloginTemplates({ silent: true, signal: controller.signal })
+    const result = await getAccountTemplates({ silent: true, signal: controller.signal })
     if (!controller.signal.aborted)
       rows.value = result
   }
@@ -60,6 +60,11 @@ onScopeDispose(() => controller.abort())
         调度
       </dt><dd class="m-0">
         {{ selected.config.enabled ? '启用' : '暂停' }}
+      </dd>
+      <dt class="text-cp-text-secondary">
+        State 开关
+      </dt><dd class="m-0">
+        {{ selected.config.turnStateInjectionEnabled ? '开启' : '关闭' }}
       </dd>
       <dt class="text-cp-text-secondary">
         账号并发

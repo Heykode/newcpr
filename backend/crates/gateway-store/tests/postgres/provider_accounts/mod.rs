@@ -1951,6 +1951,10 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
         actor: MutationActor::System,
         request_id: "request_batch_update".to_owned(),
     };
+    let original_identity: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(a) - array['enabled','concurrency_limit','weight','turn_state_injection_enabled','updated_at']
+         from provider_accounts a where id=any($1::text[]) order by id",
+    ).bind(&account_ids).fetch_all(&database.pool).await.unwrap();
 
     let result = store
         .batch_update_accounts(
@@ -1958,7 +1962,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: Some(false),
-                turn_state_injection_enabled: None,
+                turn_state_injection_enabled: Some(true),
                 concurrency_limit: Some(gateway_core::account::AccountConcurrencyLimit::new(7)),
                 weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
                 group_ids: Some(vec![AccountGroupId::new(GROUP_ID).expect("group ID")]),
@@ -1970,15 +1974,18 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
 
     assert_eq!(result.config_revision.get(), 2);
     assert_eq!(result.account_ids.len(), 2);
-    let scheduling: Vec<(bool, Option<i64>, i16)> = sqlx::query_as(
-        "select enabled, concurrency_limit, weight
+    let scheduling: Vec<(bool, Option<i64>, i16, bool)> = sqlx::query_as(
+        "select enabled, concurrency_limit, weight, turn_state_injection_enabled
          from provider_accounts where id = any($1::text[]) order by id",
     )
     .bind(&account_ids)
     .fetch_all(&database.pool)
     .await
     .expect("load batch account state");
-    assert_eq!(scheduling, [(false, Some(7), 25), (false, Some(7), 25)]);
+    assert_eq!(
+        scheduling,
+        [(false, Some(7), 25, true), (false, Some(7), 25, true)]
+    );
     for account_id in &account_ids {
         assert_eq!(
             account_group_ids(&database.pool, account_id).await,
@@ -1995,7 +2002,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: Some(true),
-                turn_state_injection_enabled: None,
+                turn_state_injection_enabled: Some(false),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(vec![
@@ -2016,15 +2023,18 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
         audit_count(&database.pool, &context.request_id).await,
         audit_before_failure
     );
-    let scheduling: Vec<(bool, Option<i64>, i16)> = sqlx::query_as(
-        "select enabled, concurrency_limit, weight
+    let scheduling: Vec<(bool, Option<i64>, i16, bool)> = sqlx::query_as(
+        "select enabled, concurrency_limit, weight, turn_state_injection_enabled
          from provider_accounts where id = any($1::text[]) order by id",
     )
     .bind(&account_ids)
     .fetch_all(&database.pool)
     .await
     .expect("load rolled back account state");
-    assert_eq!(scheduling, [(false, Some(7), 25), (false, Some(7), 25)]);
+    assert_eq!(
+        scheduling,
+        [(false, Some(7), 25, true), (false, Some(7), 25, true)]
+    );
     for account_id in &account_ids {
         assert_eq!(
             account_group_ids(&database.pool, account_id).await,
@@ -2032,6 +2042,11 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
         );
     }
 
+    let final_identity: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(a) - array['enabled','concurrency_limit','weight','turn_state_injection_enabled','updated_at']
+         from provider_accounts a where id=any($1::text[]) order by id",
+    ).bind(&account_ids).fetch_all(&database.pool).await.unwrap();
+    assert_eq!(final_identity, original_identity);
     database.close().await;
 }
 

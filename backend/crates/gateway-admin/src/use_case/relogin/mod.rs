@@ -11,7 +11,7 @@ use crate::{
             PrepareCredentialRotation, ProviderDocument,
         },
         relogin::*,
-        relogin_templates::{ReloginTemplate, ReloginTemplateConfig, ReloginTemplateSelection},
+        relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection},
     },
     ports::{
         provider::ProviderAdmin,
@@ -34,7 +34,6 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
 mod recovery;
-mod templates;
 mod worker;
 pub(crate) use worker::contribution;
 
@@ -110,13 +109,6 @@ pub struct AccountReloginAction {
 
 #[async_trait]
 pub trait ReloginService: Send + Sync {
-    async fn templates(&self) -> Result<Vec<ReloginTemplate>, AdminError>;
-    async fn save_template(
-        &self,
-        selection: Option<ReloginTemplateSelection>,
-        config: ReloginTemplateConfig,
-    ) -> Result<ReloginTemplate, AdminError>;
-    async fn delete_template(&self, selection: ReloginTemplateSelection) -> Result<(), AdminError>;
     async fn push_with_template(
         &self,
         ids: &[String],
@@ -167,6 +159,7 @@ pub(crate) struct DefaultReloginService {
     provider: Arc<dyn ProviderAdmin>,
     openai: Arc<dyn OpenAiService>,
     snapshot: Arc<dyn SnapshotControl>,
+    templates: Arc<dyn super::account_templates::AccountTemplatesService>,
     gate: Mutex<Gate>,
 }
 
@@ -178,6 +171,7 @@ impl DefaultReloginService {
         provider: Arc<dyn ProviderAdmin>,
         openai: Arc<dyn OpenAiService>,
         snapshot: Arc<dyn SnapshotControl>,
+        templates: Arc<dyn super::account_templates::AccountTemplatesService>,
     ) -> Self {
         Self {
             store,
@@ -186,6 +180,7 @@ impl DefaultReloginService {
             provider,
             openai,
             snapshot,
+            templates,
             gate: Mutex::new(Gate::default()),
         }
     }
@@ -441,7 +436,7 @@ impl DefaultReloginService {
                 self.store()?
                     .validate_template_references(config)
                     .await
-                    .map_err(templates::template_error)?;
+                    .map_err(super::account_templates::template_error)?;
             }
             // Import owns both preparation and commit, so fence before entering it.
             entry.status = ReloginStatus::Pushing;
@@ -558,47 +553,6 @@ fn result(id: String, outcome: Result<(), AdminError>) -> ReloginBatchResult {
 
 #[async_trait]
 impl ReloginService for DefaultReloginService {
-    async fn templates(&self) -> Result<Vec<ReloginTemplate>, AdminError> {
-        self.store()?
-            .templates()
-            .await
-            .map_err(templates::template_error)
-    }
-
-    async fn save_template(
-        &self,
-        selection: Option<ReloginTemplateSelection>,
-        mut config: ReloginTemplateConfig,
-    ) -> Result<ReloginTemplate, AdminError> {
-        config.name = config.name.trim().to_owned();
-        config.settings()?;
-        let (id, expected) = match selection {
-            Some(selection) => {
-                templates::validate_selection(&selection)?;
-                (selection.id, Some(selection.revision))
-            }
-            None => (format!("template_{}", uuid::Uuid::now_v7().simple()), None),
-        };
-        let template = ReloginTemplate {
-            id,
-            revision: expected.unwrap_or(0) + 1,
-            config,
-        };
-        self.store()?
-            .save_template(&template, expected)
-            .await
-            .map_err(templates::template_error)?;
-        Ok(template)
-    }
-
-    async fn delete_template(&self, selection: ReloginTemplateSelection) -> Result<(), AdminError> {
-        templates::validate_selection(&selection)?;
-        self.store()?
-            .delete_template(&selection.id, selection.revision)
-            .await
-            .map_err(templates::template_error)
-    }
-
     async fn account_actions(
         &self,
         ids: &[String],
@@ -958,7 +912,10 @@ impl ReloginService for DefaultReloginService {
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         validate_ids(ids)?;
         let _gate = self.gate.lock().await;
-        let template = self.resolve_template(template).await?;
+        let template = match template {
+            Some(selection) => Some(self.templates.resolve(selection).await?),
+            None => None,
+        };
         let entries = self.entries().await?;
         let mut results = Vec::new();
         for id in ids {

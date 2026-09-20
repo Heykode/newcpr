@@ -1,4 +1,5 @@
 mod account_groups;
+mod account_templates;
 mod accounts;
 mod auth;
 mod backup;

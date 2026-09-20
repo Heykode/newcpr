@@ -1,10 +1,11 @@
-import type { ReloginTemplateConfig } from '@/api/modules/relogin'
-import { parseAccountSchedulingForm } from '../accounts/utils/schedulingForm'
+import type { AccountTemplateConfig } from '@/api/modules/account-templates'
+import { parseAccountSchedulingForm } from '@/views/accounts/utils/schedulingForm'
 
-export function templateForm(config?: ReloginTemplateConfig) {
+export function templateForm(config?: AccountTemplateConfig) {
   return {
     name: config?.name ?? '',
     enabled: config?.enabled ?? true,
+    turnStateInjectionEnabled: config?.turnStateInjectionEnabled ?? false,
     concurrencyLimit: config?.concurrencyLimit == null ? '' : String(config.concurrencyLimit),
     weight: String(config?.weight ?? 1),
     groupIds: [...(config?.groupIds ?? [])],
@@ -13,7 +14,7 @@ export function templateForm(config?: ReloginTemplateConfig) {
   }
 }
 
-export function templateConfig(form: ReturnType<typeof templateForm>): ReloginTemplateConfig {
+export function templateConfig(form: ReturnType<typeof templateForm>): AccountTemplateConfig {
   const name = form.name.trim()
   if (!name || new TextEncoder().encode(name).length > 128 || [...name].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127))
     throw new Error('模板名称不能为空且不能超过 128 字节')
@@ -25,6 +26,7 @@ export function templateConfig(form: ReturnType<typeof templateForm>): ReloginTe
   return {
     name,
     enabled: form.enabled,
+    turnStateInjectionEnabled: form.turnStateInjectionEnabled,
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     outboundProxyId: form.proxyMode === 'proxy' ? form.proxyId : null,

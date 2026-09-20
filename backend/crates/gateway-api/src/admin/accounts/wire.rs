@@ -61,6 +61,13 @@ pub struct ListQuery {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ApplyAccountTemplateRequest {
+    pub account_ids: Vec<String>,
+    pub template: gateway_admin::model::relogin_templates::ReloginTemplateSelection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<AccountProxyUpdate>,

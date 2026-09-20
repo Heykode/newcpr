@@ -225,7 +225,7 @@ where
 {
     let result = state
         .admin_services()
-        .relogin()
+        .account_templates()
         .templates()
         .await
         .map_err(map_admin_service_error)?;
@@ -245,7 +245,7 @@ where
 {
     let result = state
         .admin_services()
-        .relogin()
+        .account_templates()
         .save_template(request.selection, request.config)
         .await
         .map_err(map_admin_service_error)?;
@@ -265,7 +265,7 @@ where
 {
     state
         .admin_services()
-        .relogin()
+        .account_templates()
         .delete_template(request)
         .await
         .map_err(map_admin_service_error)?;

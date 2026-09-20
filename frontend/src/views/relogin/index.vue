@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { ReloginBatchResult, ReloginEntry, ReloginTemplate } from '@/api/modules/relogin'
+import type { AccountTemplate } from '@/api/modules/account-templates'
+import type { ReloginBatchResult, ReloginEntry } from '@/api/modules/relogin'
 import { CheckCheck, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { useNow } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
@@ -13,6 +14,8 @@ import {
   setReloginAutomatic,
   setReloginWorkspace,
 } from '@/api/modules/relogin'
+import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
+import AccountTemplatesModal from '@/components/account-templates/AccountTemplatesModal.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -32,8 +35,6 @@ import { formatDateTime } from '@/utils/date'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
 import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
-import ReloginTemplatePicker from './ReloginTemplatePicker.vue'
-import ReloginTemplatesModal from './ReloginTemplatesModal.vue'
 
 const entries = shallowRef<ReloginEntry[]>([])
 const loading = shallowRef(false)
@@ -236,7 +237,7 @@ function saveImport() {
 }
 const confirming = shallowRef(false)
 const templatesOpen = shallowRef(false)
-const selectedTemplate = shallowRef<ReloginTemplate | null>(null)
+const selectedTemplate = shallowRef<AccountTemplate | null>(null)
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
 function confirm(mode: 'push' | 'delete', ids: string[]) {
@@ -506,7 +507,7 @@ onBeforeUnmount(() => {
       <p v-else class="mt-0 text-cp-sm">
         新增 {{ newPushCount }} 项，更新已有账号 {{ pushable.length - newPushCount }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
       </p>
-      <ReloginTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
+      <AccountTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
       <p v-if="confirmMode === 'push' && pushable.length > newPushCount" class="text-cp-sm text-cp-text-secondary">
         已有账号仅更新凭据，保留原配置。
       </p>
@@ -524,7 +525,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </BaseConfirmModal>
-    <ReloginTemplatesModal v-model="templatesOpen" />
+    <AccountTemplatesModal v-model="templatesOpen" />
     <BaseModal v-model="editing" title="选择登录工作区" :dismissible="!busy">
       <div class="grid gap-3">
         <p class="m-0 break-all text-cp-sm">

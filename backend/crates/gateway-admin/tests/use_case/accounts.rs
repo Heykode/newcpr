@@ -583,6 +583,7 @@ pub(super) struct FakeAccountStore {
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     pub(super) rotation_updates: Mutex<Vec<AccountRecord>>,
+    pub(super) batch_updates: Mutex<Vec<BatchUpdateAccounts>>,
     pub(super) rotation_attempts: Mutex<Vec<CredentialRotationCommit>>,
     pub(super) credential_detail_updates: Mutex<Vec<AccountRecord>>,
     audit_requests: Mutex<Vec<String>>,
@@ -611,6 +612,7 @@ impl FakeAccountStore {
             account_after_probe: Mutex::new(None),
             fail_commit: Mutex::new(false),
             rotation_updates: Mutex::new(Vec::new()),
+            batch_updates: Mutex::new(Vec::new()),
             rotation_attempts: Mutex::new(Vec::new()),
             credential_detail_updates: Mutex::new(Vec::new()),
             audit_requests: Mutex::new(Vec::new()),
@@ -1093,6 +1095,7 @@ impl AccountStore for FakeAccountStore {
         self.record("store.batch_update_accounts");
         self.record_context(context);
         self.require_commit()?;
+        self.batch_updates.lock().unwrap().push(command.clone());
         Ok(AccountsUpdateResult {
             config_revision: revision(2),
             account_ids: command

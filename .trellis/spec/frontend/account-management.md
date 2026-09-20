@@ -488,6 +488,18 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
 - Template management reuses import scheduling/group/proxy controls. Persist on
   the server; copy editable group arrays and retain template revision for save/delete.
   Missing group references must remain visible and explicitly removable.
+- The shared `components/account-templates` editor/picker and `api/modules/account-templates`
+  serve both pages from one catalog. State is only the account boolean switch, default
+  off in new/edit forms; never include model/global State parameters. Applying a legacy
+  untouched template preserves existing State, while explicitly saving it records the switch.
+- Account management applies a clicked template to a copied set of selected IDs, including
+  other pages, using the template ID/revision rather than client-side config. Disable
+  application with zero or more than 1000 IDs; keep management available without selection.
+  Refresh templates on menu open, retain visible mutation errors, and reread account/group
+  facts after success without discarding cross-page selections. No permanent template binding.
+- Own the submission lock in a local synchronous ref, not a parent-fed `defineModel` whose
+  reflected update can lag until the next render. Test two clicks in one event-loop turn
+  and assert one mutation. Abort stale catalog reads, never retry an uncertain mutation.
 - New-account push confirms an optional template ID/revision plus unchanged row
   revisions. Default to no template on each open, show a readable config summary,
   and do not send a template for an existing-only batch. Mixed batches apply it

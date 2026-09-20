@@ -8,6 +8,61 @@ use tower::ServiceExt as _;
 use super::super::{AdminTestFixture, AdminTestState};
 
 #[tokio::test]
+async fn account_template_apply_requires_admin_version_and_only_selection_fields() {
+    use serde_json::json;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (body, authenticated, expected) in [
+        (json!({}), false, StatusCode::UNAUTHORIZED),
+        (
+            json!({"accountIds":["acct_test"]}),
+            true,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"accountIds":["acct_test"],"template":{"id":"t"}}),
+            true,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"accountIds":["acct_test"],"template":{"id":"t","revision":1},"turnStateParameters":{}}),
+            true,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"accountIds":[],"template":{"id":"t","revision":1}}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"accountIds":["acct_test"],"template":{"id":"t","revision":0}}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"accountIds":["acct_test"],"template":{"id":"t","revision":1}}),
+            true,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/admin/accounts/apply-template")
+            .header("x-request-id", "template-api-test")
+            .header(header::CONTENT_TYPE, "application/json");
+        if authenticated {
+            request = request.header(header::COOKIE, "cpr_admin_session=valid-session");
+        }
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
 async fn personal_info_requires_admin_and_a_valid_account_query() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");

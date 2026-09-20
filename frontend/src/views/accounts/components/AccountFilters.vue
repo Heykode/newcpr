@@ -15,6 +15,7 @@ const props = defineProps<{
   selectedCount: number
   batchDeleting: boolean
   exportingAccounts: boolean
+  templateApplying?: boolean
   groups: AccountGroup[]
   groupsLoading: boolean
   planOptions: { label: string, value: string }[]
@@ -117,10 +118,12 @@ const groupOptions = computed(() => [
     <div
       class="grid w-full grid-cols-2 gap-2 xl:flex xl:w-auto xl:flex-wrap xl:shrink-0 xl:self-end xl:items-center xl:justify-end xl:ml-auto"
     >
+      <slot name="account-templates" />
       <BaseButton
         v-if="selectedCount > 0"
         variant="secondary"
         class="w-full whitespace-nowrap xl:w-auto"
+        :disabled="templateApplying"
         @click="emit('editSelected')"
       >
         <Pencil class="size-4 text-cp-link" />
@@ -130,7 +133,7 @@ const groupOptions = computed(() => [
         v-if="selectedCount > 0"
         variant="destructive"
         class="w-full whitespace-nowrap xl:w-auto"
-        :disabled="batchDeleting"
+        :disabled="batchDeleting || templateApplying"
         @click="emit('deleteSelected')"
       >
         <Trash2 class="size-4" />

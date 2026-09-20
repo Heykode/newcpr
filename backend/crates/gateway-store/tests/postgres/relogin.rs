@@ -235,6 +235,7 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
         config: ReloginTemplateConfig {
             name: "Team settings".into(),
             enabled: false,
+            turn_state_injection_enabled: Some(true),
             concurrency_limit: Some(7),
             weight: 17,
             group_ids: vec![group.into()],
@@ -244,6 +245,18 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
     store.save_template(&template, None).await.unwrap();
     let reopened = PgReloginStore::new(database.pool.clone());
     assert_eq!(reopened.templates().await.unwrap(), vec![template.clone()]);
+    sqlx::query("update account_relogin_templates set config=config-'turnStateInjectionEnabled' where id=$1")
+        .bind(&template.id).execute(&database.pool).await.unwrap();
+    let legacy = reopened.templates().await.unwrap().remove(0);
+    assert_eq!(legacy.config.turn_state_injection_enabled, None);
+    assert_eq!(
+        legacy
+            .config
+            .settings()
+            .unwrap()
+            .turn_state_injection_enabled,
+        None
+    );
     let mut duplicate = template.clone();
     duplicate.id = "template-duplicate".into();
     duplicate.config.name = "TEAM SETTINGS".into();

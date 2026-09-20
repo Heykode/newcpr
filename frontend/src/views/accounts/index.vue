@@ -5,6 +5,7 @@ import { useLocalStorage } from '@vueuse/core'
 
 import { computed, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { getRelogin } from '@/api/modules/relogin'
+import AccountTemplateMenu from '@/components/account-templates/AccountTemplateMenu.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -13,6 +14,7 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
+import { toast } from '@/components/base/BaseToast'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
@@ -48,6 +50,7 @@ import { accountColumnOptions, accountColumns, derivedAccountStatus, readAccount
 import { accountHasReloginTotp, reloginTotpEmailSet } from './relogin-availability'
 
 const selectedIds = ref<Set<string>>(new Set())
+const applyingTemplate = shallowRef(false)
 const forecastAccount = ref<AccountRow | null>(null)
 const forecastOpen = ref(false)
 
@@ -128,6 +131,15 @@ const {
   loading: groupsLoading,
   loadGroups,
 } = useAccountGroupCatalog()
+
+async function onTemplateApplied() {
+  try {
+    await Promise.all([loadAccounts({ silent: true }), loadGroups({ silent: true })])
+  }
+  catch {
+    toast.warning('模板已应用，列表刷新失败，请手动刷新')
+  }
+}
 
 const {
   open: importTasksOpen,
@@ -377,12 +389,17 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           :selected-count="selectedIds.size"
           :batch-deleting="batchDeleting"
           :exporting-accounts="exportingAccounts"
+          :template-applying="applyingTemplate"
           @delete-selected="showDeleteModal = true"
           @export-selected="handleExportAccounts"
           @create="openCreateAccount"
           @edit-selected="openBatchEdit"
           @toggle-column="toggleColumn"
-        />
+        >
+          <template #account-templates>
+            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
+          </template>
+        </AccountFilters>
       </template>
 
       <template #body>

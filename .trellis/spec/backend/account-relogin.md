@@ -114,10 +114,22 @@
   authorizes worker settlement to the selected existing account only; it cannot
   create a replacement if that account disappears. Cancel/edit/library queue paths
   clear the intent. Preserve the administrator's audit context and pool settings.
-- Relogin templates contain only named import settings and an optional saved proxy ID.
+- `AccountTemplatesService` owns the one shared template catalog; account management
+  and relogin use the existing `/api/admin/relogin/templates*` endpoints and storage.
+  Templates contain only named account settings and an optional saved proxy ID.
   `account_relogin_templates` stores independent revisions and unique normalized names.
   Updates/deletes require their confirmed revision. Changing a template never changes
   accounts that previously used it.
+- Optional `turnStateInjectionEnabled` is a boolean switch only, not State parameters.
+  Legacy missing/null preserves existing account State when applied; new imports retain
+  their default-off behavior. Newly saved UI templates use explicit true/false.
+- `POST /api/admin/accounts/apply-template` accepts frozen `accountIds` (1-1000 unique)
+  and `template: { id, revision }` only. Resolve and validate one server-side snapshot,
+  then use `AccountsService.batch_update` for atomic settings, auditing, provider
+  notification and configuration publication. Groups replace assignments, empty groups
+  clear them, null concurrency restores defaults, and no proxy explicitly selects Direct.
+  Reject State=true on any non-OpenAI target before mutation. No credential/device
+  replacement, template binding, automatic retry or schema migration is implied.
 - Manual push optionally captures template ID/revision; resolve one immutable config
   snapshot per batch. Stale/deleted templates fail before any push. Only create-only
   imports receive settings/proxy; existing account rotation never applies them.

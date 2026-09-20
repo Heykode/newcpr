@@ -32,9 +32,9 @@ use std::{
 mod recovery;
 
 #[derive(Default)]
-struct MemoryStore {
+pub(super) struct MemoryStore {
     templates: Mutex<BTreeMap<String, ReloginTemplate>>,
-    invalid_template_references: Mutex<bool>,
+    pub(super) invalid_template_references: Mutex<bool>,
     rows: Mutex<BTreeMap<String, ReloginEntry>>,
     settings: Mutex<ReloginSettings>,
     fail_after: Mutex<Option<usize>>,
@@ -143,15 +143,15 @@ impl ReloginStore for MemoryStore {
     }
 }
 
-struct Harness {
-    services: AdminServices,
-    store: Arc<MemoryStore>,
-    accounts: Arc<FakeAccountStore>,
+pub(super) struct Harness {
+    pub(super) services: AdminServices,
+    pub(super) store: Arc<MemoryStore>,
+    pub(super) accounts: Arc<FakeAccountStore>,
     provider: Arc<FakeProviderAdmin>,
     task: Arc<dyn ScheduledTask>,
 }
 impl Harness {
-    async fn new(pool: Vec<AccountRecord>) -> Self {
+    pub(super) async fn new(pool: Vec<AccountRecord>) -> Self {
         let log = events();
         let accounts = FakeAccountStore::new("openai", log.clone());
         accounts.set_accounts(pool);
@@ -279,10 +279,11 @@ fn credential() -> ReloginCredential {
     }
 }
 
-fn template_config() -> ReloginTemplateConfig {
+pub(super) fn template_config() -> ReloginTemplateConfig {
     ReloginTemplateConfig {
         name: "Team defaults".into(),
         enabled: false,
+        turn_state_injection_enabled: Some(true),
         concurrency_limit: Some(7),
         weight: 13,
         group_ids: vec!["grp_00000000000000000000000000000091".into()],
@@ -290,7 +291,7 @@ fn template_config() -> ReloginTemplateConfig {
     }
 }
 
-fn template_selection(template: &ReloginTemplate) -> ReloginTemplateSelection {
+pub(super) fn template_selection(template: &ReloginTemplate) -> ReloginTemplateSelection {
     ReloginTemplateSelection {
         id: template.id.clone(),
         revision: template.revision,
@@ -304,24 +305,24 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
     invalid.concurrency_limit = Some(0);
     assert!(
         h.services
-            .relogin()
+            .account_templates()
             .save_template(None, invalid)
             .await
             .is_err()
     );
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();
     assert_eq!(
-        h.services.relogin().templates().await.unwrap(),
+        h.services.account_templates().templates().await.unwrap(),
         vec![template.clone()]
     );
     assert!(
         h.services
-            .relogin()
+            .account_templates()
             .save_template(None, template_config())
             .await
             .is_err()
@@ -330,14 +331,14 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
     config.weight = 29;
     let updated = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(Some(template_selection(&template)), config)
         .await
         .unwrap();
     assert_eq!(updated.revision, 2);
     assert!(
         h.services
-            .relogin()
+            .account_templates()
             .delete_template(template_selection(&template))
             .await
             .is_err()
@@ -361,7 +362,7 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
     assert_eq!(h.row(&id).await.revision, before.revision);
     assert!(h.accounts.audit_requests().is_empty());
     h.services
-        .relogin()
+        .account_templates()
         .delete_template(template_selection(&updated))
         .await
         .unwrap();
@@ -385,7 +386,7 @@ async fn relogin_templates_reject_missing_references_before_push_fence() {
     let h = Harness::new(vec![]).await;
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();
@@ -419,7 +420,7 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
     let h = Harness::new(vec![existing]).await;
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();
@@ -479,7 +480,7 @@ async fn relogin_existing_account_ignores_template_references_and_settings() {
     let h = Harness::new(vec![account(false)]).await;
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();

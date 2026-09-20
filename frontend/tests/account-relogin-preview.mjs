@@ -119,6 +119,31 @@ async function main() {
                 break
             }
           }
+          else if (request.method === 'POST' && path === '/api/admin/accounts/apply-template') {
+            let raw = ''
+            for await (const chunk of request)
+              raw += chunk
+            const body = JSON.parse(raw)
+            const template = templates.find(row => row.id === body.template?.id && row.revision === body.template?.revision)
+            if (!template || !body.accountIds?.length || body.accountIds.some(id => !accounts.some(account => account.id === id))) {
+              status = 409
+            }
+            else {
+              for (const account of accounts.filter(account => body.accountIds.includes(account.id))) {
+                const config = template.config
+                Object.assign(account, {
+                  enabled: config.enabled,
+                  concurrencyLimit: config.concurrencyLimit,
+                  weight: config.weight,
+                  groups: groups.filter(group => config.groupIds.includes(group.id)),
+                  outboundProxyEndpoint: null,
+                })
+                if (config.turnStateInjectionEnabled != null)
+                  account.turnStateInjectionEnabled = config.turnStateInjectionEnabled
+              }
+              data = { accountIds: body.accountIds, configRevision: 2 }
+            }
+          }
           else if (request.method === 'POST' && path.startsWith('/api/admin/relogin/') && !path.startsWith('/api/admin/relogin/accounts/')) {
             let raw = ''
             for await (const chunk of request)
