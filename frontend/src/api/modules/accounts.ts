@@ -159,6 +159,12 @@ export interface Account {
       model: string
       refreshStatus: 'missing' | 'ready' | 'queued' | 'refreshing' | 'cooldown' | 'failed'
       probeAttempts?: number
+      probeTotalAttempts?: number
+      probeCooldownUntil?: string | null
+      probeRetryFromUpstream?: boolean | null
+      probeHttpStatus?: number | null
+      probeErrorCode?: string | null
+      probeReturnedLength?: number | null
       successfulProbeAttempt?: number | null
       lastProbeReason?: string | null
       active: { chars: number, capturedAt?: string | null, expiresAt: string } | null

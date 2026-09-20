@@ -114,7 +114,7 @@ export function useAccountsQuery() {
   const refreshInterval = computed(() => query.items.value.some(account =>
     account.enabled && account.status === 'normal'
     && account.turnStateInjectionEnabled && account.turnState?.enabled !== false
-    && account.turnState?.models?.some(model => ['queued', 'refreshing'].includes(model.refreshStatus)),
+    && account.turnState?.models?.some(model => ['queued', 'refreshing', 'cooldown'].includes(model.refreshStatus)),
   )
     ? 3_000
     : 30_000)

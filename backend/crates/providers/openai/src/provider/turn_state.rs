@@ -15,11 +15,12 @@ use futures::{
     stream::{self, FuturesUnordered},
 };
 use gateway_core::{
-    account::{CredentialState, ProviderAccount, ProviderAccountId},
+    account::{CredentialRevision, CredentialState, ProviderAccount, ProviderAccountId},
     provider_ports::{
         OpaqueTurnState, ProviderLeasePort, ProviderTurnStateAnomaly, ProviderTurnStateCandidate,
-        ProviderTurnStatePort, ProviderTurnStatePromotion, ProviderTurnStateRecord,
-        ProviderTurnStateRefreshStatus, ProviderTurnStateSlot, ProviderTurnStateValue,
+        ProviderTurnStatePort, ProviderTurnStateProbeCooldown, ProviderTurnStateProbeProgress,
+        ProviderTurnStatePromotion, ProviderTurnStateRecord, ProviderTurnStateRefreshStatus,
+        ProviderTurnStateSlot, ProviderTurnStateValue,
     },
     routing::UpstreamModelId,
     runtime::RequestTuningHandle,
@@ -59,6 +60,7 @@ const SWITCH_MARGIN: Duration = Duration::from_secs(60);
 const CLOCK_TOLERANCE: Duration = Duration::from_secs(30);
 
 type ObservationKey = (ProviderAccountId, UpstreamModelId);
+type ProbeCooldowns = HashMap<ObservationKey, (CredentialRevision, SystemTime)>;
 
 #[derive(Default)]
 struct PendingObservations {
@@ -664,6 +666,7 @@ pub(crate) struct CodexTurnStateMaintenanceService {
     quota: Arc<CodexCredentialQuotaService>,
     response_origin: url::Url,
     discovery_cursor: Arc<AtomicUsize>,
+    probe_cooldowns: Arc<Mutex<ProbeCooldowns>>,
 }
 
 impl CodexTurnStateMaintenanceService {
@@ -687,6 +690,7 @@ impl CodexTurnStateMaintenanceService {
             quota,
             response_origin,
             discovery_cursor: Arc::default(),
+            probe_cooldowns: Arc::default(),
         }
     }
 
@@ -751,6 +755,9 @@ impl CodexTurnStateMaintenanceService {
                 continue;
             }
             for model in &models {
+                if !self.probe_ready(account, model).await {
+                    continue;
+                }
                 let record = self.manager.record(account, model).await;
                 let (active, next) = refresh_slots(
                     record.as_ref(),
@@ -969,6 +976,7 @@ impl CodexTurnStateMaintenanceService {
         proxy: Option<&gateway_core::account::OutboundProxy>,
     ) -> bool {
         if !self.target_current(account, model).await
+            || !self.probe_ready(account, model).await
             || !self
                 .manager
                 .mark_refresh_status(
@@ -984,6 +992,7 @@ impl CodexTurnStateMaintenanceService {
         }
         let mut round = 0;
         let mut attempted = 0_u64;
+        let mut returned_length = None;
         let mut runtime = None;
         let mut failures = HashMap::<&'static str, usize>::new();
         loop {
@@ -1079,7 +1088,9 @@ impl CodexTurnStateMaintenanceService {
                     _ = progress_tick.tick() => {
                         let count = before_batch.saturating_add(sent.load(Ordering::Relaxed) as u64);
                         if count != reported {
-                            self.probe_progress(account, model, count, last_reason, None).await;
+                            self.probe_progress(account, model, ProviderTurnStateProbeProgress {
+                                attempts: count, reason: last_reason, successful_attempt: None, returned_length,
+                            }).await;
                             reported = count;
                         }
                         continue;
@@ -1093,10 +1104,19 @@ impl CodexTurnStateMaintenanceService {
                         last_reason = Some(reason);
                         if matches!(
                             reason,
-                            "account_rejected" | "account_stopped" | "rate_limited"
+                            "account_rejected" | "account_stopped" | "probe_rate_limited"
                         ) {
-                            self.probe_progress(account, model, attempted, last_reason, None)
-                                .await;
+                            self.probe_progress(
+                                account,
+                                model,
+                                ProviderTurnStateProbeProgress {
+                                    attempts: attempted,
+                                    reason: last_reason,
+                                    successful_attempt: None,
+                                    returned_length,
+                                },
+                            )
+                            .await;
                             return false;
                         }
                         continue;
@@ -1107,6 +1127,7 @@ impl CodexTurnStateMaintenanceService {
                 {
                     return false;
                 }
+                returned_length = u16::try_from(value.len()).ok();
                 let Some(parsed) = ParsedCodexTurnState::parse(&value) else {
                     last_reason = Some("invalid_envelope");
                     *failures.entry("invalid_envelope").or_default() += 1;
@@ -1140,8 +1161,17 @@ impl CodexTurnStateMaintenanceService {
                     )
                     .await
                 {
-                    self.probe_progress(account, model, attempted, None, Some(attempt))
-                        .await;
+                    self.probe_progress(
+                        account,
+                        model,
+                        ProviderTurnStateProbeProgress {
+                            attempts: attempted,
+                            reason: None,
+                            successful_attempt: Some(attempt),
+                            returned_length,
+                        },
+                    )
+                    .await;
                     tracing::info!(
                         account_id = account.id().as_str(),
                         model = model.as_str(),
@@ -1155,8 +1185,17 @@ impl CodexTurnStateMaintenanceService {
                 last_reason = Some("duplicate_or_write_conflict");
                 *failures.entry("duplicate_or_write_conflict").or_default() += 1;
             }
-            self.probe_progress(account, model, attempted, last_reason, None)
-                .await;
+            self.probe_progress(
+                account,
+                model,
+                ProviderTurnStateProbeProgress {
+                    attempts: attempted,
+                    reason: last_reason,
+                    successful_attempt: None,
+                    returned_length,
+                },
+            )
+            .await;
             if attempted % 100 < batch_size as u64 {
                 tracing::info!(
                     account_id = account.id().as_str(),
@@ -1164,6 +1203,7 @@ impl CodexTurnStateMaintenanceService {
                     ?slot,
                     attempted,
                     ?failures,
+                    returned_length,
                     "Turn state acquisition continues"
                 );
             }
@@ -1177,9 +1217,7 @@ impl CodexTurnStateMaintenanceService {
         &self,
         account: &ProviderAccount,
         model: &UpstreamModelId,
-        attempts: u64,
-        reason: Option<&'static str>,
-        successful_attempt: Option<u64>,
+        progress: ProviderTurnStateProbeProgress,
     ) {
         let _ = tokio::time::timeout(
             STATE_STORE_TIMEOUT,
@@ -1187,12 +1225,39 @@ impl CodexTurnStateMaintenanceService {
                 account.id(),
                 model,
                 account.turn_state_binding_revision(),
-                attempts,
-                reason,
-                successful_attempt,
+                progress,
             ),
         )
         .await;
+    }
+
+    async fn probe_ready(&self, account: &ProviderAccount, model: &UpstreamModelId) -> bool {
+        {
+            let cooldowns = self
+                .probe_cooldowns
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if cooldowns
+                .get(&(account.id().clone(), model.clone()))
+                .is_some_and(|(revision, until)| {
+                    *revision == account.turn_state_binding_revision() && *until > SystemTime::now()
+                })
+            {
+                return false;
+            }
+        }
+        matches!(
+            tokio::time::timeout(
+                STATE_STORE_TIMEOUT,
+                self.manager.store.read_probe_cooldown(
+                    account.id(),
+                    model,
+                    account.turn_state_binding_revision(),
+                ),
+            )
+            .await,
+            Ok(Ok(None))
+        )
     }
 
     async fn probe(
@@ -1306,6 +1371,69 @@ impl CodexTurnStateMaintenanceService {
         failure: super::failure::MappedProviderFailure,
         reason: &'static str,
     ) -> &'static str {
+        if let Some(CodexAccountFailure::RateLimited { retry_after }) = failure.account_failure {
+            let delay = retry_after
+                .unwrap_or_else(|| {
+                    Duration::from_secs(
+                        self.manager
+                            .request_tuning
+                            .load()
+                            .rate_limit_cooldown_seconds,
+                    )
+                })
+                .min(Duration::from_secs(u64::from(u32::MAX)));
+            let now = SystemTime::now();
+            // The probe's 429 is not evidence that sibling models or business traffic failed.
+            let cooldown = ProviderTurnStateProbeCooldown {
+                until: now.checked_add(delay).unwrap_or(now),
+                http_status: failure.error.upstream_status(),
+                retry_from_upstream: retry_after.is_some(),
+                error_code: safe_probe_error_code(
+                    failure.error.upstream_code().map(|code| code.as_str()),
+                ),
+            };
+            // A supplemental diagnostics write can fail; still honor this process's Retry-After.
+            {
+                let mut cooldowns = self
+                    .probe_cooldowns
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                cooldowns.retain(|_, (_, until)| *until > now);
+                let incoming = (account.turn_state_binding_revision(), cooldown.until);
+                let saved = cooldowns
+                    .entry((account.id().clone(), model.clone()))
+                    .or_insert(incoming);
+                if saved.0 < incoming.0 {
+                    *saved = incoming;
+                } else if saved.0 == incoming.0 {
+                    saved.1 = saved.1.max(incoming.1);
+                }
+            }
+            let recorded = matches!(
+                tokio::time::timeout(
+                    STATE_STORE_TIMEOUT,
+                    self.manager.store.record_probe_cooldown(
+                        account.id(),
+                        model,
+                        account.turn_state_binding_revision(),
+                        cooldown,
+                    ),
+                )
+                .await,
+                Ok(Ok(()))
+            );
+            tracing::warn!(
+                account_id = account.id().as_str(),
+                model = model.as_str(),
+                status = cooldown.http_status,
+                error_code = cooldown.error_code,
+                retry_after_seconds = delay.as_secs(),
+                retry_from_upstream = cooldown.retry_from_upstream,
+                recorded,
+                "Turn state probe model entered cooldown"
+            );
+            return "probe_rate_limited";
+        }
         // Only account facts belong here, not business scoring or session exclusions.
         if let Some(account_failure) = failure.account_failure.filter(|failure| {
             matches!(
@@ -1316,10 +1444,8 @@ impl CodexTurnStateMaintenanceService {
                     | CodexAccountFailure::Banned
                     | CodexAccountFailure::QuotaExhausted
                     | CodexAccountFailure::UsageLimitExhausted { .. }
-                    | CodexAccountFailure::RateLimited { .. }
             )
         }) {
-            let rate_limited = matches!(account_failure, CodexAccountFailure::RateLimited { .. });
             // Routine Cookie writes may advance the material CAS while a probe is in flight.
             // Reload only the same identity generation; an old rejection cannot affect a relogin.
             let current = tokio::time::timeout(
@@ -1349,11 +1475,7 @@ impl CodexTurnStateMaintenanceService {
                 recorded,
                 "Turn state acquisition stopped after account rejection"
             );
-            return if rate_limited {
-                "rate_limited"
-            } else {
-                "account_rejected"
-            };
+            return "account_rejected";
         }
         synchronize_passive_quota_headers(&self.quota, account, &failure.rate_limit_headers).await;
         if failure.capture_response_cookies {
@@ -1377,6 +1499,15 @@ impl CodexTurnStateMaintenanceService {
                 "Turn state probe response Cookie observation skipped"
             );
         }
+    }
+}
+
+fn safe_probe_error_code(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "rate_limit_exceeded" => Some("rate_limit_exceeded"),
+        "rate_limit_reached" => Some("rate_limit_reached"),
+        "rate_limit_error" => Some("rate_limit_error"),
+        _ => Some("other"),
     }
 }
 

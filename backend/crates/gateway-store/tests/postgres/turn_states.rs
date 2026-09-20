@@ -4,8 +4,9 @@ use gateway_core::{
     account::{CredentialRevision, ProviderAccountId},
     provider_ports::{
         OpaqueTurnState, ProviderTurnStateAnomaly, ProviderTurnStateCandidate,
-        ProviderTurnStatePort, ProviderTurnStatePromotion, ProviderTurnStateRefreshStatus,
-        ProviderTurnStateSlot, ProviderTurnStateValue,
+        ProviderTurnStatePort, ProviderTurnStateProbeCooldown, ProviderTurnStateProbeProgress,
+        ProviderTurnStatePromotion, ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
+        ProviderTurnStateValue,
     },
     routing::UpstreamModelId,
 };
@@ -17,6 +18,198 @@ use super::{TestDatabase, provider_accounts::account};
 
 fn revision() -> CredentialRevision {
     CredentialRevision::new(1).unwrap()
+}
+
+#[tokio::test]
+async fn probe_cooldown_is_model_scoped_persistent_and_never_changes_state_readiness() {
+    use gateway_admin::ports::store::AccountStore;
+    let Some(database) = TestDatabase::create("probe_cooldown").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_probe_limit", "probe-limit-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let id = ProviderAccountId::new("acct_probe_limit").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let other = UpstreamModelId::new("model-b").unwrap();
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    let original = store
+        .put_candidate(candidate(
+            &id,
+            &model,
+            &"a".repeat(292),
+            SystemTime::now(),
+            ProviderTurnStateSlot::Active,
+            292,
+        ))
+        .await
+        .unwrap();
+    let until = SystemTime::now() + Duration::from_secs(120);
+    let cooldown = ProviderTurnStateProbeCooldown {
+        until,
+        http_status: Some(429),
+        retry_from_upstream: true,
+        error_code: Some("rate_limit_exceeded"),
+    };
+    store
+        .record_probe_cooldown(&id, &model, revision(), cooldown)
+        .await
+        .unwrap();
+    store
+        .record_probe_cooldown(
+            &id,
+            &model,
+            revision(),
+            ProviderTurnStateProbeCooldown {
+                until: SystemTime::now() + Duration::from_secs(30),
+                retry_from_upstream: false,
+                ..cooldown
+            },
+        )
+        .await
+        .unwrap();
+    let reopened = PgProviderTurnStateRepository::new(database.pool.clone());
+    let saved = reopened
+        .read_probe_cooldown(&id, &model, revision())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(saved.duration_since(SystemTime::now()).unwrap() > Duration::from_secs(110));
+    assert!(
+        reopened
+            .read_probe_cooldown(&id, &other, revision())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let after = reopened
+        .read(&id, &model, revision())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.active(), original.active());
+    assert_eq!(after.state_version(), original.state_version());
+    let admin = super::admin_account_store(&database.pool);
+    let projection = admin
+        .load_turn_state_status(&[id.as_str().to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(projection[id.as_str()].ready_models.len(), 1);
+    let row = projection[id.as_str()]
+        .models
+        .iter()
+        .find(|row| row.model == model.as_str())
+        .unwrap();
+    assert_eq!(row.refresh_status, "cooldown");
+    assert_eq!(row.probe_http_status, Some(429));
+    assert!(row.probe_cooldown_until.is_some());
+    assert_eq!(row.probe_retry_from_upstream, Some(true));
+    let later_revision = CredentialRevision::new(2).unwrap();
+    store
+        .record_probe_cooldown(
+            &id,
+            &model,
+            later_revision,
+            ProviderTurnStateProbeCooldown {
+                until: SystemTime::now() + Duration::from_secs(600),
+                ..cooldown
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .read_probe_cooldown(&id, &model, revision())
+            .await
+            .unwrap(),
+        Some(saved)
+    );
+    // Disabling collection retains the cooldown, just as it retains valid State.
+    sqlx::query("update provider_accounts set turn_state_injection_enabled=false where id=$1")
+        .bind(id.as_str())
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .read_probe_cooldown(&id, &model, revision())
+            .await
+            .unwrap(),
+        Some(saved)
+    );
+    sqlx::query("update provider_turn_states set probe_cooldown_until=now()-interval '1 second'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .read_probe_cooldown(&id, &model, revision())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn probe_totals_count_deltas_across_rounds_and_duplicate_updates_are_idempotent() {
+    use gateway_admin::ports::store::AccountStore;
+    let Some(database) = TestDatabase::create("probe_totals").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_probe_totals", "probe-totals-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let id = ProviderAccountId::new("acct_probe_totals").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    for _ in 0..2 {
+        store
+            .mark_refresh_status(
+                &id,
+                &model,
+                revision(),
+                292,
+                ProviderTurnStateRefreshStatus::Refreshing,
+                SystemTime::now(),
+            )
+            .await
+            .unwrap();
+        for attempts in [1, 6, 16, 16, 6] {
+            store
+                .record_probe_progress(
+                    &id,
+                    &model,
+                    revision(),
+                    ProviderTurnStateProbeProgress {
+                        attempts,
+                        reason: Some("unexpected_shape"),
+                        returned_length: Some(356),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let projection = super::admin_account_store(&database.pool)
+        .load_turn_state_status(&[id.as_str().to_owned()])
+        .await
+        .unwrap();
+    let row = projection[id.as_str()]
+        .models
+        .iter()
+        .find(|row| row.model == model.as_str())
+        .unwrap();
+    assert_eq!(row.probe_attempts, 16);
+    assert_eq!(row.probe_total_attempts, 32);
+    assert_eq!(row.probe_returned_length, Some(356));
+    assert_eq!(row.last_probe_reason.as_deref(), Some("unexpected_shape"));
+    database.close().await;
 }
 
 #[tokio::test]
@@ -73,7 +266,16 @@ async fn business_aliases_and_personal_plans_project_their_own_state_and_success
             .await
             .unwrap();
         states
-            .record_probe_progress(&id, &model, revision(), 11, None, Some(2))
+            .record_probe_progress(
+                &id,
+                &model,
+                revision(),
+                ProviderTurnStateProbeProgress {
+                    attempts: 11,
+                    successful_attempt: Some(2),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let projection = admin.load_turn_state_status(&ids).await.unwrap();
@@ -205,7 +407,16 @@ async fn lifecycle_observations_clocks_cutoff_and_cached_projection_remain_consi
     let admin = super::admin_account_store(&database.pool);
     let ids = [id.as_str().to_owned()];
     store
-        .record_probe_progress(&id, &model, revision(), 571, Some("missing_state"), None)
+        .record_probe_progress(
+            &id,
+            &model,
+            revision(),
+            ProviderTurnStateProbeProgress {
+                attempts: 571,
+                reason: Some("missing_state"),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     let projection = admin.load_turn_state_status(&ids).await.unwrap();

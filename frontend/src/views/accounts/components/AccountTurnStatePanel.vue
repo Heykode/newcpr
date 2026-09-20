@@ -24,6 +24,12 @@ interface StateModel {
   model: string
   refreshStatus: string
   probeAttempts?: number
+  probeTotalAttempts?: number
+  probeCooldownUntil?: string | null
+  probeRetryFromUpstream?: boolean | null
+  probeHttpStatus?: number | null
+  probeErrorCode?: string | null
+  probeReturnedLength?: number | null
   successfulProbeAttempt?: number | null
   lastProbeReason?: string | null
   active: StateSlot | null
@@ -60,15 +66,21 @@ const rows = computed(() => models.value.map((model) => {
   const active = activeSlot(model.active)
   const standby = activeSlot(model.standby)
   const ready = Boolean(active && validTimestamp(active.expiresAt)! > now.value.getTime() + 60_000)
+  const cooldownUntil = model.probeCooldownUntil ? validTimestamp(model.probeCooldownUntil) : null
+  const cooldownSeconds = cooldownUntil === null ? 0 : Math.max(0, Math.ceil((cooldownUntil - now.value.getTime()) / 1000))
   let status = '待采集'
   let statusClass = 'text-cp-warning-text'
   if (!enabled.value) {
     status = '缓存保留'
     statusClass = 'text-cp-text-quaternary'
   }
-  else if (blockedReason.value || model.refreshStatus === 'cooldown') {
-    status = model.refreshStatus === 'cooldown' ? '冷却中' : '已停止'
+  else if (blockedReason.value) {
+    status = '已停止'
     statusClass = 'text-cp-error-text'
+  }
+  else if (cooldownSeconds > 0) {
+    status = ready ? '可用 · 探测冷却' : '探测冷却'
+    statusClass = ready ? 'text-cp-success-text' : 'text-cp-warning-text'
   }
   else if (ready && standby) {
     status = '等待切换'
@@ -85,6 +97,9 @@ const rows = computed(() => models.value.map((model) => {
   else if (model.refreshStatus === 'queued') {
     status = '排队中'
   }
+  else if (model.refreshStatus === 'cooldown') {
+    status = '等待重试'
+  }
   else if (model.refreshStatus === 'failed') {
     status = '等待重试'
     statusClass = 'text-cp-error-text'
@@ -98,6 +113,7 @@ const rows = computed(() => models.value.map((model) => {
     ready: ready && enabled.value && !blockedReason.value,
     status,
     statusClass,
+    cooldownSeconds,
   }
 }))
 
@@ -139,6 +155,29 @@ function captureTime(slot: StateSlot | null, full = false) {
   return full
     ? date.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
     : date.toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
+}
+
+function probeTitle(row: StateModel) {
+  const details = [
+    slotTitle('当前', row.active),
+    `本轮尝试 ${row.probeAttempts ?? 0} 次`,
+    `累计 ${row.probeTotalAttempts ?? row.probeAttempts ?? 0} 次（历史轮次可能未记录）`,
+  ]
+  if (row.successfulProbeAttempt)
+    details.push(`第 ${row.successfulProbeAttempt} 次尝试采集成功`)
+  if (row.lastProbeReason)
+    details.push(turnStateProbeReason(row.lastProbeReason) ?? row.lastProbeReason)
+  if (row.probeReturnedLength != null)
+    details.push(`最近返回 ${row.probeReturnedLength} 字符`)
+  if (row.probeHttpStatus != null)
+    details.push(`最近限流 HTTP ${row.probeHttpStatus}`)
+  if (row.probeErrorCode)
+    details.push(`限流错误码 ${row.probeErrorCode}`)
+  if (row.probeCooldownUntil) {
+    details.push(`探测恢复时间 ${row.probeCooldownUntil}`)
+    details.push(row.probeRetryFromUpstream ? '等待时间来源：上游' : '等待时间来源：后台设置')
+  }
+  return details.join('；')
 }
 </script>
 
@@ -245,9 +284,11 @@ function captureTime(slot: StateSlot | null, full = false) {
           </div>
           <div
             class="mt-1 truncate text-[10px] leading-3.5 text-cp-text-quaternary"
-            :title="`${slotTitle('当前', row.active)}；本轮尝试 ${row.probeAttempts ?? 0} 次${row.successfulProbeAttempt ? `；第 ${row.successfulProbeAttempt} 次尝试采集成功` : ''}${row.lastProbeReason ? `；${turnStateProbeReason(row.lastProbeReason)}` : ''}`"
+            :title="probeTitle(row)"
           >
+            <span v-if="enabled && row.cooldownSeconds > 0 && !blockedReason">{{ row.cooldownSeconds }}s 后重试 · </span>
             本轮 {{ row.probeAttempts ?? 0 }} 次
+            · 累计 {{ row.probeTotalAttempts ?? row.probeAttempts ?? 0 }} 次
             <span v-if="row.successfulProbeAttempt"> · 第 {{ row.successfulProbeAttempt }} 次成功</span>
             <span v-if="row.active"> · 采集 {{ captureTime(row.active) }}</span>
             <span v-if="row.lastProbeReason"> · {{ turnStateProbeReason(row.lastProbeReason) }}</span>

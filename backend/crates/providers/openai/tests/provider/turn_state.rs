@@ -20,9 +20,9 @@ use gateway_core::{
     provider_ports::{
         OpaqueTurnState, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
         ProviderSchedulingState, ProviderStoreError, ProviderStorePorts, ProviderTurnStateAnomaly,
-        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStatePromotion,
-        ProviderTurnStateRecord, ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
-        ProviderTurnStateValue,
+        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStateProbeCooldown,
+        ProviderTurnStateProbeProgress, ProviderTurnStatePromotion, ProviderTurnStateRecord,
+        ProviderTurnStateRefreshStatus, ProviderTurnStateSlot, ProviderTurnStateValue,
         egress::{ProviderEgressAddress, ProviderEgressConfig, ProviderEgressStorePort},
     },
     routing::{OpenAiTurnStatePolicy, ProviderKind, UpstreamModelId},
@@ -118,24 +118,68 @@ pub(super) struct ProbeStates {
     cancelled: AtomicUsize,
     promoted: AtomicUsize,
     progress: Mutex<BTreeMap<(ProviderAccountId, UpstreamModelId), ProbeProgress>>,
+    probe_cooldowns:
+        Mutex<BTreeMap<(ProviderAccountId, UpstreamModelId, u64), ProviderTurnStateProbeCooldown>>,
+    fail_cooldown_write: AtomicUsize,
 }
 
 type ProbeProgress = (u64, Option<&'static str>, Option<u64>);
 
 impl ProviderTurnStatePort for ProbeStates {
+    fn read_probe_cooldown<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        model: &'a UpstreamModelId,
+        revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<Option<SystemTime>, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .probe_cooldowns
+                .lock()
+                .unwrap()
+                .get(&(account.clone(), model.clone(), revision.get()))
+                .filter(|cooldown| cooldown.until > SystemTime::now())
+                .map(|cooldown| cooldown.until))
+        })
+    }
+
+    fn record_probe_cooldown<'a>(
+        &'a self,
+        account: &'a ProviderAccountId,
+        model: &'a UpstreamModelId,
+        revision: CredentialRevision,
+        cooldown: ProviderTurnStateProbeCooldown,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            if self.fail_cooldown_write.load(Ordering::SeqCst) > 0 {
+                return Err(ProviderStoreError::new(
+                    gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                    "synthetic cooldown write failure",
+                ));
+            }
+            self.probe_cooldowns
+                .lock()
+                .unwrap()
+                .insert((account.clone(), model.clone(), revision.get()), cooldown);
+            Ok(())
+        })
+    }
+
     fn record_probe_progress<'a>(
         &'a self,
         account: &'a ProviderAccountId,
         model: &'a UpstreamModelId,
         _: CredentialRevision,
-        attempts: u64,
-        reason: Option<&'static str>,
-        successful_attempt: Option<u64>,
+        progress: ProviderTurnStateProbeProgress,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async move {
             self.progress.lock().unwrap().insert(
                 (account.clone(), model.clone()),
-                (attempts, reason, successful_attempt),
+                (
+                    progress.attempts,
+                    progress.reason,
+                    progress.successful_attempt,
+                ),
             );
             Ok(())
         })
@@ -1620,12 +1664,12 @@ async fn authentication_failure_inside_sse_stops_collection_without_accepting_it
 }
 
 #[tokio::test]
-async fn rate_limit_stops_sibling_models_and_requeues_only_after_shared_cooldown() {
+async fn probe_rate_limits_are_separate_from_business_cooldown_and_requeue_after_expiry() {
     let fixture = CredentialRecoveryFixture::new().await;
     Mock::given(method("POST"))
         .respond_with(
             ResponseTemplate::new(429)
-                .insert_header("retry-after", "60")
+                .insert_header("retry-after", "3")
                 .set_body_json(serde_json::json!({"error":{"code":"rate_limit_exceeded"}})),
         )
         .mount(&fixture.server)
@@ -1635,7 +1679,8 @@ async fn rate_limit_stops_sibling_models_and_requeues_only_after_shared_cooldown
     tokio::time::sleep(Duration::from_millis(1200)).await;
     let calls = fixture.server.received_requests().await.unwrap().len();
     assert!((1..=2).contains(&calls));
-    assert!(!fixture.cooldowns.cooldowns.lock().unwrap().is_empty());
+    assert!(fixture.cooldowns.cooldowns.lock().unwrap().is_empty());
+    assert_eq!(fixture.states.probe_cooldowns.lock().unwrap().len(), 2);
     fixture.discover().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(
@@ -1660,9 +1705,163 @@ async fn rate_limit_stops_sibling_models_and_requeues_only_after_shared_cooldown
         )
         .mount(&fixture.server)
         .await;
-    fixture.cooldowns.cooldowns.lock().unwrap().clear();
+    tokio::time::sleep(Duration::from_secs(2)).await;
     fixture.discover().await;
     wait_count(&fixture.states.writes, 2).await;
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn one_model_probe_429_does_not_stop_sibling_and_retry_after_is_respected() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    let mut tuning = fixture.tuning.load();
+    tuning.rate_limit_cooldown_seconds = 0;
+    fixture.tuning.publish(tuning);
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::body_partial_json(
+            serde_json::json!({"model":"model-a"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "2")
+                .set_body_json(serde_json::json!({"error":{"code":"rate_limit_exceeded"}})),
+        )
+        .mount(&fixture.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::body_partial_json(
+            serde_json::json!({"model":"model-b"}),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.writes, 1).await;
+    wait_count(&fixture.states.cancelled, 2).await;
+    assert!(fixture.cooldowns.cooldowns.lock().unwrap().is_empty());
+    let (until, upstream) = {
+        let values = fixture.states.probe_cooldowns.lock().unwrap();
+        assert_eq!(values.len(), 1);
+        let (key, value) = values.iter().next().unwrap();
+        assert_eq!(key.1.as_str(), "model-a");
+        (value.until, value.retry_from_upstream)
+    };
+    assert!(upstream);
+    let sibling = fixture
+        .states
+        .records
+        .lock()
+        .unwrap()
+        .get(&(
+            ProviderAccountId::new("acct_recovery_probe").unwrap(),
+            UpstreamModelId::new("model-b").unwrap(),
+        ))
+        .unwrap()
+        .clone();
+    assert!(sibling.active().is_some());
+    let calls = fixture.server.received_requests().await.unwrap().len();
+    fixture.discover().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        fixture.server.received_requests().await.unwrap().len(),
+        calls
+    );
+    tokio::time::sleep(
+        until.duration_since(SystemTime::now()).unwrap_or_default() + Duration::from_millis(20),
+    )
+    .await;
+    fixture.server.reset().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(2))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.writes, 2).await;
+    assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(
+        fixture
+            .states
+            .records
+            .lock()
+            .unwrap()
+            .get(&(
+                ProviderAccountId::new("acct_recovery_probe").unwrap(),
+                UpstreamModelId::new("model-b").unwrap()
+            ))
+            .unwrap(),
+        &sibling
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn probe_cooldown_uses_configured_fallback_not_hardcoded_sixty_seconds() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    let mut tuning = fixture.tuning.load();
+    tuning.rate_limit_cooldown_seconds = 173;
+    fixture.tuning.publish(tuning);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .set_body_json(serde_json::json!({"error":{"code":"rate_limit_error"}})),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.cancelled, 2).await;
+    let values: Vec<_> = fixture
+        .states
+        .probe_cooldowns
+        .lock()
+        .unwrap()
+        .values()
+        .copied()
+        .collect();
+    assert_eq!(values.len(), 2);
+    for value in values {
+        assert!(!value.retry_from_upstream);
+        let remaining = value
+            .until
+            .duration_since(SystemTime::now())
+            .unwrap()
+            .as_secs();
+        assert!((168..=173).contains(&remaining));
+    }
+    assert!(fixture.cooldowns.cooldowns.lock().unwrap().is_empty());
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn failed_probe_cooldown_persistence_still_honors_retry_after_without_freezing_business() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    fixture
+        .states
+        .fail_cooldown_write
+        .store(1, Ordering::SeqCst);
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "60"))
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.cancelled, 2).await;
+    let calls = fixture.server.received_requests().await.unwrap().len();
+    assert_eq!(calls, 2);
+    assert!(fixture.states.probe_cooldowns.lock().unwrap().is_empty());
+    assert!(fixture.cooldowns.cooldowns.lock().unwrap().is_empty());
+    fixture.discover().await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        fixture.server.received_requests().await.unwrap().len(),
+        calls
+    );
     fixture.stop().await;
 }
 

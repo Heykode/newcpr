@@ -94,6 +94,51 @@ function render(fields = {}) {
   return renderToString(createSSRApp(component, { account: account(fields) }))
 }
 
+test('probe cooldown preserves ready State and displays deadline, round and lifetime counts', async () => {
+  const fixture = account()
+  Object.assign(fixture.turnState.models[0], {
+    refreshStatus: 'cooldown',
+    probeCooldownUntil: '2026-09-18T12:00:50Z',
+    probeTotalAttempts: 456,
+    probeAttempts: 16,
+    probeHttpStatus: 429,
+    probeRetryFromUpstream: true,
+    probeErrorCode: 'rate_limit_exceeded',
+    probeReturnedLength: 356,
+    lastProbeReason: 'probe_rate_limited',
+  })
+  const html = await render(fixture)
+  assert.match(html, /可用 · 探测冷却/)
+  assert.match(html, /50s 后重试/)
+  assert.match(html, /本轮 16 次/)
+  assert.match(html, /累计 456 次/)
+  assert.match(html, /最近返回 356 字符/)
+  assert.match(html, /等待时间来源：上游/)
+  assert.match(html, />2\/3<\/strong> 模型/)
+  fixture.turnState.models[0].active = null
+  fixture.turnState.models[0].standby = null
+  const missing = await render(fixture)
+  assert.doesNotMatch(missing, /可用 · 探测冷却/)
+  assert.match(missing, />1\/3<\/strong> 模型/)
+})
+
+test('expired probe cooldown waits for authoritative retry and account errors still override', async () => {
+  const fixture = account()
+  Object.assign(fixture.turnState.models[2], {
+    refreshStatus: 'cooldown',
+    probeCooldownUntil: '2026-09-18T11:59:59Z',
+  })
+  const html = await render(fixture)
+  assert.match(html, /等待重试/)
+  assert.doesNotMatch(html, /后重试/)
+  fixture.credentialState = 'invalid'
+  fixture.status = 'error'
+  fixture.turnState.models[2].probeCooldownUntil = '2026-09-18T12:01:00Z'
+  const blocked = await render(fixture)
+  assert.match(blocked, /已停止/)
+  assert.doesNotMatch(blocked, /后重试/)
+})
+
 test('expanded account State panel lists model slots, lengths, totals, and countdowns', async () => {
   const html = await render()
   assert.match(html, /data-account-turn-state-panel/)

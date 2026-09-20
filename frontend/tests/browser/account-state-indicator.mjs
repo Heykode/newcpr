@@ -64,8 +64,14 @@ async function main() {
               ? [
                   {
                     model: 'model-a',
-                    refreshStatus: 'ready',
+                    refreshStatus: 'cooldown',
                     probeAttempts: 11,
+                    probeTotalAttempts: 456,
+                    probeCooldownUntil: expiresAt(2),
+                    probeRetryFromUpstream: true,
+                    probeHttpStatus: 429,
+                    probeErrorCode: 'rate_limit_exceeded',
+                    probeReturnedLength: 356,
                     successfulProbeAttempt: 2,
                     active: { chars: 332, capturedAt: new Date(Date.now() - 10 * 60_000).toISOString(), expiresAt: expiresAt(50) },
                     standby: { chars: 332, expiresAt: expiresAt(55) },
@@ -201,6 +207,9 @@ async function main() {
         assert.equal(statePanel.rowOverflow, false)
         assert.match(statePanel.text, /1\/2 模型/)
         assert.match(statePanel.text, /2 个 State/)
+        assert.match(statePanel.text, /可用 · 探测冷却/)
+        assert.match(statePanel.text, /累计 456 次/)
+        assert.match(statePanel.text, /s 后重试/)
         assert.equal((statePanel.text.match(/332 字符/g) ?? []).length, 2)
         if (width < 640)
           assert.ok(statePanel.width <= width - 80, statePanel)
@@ -235,7 +244,10 @@ async function main() {
           assert.equal(metrics.overflow, false)
           assert.equal(metrics.contentHeight > metrics.height, count > 3)
           if (count > 3) {
-            await list.press('End')
+            await list.focus()
+            for (let step = 0; step < count; step++) {
+              await list.press('PageDown')
+            }
             await page.waitForFunction(() => {
               const element = document.querySelector('[data-account-turn-state-list]')
               return element.scrollTop + element.clientHeight >= element.scrollHeight - 1

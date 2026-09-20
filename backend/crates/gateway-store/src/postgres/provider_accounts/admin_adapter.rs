@@ -22,6 +22,12 @@ struct AccountTurnStateStatusRow {
     standby_captured_at: Option<chrono::DateTime<Utc>>,
     standby_expires_at: Option<chrono::DateTime<Utc>>,
     probe_attempts: Option<i64>,
+    probe_total_attempts: Option<i64>,
+    probe_cooldown_until: Option<chrono::DateTime<Utc>>,
+    probe_retry_from_upstream: Option<bool>,
+    probe_http_status: Option<i16>,
+    probe_error_code: Option<String>,
+    probe_returned_length: Option<i32>,
     successful_probe_attempt: Option<i64>,
     last_probe_reason: Option<String>,
 }
@@ -432,6 +438,8 @@ impl AccountStore for PgAdminAccountStore {
                   and (a.access_token_expires_at is null or a.access_token_expires_at > now())
                   and a.quota_access_state <> 'exhausted') as schedulable,
                 s.refresh_status, s.probe_attempts, s.last_probe_reason, s.successful_probe_attempt,
+                s.probe_total_attempts, s.probe_cooldown_until, s.probe_retry_from_upstream,
+                s.probe_http_status, s.probe_error_code, s.probe_returned_length,
                 case when (length(s.active_state) = s.normal_length
                     or length(rtrim(s.active_state, '=')) = case when s.normal_length = 292 then 290 else 332 end)
                   and s.active_issued_at <= now() + interval '30 seconds' and s.active_expires_at > now()
@@ -494,6 +502,19 @@ impl AccountStore for PgAdminAccountStore {
                     refresh_status: row.refresh_status.unwrap_or_else(|| "missing".to_owned()),
                     probe_attempts: u64::try_from(row.probe_attempts.unwrap_or_default())
                         .unwrap_or_default(),
+                    probe_total_attempts: u64::try_from(
+                        row.probe_total_attempts.unwrap_or_default(),
+                    )
+                    .unwrap_or_default(),
+                    probe_cooldown_until: row.probe_cooldown_until,
+                    probe_retry_from_upstream: row.probe_retry_from_upstream,
+                    probe_http_status: row
+                        .probe_http_status
+                        .and_then(|status| u16::try_from(status).ok()),
+                    probe_error_code: row.probe_error_code,
+                    probe_returned_length: row
+                        .probe_returned_length
+                        .and_then(|length| u16::try_from(length).ok()),
                     last_probe_reason: row.last_probe_reason,
                     successful_probe_attempt: row
                         .successful_probe_attempt
