@@ -766,6 +766,7 @@ pub struct CodexBackendJsonResponse {
 #[derive(Clone)]
 pub struct CodexBackendClient {
     pub(super) client: Client,
+    pub(super) direct_client: Client,
     pub(super) base_url: String,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
@@ -811,12 +812,16 @@ impl CodexBackendClient {
             websocket_origin_key(&self.base_url),
             client.egress_key
         );
-        let profile_identity = client.profile.snapshot().user_agent();
-        client.client = build_account_http_client(
-            account.id().as_str(),
-            account.outbound_proxy(),
-            &profile_identity,
-        )?;
+        client.client = if account.outbound_proxy().is_some() {
+            let profile_identity = client.profile.snapshot().user_agent();
+            build_account_http_client(
+                account.id().as_str(),
+                account.outbound_proxy(),
+                &profile_identity,
+            )?
+        } else {
+            self.direct_client.clone()
+        };
         Ok(client)
     }
 
