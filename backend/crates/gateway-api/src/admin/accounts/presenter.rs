@@ -134,6 +134,15 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
                         model: status.model,
                         refresh_status: status.refresh_status,
                         probe_attempts: status.probe_attempts,
+                        probe_total_attempts: status.probe_total_attempts,
+                        probe_cooldown_until: status
+                            .probe_cooldown_until
+                            .as_ref()
+                            .map(china_rfc3339),
+                        probe_retry_from_upstream: status.probe_retry_from_upstream,
+                        probe_http_status: status.probe_http_status,
+                        probe_error_code: status.probe_error_code,
+                        probe_returned_length: status.probe_returned_length,
                         successful_probe_attempt: status.successful_probe_attempt,
                         last_probe_reason: status.last_probe_reason,
                         active: status.active.map(|slot| AccountTurnStateSlotView {

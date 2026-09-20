@@ -240,17 +240,51 @@ pub struct ProviderTurnStatePromotion {
     pub minimum_remaining: Duration,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProviderTurnStateProbeProgress {
+    pub attempts: u64,
+    pub reason: Option<&'static str>,
+    pub successful_attempt: Option<u64>,
+    pub returned_length: Option<u16>,
+}
+
+/// Safe metadata only; never include upstream free text or opaque credentials.
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderTurnStateProbeCooldown {
+    pub until: SystemTime,
+    pub http_status: Option<u16>,
+    pub retry_from_upstream: bool,
+    pub error_code: Option<&'static str>,
+}
+
 /// Every expected_revision here is the account's State binding generation.
 pub trait ProviderTurnStatePort: Send + Sync {
+    fn read_probe_cooldown<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _upstream_model: &'a UpstreamModelId,
+        _expected_revision: CredentialRevision,
+    ) -> BoxFuture<'a, Result<Option<SystemTime>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn record_probe_cooldown<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _upstream_model: &'a UpstreamModelId,
+        _expected_revision: CredentialRevision,
+        _cooldown: ProviderTurnStateProbeCooldown,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Best-effort, bounded diagnostics. Reason must be a static provider diagnostic code.
     fn record_probe_progress<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,
         _upstream_model: &'a UpstreamModelId,
         _expected_revision: CredentialRevision,
-        _attempts: u64,
-        _reason: Option<&'static str>,
-        _successful_attempt: Option<u64>,
+        _progress: ProviderTurnStateProbeProgress,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async { Ok(()) })
     }

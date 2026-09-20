@@ -7,9 +7,9 @@ use gateway_core::{
     account::{CredentialRevision, ProviderAccountId},
     provider_ports::{
         OpaqueTurnState, ProviderStoreError, ProviderStoreErrorKind, ProviderTurnStateAnomaly,
-        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStatePromotion,
-        ProviderTurnStateRecord, ProviderTurnStateRefreshStatus, ProviderTurnStateSlot,
-        ProviderTurnStateValue,
+        ProviderTurnStateCandidate, ProviderTurnStatePort, ProviderTurnStateProbeCooldown,
+        ProviderTurnStateProbeProgress, ProviderTurnStatePromotion, ProviderTurnStateRecord,
+        ProviderTurnStateRefreshStatus, ProviderTurnStateSlot, ProviderTurnStateValue,
     },
     routing::UpstreamModelId,
 };
@@ -45,19 +45,84 @@ struct TurnStateRow {
 }
 
 impl ProviderTurnStatePort for PgProviderTurnStateRepository {
+    fn read_probe_cooldown<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        upstream_model: &'a UpstreamModelId,
+        expected_revision: CredentialRevision,
+    ) -> futures::future::BoxFuture<'a, Result<Option<SystemTime>, ProviderStoreError>> {
+        Box::pin(async move {
+            let until: Option<DateTime<Utc>> = sqlx::query_scalar(
+                "select s.probe_cooldown_until from provider_turn_states s
+                 join provider_accounts a on a.id = s.provider_account_id
+                 where s.provider_account_id = $1 and s.upstream_model = $2
+                   and s.credential_revision = $3 and a.turn_state_binding_revision = $3
+                   and s.probe_cooldown_until > now()",
+            )
+            .bind(account_id.as_str())
+            .bind(upstream_model.as_str())
+            .bind(revision_value(expected_revision)?)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| unavailable("read provider turn state probe cooldown"))?;
+            Ok(until.map(Into::into))
+        })
+    }
+
+    fn record_probe_cooldown<'a>(
+        &'a self,
+        account_id: &'a ProviderAccountId,
+        upstream_model: &'a UpstreamModelId,
+        expected_revision: CredentialRevision,
+        cooldown: ProviderTurnStateProbeCooldown,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            sqlx::query(
+                "update provider_turn_states s set
+                   probe_cooldown_until = greatest(s.probe_cooldown_until, $4),
+                   probe_http_status = case when s.probe_cooldown_until is null or $4 >= s.probe_cooldown_until then $5 else s.probe_http_status end,
+                   probe_retry_from_upstream = case when s.probe_cooldown_until is null or $4 >= s.probe_cooldown_until then $6 else s.probe_retry_from_upstream end,
+                   probe_error_code = case when s.probe_cooldown_until is null or $4 >= s.probe_cooldown_until then $7 else s.probe_error_code end,
+                   last_probe_reason = 'probe_rate_limited',
+                   refresh_status = 'cooldown', last_probe_at = now(), updated_at = now()
+                 from provider_accounts a
+                 where s.provider_account_id = $1 and s.upstream_model = $2
+                   and s.credential_revision = $3 and a.id = s.provider_account_id
+                   and a.turn_state_binding_revision = $3",
+            )
+            .bind(account_id.as_str())
+            .bind(upstream_model.as_str())
+            .bind(revision_value(expected_revision)?)
+            .bind(DateTime::<Utc>::from(cooldown.until))
+            .bind(
+                cooldown
+                    .http_status
+                    .and_then(|status| i16::try_from(status).ok()),
+            )
+            .bind(cooldown.retry_from_upstream)
+            .bind(cooldown.error_code)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| unavailable("record provider turn state probe cooldown"))?;
+            Ok(())
+        })
+    }
+
     fn record_probe_progress<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
         upstream_model: &'a UpstreamModelId,
         expected_revision: CredentialRevision,
-        attempts: u64,
-        reason: Option<&'static str>,
-        successful_attempt: Option<u64>,
+        progress: ProviderTurnStateProbeProgress,
     ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async move {
             sqlx::query(
-                "update provider_turn_states set probe_attempts = $4, last_probe_reason = $5,
+                "update provider_turn_states set
+                     probe_total_attempts = least(9223372036854775807::numeric,
+                       probe_total_attempts::numeric + greatest($4 - probe_attempts, 0))::bigint,
+                     probe_attempts = greatest(probe_attempts, $4), last_probe_reason = $5,
                      successful_probe_attempt = $6,
+                     probe_returned_length = coalesce($7, probe_returned_length),
                      last_probe_at = now(), updated_at = now()
                  where provider_account_id = $1 and upstream_model = $2
                    and credential_revision = $3",
@@ -65,13 +130,15 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
             .bind(account_id.as_str())
             .bind(upstream_model.as_str())
             .bind(revision_value(expected_revision)?)
-            .bind(i64::try_from(attempts).unwrap_or(i64::MAX))
-            .bind(reason)
+            .bind(i64::try_from(progress.attempts).unwrap_or(i64::MAX))
+            .bind(progress.reason)
             .bind(
-                successful_attempt
+                progress
+                    .successful_attempt
                     .and_then(|value| i64::try_from(value).ok())
                     .filter(|value| *value > 0),
             )
+            .bind(progress.returned_length.map(i32::from))
             .execute(&self.pool)
             .await
             .map_err(|_| unavailable("record provider turn state progress"))?;
@@ -451,6 +518,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                      when provider_turn_states.normal_length <> excluded.normal_length then null
                      else provider_turn_states.last_observed_length end,
                    refresh_status = excluded.refresh_status,
+                   probe_cooldown_until = case when excluded.refresh_status = 'refreshing' then null else provider_turn_states.probe_cooldown_until end,
                    probe_attempts = case when excluded.refresh_status = 'refreshing' then 0 else provider_turn_states.probe_attempts end,
                    last_probe_reason = case when excluded.refresh_status = 'refreshing' then null else provider_turn_states.last_probe_reason end,
                    successful_probe_attempt = case when excluded.refresh_status = 'refreshing' then null else provider_turn_states.successful_probe_attempt end,
@@ -520,6 +588,8 @@ async fn ensure_row(
            standby_state = null, standby_issued_at = null, standby_expires_at = null,
            active_captured_at = null, standby_captured_at = null,
            suspect_count = 0, probe_attempts = 0, last_probe_reason = null, successful_probe_attempt = null,
+           probe_cooldown_until = null, probe_retry_from_upstream = null,
+           probe_http_status = null, probe_error_code = null, probe_returned_length = null,
            state_version = provider_turn_states.state_version + 1,
            refresh_status = 'missing', last_observed_length = null,
            last_probe_at = excluded.last_probe_at, updated_at = excluded.updated_at

@@ -2153,6 +2153,12 @@ async fn account_state_readiness_respects_runtime_cooldown_without_hiding_cached
         model: "model-a".into(),
         refresh_status: "ready".into(),
         probe_attempts: 11,
+        probe_total_attempts: 11,
+        probe_cooldown_until: None,
+        probe_retry_from_upstream: None,
+        probe_http_status: None,
+        probe_error_code: None,
+        probe_returned_length: None,
         successful_probe_attempt: Some(2),
         last_probe_reason: None,
         active: Some(AccountTurnStateSlotStatus {

@@ -202,12 +202,22 @@
   have no client environment/tool metadata; retain independent source-bound
   connections and never inject an old State or enter the business WS pool.
 - Use the normal provider failure classifier and revision-fenced account writes
-  for confirmed authentication, identity-verification, ban, quota and 429 facts.
+  for confirmed authentication, identity-verification, ban and quota facts.
   Expired refreshable access tokens retain automatic OAuth recovery; revoked
   credentials require reauthorization. Do not invoke business `apply_failure`
   or its feedback, session exclusion or account-wide WS eviction.
-  A real 429 uses existing shared cooldown, stops siblings and releases the account
-  slot after cancellation. Discovery requeues it after cooldown.
+  A transient probe rate limit uses a separate account/model/binding cooldown in
+  the State row, never the business account cooldown. Unknown scope does not
+  upgrade it into an account freeze. Cancel that model's remaining batch, release
+  its collector, and rediscover after expiry. Siblings remain independent. Business
+  429 handling remains unchanged and can still block the account's collectors.
+  Prefer the parsed upstream retry duration, otherwise the existing
+  `rate_limit_cooldown_seconds` setting (default 60; explicit zero is respected).
+  Clamp untrusted delays to u32 seconds for representable deadlines. A local
+  binding-fenced deadline also protects retries when the supplemental store write fails;
+  it is not an active-State cache. Persisted cooldown survives process restart
+  and switch toggles, but is never part of business readiness or WS pool identity.
+  Do not clear historical business cooldowns on upgrade: their origin is ambiguous.
 - Exclude non-ready credentials, expired access tokens and exhausted quota at
   discovery, batch boundaries and the one-second cancellation watcher. Store
   reads/writes also enforce this under the existing owner lock. A late response
@@ -237,6 +247,15 @@
 - Stop at the first committed qualified value and cancel remaining probes.
   Repeated values are not new captures; next must expire later than current.
   Display attempts and safe last-failure codes, never raw State or source addresses.
+  `probe_attempts` is the current collection round; `probe_total_attempts` adds
+  monotonic deltas across rounds. Migration seeds it from the existing round only,
+  so older unrecorded requests cannot be reconstructed. Starting a new round never
+  resets the total. Duplicate progress writes do not double-count. Store the last
+  returned character count independently from passive business observations.
+  The admin model projection includes the probe deadline, HTTP status, allowlisted
+  error code and upstream-vs-configured delay source, never free-text error bodies.
+  A model with valid active can show both ready and probe cooldown. Account errors
+  override that display; an elapsed countdown is not evidence of successful retry.
   Publish changing attempt counts at most once per second during waiting batches.
   Record the winning attempt's dispatch ordinal separately from all attempts started;
   reset this per-task success marker only when a new collection starts or binding changes.
