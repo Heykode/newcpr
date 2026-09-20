@@ -24,6 +24,7 @@ pub use gateway_core::account::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {
     pub enabled: bool,
+    pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,

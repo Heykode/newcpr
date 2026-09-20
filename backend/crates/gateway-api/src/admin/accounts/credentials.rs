@@ -23,6 +23,8 @@ impl AccountProvider {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_state_injection_enabled: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -42,6 +44,7 @@ impl AccountImportSettingsRequest {
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
             enabled: self.enabled,
+            turn_state_injection_enabled: self.turn_state_injection_enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             group_ids: validate_wire_group_ids(&self.group_ids)?,
@@ -68,7 +71,15 @@ impl AccountImportRequest {
         if let Some(settings) = &self.settings {
             settings.validate()?;
         }
-        AccountProvider::parse(&self.provider)?;
+        let provider = AccountProvider::parse(&self.provider)?;
+        if provider != AccountProvider::OpenAi
+            && self
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.turn_state_injection_enabled == Some(true))
+        {
+            return Err(WireValidationError::new("turnStateInjectionEnabled"));
+        }
         if !self.data.is_object()
             || serde_json::to_vec(&self.data)
                 .map_or(true, |encoded| encoded.len() > MAX_IMPORT_DATA_BYTES)
@@ -160,6 +171,14 @@ impl CompleteAccountAuthorizationRequest {
             settings.validate()?;
         }
         let provider = AccountProvider::parse(&self.provider)?;
+        if provider != AccountProvider::OpenAi
+            && self
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.turn_state_injection_enabled == Some(true))
+        {
+            return Err(WireValidationError::new("turnStateInjectionEnabled"));
+        }
         match provider {
             AccountProvider::OpenAi => {
                 if !URL_SAFE_NO_PAD

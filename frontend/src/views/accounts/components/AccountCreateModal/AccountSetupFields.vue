@@ -23,12 +23,14 @@ const form = defineModel<AccountCreateForm>({ required: true })
     </fieldset>
     <AccountSettingsFields
       v-model:enabled="form.enabled"
+      v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
       v-model:selected-group-ids="form.groupIds"
       v-model:proxy-mode="form.proxyMode"
       v-model:proxy-id="form.proxyId"
       :groups="groups"
+      :turn-state-available="form.provider === 'openai' || form.provider === 'batch'"
       :groups-loading="groupsLoading"
       :preserve-proxy="false"
       :disabled="disabled"

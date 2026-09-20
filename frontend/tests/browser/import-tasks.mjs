@@ -109,6 +109,9 @@ async function main() {
     else if (path === '/api/admin/account-groups' || path === '/api/admin/proxies') {
       data = emptyPage
     }
+    else if (path === '/api/admin/relogin') {
+      data = { ...emptyPage, items: [] }
+    }
     else if (path === '/api/admin/system/version') {
       data = { version: 'test', hasUpdate: false, deploymentMode: 'test', updateWarning: null }
     }
@@ -130,13 +133,15 @@ async function main() {
     await dialog.waitFor({ state: 'hidden' })
   }
 
-  async function screenshots(label) {
+  async function screenshots(label, dialogName = '导入任务') {
+    for (const button of await page.getByRole('button', { name: /^关闭.*通知$/ }).all())
+      await button.click()
     for (const theme of ['light', 'dark']) {
       await page.emulateMedia({ colorScheme: theme })
       await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme)
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
-        const dialog = page.getByRole('dialog', { name: '导入任务', exact: true })
+        const dialog = page.getByRole('dialog', { name: dialogName, exact: true })
         await dialog.waitFor()
         const bounds = await dialog.boundingBox()
         assert.ok(bounds && bounds.x >= -1 && bounds.x + bounds.width <= width + 1, `${label} ${width}: dialog fits`)
@@ -157,6 +162,16 @@ async function main() {
 
     await page.getByRole('button', { name: '导入账号', exact: true }).click()
     await page.getByRole('group', { name: '选择账号平台' }).getByRole('button', { name: 'OpenAI', exact: true }).click()
+    const stateSwitch = page.getByRole('switch', { name: '切换 Turn State 注入' })
+    assert.equal(await stateSwitch.isChecked(), false)
+    await stateSwitch.locator('..').click()
+    assert.equal(await stateSwitch.isChecked(), true)
+    await page.getByRole('group', { name: '选择账号平台' }).getByRole('button', { name: 'xAI', exact: true }).click()
+    assert.equal(await stateSwitch.count(), 0, 'State is unavailable for xAI')
+    await page.getByRole('group', { name: '选择账号平台' }).getByRole('button', { name: '批量导入', exact: true }).click()
+    assert.equal(await stateSwitch.isChecked(), true)
+    await page.getByRole('group', { name: '选择账号平台' }).getByRole('button', { name: 'OpenAI', exact: true }).click()
+    await screenshots('import-state-settings', '账号设置')
     await page.getByRole('button', { name: '继续导入', exact: true }).click()
     await page.getByRole('radio', { name: 'RT', exact: true }).click()
     await page.getByRole('textbox', { name: 'Refresh Token', exact: true }).fill('synthetic-first\nsynthetic-second')
@@ -181,6 +196,7 @@ async function main() {
       { accounts: [{ refreshToken: 'synthetic-first' }] },
       { accounts: [{ refreshToken: 'synthetic-second' }] },
     ])
+    assert.ok(submissions[0].items.every(item => item.settings.turnStateInjectionEnabled === true))
     await screenshots('running')
 
     await closeTasks()
@@ -208,7 +224,7 @@ async function main() {
     await screenshots('unknown')
     assert.equal(submissions.length, 2)
     assert.equal(await page.getByRole('button', { name: '停止未开始条目', exact: true }).count(), 0)
-    await page.getByRole('button', { name: '查看账号', exact: true }).click()
+    await page.getByRole('button', { name: '返回账号列表', exact: true }).click()
     await page.getByRole('dialog').waitFor({ state: 'hidden' })
     assert.ok(accountReads >= 2)
 
@@ -216,6 +232,58 @@ async function main() {
     await openTasks()
     await page.getByText(/不要直接重试原 Token/).waitFor()
     assert.equal(submissions.length, 2)
+
+    await closeTasks()
+    await page.getByRole('button', { name: '导入账号', exact: true }).click()
+    await page.getByRole('group', { name: '选择账号平台' }).getByRole('button', { name: 'OpenAI', exact: true }).click()
+    assert.equal(await stateSwitch.isChecked(), false, 'a new form resets the switch')
+    await page.getByRole('button', { name: '继续导入', exact: true }).click()
+    await page.getByRole('radio', { name: 'RT', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Refresh Token', exact: true }).fill('synthetic-third\nsynthetic-fourth\nsynthetic-fifth')
+    await page.getByRole('button', { name: '创建导入任务', exact: true }).click()
+    await page.getByRole('heading', { name: '导入任务', exact: true }).waitFor()
+    assert.equal(jobs.size, 2)
+    assert.equal(submissions[2].items[0].settings.turnStateInjectionEnabled, false)
+    const batches = page.getByRole('combobox', { name: '切换导入任务' })
+    await batches.click()
+    await page.getByRole('option').filter({ hasText: '2 个条目' }).click()
+    await page.getByText(/不要直接重试原 Token/).waitFor()
+    await batches.click()
+    await page.getByRole('option').filter({ hasText: '3 个条目' }).click()
+    await page.getByRole('heading', { name: '导入中', exact: true }).waitFor()
+    const second = [...jobs.values()][1]
+    second.items[0].status = 'succeeded'
+    second.items[0].accountIds = ['acct_saved_example', 'acct_saved_example']
+    second.items[1].status = 'failed'
+    second.items[1].message = 'Synthetic rejected credential'
+    second.items[2].status = 'unknown'
+    second.items[2].message = 'Synthetic indeterminate import'
+    second.finishedAt = new Date().toISOString()
+    await page.getByRole('heading', { name: '已结束 · 有待处理项', exact: true }).waitFor()
+    await page.getByText('账号 ID（2）', { exact: true }).click()
+    assert.equal(await page.getByText('acct_saved_example', { exact: true }).count(), 2)
+    await page.getByText('Synthetic rejected credential', { exact: true }).waitFor()
+    await page.getByRole('region', { name: '导入任务详情' }).locator('p').filter({ hasText: /结束/ }).waitFor()
+    await page.getByRole('radio', { name: '需处理', exact: true }).click()
+    await page.getByText('账号 ID（2）', { exact: true }).waitFor({ state: 'hidden' })
+    await page.getByText('Synthetic rejected credential', { exact: true }).waitFor()
+    await page.getByRole('radio', { name: '全部', exact: true }).click()
+    await page.getByText('账号 ID（2）', { exact: true }).click()
+    await screenshots('multiple-batches')
+
+    await page.reload()
+    await openTasks()
+    await batches.click()
+    assert.equal(await page.getByRole('option').count(), 2, 'reload retains both server batches')
+    await page.getByRole('option').filter({ hasText: '2 个条目' }).click()
+    await page.getByText(/不要直接重试原 Token/).waitFor()
+    assert.equal(submissions.length, 3)
+
+    // Retention/restart removes task metadata, not the already-imported accounts.
+    jobs.clear()
+    await page.getByText('暂无导入任务', { exact: true }).waitFor()
+    await page.getByText(/完成后保留 1 小时/).waitFor()
+    assert.equal(submissions.length, 3, 'lost history must not replay credentials')
     assert.deepEqual(errors, [])
     assert.deepEqual(unexpected, [])
     process.stdout.write(`Passed synthetic import lifecycle; screenshots: ${output}\n`)

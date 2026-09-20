@@ -656,7 +656,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     Some(settings.enabled),
                     Some(settings.concurrency_limit),
                     Some(settings.weight),
-                    None,
+                    settings.turn_state_injection_enabled,
                     None,
                 )
                 .await?;

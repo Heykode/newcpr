@@ -1438,5 +1438,21 @@
     "file_sha256": "38600b5e9c2c2dd449b5b3d5ccf3a7fae3bedac1bc47e45eca616eb92974c419",
     "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
     "reason": "Manually re-reviewed unchanged synthetic normalized loopback proxy assertion after the module declaration moved its line by one."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1734,
+    "file_sha256": "c099b9975cc18b6720182ee6af21538e2550a26386602862042b455667665a81",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Manually re-reviewed the unchanged synthetic loopback proxy fixture and confirmed its line digest matches the prior review. File changes only extend account import State settings tests."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1761,
+    "file_sha256": "c099b9975cc18b6720182ee6af21538e2550a26386602862042b455667665a81",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Manually re-reviewed the unchanged synthetic normalized loopback proxy assertion and confirmed its line digest matches the prior review. File changes only extend account import State settings tests."
   }
 ]

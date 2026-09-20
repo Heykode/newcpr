@@ -79,11 +79,10 @@ export function useAccountOnboarding(options: {
           : accountImportDocuments(requireImportProvider(createForm.value.provider), mode, createForm.value.importTexts[mode])
         if (documents.length > MAX_TOKEN_IMPORT_COUNT)
           throw new Error(`单次最多导入 ${MAX_TOKEN_IMPORT_COUNT} 个条目`)
-        const settings = accountImportSettings(createForm.value)
         const items = documents.map(entry => ({
           provider: entry.provider,
           data: entry.document,
-          settings,
+          settings: accountImportSettings(createForm.value, entry.provider),
           outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
         }))
         const encoded = JSON.stringify(items, (_key, value: unknown) => isRecord(value)

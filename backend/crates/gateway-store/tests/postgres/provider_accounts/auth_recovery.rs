@@ -77,6 +77,7 @@ async fn replacement_clears_old_authentication_failure_but_import_uses_explicit_
             .import_provider_accounts(ImportProviderAccounts {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
                     enabled: !enabled,
+                    turn_state_injection_enabled: None,
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::DEFAULT,
                     group_ids: vec![],

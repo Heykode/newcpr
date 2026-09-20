@@ -3523,6 +3523,7 @@ fn unsupported() -> ProviderAdminError {
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
         enabled: false,
+        turn_state_injection_enabled: None,
         concurrency_limit: Some(
             gateway_core::account::AccountConcurrencyLimit::new(3).expect("concurrency"),
         ),
