@@ -411,29 +411,3 @@ fn websocket_host_header(endpoint: &str) -> Option<String> {
         None => host.to_string(),
     })
 }
-
-#[cfg(test)]
-mod default_egress_tests {
-    use super::connect_tcp;
-    use tokio::net::TcpListener;
-
-    #[tokio::test]
-    async fn default_direct_tcp_uses_ipv4() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let stream = connect_tcp("localhost", listener.local_addr().unwrap().port(), true)
-            .await
-            .unwrap();
-        assert!(stream.peer_addr().unwrap().is_ipv4());
-        assert!(stream.nodelay().unwrap());
-    }
-
-    #[tokio::test]
-    async fn default_direct_tcp_rejects_ipv6_but_proxy_dial_preserves_it() {
-        let listener = TcpListener::bind("[::1]:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        assert!(connect_tcp("::1", port, true).await.is_err());
-        let stream = connect_tcp("::1", port, false).await.unwrap();
-        assert!(stream.peer_addr().unwrap().is_ipv6());
-        assert!(stream.nodelay().unwrap());
-    }
-}

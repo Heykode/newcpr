@@ -171,6 +171,35 @@ async fn default_ipv4_and_explicit_ipv6_switch_real_http_and_ws_connections() {
 }
 
 #[tokio::test]
+async fn default_websocket_egress_rejects_implicit_ipv6() {
+    let listener = TcpListener::bind("[::1]:0").await.unwrap();
+    let (backend, _, _, pool) = fixture(
+        &format!("http://{}", listener.local_addr().unwrap()),
+        EgressMode::Unchanged,
+    )
+    .await;
+    let mut request = codex_request("gpt-test", "fixture", Vec::new());
+    request.use_websocket = true;
+    request.set_previous_response_id(Some("resp_ipv4_only".to_owned()));
+    request.previous_response_scope = Some(PreviousResponseScope::Persisted);
+    assert!(
+        timeout(
+            Duration::from_secs(5),
+            backend.create_response(&request, request_context("ipv4-only", Some("review")))
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
+    assert!(
+        timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn local_source_failures_do_not_open_the_websocket_origin_breaker() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());

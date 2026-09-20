@@ -402,7 +402,12 @@ async fn socks_account_egress_preserves_dns_mode_auth_and_ipv6_for_sse_and_webso
             targets.push(("socks5", "[::1]"));
         }
         for (scheme, host) in targets {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let proxy_address = if host == "upstream.invalid" {
+                "[::1]:0"
+            } else {
+                "127.0.0.1:0"
+            };
+            let listener = TcpListener::bind(proxy_address).await.unwrap();
             let proxy = format!(
                 "{scheme}://user%40exit:pass%3Aword@{}",
                 listener.local_addr().unwrap()
@@ -430,7 +435,7 @@ async fn socks_account_egress_preserves_dns_mode_auth_and_ipv6_for_sse_and_webso
                 target
             });
             let client = CodexBackendClient::new(
-                reqwest::Client::builder().no_proxy().build().unwrap(),
+                provider_openai::transport::build_reqwest_client().unwrap(),
                 format!("http://{host}"),
                 test_wire_profile(),
             )
