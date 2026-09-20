@@ -2188,6 +2188,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
                     enabled: false,
+                    turn_state_injection_enabled: Some(true),
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
                     group_ids: Vec::new(),
@@ -2233,8 +2234,19 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         ),
         ("acct_authorization_existing", Some(2)),
     );
-    let settings: (bool, Option<i64>, i16) = sqlx::query_as("select enabled, concurrency_limit, weight from provider_accounts where id = 'acct_authorization_existing'").fetch_one(&database.pool).await.expect("OAuth settings");
-    assert_eq!(settings, (false, None, 9));
+    let settings: (bool, Option<i64>, i16, bool) = sqlx::query_as("select enabled, concurrency_limit, weight, turn_state_injection_enabled from provider_accounts where id = 'acct_authorization_existing'").fetch_one(&database.pool).await.expect("OAuth settings");
+    assert_eq!(settings, (false, None, 9, true));
+    let changed_fields: Vec<String> = sqlx::query_scalar(
+        "select changed_fields from admin_audit_events where action = 'authorize'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("import audit");
+    assert!(
+        changed_fields
+            .iter()
+            .any(|field| field == "turn_state_injection_enabled")
+    );
     database.close().await;
 }
 
@@ -3329,6 +3341,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     .expect("seed group");
     let settings = AccountImportSettings {
         enabled: false,
+        turn_state_injection_enabled: Some(true),
         concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
         weight: AccountWeight::new(7).expect("weight"),
         group_ids: vec![AccountGroupId::new(GROUP_ID).expect("group ID")],
@@ -3351,14 +3364,14 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .expect("import with settings");
     assert_eq!(result.config_revision.get(), 2);
     for id in ["acct_new_settings", "acct_existing_settings"] {
-        let row: (bool, Option<i64>, i16) = sqlx::query_as(
-            "select enabled, concurrency_limit, weight from provider_accounts where id = $1",
+        let row: (bool, Option<i64>, i16, bool) = sqlx::query_as(
+            "select enabled, concurrency_limit, weight, turn_state_injection_enabled from provider_accounts where id = $1",
         )
         .bind(id)
         .fetch_one(&database.pool)
         .await
         .expect("saved settings");
-        assert_eq!(row, (false, Some(3), 7));
+        assert_eq!(row, (false, Some(3), 7, true));
         assert_eq!(account_group_ids(&database.pool, id).await, [GROUP_ID]);
     }
     let before = repository
@@ -3369,6 +3382,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .import_provider_accounts(ImportProviderAccounts {
             outbound_proxy: None,
             settings: Some(AccountImportSettings {
+                turn_state_injection_enabled: Some(false),
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092")
                         .expect("missing group"),
@@ -3406,5 +3420,60 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         account_group_ids(&database.pool, "acct_existing_settings").await,
         [GROUP_ID]
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn account_import_state_setting_preserves_omission_and_applies_explicit_values() {
+    use gateway_admin::model::accounts::AccountImportSettings;
+    let Some(database) = TestDatabase::create("import_state_option").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    for (index, (state, expected)) in [
+        (None, false),
+        (Some(true), true),
+        (None, true),
+        (Some(false), false),
+        (None, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let settings = AccountImportSettings {
+            enabled: true,
+            turn_state_injection_enabled: state,
+            concurrency_limit: None,
+            weight: gateway_core::account::AccountWeight::DEFAULT,
+            group_ids: vec![],
+        };
+        let imported = repository
+            .import_provider_accounts(ImportProviderAccounts {
+                settings: Some(settings),
+                outbound_proxy: None,
+                scope: ProviderAccountAdminScope {
+                    provider_kind: "openai".to_owned(),
+                },
+                accounts: vec![account("acct_import_state", "import-state-user")],
+                audit: audit(
+                    &format!("audit_state_option_{index}"),
+                    "import",
+                    "provider_accounts",
+                ),
+            })
+            .await
+            .expect("atomic import");
+        assert_eq!(imported.account_ids, ["acct_import_state"]);
+        assert_eq!(
+            repository
+                .load_provider_account("acct_import_state")
+                .await
+                .expect("saved account")
+                .expect("account exists")
+                .summary
+                .turn_state_injection_enabled,
+            expected
+        );
+    }
     database.close().await;
 }

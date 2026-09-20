@@ -38,21 +38,25 @@ const taskOptions = computed(() => props.tasks.map(task => ({
     <p v-if="stopError" role="alert" class="mb-4 text-xs wrap-anywhere text-cp-error-text">
       停止请求未确认：{{ stopError }}
     </p>
-    <BaseEmpty v-if="!tasks.length" class="min-h-[min(20rem,50dvh)] content-center" :icon="ListTodo" :title="loading ? '正在读取导入任务' : '暂无导入任务'" />
+    <BaseEmpty v-if="!tasks.length" class="min-h-[min(20rem,50dvh)] content-center" :icon="ListTodo" :title="loading ? '正在读取导入任务' : error ? '导入任务读取失败' : '暂无导入任务'" />
     <div v-else class="min-h-[min(20rem,50dvh)] min-w-0">
-      <div v-if="tasks.length > 1" class="mb-5">
+      <div class="mb-5 grid gap-2">
+        <span class="text-xs font-medium text-cp-text-secondary">近期批次（{{ tasks.length }}）</span>
         <BaseSelect
           :model-value="selectedId"
           :options="taskOptions"
           size="sm"
           aria-label="切换导入任务"
-          class="w-full min-w-0 sm:max-w-96"
+          class="w-full min-w-0"
           @update:model-value="emit('select', $event)"
         />
       </div>
       <TaskDetail v-if="detail" :task="detail" :stopping="stopping" @stop="emit('stop')" @view-accounts="emit('viewAccounts')" />
       <BaseEmpty v-else class="min-h-[min(16rem,40dvh)] content-center" :title="loading ? '正在读取条目结果' : '暂无条目结果'" surface="none" />
     </div>
+    <p class="mt-4 mb-0 text-xs text-cp-text-tertiary">
+      临时记录 · 完成后保留 1 小时 · 服务重启清空 · 不含 OAuth 授权
+    </p>
     <template #footer>
       <BaseButton @click="open = false">
         关闭

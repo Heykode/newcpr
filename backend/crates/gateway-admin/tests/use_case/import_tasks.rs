@@ -323,7 +323,9 @@ async fn imports_keep_existing_service_commit_settings_and_account_ids() {
         let services = bundle.services();
         let mut input = command(Uuid::now_v7(), 1);
         input.items[0].provider = ProviderKind::new(kind).unwrap();
-        input.items[0].command.settings = Some(import_settings());
+        let mut settings = import_settings();
+        settings.turn_state_injection_enabled = (kind == "openai").then_some(true);
+        input.items[0].command.settings = Some(settings.clone());
         let task = services.import_tasks().submit(input).unwrap();
         let (cancel, worker) = start(&mut bundle);
         wait_finished(&services, task.task_id).await;
@@ -342,7 +344,7 @@ async fn imports_keep_existing_service_commit_settings_and_account_ids() {
                 .collect::<Vec<_>>(),
             ["acct_first", "acct_second"]
         );
-        assert_eq!(store.import_settings(), vec![Some(import_settings())]);
+        assert_eq!(store.import_settings(), vec![Some(settings)]);
         let log = recorded(&log);
         assert_eq!(
             log.iter()

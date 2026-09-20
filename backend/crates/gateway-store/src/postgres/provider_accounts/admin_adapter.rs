@@ -281,9 +281,12 @@ impl PgAdminAccountStore {
             .collect::<StoreResult<Vec<_>>>()
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut changed_fields = vec!["credentials".to_owned()];
-        if settings.is_some() {
+        if let Some(settings) = &settings {
             changed_fields
                 .extend(["enabled", "concurrency_limit", "weight", "group_ids"].map(str::to_owned));
+            if settings.turn_state_injection_enabled.is_some() {
+                changed_fields.push("turn_state_injection_enabled".to_owned());
+            }
         }
         let imported = self
             .accounts

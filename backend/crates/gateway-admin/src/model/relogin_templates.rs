@@ -37,6 +37,7 @@ impl ReloginTemplateConfig {
         }
         Ok(AccountImportSettings {
             enabled: self.enabled,
+            turn_state_injection_enabled: None,
             concurrency_limit: self
                 .concurrency_limit
                 .map(|value| {

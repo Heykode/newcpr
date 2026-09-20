@@ -4,6 +4,12 @@
 
 - The global policy, OpenAI account switch and canonical upstream model allowlist
   must all match. Defaults are disabled globally and per account.
+- Import settings accept optional `turnStateInjectionEnabled`; omission/null keeps
+  existing values and new accounts retain the default-off value. Explicit booleans
+  apply in the same credential/scheduling/group transaction and appear in the
+  admin audit. Reject enabling it for non-OpenAI imports. Preserve import-facts
+  callbacks, relogin template omission and the prohibition on settings changes
+  during existing-account OAuth reauthorization.
 - The provider owns parsing and injection; the store owns atomic account/model
   records. Opted-in new-chain selection requires a valid active for the requested
   canonical model, in ordinary selection and capacity-wait reloads. Do not change

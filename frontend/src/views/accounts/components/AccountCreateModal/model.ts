@@ -7,6 +7,7 @@ export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 export interface AccountCreateForm {
   provider: AccountCreateProvider | ''
   enabled: boolean
+  turnStateInjectionEnabled: boolean
   concurrencyLimit: string
   weight: string
   groupIds: string[]
@@ -24,6 +25,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
   return {
     provider: '',
     enabled: true,
+    turnStateInjectionEnabled: false,
     concurrencyLimit: '',
     weight: '1',
     groupIds: [],
@@ -46,9 +48,14 @@ export function accountProxyError(form: AccountCreateForm): string | undefined {
   return undefined
 }
 
-export function accountImportSettings(form: AccountCreateForm) {
+export function accountImportSettings(form: AccountCreateForm, provider = form.provider) {
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
     throw new Error(scheduling.message)
-  return { enabled: form.enabled, ...scheduling.values, groupIds: [...new Set(form.groupIds)] }
+  return {
+    enabled: form.enabled,
+    ...scheduling.values,
+    groupIds: [...new Set(form.groupIds)],
+    ...(provider === 'openai' ? { turnStateInjectionEnabled: form.turnStateInjectionEnabled } : {}),
+  }
 }

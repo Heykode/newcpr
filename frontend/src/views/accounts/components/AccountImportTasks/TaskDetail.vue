@@ -22,7 +22,7 @@ const visibleItems = computed(() => filter.value === 'attention'
   : props.task.items)
 
 watch(() => props.task.taskId, () => {
-  filter.value = hasAttention.value ? 'attention' : 'all'
+  filter.value = 'all'
 }, { immediate: true })
 </script>
 
@@ -35,6 +35,9 @@ watch(() => props.task.taskId, () => {
         </h3>
         <p class="mt-1 text-xs text-cp-text-secondary">
           {{ taskTime(task.createdAt) }} 创建
+        </p>
+        <p v-if="task.finishedAt" class="mt-1 text-xs text-cp-text-secondary">
+          {{ taskTime(task.finishedAt) }} 结束
         </p>
       </div>
       <BaseButton
@@ -50,7 +53,7 @@ watch(() => props.task.taskId, () => {
         {{ task.stopRequested || task.counts.pending === 0 ? '等待当前条目结束' : '停止未开始条目' }}
       </BaseButton>
       <BaseButton size="sm" variant="soft" @click="emit('viewAccounts')">
-        查看账号 <ArrowUpRight class="size-3.5" />
+        返回账号列表 <ArrowUpRight class="size-3.5" />
       </BaseButton>
     </div>
 
@@ -95,9 +98,21 @@ watch(() => props.task.taskId, () => {
           >
             <span class="font-mono text-xs text-cp-text-secondary">{{ String(item.index).padStart(2, '0') }}</span>
             <ProviderIconGroup :provider="item.provider" size="sm" />
-            <p class="col-span-2 col-start-2 row-start-2 min-w-0 text-xs leading-relaxed wrap-anywhere text-cp-text-secondary sm:col-span-1 sm:col-start-3 sm:row-start-1">
-              {{ itemDescription(item) }}
-            </p>
+            <div class="col-span-2 col-start-2 row-start-2 min-w-0 text-xs leading-relaxed wrap-anywhere text-cp-text-secondary sm:col-span-1 sm:col-start-3 sm:row-start-1">
+              <p class="m-0">
+                {{ itemDescription(item) }}
+              </p>
+              <details v-if="item.accountIds.length" class="mt-1">
+                <summary class="cursor-pointer text-cp-text">
+                  账号 ID（{{ item.accountIds.length }}）
+                </summary>
+                <ul class="mt-1 mb-0 max-h-24 list-none overflow-y-auto p-0 font-mono text-[11px]">
+                  <li v-for="(id, index) in item.accountIds" :key="index">
+                    {{ id }}
+                  </li>
+                </ul>
+              </details>
+            </div>
             <span class="col-start-3 row-start-1 inline-flex items-center justify-self-end sm:col-start-4" :title="itemStates[item.status].label">
               <template v-if="item.status === 'succeeded' || item.status === 'failed'">
                 <Check v-if="item.status === 'succeeded'" class="size-4 text-cp-success-text" aria-hidden="true" />

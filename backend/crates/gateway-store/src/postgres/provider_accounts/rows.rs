@@ -272,6 +272,11 @@ impl ImportProviderAccounts {
     pub fn validate(&self) -> StoreResult<()> {
         if let Some(settings) = &self.settings {
             repository::validate_batch_update_group_ids(&settings.group_ids)?;
+            if self.scope.provider_kind != "openai"
+                && settings.turn_state_injection_enabled == Some(true)
+            {
+                return Err(invalid("Turn State injection is only supported for OpenAI"));
+            }
         }
         self.scope.validate()?;
         if self.accounts.is_empty() || self.accounts.len() > MAX_ADMIN_IMPORT_BATCH {

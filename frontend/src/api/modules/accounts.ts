@@ -440,6 +440,7 @@ interface AccountDeleteParams {
 
 interface AccountImportSettings {
   enabled: boolean
+  turnStateInjectionEnabled?: boolean
   concurrencyLimit: number | null
   weight: number
   groupIds: string[]

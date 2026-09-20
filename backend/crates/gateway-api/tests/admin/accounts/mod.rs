@@ -1991,6 +1991,61 @@ mod import_settings {
     use serde_json::json;
 
     #[test]
+    fn state_import_setting_is_optional_boolean_and_openai_only() {
+        for state in [None, Some(false), Some(true)] {
+            let mut settings =
+                json!({"enabled": true, "concurrencyLimit": null, "weight": 1, "groupIds": []});
+            if let Some(enabled) = state {
+                settings["turnStateInjectionEnabled"] = json!(enabled);
+            }
+            for provider in ["openai", "xai"] {
+                let request: AccountImportRequest = serde_json::from_value(
+                    json!({"provider": provider, "data": {}, "settings": settings}),
+                )
+                .expect("boolean import option");
+                assert_eq!(
+                    request
+                        .settings
+                        .as_ref()
+                        .unwrap()
+                        .turn_state_injection_enabled,
+                    state
+                );
+                assert_eq!(
+                    request.validate().is_ok(),
+                    provider == "openai" || state != Some(true)
+                );
+                let flow = if provider == "openai" {
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                } else {
+                    "flow-test"
+                };
+                let oauth: CompleteAccountAuthorizationRequest = serde_json::from_value(json!({
+                    "provider": provider, "flowId": flow, "callbackUrl": "code",
+                    "settings": settings
+                }))
+                .expect("OAuth option");
+                assert_eq!(
+                    oauth.validate().is_ok(),
+                    provider == "openai" || state != Some(true)
+                );
+            }
+        }
+        for value in [json!("true"), json!(1), json!({})] {
+            let settings = json!({
+                "enabled": true, "concurrencyLimit": null, "weight": 1, "groupIds": [],
+                "turnStateInjectionEnabled": value
+            });
+            assert!(
+                serde_json::from_value::<AccountImportRequest>(
+                    json!({"provider": "openai", "data": {}, "settings": settings})
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn import_and_oauth_apply_the_same_settings_validation() {
         for (field, value) in [
             ("concurrencyLimit", json!(0)),

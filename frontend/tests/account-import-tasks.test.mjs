@@ -254,6 +254,7 @@ for (const mode of ['access_token', 'refresh_token']) {
     h.input('openai', mode, ' synthetic-a \r\n \n synthetic-b\nsynthetic-a ')
     Object.assign(h.state.createForm.value, {
       enabled: false,
+      turnStateInjectionEnabled: true,
       concurrencyLimit: '7',
       weight: '23',
       groupIds: ['group-a', 'group-a', 'group-b'],
@@ -268,12 +269,13 @@ for (const mode of ['access_token', 'refresh_token']) {
     assert.deepEqual(body.items, ['synthetic-a', 'synthetic-b', 'synthetic-a'].map(value => ({
       provider: 'openai',
       data: { accounts: [{ [key]: value }] },
-      settings: { enabled: false, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'] },
+      settings: { enabled: false, turnStateInjectionEnabled: true, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'] },
       outboundProxyId: 'proxy-a',
     })))
     assert.equal(h.created.length, 1)
     assert.equal(h.state.showCreateModal.value, false)
     assert.equal(h.state.createForm.value.importTexts[mode], '')
+    assert.equal(h.state.createForm.value.turnStateInjectionEnabled, false)
     assert.equal(h.reloads(), 0, 'creation is not proof of account persistence')
     assert.deepEqual(h.notifications.errors, [])
   })
@@ -297,6 +299,21 @@ test('JSON documents retain metadata, multi-account boundaries and provider filt
     assert.deepEqual(h.submissions[0].items.map(entry => entry.data), documents)
     assert.deepEqual(h.submissions[0].items.map(entry => entry.provider), provider === 'batch' ? ['openai', 'xai'] : [provider])
     assert.ok(h.submissions[0].items.every(entry => entry.outboundProxyId === undefined))
+  }
+})
+
+test('State import defaults off, applies explicitly to OpenAI, and omits other providers', async (t) => {
+  for (const enabled of [false, true]) {
+    const h = mountOnboarding(t)
+    h.input('batch', 'json', JSON.stringify({
+      documents: ['openai', 'xai'].map(provider => ({ provider, document: { accounts: [] } })),
+    }))
+    assert.equal(h.state.createForm.value.turnStateInjectionEnabled, false)
+    h.state.createForm.value.turnStateInjectionEnabled = enabled
+    await h.state.handleCreate()
+    const [openai, xai] = h.submissions[0].items
+    assert.equal(openai.settings.turnStateInjectionEnabled, enabled)
+    assert.equal(Object.hasOwn(xai.settings, 'turnStateInjectionEnabled'), false)
   }
 })
 
@@ -534,12 +551,19 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
   for (const provider of ['openai', 'xai']) {
     const h = mountOnboarding(t)
     h.input(provider, 'oauth')
+    h.state.createForm.value.turnStateInjectionEnabled = true
     await h.state.handleAuthorizeOAuth()
     h.state.createForm.value.oauthCallback = 'https://example.com/callback?code=synthetic-code'
     await h.state.handleCreate()
     assert.equal(h.submissions.length, 0)
     assert.equal(h.oauthStarts[0].accountId, undefined)
-    assert.deepEqual(h.oauthCompletions[0].settings, { enabled: true, concurrencyLimit: null, weight: 1, groupIds: [] })
+    assert.deepEqual(h.oauthCompletions[0].settings, {
+      enabled: true,
+      concurrencyLimit: null,
+      weight: 1,
+      groupIds: [],
+      ...(provider === 'openai' ? { turnStateInjectionEnabled: true } : {}),
+    })
     assert.equal(h.reloads(), 1)
 
     h.state.openReauthorizeAccount({ id: 'account-existing', provider, name: 'Existing', enabled: false })
@@ -901,12 +925,12 @@ test('real task SFCs render all outcomes, safe errors, accessible progress and n
       index: index + 1,
       provider: 'openai',
       status,
-      accountIds: [],
+      accountIds: status === 'succeeded' ? ['acct_saved_example'] : [],
       message: status === 'failed' ? 'Error <script> & detail.' : null,
     })),
   })
   const html = await renderToString(vue.createSSRApp(component, { task: summary, stopping: false }))
-  for (const label of ['等待中', '处理中', '已入库', '失败', '待核对', '未执行', '不要直接重试原 Token', '停止未开始条目', '查看账号'])
+  for (const label of ['等待中', '处理中', '已入库', '失败', '待核对', '未执行', '不要直接重试原 Token', '停止未开始条目', '返回账号列表', '账号 ID', 'acct_saved_example'])
     assert.ok(html.includes(label), label)
   assert.match(html, /role="progressbar"[^>]*aria-label="条目处理进度"[^>]*aria-valuenow="4"[^>]*aria-valuemax="6"/)
   assert.match(html, /已入库 3 个账号/)
@@ -919,6 +943,7 @@ test('real task SFCs render all outcomes, safe errors, accessible progress and n
   assert.match(waiting, /<button disabled[^>]*>\s*等待当前条目结束<\/button>/)
   const done = await renderToString(vue.createSSRApp(component, { task: completed(), stopping: false }))
   assert.doesNotMatch(done, /停止未开始条目|等待当前条目结束/)
+  assert.match(done, /结束/)
   const zero = await renderToString(vue.createSSRApp(component, {
     task: task('task-a', { total: 0, counts: { pending: 0, running: 0, succeeded: 0, failed: 0, unknown: 0, skipped: 0, importedAccounts: 0 } }),
     stopping: false,
@@ -940,7 +965,21 @@ test('real task SFCs render all outcomes, safe errors, accessible progress and n
   assert.match(panelHtml, /offline &lt;error&gt;/)
   assert.match(panelHtml, /stop &lt;failed&gt;/)
   assert.match(panelHtml, /刷新进度/)
+  assert.match(panelHtml, /近期批次（1）/)
+  assert.match(panelHtml, /完成后保留 1 小时/)
   assert.doesNotMatch(panelHtml, /<error>|<failed>/)
+  const unread = await renderToString(vue.createSSRApp(panel, {
+    modelValue: true,
+    tasks: [],
+    selectedId: '',
+    detail: null,
+    loading: false,
+    stopping: false,
+    error: 'offline',
+    stopError: '',
+  }))
+  assert.match(unread, /导入任务读取失败/)
+  assert.doesNotMatch(unread, /暂无导入任务/)
 })
 
 test('task presenters distinguish stopping, terminal attention and per-document account counts', () => {

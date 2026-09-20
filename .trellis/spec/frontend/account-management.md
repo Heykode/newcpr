@@ -12,6 +12,17 @@
   Refresh accounts when imported-account counts advance; fence stale detail
   responses by selected task and cancellation. Never persist tokens in browser
   task preferences or include them in task results.
+- The import settings step exposes the default-off State switch for OpenAI and
+  mixed batches. Send `turnStateInjectionEnabled` only for OpenAI documents and
+  new OpenAI OAuth; reauthorization must still omit all import settings.
+- Task history is process-local, actor-scoped, bounded to 100 retained batches,
+  and expires one hour after completion; restart loses it. OAuth authorization
+  does not create an import task. Never present this as a durable account-import
+  audit. Keep the recent-batch selector visible even with one result and distinguish
+  an initial read failure from an authoritative empty list.
+- Task detail defaults to all items, not attention-only when any item failed.
+  Keep the explicit attention filter, creation/completion times and expandable
+  saved account IDs. Returning to the account list is not a batch filter.
 - Account-column preferences already exist and remain authoritative. Usage and
   error tables use separate storage keys, keep required identity/actions and error
   columns visible, tolerate invalid stored values and retain original layout.
