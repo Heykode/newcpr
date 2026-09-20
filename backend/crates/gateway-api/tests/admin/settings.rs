@@ -41,6 +41,7 @@ fn update_body() -> Value {
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateProbeProxyId": null,
+        "turnStateProbeConcurrency": 3,
         "responsesMaxDecompressedBodyBytes": 67108864,
         "modelMappings": {
             "gpt-5.4": "gpt-5.5",
@@ -126,6 +127,70 @@ async fn probe_proxy_selection_preserves_omitted_and_clears_explicit_null() {
             .unwrap();
         assert_eq!(
             response_json(response).await["data"]["turnStateProbeProxyId"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn probe_concurrency_rejects_out_of_range_and_non_integer_values() {
+    for value in [0, 11, u32::MAX] {
+        let mut body = update_body();
+        body["turnStateProbeConcurrency"] = json!(value);
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(
+            request.validate().unwrap_err().field(),
+            "turnStateProbeConcurrency"
+        );
+    }
+    for value in [json!(-1), json!(1.5), json!("3"), json!(true)] {
+        let mut body = update_body();
+        body["turnStateProbeConcurrency"] = value;
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+    }
+}
+
+#[tokio::test]
+async fn probe_concurrency_round_trips_and_omission_preserves_the_saved_value() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let app = app(fixture.state());
+    for (value, expected) in [
+        (None, 3),
+        (Some(1), 1),
+        (Some(10), 10),
+        (None, 10),
+        (Some(3), 3),
+    ] {
+        let mut body = update_body();
+        if let Some(value) = value {
+            body["turnStateProbeConcurrency"] = json!(value);
+        } else {
+            body.as_object_mut()
+                .unwrap()
+                .remove("turnStateProbeConcurrency");
+        }
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["data"]["turnStateProbeConcurrency"],
+            expected
+        );
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            response_json(response).await["data"]["turnStateProbeConcurrency"],
             expected
         );
     }
@@ -265,6 +330,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
 
     let settings = RuntimeSettings {
         turn_state_probe_proxy_id: None,
+        turn_state_probe_concurrency: 3,
         config_revision: Revision::new(7).expect("revision"),
         disable_fast: false,
         turn_state_injection_enabled: false,
@@ -330,6 +396,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "turnStateInjectionEnabled": false,
             "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
             "turnStateProbeProxyId": null,
+            "turnStateProbeConcurrency": 3,
             "responsesMaxDecompressedBodyBytes": 67108864,
             "modelMappings": {
                 "gpt-5.4": "gpt-5.5",
@@ -395,6 +462,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
     let settings = RuntimeSettings {
         config_revision: Revision::new(7).expect("revision"),
         turn_state_probe_proxy_id: request.turn_state_probe_proxy_id.clone().flatten(),
+        turn_state_probe_concurrency: request.turn_state_probe_concurrency.unwrap_or(3),
         disable_fast: request.disable_fast.unwrap_or(false),
         turn_state_injection_enabled: request.turn_state_injection_enabled.unwrap_or(false),
         turn_state_models: request

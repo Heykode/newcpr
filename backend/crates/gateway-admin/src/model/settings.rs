@@ -189,6 +189,7 @@ pub struct RuntimeSettings {
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<UpstreamModelId>,
     pub turn_state_probe_proxy_id: Option<String>,
+    pub turn_state_probe_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
@@ -213,6 +214,7 @@ pub struct ReplaceRuntimeSettings {
     pub turn_state_models: Option<Vec<UpstreamModelId>>,
     /// Omitted preserves the route; explicit null selects the IPv6 pool.
     pub turn_state_probe_proxy_id: Option<Option<String>>,
+    pub turn_state_probe_concurrency: Option<u32>,
     pub responses_max_decompressed_body_bytes: Option<u64>,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,

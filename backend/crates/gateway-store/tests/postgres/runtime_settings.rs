@@ -13,6 +13,7 @@ use super::TestDatabase;
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         turn_state_probe_proxy_id: None,
+        turn_state_probe_concurrency: None,
         admin_api_key: None,
         disable_fast: None,
         turn_state_injection_enabled: None,
@@ -38,6 +39,87 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         audit_retention_days: 90,
         request_tuning: Default::default(),
     }
+}
+
+#[test]
+fn runtime_settings_validate_probe_concurrency_bounds() {
+    for (value, valid) in [
+        (None, true),
+        (Some(1), true),
+        (Some(3), true),
+        (Some(10), true),
+        (Some(0), false),
+        (Some(11), false),
+    ] {
+        let mut settings = settings_with_margin(3_600);
+        settings.turn_state_probe_concurrency = value;
+        assert_eq!(settings.validate().is_ok(), valid, "{value:?}");
+    }
+}
+
+#[tokio::test]
+async fn probe_concurrency_defaults_persists_and_reaches_the_snapshot() {
+    let Some(database) = TestDatabase::create("probe_concurrency").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let snapshots = PgRuntimeSnapshotRepository::new(database.pool.clone());
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .turn_state_probe_concurrency,
+        3
+    );
+    for (value, expected) in [(Some(1), 1), (Some(10), 10), (None, 10), (Some(3), 3)] {
+        let mut update = settings_with_margin(3_600);
+        update.turn_state_probe_concurrency = value;
+        repository.update_runtime_settings(update).await.unwrap();
+        assert_eq!(
+            repository
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .turn_state_probe_concurrency,
+            expected
+        );
+        assert_eq!(
+            snapshots
+                .load_runtime_snapshot()
+                .await
+                .unwrap()
+                .settings
+                .turn_state_probe_concurrency,
+            expected
+        );
+    }
+    let revision = repository
+        .load_runtime_settings()
+        .await
+        .unwrap()
+        .config_revision;
+    for invalid in [0, 11] {
+        let mut update = settings_with_margin(3_600);
+        update.turn_state_probe_concurrency = Some(invalid);
+        assert!(repository.update_runtime_settings(update).await.is_err());
+        assert!(
+            sqlx::query("update runtime_settings set turn_state_probe_concurrency = $1")
+                .bind(i64::from(invalid))
+                .execute(&database.pool)
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        repository
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .config_revision,
+        revision
+    );
+    database.close().await;
 }
 
 #[test]

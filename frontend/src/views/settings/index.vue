@@ -51,6 +51,7 @@ const {
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   requestIntervalMsValue,
+  turnStateProbeConcurrencyValue,
   responsesMaxDecompressedBodyBytesValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
@@ -136,6 +137,7 @@ watch(
         v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
         v-model:turn-state-models-text="form.turnStateModelsText"
         v-model:turn-state-probe-proxy-id="form.turnStateProbeProxyId"
+        v-model:turn-state-probe-concurrency="turnStateProbeConcurrencyValue"
         v-model:request-tuning="form.requestTuning"
         :disabled="loading || saving"
       />

@@ -41,6 +41,7 @@ pub struct SnapshotSettingsFacts {
     turn_state_injection_enabled: bool,
     turn_state_models: Vec<String>,
     turn_state_probe_proxy: Option<crate::account::OutboundProxy>,
+    turn_state_probe_concurrency: u32,
 }
 
 impl SnapshotSettingsFacts {
@@ -88,6 +89,7 @@ impl SnapshotSettingsFacts {
             request_tuning: super::RequestTuning::default(),
             turn_state_injection_enabled: false,
             turn_state_probe_proxy: None,
+            turn_state_probe_concurrency: super::DEFAULT_TURN_STATE_PROBE_CONCURRENCY,
             turn_state_models: vec![
                 "gpt-6-astra".to_owned(),
                 "gpt-5.6-sol".to_owned(),
@@ -115,6 +117,12 @@ impl SnapshotSettingsFacts {
         proxy: Option<crate::account::OutboundProxy>,
     ) -> Self {
         self.turn_state_probe_proxy = proxy;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_turn_state_probe_concurrency(mut self, concurrency: u32) -> Self {
+        self.turn_state_probe_concurrency = concurrency;
         self
     }
 }
@@ -469,14 +477,19 @@ async fn compile_runtime_snapshot(
         .map(UpstreamModelId::new)
         .collect::<Result<BTreeSet<_>, _>>()
         .map_err(|_| RuntimeSnapshotCompileError::InvalidData)?;
-    if turn_state_models.is_empty() || turn_state_models.len() > 64 {
+    if turn_state_models.is_empty()
+        || turn_state_models.len() > 64
+        || !(1..=super::MAX_TURN_STATE_PROBE_CONCURRENCY)
+            .contains(&facts.settings.turn_state_probe_concurrency)
+    {
         return Err(RuntimeSnapshotCompileError::InvalidData);
     }
     let turn_state_policy = super::OpenAiTurnStatePolicy::new(
         facts.settings.turn_state_injection_enabled,
         turn_state_models,
     )
-    .with_probe_proxy(facts.settings.turn_state_probe_proxy);
+    .with_probe_proxy(facts.settings.turn_state_probe_proxy)
+    .with_probe_concurrency(facts.settings.turn_state_probe_concurrency);
     let selection_policy = AccountSelectionPolicy::new(
         rotation_strategy,
         default_concurrency,

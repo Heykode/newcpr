@@ -128,6 +128,36 @@ impl ProviderCatalogPort for PublishingCatalog {
 }
 
 #[test]
+fn state_probe_concurrency_defaults_and_snapshot_bounds_are_enforced() {
+    assert_eq!(
+        gateway_core::routing::OpenAiTurnStatePolicy::default().probe_concurrency(),
+        3
+    );
+    for value in [None, Some(1), Some(3), Some(10), Some(0), Some(11)] {
+        let mut settings = SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None);
+        if let Some(value) = value {
+            settings = settings.with_turn_state_probe_concurrency(value);
+        }
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            settings,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let result = block_on(compiler(Arc::new(TestSnapshotStore::new(Ok(facts)))).compile())
+            .map(|snapshot| snapshot.openai_turn_state_policy().probe_concurrency());
+        let expected = match value {
+            Some(0 | 11) => Err(RuntimeSnapshotCompileError::InvalidData),
+            value => Ok(value.unwrap_or(3)),
+        };
+        assert_eq!(result, expected, "{value:?}");
+    }
+}
+
+#[test]
 fn compiler_should_reject_revision_changed_during_consistent_read() {
     let facts = facts(1, 2);
     let compiler = compiler(Arc::new(TestSnapshotStore::new(Ok(facts))));

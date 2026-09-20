@@ -44,6 +44,7 @@ export function useSettingsForm() {
     turnStateInjectionEnabled: false,
     turnStateModelsText: 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra',
     turnStateProbeProxyId: '',
+    turnStateProbeConcurrency: 3 as number | null,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
@@ -58,7 +59,7 @@ export function useSettingsForm() {
     requestTuning: { ...requestTuningFallbacks },
   })
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'turnStateProbeConcurrency') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -76,6 +77,7 @@ export function useSettingsForm() {
   const refreshConcurrencyValue = numericModel('refreshConcurrency')
   const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
   const requestIntervalMsValue = numericModel('requestIntervalMs')
+  const turnStateProbeConcurrencyValue = numericModel('turnStateProbeConcurrency')
   const responsesMaxDecompressedBodyBytesValue = computed({
     get: () => String(form.responsesMaxDecompressedBodyBytes),
     set: (value: string) => {
@@ -96,6 +98,7 @@ export function useSettingsForm() {
     form.disableFast = data.disableFast ?? false
     form.turnStateInjectionEnabled = data.turnStateInjectionEnabled ?? false
     form.turnStateProbeProxyId = data.turnStateProbeProxyId ?? ''
+    form.turnStateProbeConcurrency = data.turnStateProbeConcurrency ?? 3
     form.turnStateModelsText = (data.turnStateModels ?? [
       'gpt-6-astra',
       'gpt-5.6-sol',
@@ -203,6 +206,12 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
+    const turnStateProbeConcurrency = form.turnStateProbeConcurrency
+    if (turnStateProbeConcurrency === null || !Number.isInteger(turnStateProbeConcurrency)
+      || turnStateProbeConcurrency < 1 || turnStateProbeConcurrency > 10) {
+      toast.warning('State 第四轮起探测并发须为 1–10 的整数')
+      return
+    }
     if (!Number.isInteger(form.responsesMaxDecompressedBodyBytes)
       || form.responsesMaxDecompressedBodyBytes < 1
       || form.responsesMaxDecompressedBodyBytes > 256 * 1024 * 1024) {
@@ -233,6 +242,7 @@ export function useSettingsForm() {
         turnStateInjectionEnabled: form.turnStateInjectionEnabled,
         turnStateModels,
         turnStateProbeProxyId: form.turnStateProbeProxyId || null,
+        turnStateProbeConcurrency,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,
@@ -275,6 +285,7 @@ export function useSettingsForm() {
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
     requestIntervalMsValue,
+    turnStateProbeConcurrencyValue,
     responsesMaxDecompressedBodyBytesValue,
     minCodexDesktopVersionError,
     minCodexCliVersionError,
