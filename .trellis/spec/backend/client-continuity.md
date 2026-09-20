@@ -504,3 +504,31 @@ time. Observe actual opening duration and its outcome independently.
   必须成功；普通证书负例不能冒充这个边界回归。
 - 本地 macOS 结果不代表 Linux 发布二进制、数据库 TLS 或真实上游验收。未执行的
   持久化/网络测试必须单独记录，不把提前返回写成通过。
+
+## 14. Account Client Cache Restoration
+
+- Normal native HTTP clients use a process-wide 256-entry LRU, keyed by
+  account/proxy, additive CA configuration and the request's frozen UA.
+  Direct accounts no longer share the base client's connection pool.
+  Preserve ordinary direct IPv4 binding and independent explicit egress clients.
+- Token refresh has its own 128-entry LRU keyed by account/proxy, CA, frozen
+  UA and token endpoint. Both automatic and manual refresh pass the account ID.
+  Pre-account authorization/import and credential lease/CAS semantics stay intact.
+- LRU capacity counts cached clients, not sockets, account admission or requests.
+  Eviction drops cached references; live requests retain their clients and finish.
+  Configuration/account callbacks invalidate affected caches. Reapplying an
+  unchanged effective UA must not evict warm pools during periodic reconciliation.
+  Routine Cookie persistence must not acquire a new cache-invalidation hook.
+- WS direct, proxy and source-bound dialing use the official default TCP
+  NODELAY policy; do not force NODELAY to implement response delivery or retries.
+  SOCKS buffering remains handshake-only. Preserve compression, flush
+  acknowledgement, 1200-ms/64-KiB precommit buffering, replay safety and ownership.
+- Regression coverage must use real loopback sockets for account/profile
+  separation, runtime UA changes on the same base client, LRU pressure and
+  eviction during a partial response. Isolate global-cache pressure tests in a
+  child process so unrelated tests cannot invalidate their expected hot entries.
+- Unrelated tests using separate Tokio runtimes must not share synthetic account
+  IDs with a process-cached client. A runtime teardown can drop that client's
+  connection tasks while another test is using its pool. Give independent
+  fixtures unique account IDs and include them in the frozen request scope;
+  keep reuse assertions within one runtime rather than weakening retry policy.

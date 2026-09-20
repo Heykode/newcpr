@@ -505,7 +505,6 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_header_old",
         "acct_header_same",
         "acct_http_sse_exhausted",
-        "acct_image_metering",
         "acct_local_affinity",
         "acct_metadata_new",
         "acct_metadata_old",
@@ -549,6 +548,14 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
 }
 
 fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
+    context_with_account_scope(request_id, cancellation, contract_account_scope())
+}
+
+fn context_with_account_scope(
+    request_id: &str,
+    cancellation: CancellationToken,
+    account_scope: Arc<FrozenAccountScope>,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
@@ -558,7 +565,7 @@ fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext 
         SystemTime::now() + Duration::from_secs(30),
         account_policy(),
         AccountAttemptContext::new(BTreeSet::<ProviderAccountId>::new(), None, None)
-            .with_account_scope(contract_account_scope()),
+            .with_account_scope(account_scope),
         None,
         cancellation,
     )
@@ -1593,8 +1600,19 @@ async fn image_metering_events(
     model: &str,
 ) -> Vec<gateway_core::event::ProviderEvent> {
     let store = Arc::new(MemoryAccountStore::default());
-    const ACCOUNT_ID: &str = "acct_image_metering";
-    create_account(&store, ACCOUNT_ID).await;
+    // Independent test runtimes must not share a process-cached account client.
+    let account_id = format!("acct_image_metering_{}", uuid::Uuid::new_v4());
+    create_account(&store, &account_id).await;
+    let account_scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+            ProviderAccountId::new(account_id).expect("account"),
+            RuntimeAccount::new(
+                ProviderKind::new("openai").expect("provider"),
+                BTreeSet::new(),
+            ),
+        )]))),
+        ClientRoutingScope::all_accounts(),
+    ));
     let server = MockServer::start().await;
     let endpoint = match kind {
         ImageRequestKind::Generation => "/codex/images/generations",
@@ -1621,7 +1639,7 @@ async fn image_metering_events(
     let mut stream = provider
         .execute(
             planned_provider_endpoint_request("openai", operation),
-            context("req_image_usage", CancellationToken::new()),
+            context_with_account_scope("req_image_usage", CancellationToken::new(), account_scope),
         )
         .await
         .expect("prepare image stream");
