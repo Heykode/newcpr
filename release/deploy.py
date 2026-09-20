@@ -8,15 +8,19 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 from urllib.parse import urlsplit
 
 import verified_image as images
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "deploy"))
+import egress_check
+
 DEPLOY_FILES = [
     "release/deploy.py", "release/verified_image.py", "deploy/rollout.py",
-    "deploy/migration_backup.py",
+    "deploy/migration_backup.py", "deploy/egress_check.py",
 ]
 
 
@@ -57,6 +61,10 @@ def validate_profile(profile):
         raise images.Unavailable("Configuration paths must be absolute")
     if profile["container"] in profile["protected_containers"]:
         raise images.Unavailable("The application cannot also be a protected container")
+    try:
+        egress_check.validate_checks(profile.get("egress_checks", []))
+    except (TypeError, ValueError):
+        raise images.Unavailable("Invalid deployment egress checks") from None
     return profile
 
 
@@ -176,7 +184,7 @@ def run(profile, commit, apply, migration_plan=None):
             raise images.Unavailable("Unexpected remote staging directory")
         subprocess.run([
             "scp", str(archive), str(request_path), str(ROOT / "deploy/rollout.py"),
-            str(ROOT / "deploy/migration_backup.py"),
+            str(ROOT / "deploy/migration_backup.py"), str(ROOT / "deploy/egress_check.py"),
             host + ":" + remote + "/",
         ], check=True)
         print("Image staged. Starting locked deployment"
