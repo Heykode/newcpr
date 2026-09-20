@@ -915,7 +915,7 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
             .unwrap();
         assert!(
             earliest_third.duration_since(first_second) < Duration::from_secs(5),
-            "standby retries use the restored escalating batches without six-second pacing"
+            "standby retries use staged batches without six-second pacing"
         );
     }
     if succeed {
@@ -976,7 +976,7 @@ async fn parallel_account_model_tasks_only_acquire_active_initially() {
 }
 
 #[tokio::test]
-async fn standby_repeats_are_rejected_and_retried_with_escalating_batches() {
+async fn standby_repeats_are_rejected_and_retried_with_staged_batches() {
     bounded_collectors(AcquisitionScenario::RepeatedStandby).await;
 }
 
@@ -1130,6 +1130,86 @@ impl CredentialRecoveryFixture {
             .unwrap();
         assert_eq!(self.leases.reads.load(Ordering::SeqCst), 0);
     }
+}
+
+#[tokio::test]
+async fn probe_batches_warm_up_and_apply_live_concurrency_at_the_next_boundary() {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let fixture = CredentialRecoveryFixture::with_probe_proxy(Some(proxy.clone())).await;
+    let policy =
+        OpenAiTurnStatePolicy::new(true, [UpstreamModelId::new("model-a").unwrap()].into())
+            .with_probe_proxy(Some(proxy));
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(policy.clone());
+    fixture.discover().await;
+
+    // Hold every response so batch boundaries are verified by actual requests,
+    // not by how quickly the test machine constructs clients.
+    for (round, (expected, next_concurrency)) in
+        [(1, 3), (1, 3), (1, 3), (3, 10), (10, 1), (1, 5), (5, 5)]
+            .into_iter()
+            .enumerate()
+    {
+        let mut requests = Vec::new();
+        for _ in 0..expected {
+            let reader = tokio::time::timeout(Duration::from_secs(10), async {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut body_length = 0;
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        body_length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut body = vec![0; body_length];
+                reader.read_exact(&mut body).await.unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["model"], "model-a");
+                reader
+            })
+            .await
+            .expect("expected batch request");
+            // Keep the complete reader alive until the whole batch is dispatched.
+            requests.push(reader);
+        }
+        fixture.tuning.publish_openai_turn_state_policy(
+            policy.clone().with_probe_concurrency(next_concurrency),
+        );
+        let quiet = if round == 3 { 1100 } else { 50 };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(quiet), listener.accept())
+                .await
+                .is_err(),
+            "round {round} exceeded its batch size"
+        );
+        assert_eq!(
+            fixture.states.cancelled.load(Ordering::SeqCst),
+            0,
+            "a numeric setting update must not cancel collection"
+        );
+        assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
+        for mut reader in requests {
+            reader.get_mut().write_all(
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ).await.unwrap();
+        }
+    }
+    fixture.stop().await;
 }
 
 #[tokio::test]

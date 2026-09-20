@@ -188,8 +188,14 @@
   Needed models within an admitted account may run concurrently; keys never overlap.
   One completed model cannot release its account's slot while siblings are running.
   Running-key wakeups coalesce separately; restart clears stale running ownership.
-- Each model uses batches of 1,5,10,10,... with at most ten concurrent requests per batch,
-  sequential batches and no 500-request or whole-task lifetime limit.
+- Each account/model acquisition starts with three single-request batches.
+  From batch four onward, use `turnStateProbeConcurrency` (default 3, integer 1-10).
+  Settings omission preserves the persisted value; migration defaults old rows to 3
+  without touching State, progress or clocks. Validate API, use case, store and snapshot
+  bounds; enforce the database constraint. Read the live policy at each batch boundary:
+  changing only concurrency must not restart the collector, reset its warmup, cancel
+  in-flight probes or invalidate State. Batches remain sequential with at most ten
+  concurrent requests and no 500-request or whole-task lifetime limit.
   Do not add a hidden model-task cap or six-second pacing. Recheck eligibility
   before each probe and between batches. Misses may hold the five slots indefinitely.
 - Each request allocates one enabled/nonblocked source from the process-wide
@@ -282,6 +288,51 @@
   healthy accounts, recovery, and transient errors that must not invalidate
   credentials. PostgreSQL checks must reject candidates and hide readiness while
   credentials/quota are ineligible, retaining their clocks on same-binding recovery.
+
+## Scenario: Live Probe Concurrency
+
+### 1. Scope / Trigger
+
+Editing the State probe concurrency in runtime settings, including during acquisition.
+
+### 2. Signatures
+
+- `turnStateProbeConcurrency`: optional `u32` on settings update, required on response.
+- `runtime_settings.turn_state_probe_concurrency`: INTEGER, default 3, CHECK 1-10.
+- `OpenAiTurnStatePolicy::probe_concurrency()` carries the compiled live value.
+
+### 3. Contracts
+
+See Maintenance Isolation for the 1,1,1,N batch contract. The setting applies per
+account/model, not to the five-account admission limit or ordinary request concurrency.
+Omission/null preserves the stored value. Frontend fallback for an older response is 3.
+
+### 4. Validation & Error Matrix
+
+| Input/event | Expected result |
+| --- | --- |
+| 1, 3, 10 | Persist, reload and publish to the next batch |
+| 0, 11 | Reject before mutation; database also enforces the range |
+| Fraction, negative, string or boolean | Reject JSON field decoding |
+| Numeric edit while responses are pending | Finish that batch at its original size |
+| Migration from 0030 | Default 3; leave all State rows and old settings unchanged |
+
+### 5. Good / Base / Bad Cases
+
+Good: changing 3 to 10 during batch four leaves three inflight, then starts ten.
+Base: no edit yields 1,1,1,3,3,... until success or existing stop conditions.
+Bad: treating a numeric edit as a credential change or resetting warmup every batch.
+
+### 6. Tests Required
+
+Hold local proxy responses to verify batch sizes and the cancellation watcher.
+Test settings validation/omission, real PostgreSQL migration and snapshot roundtrip,
+and browser save/reload/bounds at desktop and mobile widths.
+
+### 7. Wrong vs Correct
+
+Wrong: cache concurrency when a long-lived collector starts or use it as a pool key.
+Correct: read it at batch boundaries; preserve State, identity, WS ownership and egress.
 
 ## Scenario: Concurrent Responses and Independent Switches
 

@@ -17,6 +17,7 @@ async function main() {
   const errors = []
   page.on('pageerror', error => errors.push(error.stack))
   let catalogFailed = false
+  let saves = 0
   let saved = {
     turnStateInjectionEnabled: true,
     turnStateModels: ['model-a'],
@@ -45,6 +46,7 @@ async function main() {
       data = saved
     }
     else if (path === '/api/admin/settings/update') {
+      saves += 1
       saved = route.request().postDataJSON()
       assert.equal(Object.hasOwn(saved, 'proxyUrl'), false)
       data = saved
@@ -67,7 +69,28 @@ async function main() {
   try {
     await page.goto(`${process.env.QA_BASE_URL || 'http://127.0.0.1:5208'}/settings`)
     const select = page.getByRole('combobox', { name: 'State 探测出口' })
+    const concurrency = page.getByRole('spinbutton', { name: 'State 第四轮起探测并发' })
     await select.waitFor()
+    assert.equal(await concurrency.inputValue(), '3')
+    for (const value of ['1', '10', '3']) {
+      await concurrency.fill(value)
+      const savedResponse = page.waitForResponse(response => response.url().endsWith('/settings/update'))
+      await page.getByRole('button', { name: '保存', exact: true }).click()
+      await savedResponse
+      assert.equal(saved.turnStateProbeConcurrency, Number(value))
+      await page.reload()
+      await concurrency.waitFor()
+      await page.waitForFunction(value =>
+        document.querySelector('[aria-label="State 第四轮起探测并发"]')?.value === value, value)
+    }
+    const validSaves = saves
+    for (const value of ['', '0', '11', '1.5']) {
+      await concurrency.fill(value)
+      await page.getByRole('button', { name: '保存', exact: true }).click()
+      await page.getByText('State 第四轮起探测并发须为 1–10 的整数', { exact: true }).first().waitFor()
+      assert.equal(saves, validSaves)
+    }
+    await concurrency.fill('3')
     assert.match(await select.textContent(), /IPv6 池/)
     await select.click()
     assert.equal(await page.getByRole('option', { name: 'Untested proxy（未通过测试）' }).isDisabled(), true)
@@ -84,7 +107,11 @@ async function main() {
       await select.scrollIntoViewIfNeeded()
       const box = await select.boundingBox()
       assert.ok(box.width > 50 && box.x >= 0 && box.x + box.width <= width)
+      const concurrencyBox = await concurrency.boundingBox()
+      assert.ok(concurrencyBox.width > 50 && concurrencyBox.x >= 0 && concurrencyBox.x + concurrencyBox.width <= width)
       await page.screenshot({ path: `${output}/${width}.png`, fullPage: true })
+      await concurrency.scrollIntoViewIfNeeded()
+      await page.screenshot({ path: `${output}/${width}-state.png` })
     }
     catalogFailed = true
     await page.reload()
@@ -104,7 +131,7 @@ async function main() {
     await response
     assert.equal(saved.turnStateProbeProxyId, null)
     assert.deepEqual(errors, [])
-    process.stdout.write('Passed: proxy selection, persistence, IPv6 reset, untested exclusion, catalog failure preservation, desktop/mobile geometry.\n')
+    process.stdout.write('Passed: concurrency defaults/bounds/save/reload, proxy selection, IPv6 reset, catalog failure preservation, desktop/mobile geometry.\n')
   }
   finally {
     await browser.close()

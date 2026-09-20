@@ -26,6 +26,8 @@ use crate::validation::{IdentifierError, RoutingError, validate_text};
 pub const DEFAULT_MAX_REQUEST_ATTEMPTS: u32 = 32;
 pub const DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_TURN_STATE_PROBE_CONCURRENCY: u32 = 3;
+pub const MAX_TURN_STATE_PROBE_CONCURRENCY: u32 = 10;
 
 /// OpenAI managed turn-state injection policy published with the runtime snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub struct OpenAiTurnStatePolicy {
     enabled: bool,
     models: Arc<BTreeSet<UpstreamModelId>>,
     probe_proxy: Option<crate::account::OutboundProxy>,
+    probe_concurrency: u32,
 }
 
 impl Default for OpenAiTurnStatePolicy {
@@ -45,6 +48,7 @@ impl Default for OpenAiTurnStatePolicy {
             enabled: false,
             models: Arc::new(models),
             probe_proxy: None,
+            probe_concurrency: DEFAULT_TURN_STATE_PROBE_CONCURRENCY,
         }
     }
 }
@@ -56,6 +60,7 @@ impl OpenAiTurnStatePolicy {
             enabled,
             models: Arc::new(models),
             probe_proxy: None,
+            probe_concurrency: DEFAULT_TURN_STATE_PROBE_CONCURRENCY,
         }
     }
 
@@ -83,6 +88,17 @@ impl OpenAiTurnStatePolicy {
     #[must_use]
     pub fn probe_proxy(&self) -> Option<&crate::account::OutboundProxy> {
         self.probe_proxy.as_ref()
+    }
+
+    #[must_use]
+    pub const fn with_probe_concurrency(mut self, concurrency: u32) -> Self {
+        self.probe_concurrency = concurrency;
+        self
+    }
+
+    #[must_use]
+    pub const fn probe_concurrency(&self) -> u32 {
+        self.probe_concurrency
     }
 }
 

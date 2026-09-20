@@ -1092,6 +1092,7 @@ impl SettingsStore for StaticSettingsStore {
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings> {
         Ok(RuntimeSettings {
             turn_state_probe_proxy_id: None,
+            turn_state_probe_concurrency: 3,
             config_revision: revision(1),
             disable_fast: false,
             turn_state_injection_enabled: false,

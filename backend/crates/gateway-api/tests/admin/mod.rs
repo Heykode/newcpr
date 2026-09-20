@@ -416,6 +416,9 @@ impl SettingsStore for MemorySettingsStore {
             turn_state_probe_proxy_id: command
                 .turn_state_probe_proxy_id
                 .unwrap_or_else(|| settings.turn_state_probe_proxy_id.clone()),
+            turn_state_probe_concurrency: command
+                .turn_state_probe_concurrency
+                .unwrap_or(settings.turn_state_probe_concurrency),
             config_revision: next_revision(settings.config_revision),
             disable_fast: command.disable_fast.unwrap_or(settings.disable_fast),
             turn_state_injection_enabled: command
@@ -1387,6 +1390,7 @@ fn test_runtime_settings() -> RuntimeSettings {
     RuntimeSettings {
         config_revision: Revision::new(7).expect("revision"),
         turn_state_probe_proxy_id: None,
+        turn_state_probe_concurrency: 3,
         disable_fast: false,
         turn_state_injection_enabled: false,
         turn_state_models: vec![

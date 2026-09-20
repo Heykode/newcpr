@@ -1029,7 +1029,13 @@ impl CodexTurnStateMaintenanceService {
             } else {
                 ProviderTurnStateSlot::Standby
             };
-            let batch_size = probe_batch_size(round);
+            let batch_size = probe_batch_size(
+                round,
+                self.manager
+                    .request_tuning
+                    .openai_turn_state_policy()
+                    .probe_concurrency(),
+            );
             round = round.saturating_add(1);
             let Some((_, runtime)) = runtime.as_ref() else {
                 return false;
@@ -1534,11 +1540,12 @@ fn probe_error_reason(error: &crate::transport::CodexClientError) -> &'static st
         _ => "transport_error",
     }
 }
-fn probe_batch_size(round: usize) -> usize {
+fn probe_batch_size(round: usize, configured_concurrency: u32) -> usize {
     match round {
-        0 => 1,
-        1 => 5,
-        _ => MAX_BATCH,
+        0..=2 => 1,
+        _ => usize::try_from(configured_concurrency)
+            .unwrap_or(MAX_BATCH)
+            .clamp(1, MAX_BATCH),
     }
 }
 
@@ -1679,15 +1686,17 @@ mod tests {
     }
 
     #[test]
-    fn probe_batches_are_capped_at_ten() {
-        let expected = [1, 5, 10, 10, 10, 10, 10, 10, 10, 10, 10];
-        for (round, expected) in expected.into_iter().enumerate() {
-            let size = probe_batch_size(round);
-            assert_eq!(size, expected);
+    fn probe_batches_warm_up_then_use_bounded_configured_concurrency() {
+        for concurrency in [1, 3, 10] {
+            for round in 0..3 {
+                assert_eq!(probe_batch_size(round, concurrency), 1);
+            }
+            for round in [3, 4, 100, usize::MAX] {
+                assert_eq!(probe_batch_size(round, concurrency), concurrency as usize);
+            }
         }
-        assert!((0..1000).all(|round| (1..=10).contains(&probe_batch_size(round))));
-        assert_eq!(probe_batch_size(100), 10);
-        assert_eq!(probe_batch_size(usize::MAX), 10);
+        assert_eq!(probe_batch_size(3, 0), 1);
+        assert_eq!(probe_batch_size(3, u32::MAX), 10);
     }
 
     #[test]

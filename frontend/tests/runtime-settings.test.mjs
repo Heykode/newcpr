@@ -257,6 +257,50 @@ const busyWaitDefaults = {
   accountBusyWaitFallbackTimeoutSeconds: 30,
 }
 
+test('State probe concurrency defaults to three and round trips bounded integers', async () => {
+  const query = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    assert.equal(query.state.form.turnStateProbeConcurrency, 3)
+    assert.equal(query.state.turnStateProbeConcurrencyValue.value, '3')
+    for (const value of [1, 10, 3]) {
+      query.state.turnStateProbeConcurrencyValue.value = String(value)
+      await query.state.saveSettings()
+      assert.equal(query.requests.at(-1).turnStateProbeConcurrency, value)
+      await query.state.loadSettings()
+      assert.equal(query.state.form.turnStateProbeConcurrency, value)
+      assert.equal(query.requests.at(-1).maxConcurrentPerAccount, 5)
+    }
+  }
+  finally {
+    query.stop()
+  }
+})
+
+test('State probe concurrency rejects invalid values before saving', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    const invalidValues = [null, undefined, '', '3', 0, -1, 11, 1.5, NaN, Infinity]
+    for (const value of invalidValues) {
+      query.state.form.turnStateProbeConcurrency = value
+      await query.state.saveSettings()
+    }
+    assert.equal(query.requests.length, 0)
+    assert.equal(warnings.length, invalidValues.length)
+    query.state.turnStateProbeConcurrencyValue.value = ''
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 0)
+    query.state.turnStateProbeConcurrencyValue.value = '3'
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+  }
+  finally {
+    query.stop()
+  }
+})
+
 test('State probe proxy defaults to IPv6 and only saves a catalog reference', async () => {
   for (const initialId of [undefined, null, 'proxy-test']) {
     const query = mountSettings({ ...settings(), turnStateProbeProxyId: initialId })

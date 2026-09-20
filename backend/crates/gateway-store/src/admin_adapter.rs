@@ -76,6 +76,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 disable_fast: command.disable_fast,
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
                 turn_state_probe_proxy_id: command.turn_state_probe_proxy_id,
+                turn_state_probe_concurrency: command.turn_state_probe_concurrency,
                 turn_state_models: command.turn_state_models.map_or_else(
                     || current.settings.turn_state_models,
                     |models| {
@@ -112,6 +113,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "turn_state_injection_enabled".to_owned(),
                     "turn_state_models".to_owned(),
                     "turn_state_probe_proxy_id".to_owned(),
+                    "turn_state_probe_concurrency".to_owned(),
                     "responses_max_decompressed_body_bytes".to_owned(),
                     "refresh_margin_seconds".to_owned(),
                     "refresh_concurrency".to_owned(),
@@ -218,6 +220,7 @@ pub(crate) fn admin_runtime_settings(
         disable_fast: settings.disable_fast,
         turn_state_injection_enabled: settings.turn_state_injection_enabled,
         turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,
+        turn_state_probe_concurrency: settings.turn_state_probe_concurrency,
         turn_state_models: settings
             .turn_state_models
             .into_iter()

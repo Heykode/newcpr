@@ -125,6 +125,9 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
     let valid = command.refresh_margin_seconds > 0
         && command.refresh_concurrency > 0
         && command.max_concurrent_per_account > 0
+        && command.turn_state_probe_concurrency.is_none_or(|value| {
+            (1..=gateway_core::routing::MAX_TURN_STATE_PROBE_CONCURRENCY).contains(&value)
+        })
         && command
             .responses_max_decompressed_body_bytes
             .is_none_or(|value| {

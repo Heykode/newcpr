@@ -25,6 +25,7 @@ pub struct RuntimeSettings {
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
     pub turn_state_probe_proxy_id: Option<String>,
+    pub turn_state_probe_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -57,6 +58,10 @@ impl fmt::Debug for RuntimeSettings {
             )
             .field("turn_state_models", &self.turn_state_models)
             .field(
+                "turn_state_probe_concurrency",
+                &self.turn_state_probe_concurrency,
+            )
+            .field(
                 "responses_max_decompressed_body_bytes",
                 &self.responses_max_decompressed_body_bytes,
             )
@@ -86,6 +91,7 @@ pub struct RuntimeSettingsUpdate {
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Vec<String>,
     pub turn_state_probe_proxy_id: Option<Option<String>>,
+    pub turn_state_probe_concurrency: Option<u32>,
     pub responses_max_decompressed_body_bytes: u64,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -116,6 +122,10 @@ impl fmt::Debug for RuntimeSettingsUpdate {
             )
             .field("turn_state_models", &self.turn_state_models)
             .field(
+                "turn_state_probe_concurrency",
+                &self.turn_state_probe_concurrency,
+            )
+            .field(
                 "responses_max_decompressed_body_bytes",
                 &self.responses_max_decompressed_body_bytes,
             )
@@ -130,6 +140,9 @@ impl RuntimeSettingsUpdate {
         if self.refresh_margin_seconds == 0
             || self.refresh_concurrency == 0
             || self.max_concurrent_per_account == 0
+            || self.turn_state_probe_concurrency.is_some_and(|value| {
+                !(1..=gateway_core::routing::MAX_TURN_STATE_PROBE_CONCURRENCY).contains(&value)
+            })
             || self.responses_max_decompressed_body_bytes == 0
             || self.responses_max_decompressed_body_bytes
                 > gateway_admin::model::settings::MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES
@@ -202,7 +215,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
-                    min_codex_cli_version, request_tuning_json, updated_at
+                    min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -255,7 +268,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
-                min_codex_cli_version, request_tuning_json, updated_at
+                min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -308,6 +321,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 turn_state_injection_enabled = coalesce($16, turn_state_injection_enabled),
 	                 turn_state_models = $17,
 	                 turn_state_probe_proxy_id = case when $18 then $19 else turn_state_probe_proxy_id end,
+	                 turn_state_probe_concurrency = coalesce($20, turn_state_probe_concurrency),
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -334,6 +348,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(&update.turn_state_models)
     .bind(update.turn_state_probe_proxy_id.is_some())
     .bind(update.turn_state_probe_proxy_id.as_ref().and_then(Option::as_deref))
+    .bind(update.turn_state_probe_concurrency.map(i64::from))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -389,6 +404,7 @@ struct RuntimeSettingsRow {
     turn_state_injection_enabled: bool,
     turn_state_models: Vec<String>,
     turn_state_probe_proxy_id: Option<String>,
+    turn_state_probe_concurrency: i32,
     responses_max_decompressed_body_bytes: i64,
     refresh_margin_seconds: i64,
     refresh_concurrency: i64,
@@ -413,6 +429,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         turn_state_injection_enabled: row.turn_state_injection_enabled,
         turn_state_models: row.turn_state_models,
         turn_state_probe_proxy_id: row.turn_state_probe_proxy_id,
+        turn_state_probe_concurrency: to_u32(i64::from(row.turn_state_probe_concurrency))?,
         responses_max_decompressed_body_bytes: to_u64(row.responses_max_decompressed_body_bytes)?,
         refresh_margin_seconds: to_u64(row.refresh_margin_seconds)?,
         refresh_concurrency: to_u32(row.refresh_concurrency)?,

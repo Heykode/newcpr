@@ -21,6 +21,7 @@ const disableFast = defineModel<boolean>('disableFast', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
 const turnStateModelsText = defineModel<string>('turnStateModelsText', { required: true })
 const turnStateProbeProxyId = defineModel<string>('turnStateProbeProxyId', { required: true })
+const turnStateProbeConcurrency = defineModel<string>('turnStateProbeConcurrency', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
 const customLocation = computed({
@@ -179,6 +180,22 @@ const tuningValues = {
       </div>
       <BaseForm class="mt-4 max-w-6xl">
         <TurnStateProbeProxyField v-model="turnStateProbeProxyId" :disabled="disabled" />
+        <BaseFormItem label="第四轮起探测并发">
+          <BaseInput
+            v-model="turnStateProbeConcurrency"
+            class="max-w-48"
+            aria-label="State 第四轮起探测并发"
+            type="number"
+            min="1"
+            max="10"
+            step="1"
+            :disabled="disabled"
+          >
+            <template #prefix>
+              <Gauge class="size-4" />
+            </template>
+          </BaseInput>
+        </BaseFormItem>
         <BaseFormItem
           label="维护模型名单"
           description="使用逗号或换行分隔，按路由后的上游模型匹配"
