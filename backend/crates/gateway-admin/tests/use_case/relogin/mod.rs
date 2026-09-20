@@ -29,6 +29,8 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
+mod recovery;
+
 #[derive(Default)]
 struct MemoryStore {
     templates: Mutex<BTreeMap<String, ReloginTemplate>>,
@@ -36,6 +38,7 @@ struct MemoryStore {
     rows: Mutex<BTreeMap<String, ReloginEntry>>,
     settings: Mutex<ReloginSettings>,
     fail_after: Mutex<Option<usize>>,
+    ready_save_delay: Mutex<std::time::Duration>,
 }
 
 fn conflict() -> AdminStoreError {
@@ -92,6 +95,14 @@ impl ReloginStore for MemoryStore {
         self.save_batch(&[(entry.clone(), expected)]).await
     }
     async fn save_batch(&self, entries: &[(ReloginEntry, Option<u64>)]) -> AdminStoreResult<()> {
+        let delay = *self.ready_save_delay.lock().unwrap();
+        if entries
+            .iter()
+            .any(|(entry, _)| entry.status == ReloginStatus::Ready)
+            && !delay.is_zero()
+        {
+            tokio::time::sleep(delay).await;
+        }
         let mut failure = self.fail_after.lock().unwrap();
         if let Some(remaining) = failure.as_mut() {
             if *remaining == 0 {
@@ -1192,7 +1203,9 @@ async fn automatic_relogin_cookie_changes_during_login_still_push() {
     let row = h.row(&id).await;
     assert!(row.automatic_job);
     assert!(row.synced_at.is_some());
-    assert_eq!(row.automatic_attempts, 1);
+    assert_eq!(row.automatic_attempts, 0);
+    assert!(row.next_attempt_at.is_none());
+    assert_eq!(row.automatic_started_at.len(), 1);
     assert_eq!(h.accounts.rotation_attempts.lock().unwrap().len(), 1);
 }
 
@@ -1254,6 +1267,21 @@ async fn relogin_cookie_updates_do_not_reset_automatic_failure_budget() {
         .get_mut(&id)
         .unwrap()
         .next_attempt_at = None;
+    h.cycle().await;
+    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);
+    assert_eq!(
+        h.services.relogin().list().await.unwrap().items[0]
+            .recovery
+            .state,
+        "loop_guard"
+    );
+    h.store
+        .rows
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .automatic_started_at = vec![Utc::now() - Duration::minutes(16); 3];
     h.cycle().await;
     assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 4);
     assert_eq!(h.row(&id).await.automatic_attempts, 1);
@@ -1442,7 +1470,7 @@ async fn relogin_queue_is_deduplicated_and_shares_bounded_concurrency() {
         .await
         .unwrap();
     h.cycle().await;
-    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 2);
+    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);
     assert_eq!(h.provider.relogin_peak.load(Ordering::SeqCst), 2);
     h.cycle().await;
     assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);

@@ -19,6 +19,7 @@ export interface ReloginEntry {
   automatic: boolean
   status: ReloginStatus
   message: string
+  recovery?: { state: string, message: string, retryAt: string | null }
   planType: string | null
   workspaceId: string | null
   preferredWorkspaceId: string | null

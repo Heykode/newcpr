@@ -219,6 +219,34 @@ async function main() {
     await team.getByText('已同步到号池', { exact: true }).waitFor()
     await team.getByText('暂停调度', { exact: true }).waitFor()
 
+    rows = rows.map(row => row.id === 'team-account'
+      ? {
+          ...row,
+          recovery: {
+            state: 'cooldown',
+            message: '上次恢复未完成，等待重试',
+            retryAt: new Date(Date.now() + 300000).toISOString(),
+          },
+        }
+      : row)
+    await page.getByRole('button', { name: '刷新重登列表', exact: true }).click()
+    await team.getByText('重试冷却中', { exact: true }).waitFor()
+    await team.getByText(/^剩余 \d+分\d+秒$/).waitFor()
+    assert.equal(await team.getByText('已同步到号池', { exact: true }).count(), 0)
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      const statusCell = team.locator('[data-column-key="status"]')
+      await statusCell.scrollIntoViewIfNeeded()
+      assert.ok(await statusCell.evaluate(cell => [...cell.children].every(node => node.scrollWidth <= node.clientWidth + 1)))
+      await page.screenshot({ path: `${output}/recovery-${width}.png`, fullPage: true })
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.getByRole('combobox', { name: '处理状态筛选' }).click()
+    await page.getByRole('option', { name: '重试冷却中', exact: true }).click()
+    assert.equal(await page.locator('tbody tr').count(), 1)
+    await page.getByRole('combobox', { name: '处理状态筛选' }).click()
+    await page.getByRole('option', { name: '全部处理状态', exact: true }).click()
+
     await page.getByRole('spinbutton', { name: '重登并发', exact: true }).fill('2')
     await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/relogin/settings')),

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ReloginBatchResult, ReloginEntry, ReloginTemplate } from '@/api/modules/relogin'
 import { CheckCheck, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
+import { useNow } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   configureRelogin,
@@ -30,7 +31,7 @@ import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
-import { credentialLabel, matchesPool, poolPresentation, processingStatus, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
+import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 import ReloginTemplatePicker from './ReloginTemplatePicker.vue'
 import ReloginTemplatesModal from './ReloginTemplatesModal.vue'
 
@@ -50,7 +51,8 @@ const pageSize = shallowRef(20)
 const concurrency = shallowRef('1')
 const savedConcurrency = shallowRef(1)
 const paused = shallowRef(false)
-const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
+const now = useNow({ interval: 1000 })
+const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries({ ...statusLabels, ...recoveryLabels }).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
 const poolOptions = [
   { value: '', label: '全部号池状态' },
   { value: 'absent', label: '未入池' },
@@ -424,6 +426,7 @@ onBeforeUnmount(() => {
         </template>
         <template #status="{ row }">
           <span class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
+          <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
         </template>
         <template #credential="{ row }">
           <span class="block whitespace-normal break-words" :class="row.credentialStatus === 'verified' ? 'text-cp-success' : row.credentialStatus === 'expired' ? 'text-cp-warning' : 'text-cp-text-tertiary'" :title="row.verifiedAt ? `本次缓存凭据验证于 ${formatDateTime(row.verifiedAt)}；不代表已推送或号池当前正常` : '尚未通过重登获取新的 JSON；与号池已有凭据无关'">{{ credentialLabel(row) }}</span>

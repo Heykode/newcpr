@@ -7,12 +7,11 @@
 - Manual login only caches verified credentials. Explicit push confirms the library
   revision. Automatic recovery requires enabled OAuth, expired credential state, a
   matching terminal expiry reason, and an enabled email-matched library entry.
-- OpenAI `expired` plus `access_token_expired` with a refresh token is reserved for
-  bounded token-refresh recovery, not password relogin. It remains blocked from
-  inference even when the stored access-token expiry is in the future or missing.
-  The refresh worker respects `next_refresh_at`; explicit revocation, invalid grant
-  or exhausted recovery uses terminal `credential_expired`. Do not rewrite tokens
-  from an inference request's stale snapshot.
+- OpenAI `expired` plus `access_token_expired` can trigger password/TOTP recovery
+  even when a refresh token exists. The refresh worker remains independent; recheck
+  account health and authentication generation before pushing so its successful
+  recovery is not overwritten. Expired accounts remain blocked from inference.
+  Do not rewrite tokens from an inference request's stale snapshot.
 - Existing account recovery captures account ID, principal, workspace and credential
   revision. Recheck these at push; automatic push also rechecks recovery eligibility.
   Use the existing prepared rotation and CAS transaction, never delete/recreate.
@@ -58,6 +57,20 @@
 - Manual and automatic login share bounded concurrency. Publish in-memory occupancy
   only after all fallible claim writes complete; otherwise a partial claim failure
   can permanently fill the queue with jobs that were never started.
+- Scan every two seconds while login exchanges are active and refill available slots
+  after individual completions. Poll exchanges while awaiting claim: settlement may
+  hold the gate across an asynchronous save. Awaiting claim alone can deadlock it.
+  Keep execution owned by the scheduled cycle, not detached tasks; dropped cycle
+  owners release stale occupancy and orphan persisted rows retain failure fences.
+- Confirmed push clears failure cooldown, per-generation attempts and attempted target.
+  Failed recovery keeps bounded backoff and at most three attempts per authentication
+  generation. A new binding can recover immediately; Cookie writes cannot reset it.
+  Preserve a JSONB-defaulted rolling history of automatic starts across success and
+  reimport: at most three starts in fifteen minutes, including across new bindings.
+- One shared eligibility projection drives the worker and the safe list `recovery`
+  field. Expose waiting, cooldown/retry time, pause, missing material, workspace
+  ambiguity, retry limits and loop protection without secrets. An uncertain push
+  remains blocked; manually obtained valid credentials await explicit push.
 - Pausing, deleting, editing material or changing per-entry automatic/workspace state
   cancels in-flight results using both cancellation and revision fencing.
 - The current worker assumes a single CPR instance. Multi-replica relogin requires a

@@ -1,6 +1,6 @@
 use super::*;
 use crate::model::{MutationActor, relogin::ReloginRequest};
-use futures::{future::BoxFuture, future::join_all};
+use futures::{StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use gateway_core::{
     account::AccountErrorReason,
     task::{
@@ -67,14 +67,74 @@ pub fn needs_relogin(account: &AccountRecord) -> bool {
 
 impl DefaultReloginService {
     async fn cycle(&self, shutdown: &CancellationToken) -> Result<(), AdminError> {
+        let owner = Arc::new(());
+        let mut active = FuturesUnordered::new();
+        let mut scan = tokio::time::interval_at(
+            tokio::time::Instant::now() + RELOGIN_SCAN_INTERVAL,
+            RELOGIN_SCAN_INTERVAL,
+        );
+        scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut failure = None;
+        loop {
+            if failure.is_none() {
+                // Settlement may hold gate across an await. Keep polling exchanges
+                // while claiming; awaiting claim alone could deadlock its lock owner.
+                let claim = self.claim(shutdown, &owner);
+                tokio::pin!(claim);
+                let claimed = loop {
+                    tokio::select! {
+                        result = &mut claim => break result,
+                        outcome = active.next(), if !active.is_empty() => {
+                            if let Some(Err(error)) = outcome {
+                                failure = Some(error);
+                            }
+                        }
+                    }
+                };
+                match claimed {
+                    Ok(jobs) => {
+                        for (entry, request, cancellation) in jobs {
+                            active.push(self.execute(entry, request, cancellation, shutdown));
+                        }
+                    }
+                    Err(error) => failure = Some(error),
+                }
+            }
+            if active.is_empty() {
+                return failure.map_or(Ok(()), Err);
+            }
+            tokio::select! {
+                outcome = active.next() => {
+                    if let Some(Err(error)) = outcome {
+                        failure = Some(error);
+                    }
+                    if active.is_empty() {
+                        return failure.map_or(Ok(()), Err);
+                    }
+                }
+                _ = scan.tick(), if failure.is_none() => {},
+            }
+        }
+    }
+
+    async fn claim(
+        &self,
+        shutdown: &CancellationToken,
+        owner: &Arc<()>,
+    ) -> Result<Vec<(ReloginEntry, ReloginRequest, CancellationToken)>, AdminError> {
         let jobs = {
             let mut gate = self.gate.lock().await;
+            // Dropped/panicked cycles own no live exchanges. User cancellation alone
+            // does not free a slot until its exchange has actually finished.
+            gate.active
+                .retain(|_, active| active.owner.upgrade().is_some());
             let settings = self.store()?.settings().await.map_err(store_error)?;
             let mut entries = self.entries().await?;
             let pool = self.pool().await?;
             // No jobs survive process shutdown. Never leave a persisted running row stuck forever.
             for entry in &mut entries {
-                if entry.status == ReloginStatus::Pushing {
+                if entry.status == ReloginStatus::Pushing && !gate.active.contains_key(&entry.email)
+                {
                     entry.status = ReloginStatus::Uncertain;
                     entry.message = "上次推送结果未确认，请检查号池并重新获取凭证".to_owned();
                     self.save(entry).await?;
@@ -88,7 +148,7 @@ impl DefaultReloginService {
                 }
             }
             if settings.paused || shutdown.is_cancelled() {
-                return Ok(());
+                return Ok(Vec::new());
             }
             let mut jobs = Vec::new();
             for mut entry in entries {
@@ -107,7 +167,7 @@ impl DefaultReloginService {
                     continue;
                 }
                 if entry.status != ReloginStatus::Queued {
-                    if !entry.automatic || entry.next_attempt_at.is_some_and(|at| at > Utc::now()) {
+                    if !recovery::view(&entry, &pool, &settings, Utc::now()).waiting() {
                         continue;
                     }
                     let target = match select_target(&entry, &pool) {
@@ -120,15 +180,9 @@ impl DefaultReloginService {
                     else {
                         continue;
                     };
-                    if entry
-                        .attempted_target
-                        .as_ref()
-                        .is_none_or(|attempted| !attempted.matches_account(account))
-                    {
+                    if entry.synced_at.is_some() || !recovery::same_attempt(&entry, account) {
                         entry.automatic_attempts = 0;
-                    }
-                    if entry.automatic_attempts >= 3 {
-                        continue;
+                        entry.next_attempt_at = None;
                     }
                     entry.target = Some(ReloginTarget::from_account(account)?);
                     entry.automatic_job = true;
@@ -175,8 +229,13 @@ impl DefaultReloginService {
                 };
                 if entry.automatic_job {
                     entry.automatic_attempts += 1;
-                    entry.attempted_target = entry.target.clone();
+                    let now = Utc::now();
+                    entry.automatic_started_at = recovery::recent_starts(&entry, now);
+                    entry.automatic_started_at.push(now);
                 }
+                entry.attempted_target = entry.target.clone();
+                entry.synced_at = None;
+                entry.credential = None;
                 entry.status = ReloginStatus::Running;
                 entry.message = "正在登录并验证工作区".to_owned();
                 self.save(&mut entry).await?;
@@ -185,66 +244,112 @@ impl DefaultReloginService {
             }
             // Publish in-memory occupancy only after all fallible claim writes complete.
             for (entry, _, cancellation) in &jobs {
-                gate.active
-                    .insert(entry.email.clone(), cancellation.clone());
+                gate.active.insert(
+                    entry.email.clone(),
+                    ActiveLogin {
+                        cancellation: cancellation.clone(),
+                        owner: Arc::downgrade(owner),
+                    },
+                );
             }
             jobs
         };
-        let outcomes = join_all(jobs.into_iter().map(|(entry, request, cancellation)| async move {
-            let outcome = tokio::select! {
-                biased;
-                () = shutdown.cancelled() => Err(AdminError::conflict("服务正在停止，任务已取消")),
-                () = cancellation.cancelled() => Err(AdminError::conflict("重登任务已取消")),
-                outcome = tokio::time::timeout(Duration::from_secs(300), self.provider.relogin(request)) => {
-                    match outcome {
-                        Ok(outcome) => outcome.map_err(|error| map_provider_error(error, "relogin")),
-                        Err(_) => Err(AdminError::unavailable("重登超时，请检查网络和代理")),
-                    }
+        Ok(jobs)
+    }
+
+    async fn execute(
+        &self,
+        entry: ReloginEntry,
+        request: ReloginRequest,
+        cancellation: CancellationToken,
+        shutdown: &CancellationToken,
+    ) -> Result<(), AdminError> {
+        let outcome = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => Err(AdminError::conflict("服务正在停止，任务已取消")),
+            () = cancellation.cancelled() => Err(AdminError::conflict("重登任务已取消")),
+            outcome = tokio::time::timeout(Duration::from_secs(300), self.provider.relogin(request)) => {
+                match outcome {
+                    Ok(outcome) => outcome.map_err(|error| map_provider_error(error, "relogin")),
+                    Err(_) => Err(AdminError::unavailable("重登超时，请检查网络和代理")),
                 }
-            };
-            let mut gate = self.gate.lock().await;
-            gate.active.remove(&entry.email);
-            let Some(mut current) = self.entries().await?.into_iter().find(|current| current.id == entry.id) else { return Ok(()) };
-            if current.revision != entry.revision || cancellation.is_cancelled() { return Ok(()); }
-            match outcome {
-                Ok(credential) => {
-                    if !credential.email.eq_ignore_ascii_case(&current.email)
-                        || current.target.as_ref().is_some_and(|target| target.user_id != credential.user_id || target.workspace_id != credential.workspace_id)
-                        || (current.manual_push_context.is_none() && current.preferred_workspace_id.as_ref().is_some_and(|workspace| workspace != &credential.workspace_id))
-                    {
-                        current.status = ReloginStatus::Failed;
-                        current.message = "新凭据身份或工作区不一致，未推送".to_owned();
-                    } else {
-                        current.credential = Some(credential);
-                        current.synced_at = None;
-                        current.status = ReloginStatus::Ready;
-                        current.message = "已获取新 JSON，凭证验证通过".to_owned();
-                    }
-                }
-                Err(error) => {
+            }
+        };
+        let mut gate = self.gate.lock().await;
+        gate.active.remove(&entry.email);
+        let Some(mut current) = self
+            .entries()
+            .await?
+            .into_iter()
+            .find(|current| current.id == entry.id)
+        else {
+            return Ok(());
+        };
+        if current.revision != entry.revision || cancellation.is_cancelled() {
+            return Ok(());
+        }
+        match outcome {
+            Ok(credential) => {
+                if !credential.email.eq_ignore_ascii_case(&current.email)
+                    || current.target.as_ref().is_some_and(|target| {
+                        target.user_id != credential.user_id
+                            || target.workspace_id != credential.workspace_id
+                    })
+                    || (current.manual_push_context.is_none()
+                        && current
+                            .preferred_workspace_id
+                            .as_ref()
+                            .is_some_and(|workspace| workspace != &credential.workspace_id))
+                {
                     current.status = ReloginStatus::Failed;
-                    current.message = error.message().to_owned();
+                    current.message = "新凭据身份或工作区不一致，未推送".to_owned();
+                } else {
+                    current.credential = Some(credential);
+                    current.synced_at = None;
+                    current.status = ReloginStatus::Ready;
+                    current.message = "已获取新 JSON，凭证验证通过".to_owned();
                 }
             }
-            current.next_attempt_at = Some(Utc::now() + chrono::Duration::minutes(5 * i64::from(current.automatic_attempts.max(1))));
-            self.save(&mut current).await?;
-            if current.status == ReloginStatus::Ready
-                && ((current.automatic_job && current.automatic) || current.manual_push_context.is_some())
-                && !shutdown.is_cancelled() && !self.store()?.settings().await.map_err(store_error)?.paused
-            {
-                let context = current.manual_push_context.clone().unwrap_or_else(|| MutationContext { actor: MutationActor::System, request_id: format!("relogin_{}", uuid::Uuid::now_v7()) });
-                if let Err(error) = self.push_entry(&mut current, &context).await {
-                    if current.status == ReloginStatus::Ready && current.manual_push_context.is_some() {
-                        current.status = ReloginStatus::Failed;
-                    }
-                    current.message = format!("新凭据已保存，推送未完成：{}", error.message());
-                    self.save(&mut current).await?;
-                }
+            Err(error) => {
+                current.status = ReloginStatus::Failed;
+                current.message = error.message().to_owned();
             }
-            Ok::<_, AdminError>(())
-        })).await;
-        for outcome in outcomes {
-            outcome?;
+        }
+        current.next_attempt_at = if current.status == ReloginStatus::Failed {
+            Some(
+                Utc::now()
+                    + chrono::Duration::minutes(5 * i64::from(current.automatic_attempts.max(1))),
+            )
+        } else {
+            None
+        };
+        self.save(&mut current).await?;
+        if current.status == ReloginStatus::Ready
+            && ((current.automatic_job && current.automatic)
+                || current.manual_push_context.is_some())
+            && !shutdown.is_cancelled()
+            && !self.store()?.settings().await.map_err(store_error)?.paused
+        {
+            let context = current
+                .manual_push_context
+                .clone()
+                .unwrap_or_else(|| MutationContext {
+                    actor: MutationActor::System,
+                    request_id: format!("relogin_{}", uuid::Uuid::now_v7()),
+                });
+            if let Err(error) = self.push_entry(&mut current, &context).await {
+                current.next_attempt_at = Some(
+                    Utc::now()
+                        + chrono::Duration::minutes(
+                            5 * i64::from(current.automatic_attempts.max(1)),
+                        ),
+                );
+                if current.status == ReloginStatus::Ready && current.manual_push_context.is_some() {
+                    current.status = ReloginStatus::Failed;
+                }
+                current.message = format!("新凭据已保存，推送未完成：{}", error.message());
+                self.save(&mut current).await?;
+            }
         }
         Ok(())
     }

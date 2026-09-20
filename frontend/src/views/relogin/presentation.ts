@@ -10,7 +10,29 @@ export const statusLabels: Record<ReloginStatus, string> = {
   failed: '重登失败',
 }
 
+export const recoveryLabels: Record<string, string> = {
+  waiting: '等待重登',
+  cooldown: '重试冷却中',
+  loop_guard: '频繁失效保护',
+  retry_limit: '自动重试已停止',
+  disabled: '自动重登已关闭',
+  paused: '队列已暂停',
+  account_disabled: '账号已暂停调度',
+  workspace_required: '工作区待确认',
+  invalid_material: '重登资料不完整',
+  unsupported_error: '需人工检查',
+}
+
 export function processingStatus(row: ReloginEntry) {
+  const recovery = row.recovery
+  if (!['running', 'pushing', 'uncertain', 'queued'].includes(row.status) && recovery && recoveryLabels[recovery.state]) {
+    return {
+      key: recovery.state,
+      label: recoveryLabels[recovery.state],
+      tone: recovery.state === 'waiting' ? 'text-cp-primary' : 'text-cp-warning',
+      detail: [recovery.message, row.message].filter(Boolean).join('；'),
+    }
+  }
   if (row.status === 'ready' && row.poolStatus === 'synced')
     return { key: 'synced', label: '已同步到号池', tone: 'text-cp-success', detail: '本次凭据已推送；账号当前状态见号池列' }
   if (row.status === 'uncertain')
@@ -21,6 +43,19 @@ export function processingStatus(row: ReloginEntry) {
     tone: row.status === 'failed' ? 'text-cp-error' : ['running', 'pushing'].includes(row.status) ? 'text-cp-primary' : 'text-cp-text-secondary',
     detail: row.message,
   }
+}
+
+export function recoveryCountdown(row: ReloginEntry, now: number) {
+  const retryAt = row.recovery?.retryAt
+  if (!retryAt)
+    return ''
+  const remaining = Date.parse(retryAt) - now
+  if (!Number.isFinite(remaining))
+    return ''
+  if (remaining <= 0)
+    return '等待下一轮检查'
+  const seconds = Math.ceil(remaining / 1000)
+  return `剩余 ${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, '0')}秒`
 }
 
 export function credentialLabel(row: ReloginEntry) {

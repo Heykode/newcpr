@@ -33,6 +33,7 @@ use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
+mod recovery;
 mod templates;
 mod worker;
 pub(crate) use worker::contribution;
@@ -49,6 +50,7 @@ pub struct ReloginView {
     pub automatic: bool,
     pub status: ReloginStatus,
     pub message: String,
+    pub recovery: recovery::RecoveryView,
     pub plan_type: Option<String>,
     pub workspace_id: Option<String>,
     pub preferred_workspace_id: Option<String>,
@@ -150,7 +152,12 @@ pub trait ReloginService: Send + Sync {
 
 #[derive(Default)]
 struct Gate {
-    active: BTreeMap<String, CancellationToken>,
+    active: BTreeMap<String, ActiveLogin>,
+}
+
+struct ActiveLogin {
+    cancellation: CancellationToken,
+    owner: std::sync::Weak<()>,
 }
 
 pub(crate) struct DefaultReloginService {
@@ -224,8 +231,8 @@ impl DefaultReloginService {
 
     fn stop(gate: &Gate, entry: &mut ReloginEntry) {
         entry.manual_push_context = None;
-        if let Some(cancellation) = gate.active.get(&entry.email) {
-            cancellation.cancel();
+        if let Some(active) = gate.active.get(&entry.email) {
+            active.cancellation.cancel();
         }
         if entry.status.active() {
             entry.status = ReloginStatus::Failed;
@@ -461,6 +468,9 @@ impl DefaultReloginService {
             entry.target = Some(ReloginTarget::from_account(&current.credential)?);
         }
         entry.synced_at = Some(Utc::now());
+        entry.next_attempt_at = None;
+        entry.automatic_attempts = 0;
+        entry.attempted_target = None;
         entry.status = ReloginStatus::Ready;
         entry.message = "凭据已同步到号池".to_owned();
         self.save(entry).await
@@ -713,6 +723,7 @@ impl ReloginService for DefaultReloginService {
         let items = entries
             .into_iter()
             .map(|entry| {
+                let recovery = recovery::view(&entry, &pool, &settings, now);
                 let imported_at = entry.import_time();
                 let matches = matching_accounts(&entry, &pool);
                 let statistics = statistics_account(&entry, &matches);
@@ -742,6 +753,7 @@ impl ReloginService for DefaultReloginService {
                     "present"
                 };
                 ReloginView {
+                    recovery,
                     id: entry.id,
                     revision: entry.revision,
                     email: entry.email,
@@ -881,6 +893,7 @@ impl ReloginService for DefaultReloginService {
                     automatic_job: false,
                     manual_push_context: None,
                     automatic_attempts: 0,
+                    automatic_started_at: Vec::new(),
                     attempted_target: None,
                     next_attempt_at: None,
                     synced_at: None,
