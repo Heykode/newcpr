@@ -189,6 +189,24 @@ Following the release process introduced by upstream commit `9b19cf08`:
 
 ## Minimum Verification Checklist
 
+### Container Egress
+
+- An unchanged/disabled application IPv6 policy means unbound automatic
+  dual-stack connections, not IPv4-only. Do not add source binding or change
+  provider identity, State or scheduling to repair a missing container route.
+- Check the application network namespace rather than just host connectivity.
+  Multi-network macvlan endpoints can be preferred for IPv4 even with no IPv4
+  gateway. Pin the application's real bridge gateway with Compose `gw_priority`,
+  not `priority`; preserve the separate IPv6 gateway and shared services.
+- Live route repair and persistent Compose configuration are distinct. Do not
+  claim that editing Compose updated a running Docker endpoint. Verify recreation
+  on an isolated test project rather than interrupting production connections.
+- Optional deployment `egress_checks` test direct address families and saved
+  proxies before/after cutover. Resolve proxy URLs from the matched application
+  database using read-only SQL and pass credentials over stdin only.
+- Network checks do not bypass verified-image or migration gates. Post-migration
+  connectivity failure must not trigger an old-image/schema rollback.
+
 - [ ] Exact base, upstream, head, merge base, and complete diff recorded.
 - [ ] Worktree and index checked; parallel changes identified separately.
 - [ ] Relevant Rust, frontend, migration, container, and security checks

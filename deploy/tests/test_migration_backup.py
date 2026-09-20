@@ -82,6 +82,21 @@ class MigrationRolloutTests(unittest.TestCase):
         up.assert_not_called()
         self.assertEqual(self.app["Image"], "sha256:old")
 
+    def test_post_migration_egress_failure_does_not_roll_back_schema(self):
+        self.worker.upgrade = {"before": {}, "after": {}}
+        self.worker.migration_database = "example-db-1"
+        with patch.object(migration_backup, "prepare"), \
+                patch.object(migration_backup, "check_schema"), \
+                patch.object(test_rollout.rollout.egress_check, "verify",
+                             side_effect=[[], RuntimeError("egress failed")]), \
+                patch.object(self.worker, "up", side_effect=self.fake_up) as up:
+            self.assertEqual(self.worker.run(), 1)
+        import json
+        result = json.loads((self.worker.backup / "result.json").read_text())
+        self.assertEqual(result["status"], "migration_recovery_required")
+        up.assert_called_once_with("upgrade.log")
+        self.assertEqual(self.app["Image"], "sha256:new")
+
     def test_backup_requires_complete_read_and_keeps_old_service_online(self):
         self.worker.prepare()
         data = self.directory / "runtime"

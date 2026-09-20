@@ -39,7 +39,12 @@ Python 3.9+、PyYAML（版本见 `deploy/rollout-requirements.txt`），以及�
   "health_url": "http://127.0.0.1:8080/healthz",
   "health_status": 204,
   "protected_containers": ["application-postgres-1", "application-redis-1", "other-api"],
-  "config_files": ["/srv/application/deploy/config.yaml"]
+  "config_files": ["/srv/application/deploy/config.yaml"],
+  "egress_checks": [
+    {"name": "direct-v4", "url": "https://probe.example.test/ipv4", "family": "ipv4"},
+    {"name": "direct-v6", "url": "https://probe.example.test/ipv6", "family": "ipv6"},
+    {"name": "managed-proxy", "url": "https://probe.example.test/check", "proxy_id": "proxy_example"}
+  ]
 }
 ```
 
@@ -49,6 +54,47 @@ SSH 目标只能是预先配置好的别名。生产和测试环境使用不同�
 多文件覆盖部署需要先单独适配，不会擅自丢弃覆盖配置。
 旧镜像必须具有源码 revision 和版本标签，才能核对数据库迁移目录及大版本；
 没有标签的首次接入需要人工确认基线，不提供绕过参数。
+
+### 出口验收与网关
+
+`egress_checks` 可选，按目标实际需要配置；只部署 IPv4 的实例不必要求 IPv6。
+示例域名不能直接使用，应替换为允许访问、稳定返回 2xx 的小型 HTTPS 检测接口。
+每次发布在切换前和切换后，从应用容器内执行相同检查，不能以宿主机出网成功代替。
+最多八项并行检查，每项连接超时 5 秒、请求上限 12 秒，执行进程上限 17 秒。
+`family` 允许 `auto`、`ipv4`、`ipv6`，默认 `auto`；它仅限制验收请求，
+不会修改应用的默认选路。IPv4/IPv6 检查核对直接连接的对端地址族，
+代理检查的对端地址族指应用到代理这一跳，不代表代理访问目标的协议。
+
+`proxy_id` 引用账号后台已经保存的代理。脚本复用受保护 PostgreSQL 容器的
+身份校验，仅用只读查询取出最新代理 URL，不登录后台、不改测试记录或账号绑定。
+凭据只经 stdin 传给 curl，不放进命令参数、结果、Git 或部署配置。
+当前该查找方式要求标准 Compose PostgreSQL 身份及共享网络，无法可靠绑定时拒绝检查。
+代理查询上限 15 秒；检查名称只能用简短 ASCII 标识符，输出仅包含名称、HTTP 状态、
+地址族和耗时。直接检查明确禁用环境代理，代理检查不继承 `NO_PROXY` 绕行。
+
+前置检查失败时不切换容器。后置失败遵循原有回滚规则；涉及迁移仍只标记需要人工
+恢复，不跨 schema 回滚。无迁移回滚后也必须再次通过出口检查才报告恢复成功。
+成功记录中的 `egress_before`、`egress_after` 留存脱敏结果。
+未配置该字段时没有额外外网请求，也不会改变原发布行为。
+
+应用同时接入 IPv4 bridge 和 IPv6 macvlan 时，不要把自动分配的 IPv4 地址当成
+可用 IPv4 网关。应在应用的 Compose endpoint 上明确正常 IPv4 出口的较高
+`gw_priority`，保留 IPv6 出口；不修改共享网络或其他服务。例如：
+
+```yaml
+services:
+  app:
+    networks:
+      ipv4_egress:
+        gw_priority: 1
+      ipv6_egress:
+        gw_priority: 0
+```
+
+`gw_priority` 不是普通 `priority`。已有运行容器的热路由修复与 Compose 持久配置
+是两项不同操作；仅编辑文件不会更新现有 endpoint 元数据。
+不要为验收而重启生产或断开正在承载业务的网络，重建验证应在隔离测试项目执行。
+未启用应用 IPv6 模式时仍沿用普通双栈自动连接，不强制 IPv4，也不进入 IPv6 池。
 
 ## 所有窗口共用
 
@@ -121,6 +167,15 @@ python3 -m unittest discover -s deploy/tests -p 'test_*.py' -v
 ```bash
 CPR_ROLLOUT_DOCKER_TEST=1 python3 -m unittest discover \
   -s deploy/tests -p 'test_docker_rollout.py' -v
+```
+
+Linux 测试机还可以运行多网络网关重建回归。该测试需 Docker 和 root 或免密 sudo
+操作临时 dummy 网卡的权限，使用随机命名的独立容器、bridge、macvlan，
+不连接已有应用网络。通过 `CPR_EGRESS_TEST_IMAGE` 指定已缓存且包含 `sleep` 的镜像：
+
+```bash
+CPR_EGRESS_DOCKER_TEST=1 python3 -m unittest discover \
+  -s deploy/tests -p 'test_docker_egress.py' -v
 ```
 
 测试覆盖来源/摘要/有效期、相同树复用、旧窗口和配置竞态、迁移拒绝、失败回滚及

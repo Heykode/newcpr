@@ -15,6 +15,8 @@ import threading
 import time
 import urllib.request
 
+import egress_check
+
 
 def digest(path):
     result = hashlib.sha256()
@@ -75,6 +77,7 @@ class Rollout:
         self.samples = []
         self.stop_monitor = threading.Event()
         self.pending = None
+        self.egress_before = []
 
     def compose_run(self, *args, file=None):
         return subprocess.run(
@@ -135,6 +138,7 @@ class Rollout:
             raise RuntimeError("Invalid protected container list")
         self.protected = {name: inspect(name) for name in self.profile["protected_containers"]}
         self.configs = {Path(path): digest(path) for path in self.profile.get("config_files", [])}
+        self.egress_before = egress_check.verify(self.profile, self.old, self.protected)
         if digest(self.archive) != self.proof["archive_sha256"]:
             raise RuntimeError("Transferred archive checksum mismatch")
         loaded = subprocess.run(["docker", "image", "load", "--input", str(self.archive)],
@@ -198,7 +202,8 @@ class Rollout:
         result = {"status": "not_switched", "target_commit": self.selected["target_commit"],
                   "tested_commit": self.proof["source_commit"], "image": self.new_image,
                   "previous_image": self.old_image, "version": self.proof["version"],
-                  "migrations_changed": self.upgrade is not None}
+                  "migrations_changed": self.upgrade is not None,
+                  "egress_before": self.egress_before}
         self.samples.append((time.monotonic(), True))
         monitor = threading.Thread(target=self.monitor)
         monitor.start()
@@ -221,6 +226,7 @@ class Rollout:
                     raise RuntimeError("A protected service changed during deployment")
             if any(digest(path) != expected for path, expected in self.configs.items()):
                 raise RuntimeError("Application configuration changed")
+            result["egress_after"] = egress_check.verify(self.profile, current, self.protected)
             for _ in range(5):
                 time.sleep(1)
                 if not healthy(self.profile):
@@ -238,7 +244,8 @@ class Rollout:
                 try:
                     atomic_copy(self.backup / "rollback.yaml", self.compose)
                     self.up("rollback.log")
-                    self.ready(self.old_image)
+                    restored = self.ready(self.old_image)
+                    result["egress_rollback"] = egress_check.verify(self.profile, restored, self.protected)
                     result["status"] = "rolled_back"
                 except BaseException:
                     result["status"] = "rollback_failed"
