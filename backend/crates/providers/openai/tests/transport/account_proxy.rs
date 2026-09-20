@@ -152,11 +152,13 @@ fn isolate_client_cache_test(name: &str) -> bool {
 }
 
 #[tokio::test]
-async fn direct_http_accounts_have_separate_connection_pools() {
-    if isolate_client_cache_test("direct_http_accounts_have_separate_connection_pools") {
+async fn direct_http_accounts_share_the_pool_without_sharing_request_headers() {
+    if isolate_client_cache_test(
+        "direct_http_accounts_share_the_pool_without_sharing_request_headers",
+    ) {
         return;
     }
-    let (base_url, server) = pooled_http_exit(2, 3).await;
+    let (base_url, server) = pooled_http_exit(1, 4).await;
     let base = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         base_url,
@@ -167,22 +169,33 @@ async fn direct_http_accounts_have_separate_connection_pools() {
     for id in ["direct-a", "direct-b", "direct-a"] {
         let authorization = format!("Bearer synthetic-{id}");
         let cookie = format!("__cf_bm=synthetic-{id}");
+        let turn_state = format!("synthetic-state-{id}");
         let mut context = request_context(id, Some(id));
         context.authorization = &authorization;
         context.cookie_header = Some(&cookie);
+        context.turn_state = Some(&turn_state);
+        context.installation_id = Some(id);
         base.for_account(&account(id, None))
             .unwrap()
             .create_response(&request, context)
             .await
             .unwrap();
     }
+    base.for_account(&account("direct-b", None))
+        .unwrap()
+        .create_response(&request, request_context("no-state", Some("direct-b")))
+        .await
+        .unwrap();
 
     let connection_ids = timeout(Duration::from_secs(5), server)
         .await
-        .expect("isolated account connections")
+        .expect("shared direct account connection")
         .unwrap();
-    assert_ne!(connection_ids[0].0, connection_ids[1].0);
-    assert_eq!(connection_ids[0].0, connection_ids[2].0);
+    assert!(
+        connection_ids
+            .iter()
+            .all(|seen| seen.0 == connection_ids[0].0)
+    );
     for ((_, headers), id) in connection_ids
         .iter()
         .zip(["direct-a", "direct-b", "direct-a"])
@@ -190,24 +203,34 @@ async fn direct_http_accounts_have_separate_connection_pools() {
         assert_eq!(headers["chatgpt-account-id"], id);
         assert_eq!(headers["authorization"], format!("Bearer synthetic-{id}"));
         assert_eq!(headers["cookie"], format!("__cf_bm=synthetic-{id}"));
+        assert_eq!(
+            headers["x-codex-turn-state"],
+            format!("synthetic-state-{id}")
+        );
+        assert_eq!(headers["x-codex-installation-id"], id);
     }
+    let last = &connection_ids[3].1;
+    assert_eq!(last["chatgpt-account-id"], "direct-b");
+    assert!(!last.contains_key("cookie"));
+    assert!(!last.contains_key("x-codex-turn-state"));
+    assert!(!last.contains_key("x-codex-installation-id"));
 }
 
 #[tokio::test]
-async fn direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change() {
+async fn proxy_http_pool_reuses_one_profile_and_rotates_after_user_agent_change() {
     use gateway_core::provider_ports::ProviderUserAgentOverride;
 
     if isolate_client_cache_test(
-        "direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change",
+        "proxy_http_pool_reuses_one_profile_and_rotates_after_user_agent_change",
     ) {
         return;
     }
-    let (base_url, server) = pooled_http_exit(2, 3).await;
-    let account = account("profile-pool", None);
+    let (proxy_url, server) = pooled_http_exit(2, 3).await;
+    let account = account("profile-pool", Some(&proxy_url));
     let profile = test_wire_profile();
     let base = CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
-        &base_url,
+        "http://upstream.invalid",
         profile.clone(),
     );
     let default_client = base.for_account(&account).unwrap();
@@ -240,6 +263,131 @@ async fn direct_http_pool_reuses_one_profile_and_rotates_after_user_agent_change
         .unwrap();
     assert_eq!(connection_ids[0].0, connection_ids[1].0);
     assert_ne!(connection_ids[0].0, connection_ids[2].0);
+    assert_ne!(
+        connection_ids[0].1["user-agent"],
+        connection_ids[2].1["user-agent"]
+    );
+}
+
+#[tokio::test]
+async fn direct_http_pool_preserves_frozen_profiles_across_user_agent_changes() {
+    use gateway_core::provider_ports::ProviderUserAgentOverride;
+
+    let (base_url, server) = pooled_http_exit(1, 4).await;
+    let profile = test_wire_profile();
+    let base = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        base_url,
+        profile.clone(),
+    );
+    let first = account("direct-profile-a", None);
+    let second = account("direct-profile-b", None);
+    let prepared = base.for_account(&first).unwrap();
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+    prepared
+        .create_response(
+            &request,
+            request_context("old-profile", Some("direct-profile-a")),
+        )
+        .await
+        .unwrap();
+    profile
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color".to_owned(),
+        })
+        .unwrap();
+    for (client, id) in [
+        (base.for_account(&second).unwrap(), "direct-profile-b"),
+        (prepared, "direct-profile-a"),
+        (base.for_account(&first).unwrap(), "direct-profile-a"),
+    ] {
+        client
+            .create_response(&request, request_context(id, Some(id)))
+            .await
+            .unwrap();
+    }
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(seen.iter().all(|entry| entry.0 == seen[0].0));
+    assert_eq!(seen[0].1["user-agent"], seen[2].1["user-agent"]);
+    assert_eq!(seen[1].1["user-agent"], seen[3].1["user-agent"]);
+    assert_ne!(seen[0].1["user-agent"], seen[1].1["user-agent"]);
+}
+
+#[tokio::test]
+async fn direct_http_account_churn_and_cache_eviction_preserve_the_base_pool() {
+    use provider_openai::transport::client::{
+        build_reqwest_client, evict_account_http_clients, evict_all_account_http_clients,
+    };
+
+    if isolate_client_cache_test(
+        "direct_http_account_churn_and_cache_eviction_preserve_the_base_pool",
+    ) {
+        return;
+    }
+    let (base_url, server) = pooled_http_exit(1, 301).await;
+    let base = CodexBackendClient::new(
+        build_reqwest_client().unwrap(),
+        base_url,
+        test_wire_profile(),
+    );
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+    for index in 0..300 {
+        let id = format!("direct-churn-{index}");
+        base.for_account(&account(&id, None))
+            .unwrap()
+            .create_response(&request, request_context(&id, Some(&id)))
+            .await
+            .unwrap();
+    }
+    let first = account("direct-churn-0", None);
+    evict_account_http_clients(first.id().as_str());
+    evict_all_account_http_clients();
+    base.for_account(&first)
+        .unwrap()
+        .create_response(
+            &request,
+            request_context("after-eviction", Some("direct-churn-0")),
+        )
+        .await
+        .unwrap();
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(seen.iter().all(|entry| entry.0 == seen[0].0));
+}
+
+#[tokio::test]
+async fn proxy_http_accounts_keep_separate_pools_on_the_same_proxy() {
+    if isolate_client_cache_test("proxy_http_accounts_keep_separate_pools_on_the_same_proxy") {
+        return;
+    }
+    let (proxy_url, server) = pooled_http_exit(2, 3).await;
+    let base = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        "http://upstream.invalid",
+        test_wire_profile(),
+    );
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+    for id in ["shared-proxy-a", "shared-proxy-b", "shared-proxy-a"] {
+        base.for_account(&account(id, Some(&proxy_url)))
+            .unwrap()
+            .create_response(&request, request_context(id, Some(id)))
+            .await
+            .unwrap();
+    }
+    let seen = timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(seen[0].0, seen[1].0);
+    assert_eq!(seen[0].0, seen[2].0);
 }
 
 #[tokio::test]
@@ -692,6 +840,56 @@ async fn http_sse_accounts_use_distinct_proxies_and_clearing_restores_direct_cli
             .unwrap()
             .starts_with("POST /codex/responses HTTP/1.1")
     );
+}
+
+#[tokio::test]
+async fn removing_account_proxy_reuses_the_original_direct_pool() {
+    let (direct_url, direct) = pooled_http_exit(1, 2).await;
+    let (proxy_url, proxy) = http_exit("temporary_proxy").await;
+    let base = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        direct_url,
+        test_wire_profile(),
+    );
+    let mut request = codex_request("gpt-5.5", "", Vec::new());
+    request.force_http_sse = true;
+    let initial = base.for_account(&account("proxy-roundtrip", None)).unwrap();
+    initial
+        .create_response(
+            &request,
+            request_context("before-proxy", Some("proxy-roundtrip")),
+        )
+        .await
+        .unwrap();
+    let proxied = initial
+        .for_account(&account("proxy-roundtrip", Some(&proxy_url)))
+        .unwrap();
+    let response = proxied
+        .create_response(
+            &request,
+            request_context("using-proxy", Some("proxy-roundtrip")),
+        )
+        .await
+        .unwrap();
+    assert!(response.body.contains("resp_temporary_proxy"));
+    proxied
+        .for_account(&account("proxy-roundtrip", None))
+        .unwrap()
+        .create_response(
+            &request,
+            request_context("after-proxy", Some("proxy-roundtrip")),
+        )
+        .await
+        .unwrap();
+    let seen = timeout(Duration::from_secs(5), direct)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(seen[0].0, seen[1].0);
+    timeout(Duration::from_secs(5), proxy)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 async fn websocket_exit(label: &'static str) -> (String, tokio::task::JoinHandle<String>) {
