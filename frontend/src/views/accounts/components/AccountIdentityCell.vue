@@ -11,6 +11,7 @@ import AccountPlanBadge from './AccountPlanBadge.vue'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
+  & Partial<Pick<AccountRow, 'customName'>>
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
   & Partial<Pick<AccountRow, 'accountId' | 'turnStateInjectionEnabled' | 'turnState'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
@@ -42,12 +43,12 @@ const emailText = computed(() => {
   return '未命名账号'
 })
 
-const displayTitle = computed(() =>
-  props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0],
-)
+const customName = computed(() => props.account.customName?.trim() || null)
+const displayTitle = computed(() => customName.value
+  ?? (props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0]))
 
 const secondaryText = computed(() =>
-  props.titleMode === 'email' ? null : emailText.value,
+  props.titleMode === 'email' && !customName.value ? null : emailText.value,
 )
 
 const avatarSizeClass = computed(() =>
@@ -141,7 +142,7 @@ const avatarToneClass = computed(() => {
     </span>
     <div class="min-w-0 flex-1" data-swipe-select-ignore>
       <div class="flex min-w-0 items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
+        <span :title="displayTitle" class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
           {{ displayTitle }}
         </span>
         <span
@@ -161,7 +162,7 @@ const avatarToneClass = computed(() => {
         <slot name="meta" />
         <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
-      <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
+      <div v-if="secondaryText && (customName || metaPosition !== 'secondary' || (!showPlan && !$slots.meta))" class="truncate font-emphasis" :class="secondaryClass" :title="secondaryText">
         {{ secondaryText }}
       </div>
     </div>

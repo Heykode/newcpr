@@ -6,6 +6,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { batchUpdateAccounts } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { normalizeAccountName } from '@/utils/account-name'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -18,6 +19,8 @@ export function useAccountBatchEditor(options: {
 }) {
   const selectedAccountsById = new Map<string, AccountRow>()
   const showBatchEditModal = shallowRef(false)
+  const customName = shallowRef('')
+  const updateCustomName = ref(false)
   const turnStateAvailable = shallowRef(false)
   const schedulingEnabled = shallowRef(true)
   const turnStateInjectionEnabled = shallowRef(false)
@@ -33,7 +36,8 @@ export function useAccountBatchEditor(options: {
   const updateGroups = ref(false)
   const updateProxy = ref(false)
   const hasUpdates = computed(() =>
-    updateEnabled.value
+    updateCustomName.value
+    || updateEnabled.value
     || (turnStateAvailable.value && updateTurnStateInjectionEnabled.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
@@ -44,6 +48,7 @@ export function useAccountBatchEditor(options: {
   const saving = saveAction.loading
 
   function resetUpdateSelection() {
+    updateCustomName.value = false
     updateEnabled.value = false
     updateTurnStateInjectionEnabled.value = false
     updateConcurrencyLimit.value = false
@@ -56,6 +61,8 @@ export function useAccountBatchEditor(options: {
     const accounts = selectedAccounts()
     if (accounts.length === 0)
       return
+    const firstName = accounts[0]?.customName ?? ''
+    customName.value = accounts.every(account => (account.customName ?? '') === firstName) ? firstName : ''
 
     schedulingEnabled.value = accounts.every(account => account.enabled)
     turnStateAvailable.value = accounts.every(account => account.provider === 'openai')
@@ -94,6 +101,8 @@ export function useAccountBatchEditor(options: {
       const payload: Parameters<typeof batchUpdateAccounts>[0] = {
         accountIds,
       }
+      if (updateCustomName.value)
+        payload.customName = normalizeAccountName(customName.value)
       if (updateEnabled.value)
         payload.enabled = schedulingEnabled.value
       if (turnStateAvailable.value && updateTurnStateInjectionEnabled.value)
@@ -142,6 +151,7 @@ export function useAccountBatchEditor(options: {
   watch([showBatchEditModal, saving], ([open, isSaving]) => {
     if (open || isSaving)
       return
+    customName.value = ''
     schedulingEnabled.value = true
     turnStateAvailable.value = false
     turnStateInjectionEnabled.value = false
@@ -154,6 +164,8 @@ export function useAccountBatchEditor(options: {
   })
 
   return {
+    customName,
+    updateCustomName,
     showBatchEditModal,
     turnStateAvailable,
     schedulingEnabled,

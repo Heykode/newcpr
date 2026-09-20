@@ -54,6 +54,250 @@ mod devices;
 mod timestamps;
 
 #[tokio::test]
+async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
+    let Some(database) = TestDatabase::create("custom_names").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    for id in ["acct_name_one", "acct_name_two"] {
+        repository
+            .insert_provider_account(account(id, id))
+            .await
+            .unwrap();
+    }
+    let ids = vec!["acct_name_one".to_owned(), "acct_name_two".to_owned()];
+    let identity_before: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(a)-array['custom_name','updated_at'] from provider_accounts a order by id",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .unwrap();
+    let store = admin_account_store(&database.pool);
+    let command = BatchUpdateAccounts {
+        custom_name: Some(Some("  Local batch  ".into())),
+        account_ids: ids.clone(),
+        enabled: None,
+        turn_state_injection_enabled: None,
+        concurrency_limit: None,
+        weight: None,
+        group_ids: None,
+        outbound_proxy: None,
+    };
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "custom-name-update".into(),
+    };
+    store
+        .batch_update_accounts(command.clone(), &context)
+        .await
+        .unwrap();
+    for id in &ids {
+        let loaded = repository.load_provider_account(id).await.unwrap().unwrap();
+        assert_eq!(loaded.summary.custom_name.as_deref(), Some("Local batch"));
+    }
+    let identity_after: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(a)-array['custom_name','updated_at'] from provider_accounts a order by id",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(identity_after, identity_before);
+    let result = store
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(20).unwrap(),
+                provider_kind: None,
+                group_filter: None,
+                search: Some("local batch".into()),
+                status: None,
+                plan_type: None,
+                sort: None,
+            },
+            AccountRuntimeSnapshot::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.items.len(), 2);
+    assert!(
+        result
+            .items
+            .iter()
+            .all(|item| item.account.custom_name.as_deref() == Some("Local batch"))
+    );
+
+    // Group failure must roll the name back in the same settings transaction.
+    assert!(
+        store
+            .batch_update_accounts(
+                BatchUpdateAccounts {
+                    custom_name: Some(Some("Not committed".into())),
+                    group_ids: Some(vec![
+                        AccountGroupId::new("grp_00000000000000000000000000000099").unwrap()
+                    ]),
+                    ..command.clone()
+                },
+                &context
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        repository
+            .load_provider_account(&ids[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .custom_name
+            .as_deref(),
+        Some("Local batch")
+    );
+    for name in [
+        None,
+        Some(None),
+        Some(Some("Renamed".into())),
+        Some(Some("   ".into())),
+    ] {
+        store
+            .batch_update_accounts(
+                BatchUpdateAccounts {
+                    custom_name: name.clone(),
+                    ..command.clone()
+                },
+                &context,
+            )
+            .await
+            .unwrap();
+        let expected = match name {
+            None => Some("Local batch"),
+            Some(Some(ref value)) if !value.trim().is_empty() => Some("Renamed"),
+            _ => None,
+        };
+        assert_eq!(
+            repository
+                .load_provider_account(&ids[0])
+                .await
+                .unwrap()
+                .unwrap()
+                .summary
+                .custom_name
+                .as_deref(),
+            expected
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
+    use gateway_admin::model::accounts::AccountImportSettings;
+    let Some(database) = TestDatabase::create("custom_name_retention").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let id = "acct_custom_name";
+    let scope = ProviderAccountAdminScope {
+        provider_kind: "openai".into(),
+    };
+    for (index, name) in [Some("  New batch  "), None, Some("   ")]
+        .into_iter()
+        .enumerate()
+    {
+        repository
+            .import_provider_accounts(ImportProviderAccounts {
+                settings: Some(AccountImportSettings {
+                    custom_name: name.map(str::to_owned),
+                    enabled: true,
+                    turn_state_injection_enabled: None,
+                    concurrency_limit: None,
+                    weight: gateway_core::account::AccountWeight::DEFAULT,
+                    group_ids: vec![],
+                }),
+                outbound_proxy: None,
+                scope: scope.clone(),
+                accounts: vec![account(id, "custom-name-owner")],
+                audit: audit(&format!("audit_custom_import_{index}"), "import", id),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            repository
+                .load_provider_account(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .summary
+                .custom_name
+                .as_deref(),
+            Some("New batch")
+        );
+    }
+    let current = repository
+        .load_provider_account(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .summary;
+    repository
+        .rotate_provider_account(RotateProviderAccount {
+            relogin_operation_id: None,
+            scope,
+            profile: profile(id, "Upstream updated name"),
+            replacement_identity: None,
+            credential: credential_update(
+                id,
+                current.credential_revision.get(),
+                "synthetic-rotation",
+            ),
+            audit: audit("audit_custom_rotation", "rotate", id),
+        })
+        .await
+        .unwrap();
+    let account_id = ProviderAccountId::new(id).unwrap();
+    let current = repository.get_account(&account_id).await.unwrap().unwrap();
+    let refresh = CredentialCasUpdate::new(
+        account_id.clone(),
+        current.revision(),
+        ProviderAccountUpdate {
+            account_id,
+            name: "Upstream refreshed name".into(),
+            email: current.email().map(str::to_owned),
+            plan_type: None,
+        },
+        PlaintextCredential::new(
+            json!({"access_token":"synthetic-refreshed"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        repository
+            .compare_and_swap_credential(refresh)
+            .await
+            .unwrap(),
+        CredentialCasOutcome::Updated(_)
+    ));
+    assert_eq!(
+        repository
+            .load_provider_account(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .custom_name
+            .as_deref(),
+        Some("New batch")
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn explicit_quota_plan_is_fenced_and_survives_token_only_refreshes() {
     let Some(database) = TestDatabase::create("quota_plan_refresh").await else {
         return;
@@ -935,6 +1179,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
             store
                 .update_account(
                     UpdateAccount {
+                        custom_name: None,
                         account_id: id.clone(),
                         enabled,
                         turn_state_injection_enabled: Some(false),
@@ -1661,6 +1906,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                custom_name: None,
                 outbound_proxy: None,
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
@@ -1741,6 +1987,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        custom_name: None,
         account_id: "acct_proxy".to_owned(),
         enabled: true,
         turn_state_injection_enabled: Some(false),
@@ -1951,14 +2198,19 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
         actor: MutationActor::System,
         request_id: "request_batch_update".to_owned(),
     };
+    let original_identity: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(a) - array['enabled','concurrency_limit','weight','turn_state_injection_enabled','updated_at']
+         from provider_accounts a where id=any($1::text[]) order by id",
+    ).bind(&account_ids).fetch_all(&database.pool).await.unwrap();
 
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                custom_name: None,
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: Some(false),
-                turn_state_injection_enabled: None,
+                turn_state_injection_enabled: Some(true),
                 concurrency_limit: Some(gateway_core::account::AccountConcurrencyLimit::new(7)),
                 weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
                 group_ids: Some(vec![AccountGroupId::new(GROUP_ID).expect("group ID")]),
@@ -1970,15 +2222,18 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
 
     assert_eq!(result.config_revision.get(), 2);
     assert_eq!(result.account_ids.len(), 2);
-    let scheduling: Vec<(bool, Option<i64>, i16)> = sqlx::query_as(
-        "select enabled, concurrency_limit, weight
+    let scheduling: Vec<(bool, Option<i64>, i16, bool)> = sqlx::query_as(
+        "select enabled, concurrency_limit, weight, turn_state_injection_enabled
          from provider_accounts where id = any($1::text[]) order by id",
     )
     .bind(&account_ids)
     .fetch_all(&database.pool)
     .await
     .expect("load batch account state");
-    assert_eq!(scheduling, [(false, Some(7), 25), (false, Some(7), 25)]);
+    assert_eq!(
+        scheduling,
+        [(false, Some(7), 25, true), (false, Some(7), 25, true)]
+    );
     for account_id in &account_ids {
         assert_eq!(
             account_group_ids(&database.pool, account_id).await,
@@ -1992,10 +2247,11 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                custom_name: None,
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
                 enabled: Some(true),
-                turn_state_injection_enabled: None,
+                turn_state_injection_enabled: Some(false),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(vec![
@@ -2016,15 +2272,18 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
         audit_count(&database.pool, &context.request_id).await,
         audit_before_failure
     );
-    let scheduling: Vec<(bool, Option<i64>, i16)> = sqlx::query_as(
-        "select enabled, concurrency_limit, weight
+    let scheduling: Vec<(bool, Option<i64>, i16, bool)> = sqlx::query_as(
+        "select enabled, concurrency_limit, weight, turn_state_injection_enabled
          from provider_accounts where id = any($1::text[]) order by id",
     )
     .bind(&account_ids)
     .fetch_all(&database.pool)
     .await
     .expect("load rolled back account state");
-    assert_eq!(scheduling, [(false, Some(7), 25), (false, Some(7), 25)]);
+    assert_eq!(
+        scheduling,
+        [(false, Some(7), 25, true), (false, Some(7), 25, true)]
+    );
     for account_id in &account_ids {
         assert_eq!(
             account_group_ids(&database.pool, account_id).await,
@@ -2032,6 +2291,11 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
         );
     }
 
+    let final_identity: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(a) - array['enabled','concurrency_limit','weight','turn_state_injection_enabled','updated_at']
+         from provider_accounts a where id=any($1::text[]) order by id",
+    ).bind(&account_ids).fetch_all(&database.pool).await.unwrap();
+    assert_eq!(final_identity, original_identity);
     database.close().await;
 }
 
@@ -2187,6 +2451,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         .commit_authorization(
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    custom_name: None,
                     enabled: false,
                     turn_state_injection_enabled: Some(true),
                     concurrency_limit: None,
@@ -2708,6 +2973,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            custom_name: None,
             outbound_proxy: None,
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: Some(false),
@@ -3283,6 +3549,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                custom_name: None,
                 account_id: id.as_str().to_owned(),
                 enabled: true,
                 turn_state_injection_enabled: Some(false),
@@ -3340,6 +3607,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     .await
     .expect("seed group");
     let settings = AccountImportSettings {
+        custom_name: None,
         enabled: false,
         turn_state_injection_enabled: Some(true),
         concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
@@ -3441,6 +3709,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
     .enumerate()
     {
         let settings = AccountImportSettings {
+            custom_name: None,
             enabled: true,
             turn_state_injection_enabled: state,
             concurrency_limit: None,

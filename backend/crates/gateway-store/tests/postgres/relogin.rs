@@ -33,6 +33,7 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
         automatic_job: false,
         manual_push_context: None,
         automatic_attempts: 0,
+        automatic_started_at: Vec::new(),
         attempted_target: None,
         next_attempt_at: None,
         synced_at: None,
@@ -161,6 +162,10 @@ async fn relogin_storage_can_read_and_update_legacy_mailbox_rows_without_using_t
         .as_object_mut()
         .unwrap()
         .remove("manual_push_context");
+    material
+        .as_object_mut()
+        .unwrap()
+        .remove("automatic_started_at");
     material["mfa_secret"] = "".into();
     material["mailbox"] = serde_json::json!({
         "client_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -184,8 +189,10 @@ async fn relogin_storage_can_read_and_update_legacy_mailbox_rows_without_using_t
     );
     let mut loaded = rows.into_iter().find(|row| row.id == legacy.id).unwrap();
     assert!(loaded.manual_push_context.is_none());
+    assert!(loaded.automatic_started_at.is_empty());
     assert!(loaded.validate_totp().is_err());
     loaded.automatic = false;
+    loaded.automatic_started_at = vec![chrono::Utc::now()];
     loaded.manual_push_context = Some(gateway_admin::model::MutationContext {
         actor: gateway_admin::model::MutationActor::AdminSession {
             admin_user_id: "admin-test".into(),
@@ -204,6 +211,7 @@ async fn relogin_storage_can_read_and_update_legacy_mailbox_rows_without_using_t
     assert!(!saved.to_string().contains("synthetic-mailbox-token"));
     let roundtrip: ReloginEntry = serde_json::from_value(saved).unwrap();
     assert_eq!(roundtrip.manual_push_context, loaded.manual_push_context);
+    assert_eq!(roundtrip.automatic_started_at, loaded.automatic_started_at);
     store.delete(&legacy.id, loaded.revision).await.unwrap();
     assert_eq!(store.entries().await.unwrap().len(), 1);
     database.close().await;
@@ -227,6 +235,7 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
         config: ReloginTemplateConfig {
             name: "Team settings".into(),
             enabled: false,
+            turn_state_injection_enabled: Some(true),
             concurrency_limit: Some(7),
             weight: 17,
             group_ids: vec![group.into()],
@@ -236,6 +245,18 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
     store.save_template(&template, None).await.unwrap();
     let reopened = PgReloginStore::new(database.pool.clone());
     assert_eq!(reopened.templates().await.unwrap(), vec![template.clone()]);
+    sqlx::query("update account_relogin_templates set config=config-'turnStateInjectionEnabled' where id=$1")
+        .bind(&template.id).execute(&database.pool).await.unwrap();
+    let legacy = reopened.templates().await.unwrap().remove(0);
+    assert_eq!(legacy.config.turn_state_injection_enabled, None);
+    assert_eq!(
+        legacy
+            .config
+            .settings()
+            .unwrap()
+            .turn_state_injection_enabled,
+        None
+    );
     let mut duplicate = template.clone();
     duplicate.id = "template-duplicate".into();
     duplicate.config.name = "TEAM SETTINGS".into();

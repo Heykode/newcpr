@@ -130,7 +130,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select
                     (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
-                    outbound_proxy_url, id, provider_kind, name, email, upstream_user_id,
+                    outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
@@ -660,6 +660,18 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     None,
                 )
                 .await?;
+                if let Some(name) = gateway_admin::model::accounts::normalize_custom_name(
+                    settings.custom_name.as_deref(),
+                )
+                .map_err(|_| invalid("invalid custom account name"))?
+                {
+                    update_custom_name_in_transaction(
+                        &mut transaction,
+                        &unique_ids,
+                        Some(name.as_str()),
+                    )
+                    .await?;
+                }
                 replace_account_group_assignments_in_transaction(
                     &mut transaction,
                     &unique_ids,
@@ -805,6 +817,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 command.outbound_proxy.as_ref(),
             )
             .await?;
+            if let Some(name) = &command.custom_name {
+                update_custom_name_in_transaction(
+                    &mut transaction,
+                    &command.account_ids,
+                    name.as_deref(),
+                )
+                .await?;
+            }
             if let Some(group_ids) = &command.group_ids {
                 replace_account_group_assignments_in_transaction(
                     &mut transaction,
@@ -1195,6 +1215,25 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
             id: "one or more provider account IDs".to_owned(),
         })
     }
+}
+
+async fn update_custom_name_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    name: Option<&str>,
+) -> StoreResult<()> {
+    let name = gateway_admin::model::accounts::normalize_custom_name(name)
+        .map_err(|_| invalid("invalid custom account name"))?;
+    sqlx::query(
+        "update provider_accounts set custom_name=$2, updated_at=greatest(now(), updated_at)
+         where id=any($1::text[])",
+    )
+    .bind(account_ids)
+    .bind(name)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| postgres_unavailable("update custom account names"))?;
+    Ok(())
 }
 
 pub(crate) async fn delete_provider_accounts_in_transaction(

@@ -14,7 +14,34 @@ function load(path, dependencies = {}) {
   return exports
 }
 const { importPreview } = load('../src/views/relogin/import-preview.ts')
-const { processingStatus, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace } = load('../src/views/relogin/presentation.ts')
+const { processingStatus, recoveryCountdown, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace } = load('../src/views/relogin/presentation.ts')
+
+test('recovery diagnostics supersede old sync messages but never an active or uncertain push', () => {
+  const row = {
+    status: 'ready',
+    poolStatus: 'synced',
+    message: '凭据已同步到号池',
+    recovery: { state: 'cooldown', message: '等待重试', retryAt: '2026-01-01T00:05:00Z' },
+  }
+  assert.equal(processingStatus(row).key, 'cooldown')
+  assert.equal(recoveryCountdown(row, Date.parse('2026-01-01T00:03:59Z')), '剩余 1分01秒')
+  assert.equal(recoveryCountdown(row, Date.parse('2026-01-01T00:05:00Z')), '等待下一轮检查')
+  row.recovery.retryAt = 'invalid'
+  assert.equal(recoveryCountdown(row, 0), '')
+  for (const status of ['running', 'pushing', 'uncertain', 'queued']) {
+    row.status = status
+    assert.equal(processingStatus(row).key, status)
+  }
+  row.status = 'ready'
+  for (const state of ['waiting', 'loop_guard', 'retry_limit', 'workspace_required', 'disabled', 'paused', 'account_disabled']) {
+    row.recovery.state = state
+    assert.equal(processingStatus(row).key, state)
+  }
+  row.recovery.state = 'idle'
+  assert.equal(processingStatus(row).key, 'synced')
+  delete row.recovery
+  assert.equal(processingStatus(row).key, 'synced')
+})
 
 test('relogin view never treats cached verification or previous push as current pool health', () => {
   const row = {

@@ -1462,5 +1462,77 @@
     "file_sha256": "0816fd26b19361b348cd66f8a8dca39701a62b303a7500837ed1608548240742",
     "line_sha256": "588cd1db9d80d264c927db295a3eba023dbb7a8a1addbc5c814ed3ce29390a15",
     "reason": "Manually re-reviewed the unchanged synthetic forwarding-header fixture and verified its line digest against the prior review. HTTP and WS assertions still require stripping it; new tests only cover opaque organization extensions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1734,
+    "file_sha256": "5485d2b612d5b14b1eb96489f70f3b4d813aba23539fd02ad970fb1a8e981e4c",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Manually re-reviewed the existing synthetic loopback proxy fixture and verified it is byte-identical to the previous review. This file only adds template State atomic-update, rollback and account identity preservation assertions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1761,
+    "file_sha256": "5485d2b612d5b14b1eb96489f70f3b4d813aba23539fd02ad970fb1a8e981e4c",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Manually re-reviewed the existing normalized synthetic loopback proxy assertion and verified it is byte-identical to the previous review. No test credentials or proxy fixture values were changed."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1980,
+    "file_sha256": "2b306c93131be6ec44d81e4c04ca259d186559e6a2fb68a22833143abf3361b7",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Re-reviewed unchanged synthetic loopback proxy fixture against HEAD; additions test independent custom names, atomic rollback and credential retention. No fixture credential value changed."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 2008,
+    "file_sha256": "2b306c93131be6ec44d81e4c04ca259d186559e6a2fb68a22833143abf3361b7",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Re-reviewed the existing normalized synthetic loopback assertion, byte-identical to HEAD. New custom-name tests and nullable fixture fields only shift its position."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 235,
+    "file_sha256": "b07bf7fe1485010b01f3c66f5cf66014161e80a6dff2186305f0f08bb86d49cf",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Re-reviewed unchanged synthetic loopback batch proxy fixture against HEAD. This file only adds omitted custom_name fields to three existing command constructors."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 341,
+    "file_sha256": "b07bf7fe1485010b01f3c66f5cf66014161e80a6dff2186305f0f08bb86d49cf",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Re-reviewed unchanged synthetic loopback account-removal fixture; content is byte-identical to the HEAD review."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 808,
+    "file_sha256": "b07bf7fe1485010b01f3c66f5cf66014161e80a6dff2186305f0f08bb86d49cf",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Re-reviewed unchanged synthetic managed-proxy loopback fixture; only unrelated nullable command fields were added."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 965,
+    "file_sha256": "b07bf7fe1485010b01f3c66f5cf66014161e80a6dff2186305f0f08bb86d49cf",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Re-reviewed unchanged legacy synthetic loopback proxy fixture; line digest matches the previously reviewed HEAD content."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1036,
+    "file_sha256": "b07bf7fe1485010b01f3c66f5cf66014161e80a6dff2186305f0f08bb86d49cf",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Re-reviewed unchanged synthetic loopback migration SQL fixture. New custom_name None fields shift lines only; migration fixture values and assertions remain unchanged."
   }
 ]

@@ -1,5 +1,29 @@
 # Account Management Contracts
 
+## Custom Account Names
+
+- `Account.customName?: string | null` is independent display metadata. Prefer it
+  in `AccountIdentityCell`; without it, preserve the old title behavior exactly.
+  Keep actual email visible under a custom title, including secondary-meta layouts.
+  Use ordinary escaped text, truncation and a full-title tooltip; do not change avatar
+  identity, sort semantics, credential documents or email-based relogin matching.
+- Single editing records the opened custom-name baseline and sends a name only
+  when changed. Editing other settings must not replay a stale name from a refreshed
+  account list. Explicit null/blank clears; imports omit blank names.
+- Batch editing has seven opt-in fields including State and custom name. Name
+  editing follows the same unchecked-by-default/reset rules as all other fields.
+  Only normalize and submit a checked name; unchecked invalid drafts are ignored.
+- Shared `AccountSettingsFields.nameAvailable` defaults false. Enable it only in
+  account editing/imports, not in templates. Template names identify templates,
+  not accounts, and applying a template must preserve every account custom name.
+- Relogin push confirmation resets the independent batch name on every open and
+  shows it only when new accounts are included. Existing-only pushes omit it.
+  Mixed pushes may send it but only the backend create-only branch applies it.
+- Mirror Admin name validation: trim, max 128 Unicode characters, no control
+  characters. Block invalid names before leaving import settings. Verify unset,
+  explicit clear, import/OAuth, reauthorization preservation, mixed pushes and
+  template preservation with synthetic-only tests and mobile/light/dark screenshots.
+
 ## Background Imports and Independent Table Preferences
 
 - Browser AT/RT and JSON imports submit server-owned tasks. Preserve JSON document
@@ -488,6 +512,18 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
 - Template management reuses import scheduling/group/proxy controls. Persist on
   the server; copy editable group arrays and retain template revision for save/delete.
   Missing group references must remain visible and explicitly removable.
+- The shared `components/account-templates` editor/picker and `api/modules/account-templates`
+  serve both pages from one catalog. State is only the account boolean switch, default
+  off in new/edit forms; never include model/global State parameters. Applying a legacy
+  untouched template preserves existing State, while explicitly saving it records the switch.
+- Account management applies a clicked template to a copied set of selected IDs, including
+  other pages, using the template ID/revision rather than client-side config. Disable
+  application with zero or more than 1000 IDs; keep management available without selection.
+  Refresh templates on menu open, retain visible mutation errors, and reread account/group
+  facts after success without discarding cross-page selections. No permanent template binding.
+- Own the submission lock in a local synchronous ref, not a parent-fed `defineModel` whose
+  reflected update can lag until the next render. Test two clicks in one event-loop turn
+  and assert one mutation. Abort stale catalog reads, never retry an uncertain mutation.
 - New-account push confirms an optional template ID/revision plus unchanged row
   revisions. Default to no template on each open, show a readable config summary,
   and do not send a template for an existing-only batch. Mixed batches apply it

@@ -82,6 +82,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
     AccountView {
         id: account.id.clone(),
         name: account.name,
+        custom_name: account.custom_name,
         provider: account.provider_kind.to_string(),
         groups: account
             .groups

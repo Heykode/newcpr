@@ -99,6 +99,9 @@ pub struct ReloginEntry {
     #[serde(default)]
     pub manual_push_context: Option<super::MutationContext>,
     pub automatic_attempts: u32,
+    /// Rolling start budget survives successful pushes and Cookie-only revisions.
+    #[serde(default)]
+    pub automatic_started_at: Vec<DateTime<Utc>>,
     pub attempted_target: Option<ReloginTarget>,
     pub next_attempt_at: Option<DateTime<Utc>>,
     pub synced_at: Option<DateTime<Utc>>,

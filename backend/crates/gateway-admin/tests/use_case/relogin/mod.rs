@@ -29,13 +29,16 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
+mod recovery;
+
 #[derive(Default)]
-struct MemoryStore {
+pub(super) struct MemoryStore {
     templates: Mutex<BTreeMap<String, ReloginTemplate>>,
-    invalid_template_references: Mutex<bool>,
+    pub(super) invalid_template_references: Mutex<bool>,
     rows: Mutex<BTreeMap<String, ReloginEntry>>,
     settings: Mutex<ReloginSettings>,
     fail_after: Mutex<Option<usize>>,
+    ready_save_delay: Mutex<std::time::Duration>,
 }
 
 fn conflict() -> AdminStoreError {
@@ -92,6 +95,14 @@ impl ReloginStore for MemoryStore {
         self.save_batch(&[(entry.clone(), expected)]).await
     }
     async fn save_batch(&self, entries: &[(ReloginEntry, Option<u64>)]) -> AdminStoreResult<()> {
+        let delay = *self.ready_save_delay.lock().unwrap();
+        if entries
+            .iter()
+            .any(|(entry, _)| entry.status == ReloginStatus::Ready)
+            && !delay.is_zero()
+        {
+            tokio::time::sleep(delay).await;
+        }
         let mut failure = self.fail_after.lock().unwrap();
         if let Some(remaining) = failure.as_mut() {
             if *remaining == 0 {
@@ -132,15 +143,15 @@ impl ReloginStore for MemoryStore {
     }
 }
 
-struct Harness {
-    services: AdminServices,
-    store: Arc<MemoryStore>,
-    accounts: Arc<FakeAccountStore>,
+pub(super) struct Harness {
+    pub(super) services: AdminServices,
+    pub(super) store: Arc<MemoryStore>,
+    pub(super) accounts: Arc<FakeAccountStore>,
     provider: Arc<FakeProviderAdmin>,
     task: Arc<dyn ScheduledTask>,
 }
 impl Harness {
-    async fn new(pool: Vec<AccountRecord>) -> Self {
+    pub(super) async fn new(pool: Vec<AccountRecord>) -> Self {
         let log = events();
         let accounts = FakeAccountStore::new("openai", log.clone());
         accounts.set_accounts(pool);
@@ -268,10 +279,11 @@ fn credential() -> ReloginCredential {
     }
 }
 
-fn template_config() -> ReloginTemplateConfig {
+pub(super) fn template_config() -> ReloginTemplateConfig {
     ReloginTemplateConfig {
         name: "Team defaults".into(),
         enabled: false,
+        turn_state_injection_enabled: Some(true),
         concurrency_limit: Some(7),
         weight: 13,
         group_ids: vec!["grp_00000000000000000000000000000091".into()],
@@ -279,7 +291,7 @@ fn template_config() -> ReloginTemplateConfig {
     }
 }
 
-fn template_selection(template: &ReloginTemplate) -> ReloginTemplateSelection {
+pub(super) fn template_selection(template: &ReloginTemplate) -> ReloginTemplateSelection {
     ReloginTemplateSelection {
         id: template.id.clone(),
         revision: template.revision,
@@ -293,24 +305,24 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
     invalid.concurrency_limit = Some(0);
     assert!(
         h.services
-            .relogin()
+            .account_templates()
             .save_template(None, invalid)
             .await
             .is_err()
     );
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();
     assert_eq!(
-        h.services.relogin().templates().await.unwrap(),
+        h.services.account_templates().templates().await.unwrap(),
         vec![template.clone()]
     );
     assert!(
         h.services
-            .relogin()
+            .account_templates()
             .save_template(None, template_config())
             .await
             .is_err()
@@ -319,14 +331,14 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
     config.weight = 29;
     let updated = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(Some(template_selection(&template)), config)
         .await
         .unwrap();
     assert_eq!(updated.revision, 2);
     assert!(
         h.services
-            .relogin()
+            .account_templates()
             .delete_template(template_selection(&template))
             .await
             .is_err()
@@ -342,6 +354,7 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
                 std::slice::from_ref(&id),
                 &versions,
                 Some(template_selection(&template)),
+                None,
                 &context("stale-template")
             )
             .await
@@ -350,7 +363,7 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
     assert_eq!(h.row(&id).await.revision, before.revision);
     assert!(h.accounts.audit_requests().is_empty());
     h.services
-        .relogin()
+        .account_templates()
         .delete_template(template_selection(&updated))
         .await
         .unwrap();
@@ -361,6 +374,7 @@ async fn relogin_templates_validate_and_fence_edits_deletes_and_pushes() {
                 std::slice::from_ref(&id),
                 &versions,
                 Some(template_selection(&updated)),
+                None,
                 &context("deleted-template")
             )
             .await
@@ -374,7 +388,7 @@ async fn relogin_templates_reject_missing_references_before_push_fence() {
     let h = Harness::new(vec![]).await;
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();
@@ -389,6 +403,7 @@ async fn relogin_templates_reject_missing_references_before_push_fence() {
             std::slice::from_ref(&id),
             &BTreeMap::from([(id.clone(), before.revision)]),
             Some(template_selection(&template)),
+            None,
             &context("invalid-reference"),
         )
         .await
@@ -408,7 +423,7 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
     let h = Harness::new(vec![existing]).await;
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();
@@ -431,15 +446,15 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
             &[old.clone(), new.clone()],
             &versions,
             Some(template_selection(&template)),
+            Some("  New batch  ".into()),
             &context("mixed-template"),
         )
         .await
         .unwrap();
     assert!(result.iter().all(|result| result.success), "{result:?}");
-    assert_eq!(
-        h.accounts.import_settings(),
-        vec![Some(template.config.settings().unwrap())]
-    );
+    let mut expected_settings = template.config.settings().unwrap();
+    expected_settings.custom_name = Some("New batch".into());
+    assert_eq!(h.accounts.import_settings(), vec![Some(expected_settings)]);
     assert!(h.row(&old).await.synced_at.is_some());
     assert!(h.row(&new).await.synced_at.is_some());
     assert_eq!(h.row(&old).await.target.unwrap().account_id, "acct_test");
@@ -455,6 +470,7 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
             &[old, new],
             &versions,
             Some(template_selection(&template)),
+            None,
             &context("repeat-template"),
         )
         .await
@@ -468,7 +484,7 @@ async fn relogin_existing_account_ignores_template_references_and_settings() {
     let h = Harness::new(vec![account(false)]).await;
     let template = h
         .services
-        .relogin()
+        .account_templates()
         .save_template(None, template_config())
         .await
         .unwrap();
@@ -482,11 +498,63 @@ async fn relogin_existing_account_ignores_template_references_and_settings() {
             std::slice::from_ref(&id),
             &BTreeMap::from([(id.clone(), h.row(&id).await.revision)]),
             Some(template_selection(&template)),
+            Some("Must not replace existing name".into()),
             &context("existing-template"),
         )
         .await
         .unwrap();
     assert!(result[0].success);
+    assert!(h.accounts.import_settings().is_empty());
+}
+
+#[tokio::test]
+async fn relogin_new_batch_name_is_optional_and_independent_of_templates() {
+    for name in [None, Some("   "), Some("  New batch  ")] {
+        let h = Harness::new(vec![]).await;
+        let id = h.import("test@example.invalid").await;
+        h.ready(&id).await;
+        let versions = BTreeMap::from([(id.clone(), h.row(&id).await.revision)]);
+        let result = h
+            .services
+            .relogin()
+            .push_with_template(
+                &[id],
+                &versions,
+                None,
+                name.map(str::to_owned),
+                &context("batch-name"),
+            )
+            .await
+            .unwrap();
+        assert!(result[0].success);
+        let settings = h.accounts.import_settings();
+        if name.is_some_and(|name| !name.trim().is_empty()) {
+            assert_eq!(
+                settings[0].as_ref().unwrap().custom_name.as_deref(),
+                Some("New batch")
+            );
+        } else {
+            assert_eq!(settings, vec![None]);
+        }
+    }
+    let h = Harness::new(vec![]).await;
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let before = h.row(&id).await;
+    assert!(
+        h.services
+            .relogin()
+            .push_with_template(
+                std::slice::from_ref(&id),
+                &BTreeMap::from([(id.clone(), before.revision)]),
+                None,
+                Some("x".repeat(129)),
+                &context("invalid-name"),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(h.row(&id).await.revision, before.revision);
     assert!(h.accounts.import_settings().is_empty());
 }
 
@@ -1192,7 +1260,9 @@ async fn automatic_relogin_cookie_changes_during_login_still_push() {
     let row = h.row(&id).await;
     assert!(row.automatic_job);
     assert!(row.synced_at.is_some());
-    assert_eq!(row.automatic_attempts, 1);
+    assert_eq!(row.automatic_attempts, 0);
+    assert!(row.next_attempt_at.is_none());
+    assert_eq!(row.automatic_started_at.len(), 1);
     assert_eq!(h.accounts.rotation_attempts.lock().unwrap().len(), 1);
 }
 
@@ -1254,6 +1324,21 @@ async fn relogin_cookie_updates_do_not_reset_automatic_failure_budget() {
         .get_mut(&id)
         .unwrap()
         .next_attempt_at = None;
+    h.cycle().await;
+    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);
+    assert_eq!(
+        h.services.relogin().list().await.unwrap().items[0]
+            .recovery
+            .state,
+        "loop_guard"
+    );
+    h.store
+        .rows
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .automatic_started_at = vec![Utc::now() - Duration::minutes(16); 3];
     h.cycle().await;
     assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 4);
     assert_eq!(h.row(&id).await.automatic_attempts, 1);
@@ -1442,7 +1527,7 @@ async fn relogin_queue_is_deduplicated_and_shares_bounded_concurrency() {
         .await
         .unwrap();
     h.cycle().await;
-    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 2);
+    assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);
     assert_eq!(h.provider.relogin_peak.load(Ordering::SeqCst), 2);
     h.cycle().await;
     assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 3);

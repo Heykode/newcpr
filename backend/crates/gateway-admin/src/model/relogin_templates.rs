@@ -1,4 +1,4 @@
-//! Credential-free, versioned defaults for create-only relogin imports.
+//! Credential-free, versioned settings shared by account updates and relogin imports.
 
 use super::{AdminError, accounts::AccountImportSettings};
 use gateway_core::{
@@ -13,6 +13,8 @@ use std::collections::BTreeSet;
 pub struct ReloginTemplateConfig {
     pub name: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<u32>,
     pub weight: u16,
     pub group_ids: Vec<String>,
@@ -36,8 +38,9 @@ impl ReloginTemplateConfig {
             validate_template_id(id)?;
         }
         Ok(AccountImportSettings {
+            custom_name: None,
             enabled: self.enabled,
-            turn_state_injection_enabled: None,
+            turn_state_injection_enabled: self.turn_state_injection_enabled,
             concurrency_limit: self
                 .concurrency_limit
                 .map(|value| {

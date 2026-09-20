@@ -5,6 +5,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { updateAccount } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { normalizeAccountName } from '@/utils/account-name'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -16,6 +17,8 @@ export function useAccountEditor(options: {
 }) {
   const showEditModal = shallowRef(false)
   const editingAccountId = shallowRef<string | null>(null)
+  const customName = shallowRef('')
+  let initialCustomName = ''
   const schedulingEnabled = shallowRef(true)
   const turnStateInjectionEnabled = shallowRef(false)
   const concurrencyLimit = shallowRef('')
@@ -34,6 +37,8 @@ export function useAccountEditor(options: {
 
   function open(account: AccountRow) {
     editingAccountId.value = account.id
+    customName.value = account.customName ?? ''
+    initialCustomName = customName.value
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
@@ -67,6 +72,9 @@ export function useAccountEditor(options: {
         weight: scheduling.values.weight,
         groupIds: [...new Set(selectedGroupIds.value)],
       }
+      const name = normalizeAccountName(customName.value)
+      if (name !== normalizeAccountName(initialCustomName))
+        payload.customName = name
       if (editingAccount.value?.provider === 'openai')
         payload.turnStateInjectionEnabled = turnStateInjectionEnabled.value
       await updateAccount(payload)
@@ -80,6 +88,8 @@ export function useAccountEditor(options: {
     if (open || isSaving)
       return
     editingAccountId.value = null
+    customName.value = ''
+    initialCustomName = ''
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = true
@@ -90,6 +100,7 @@ export function useAccountEditor(options: {
   })
 
   return {
+    customName,
     showEditModal,
     editingAccount,
     schedulingEnabled,

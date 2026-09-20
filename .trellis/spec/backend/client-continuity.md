@@ -512,10 +512,14 @@ time. Observe actual opening duration and its outcome independently.
 
 ## 14. Account Client Cache Restoration
 
-- Normal native HTTP clients use a process-wide 256-entry LRU, keyed by
-  account/proxy, additive CA configuration and the request's frozen UA.
-  Direct accounts no longer share the base client's connection pool.
-  Preserve ordinary direct IPv4 binding and independent explicit egress clients.
+- Ordinary direct account HTTP requests reuse the base client's direct pool.
+  Retain that original client across proxy rebinding so removing a proxy cannot
+  reuse the proxy pool. Authentication, Cookie, State and the frozen UA remain
+  request-scoped; account or UA cache invalidation must not tear down the shared
+  base pool. Preserve ordinary direct IPv4 binding and independent IPv6/probe clients.
+- Account HTTP cache clients (including proxied requests) retain the process-wide
+  256-entry LRU keyed by account/proxy, additive CA and frozen UA. Do not replace
+  LRU with clear-all eviction or remove account isolation from proxy clients.
 - Token refresh has its own 128-entry LRU keyed by account/proxy, CA, frozen
   UA and token endpoint. Both automatic and manual refresh pass the account ID.
   Pre-account authorization/import and credential lease/CAS semantics stay intact.
@@ -528,10 +532,11 @@ time. Observe actual opening duration and its outcome independently.
   NODELAY policy; do not force NODELAY to implement response delivery or retries.
   SOCKS buffering remains handshake-only. Preserve compression, flush
   acknowledgement, 1200-ms/64-KiB precommit buffering, replay safety and ownership.
-- Regression coverage must use real loopback sockets for account/profile
-  separation, runtime UA changes on the same base client, LRU pressure and
-  eviction during a partial response. Isolate global-cache pressure tests in a
-  child process so unrelated tests cannot invalidate their expected hot entries.
+- Regression coverage must use real loopback sockets for direct sharing with
+  isolated request headers, proxy account/profile separation, runtime UA changes
+  on the same base client, LRU pressure and eviction during a partial response.
+  Isolate global-cache pressure tests in a child process so unrelated tests
+  cannot invalidate their expected hot entries.
 - Unrelated tests using separate Tokio runtimes must not share synthetic account
   IDs with a process-cached client. A runtime teardown can drop that client's
   connection tasks while another test is using its pool. Give independent

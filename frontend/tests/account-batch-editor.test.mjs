@@ -9,7 +9,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 
 const require = createRequire(import.meta.url)
-const updateFields = ['updateEnabled', 'updateTurnStateInjectionEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy']
+const updateFields = ['updateEnabled', 'updateTurnStateInjectionEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName']
 
 function loadModule(filename, dependencies = {}) {
   const exports = {}
@@ -73,6 +73,7 @@ function mountEditor(t, options = {}) {
     '@/components/base/BaseToast': { toast },
     '@/composables/useAsyncAction': asyncAction,
     '../utils/schedulingForm': schedulingForm,
+    '@/utils/account-name': loadModule(new URL('../src/utils/account-name.ts', import.meta.url)),
   })
   const scope = vue.effectScope()
   t.after(() => scope.stop())
@@ -101,6 +102,32 @@ function assertNoRequest(editor) {
   assert.deepEqual(editor.messages.success, [])
   assert.equal(editor.state.saving.value, false)
 }
+
+test('custom names require opt-in, support clear, and ignore unchecked invalid text', async (t) => {
+  for (const [value, expected] of [['  Batch name  ', 'Batch name'], ['', null]]) {
+    const editor = mountEditor(t, { accounts: [account('account-a', { customName: 'Original' })] })
+    editor.state.open()
+    assert.equal(editor.state.customName.value, 'Original')
+    editor.state.customName.value = value
+    assert.equal(editor.state.hasUpdates.value, false)
+    editor.state.updateCustomName.value = true
+    await editor.state.save()
+    assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], customName: expected }])
+    await vue.nextTick()
+    assert.equal(editor.state.customName.value, '')
+  }
+  const editor = mountEditor(t)
+  editor.state.open()
+  editor.state.customName.value = 'Invalid\nname'
+  editor.state.updateCustomName.value = true
+  await editor.state.save()
+  assert.equal(editor.requests.length, 0)
+  assert.equal(editor.messages.error.length, 1)
+  editor.state.updateCustomName.value = false
+  editor.state.updateWeight.value = true
+  await editor.state.save()
+  assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], weight: 17 }])
+})
 
 test('turn state batch update is opt-in and does not change ordinary scheduling', async (t) => {
   const editor = mountEditor(t)
@@ -251,6 +278,7 @@ test('every single field and combination sends exactly the opted-in patch after 
     { weight: 23 },
     { groupIds: ['group-new', 'group-other'] },
     { outboundProxyId: 'proxy-next' },
+    { customName: null },
   ]
 
   for (let mask = 1; mask < 2 ** updateFields.length; mask += 1) {

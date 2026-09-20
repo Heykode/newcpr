@@ -23,11 +23,27 @@ pub use gateway_core::account::{
 /// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {
+    pub custom_name: Option<String>,
     pub enabled: bool,
     pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
+}
+
+/// Local display metadata, never provider identity or credential material.
+pub fn normalize_custom_name(value: Option<&str>) -> Result<Option<String>, super::AdminError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.chars().any(char::is_control) {
+        return Err(super::AdminError::invalid("账号名称不能包含控制字符"));
+    }
+    let value = value.trim();
+    if value.chars().count() > 128 {
+        return Err(super::AdminError::invalid("账号名称不能超过 128 个字符"));
+    }
+    Ok((!value.is_empty()).then(|| value.to_owned()))
 }
 
 /// 账号列表排序字段。
@@ -121,6 +137,7 @@ pub struct AccountTurnStateSlotStatus {
 /// 账号公共存储投影；Provider 专属字段不进入此结构。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountRecord {
+    pub custom_name: Option<String>,
     pub id: String,
     pub provider_kind: ProviderKind,
     pub groups: Vec<AccountGroupRef>,
@@ -319,6 +336,7 @@ pub struct AccountSummary {
 /// 账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccount {
+    pub custom_name: Option<Option<String>>,
     pub account_id: String,
     pub enabled: bool,
     pub turn_state_injection_enabled: Option<bool>,
@@ -338,6 +356,7 @@ pub struct AccountUpdateResult {
 /// 一批账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
+    pub custom_name: Option<Option<String>>,
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,

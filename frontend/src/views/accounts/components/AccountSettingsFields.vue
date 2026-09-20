@@ -17,8 +17,11 @@ withDefaults(defineProps<{
   preserveProxy?: boolean
   proxyError?: string
   turnStateAvailable?: boolean
-}>(), { preserveProxy: true, batch: false, turnStateAvailable: false })
+  nameAvailable?: boolean
+}>(), { preserveProxy: true, batch: false, turnStateAvailable: false, nameAvailable: false })
 
+const customName = defineModel<string>('customName', { default: '' })
+const updateCustomName = defineModel<boolean>('updateCustomName', { default: false })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
@@ -36,6 +39,17 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
 
 <template>
   <div class="grid gap-5">
+    <BaseFormItem v-if="nameAvailable" label="自定义账号名称（选填）">
+      <template v-if="batch" #extra>
+        <BaseCheckbox v-model="updateCustomName" label="应用账号名称更改" title="应用账号名称更改" :disabled="disabled" />
+      </template>
+      <BaseInput
+        v-model="customName"
+        aria-label="自定义账号名称"
+        placeholder="默认名称"
+        :disabled="disabled || (batch && !updateCustomName)"
+      />
+    </BaseFormItem>
     <div :class="batch ? 'grid gap-2' : 'flex min-h-6 items-center justify-between gap-3'">
       <div class="flex min-w-0 items-center justify-between gap-3">
         <span class="text-cp leading-none font-medium text-cp-text-secondary">调度</span>

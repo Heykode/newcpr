@@ -287,6 +287,9 @@ impl PgAdminAccountStore {
             if settings.turn_state_injection_enabled.is_some() {
                 changed_fields.push("turn_state_injection_enabled".to_owned());
             }
+            if settings.custom_name.is_some() {
+                changed_fields.push("custom_name".to_owned());
+            }
         }
         let imported = self
             .accounts
@@ -1017,9 +1020,13 @@ impl AccountStore for PgAdminAccountStore {
         if command.turn_state_injection_enabled.is_some() {
             changed_fields.push("turn_state_injection_enabled".to_owned());
         }
+        if command.custom_name.is_some() {
+            changed_fields.push("custom_name".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                custom_name: command.custom_name,
                 account_ids: vec![command.account_id.clone()],
                 enabled: Some(command.enabled),
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
@@ -1112,9 +1119,13 @@ impl AccountStore for PgAdminAccountStore {
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
+        if command.custom_name.is_some() {
+            changed_fields.push("custom_name".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                custom_name: command.custom_name,
                 account_ids: command.account_ids,
                 enabled: command.enabled,
                 turn_state_injection_enabled: command.turn_state_injection_enabled,

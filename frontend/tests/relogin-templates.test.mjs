@@ -16,12 +16,12 @@ function load(path, dependencies = {}) {
   runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? require(name) })
   return exports
 }
-const { templateForm, templateConfig } = load('../src/views/relogin/template-form.ts', {
-  '../accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
+const { templateForm, templateConfig } = load('../src/components/account-templates/template-form.ts', {
+  '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
 })
 
 test('templates roundtrip scheduling, groups and proxy without sharing mutable arrays', () => {
-  const config = { name: 'Team', enabled: false, concurrencyLimit: 8, weight: 19, groupIds: ['group-a'], outboundProxyId: 'proxy-a' }
+  const config = { name: 'Team', enabled: false, turnStateInjectionEnabled: true, concurrencyLimit: 8, weight: 19, groupIds: ['group-a'], outboundProxyId: 'proxy-a' }
   const form = templateForm(config)
   assert.equal(JSON.stringify(templateConfig(form)), JSON.stringify(config))
   form.groupIds.push('group-b')
@@ -31,6 +31,7 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
   assert.equal(JSON.stringify(templateConfig(blank)), JSON.stringify({
     name: 'Defaults',
     enabled: true,
+    turnStateInjectionEnabled: false,
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
@@ -66,9 +67,58 @@ test('push snapshots template revision and remains backward compatible without o
   }))
   await api.pushRelogin([{ id: 'old', revision: 9 }])
   assert.equal('template' in calls[1].data, false)
-  await api.saveReloginTemplate({ name: 'Test' }, { id: 'template-a', revision: 3 })
+  const templates = load('../src/api/modules/account-templates.ts', {
+    '../request': async request => calls.push(request),
+  })
+  await templates.saveAccountTemplate({ name: 'Test' }, { id: 'template-a', revision: 3 })
   assert.equal(calls[2].url, '/api/admin/relogin/templates/save')
   assert.equal(calls[2].data.selection.revision, 3)
-  await api.deleteReloginTemplate({ id: 'template-a', revision: 4 })
+  await templates.deleteAccountTemplate({ id: 'template-a', revision: 4 })
   assert.equal(calls[3].data.revision, 4)
+})
+
+test('template State is only a boolean and legacy forms become explicit when saved', () => {
+  const legacy = templateForm({ name: 'Legacy', turnStateParameters: { model: 'never-copy' } })
+  assert.equal(legacy.turnStateInjectionEnabled, false)
+  for (const enabled of [true, false]) {
+    legacy.turnStateInjectionEnabled = enabled
+    const config = templateConfig(legacy)
+    assert.equal(config.turnStateInjectionEnabled, enabled)
+    assert.equal('turnStateParameters' in config, false)
+  }
+})
+
+test('account application captures IDs and version without resubmitting template config', async () => {
+  let call
+  const api = load('../src/api/modules/account-templates.ts', {
+    '../request': async (request) => { call = request },
+  })
+  const ids = ['first', 'second']
+  const template = { id: 'template', revision: 5, config: { enabled: false } }
+  await api.applyAccountTemplate(ids, template)
+  ids.push('later')
+  template.revision = 6
+  assert.equal(call.url, '/api/admin/accounts/apply-template')
+  assert.equal(JSON.stringify(call.data), JSON.stringify({
+    accountIds: ['first', 'second'],
+    template: { id: 'template', revision: 5 },
+  }))
+})
+
+test('templates never carry account names and push names are independent of templates', async () => {
+  const form = { ...templateForm(), name: 'Common settings', customName: 'Never apply' }
+  assert.equal('customName' in templateConfig(form), false)
+  assert.equal('customName' in templateForm({ ...templateConfig(form), customName: 'Never copy' }), false)
+  const calls = []
+  const api = load('../src/api/modules/relogin.ts', {
+    '../request': async request => calls.push(request),
+  })
+  await api.pushRelogin([{ id: 'new', revision: 1 }], undefined, 'Batch A')
+  assert.equal(calls[0].data.customName, 'Batch A')
+  assert.equal('template' in calls[0].data, false)
+  await api.pushRelogin([{ id: 'new', revision: 1 }], { id: 'template', revision: 2 }, 'Batch B')
+  assert.equal(calls[1].data.customName, 'Batch B')
+  assert.equal('customName' in calls[1].data.template, false)
+  await api.pushRelogin([{ id: 'old', revision: 1 }])
+  assert.equal('customName' in calls[2].data, false)
 })

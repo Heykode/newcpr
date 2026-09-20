@@ -108,6 +108,9 @@ async function main() {
               case '/api/admin/proxies':
                 data = { items: [], page: { page: 1, pageSize: 200, total: 0, totalPages: 0 } }
                 break
+              case '/api/admin/ipv6-egress':
+                data = { revision: 1, defaultMode: 'unchanged', addresses: [], accountOverrides: {}, fixedBindings: {} }
+                break
               case '/api/admin/relogin':
                 data = { settings: { concurrency: 1, paused: false }, items: library }
                 break
@@ -117,6 +120,52 @@ async function main() {
               case '/api/admin/accounts/import-tasks':
                 data = { items: [] }
                 break
+            }
+          }
+          else if (request.method === 'POST' && ['/api/admin/accounts/update', '/api/admin/accounts/batch-update'].includes(path)) {
+            let raw = ''
+            for await (const chunk of request)
+              raw += chunk
+            const body = JSON.parse(raw)
+            const ids = body.accountIds ?? [body.accountId]
+            if (ids.some(id => !accounts.some(account => account.id === id))) {
+              status = 404
+            }
+            else {
+              for (const account of accounts.filter(account => ids.includes(account.id))) {
+                for (const field of ['customName', 'enabled', 'turnStateInjectionEnabled', 'concurrencyLimit', 'weight']) {
+                  if (Object.hasOwn(body, field))
+                    account[field] = field === 'customName' ? body[field]?.trim() || null : body[field]
+                }
+                if (body.groupIds)
+                  account.groups = groups.filter(group => body.groupIds.includes(group.id))
+              }
+              data = { accountIds: ids, configRevision: 2 }
+            }
+          }
+          else if (request.method === 'POST' && path === '/api/admin/accounts/apply-template') {
+            let raw = ''
+            for await (const chunk of request)
+              raw += chunk
+            const body = JSON.parse(raw)
+            const template = templates.find(row => row.id === body.template?.id && row.revision === body.template?.revision)
+            if (!template || !body.accountIds?.length || body.accountIds.some(id => !accounts.some(account => account.id === id))) {
+              status = 409
+            }
+            else {
+              for (const account of accounts.filter(account => body.accountIds.includes(account.id))) {
+                const config = template.config
+                Object.assign(account, {
+                  enabled: config.enabled,
+                  concurrencyLimit: config.concurrencyLimit,
+                  weight: config.weight,
+                  groups: groups.filter(group => config.groupIds.includes(group.id)),
+                  outboundProxyEndpoint: null,
+                })
+                if (config.turnStateInjectionEnabled != null)
+                  account.turnStateInjectionEnabled = config.turnStateInjectionEnabled
+              }
+              data = { accountIds: body.accountIds, configRevision: 2 }
             }
           }
           else if (request.method === 'POST' && path.startsWith('/api/admin/relogin/') && !path.startsWith('/api/admin/relogin/accounts/')) {

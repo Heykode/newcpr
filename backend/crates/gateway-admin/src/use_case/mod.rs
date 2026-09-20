@@ -1,6 +1,7 @@
 //! 管理控制面的用例实现。
 
 pub mod account_groups;
+pub mod account_templates;
 pub mod accounts;
 pub mod auth;
 pub mod backup;

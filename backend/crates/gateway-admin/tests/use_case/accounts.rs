@@ -583,6 +583,7 @@ pub(super) struct FakeAccountStore {
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     pub(super) rotation_updates: Mutex<Vec<AccountRecord>>,
+    pub(super) batch_updates: Mutex<Vec<BatchUpdateAccounts>>,
     pub(super) rotation_attempts: Mutex<Vec<CredentialRotationCommit>>,
     pub(super) credential_detail_updates: Mutex<Vec<AccountRecord>>,
     audit_requests: Mutex<Vec<String>>,
@@ -611,6 +612,7 @@ impl FakeAccountStore {
             account_after_probe: Mutex::new(None),
             fail_commit: Mutex::new(false),
             rotation_updates: Mutex::new(Vec::new()),
+            batch_updates: Mutex::new(Vec::new()),
             rotation_attempts: Mutex::new(Vec::new()),
             credential_detail_updates: Mutex::new(Vec::new()),
             audit_requests: Mutex::new(Vec::new()),
@@ -1093,6 +1095,7 @@ impl AccountStore for FakeAccountStore {
         self.record("store.batch_update_accounts");
         self.record_context(context);
         self.require_commit()?;
+        self.batch_updates.lock().unwrap().push(command.clone());
         Ok(AccountsUpdateResult {
             config_revision: revision(2),
             account_ids: command
@@ -1564,6 +1567,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                custom_name: None,
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
@@ -1602,6 +1606,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                custom_name: None,
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
                 enabled: false,
@@ -1645,6 +1650,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                custom_name: None,
                 outbound_proxy: None,
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
                 enabled: Some(false),
@@ -3226,6 +3232,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        custom_name: None,
         outbound_proxy: None,
         id: "acct_test".to_owned(),
         provider_kind: ProviderKind::new(kind).expect("provider kind"),
@@ -3563,6 +3570,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        custom_name: None,
         enabled: false,
         turn_state_injection_enabled: None,
         concurrency_limit: Some(

@@ -253,6 +253,7 @@ for (const mode of ['access_token', 'refresh_token']) {
     const h = mountOnboarding(t)
     h.input('openai', mode, ' synthetic-a \r\n \n synthetic-b\nsynthetic-a ')
     Object.assign(h.state.createForm.value, {
+      customName: '  Import batch  ',
       enabled: false,
       turnStateInjectionEnabled: true,
       concurrencyLimit: '7',
@@ -269,13 +270,14 @@ for (const mode of ['access_token', 'refresh_token']) {
     assert.deepEqual(body.items, ['synthetic-a', 'synthetic-b', 'synthetic-a'].map(value => ({
       provider: 'openai',
       data: { accounts: [{ [key]: value }] },
-      settings: { enabled: false, turnStateInjectionEnabled: true, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'] },
+      settings: { customName: 'Import batch', enabled: false, turnStateInjectionEnabled: true, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'] },
       outboundProxyId: 'proxy-a',
     })))
     assert.equal(h.created.length, 1)
     assert.equal(h.state.showCreateModal.value, false)
     assert.equal(h.state.createForm.value.importTexts[mode], '')
     assert.equal(h.state.createForm.value.turnStateInjectionEnabled, false)
+    assert.equal(h.state.createForm.value.customName, '')
     assert.equal(h.reloads(), 0, 'creation is not proof of account persistence')
     assert.deepEqual(h.notifications.errors, [])
   })
@@ -552,12 +554,14 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     const h = mountOnboarding(t)
     h.input(provider, 'oauth')
     h.state.createForm.value.turnStateInjectionEnabled = true
+    h.state.createForm.value.customName = '  OAuth batch  '
     await h.state.handleAuthorizeOAuth()
     h.state.createForm.value.oauthCallback = 'https://example.com/callback?code=synthetic-code'
     await h.state.handleCreate()
     assert.equal(h.submissions.length, 0)
     assert.equal(h.oauthStarts[0].accountId, undefined)
     assert.deepEqual(h.oauthCompletions[0].settings, {
+      customName: 'OAuth batch',
       enabled: true,
       concurrencyLimit: null,
       weight: 1,
@@ -571,6 +575,7 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     assert.equal(h.oauthStarts[1].accountId, 'account-existing')
     assert.equal(h.oauthStarts[1].outboundProxyId, undefined)
     h.state.createForm.value.oauthCallback = 'synthetic-authorization-code'
+    h.state.createForm.value.customName = 'Must not rename existing account'
     await h.state.handleCreate()
     assert.equal(h.oauthCompletions[1].settings, undefined)
     assert.equal(h.submissions.length, 0)
