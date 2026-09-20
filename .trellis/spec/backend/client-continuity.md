@@ -105,8 +105,13 @@ editing prior entries.
   not permission to move that continuation elsewhere.
 - Fresh/random policies never authorize post-payload replay. A safe pre-send
   fallback uses the selected account, IPv6 source and frozen profile.
-- Source binding must never silently become IPv4. Keep ordinary `unchanged`
-  behavior intact. HTTP and WS use their existing protocol-specific TLS/ALPN.
+- Explicit IPv6 source binding must never silently become IPv4. Ordinary
+  `unchanged` direct HTTP and WS now use IPv4 only; account proxies retain their
+  own dual-stack dial and State probes retain their independent egress.
+  HTTP and WS use their existing protocol-specific TLS/ALPN. This changes TCP
+  address selection, not account scheduling, identity or continuation ownership.
+  WS connector errors must retain the underlying I/O kind while redacting
+  endpoint details, so pre-send failures keep their existing diagnosis.
 - A local egress failure during a shared WebSocket opening remains a typed
   local error for every waiter; it must not become `SharedConnectFailed` or
   count against the origin breaker. After a committed policy reload, retire
@@ -493,7 +498,7 @@ time. Observe actual opening duration and its outcome independently.
 - 兼容验证覆盖宿主预装与并发初始化、正常 HTTPS/WSS、错误证书/主机名、
   代理内外层校验及重复采样。随机扩展顺序、临时公钥和 session ID 不纳入
   逐字节相等承诺。
-- `cpr_tls_rejects_plaintext_extensions_across_key_change` 将完整明文
+- TLS 密钥切换边界回归将完整明文
   EncryptedExtensions 追加到 ServerHello 同一记录，断言
   `KeyEpochWithPendingFragment` 和 `unexpected_message`。合法服务端 flight
   必须成功；普通证书负例不能冒充这个边界回归。
