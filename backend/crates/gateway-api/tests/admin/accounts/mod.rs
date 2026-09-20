@@ -1395,6 +1395,7 @@ mod response {
                 plan_type: None,
                 authentication_kind: "oauth".to_owned(),
                 credential_revision: Revision::new(1).expect("revision"),
+                turn_state_binding_revision: Revision::new(1).expect("binding revision"),
                 relogin_count: 0,
                 last_relogin_at: None,
                 has_refresh_token: true,
