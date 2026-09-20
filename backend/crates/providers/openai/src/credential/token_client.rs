@@ -5,17 +5,75 @@ use super::types::CodexOAuthMetadata;
 use crate::transport::{
     headers::build_codex_profile_headers,
     profile::CodexWireProfileState,
-    tls::{build_reqwest_native_client_with_custom_ca, ensure_rustls_provider},
+    tls::{
+        build_reqwest_native_client_with_custom_ca, custom_ca_env_cache_key, ensure_rustls_provider,
+    },
 };
 use async_trait::async_trait;
+use gateway_core::account::ProviderAccountId;
 use reqwest::{Client, StatusCode, redirect::Policy};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::{fmt, time::Duration};
+use std::{
+    collections::VecDeque,
+    fmt,
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 
 const MAX_OAUTH_RESPONSE_BYTES: usize = 64 * 1024;
 const TOKEN_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_CACHED_ACCOUNT_TOKEN_CLIENTS: usize = 128;
+
+type TokenClientCacheKey = (Option<String>, String, String, String);
+
+struct TokenClientCacheEntry {
+    account_id: String,
+    key: TokenClientCacheKey,
+    client: Client,
+}
+
+#[derive(Default)]
+struct TokenClientCache {
+    entries: VecDeque<TokenClientCacheEntry>,
+}
+
+impl TokenClientCache {
+    fn get(&mut self, key: &TokenClientCacheKey) -> Option<Client> {
+        let index = self.entries.iter().position(|entry| &entry.key == key)?;
+        let entry = self.entries.remove(index)?;
+        let client = entry.client.clone();
+        self.entries.push_back(entry);
+        Some(client)
+    }
+
+    fn insert(&mut self, entry: TokenClientCacheEntry) -> Client {
+        if let Some(client) = self.get(&entry.key) {
+            return client;
+        }
+        while self.entries.len() >= MAX_CACHED_ACCOUNT_TOKEN_CLIENTS {
+            self.entries.pop_front();
+        }
+        let client = entry.client.clone();
+        self.entries.push_back(entry);
+        client
+    }
+
+    fn evict_account(&mut self, account_id: &str) {
+        self.entries.retain(|entry| entry.account_id != account_id);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+static TOKEN_CLIENTS: OnceLock<Mutex<TokenClientCache>> = OnceLock::new();
+
+fn token_clients() -> &'static Mutex<TokenClientCache> {
+    TOKEN_CLIENTS.get_or_init(|| Mutex::new(TokenClientCache::default()))
+}
 
 /// Codex Desktop 使用的官方 OAuth public client。
 pub const OFFICIAL_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -206,6 +264,15 @@ impl fmt::Debug for RefreshUpstreamFailure {
 #[async_trait]
 pub trait TokenRefresher: Send + Sync + 'static {
     async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, RefreshFailure>;
+    async fn refresh_for_account(
+        &self,
+        account_id: &ProviderAccountId,
+        refresh_token: &str,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<TokenPair, RefreshFailure> {
+        let _ = account_id;
+        self.refresh_with_proxy(refresh_token, proxy).await
+    }
     async fn refresh_with_proxy(
         &self,
         refresh_token: &str,
@@ -311,6 +378,51 @@ pub struct OpenAiTokenClient {
 pub struct TokenClientBuildError;
 
 impl OpenAiTokenClient {
+    fn with_account(
+        &self,
+        account_id: &ProviderAccountId,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<Self, TokenClientBuildError> {
+        let mut selected = Self {
+            profile: self.profile.frozen(),
+            ..self.clone()
+        };
+        let key = (
+            custom_ca_env_cache_key(),
+            token_egress_key(account_id.as_str(), proxy),
+            selected.profile.snapshot().user_agent(),
+            self.config.token_endpoint.clone(),
+        );
+        if let Some(client) = token_clients()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+        {
+            selected.client = client;
+            return Ok(selected);
+        }
+        let mut builder = Client::builder()
+            .no_proxy()
+            .redirect(Policy::none())
+            .connect_timeout(TOKEN_CONNECT_TIMEOUT)
+            .timeout(TOKEN_REQUEST_TIMEOUT);
+        if let Some(proxy) = proxy {
+            builder = builder
+                .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| TokenClientBuildError)?);
+        }
+        let client = build_reqwest_native_client_with_custom_ca(builder)
+            .map_err(|_| TokenClientBuildError)?;
+        selected.client = token_clients()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(TokenClientCacheEntry {
+                account_id: account_id.as_str().to_owned(),
+                key,
+                client,
+            });
+        Ok(selected)
+    }
+
     fn with_proxy(
         &self,
         proxy: Option<&gateway_core::account::OutboundProxy>,
@@ -509,6 +621,18 @@ struct AuthorizationCodeResponse {
 
 #[async_trait]
 impl TokenRefresher for OpenAiTokenClient {
+    async fn refresh_for_account(
+        &self,
+        account_id: &ProviderAccountId,
+        refresh_token: &str,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<TokenPair, RefreshFailure> {
+        self.with_account(account_id, proxy)
+            .map_err(|_| proxy_refresh_failure())?
+            .refresh(refresh_token)
+            .await
+    }
+
     async fn refresh_with_proxy(
         &self,
         refresh_token: &str,
@@ -548,6 +672,36 @@ impl TokenRefresher for OpenAiTokenClient {
             upstream: None,
         })
     }
+}
+
+fn token_egress_key(
+    account_id: &str,
+    proxy: Option<&gateway_core::account::OutboundProxy>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(account_id.as_bytes());
+    hash.update([0]);
+    hash.update(
+        proxy
+            .map_or("direct", |proxy| proxy.expose_url())
+            .as_bytes(),
+    );
+    hex::encode(hash.finalize())
+}
+
+pub fn evict_account_token_clients(account_id: &str) {
+    token_clients()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .evict_account(account_id);
+}
+
+pub fn evict_all_account_token_clients() {
+    token_clients()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
 }
 
 #[async_trait]

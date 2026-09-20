@@ -394,6 +394,71 @@ async fn seed_refreshable_account(
 }
 
 #[tokio::test]
+async fn automatic_and_manual_refresh_preserve_the_account_client_scope() {
+    struct AccountScopedRefresher(Mutex<Vec<ProviderAccountId>>);
+
+    #[async_trait]
+    impl TokenRefresher for AccountScopedRefresher {
+        async fn refresh(&self, _: &str) -> Result<TokenPair, RefreshFailure> {
+            panic!("existing accounts must use the account-scoped refresh entry point")
+        }
+
+        async fn refresh_for_account(
+            &self,
+            account_id: &ProviderAccountId,
+            _: &str,
+            proxy: Option<&gateway_core::account::OutboundProxy>,
+        ) -> Result<TokenPair, RefreshFailure> {
+            assert!(proxy.is_none());
+            self.0.lock().unwrap().push(account_id.clone());
+            Ok(TokenPair {
+                access_token: Some("synthetic-scoped-access".to_owned()),
+                refresh_token: None,
+                id_token: None,
+            })
+        }
+    }
+
+    let store = Arc::new(MemoryAccountStore::default());
+    seed_refreshable_account(
+        &store,
+        "acct_refresh_scope",
+        SystemTime::now() + Duration::from_secs(30),
+        None,
+    )
+    .await;
+    let refresher = Arc::new(AccountScopedRefresher(Mutex::new(Vec::new())));
+    let policy = MutableRuntimePolicy::new(Duration::from_secs(60));
+    let automatic = CodexCredentialRefreshService::new(
+        store.repository(),
+        refresher.clone(),
+        Arc::new(RefreshLeases),
+        Arc::new(RefreshCredentialState),
+        policy.clone(),
+    );
+    let outcomes = automatic.refresh_due().await.unwrap();
+    assert!(matches!(
+        outcomes.as_slice(),
+        [CodexCredentialRefreshOutcome::Refreshed { .. }]
+    ));
+    let account = store.account("acct_refresh_scope").unwrap();
+    let current = store
+        .load_credential(account.id(), account.revision())
+        .await
+        .unwrap();
+    let manual = provider_openai::credential::CodexCredentialAdminService::new(
+        refresher.clone(),
+        Arc::new(RefreshLeases),
+        policy,
+    );
+    manual.manual_refresh(current).await.unwrap();
+    assert_eq!(
+        *refresher.0.lock().unwrap(),
+        vec![account.id().clone(), account.id().clone()]
+    );
+}
+
+#[tokio::test]
 async fn scheduled_refresh_uses_the_current_margin_without_persisting_a_normal_schedule() {
     let store = Arc::new(MemoryAccountStore::default());
     let policy = MutableRuntimePolicy::new(Duration::from_secs(1));
