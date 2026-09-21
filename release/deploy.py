@@ -136,7 +136,11 @@ def require_target_ci(repository, commit):
         raise images.Unavailable("Latest main CI must succeed before deployment")
 
 
-def run(profile, commit, apply, migration_plan=None):
+def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=None):
+    if (apply and prepare) or (staged is not None and not apply):
+        raise images.Unavailable("Use --prepare or --apply; --staged requires --apply")
+    if staged is not None and not re.fullmatch(r"/var/tmp/cpr-deploy\.[A-Za-z0-9]+", staged):
+        raise images.Unavailable("Invalid prepared staging directory")
     os.chdir(ROOT)
     images.git("fetch", "origin", "main")
     # Do not silently execute a stale or locally edited deployment implementation.
@@ -157,54 +161,75 @@ def run(profile, commit, apply, migration_plan=None):
     else:
         validate_upgrade(old_labels, selected["proof"])
     print(json.dumps({
-        "mode": "apply" if apply else "plan",
+        "mode": "apply" if apply else "prepare" if prepare else "plan",
         "target_commit": commit, "tested_commit": selected["proof"]["source_commit"],
         "ci_run": selected["proof"]["run_id"], "platform": selected["proof"]["platform"],
         "build_required": False, "migrations_changed": upgrade is not None,
         "automatic_image_rollback": upgrade is None,
     }), flush=True)
-    if not apply:
+    if not apply and not prepare:
         return
     host = profile["ssh_host"]
     with tempfile.TemporaryDirectory(prefix="cpr-deploy-") as temporary:
         directory = Path(temporary)
         archive = directory / "image.tar.gz"
-        print("Downloading and verifying the CI image; the old service stays online.", flush=True)
-        images.artifact_file(repository, selected["artifact"], "image.tar.gz", archive)
-        if images.sha256(archive) != selected["proof"]["archive_sha256"]:
-            raise images.Unavailable("Image archive checksum mismatch")
         request = {"profile": profile, "selected": selected, "expected_old_image": old_id}
         if upgrade:
             request["migration_upgrade"] = upgrade
+        if staged is not None:
+            previous = json.loads(ssh(host, "cat", staged + "/request.json"))
+            if previous != request:
+                raise images.Unavailable("Prepared request changed; run a new preparation before applying")
+            remote = staged
+            transfer = []
+            print("Reusing the uploaded image; rechecking and refreshing online backups before switching.",
+                  flush=True)
+        else:
+            print("Downloading and verifying the CI image; the old service stays online.", flush=True)
+            images.artifact_file(repository, selected["artifact"], "image.tar.gz", archive)
+            if images.sha256(archive) != selected["proof"]["archive_sha256"]:
+                raise images.Unavailable("Image archive checksum mismatch")
+            remote = ssh(host, "mktemp", "-d", "/var/tmp/cpr-deploy.XXXXXXXX")
+            if not re.fullmatch(r"/var/tmp/cpr-deploy\.[A-Za-z0-9]+", remote):
+                raise images.Unavailable("Unexpected remote staging directory")
+            transfer = [str(archive)]
         request_path = directory / "request.json"
         request_path.write_text(json.dumps(request))
         request_path.chmod(0o600)
-        remote = ssh(host, "mktemp", "-d", "/var/tmp/cpr-deploy.XXXXXXXX")
-        if not re.fullmatch(r"/var/tmp/cpr-deploy\.[A-Za-z0-9]+", remote):
-            raise images.Unavailable("Unexpected remote staging directory")
         subprocess.run([
-            "scp", str(archive), str(request_path), str(ROOT / "deploy/rollout.py"),
+            "scp", *transfer, str(request_path), str(ROOT / "deploy/rollout.py"),
             str(ROOT / "deploy/migration_backup.py"), str(ROOT / "deploy/egress_check.py"),
             host + ":" + remote + "/",
         ], check=True)
-        print("Image staged. Starting locked deployment"
-              + (" with reviewed migrations and manual recovery." if upgrade
-                 else " with image rollback enabled."), flush=True)
+        if prepare:
+            print("Image staged. Preparing online only; application switching is disabled.", flush=True)
+        else:
+            print("Image staged. Starting locked deployment"
+                  + (" with reviewed migrations and manual recovery." if upgrade
+                     else " with image rollback enabled."), flush=True)
         # Keep SSH alive during graceful drain; never kill it to force a short outage.
         result = subprocess.run([
             "ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", host,
             shlex.join(["python3", remote + "/rollout.py", "--request",
-                        remote + "/request.json", "--archive", remote + "/image.tar.gz", "--apply"]),
+                        remote + "/request.json", "--archive", remote + "/image.tar.gz",
+                        "--prepare" if prepare else "--apply"]),
         ])
         if result.returncode:
-            raise images.Unavailable("Deployment failed; inspect the server deployment result before retrying")
+            raise images.Unavailable("Preparation or deployment failed; inspect the private result before retrying")
+        if prepare:
+            print(json.dumps({"status": "prepared_not_deployed", "staged": remote,
+                              "target_commit": commit, "version": selected["proof"]["version"]}),
+                  flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", required=True, type=Path)
     parser.add_argument("--commit", required=True)
-    parser.add_argument("--apply", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--prepare", action="store_true", help="Stage image and online backups, never switch")
+    parser.add_argument("--staged", help="Reuse a prepared server directory with --apply")
     parser.add_argument("--migration-plan", help="Reviewed upgrade name, for example v3.13.0")
     args = parser.parse_args()
     if not images.SHA.fullmatch(args.commit):
@@ -216,7 +241,8 @@ def main():
         parser.error("Deployment profile must be private (chmod 600)")
     try:
         profile = validate_profile(json.loads(profile_path.read_text()))
-        run(profile, args.commit, args.apply, args.migration_plan)
+        run(profile, args.commit, args.apply, args.migration_plan,
+            prepare=args.prepare, staged=args.staged)
     except (images.Unavailable, subprocess.SubprocessError, OSError, ValueError, KeyError) as error:
         # Never echo subprocess commands that may contain private deployment paths.
         message = str(error) if isinstance(error, images.Unavailable) else type(error).__name__

@@ -167,6 +167,15 @@ Following the release process introduced by upstream commit `9b19cf08`:
   A successful workflow means the release pipeline completed; it does not
   mean a runtime instance was upgraded.
 
+When approval is required at the interruption boundary, run the verified
+deployment command with `--prepare`, never `--apply`. Preparation imports the
+verified image and validates online backups under the shared deployment lock,
+then exits without changing live Compose or database schema. Do not hold a
+running apply process open while waiting for approval. After separate approval,
+`--apply --staged <returned-directory>` can reuse the uploaded archive, but must
+revalidate current evidence and regenerate online backups before switching.
+Prepared state is not a deployment result or a permanent recovery guarantee.
+
 ## Release Platform Policy
 
 - `release/platforms.yaml` is the only active platform list. The approved default
