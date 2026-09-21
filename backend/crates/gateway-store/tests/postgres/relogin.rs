@@ -31,6 +31,8 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
         credential: None,
         target: None,
         automatic_job: false,
+        workspace_mode: Default::default(),
+        workspace_targets: Vec::new(),
         manual_push_context: None,
         automatic_attempts: 0,
         stop_reason: None,

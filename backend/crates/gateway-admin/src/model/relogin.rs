@@ -10,6 +10,21 @@ pub const MAX_ENTRIES: usize = 10_000;
 pub const MAX_BATCH: usize = 500;
 pub const MAX_IMPORT_BYTES: usize = 512 * 1024;
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloginWorkspaceMode {
+    #[default]
+    Original,
+    Highest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReloginPushSelection {
+    pub account_id: String,
+    pub switch_workspace: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReloginStatus {
@@ -118,6 +133,11 @@ pub struct ReloginEntry {
     pub credential: Option<ReloginCredential>,
     pub target: Option<ReloginTarget>,
     pub automatic_job: bool,
+    #[serde(default)]
+    pub workspace_mode: ReloginWorkspaceMode,
+    /// Frozen before manual acquisition, never adopted from a later pool snapshot.
+    #[serde(default)]
+    pub workspace_targets: Vec<ReloginTarget>,
     /// Explicit account-menu confirmation; absent on legacy and library-only jobs.
     #[serde(default)]
     pub manual_push_context: Option<super::MutationContext>,

@@ -238,6 +238,15 @@ pub trait ProviderAdmin: Send + Sync {
         command: PrepareCredentialRotation,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError>;
 
+    /// Explicit manual relogin only; ordinary refresh/rotation remains workspace-locked.
+    async fn prepare_relogin_workspace_switch(
+        &self,
+        _command: PrepareCredentialRotation,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Invalid)
+            .with_public_message("不支持手动切换工作区"))
+    }
+
     async fn prepare_refresh(
         &self,
         command: PrepareCredentialRefresh,

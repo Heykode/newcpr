@@ -143,6 +143,63 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
 }
 
 #[tokio::test]
+async fn relogin_workspace_wire_is_opt_in_and_requires_typed_confirmation() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for body in [
+        json!({"ids":["a"]}),
+        json!({"ids":["a"],"workspaceMode":"original"}),
+        json!({"ids":["a"],"workspaceMode":"highest"}),
+    ] {
+        assert_eq!(
+            request(&fixture, "/api/admin/relogin/queue", Some(body), true)
+                .await
+                .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    for (path, body) in [
+        (
+            "/api/admin/relogin/queue",
+            json!({"ids":["a"],"workspaceMode":"anything"}),
+        ),
+        (
+            "/api/admin/relogin/push",
+            json!({"ids":["a"],"revisions":{"a":1},"selections":{"a":{"accountId":"pool"}}}),
+        ),
+        (
+            "/api/admin/relogin/push",
+            json!({"ids":["a"],"revisions":{"a":1},"selections":{"a":{"accountId":"pool","switchWorkspace":"yes"}}}),
+        ),
+        (
+            "/api/admin/relogin/accounts/queue",
+            json!({"entryId":"a","revision":1,"target":{"account_id":"a","credential_revision":1,"user_id":"u","workspace_id":"w"},"workspaceMode":"highest"}),
+        ),
+    ] {
+        let (status, response) = request(&fixture, path, Some(body.clone()), true).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{path} {body}: {response}"
+        );
+    }
+    assert_eq!(
+        request(
+            &fixture,
+            "/api/admin/relogin/queue",
+            Some(json!({"ids":["a"],"workspaceMode":null})),
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(request(&fixture, "/api/admin/relogin/push", Some(json!({
+        "ids":["a"],"revisions":{"a":1},"selections":{"a":{"accountId":"pool","switchWorkspace":true}}
+    })), true).await.0, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn relogin_retry_settings_reject_wrong_types_before_accessing_storage() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");

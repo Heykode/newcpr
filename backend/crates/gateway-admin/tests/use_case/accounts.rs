@@ -481,6 +481,21 @@ impl ProviderAdmin for FakeProviderAdmin {
         Ok(self.prepared_rotation(&command.account))
     }
 
+    async fn prepare_relogin_workspace_switch(
+        &self,
+        command: PrepareCredentialRotation,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        let prepared = self.prepare_rotation(command).await?;
+        let (mut facts, guard) = prepared.into_parts();
+        let credential = self.relogin_result.lock().unwrap().clone().unwrap();
+        facts.replacement_identity = Some(gateway_core::account::ProviderAccountIdentity::new(
+            credential.user_id,
+            Some(credential.workspace_id),
+        ));
+        facts.plan_type = Some(credential.plan_type);
+        Ok(PreparedCredentialRotation::new(facts, guard))
+    }
+
     async fn prepare_refresh(
         &self,
         command: PrepareCredentialRefresh,
@@ -584,7 +599,7 @@ impl ProviderAdmin for FakeProviderAdmin {
 
 pub(super) struct FakeAccountStore {
     events: EventLog,
-    accounts: Mutex<Vec<AccountRecord>>,
+    pub(super) accounts: Mutex<Vec<AccountRecord>>,
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     pub(super) rotation_updates: Mutex<Vec<AccountRecord>>,
@@ -1040,6 +1055,25 @@ impl AccountStore for FakeAccountStore {
             account.credential_state = CredentialState::Ready;
         }
         Ok(rotation_result(command))
+    }
+
+    async fn commit_relogin_workspace_switch(
+        &self,
+        command: CredentialRotationCommit,
+        context: &MutationContext,
+    ) -> AdminStoreResult<CredentialMutationResult> {
+        let identity = command.prepared.replacement_identity.clone().unwrap();
+        let plan = command.prepared.plan_type.clone();
+        let result = self.commit_credential_rotation(command, context).await?;
+        let mut accounts = self.accounts.lock().unwrap();
+        let account = accounts
+            .iter_mut()
+            .find(|account| account.id == result.account_id.as_str())
+            .unwrap();
+        account.upstream_user_id = Some(identity.upstream_user_id().to_owned());
+        account.upstream_account_id = identity.upstream_account_id().map(str::to_owned);
+        account.plan_type = plan;
+        Ok(result)
     }
 
     async fn commit_credential_refresh(

@@ -135,6 +135,27 @@ impl PgProviderAccountRepository {
         replacement_email: Option<&str>,
         incoming: &JsonObject,
     ) -> StoreResult<JsonObject> {
+        self.prepare_rotated_device_with_workspace_policy(
+            transaction,
+            (account_id, expected_revision),
+            replacement_identity,
+            replacement_email,
+            incoming,
+            false,
+        )
+        .await
+    }
+
+    pub(crate) async fn prepare_rotated_device_with_workspace_policy(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        target: (&str, u64),
+        replacement_identity: Option<&ProviderAccountIdentity>,
+        replacement_email: Option<&str>,
+        incoming: &JsonObject,
+        switch_workspace: bool,
+    ) -> StoreResult<JsonObject> {
+        let (account_id, expected_revision) = target;
         if self.device_codecs.is_empty()? {
             return Ok(incoming.clone());
         }
@@ -169,6 +190,7 @@ impl PgProviderAccountRepository {
             None => old_account.as_deref(),
         };
         if replacement_identity.is_some()
+            && !switch_workspace
             && old_account
                 .as_deref()
                 .is_some_and(|known| Some(known) != account)
@@ -188,7 +210,7 @@ impl PgProviderAccountRepository {
         let old_account = old_account.as_deref().filter(|value| !value.is_empty());
         if let (Some(old_user), Some(old_account), Some(new_user), Some(new_account)) =
             (old_user, old_account, Some(user), Some(account))
-            && old_user != new_user
+            && (old_user != new_user || (switch_workspace && old_account != new_account))
         {
             let emails_match = old_email
                 .as_deref()
@@ -200,7 +222,7 @@ impl PgProviderAccountRepository {
                         .filter(|value| !value.is_empty()),
                 )
                 .is_some_and(|(old, new)| old.eq_ignore_ascii_case(new));
-            if !emails_match {
+            if !emails_match || (switch_workspace && old_user != new_user) {
                 return Err(device_conflict(
                     "reauthorization cannot rebind a device without a matching email",
                 ));

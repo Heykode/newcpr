@@ -337,42 +337,62 @@ impl PgAdminAccountStore {
         action: &str,
         relogin_operation_id: Option<String>,
     ) -> AdminStoreResult<CredentialMutationResult> {
+        self.commit_prepared_rotation_with_workspace_policy(
+            prepared,
+            context,
+            action,
+            relogin_operation_id,
+            false,
+        )
+        .await
+    }
+
+    async fn commit_prepared_rotation_with_workspace_policy(
+        &self,
+        prepared: PreparedCredentialRotationFacts,
+        context: &MutationContext,
+        action: &str,
+        relogin_operation_id: Option<String>,
+        switch_workspace: bool,
+    ) -> AdminStoreResult<CredentialMutationResult> {
         let account_id = prepared.account_id.clone();
         let scope = ProviderAccountAdminScope {
             provider_kind: prepared.provider_kind.as_str().to_owned(),
         };
-        let rotation = self
-            .accounts
-            .rotate_provider_account(RotateProviderAccount {
-                relogin_operation_id,
-                scope,
-                profile: UpdateProviderAccount {
-                    id: account_id.as_str().to_owned(),
-                    name: prepared.name,
-                    email: prepared.email,
-                    plan_type: prepared.plan_type,
-                },
-                replacement_identity: prepared.replacement_identity,
-                credential: ProviderCredentialUpdate {
-                    account_id: account_id.as_str().to_owned(),
-                    expected_revision: store_revision(prepared.expected_credential_revision)?,
-                    provider_credentials_json: provider_document_json(prepared.provider_material)
-                        .map_err(|error| admin_store_error(ENTITY, error))?,
-                    has_refresh_token: prepared.has_refresh_token,
-                    access_token_expires_at: prepared.access_token_expires_at,
-                    next_refresh_at: prepared.next_refresh_at,
-                    preserve_profile: prepared.preserve_profile,
-                },
-                audit: mutation_audit(
-                    context,
-                    action,
-                    "provider_account",
-                    account_id.as_str(),
-                    vec!["credentials".to_owned()],
-                ),
-            })
-            .await
-            .map_err(|error| admin_store_error(ENTITY, error))?;
+        let command = RotateProviderAccount {
+            relogin_operation_id,
+            scope,
+            profile: UpdateProviderAccount {
+                id: account_id.as_str().to_owned(),
+                name: prepared.name,
+                email: prepared.email,
+                plan_type: prepared.plan_type,
+            },
+            replacement_identity: prepared.replacement_identity,
+            credential: ProviderCredentialUpdate {
+                account_id: account_id.as_str().to_owned(),
+                expected_revision: store_revision(prepared.expected_credential_revision)?,
+                provider_credentials_json: provider_document_json(prepared.provider_material)
+                    .map_err(|error| admin_store_error(ENTITY, error))?,
+                has_refresh_token: prepared.has_refresh_token,
+                access_token_expires_at: prepared.access_token_expires_at,
+                next_refresh_at: prepared.next_refresh_at,
+                preserve_profile: prepared.preserve_profile,
+            },
+            audit: mutation_audit(
+                context,
+                action,
+                "provider_account",
+                account_id.as_str(),
+                vec!["credentials".to_owned()],
+            ),
+        };
+        let rotation = if switch_workspace {
+            self.accounts.switch_relogin_workspace(command).await
+        } else {
+            self.accounts.rotate_provider_account(command).await
+        }
+        .map_err(|error| admin_store_error(ENTITY, error))?;
         Ok(CredentialMutationResult {
             config_revision: admin_revision(rotation.config_revision)?,
             account_id,
@@ -983,6 +1003,21 @@ impl AccountStore for PgAdminAccountStore {
             context,
             action,
             command.relogin_operation_id,
+        )
+        .await
+    }
+
+    async fn commit_relogin_workspace_switch(
+        &self,
+        command: CredentialRotationCommit,
+        context: &MutationContext,
+    ) -> AdminStoreResult<CredentialMutationResult> {
+        self.commit_prepared_rotation_with_workspace_policy(
+            command.prepared,
+            context,
+            "relogin_workspace_switch",
+            command.relogin_operation_id,
+            true,
         )
         .await
     }

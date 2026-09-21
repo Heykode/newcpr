@@ -503,6 +503,30 @@ impl ProviderAdmin for OpenAiAdminProvider {
         prepared_rotation(prepared, command.account.provider_kind)
     }
 
+    async fn prepare_relogin_workspace_switch(
+        &self,
+        command: PrepareCredentialRotation,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        validate_account_record(&command.account, &self.provider_kind)?;
+        let account_id = ProviderAccountId::new(command.account.id.clone())
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        let current = self
+            .accounts
+            .load_current_credential(&account_id)
+            .await
+            .map_err(map_store_error)?;
+        if !account_matches_record(&current.account, &command.account) {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Conflict)
+                .with_public_message("账号凭据已被更新，请重新确认切换"));
+        }
+        let secret = rotation_secret(command.provider_material)?;
+        let expires_at = parse_access_token_expiration(secret.access_token.expose_secret());
+        let prepared = CodexCredentialAdmin
+            .prepare_workspace_switch(current, secret, expires_at)
+            .map_err(map_credential_admin_error)?;
+        prepared_rotation(prepared, command.account.provider_kind)
+    }
+
     async fn prepare_refresh(
         &self,
         command: PrepareCredentialRefresh,

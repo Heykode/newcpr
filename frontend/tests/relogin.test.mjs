@@ -192,3 +192,22 @@ test('relogin push sends exactly the confirmed row versions and does not replay'
     revisions: { a: 7, b: 12 },
   })
 })
+
+test('highest workspace acquisition and exact push target are explicit opt-ins', async () => {
+  const calls = []
+  const { queueRelogin, pushRelogin } = load('../src/api/modules/relogin.ts', {
+    '../request': async config => calls.push(config),
+  })
+  await queueRelogin(['a'])
+  await queueRelogin(['a'], 'highest')
+  assert.equal(calls[0].data.workspaceMode, 'original')
+  assert.equal(calls[1].data.workspaceMode, 'highest')
+  await pushRelogin([{ id: 'a', revision: 17 }], undefined, undefined, {
+    a: { accountId: 'original-free', switchWorkspace: true },
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[2].data)), {
+    ids: ['a'],
+    revisions: { a: 17 },
+    selections: { a: { accountId: 'original-free', switchWorkspace: true } },
+  })
+})

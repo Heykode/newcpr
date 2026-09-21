@@ -208,6 +208,33 @@ async function main() {
                 data = null
               }
             }
+            else if (path.endsWith('/queue')) {
+              data = body.ids.map((id) => {
+                const row = library.find(row => row.id === id)
+                if (!row)
+                  return { id, success: false, message: '测试资料不存在' }
+                row.workspaceMode = body.workspaceMode ?? 'original'
+                row.pushTargets = row.workspaceMode === 'highest'
+                  ? row.poolAccountIds.map(accountId => ({
+                      accountId,
+                      workspaceId: row.workspaceId,
+                      planType: row.planType,
+                      switchWorkspace: true,
+                      available: true,
+                    }))
+                  : []
+                if (row.workspaceMode === 'highest') {
+                  row.workspaceId = `workspace-business-${id}`
+                  row.planType = 'team'
+                }
+                row.status = 'ready'
+                row.poolStatus = row.poolAccountIds.length ? 'pending_push' : 'absent'
+                row.credentialStatus = 'verified'
+                row.message = '本地合成凭据，待确认推送'
+                row.revision++
+                return { id, success: true, message: '完成' }
+              })
+            }
             else if (path.endsWith('/push')) {
               if (body.template && !templates.some(row => row.id === body.template.id && row.revision === body.template.revision))
                 status = 409

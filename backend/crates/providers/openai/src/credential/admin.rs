@@ -568,9 +568,41 @@ impl CodexCredentialAdmin {
     pub(crate) fn prepare_candidate_oauth_rotation(
         &self,
         current: LoadedCredential,
+        secret: CodexOAuthSecret,
+        access_token_expires_at: Option<DateTime<Utc>>,
+        fallback_refresh_token: Option<SecretString>,
+    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
+        self.prepare_candidate_oauth_replacement(
+            current,
+            secret,
+            access_token_expires_at,
+            fallback_refresh_token,
+            false,
+        )
+    }
+
+    pub(crate) fn prepare_workspace_switch(
+        &self,
+        current: LoadedCredential,
+        secret: CodexOAuthSecret,
+        access_token_expires_at: Option<DateTime<Utc>>,
+    ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
+        self.prepare_candidate_oauth_replacement(
+            current,
+            secret,
+            access_token_expires_at,
+            None,
+            true,
+        )
+    }
+
+    fn prepare_candidate_oauth_replacement(
+        &self,
+        current: LoadedCredential,
         mut secret: CodexOAuthSecret,
         access_token_expires_at: Option<DateTime<Utc>>,
         fallback_refresh_token: Option<SecretString>,
+        switch_workspace: bool,
     ) -> Result<PreparedCodexCredentialRotation, CodexCredentialAdminError> {
         if current.account.provider().as_str() != PROVIDER_NAME
             || current.account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
@@ -584,7 +616,7 @@ impl CodexCredentialAdmin {
         let old_account = normalized_identity(current.account.upstream_account_id());
         let new_account = normalized_identity(metadata.chatgpt_account_id.as_deref());
         if matches!((&old_email, &new_email), (Some(old), Some(new)) if old != new)
-            || conflicting_claims(old_account, new_account)
+            || (!switch_workspace && conflicting_claims(old_account, new_account))
         {
             return Err(CodexCredentialAdminError::PrincipalConflict);
         }
@@ -597,6 +629,14 @@ impl CodexCredentialAdmin {
         ) else {
             return Err(CodexCredentialAdminError::PrincipalUnconfirmed);
         };
+        if switch_workspace
+            && (normalized_identity(current.account.upstream_user_id()) != Some(user)
+                || user.trim().is_empty()
+                || secret.id_token.is_none()
+                || secret.refresh_token.is_none())
+        {
+            return Err(CodexCredentialAdminError::PrincipalConflict);
+        }
         let identity = ProviderAccountIdentity::new(user.to_owned(), Some(account.to_owned()));
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)
             .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;

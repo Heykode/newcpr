@@ -30,6 +30,7 @@ use std::{
 };
 
 mod recovery;
+mod workspace;
 
 #[derive(Default)]
 pub(super) struct MemoryStore {

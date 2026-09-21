@@ -130,6 +130,27 @@
 
 ## Account Menu and Import Templates
 
+- Library manual acquisition explicitly selects `original` or `highest`; omitted API
+  mode and old JSONB rows remain `original`. Highest ignores the stored preferred
+  workspace only for this acquisition, freezes same-email targets before login and
+  verifies the returned principal. Never fall back to Direct if a captured target
+  disappears. Multiple candidates with different proxies must not be guessed.
+- Highest acquisition never automatically pushes. An explicit push includes the entry
+  revision and selected account ID plus `switchWorkspace`. Select only a captured
+  target. If the destination workspace is already pooled, update that row only; later
+  arrivals, deleted/recreated accounts and changed bindings require reacquisition.
+- Workspace replacement uses dedicated Provider preparation and Store commit ports.
+  Both independently require the same nonempty upstream user and matching email;
+  complete newly acquired tokens are mandatory. Ordinary rotation, account-menu
+  recovery, refresh and automatic recovery remain workspace-locked.
+- Confirmed switching preserves the local account ID, names, settings and history.
+  Rebind its durable installation identity under the existing transaction locks;
+  conflicting active or archived destination devices fail closed, never steal a binding.
+  Credential CAS, identity uniqueness, audit, success count, device update and old quota
+  invalidation are atomic. The new binding generation fences old State slots.
+  On success prefer the selected destination for subsequent automatic recovery.
+  Preserve uncertainty fencing and Cookie-only bounded retries.
+
 - Account-menu actions query only requested pool IDs and expose matching valid TOTP
   availability, task status and a target snapshot, never login secrets. Queueing
   rechecks material revision and the selected account/principal/workspace/credential

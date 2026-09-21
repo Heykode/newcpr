@@ -189,6 +189,8 @@ impl DefaultReloginService {
                     }
                     entry.target = Some(ReloginTarget::from_account(account)?);
                     entry.automatic_job = true;
+                    entry.workspace_mode = ReloginWorkspaceMode::Original;
+                    entry.workspace_targets.clear();
                     entry.manual_push_context = None;
                 }
                 let target_account = entry
@@ -218,16 +220,51 @@ impl DefaultReloginService {
                     self.save(&mut entry).await?;
                     continue;
                 }
+                if entry.workspace_mode == ReloginWorkspaceMode::Highest {
+                    let candidates: Vec<_> = entry
+                        .workspace_targets
+                        .iter()
+                        .filter_map(|target| {
+                            pool.iter().find(|account| {
+                                target.matches_account(account)
+                                    && account.email.as_ref().is_some_and(|email| {
+                                        email.eq_ignore_ascii_case(&entry.email)
+                                    })
+                            })
+                        })
+                        .collect();
+                    if candidates.len() != entry.workspace_targets.len()
+                        || candidates.first().is_some_and(|first| {
+                            candidates
+                                .iter()
+                                .any(|account| account.outbound_proxy != first.outbound_proxy)
+                        })
+                    {
+                        entry.status = ReloginStatus::Failed;
+                        entry.message = "原账号或代理已变化，请重新发起重登".to_owned();
+                        self.save(&mut entry).await?;
+                        continue;
+                    }
+                }
                 let request = ReloginRequest {
                     email: entry.email.clone(),
                     password: entry.password.clone(),
                     mfa_secret: entry.mfa_secret.clone(),
-                    workspace_id: entry
-                        .target
-                        .as_ref()
-                        .map(|target| target.workspace_id.clone())
-                        .or_else(|| entry.preferred_workspace_id.clone()),
+                    workspace_id: if entry.workspace_mode == ReloginWorkspaceMode::Highest {
+                        None
+                    } else {
+                        entry
+                            .target
+                            .as_ref()
+                            .map(|target| target.workspace_id.clone())
+                            .or_else(|| entry.preferred_workspace_id.clone())
+                    },
                     outbound_proxy: target_account
+                        .or_else(|| {
+                            entry.workspace_targets.first().and_then(|target| {
+                                pool.iter().find(|account| target.matches_account(account))
+                            })
+                        })
                         .and_then(|account| account.outbound_proxy.clone()),
                 };
                 if entry.automatic_job {
@@ -310,10 +347,17 @@ impl DefaultReloginService {
                             || target.workspace_id != credential.workspace_id
                     })
                     || (current.manual_push_context.is_none()
+                        && current.workspace_mode == ReloginWorkspaceMode::Original
                         && current
                             .preferred_workspace_id
                             .as_ref()
                             .is_some_and(|workspace| workspace != &credential.workspace_id))
+                    || (current.workspace_mode == ReloginWorkspaceMode::Highest
+                        && (credential.user_id.is_empty()
+                            || current
+                                .workspace_targets
+                                .iter()
+                                .any(|target| target.user_id != credential.user_id)))
                 {
                     current.status = ReloginStatus::Failed;
                     current.message = "新凭据身份或工作区不一致，未推送".to_owned();

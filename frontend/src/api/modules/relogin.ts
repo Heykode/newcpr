@@ -3,6 +3,13 @@ import type { AccountTemplateSelection } from './account-templates'
 import request from '../request'
 
 export type ReloginStatus = 'pending' | 'queued' | 'running' | 'ready' | 'pushing' | 'uncertain' | 'failed'
+export type ReloginWorkspaceMode = 'original' | 'highest'
+export interface ReloginPushSelection { accountId: string, switchWorkspace: boolean }
+export interface ReloginPushTarget extends ReloginPushSelection {
+  workspaceId: string
+  planType: string | null
+  available: boolean
+}
 export interface ReloginPoolAccount {
   id: string
   workspaceId: string | null
@@ -24,6 +31,8 @@ export interface ReloginEntry {
   planType: string | null
   workspaceId: string | null
   preferredWorkspaceId: string | null
+  workspaceMode?: ReloginWorkspaceMode
+  pushTargets?: ReloginPushTarget[]
   credentialStatus: 'none' | 'verified' | 'expired'
   poolStatus: 'absent' | 'present' | 'pending_push' | 'synced'
   poolAccountIds: string[]
@@ -71,13 +80,13 @@ export function getRelogin(options: RequestOptions = {}) {
 export function importRelogin(text: string, replaceExisting: boolean) {
   return request<{ imported: number }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
 }
-export function queueRelogin(ids: string[]) {
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids } })
+export function queueRelogin(ids: string[], workspaceMode: ReloginWorkspaceMode = 'original') {
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids, workspaceMode } })
 }
-export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string) {
+export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>) {
   const ids = rows.map(row => row.id)
   const revisions = Object.fromEntries(rows.map(row => [row.id, row.revision]))
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}) }, timeout: 120000 })
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}) }, timeout: 120000 })
 }
 export function deleteRelogin(ids: string[]) {
   return request<void>({ url: '/api/admin/relogin/delete', method: 'POST', data: { ids } })

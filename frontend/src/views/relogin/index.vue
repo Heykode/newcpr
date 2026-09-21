@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountTemplate } from '@/api/modules/account-templates'
-import type { ReloginBatchResult, ReloginEntry } from '@/api/modules/relogin'
+import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
 import { CheckCheck, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 import { useNow } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
@@ -197,8 +197,20 @@ function batchReport(results: ReloginBatchResult[]) {
     toast.success(`${results.length} 项完成`)
   }
 }
+const queueOpen = shallowRef(false)
+const queuedIds = shallowRef<string[]>([])
+const queueMode = shallowRef<ReloginWorkspaceMode>('highest')
+const queueOptions = [{ value: 'highest', label: '最高套餐' }, { value: 'original', label: '原工作区' }]
 function queue(ids: string[]) {
-  return action(async () => batchReport(await queueRelogin(ids)))
+  queuedIds.value = [...ids]
+  queueMode.value = 'highest'
+  queueOpen.value = true
+}
+function executeQueue() {
+  return action(async () => {
+    batchReport(await queueRelogin(queuedIds.value, queueMode.value))
+    queueOpen.value = false
+  })
 }
 function changeAutomatic(ids: string[], enabled: boolean) {
   return action(() => setReloginAutomatic(ids, enabled))
@@ -288,12 +300,17 @@ const selectedTemplate = shallowRef<AccountTemplate | null>(null)
 const batchCustomName = shallowRef('')
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
+const pushAccounts = ref<Record<string, string>>({})
 function confirm(mode: 'push' | 'delete', ids: string[]) {
   failure.value = ''
   selectedTemplate.value = null
   batchCustomName.value = ''
   confirmMode.value = mode
   pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
+  pushAccounts.value = Object.fromEntries(pendingRows.value.map((row) => {
+    const targets = row.pushTargets?.filter(target => target.available) ?? []
+    return [row.id, targets.length === 1 ? targets[0]!.accountId : '']
+  }))
   confirming.value = pendingRows.value.length > 0
 }
 function canPush(row: ReloginEntry) {
@@ -301,14 +318,37 @@ function canPush(row: ReloginEntry) {
 }
 const pushable = computed(() => pendingRows.value.filter(canPush))
 const newPushCount = computed(() => pushable.value.filter(row => row.poolAccountIds.length === 0).length)
+function requiresPushTarget(row: ReloginEntry) {
+  return row.workspaceMode === 'highest' && (row.pushTargets?.length ?? 0) > 0
+}
+function pushTarget(row: ReloginEntry) {
+  return row.pushTargets?.find(target => target.available && target.accountId === pushAccounts.value[row.id])
+}
+function pushTargetOptions(row: ReloginEntry) {
+  return (row.pushTargets ?? []).filter(target => target.available).map(target => ({
+    value: target.accountId,
+    label: `${target.planType?.toUpperCase() ?? '未知套餐'} · ${target.workspaceId}`,
+  }))
+}
+const pushSelectionMissing = computed(() => pushable.value.some(row =>
+  requiresPushTarget(row) && !pushTarget(row),
+))
 function executeConfirmed() {
+  if (confirmMode.value === 'push' && pushSelectionMissing.value)
+    return
   return action(async () => {
     if (confirmMode.value === 'push') {
       const template = newPushCount.value > 0 && selectedTemplate.value
         ? { id: selectedTemplate.value.id, revision: selectedTemplate.value.revision }
         : undefined
       const customName = newPushCount.value > 0 ? normalizeAccountName(batchCustomName.value) ?? undefined : undefined
-      batchReport(await pushRelogin(pushable.value, template, customName))
+      const selections: Record<string, ReloginPushSelection> = {}
+      for (const row of pushable.value) {
+        const target = pushTarget(row)
+        if (requiresPushTarget(row) && target)
+          selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
+      }
+      batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))
@@ -573,7 +613,15 @@ onBeforeUnmount(() => {
         </BaseButton>
       </template>
     </BaseModal>
-    <BaseConfirmModal v-model="confirming" :title="confirmMode === 'push' ? '确认推送到号池' : '删除重登资料'" :destructive="confirmMode === 'delete'" :loading="busy" :confirm-disabled="confirmMode === 'push' && !pushable.length" @confirm="executeConfirmed">
+    <BaseConfirmModal v-model="queueOpen" title="确认重登" :loading="busy" @confirm="executeQueue">
+      <BaseFormItem label="本次登录工作区">
+        <BaseSelect v-model="queueMode" :options="queueOptions" aria-label="本次登录工作区" :disabled="busy" />
+      </BaseFormItem>
+      <p class="mb-0 text-cp-sm">
+        {{ queuedIds.length }} 个账号，获取后待确认推送。自动重登仍沿用原工作区。
+      </p>
+    </BaseConfirmModal>
+    <BaseConfirmModal v-model="confirming" :title="confirmMode === 'push' ? '确认推送到号池' : '删除重登资料'" :destructive="confirmMode === 'delete'" :loading="busy" :confirm-disabled="confirmMode === 'push' && (!pushable.length || pushSelectionMissing)" @confirm="executeConfirmed">
       <p v-if="failure" class="mt-0 whitespace-pre-wrap break-words text-cp-sm text-cp-error" role="alert">
         {{ failure }}
       </p>
@@ -588,7 +636,7 @@ onBeforeUnmount(() => {
         <BaseInput v-model="batchCustomName" aria-label="本批账号名称" placeholder="默认名称" :disabled="busy" />
       </BaseFormItem>
       <p v-if="confirmMode === 'push' && pushable.length > newPushCount" class="text-cp-sm text-cp-text-secondary">
-        已有账号仅更新凭据，保留原配置。
+        已有账号保留名称、分组、并发和调度配置。
       </p>
       <div class="max-h-64 overflow-auto">
         <div v-for="row in pendingRows" :key="row.id" class="border-b border-cp-border py-2 text-cp-sm">
@@ -600,6 +648,18 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="row.workspaceId && confirmMode === 'push'" class="break-all font-mono text-cp-xs">
             {{ row.workspaceId }}
+          </div>
+          <div v-if="confirmMode === 'push' && canPush(row) && requiresPushTarget(row)" class="mt-2 grid min-w-0 gap-2">
+            <BaseSelect v-model="pushAccounts[row.id]" :options="pushTargetOptions(row)" :aria-label="`${row.email} 推送目标`" placeholder="选择要更新的账号" :disabled="busy" />
+            <p v-if="pushTarget(row)?.switchWorkspace" class="m-0 break-words text-cp-sm text-cp-warning">
+              将原 {{ pushTarget(row)?.planType?.toUpperCase() ?? '未知套餐' }} 账号切换为 {{ row.planType?.toUpperCase() }}，不另建账号。
+            </p>
+            <p v-else-if="pushTarget(row)" class="m-0 text-cp-sm text-cp-text-secondary">
+              更新所选账号，工作区不变。
+            </p>
+            <p v-else class="m-0 text-cp-sm text-cp-warning">
+              {{ pushTargetOptions(row).length ? '请选择推送目标。' : '原账号已变化或目标工作区已存在，请重新获取凭据。' }}
+            </p>
           </div>
         </div>
       </div>

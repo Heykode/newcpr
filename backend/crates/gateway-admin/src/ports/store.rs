@@ -223,6 +223,18 @@ pub trait AccountStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<CredentialMutationResult>;
 
+    async fn commit_relogin_workspace_switch(
+        &self,
+        _command: CredentialRotationCommit,
+        _context: &MutationContext,
+    ) -> AdminStoreResult<CredentialMutationResult> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "relogin workspace",
+            "workspace switching unavailable",
+        ))
+    }
+
     async fn commit_credential_refresh(
         &self,
         command: CredentialRotationCommit,

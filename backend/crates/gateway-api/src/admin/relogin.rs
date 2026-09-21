@@ -9,7 +9,9 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use gateway_admin::model::relogin::{ReloginSettingsUpdate, ReloginTarget};
+use gateway_admin::model::relogin::{
+    ReloginPushSelection, ReloginSettingsUpdate, ReloginTarget, ReloginWorkspaceMode,
+};
 use gateway_admin::model::relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection};
 use serde::Deserialize;
 
@@ -29,6 +31,14 @@ struct BatchRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueueRequest {
+    ids: Vec<String>,
+    #[serde(default)]
+    workspace_mode: ReloginWorkspaceMode,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AccountQueueRequest {
     entry_id: String,
     revision: u64,
@@ -42,6 +52,8 @@ struct PushRequest {
     ids: Vec<String>,
     revisions: std::collections::BTreeMap<String, u64>,
     template: Option<ReloginTemplateSelection>,
+    #[serde(default)]
+    selections: std::collections::BTreeMap<String, ReloginPushSelection>,
 }
 
 #[derive(Deserialize)]
@@ -178,7 +190,7 @@ where
 async fn queue<S>(
     _: AdminAuth,
     State(state): State<S>,
-    AdminJson(request): AdminJson<BatchRequest>,
+    AdminJson(request): AdminJson<QueueRequest>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -186,7 +198,7 @@ where
     let result = state
         .admin_services()
         .relogin()
-        .queue(&request.ids)
+        .queue_with_workspace(&request.ids, request.workspace_mode)
         .await
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(
@@ -206,11 +218,12 @@ where
     let result = state
         .admin_services()
         .relogin()
-        .push_with_template(
+        .push_with_selection(
             &request.ids,
             &request.revisions,
             request.template,
             request.custom_name,
+            &request.selections,
             &auth.context().mutation_context(),
         )
         .await
