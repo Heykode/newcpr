@@ -86,6 +86,12 @@ profiles or random fingerprint generation.
   close details and send state, but do not spend
   recovery budget, replay the request, or classify it as an invalid account.
   The close handler adds no replay or post-send HTTP fallback policy.
+- Empty-body HTTP 404 path-block detection must check the failure source.
+  Parsed SSE/WS events pass no HTTP body to the classifier; this is not evidence
+  that the actual response was empty. A structured missing-item 404 remains a
+  request error, with its raw event/status preserved and no credential mutation
+  or replay permission. Keep explicit auth/ban evidence ahead of generic status
+  rules and preserve the existing actual-empty-HTTP behavior.
 - Before any WS opening, optional `NewChain` requests at or above
   `websocket_large_request_threshold_bytes` use the existing HTTP transport.
   Default is 15 MiB; zero or disabled `websocket_http_fallback_enabled` disables
@@ -110,6 +116,8 @@ profiles or random fingerprint generation.
 | Commit fails or finalization was already started | Preserve the existing terminal reason; no false success |
 | Actual client disconnect/cancellation | Existing cancellation and detached cleanup contract |
 | WS closes with 1009 before / after HTTP commit | HTTP 413 / streamed error; no replay or account-health penalty |
+| Repeated SSE/WS missing-item errors with explicit 404 | Request-scoped errors; credential state and revision unchanged |
+| Actual empty HTTP 404 / structured auth or ban with 404 | Existing path-block / explicit account-failure classification |
 | Independent new chain at the configured size threshold | HTTP before WS opening; `http_large_request` decision |
 | Zero threshold, fallback disabled, warmup or continuation | Existing transport policy; no size-driven escape |
 | Retryable upstream 401 then local no-account/capacity failure | Local 503 contract; no stale 401 body or events |
@@ -139,6 +147,10 @@ profiles or random fingerprint generation.
   Retain upstream status/request IDs, usage, cost and pending provider failures.
 - Exercise 1009 before and after delivery on new/reused sockets, another close
   code as control, and Responses/Chat error status/body projection.
+- Exercise three consecutive missing-item 404 events over both HTTP/SSE and WS,
+  with `error` and `response.failed` envelopes. Check state/revision, raw details,
+  retry safety and account scoring. Retain HTTP empty/nonempty 404 and explicit
+  expiry, revocation, identity-verification and workspace-ban controls.
 - Account-exhaustion regressions must cover retained atomic error events as
   well as raw bodies. Keep intermediate authentication diagnostics while
   finalizing once with the local error, without committing a stale response.

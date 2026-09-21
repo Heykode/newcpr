@@ -522,7 +522,11 @@ fn classify_upstream_failure(
     if status == Some(StatusCode::FORBIDDEN) && is_cloudflare_challenge(&body) {
         return CodexFailureCategory::CloudflareChallenge;
     }
-    if status == Some(StatusCode::NOT_FOUND) && body.trim().is_empty() {
+    // Parsed stream events have no HTTP body; they are not empty HTTP responses.
+    if matches!(source, UpstreamFailureSource::HttpResponse)
+        && status == Some(StatusCode::NOT_FOUND)
+        && body.trim().is_empty()
+    {
         return CodexFailureCategory::CloudflarePathBlocked;
     }
     let structured_failure_signals = [code.as_str(), error_type.as_str()];

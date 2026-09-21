@@ -290,6 +290,10 @@ Core 只理解 `Operation`、能力要求、Provider 候选、稳定错误和 ca
 连接测试的 `gateway` / `provider` / `upstream` 来源以及 `not_sent` / `sent` / `ambiguous` 发送状态由 Core 在
 仍持有完整执行错误时一次判定；Vue 只能根据稳定字段生成摘要，不能匹配英文错误句子反推来源。
 
+OpenAI 的空正文 HTTP 404 路径保护只适用于真实 HTTP 错误响应。SSE/WS 的结构化错误事件不能因为
+分类器没有传入 HTTP body 而被当成空响应；历史条目不存在的请求错误不得累积为账号凭据无效。
+显式凭据失效、身份验证和账号/工作区封禁信号仍按原规则处理，不以 404 状态码一概放行。
+
 ## 6. 路由、账号范围与 continuation
 
 Client Key 与账号分组形成授权范围：
