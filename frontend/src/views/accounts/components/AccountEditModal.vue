@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import type { AccountGroup } from '@/api'
+import type { AccountGroup, AccountModelAccess } from '@/api'
 import { shallowRef } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -28,6 +28,7 @@ const enabled = defineModel<boolean>('enabled', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
+const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
@@ -66,10 +67,12 @@ const egressSaving = shallowRef(false)
         v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
+        v-model:model-access="modelAccess"
         v-model:selected-group-ids="selectedGroupIds"
         v-model:proxy-mode="proxyMode"
         v-model:proxy-id="proxyId"
         name-available
+        model-access-available
         :groups="groups"
         :groups-loading="groupsLoading"
         :turn-state-available="account.provider === 'openai'"

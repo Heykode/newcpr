@@ -2203,6 +2203,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        model_access: Default::default(),
         custom_name: None,
         outbound_proxy: None,
         id: account.id().to_string(),

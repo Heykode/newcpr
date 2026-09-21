@@ -76,6 +76,7 @@ async fn replacement_clears_old_authentication_failure_but_import_uses_explicit_
         repository
             .import_provider_accounts(ImportProviderAccounts {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    model_access: Default::default(),
                     custom_name: None,
                     enabled: !enabled,
                     turn_state_injection_enabled: None,

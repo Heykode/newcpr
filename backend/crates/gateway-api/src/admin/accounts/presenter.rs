@@ -165,6 +165,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         concurrency_limit: account.concurrency_limit.map(|limit| limit.get()),
         effective_concurrency_limit: effective_concurrency_limit.get(),
         weight: account.weight.get(),
+        model_access: account.model_access,
         outbound_proxy_endpoint: account
             .outbound_proxy
             .as_ref()

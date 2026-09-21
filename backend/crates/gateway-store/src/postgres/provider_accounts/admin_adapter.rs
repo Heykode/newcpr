@@ -1068,6 +1068,9 @@ impl AccountStore for PgAdminAccountStore {
         if command.custom_name.is_some() {
             changed_fields.push("custom_name".to_owned());
         }
+        if command.model_access.is_some() {
+            changed_fields.push("model_access".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
@@ -1077,6 +1080,7 @@ impl AccountStore for PgAdminAccountStore {
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
                 concurrency_limit: Some(command.concurrency_limit),
                 weight: Some(command.weight),
+                model_access: command.model_access,
                 group_ids: Some(command.group_ids),
                 outbound_proxy: command.outbound_proxy,
                 audit: mutation_audit(
@@ -1154,13 +1158,22 @@ impl AccountStore for PgAdminAccountStore {
         } else {
             "provider_accounts".to_owned()
         };
-        let mut changed_fields = vec![
-            "enabled".to_owned(),
-            "turn_state_injection_enabled".to_owned(),
-            "concurrency_limit".to_owned(),
-            "weight".to_owned(),
-            "groups".to_owned(),
-        ];
+        let mut changed_fields = Vec::new();
+        for (changed, field) in [
+            (command.enabled.is_some(), "enabled"),
+            (
+                command.turn_state_injection_enabled.is_some(),
+                "turn_state_injection_enabled",
+            ),
+            (command.concurrency_limit.is_some(), "concurrency_limit"),
+            (command.weight.is_some(), "weight"),
+            (command.group_ids.is_some(), "groups"),
+            (command.model_access.is_some(), "model_access"),
+        ] {
+            if changed {
+                changed_fields.push(field.to_owned());
+            }
+        }
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
@@ -1176,6 +1189,7 @@ impl AccountStore for PgAdminAccountStore {
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
+                model_access: command.model_access,
                 group_ids: command.group_ids,
                 outbound_proxy: command.outbound_proxy,
                 audit: mutation_audit(

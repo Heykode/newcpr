@@ -902,6 +902,7 @@ async fn shared_admin_store_applies_device_registry_to_create_delete_and_import(
         request_id: "device_admin_shared".to_owned(),
     };
     let prepare = |id: &str, device: &str, token: &str| PreparedCredentialCreate {
+        model_access: Default::default(),
         outbound_proxy: None,
         account_id: ProviderAccountId::new(id).expect("account ID"),
         provider_kind: ProviderKind::new("openai").expect("provider"),

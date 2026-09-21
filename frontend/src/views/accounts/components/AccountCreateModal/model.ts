@@ -1,4 +1,6 @@
+import type { AccountModelAccess } from '@/api'
 import { normalizeAccountName } from '@/utils/account-name'
+import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 
 export type AccountCreateProvider = 'batch' | 'openai' | 'xai'
@@ -12,6 +14,7 @@ export interface AccountCreateForm {
   turnStateInjectionEnabled: boolean
   concurrencyLimit: string
   weight: string
+  modelAccess?: AccountModelAccess
   groupIds: string[]
   step: 'settings' | 'import'
   mode: AccountImportMode
@@ -52,6 +55,9 @@ export function accountProxyError(form: AccountCreateForm): string | undefined {
 }
 
 export function accountImportSettings(form: AccountCreateForm, provider = form.provider) {
+  const modelError = accountModelAccessError(form.modelAccess)
+  if (modelError)
+    throw new Error(modelError)
   const customName = normalizeAccountName(form.customName)
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
@@ -61,6 +67,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
     enabled: form.enabled,
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
+    ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),
     ...(provider === 'openai' ? { turnStateInjectionEnabled: form.turnStateInjectionEnabled } : {}),
   }
 }

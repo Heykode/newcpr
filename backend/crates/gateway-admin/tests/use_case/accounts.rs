@@ -1702,6 +1702,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
@@ -1741,6 +1742,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
                 account_id: "acct_test".to_owned(),
@@ -1785,6 +1787,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
@@ -3390,6 +3393,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        model_access: Default::default(),
         custom_name: None,
         outbound_proxy: None,
         id: "acct_test".to_owned(),
@@ -3437,6 +3441,7 @@ fn prepared_create_with_id(
 ) -> PreparedCredentialCreate {
     let now = Utc::now();
     PreparedCredentialCreate {
+        model_access: Default::default(),
         outbound_proxy: None,
         account_id: ProviderAccountId::new(account_id).expect("prepared account ID"),
         provider_kind,
@@ -3728,6 +3733,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        model_access: Default::default(),
         custom_name: None,
         enabled: false,
         turn_state_injection_enabled: None,

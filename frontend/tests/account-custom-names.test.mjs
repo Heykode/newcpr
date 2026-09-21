@@ -13,13 +13,15 @@ function load(path, dependencies = {}) {
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
-  runInNewContext(outputText, { exports, require: name => dependencies[name] ?? require(name) })
+  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? require(name) })
   return exports
 }
 const names = load('../src/utils/account-name.ts')
 const scheduling = load('../src/views/accounts/utils/schedulingForm.ts')
+const modelAccess = load('../src/views/accounts/utils/modelAccess.ts')
 const creation = load('../src/views/accounts/components/AccountCreateModal/model.ts', {
   '../../utils/schedulingForm': scheduling,
+  '../../utils/modelAccess': modelAccess,
   '@/utils/account-name': names,
 })
 
@@ -74,6 +76,7 @@ test('single editor only submits a changed name and preserves concurrent externa
     '@/composables/useAsyncAction': asyncAction,
     '@/utils/account-name': names,
     '../utils/schedulingForm': scheduling,
+    '../utils/modelAccess': modelAccess,
   })
   const scope = vue.effectScope()
   t.after(() => scope.stop())

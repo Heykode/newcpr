@@ -38,6 +38,7 @@ impl ReloginTemplateConfig {
             validate_template_id(id)?;
         }
         Ok(AccountImportSettings {
+            model_access: None,
             custom_name: None,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,

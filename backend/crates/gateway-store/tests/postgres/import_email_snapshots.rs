@@ -29,6 +29,7 @@ async fn admin_import_email_snapshots_use_committed_ids_and_final_duplicate_valu
         request_id: "import-email-snapshots".to_owned(),
     };
     let prepare = |id: &str, user: &str, email: Option<&str>| PreparedCredentialCreate {
+        model_access: Default::default(),
         outbound_proxy: None,
         account_id: ProviderAccountId::new(id).unwrap(),
         provider_kind: ProviderKind::new("openai").unwrap(),

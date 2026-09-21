@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { getAccounts } from '@/api'
+import type { AccountModelAccess, getAccounts } from '@/api'
 import type { RequestOptions } from '@/api/request'
 
 import { computed, ref, shallowRef, watch } from 'vue'
@@ -7,6 +7,7 @@ import { batchUpdateAccounts } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
+import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -26,6 +27,9 @@ export function useAccountBatchEditor(options: {
   const turnStateInjectionEnabled = shallowRef(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
+  const modelAccess = ref<AccountModelAccess | undefined>()
+  const updateModelAccess = ref(false)
+  const catalogAccountId = shallowRef<string>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
@@ -41,6 +45,7 @@ export function useAccountBatchEditor(options: {
     || (turnStateAvailable.value && updateTurnStateInjectionEnabled.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
+    || updateModelAccess.value
     || updateGroups.value
     || (updateProxy.value && proxyMode.value !== 'preserve'),
   )
@@ -53,6 +58,7 @@ export function useAccountBatchEditor(options: {
     updateTurnStateInjectionEnabled.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
+    updateModelAccess.value = false
     updateGroups.value = false
     updateProxy.value = false
   }
@@ -71,6 +77,8 @@ export function useAccountBatchEditor(options: {
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
     weight.value = sharedWeight(accounts)
+    modelAccess.value = { mode: 'all', models: [] }
+    catalogAccountId.value = accounts[0]?.id
     selectedGroupIds.value = sharedGroupIds(accounts)
     resetUpdateSelection()
     showBatchEditModal.value = true
@@ -81,6 +89,11 @@ export function useAccountBatchEditor(options: {
       return
     if (!hasUpdates.value) {
       toast.warning('请先勾选要更新的设置')
+      return
+    }
+    const modelError = updateModelAccess.value ? accountModelAccessError(modelAccess.value) : undefined
+    if (modelError || (updateModelAccess.value && !modelAccess.value)) {
+      toast.warning(modelError ?? '请选择模型限制模式')
       return
     }
     const scheduling = parseAccountSchedulingForm(
@@ -111,6 +124,8 @@ export function useAccountBatchEditor(options: {
         payload.concurrencyLimit = scheduling.values.concurrencyLimit
       if (updateWeight.value)
         payload.weight = scheduling.values.weight
+      if (updateModelAccess.value && modelAccess.value)
+        payload.modelAccess = { ...modelAccess.value, models: [...modelAccess.value.models] }
       if (updateGroups.value)
         payload.groupIds = [...new Set(selectedGroupIds.value)]
       if (updateProxy.value && proxyMode.value !== 'preserve') {
@@ -159,6 +174,8 @@ export function useAccountBatchEditor(options: {
     proxyId.value = ''
     concurrencyLimit.value = ''
     weight.value = '1'
+    modelAccess.value = undefined
+    catalogAccountId.value = undefined
     selectedGroupIds.value = []
     resetUpdateSelection()
   })
@@ -172,6 +189,9 @@ export function useAccountBatchEditor(options: {
     turnStateInjectionEnabled,
     concurrencyLimit,
     weight,
+    modelAccess,
+    updateModelAccess,
+    catalogAccountId,
     proxyMode,
     proxyId,
     selectedGroupIds,

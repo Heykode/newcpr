@@ -1,6 +1,57 @@
-use gateway_store::postgres::{PgProviderAccountRepository, ProviderAccountRepository};
+use super::TestDatabase;
 
-use super::{TestDatabase, provider_accounts::account};
+async fn insert_legacy_account(database: &TestDatabase) {
+    // Use the old schema, not the latest repository's required columns.
+    sqlx::query(
+        "insert into provider_accounts (
+            id, provider_kind, name, upstream_user_id, authentication_kind,
+            provider_credentials_json, has_refresh_token,
+            credential_observed_at, created_at, updated_at
+        ) values (
+            'upgrade-owner', 'openai', 'Upgrade', 'upgrade-user', 'oauth',
+            '{}'::jsonb, false, now(), now(), now()
+        )",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn model_access_upgrade_defaults_existing_accounts_without_touching_identity() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 34)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("model_access_upgrade", &old).await
+    else {
+        return;
+    };
+    insert_legacy_account(&database).await;
+    let before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let mut after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("model_access_json"),
+        Some(serde_json::json!({"mode":"all","models":[]})),
+    );
+    assert_eq!(before, after);
+    database.close().await;
+}
 
 #[tokio::test]
 async fn probe_concurrency_upgrade_defaults_to_three_without_touching_state_or_settings() {
@@ -18,10 +69,7 @@ async fn probe_concurrency_upgrade_defaults_to_three_without_touching_state_or_s
     else {
         return;
     };
-    PgProviderAccountRepository::new(database.pool.clone())
-        .insert_provider_account(account("upgrade-owner", "upgrade-user"))
-        .await
-        .unwrap();
+    insert_legacy_account(&database).await;
     sqlx::query(
         "insert into provider_turn_states (
             provider_account_id, upstream_model, credential_revision, normal_length,
@@ -83,10 +131,7 @@ async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
     let Some(database) = TestDatabase::create_with_migrator("state_upgrade", &old).await else {
         return;
     };
-    PgProviderAccountRepository::new(database.pool.clone())
-        .insert_provider_account(account("upgrade-owner", "upgrade-user"))
-        .await
-        .unwrap();
+    insert_legacy_account(&database).await;
     sqlx::query(
         "insert into provider_turn_states (
              provider_account_id, upstream_model, credential_revision, normal_length,
@@ -138,7 +183,7 @@ async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
     connection.close().await.unwrap();
     assert!(matches!(
         downgrade,
-        Err(sqlx::migrate::MigrateError::VersionMissing(28 | 29))
+        Err(sqlx::migrate::MigrateError::VersionMissing(version)) if version > 27
     ));
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     database.close().await;
