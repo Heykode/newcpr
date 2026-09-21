@@ -42,6 +42,13 @@ export const accountColumns = defineTableColumns<AccountRow>([
     emptyText: '',
   },
   {
+    key: 'weight',
+    label: '优先级',
+    kind: 'numeric',
+    size: 'sm',
+    align: 'center',
+  },
+  {
     key: 'reloginCount',
     label: '重登次数',
     kind: 'numeric',
@@ -76,9 +83,10 @@ export function readAccountColumnKeys(raw: string): string[] {
   try {
     const stored: unknown = JSON.parse(raw)
     const legacy = Array.isArray(stored)
+    const version = stored && typeof stored === 'object' && 'version' in stored ? stored.version : null
     const keys: unknown = legacy
       ? stored
-      : stored && typeof stored === 'object' && 'version' in stored && stored.version === 2 && 'keys' in stored
+      : stored && typeof stored === 'object' && (version === 2 || version === 3) && 'keys' in stored
         ? stored.keys
         : null
     if (!Array.isArray(keys))
@@ -86,6 +94,8 @@ export function readAccountColumnKeys(raw: string): string[] {
     const selected = [...new Set(keys
       .map(key => key === 'addedAtDisplay' ? 'addedAt' : key)
       .filter((key): key is string => typeof key === 'string' && defaults.includes(key)))]
+    if ((legacy || version === 2) && !selected.includes('weight'))
+      selected.push('weight')
     if (legacy && !selected.includes('reloginCount'))
       selected.push('reloginCount')
     return selected
@@ -96,7 +106,7 @@ export function readAccountColumnKeys(raw: string): string[] {
 }
 
 export function writeAccountColumnKeys(keys: string[]): string {
-  return JSON.stringify({ version: 2, keys })
+  return JSON.stringify({ version: 3, keys })
 }
 
 export const statusLabels: Record<AccountStatus, string> = {

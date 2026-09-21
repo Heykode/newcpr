@@ -21,7 +21,7 @@ export const accounts = [0, 1, 2].map((reloginCount, index) => ({
   inFlight: 0,
   concurrencyLimit: null,
   effectiveConcurrencyLimit: 3,
-  weight: 100,
+  weight: [1, 50, 100][index],
   outboundProxyEndpoint: null,
   accessTokenExpiresAt: '2099-01-01T00:00:00Z',
   accessTokenExpiresAtDisplay: '2099-01-01',

@@ -444,13 +444,15 @@ uncertain delivery. Keep the status column wide enough for the extra line.
 validation, polling, failed saves, legacy settings payloads and narrow layouts.
 
 Both lists share `ReloginCountCell`, reading backend `reloginCount` and
-`lastReloginAt`. Place the sortable account column after last use, and the relogin
+`lastReloginAt`. Place the account columns in last-use, priority, relogin-count order, and the relogin
 column after pool membership. Zero is neutral; unresolved workspace counts are
 `null` and render as unknown. Do not derive counts from button clicks, statuses,
 attempts or cached credentials. Last-success tooltips use explicit UTC+8 time.
-Account column storage uses `{ version: 2, keys }`: migrate legacy arrays once by
-adding the new count column while preserving hidden existing columns. Respect
-versioned choices, including an empty list, so hiding the new column persists.
+The priority column reads the existing `Account.weight` without changing scheduling,
+adding API calls or enabling unsupported sorting. Use a centered, fixed 88px column.
+Account column storage uses `{ version: 3, keys }`: add priority to legacy arrays and
+version-2 choices; only legacy arrays also add relogin count. Preserve other hidden
+columns and respect version-3 choices, including an empty list, so hiding persists.
 Use `relogin-count.test.mjs` and `browser/relogin-count.mjs` for regression; the
 opt-in `relogin-count-preview.mjs` disables the backend proxy and serves only fake,
 read-only data.

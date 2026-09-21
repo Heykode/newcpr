@@ -30,17 +30,29 @@ test('account status and plan columns share centered header and cell alignment',
   }
 })
 
-test('account table keeps group and last-used columns compact and grows only identity and usage', () => {
+test('account table keeps group, last-used and priority columns compact and grows only identity and usage', () => {
   const columns = table.resolveColumns(accountColumns)
   const find = key => columns.find(column => column.key === key)
   assert.equal(find('groups').basisWidth, 184)
   assert.equal(find('lastUsedAt').basisWidth, 112)
-  for (const key of ['groups', 'lastUsedAt', 'selection', 'actions']) {
+  assert.equal(find('weight').basisWidth, 88)
+  assert.equal(find('weight').align, 'center')
+  for (const key of ['groups', 'lastUsedAt', 'weight', 'selection', 'actions']) {
     const column = find(key)
     assert.equal(table.columnStyle(column, columns, 'content').width, `${column.basisWidth}px`)
   }
   for (const key of ['identity', 'usage'])
     assert.match(table.columnStyle(find(key), columns, 'content').width, /\* 0\.5\)$/)
+})
+
+test('priority displays the existing account weight without inventing a default or unsupported sorting', () => {
+  const column = accountColumns.find(column => column.key === 'weight')
+  assert.equal(column.label, '优先级')
+  assert.equal(column.sortable, undefined)
+  for (const weight of [1, 50, 100])
+    assert.equal(table.cellDisplayValue(column, { weight }), weight)
+  for (const weight of [null, undefined])
+    assert.equal(table.cellDisplayValue(column, { weight }), '—')
 })
 
 test('content layout recomputes growth when columns are hidden and retains a proportional fallback', () => {

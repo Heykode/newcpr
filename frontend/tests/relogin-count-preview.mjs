@@ -66,6 +66,9 @@ async function main() {
                 break
             }
           }
+          else if (request.method === 'POST' && url.pathname === '/dev/api/admin/relogin/accounts/query') {
+            data = []
+          }
           response.statusCode = data === undefined ? 405 : 200
           response.end(JSON.stringify({
             code: response.statusCode,
