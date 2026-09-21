@@ -258,6 +258,64 @@ fn bare_http_429_remains_a_temporary_rate_limit() {
 }
 
 #[test]
+fn http_404_classification_preserves_body_and_account_evidence() {
+    for (body, expected) in [
+        ("", CodexFailureCategory::CloudflarePathBlocked),
+        (" \r\n\t", CodexFailureCategory::CloudflarePathBlocked),
+        (
+            r#"{"error":{"type":"invalid_request_error","code":null,"param":"input","message":"Item with id 'rs_missing_fixture' not found."}}"#,
+            CodexFailureCategory::InvalidRequest,
+        ),
+        (
+            "<html><body>Not Found</body></html>",
+            CodexFailureCategory::InvalidRequest,
+        ),
+        (
+            r#"{"error":{"code":"token_expired","message":"synthetic failure"}}"#,
+            CodexFailureCategory::CredentialExpired,
+        ),
+        (
+            r#"{"error":{"code":"account_banned","message":"synthetic failure"}}"#,
+            CodexFailureCategory::Banned,
+        ),
+        (
+            r#"{"error":{"code":"deactivated_workspace","message":"synthetic failure"}}"#,
+            CodexFailureCategory::Banned,
+        ),
+    ] {
+        assert_eq!(classify(404, body), expected, "{body}");
+    }
+
+    for (code, expected) in [
+        ("token_expired", CodexFailureCategory::CredentialExpired),
+        ("account_banned", CodexFailureCategory::Banned),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-error-json",
+            HeaderValue::from_str(
+                &STANDARD.encode(serde_json::json!({"error": {"code": code}}).to_string()),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            CodexUpstreamFailure::from_response(
+                reqwest::StatusCode::NOT_FOUND,
+                "",
+                None,
+                &CodexUpstreamDiagnostics::from_headers(Some(404), &headers),
+                None,
+                &[],
+                &[],
+                CodexUpstreamSendPhase::AfterPayload,
+            )
+            .category(),
+            expected,
+        );
+    }
+}
+
+#[test]
 fn openai_account_failure_matrix_is_preserved() {
     let cases = [
         (
