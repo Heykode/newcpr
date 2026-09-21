@@ -121,10 +121,12 @@ pub(crate) fn literal_prefix_pattern(value: &str) -> String {
 }
 
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
-    "select mr.id, mr.endpoint, mr.client_transport, mr.requested_model_id,
+    "select mr.id, ck.name as client_api_key_name, mr.billing_snapshot_json,
+            mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
             mr.provider_account_name_snapshot as provider_account_name,
             mr.provider_account_email_snapshot as provider_account_email,
+            account.custom_name as provider_account_custom_name,
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.upstream_response_model, mr.service_tier,
@@ -139,10 +141,13 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             host(mr.client_ip) as client_ip, mr.user_agent,
             mr.reasoning_effort, mr.reasoning_preset, mr.subagent_kind, mr.compact,
             mr.started_at
-     from model_requests mr";
+     from model_requests mr
+     left join provider_accounts account on account.id = mr.provider_account_ref
+     left join client_api_keys ck on ck.id = mr.client_api_key_ref";
 
 pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
-    "select mr.id, mr.client_api_key_ref, mr.config_revision,
+    "select mr.id, mr.client_api_key_ref, ck.name as client_api_key_name,
+            mr.billing_snapshot_json, mr.config_revision,
             mr.routing_scope, mr.routing_group_refs, mr.routing_group_names_snapshot,
             mr.protocol, mr.operation,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
@@ -168,7 +173,8 @@ pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
             mr.user_agent, mr.reasoning_effort, mr.reasoning_preset, mr.request_kind,
             mr.subagent_kind, mr.compact, mr.image_generation_requested,
             mr.image_generation_succeeded, mr.started_at, mr.deadline_at, mr.completed_at
-     from model_requests mr";
+     from model_requests mr
+     left join client_api_keys ck on ck.id = mr.client_api_key_ref";
 
 pub(crate) async fn list_usage_records(
     pool: &PgPool,

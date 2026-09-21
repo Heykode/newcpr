@@ -174,6 +174,12 @@ function upstreamSendStateText(value: string | null | undefined) {
             <span class="min-w-0 truncate">{{ upstreamSendStateText(row.upstreamSendState) }}</span>
           </span>
         </template>
+        <template #clientApiKeyName="{ row }">
+          <span class="block max-w-full truncate" :title="row.clientApiKeyName || undefined">
+            {{ row.clientApiKeyName || '—' }}
+          </span>
+        </template>
+
         <template #accountId="{ row }">
           <span
             class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-text"

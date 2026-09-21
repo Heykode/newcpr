@@ -351,6 +351,46 @@ fn scoped_ids_separate_client_keys_accounts_and_installations() {
 }
 
 #[test]
+fn cache_only_clients_already_get_stable_scoped_session_headers() {
+    let make = |cache: &str| {
+        let mut request = CodexResponsesRequest::from_body(
+            json!({"model":"gpt-test","input":"hello","prompt_cache_key":cache})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        request.client_api_key_id = Some("key-cache-only".to_owned());
+        request
+    };
+    let request = make("shared-cache");
+    let mut first_context = context();
+    first_context.session_id = None;
+    first_context.thread_id = None;
+    first_context.client_request_id = None;
+    let mut second_context = first_context;
+    second_context.request_id = "another-request";
+    let mut first = HeaderMap::new();
+    let mut second = HeaderMap::new();
+    apply_response_headers(&mut first, &request, first_context).unwrap();
+    apply_response_headers(&mut second, &request, second_context).unwrap();
+    for name in ["session-id", "thread-id", "x-client-request-id"] {
+        assert_eq!(first[name], second[name], "{name}");
+        assert_ne!(first[name], "shared-cache");
+    }
+    assert_eq!(
+        project_response_request(&request, first_context).prompt_cache_key(),
+        Some(first["thread-id"].to_str().unwrap()),
+    );
+    let mut changed = HeaderMap::new();
+    apply_response_headers(&mut changed, &make("other-cache"), second_context).unwrap();
+    assert_ne!(first["session-id"], changed["session-id"]);
+    second_context.account_id = Some("another-account");
+    apply_response_headers(&mut changed, &request, second_context).unwrap();
+    assert_ne!(first["session-id"], changed["session-id"]);
+    assert_eq!(request.prompt_cache_key(), Some("shared-cache"));
+}
+
+#[test]
 fn explicit_thread_wins_over_cache_and_changing_turns() {
     let first = scoped_request("key-a");
     let mut body = first.body().clone();

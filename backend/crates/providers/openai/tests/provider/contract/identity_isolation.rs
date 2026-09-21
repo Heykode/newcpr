@@ -357,7 +357,7 @@ async fn proxy_location_precedence_preserves_fallback_identity_on_http_and_ws() 
     }
 }
 
-fn qx_provider(store: &Arc<MemoryAccountStore>, url: String) -> CodexProvider {
+pub(super) fn qx_provider(store: &Arc<MemoryAccountStore>, url: String) -> CodexProvider {
     let selected = wire_profile().snapshot();
     provider_and_quota_with_profile(
         store,

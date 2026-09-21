@@ -87,6 +87,7 @@ struct FinalState {
     provider_metadata_json: Option<String>,
     cost_source: CostSource,
     cost_ticks: Option<u128>,
+    cost_breakdown: Option<gateway_core::metering::CalculatedCostBreakdown>,
 }
 
 #[derive(Default)]
@@ -266,6 +267,7 @@ impl ExecutionStore for FakeStore {
                     .cost
                     .total()
                     .map(|total| total.amount().scaled()),
+                cost_breakdown: finalization.cost.breakdown().cloned(),
             });
         let gate = self
             .finalize_gate
@@ -2628,9 +2630,7 @@ fn calculated_cost_is_persisted_when_provider_does_not_report_cost() {
             "calculated-cost",
             "grok-4.5",
         ))),
-        Ok(GatewayEvent::CalculatedCost(
-            CalculatedCost::from_usd_ticks(123).expect("calculated cost"),
-        )),
+        Ok(GatewayEvent::CalculatedCost(cost_with_saved_breakdown(123))),
         Ok(GatewayEvent::Completed(ResponseMeta::new(
             "calculated-cost",
             "grok-4.5",
@@ -2655,6 +2655,29 @@ fn calculated_cost_is_persisted_when_provider_does_not_report_cost() {
 
     assert_eq!(state.finalizations[0].cost_source, CostSource::Calculated);
     assert_eq!(state.finalizations[0].cost_ticks, Some(123));
+    assert!(
+        state.finalizations[0]
+            .cost_breakdown
+            .as_ref()
+            .unwrap()
+            .long_context_billing_applied()
+    );
+}
+
+fn cost_with_saved_breakdown(ticks: u128) -> CalculatedCost {
+    use gateway_core::metering::{
+        CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates,
+    };
+    let total = CalculatedCost::from_usd_ticks(ticks).unwrap().total();
+    let zero = CalculatedCost::from_usd_ticks(0).unwrap().total();
+    CalculatedCostBreakdown::new(
+        CalculatedCostAmounts::new(total, zero, zero, zero, total, total),
+        CalculatedCostRates::new(total, total, zero, zero),
+        None,
+        100,
+    )
+    .with_long_context_billing(true)
+    .calculated_cost()
 }
 
 #[test]
@@ -2666,15 +2689,11 @@ fn provider_reported_cost_should_not_be_replaced_by_calculated_cost() {
             "reported-cost",
             "grok-4.5",
         ))),
-        Ok(GatewayEvent::CalculatedCost(
-            CalculatedCost::from_usd_ticks(10).expect("first calculated cost"),
-        )),
+        Ok(GatewayEvent::CalculatedCost(cost_with_saved_breakdown(10))),
         Ok(GatewayEvent::ProviderCost(
             ProviderReportedCost::from_usd_ticks(25).expect("provider cost"),
         )),
-        Ok(GatewayEvent::CalculatedCost(
-            CalculatedCost::from_usd_ticks(999).expect("later calculated cost"),
-        )),
+        Ok(GatewayEvent::CalculatedCost(cost_with_saved_breakdown(999))),
         Ok(GatewayEvent::Completed(ResponseMeta::new(
             "reported-cost",
             "grok-4.5",
@@ -2704,6 +2723,7 @@ fn provider_reported_cost_should_not_be_replaced_by_calculated_cost() {
         ),
         (CostSource::ProviderReported, Some(25))
     );
+    assert!(state.finalizations[0].cost_breakdown.is_none());
 }
 
 #[test]
@@ -2718,9 +2738,7 @@ fn discarded_attempt_cost_never_leaks_into_retry_result() {
                     "discarded",
                     "gpt-5",
                 ))),
-                Ok(GatewayEvent::CalculatedCost(
-                    CalculatedCost::from_usd_ticks(888).expect("discarded calculated cost"),
-                )),
+                Ok(GatewayEvent::CalculatedCost(cost_with_saved_breakdown(888))),
                 Ok(GatewayEvent::ProviderCost(
                     ProviderReportedCost::from_usd_ticks(999).expect("discarded cost"),
                 )),
@@ -2749,6 +2767,7 @@ fn discarded_attempt_cost_never_leaks_into_retry_result() {
     let state = store.state.lock().expect("store lock");
     assert_eq!(state.finalizations[0].cost_source, CostSource::Unavailable);
     assert_eq!(state.finalizations[0].cost_ticks, None);
+    assert!(state.finalizations[0].cost_breakdown.is_none());
     assert_eq!(
         session.budget_charge().amount_usd.scaled(),
         999,

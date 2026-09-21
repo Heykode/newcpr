@@ -56,6 +56,7 @@ pub struct CostCoverageView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BillingView {
+    pub long_context_billing_applied: bool,
     pub input_amount_display: String,
     pub output_amount_display: String,
     pub cache_read_amount_display: String,
@@ -86,12 +87,14 @@ pub struct UsageTurnStateSummaryView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageListRecordView {
+    pub client_api_key_name: Option<String>,
     pub id: String,
     pub provider: Option<String>,
     pub authentication_kind: Option<String>,
     pub account_id: Option<String>,
     pub account_email: Option<String>,
     pub account_name: Option<String>,
+    pub account_custom_name: Option<String>,
     pub route: String,
     pub model: Option<String>,
     pub requested_model: Option<String>,
@@ -120,6 +123,7 @@ pub struct UsageListRecordView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageRecordView {
+    pub client_api_key_name: Option<String>,
     pub id: String,
     pub request_id: String,
     pub client_api_key_id: Option<String>,
@@ -775,6 +779,7 @@ pub struct DiagnosticsView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpsErrorView {
+    pub client_api_key_name: Option<String>,
     pub id: String,
     pub request_id: Option<String>,
     pub client_api_key_id: Option<String>,

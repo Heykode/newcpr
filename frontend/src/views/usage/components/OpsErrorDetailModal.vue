@@ -50,6 +50,7 @@ const requestFields = computed(() => visibleFields([
   { label: '时间', value: props.record?.createdAtDisplay, mono: true },
   { label: '请求 ID', value: props.record?.requestId, mono: true },
   { label: '客户端 Key ID', value: props.record?.clientApiKeyId, mono: true },
+  { label: 'Key 名称', value: props.record?.clientApiKeyName },
   { label: '客户端 IP', value: props.record?.clientIp, mono: true },
   { label: '协议', value: props.record?.protocol, mono: true },
   { label: 'User-Agent', value: props.record?.userAgent, mono: true, wrap: true, fullWidth: true },

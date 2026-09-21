@@ -106,6 +106,7 @@ impl OpenAiResponseObservationState {
     pub(super) fn from_backend_response(
         response: &CodexBackendStreamingResponse,
         request: &CodexResponsesRequest,
+        trace: &gateway_core::diagnostics::TraceContext,
     ) -> Self {
         if let Some(capture) = &request.turn_state_capture {
             capture.returned(response.turn_state.as_deref());
@@ -116,7 +117,7 @@ impl OpenAiResponseObservationState {
             response_metadata: response.response_metadata.clone(),
             metrics: response.transport_metrics.clone(),
             websocket_pool_decision: response.websocket_pool_decision,
-            request_summary: openai_response_request_summary(request, response.transport),
+            request_summary: openai_response_request_summary(request, response.transport, trace),
             stream: request.stream(),
             requested_service_tier: normalize_service_tier(request.service_tier()),
             upstream_service_tier: None,
@@ -485,12 +486,13 @@ pub(super) fn openai_processing_ms(response_metadata: &CodexResponseMetadata) ->
 pub(super) fn openai_response_request_summary(
     request: &CodexResponsesRequest,
     transport: CodexBackendTransport,
+    trace: &gateway_core::diagnostics::TraceContext,
 ) -> Value {
     let body = request.body();
     let input = body.get("input");
     let tools = body.get("tools");
     let semantics = request.semantics();
-    json!({
+    let mut summary = json!({
         "model": request.model(),
         "stream": request.stream(),
         "store": request.store(),
@@ -510,7 +512,11 @@ pub(super) fn openai_response_request_summary(
             "useWebsocket": request.use_websocket,
             "forceHttpSse": request.force_http_sse,
         },
-    })
+    });
+    if trace.is_enabled() {
+        summary["cacheFingerprints"] = super::cache_diagnostics::fingerprints(body);
+    }
+    summary
 }
 
 pub(super) const fn json_value_kind(value: Option<&Value>) -> &'static str {

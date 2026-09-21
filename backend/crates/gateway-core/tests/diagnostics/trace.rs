@@ -4,6 +4,33 @@ use std::{
 };
 
 use gateway_core::diagnostics::{TraceContext, body_fingerprint};
+
+#[test]
+fn terminal_cache_counts_survive_metadata_truncation_and_keep_unknown_distinct() {
+    for cached in [Some(0), Some(123), None] {
+        let trace = TraceContext::new("req_cache_counts");
+        let mut value = serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "usage": {"input_tokens_details": {"cache_write_tokens": 7}},
+                "metadata": (0..100).map(|i| (format!("field{i}"), serde_json::json!("synthetic"))).collect::<serde_json::Map<_,_>>(),
+            },
+        });
+        if let Some(cached) = cached {
+            value["response"]["usage"]["input_tokens_details"]["cached_tokens"] =
+                serde_json::json!(cached);
+        }
+        trace.capture_event("upstream.event", &serde_json::to_vec(&value).unwrap());
+        let snapshot = trace.snapshot().unwrap();
+        let data = &snapshot["events"][0]["data"];
+        assert_eq!(data["truncated"], true, "exercise the event-size fallback");
+        assert_eq!(
+            data["cacheUsage"]["cachedTokens"],
+            serde_json::json!(cached)
+        );
+        assert_eq!(data["cacheUsage"]["cacheWriteTokens"], 7);
+    }
+}
 use serde_json::json;
 use tracing::{
     Event, Metadata, Subscriber,

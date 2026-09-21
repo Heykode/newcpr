@@ -2044,7 +2044,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
 }
 
 #[tokio::test]
-async fn account_recovery_resets_status_facts_without_changing_credentials_or_scheduling() {
+async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     const GROUP_ID: &str = "grp_00000000000000000000000000000070";
     let Some(database) = TestDatabase::create("provider_account_recovery").await else {
         return;
@@ -2119,6 +2119,58 @@ async fn account_recovery_resets_status_facts_without_changing_credentials_or_sc
     .await
     .expect("load account before recovery");
     let store = admin_account_store(&database.pool);
+    let facts_query = "select to_jsonb(a) - 'enabled' - 'updated_at'
+                       from provider_accounts a where id = 'acct_recovery'";
+    let before_enable: serde_json::Value = sqlx::query_scalar(facts_query)
+        .fetch_one(&database.pool)
+        .await
+        .expect("load disabled account facts");
+
+    let enabled = store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                custom_name: None,
+                account_ids: vec!["acct_recovery".to_owned()],
+                enabled: Some(true),
+                turn_state_injection_enabled: None,
+                concurrency_limit: None,
+                weight: None,
+                group_ids: None,
+                outbound_proxy: None,
+            },
+            &MutationContext {
+                actor: MutationActor::System,
+                request_id: "request_account_enable".to_owned(),
+            },
+        )
+        .await
+        .expect("enable account scheduling");
+
+    assert_eq!(enabled.config_revision.get(), 2);
+    assert!(
+        repository
+            .load_provider_account("acct_recovery")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .enabled
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, serde_json::Value>(facts_query)
+            .fetch_one(&database.pool)
+            .await
+            .expect("load enabled account facts"),
+        before_enable
+    );
+    assert_eq!(
+        account_group_ids(&database.pool, "acct_recovery").await,
+        [GROUP_ID]
+    );
+    assert_eq!(
+        audit_count(&database.pool, "request_account_enable").await,
+        1
+    );
 
     let result = store
         .recover_account(
@@ -2131,7 +2183,7 @@ async fn account_recovery_resets_status_facts_without_changing_credentials_or_sc
         .await
         .expect("recover account");
 
-    assert_eq!(result.config_revision.get(), 2);
+    assert_eq!(result.config_revision.get(), 3);
     let current = sqlx::query_as::<_, RecoveredAccountRow>(
         "select enabled, credential_state, quota_access_state, quota_evidence,
                 last_error_message, provider_quota_json, concurrency_limit, weight,

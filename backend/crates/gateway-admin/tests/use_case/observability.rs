@@ -847,6 +847,7 @@ fn total_record(
     now: DateTime<Utc>,
 ) -> UsageListRecord {
     UsageListRecord {
+        client_api_key_name: None,
         id: id.to_owned(),
         endpoint: "/v1/responses".to_owned(),
         client_transport: "http_sse".to_owned(),
@@ -855,6 +856,7 @@ fn total_record(
         provider_account_ref: None,
         provider_account_name: None,
         provider_account_email: None,
+        provider_account_custom_name: None,
         provider_account_authentication_kind: None,
         upstream_model_id: Some("gpt-5.5".to_owned()),
         upstream_transport: None,

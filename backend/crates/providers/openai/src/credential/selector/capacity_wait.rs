@@ -111,6 +111,30 @@ enum WaitOutcome {
     Retry,
 }
 
+// Interval waiting is a soft-affinity exception, not execution-capacity Busy.
+fn sole_interval_deadline(
+    candidate: &AccountCandidate,
+    context: &AccountSelectionContext,
+    limits: &AccountConcurrencySnapshot,
+) -> Option<SystemTime> {
+    if AccountSelector.availability(candidate, context, limits)
+        != AccountSchedulingAvailability::Blocked(AccountSchedulingBlocker::RequestInterval)
+    {
+        return None;
+    }
+    let mut without_interval = candidate.clone();
+    without_interval.signals.last_started_at = None;
+    if AccountSelector.availability(&without_interval, context, limits)
+        != AccountSchedulingAvailability::Ready
+    {
+        return None;
+    }
+    candidate
+        .signals
+        .last_started_at?
+        .checked_add(context.policy.request_interval())
+}
+
 impl CodexCredentialSelector {
     pub(super) async fn select_with_capacity_wait(
         &self,
@@ -289,8 +313,11 @@ impl CodexCredentialSelector {
                 && !sticky_tried.contains(original)
                 && candidates.iter().any(|candidate| {
                     candidate.account.id() == original
-                        && AccountSelector.availability(candidate, &state.context, &limits)
+                        && (AccountSelector.availability(candidate, &state.context, &limits)
                             == AccountSchedulingAvailability::Busy
+                            || (state.pinned.is_none()
+                                && sole_interval_deadline(candidate, &state.context, &limits)
+                                    .is_some()))
                 })
             {
                 sticky_tried.insert(original.clone());
@@ -318,7 +345,19 @@ impl CodexCredentialSelector {
                                 AccountWaitFailure::QueueFull,
                             ));
                         }
-                        state.affinity.observe_lease_busy(original);
+                        if candidates.iter().any(|candidate| {
+                            candidate.account.id() == original
+                                && sole_interval_deadline(candidate, &state.context, &limits)
+                                    .is_some()
+                        }) {
+                            state.affinity.observe_preferred_selection(
+                                PreferredAccountSelection::Blocked(
+                                    AccountSchedulingBlocker::RequestInterval,
+                                ),
+                            );
+                        } else {
+                            state.affinity.observe_lease_busy(original);
+                        }
                     }
                 }
             }
@@ -635,7 +674,12 @@ impl CodexCredentialSelector {
             .run(self.reload_wait_exclusions(state, request.attempt))
             .await?;
         let limits = self.wait_limits()?;
+        let interval_end = (mode == AccountWaitMode::Sticky && state.pinned.is_none())
+            .then(|| sole_interval_deadline(&candidate, &state.context, &limits))
+            .flatten();
         match AccountSelector.availability(&candidate, &state.context, &limits) {
+            AccountSchedulingAvailability::Blocked(AccountSchedulingBlocker::RequestInterval)
+                if interval_end.is_some() => {}
             AccountSchedulingAvailability::Blocked(_) => return Ok(WaitOutcome::Changed),
             AccountSchedulingAvailability::Busy => {}
             AccountSchedulingAvailability::Ready => {
@@ -684,8 +728,19 @@ impl CodexCredentialSelector {
                 }
             }
         }
-        let deadline = control.enter(mode)?;
         let tuning = request.attempt.request_tuning();
+        // A skipped interval must not start a new sticky window for later retries.
+        if interval_end.is_some_and(|end| {
+            end >= request.attempt.deadline()
+                || end.duration_since(SystemTime::now()).unwrap_or_default()
+                    >= Duration::from_secs(tuning.account_busy_wait_sticky_timeout_seconds)
+        }) {
+            return Ok(WaitOutcome::Changed);
+        }
+        let deadline = control.enter(mode)?;
+        if interval_end.is_some_and(|end| end >= deadline.deadline()) {
+            return Ok(WaitOutcome::Changed);
+        }
         let max_waiting = NonZeroU32::new(match mode {
             AccountWaitMode::Sticky => tuning.account_busy_wait_sticky_max_waiting,
             AccountWaitMode::Fallback => tuning.account_busy_wait_fallback_max_waiting,
@@ -719,11 +774,29 @@ impl CodexCredentialSelector {
                     let limits = self.wait_limits()?;
                     state.context.now = SystemTime::now();
                     self.reload_wait_exclusions(state, request.attempt).await?;
-                    if matches!(
-                        AccountSelector.availability(&candidate, &state.context, &limits),
-                        AccountSchedulingAvailability::Blocked(_)
-                    ) {
-                        return Ok(WaitOutcome::Changed);
+                    match AccountSelector.availability(&candidate, &state.context, &limits) {
+                        AccountSchedulingAvailability::Blocked(
+                            AccountSchedulingBlocker::RequestInterval,
+                        ) if interval_end.is_some_and(|end| {
+                            sole_interval_deadline(&candidate, &state.context, &limits)
+                                .is_some_and(|current| current <= end && state.context.now < end)
+                        }) =>
+                        {
+                            // Do not promote before the interval ends or chase a later start.
+                            let remaining = interval_end
+                                .and_then(|end| end.duration_since(SystemTime::now()).ok())
+                                .unwrap_or_default();
+                            tokio::time::sleep(poll.min(remaining)).await;
+                            poll = (poll * 2).min(Duration::from_secs(1));
+                            continue;
+                        }
+                        AccountSchedulingAvailability::Blocked(_) => {
+                            return Ok(WaitOutcome::Changed);
+                        }
+                        AccountSchedulingAvailability::Busy if interval_end.is_some() => {
+                            return Ok(WaitOutcome::Changed);
+                        }
+                        _ => {}
                     }
                     let promotion = waiting
                         .try_promote(self.wait_execution_request(
@@ -757,6 +830,9 @@ impl CodexCredentialSelector {
                             return Err(CredentialSelectionError::AccountWait(
                                 AccountWaitFailure::TokenExpired,
                             ));
+                        }
+                        ProviderWaitPromotion::Busy { .. } if interval_end.is_some() => {
+                            return Ok(WaitOutcome::Changed);
                         }
                         ProviderWaitPromotion::Busy { .. } => {}
                     }

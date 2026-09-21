@@ -300,6 +300,7 @@ pub struct ModelRequestFinalization {
     pub cost_source: CostSource,
     pub cost_amount: Option<DecimalAmount>,
     pub cost_currency: Option<String>,
+    pub billing_snapshot_json: Option<Value>,
     pub timings: ModelRequestTimings,
     pub completed_at: DateTime<Utc>,
 }
@@ -326,6 +327,17 @@ impl ModelRequestFinalization {
             && (currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()))
         {
             return Err(invalid("cost currency must be three uppercase characters"));
+        }
+        if let Some(snapshot) = &self.billing_snapshot_json {
+            let saved = super::billing_snapshot::decode(snapshot)
+                .ok_or_else(|| invalid("invalid billing snapshot"))?;
+            if self.cost_source != CostSource::Calculated
+                || self.cost_currency.as_deref() != Some(saved.total_amount.currency.as_str())
+                || self.cost_amount.as_ref().map(ToString::to_string)
+                    != Some(saved.total_amount.amount.to_string())
+            {
+                return Err(invalid("billing snapshot does not match persisted total"));
+            }
         }
         for (field, value) in [
             ("upstream_transport", self.upstream_transport.as_deref()),
@@ -743,7 +755,7 @@ impl ModelRequestRepository for PgExecutionStore {
                  upstream_connection_exit_reason = $45,
                  upstream_connection_age_ms = $46,
                  upstream_connection_idle_ms = $47, diagnostic_trace_json = $48,
-                 upstream_response_model = $49
+                 upstream_response_model = $49, billing_snapshot_json = $50
              where id = $1 and outcome = 'running'
              returning id, client_api_key_ref, continuation_affinity_hash,
                        continuation_requested, provider_kind, upstream_transport,
@@ -936,6 +948,7 @@ impl ModelRequestRepository for PgExecutionStore {
         )?)
         .bind(finalization.diagnostic_trace_json.map(sqlx::types::Json))
         .bind(finalization.upstream_response_model)
+        .bind(finalization.billing_snapshot_json)
         .fetch_one(&self.pool)
         .await
         .map_err(|_| postgres_unavailable("finalize model request"))?;
@@ -1255,6 +1268,10 @@ impl ExecutionStore for PgExecutionStore {
                 cost_source,
                 cost_amount,
                 cost_currency,
+                billing_snapshot_json: finalization
+                    .cost
+                    .breakdown()
+                    .map(super::billing_snapshot::encode),
                 timings: ModelRequestTimings {
                     transport_decision_wait_ms: finalization.timings.transport_decision_wait_ms,
                     connect_ms: finalization.timings.connect_ms,

@@ -134,6 +134,34 @@ pub(crate) fn encode_responses_body(
     encoded
 }
 
+/// Normalize only rejected reasoning replay fields on the selected OAuth copy.
+pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in input {
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+            continue;
+        }
+        item.shift_remove("status");
+        // Preserve plaintext-only history; only encrypted replay makes it redundant.
+        if item
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .is_some_and(|content| !content.trim().is_empty())
+            && item
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| !content.is_empty())
+        {
+            item.shift_remove("content");
+        }
+    }
+}
+
 fn adapt_codex_responses_body(
     body: &mut Map<String, Value>,
     upstream_model: &str,

@@ -2167,6 +2167,157 @@ async fn capacity_wait_queue_full_soft_affinity_can_use_idle_but_required_cannot
 }
 
 #[tokio::test]
+async fn affinity_interval_waits_only_for_a_healthy_soft_owner_within_budget() {
+    use std::sync::atomic::Ordering;
+    for scenario in [
+        "ready",
+        "full",
+        "too-long",
+        "busy",
+        "disabled",
+        "invalid",
+        "cancel",
+        "rotated-start",
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "at-original");
+        create_account(&store, "acct_other", "at-other");
+        let original = ProviderAccountId::new("acct_original").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        leases
+            .capacity
+            .set_load("acct_original", u32::from(scenario == "busy"));
+        leases.capacity.set_load("acct_other", 0);
+        leases
+            .capacity
+            .full
+            .store(scenario == "full", Ordering::SeqCst);
+        leases
+            .capacity
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&original)
+            .unwrap()
+            .last_started_at = Some(SystemTime::now());
+        let affinity = Arc::new(MemorySessionAffinity::default());
+        let key = ProviderSessionAffinityKey::try_new("interval-original").unwrap();
+        affinity
+            .bind(
+                &ProviderKind::new("openai").unwrap(),
+                &key,
+                &original,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        let selector = selector_with_affinity(&store, Arc::clone(&leases), affinity)
+            .with_account_concurrency(capacity_handle(&["acct_original", "acct_other"], 1));
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_interval_affinity").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            ),
+            NonZeroU32::MIN,
+            SystemTime::now() + Duration::from_secs(30),
+            gateway_core::account::AccountSelectionPolicy::new(
+                gateway_core::account::RotationStrategy::Smart,
+                NonZeroU32::new(2).unwrap(),
+                if scenario == "too-long" {
+                    Duration::from_secs(20)
+                } else {
+                    Duration::from_millis(250)
+                },
+            ),
+            AccountAttemptContext::new(BTreeSet::new(), None, None)
+                .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        )
+        .with_request_tuning(gateway_core::routing::RequestTuning {
+            account_busy_wait_sticky_timeout_seconds: 10,
+            ..capacity_tuning()
+        });
+        let selected = capacity_select(&selector, &attempt, Some(&key));
+        tokio::pin!(selected);
+        if matches!(
+            scenario,
+            "ready" | "disabled" | "invalid" | "cancel" | "rotated-start"
+        ) {
+            tokio::select! {
+                result = &mut selected => panic!("interval must queue ({scenario}): {result:?}"),
+                () = wait_until_queued(&leases) => {}
+            }
+            assert!(
+                leases.requests.lock().unwrap().is_empty(),
+                "no early execution"
+            );
+            match scenario {
+                "disabled" => store.set_enabled(&original, false).await.unwrap(),
+                "invalid" => persist_credential_state(
+                    &store,
+                    &store.account("acct_original").unwrap(),
+                    CredentialState::Invalid,
+                ),
+                "cancel" => attempt.cancellation().cancel(),
+                "rotated-start" => {
+                    leases
+                        .capacity
+                        .signals
+                        .lock()
+                        .unwrap()
+                        .get_mut(&original)
+                        .unwrap()
+                        .last_started_at = Some(SystemTime::now() + Duration::from_secs(20));
+                }
+                _ => {}
+            }
+        }
+        let result = tokio::time::timeout(Duration::from_secs(2), selected)
+            .await
+            .unwrap();
+        if scenario == "cancel" {
+            assert!(matches!(result, Err(CredentialSelectionError::Cancelled)));
+        } else {
+            let lease = result.unwrap();
+            assert_eq!(
+                lease.account_id().as_str(),
+                if scenario == "ready" {
+                    "acct_original"
+                } else {
+                    "acct_other"
+                },
+                "{scenario}"
+            );
+            if scenario == "ready" {
+                assert!(lease.affinity_hit());
+            }
+        }
+        assert_eq!(
+            leases.capacity.waiting.load(Ordering::SeqCst),
+            0,
+            "{scenario}"
+        );
+        if matches!(scenario, "too-long" | "busy") {
+            assert!(
+                leases.capacity.waits.lock().unwrap().is_empty(),
+                "{scenario}"
+            );
+        }
+        if scenario == "too-long" {
+            assert!(
+                !attempt
+                    .account_wait_budget()
+                    .unwrap()
+                    .is_exhausted_at(std::time::Instant::now() + Duration::from_secs(11)),
+                "skipping interval waiting must not start its ten-second window"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn capacity_wait_disabled_and_diagnostic_preserve_the_legacy_path() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());

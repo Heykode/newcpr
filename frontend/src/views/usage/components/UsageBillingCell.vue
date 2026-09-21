@@ -54,7 +54,12 @@ function itemValueClass(tone?: string, accent?: boolean) {
       {{ usageBillingText(record) }}
     </span>
 
-    <UsageDetailPopover v-if="billing" title="计费明细" trigger-label="查看费用明细">
+    <UsageDetailPopover
+      v-if="billing"
+      :title="billing.longContextBillingApplied ? '长上下文计费明细' : '计费明细'"
+      :trigger-label="billing.longContextBillingApplied ? '查看长上下文计费明细' : '查看费用明细'"
+      :tone="billing.longContextBillingApplied ? 'warning' : 'primary'"
+    >
       <div class="grid gap-1.5 text-cp-text-secondary">
         <div v-for="item in amountItems" :key="item.label" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
           <span class="whitespace-nowrap">{{ item.label }}</span>

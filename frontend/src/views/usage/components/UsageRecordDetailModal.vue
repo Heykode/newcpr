@@ -103,6 +103,7 @@ const identifierItems = computed(() => [
   { label: '上游请求 ID', value: props.record?.upstreamRequestId, mono: true, wrap: true },
   { label: '账号 ID', value: props.record?.accountId, mono: true, wrap: true },
   { label: '客户端 Key ID', value: props.record?.clientApiKeyId, mono: true, wrap: true },
+  { label: 'Key 名称', value: props.record?.clientApiKeyName, wrap: true },
 ])
 
 interface AttemptRow {

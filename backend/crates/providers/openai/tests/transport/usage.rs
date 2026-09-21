@@ -206,6 +206,15 @@ fn billing_breakdown_should_switch_only_after_the_long_context_threshold() {
         .expect("short-context boundary");
     let long = openai_billing_breakdown("gpt-5.4", billing_usage(272_001, 0, 0, 0), None)
         .expect("long-context pricing");
+    assert!(!boundary.long_context_billing_applied());
+    assert!(long.long_context_billing_applied());
+    assert!(
+        long.calculated_cost()
+            .into_estimate()
+            .breakdown()
+            .unwrap()
+            .long_context_billing_applied()
+    );
 
     assert_eq!(
         boundary.input_price_per_million().amount().scaled(),
