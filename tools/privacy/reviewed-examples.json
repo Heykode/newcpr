@@ -1534,5 +1534,101 @@
     "file_sha256": "b07bf7fe1485010b01f3c66f5cf66014161e80a6dff2186305f0f08bb86d49cf",
     "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
     "reason": "Re-reviewed unchanged synthetic loopback migration SQL fixture. New custom_name None fields shift lines only; migration fixture values and assertions remain unchanged."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1980,
+    "file_sha256": "854fc8dc660c730adbf70396e4795179a1aa6dce98e12cd184e2c0e4c16b85de",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Manually re-reviewed unchanged synthetic loopback proxy fixture against HEAD and the previous line digest. This file only adds disabled-account enable preservation assertions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 2008,
+    "file_sha256": "854fc8dc660c730adbf70396e4795179a1aa6dce98e12cd184e2c0e4c16b85de",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Manually re-reviewed unchanged normalized synthetic loopback assertion against HEAD. The enable/recover regression changes no credential fixture or audit-redaction assertion."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 396,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "22a9edc2ec1798b0f4370c03489ec74713550fa6107fa544ab3b54d3c1f25a54",
+    "reason": "Manually re-reviewed unchanged static preview-01 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 397,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "543be7395e9f3f640692cdfe43dcf5923bb5f50c40c00a4777fbe9ea4998a574",
+    "reason": "Manually re-reviewed unchanged static preview-02 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 398,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "a649b1f5a355cc87ba0c9c1176f42eb6a619d76ec03a15b9d1c4b91c795d74b2",
+    "reason": "Manually re-reviewed unchanged static preview-03 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 399,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "acc8562886b64af13820f3233051f4fdee9db0539d6aa02992b113f59028b70f",
+    "reason": "Manually re-reviewed unchanged static preview-04 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 400,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "4cd99d26dc77e695e952ff0557c5b72ebc4e4cbaa2b0760f5b4fb2d4824402be",
+    "reason": "Manually re-reviewed unchanged static preview-05 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 401,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "25b5a9145901ab9c4d223054a5d93c2a46332c705f9a1c64ce6e4dffdd9d33b5",
+    "reason": "Manually re-reviewed unchanged static preview-06 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 402,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "6add8befdfda841950de19d1be394a23e57efad89eba38751020e251a02d6127",
+    "reason": "Manually re-reviewed unchanged static preview-07 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 403,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "fd08411c930ac37fffb72a69e0ddf7c4748697f590f8d186b0b0593fb7f26965",
+    "reason": "Manually re-reviewed unchanged static preview-08 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 404,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "19d01127d86ffe835cd117a4be9e27126c7cb3e143749432d85d6fd00fbe3d8b",
+    "reason": "Manually re-reviewed unchanged static preview-09 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "frontend/src/views/theme/fixtures/dashboard.ts",
+    "rule": "non-example-ip",
+    "line": 405,
+    "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
+    "line_sha256": "1f4e54601e99cfed60e0375d1c5bc9324fa74ea5b88ebe97e8805f00df10bbf2",
+    "reason": "Manually re-reviewed unchanged static preview-10 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
   }
 ]

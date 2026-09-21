@@ -39,7 +39,6 @@ const {
   updateError,
   updateSuccess,
   needRestart,
-  loadedOnce,
   updateLogs,
   updateStreaming,
   updateStreamError,
@@ -136,8 +135,8 @@ async function handleUpdateRequest() {
 async function runConfirmedUpdate(targetVersion: string) {
   try {
     const result = await updateNow(targetVersion)
-    if (result?.needRestart) {
-      toast.success('更新完成，请重启服务')
+    if (result) {
+      toast.success('更新已开始')
     }
   }
   catch {}
@@ -163,7 +162,7 @@ async function handleRestart() {
 }
 
 watch(open, (visible) => {
-  if (visible && !loadedOnce.value) {
+  if (visible) {
     void loadSystem(false).catch(() => undefined)
   }
 })
@@ -187,7 +186,7 @@ watch(
     description="检查版本、查看发布说明并执行在线更新"
     tone="success"
     size="lg"
-    :dismissible="!updating && !restarting"
+    :dismissible="!restarting"
   >
     <template #icon>
       <ArrowUpCircle class="size-4.5 text-cp-success" />

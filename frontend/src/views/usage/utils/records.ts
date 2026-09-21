@@ -19,6 +19,7 @@ export interface UsageViewModel {
   id: string
   requestId: string
   clientApiKeyId: string | null
+  clientApiKeyName?: string | null
   kind: string
   provider: string | null
   authenticationKind: string | null
@@ -87,6 +88,7 @@ export function normalizeUsageRecord(record: UsageRecordDetail): UsageViewModel 
     id: record.id,
     requestId: record.requestId,
     clientApiKeyId: record.clientApiKeyId,
+    clientApiKeyName: record.clientApiKeyName,
     kind: record.kind,
     provider: record.provider,
     authenticationKind: record.authenticationKind,

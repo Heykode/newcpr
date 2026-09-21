@@ -69,11 +69,13 @@ const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../../transport/fixtures/official_models_snapshot.json");
 
 mod affinity;
+mod cache_diagnostics;
 mod compact;
 mod generate_compat;
 mod identity_isolation;
 mod quota_continuation;
 mod raw_identity;
+mod reasoning_replay;
 mod request_alignment;
 mod scheduling;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
@@ -1495,13 +1497,13 @@ async fn image_prices_should_use_modality_rates_and_precede_delivery() {
                         .canonical_facts()
                         .iter()
                         .filter_map(move |fact| match fact {
-                            GatewayEvent::CalculatedCost(cost) => Some((index, *cost)),
+                            GatewayEvent::CalculatedCost(cost) => Some((index, cost.clone())),
                             _ => None,
                         })
                 })
                 .collect::<Vec<_>>();
             assert_eq!(costs.len(), 1, "model={model}");
-            let (cost_index, cost) = costs[0];
+            let (cost_index, cost) = costs[0].clone();
             assert_eq!(
                 cost.total().amount().scaled(),
                 expected_ticks,

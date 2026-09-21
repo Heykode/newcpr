@@ -311,6 +311,7 @@ pub struct UsageCalculatedBillingFact {
 /// Provider 已确认的逐项费用与单价。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedBillingBreakdown {
+    pub long_context_billing_applied: bool,
     pub input_amount: CurrencyCost,
     pub output_amount: CurrencyCost,
     pub cache_read_amount: CurrencyCost,
@@ -533,6 +534,7 @@ pub struct DashboardObservation {
 /// 使用记录表格的窄读模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageListRecord {
+    pub client_api_key_name: Option<String>,
     pub id: String,
     pub endpoint: String,
     pub client_transport: String,
@@ -541,6 +543,8 @@ pub struct UsageListRecord {
     pub provider_account_ref: Option<String>,
     pub provider_account_name: Option<String>,
     pub provider_account_email: Option<String>,
+    /// 账号当前自定义名称，按内部账号 ID 关联，不属于请求历史快照。
+    pub provider_account_custom_name: Option<String>,
     pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
@@ -584,6 +588,7 @@ pub struct UsageListRecord {
 /// 一次完整模型请求的公共观测记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageRecord {
+    pub client_api_key_name: Option<String>,
     pub id: String,
     pub client_api_key_ref: String,
     pub config_revision: u64,
@@ -763,6 +768,7 @@ pub struct DiagnosticObservation {
 /// 统一运维错误记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsError {
+    pub client_api_key_name: Option<String>,
     pub source: String,
     pub event_id: String,
     pub request_id: Option<String>,

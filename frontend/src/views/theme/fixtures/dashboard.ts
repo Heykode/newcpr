@@ -116,6 +116,7 @@ function previewUsageRecord(options: PreviewUsageRecordOptions): UsageListRecord
     accountId: `account_${options.id}`,
     accountEmail: options.accountEmail,
     accountName: options.accountEmail.split('@')[0] ?? null,
+    accountCustomName: null,
     route: stream ? '/v1/responses' : '/v1/chat/completions',
     model: options.model,
     requestedModel: options.model,

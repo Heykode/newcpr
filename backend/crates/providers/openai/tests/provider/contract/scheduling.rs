@@ -28,8 +28,26 @@ async fn managed_state_gates_both_selectors_by_account_model_and_restores_when_d
         let account = imported.account.clone();
         accounts.create_account(imported).await.unwrap();
         let states = Arc::new(ProbeStates::default());
-        let ports =
-            crate::admin::provider_ports_with_accounts(accounts).with_turn_states(states.clone());
+        let ports = crate::admin::provider_ports_with_accounts(accounts);
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases
+            .capacity
+            .enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        leases.capacity.set_load(account.id().as_str(), 0);
+        let ports = gateway_core::provider_ports::ProviderStorePorts::new(
+            ports.accounts(),
+            leases.clone(),
+            ports.session_affinity(),
+            ports.session_exclusions(),
+            ports.catalog_cache(),
+            ports.artifact_profiles(),
+            ports.credential_state(),
+            ports.cooldowns(),
+            ports.runtime_policy(),
+            ports.oauth_pending(),
+        )
+        .with_turn_states(states.clone());
         let server = local_server().await;
         let mut config = crate::admin::valid_config();
         config.config.api.base_url = server.uri();
@@ -113,6 +131,49 @@ async fn managed_state_gates_both_selectors_by_account_model_and_restores_when_d
             requests[0].headers.get("x-codex-turn-state").unwrap(),
             "s".repeat(292).as_str()
         );
+        if wait {
+            leases
+                .capacity
+                .signals
+                .lock()
+                .unwrap()
+                .get_mut(account.id())
+                .unwrap()
+                .last_started_at = Some(SystemTime::now() + Duration::from_secs(1));
+            let selected = provider.execute(
+                planned_request("openai", http_generate_operation()),
+                attempt(),
+            );
+            tokio::pin!(selected);
+            tokio::select! {
+                result = &mut selected => panic!("interval should queue: {:?}", result.err()),
+                () = provider_wait_queued(&leases) => {}
+            }
+            states.records.lock().unwrap().clear();
+            assert!(
+                timeout(Duration::from_secs(2), selected)
+                    .await
+                    .unwrap()
+                    .is_err(),
+                "losing State while waiting must reject before sending"
+            );
+            assert_eq!(
+                leases
+                    .capacity
+                    .waiting
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+            leases
+                .capacity
+                .signals
+                .lock()
+                .unwrap()
+                .get_mut(account.id())
+                .unwrap()
+                .last_started_at = None;
+        }
         states.records.lock().unwrap().clear();
         let result = provider
             .execute(

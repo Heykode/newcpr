@@ -337,6 +337,158 @@ async fn terminal_failure_should_accept_exactly_one_client_status_backfill() {
 }
 
 #[tokio::test]
+async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version <= 32)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("billing_upgrade", &old).await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_legacy_billing")
+        .await
+        .unwrap();
+    sqlx::query(
+        "update model_requests set provider_kind = 'openai', provider_account_ref = 'acct_legacy',
+        upstream_transport = 'http_sse', attempt_count = 1, upstream_send_state = 'sent',
+        outcome = 'succeeded', downstream_committed_at = now(), client_status_code = 200,
+        cost_source = 'calculated', cost_amount = 1.23, cost_currency = 'USD', completed_at = now()
+        where id = 'req_legacy_billing'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let before: Value = sqlx::query_scalar("select to_jsonb(mr) from model_requests mr")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    let costs_before: Value =
+        sqlx::query_scalar("select to_jsonb(c) from account_cumulative_costs c")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let after: Value =
+        sqlx::query_scalar("select to_jsonb(mr) - 'billing_snapshot_json' from model_requests mr")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let snapshot: Option<Value> =
+        sqlx::query_scalar("select billing_snapshot_json from model_requests")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let costs_after: Value =
+        sqlx::query_scalar("select to_jsonb(c) from account_cumulative_costs c")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(costs_before, costs_after);
+    assert!(
+        snapshot.is_none(),
+        "legacy records must not fabricate a pricing flag"
+    );
+    assert!(
+        old.run(&database.pool).await.is_err(),
+        "old binary cannot safely roll back across migration"
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn billing_snapshot_survives_finalization_without_repricing_or_duplicate_charges() {
+    use gateway_core::metering::{
+        CalculatedCostAmounts, CalculatedCostBreakdown, CalculatedCostRates, CurrencyCode, Decimal,
+        Money,
+    };
+    let Some(database) = TestDatabase::create("billing_snapshot").await else {
+        return;
+    };
+    let money = |ticks| {
+        Money::new(
+            Decimal::from_scaled(ticks).unwrap(),
+            CurrencyCode::new("USD").unwrap(),
+        )
+    };
+    let snapshot = CalculatedCostBreakdown::new(
+        CalculatedCostAmounts::new(
+            money(100),
+            money(200),
+            money(30),
+            money(0),
+            money(330),
+            money(330),
+        ),
+        CalculatedCostRates::new(money(1000), money(2000), money(300), money(0)),
+        Some("priority".to_owned()),
+        100,
+    )
+    .with_long_context_billing(true);
+    seed_running_request(&database.pool, "req_snapshot")
+        .await
+        .unwrap();
+    sqlx::query("update model_requests set provider_kind = 'openai', provider_account_ref = 'acct_snapshot', upstream_model_id = 'future-model', upstream_transport = 'http_sse', attempt_count = 1 where id = 'req_snapshot'")
+        .execute(&database.pool).await.unwrap();
+    let repository = PgExecutionStore::new(database.pool.clone());
+    let mut finalization = successful_core_finalization("req_snapshot");
+    finalization.downstream_committed_at = Some(SystemTime::now());
+    finalization.cost = snapshot.calculated_cost().into_estimate();
+    ExecutionStore::finalize_model_request(&repository, finalization)
+        .await
+        .unwrap();
+    let mut duplicate = successful_core_finalization("req_snapshot");
+    duplicate.cost = CalculatedCost::from_usd_ticks(999).unwrap().into_estimate();
+    assert!(
+        ExecutionStore::finalize_model_request(&repository, duplicate)
+            .await
+            .is_err()
+    );
+    let row: (String, Value) = sqlx::query_as("select cost_amount::text, billing_snapshot_json from model_requests where id = 'req_snapshot'")
+        .fetch_one(&database.pool).await.unwrap();
+    assert_eq!(row.0, "0.0000000330");
+    assert_eq!(row.1["longContextBillingApplied"], true);
+    assert_eq!(row.1["inputPrice"], "0.0000001000");
+    let detail = admin_observability_store(&database.pool)
+        .usage_record_detail("req_snapshot")
+        .await
+        .unwrap();
+    let Some(admin_observability::UsageBilling::Calculated(saved)) = detail.request.billing else {
+        panic!("request-time details must not require a current model price");
+    };
+    assert!(saved.long_context_billing_applied);
+    assert_eq!(saved.total_amount.amount, row.0.parse().unwrap());
+    let charges: (i64, String) = sqlx::query_as("select count(*), sum(amount)::text from account_cumulative_cost_entries where provider_account_ref = 'acct_snapshot'")
+        .fetch_one(&database.pool).await.unwrap();
+    assert_eq!(charges, (1, "0.0000000330".to_owned()));
+    // Malformed/inconsistent optional metadata must never replace authoritative totals.
+    for invalid in [json!({"version": 99}), json!({"version": 1, "total": "9"})] {
+        sqlx::query(
+            "update model_requests set billing_snapshot_json = $1 where id = 'req_snapshot'",
+        )
+        .bind(invalid)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let detail = admin_observability_store(&database.pool)
+            .usage_record_detail("req_snapshot")
+            .await
+            .unwrap();
+        assert!(matches!(
+            detail.request.billing,
+            Some(admin_observability::UsageBilling::Total { .. })
+        ));
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn core_adapter_should_persist_calculated_cost_exactly() {
     let Some(database) = TestDatabase::create("execution_calculated_cost").await else {
         return;

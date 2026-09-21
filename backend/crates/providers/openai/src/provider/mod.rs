@@ -95,6 +95,7 @@ use crate::transport::{
     CodexWebSocketPool, endpoint_url,
 };
 
+mod cache_diagnostics;
 mod compact;
 mod execution;
 mod failure;
@@ -618,6 +619,12 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
+        if matches!(
+            lease.authentication(),
+            crate::credential::CodexRuntimeAuthentication::OAuth(_)
+        ) {
+            crate::transport::request::normalize_reasoning_replay(upstream_request.body_mut());
+        }
         if context.continuation_attempt() != ContinuationAttempt::Native
             && let Some(manager) = &self.turn_states
             && !manager

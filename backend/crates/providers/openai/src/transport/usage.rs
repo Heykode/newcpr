@@ -510,24 +510,27 @@ fn openai_billing_breakdown_with_context(
         effective_multiplier_percent(selected.total_ticks, standard.total_ticks)?;
     let cache_write_rate = cache_write_rate(selected_rates, pricing.cache_write_percent)?;
 
-    Some(CalculatedCostBreakdown::new(
-        CalculatedCostAmounts::new(
-            usd_money(selected.input_ticks)?,
-            usd_money(selected.output_ticks)?,
-            usd_money(selected.cache_read_ticks)?,
-            usd_money(selected.cache_write_ticks)?,
-            usd_money(standard.total_ticks)?,
-            usd_money(selected.total_ticks)?,
-        ),
-        CalculatedCostRates::new(
-            usd_price_per_million(selected_rates.input_ticks)?,
-            usd_price_per_million(selected_rates.output_ticks)?,
-            usd_price_per_million(selected_rates.cache_read_ticks)?,
-            usd_price_per_million(cache_write_rate)?,
-        ),
-        Some(normalized_tier.unwrap_or_else(|| "default".to_owned())),
-        multiplier_percent,
-    ))
+    Some(
+        CalculatedCostBreakdown::new(
+            CalculatedCostAmounts::new(
+                usd_money(selected.input_ticks)?,
+                usd_money(selected.output_ticks)?,
+                usd_money(selected.cache_read_ticks)?,
+                usd_money(selected.cache_write_ticks)?,
+                usd_money(standard.total_ticks)?,
+                usd_money(selected.total_ticks)?,
+            ),
+            CalculatedCostRates::new(
+                usd_price_per_million(selected_rates.input_ticks)?,
+                usd_price_per_million(selected_rates.output_ticks)?,
+                usd_price_per_million(selected_rates.cache_read_ticks)?,
+                usd_price_per_million(cache_write_rate)?,
+            ),
+            Some(normalized_tier.unwrap_or_else(|| "default".to_owned())),
+            multiplier_percent,
+        )
+        .with_long_context_billing(long_context && pricing.long_standard.is_configured()),
+    )
 }
 
 /// 独立 Images 端点按公开标准 API 单价估算；不是 ChatGPT 账号实际扣费。

@@ -188,6 +188,7 @@ fn sensitive_response_views_do_not_require_debug_or_add_secret_fields() {
 #[test]
 fn billing_view_should_preserve_the_original_detail_contract() {
     let value = serde_json::to_value(BillingView {
+        long_context_billing_applied: false,
         input_amount_display: "$0.03".to_owned(),
         output_amount_display: "$0.00".to_owned(),
         cache_read_amount_display: "$0.14".to_owned(),
@@ -207,6 +208,7 @@ fn billing_view_should_preserve_the_original_detail_contract() {
     assert_eq!(value["cacheReadPriceDisplay"], "$1.0000 / 1M Token");
     assert_eq!(value["serviceTierDisplay"], "Fast");
     assert_eq!(value["multiplierDisplay"], "1.00x");
+    assert_eq!(value["longContextBillingApplied"], false);
 }
 
 #[test]
@@ -649,6 +651,7 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
         .lock()
         .expect("ops errors")
         .push(OpsError {
+            client_api_key_name: Some("test-client".to_owned()),
             source: "model_request".to_owned(),
             event_id: "err_snapshot".to_owned(),
             request_id: Some("req_err".to_owned()),
@@ -839,6 +842,7 @@ fn usage_record_with_account(
     use gateway_admin::model::observability::{RequestOutcome, UsageRecord};
 
     UsageRecord {
+        client_api_key_name: Some("test-client".to_owned()),
         id: id.to_owned(),
         client_api_key_ref: "key_detail".to_owned(),
         config_revision: 1,
@@ -972,6 +976,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .lock()
         .expect("usage records")
         .push(UsageListRecord {
+            client_api_key_name: Some("test-client".to_owned()),
             id: "request_endpoint".to_owned(),
             endpoint: "/v1/responses".to_owned(),
             client_transport: "websocket".to_owned(),
@@ -980,6 +985,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             provider_account_ref: Some("acct_snapshot".to_owned()),
             provider_account_name: Some("Snapshot Alpha".to_owned()),
             provider_account_email: Some("alpha@example.invalid".to_owned()),
+            provider_account_custom_name: Some("Current custom name".to_owned()),
             provider_account_authentication_kind: Some("oauth".to_owned()),
             upstream_model_id: Some("grok-4.5".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
@@ -1006,6 +1012,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             cost_currency: None,
             billing: Some(UsageBilling::Calculated(Box::new(
                 CalculatedBillingBreakdown {
+                    long_context_billing_applied: true,
                     input_amount: usd("0.03"),
                     output_amount: usd("0.07"),
                     cache_read_amount: usd("0.00"),
@@ -1091,6 +1098,11 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         value["data"]["items"][0]["billing"]["serviceTierDisplay"],
         "Standard"
     );
+    assert_eq!(
+        value["data"]["items"][0]["billing"]["longContextBillingApplied"],
+        true
+    );
+    assert_eq!(value["data"]["items"][0]["clientApiKeyName"], "test-client");
 
     assert_eq!(
         serde_json::json!({
@@ -1099,6 +1111,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             "accountId": value["data"]["items"][0]["accountId"],
             "accountName": value["data"]["items"][0]["accountName"],
             "accountEmail": value["data"]["items"][0]["accountEmail"],
+            "accountCustomName": value["data"]["items"][0]["accountCustomName"],
             "authenticationKind": value["data"]["items"][0]["authenticationKind"],
             "imageInputTokens": value["data"]["items"][0]["tokenDetails"]["imageInputTokens"],
             "imageOutputTokens": value["data"]["items"][0]["tokenDetails"]["imageOutputTokens"],
@@ -1122,6 +1135,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             "accountId": "acct_snapshot",
             "accountName": "Snapshot Alpha",
             "accountEmail": "alpha@example.invalid",
+            "accountCustomName": "Current custom name",
             "authenticationKind": "oauth",
             "imageInputTokens": 31,
             "imageOutputTokens": 9,

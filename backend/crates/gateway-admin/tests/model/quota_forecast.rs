@@ -180,12 +180,13 @@ fn weekly_usd_forecast_pairs_ten_dollars_with_twenty_percentage_points() {
             usage: baseline_usage,
         }],
         0,
+        false,
     );
     assert_eq!(paired.method, QuotaForecastMethod::Incremental);
     assert_eq!(paired.sampled_percent, 20.0);
     assert_eq!(paired.usage.usd, 10.0);
     let result = account_quota_forecasts(&full, imported, now(), &[paired]);
-    assert_eq!(result[0].estimated_usd, Some(50.0));
+    assert_eq!(result[0].estimated_usd, Some(32.0));
     assert_eq!(result[0].remaining_usd, Some(20.0));
 }
 
@@ -200,6 +201,23 @@ fn samples(quota: &ProviderQuota) -> Vec<QuotaForecastSample> {
         .filter_map(|window| {
             let usage = window.local_usage.as_ref()?;
             let usd = usage.costs.iter().find(|cost| cost.currency == "USD");
+            let usage = QuotaForecastUsage {
+                request_count: usage.request_count,
+                tokens: usage.total_tokens.unwrap_or(0),
+                input_tokens: usage.input_tokens.unwrap_or(0),
+                output_tokens: usage.output_tokens.unwrap_or(0),
+                cached_tokens: usage.cached_tokens.unwrap_or(0),
+                missing_token_count: u64::from(usage.total_tokens.is_none()),
+                known_cost_count: if usd.is_some() {
+                    usage.cost_coverage.known_count()
+                } else {
+                    0
+                },
+                unavailable_cost_count: usage.cost_coverage.partial_count
+                    + usage.cost_coverage.unavailable_count,
+                usd: usd.map_or(0.0, |cost| cost.amount.as_str().parse().unwrap()),
+                excluded_request_count: 0,
+            };
             Some(QuotaForecastSample {
                 key: window.key.clone(),
                 method: QuotaForecastMethod::Cumulative,
@@ -213,23 +231,8 @@ fn samples(quota: &ProviderQuota) -> Vec<QuotaForecastSample> {
                 observation_count: 0,
                 pending_request_count: 0,
                 discontinuous: false,
-                usage: QuotaForecastUsage {
-                    request_count: usage.request_count,
-                    tokens: usage.total_tokens.unwrap_or(0),
-                    input_tokens: usage.input_tokens.unwrap_or(0),
-                    output_tokens: usage.output_tokens.unwrap_or(0),
-                    cached_tokens: usage.cached_tokens.unwrap_or(0),
-                    missing_token_count: u64::from(usage.total_tokens.is_none()),
-                    known_cost_count: if usd.is_some() {
-                        usage.cost_coverage.known_count()
-                    } else {
-                        0
-                    },
-                    unavailable_cost_count: usage.cost_coverage.partial_count
-                        + usage.cost_coverage.unavailable_count,
-                    usd: usd.map_or(0.0, |cost| cost.amount.as_str().parse().unwrap()),
-                    excluded_request_count: 0,
-                },
+                cycle_usage: usage.clone(),
+                usage,
             })
         })
         .collect()
@@ -362,7 +365,7 @@ fn incremental_sample_supports_mid_cycle_accounts_and_remaining_uses_current_per
     sample.block_count = 2;
     let [week, month] =
         account_quota_forecasts(&source, now() - Duration::days(1), now(), &[sample]);
-    assert_eq!(week.estimated_tokens, Some(10_000));
+    assert_eq!(week.estimated_tokens, Some(9_000));
     assert_eq!(week.remaining_tokens, Some(8_000));
     assert_eq!(month.remaining_tokens, Some(8_000));
     assert!(week.unavailable_reason.is_none());
@@ -374,6 +377,7 @@ fn missing_tokens_keep_estimates_from_recorded_usage() {
     let source = quota(vec![window("week", 7)]);
     let mut sample = samples(&source).remove(0);
     sample.usage.missing_token_count = 1;
+    sample.cycle_usage = sample.usage.clone();
     let [week, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert!(week.incomplete_tokens);
     assert!(week.unavailable_reason.is_none());
@@ -428,6 +432,7 @@ fn missing_tokens_and_costs_do_not_block_recorded_capacity_or_remaining_estimate
     sample.usage.unavailable_cost_count = 2;
     sample.usage.excluded_request_count = 1;
     sample.pending_request_count = 1;
+    sample.cycle_usage = sample.usage.clone();
     let [week, month] =
         account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert!(week.incomplete_tokens);
@@ -470,6 +475,7 @@ fn money_without_known_cost_evidence_is_not_estimated() {
     let source = quota(vec![window("week", 7)]);
     let mut sample = samples(&source).remove(0);
     sample.usage.known_cost_count = 0;
+    sample.cycle_usage = sample.usage.clone();
     let [week, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert!(week.incomplete_cost);
     assert!(week.unavailable_reason.is_none());
@@ -485,6 +491,7 @@ fn entirely_unknown_tokens_leave_known_money_estimates_available() {
     let mut sample = samples(&source).remove(0);
     sample.usage.tokens = 0;
     sample.usage.missing_token_count = sample.usage.request_count;
+    sample.cycle_usage = sample.usage.clone();
     let [week, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert!(week.incomplete_tokens);
     assert!(!week.incomplete_cost);
@@ -506,6 +513,7 @@ fn entirely_unknown_tokens_and_costs_do_not_invent_zero_estimates() {
         unavailable_cost_count: 2,
         ..Default::default()
     };
+    sample.cycle_usage = sample.usage.clone();
     let [week, month] =
         account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     for forecast in [week, month] {
@@ -529,6 +537,7 @@ fn known_zero_and_partial_positive_token_totals_remain_visible() {
         let mut sample = samples(&source).remove(0);
         sample.usage.tokens = 0;
         sample.usage.missing_token_count = missing;
+        sample.cycle_usage = sample.usage.clone();
         let [week, _] =
             account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
         assert_eq!(week.incomplete_tokens, missing > 0);
@@ -538,6 +547,7 @@ fn known_zero_and_partial_positive_token_totals_remain_visible() {
     let mut sample = samples(&source).remove(0);
     sample.usage.tokens = 17;
     sample.usage.missing_token_count = sample.usage.request_count;
+    sample.cycle_usage = sample.usage.clone();
     let [week, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert!(week.incomplete_tokens);
     assert_eq!(week.source.unwrap().tokens, Some(17));
@@ -551,6 +561,7 @@ fn partial_zero_known_cost_remains_zero_without_imputing_missing_usage() {
     sample.usage.usd = 0.0;
     sample.usage.known_cost_count = 9;
     sample.usage.unavailable_cost_count = 1;
+    sample.cycle_usage = sample.usage.clone();
     let [week, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
     assert!(week.incomplete_cost);
     assert!(week.unavailable_reason.is_none());
@@ -585,4 +596,51 @@ fn oversized_window_or_estimate_is_unavailable_without_panics_or_saturation() {
     let [week, _] = forecast(&quota(vec![sample]));
     assert!(week.estimated_tokens.is_none());
     assert_eq!(week.estimated_usd, Some(10.0));
+}
+
+#[test]
+fn slower_recent_consumption_preserves_recorded_cycle_usage_in_total_forecast() {
+    let mut source = quota(vec![window("week", 7)]);
+    source.windows[0].used_percent = Some(92.0);
+    let mut sample = samples(&source).remove(0);
+    sample.method = QuotaForecastMethod::Incremental;
+    sample.start_at = now() - Duration::hours(20);
+    sample.baseline_percent = 75.0;
+    sample.sampled_percent = 17.0;
+    sample.block_count = 3;
+    sample.usage.tokens = 141_226_903;
+    sample.usage.usd = 237.21007884;
+    sample.cycle_usage.tokens = 1_084_786_565;
+    sample.cycle_usage.usd = 1_412.57957384;
+    let [cycle, month] =
+        account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
+    assert_eq!(cycle.source.as_ref().unwrap().tokens, Some(1_084_786_565));
+    assert_eq!(cycle.source.as_ref().unwrap().usd, Some(1_412.57957384));
+    assert_eq!(cycle.remaining_tokens, Some(66_459_719));
+    assert_eq!(cycle.estimated_tokens, Some(1_151_246_284));
+    assert!((cycle.remaining_usd.unwrap() - 111.628272395294).abs() < 1e-8);
+    assert!((cycle.estimated_usd.unwrap() - 1_524.207846235294).abs() < 1e-8);
+    assert_eq!(month.remaining_tokens, cycle.remaining_tokens);
+    assert!(
+        (month.estimated_usd.unwrap() - cycle.estimated_usd.unwrap() * 30.0 / 7.0).abs() < 1e-8
+    );
+}
+
+#[test]
+fn exhausted_cycle_total_is_recorded_usage_even_when_recent_sample_is_small() {
+    let mut source = quota(vec![window("week", 7)]);
+    source.windows[0].used_percent = Some(100.0);
+    let mut sample = samples(&source).remove(0);
+    sample.method = QuotaForecastMethod::Incremental;
+    sample.start_at = now() - Duration::hours(2);
+    sample.baseline_percent = 85.0;
+    sample.sampled_percent = 15.0;
+    sample.block_count = 3;
+    sample.usage.tokens = 100;
+    sample.usage.usd = 0.1;
+    let [cycle, _] = account_quota_forecasts(&source, now() - Duration::days(60), now(), &[sample]);
+    assert_eq!(cycle.estimated_tokens, Some(1_000));
+    assert_eq!(cycle.estimated_usd, Some(2.0));
+    assert_eq!(cycle.remaining_tokens, Some(0));
+    assert_eq!(cycle.remaining_usd, Some(0.0));
 }

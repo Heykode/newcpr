@@ -55,6 +55,19 @@ withDefaults(
       >
         {{ usageAccountText(row) }}
       </span>
+      <span
+        v-if="row.accountCustomName?.trim()"
+        class="mt-1 block max-w-full truncate text-cp-xs font-emphasis text-cp-text-quaternary"
+        :title="row.accountCustomName"
+      >
+        {{ row.accountCustomName }}
+      </span>
+    </template>
+
+    <template #clientApiKeyName="{ row }">
+      <span class="block max-w-full truncate" :title="row.clientApiKeyName || undefined">
+        {{ row.clientApiKeyName || '—' }}
+      </span>
     </template>
 
     <template #clientIp="{ row }">

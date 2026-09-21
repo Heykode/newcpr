@@ -251,6 +251,12 @@ OpenAI Responses 在统一请求编码阶段，将 `input` 数组中显式指定
 `instructions` 保留，不递归修改嵌套角色，也不修改省略 `type` 的消息。
 HTTP/SSE 与 WebSocket 共用此规则，发送阶段不再重复转换角色。
 
+选定 OAuth 账号并完成身份范围处理后，只对 `input` 数组内显式 `type: "reasoning"`
+项移除顶层 `status`；有非空字符串 `encrypted_content` 时，同时移除非空数组 `content`。
+保留 ID、summary、加密内容、仅含明文的历史、未知类型及嵌套字段。不因此增加重试、
+更改账号选择、缓存键或允许跨账号复用密文。流内明确 `invalid_prompt` 归类为请求错误，
+不作为账号不可用或容量累计冻结的依据。
+
 Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行。当前响应期间收到的后续业务帧
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 这对齐 Codex 客户端 `stream_request` 持锁至本轮结束的串行行为，不表示支持额外控制消息类型。
@@ -321,7 +327,7 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
 | `POST` | `/api/admin/accounts/import` | `{ provider, data, settings?, outboundProxyId? }` | 导入或按上游身份更新账号，可同时应用调度、分组设置与默认代理 |
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
-| `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 管理员显式清除该账号的本地错误/额度/cooldown 事实并重新启用，不访问上游 |
+| `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 停用账号仅启用；已启用账号显式清除本地错误/额度/cooldown，不访问上游 |
 | `POST` | `/api/admin/accounts/rotate` | OpenAI rotation 字段 | 手工替换 OpenAI OAuth token |
 | `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, outboundProxyId?, outboundProxyUrl? }` | 一次更新账号调度状态、并发上限（`null` 表示继承运行参数）、权重（1–100）、所属分组与出站代理 |
 | `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled, concurrencyLimit, weight, groupIds, outboundProxyId?, outboundProxyUrl? }` | 一次事务统一更新所选账号的调度字段、完整分组集合与可选代理 |
@@ -662,9 +668,9 @@ OAuth start 使用：
 - 同一已知 `resetAt` 的账号级窗口也可通过连续两次新鲜观测确认未触顶后恢复。
   缺失窗口、未知用量、再次触顶或重置时间不匹配会中断该窗口证据；旧观测、重复观测、
   耗尽前观测不推进恢复。新一轮耗尽不复用旧进度，额度恢复不改变凭据错误或启停状态。
-- `POST /accounts/recover` 是管理员对本地事实的强制恢复：它清除 Redis cooldown 和已保存的额度/错误，
-  把账号重新启用并恢复为可调度 credential；它不验证上游账号是否已经恢复，下一次真实请求仍可重新写入
-  失败事实。
+- `POST /accounts/recover` 对停用账号只设置启用，保留额度、凭据错误、cooldown、
+  State 设置及身份字段。对已经启用的账号，仍是管理员对本地错误/额度/cooldown 的强制恢复；
+  它不验证上游是否已经恢复，下一次真实请求仍可重新写入失败事实。
 - 成功额度观测会 revision-fenced 写入 quota；明确 `Allowed` 投影为 `normal`，明确耗尽投影为
   `quota_exhausted`。额度观测不会清除凭据过期、无效或封禁事实；这些事实统一投影为 `error`，并由
   `errorReason` 区分。额度接口的 401/403 也不足以判定 refresh token 永久失效，credential 终态只由
@@ -866,8 +872,9 @@ Store 统计使用同一只读重复读快照，每条 SQL 最多 2 秒。监控
   这不保证可连续使用到耗尽，短期限额仍可能阻断使用。
 - 列表每 30 秒读取时即时计算，分组后台每 10 秒计算；相同输入使用相同函数，
   不新增个人预测缓存或一份消费账本。未知/部分数据保留覆盖状态。
-- `GET /api/admin/accounts/quota-forecast` 保持原周/月格式及 Token 配对算法，
-  美元值使用同一当前窗口函数；月/周折算仍标注，剩余不折算。
+- `GET /api/admin/accounts/quota-forecast` 保持原周/月格式；近期配对样本只预测剩余 Token，
+  预计总量为本周期已记录 Token 加预测剩余，额度重置后重新累计。
+  美元值仍使用同一当前窗口函数；月/周折算仍标注，剩余不折算。
   详情缓存有效期 10 秒，打开时每 30 秒重新读取，不触发上游额度刷新。
 - 原额度学习调用已停用；`0014` 和旧数据原样保留，运行时预测不再读写或继承。
   寿命生命周期与已停用的额度样本无关。
@@ -1132,6 +1139,21 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。
 
+列表及 Dashboard 最近请求的 `accountCustomName` 按内部账号 ID 关联当前自定义名称，
+不按邮箱关联，也不改写历史请求。修改或清空自定义名称后，下次查询显示最新值；
+账号已删除或未关联时为 `null`，请求本身仍保留。
+
+请求列表、详情与错误记录的 `clientApiKeyName` 按内部 Key ID 关联当前名称；重命名后
+显示新名称，删除后为 `null`，不暴露 Key 秘钥，不改变请求归属和额度结算。
+
+新请求的本地计算费用保存当次单价、分项金额和长上下文档位，读取历史不重新定价。
+`billing.longContextBillingApplied=true` 表示当次 CPR 估算确实使用了长上下文价档，
+费用详情按钮显示黄色；这不是订阅实际扣费或 State 有效性的证明。
+旧记录只有总额时仍保留总额；可验证的旧明细继续兼容展示，但不猜测黄色标记。
+上游直接报告的费用保持优先，不能被本地估算明细替换。
+该存储变更使用追加迁移 `0033_request_billing_snapshots.sql`，不改写旧账本或旧迁移；
+升级不能走禁止迁移变更的镜像快速切换，也不能直接回滚不含此迁移的旧二进制。
+
 汇总与洞察中的请求数与 outcome 分布覆盖筛选范围内全部请求；token、缓存、延迟与成本聚合仅统计
 已完整交付客户端的成功响应。
 
@@ -1139,6 +1161,11 @@ request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可�
 `relatedRequests[]`（`requestId / relation / outcome / completedAt`）；`relation` 为 `recovered_by` 或
 `recovers`。`trace` 是执行终态时的有界脱敏时间线，包含 request、attempt 和 exchange 关联、阶段、
 事件摘要及淘汰计数；普通用量列表不携带此字段。
+
+启用诊断时，OpenAI request summary 可包含 `cacheFingerprints`，仅用于比较请求字段，
+不改变缓存键。总检查量最多 64 KiB、2048 个节点、前 8 条 input，单字段最多 16 KiB；
+超过上限明确标记省略，不把部分内容的摘要当成完整摘要。终态事件中的缓存计数独立保留，
+元数据截断不丢失已提取的计数；缺失为 `null`，不能当成零命中。
 
 错误记录中的“已自动恢复”表示系统关联到了后续成功请求，不会把原来的失败记录改为成功。
 `upstreamSendState = ambiguous` 表示无法确认该次上游执行结果，不代表后续恢复请求失败；
@@ -1161,7 +1188,7 @@ priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex �
 | `GET` | `/api/admin/system/version` | 无 | 当前构建、部署模式和可用更新 |
 | `GET` | `/api/admin/system/update/detail` | `refresh=true|false` | 读取或强制刷新 Release 详情 |
 | `GET` | `/api/admin/system/update/events` | 无 | SSE 更新事件流 |
-| `POST` | `/api/admin/system/update` | 可选 `{ targetVersion }` | 开始在线更新 |
+| `POST` | `/api/admin/system/update` | `{ targetVersion }` | 返回 `202` 和 `operationId`，后台执行在线更新 |
 | `GET` | `/api/admin/system/update/status` | 无 | 查询当前更新或回滚状态 |
 | `POST` | `/api/admin/system/rollback` | 无 | 回滚到保留的上一版本 |
 | `POST` | `/api/admin/system/restart` | 无 | 请求进程重启 |
@@ -1169,6 +1196,13 @@ priority 价格，缺少专用价格时回退到标准价格的 `2.00x`；Flex �
 在线更新仅在当前部署模式、Release 资产和进程重启能力都满足要求时可用，且只在同一 major 版本内
 提供：跨大版本目标会以 `40901` 冲突拒绝，需按发布说明重新部署。
 实例升级和仓库发版见 [部署文档](../deploy/README.md#镜像升级与源码构建)。
+
+更新任务不依赖 HTTP 连接存活。接受响应不表示安装完成；通过 status 的
+`operation.status` 和 `needRestart` 判断结果。终态先落盘再发送 SSE，SSE 按
+`operationId` 归属；浏览器重开后读取状态，提交响应丢失时先查询而不自动重复 POST。
+已完成但未重启的更新拒绝再次提交。Host 关闭或任务中断收敛为失败，
+孤立的 running 状态只在没有执行锁时恢复。没有新版本时仍可显示当前 Release 说明。
+这不替换经校验镜像部署流程，也不自动执行生产容器切换。
 
 ## 请求地区覆盖
 

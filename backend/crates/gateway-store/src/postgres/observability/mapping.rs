@@ -428,6 +428,7 @@ pub(crate) fn admin_usage_list_record(
         }
     };
     Ok(admin_observability::UsageListRecord {
+        client_api_key_name: record.client_api_key_name,
         id: record.id,
         endpoint: record.endpoint,
         client_transport: record.client_transport,
@@ -436,6 +437,7 @@ pub(crate) fn admin_usage_list_record(
         provider_account_ref: record.provider_account_ref,
         provider_account_name: record.provider_account_name,
         provider_account_email: record.provider_account_email,
+        provider_account_custom_name: record.provider_account_custom_name,
         provider_account_authentication_kind: record.provider_account_authentication_kind,
         upstream_model_id: record.upstream_model_id,
         upstream_transport: record.upstream_transport,
@@ -453,7 +455,10 @@ pub(crate) fn admin_usage_list_record(
         cost_source: record.cost_source,
         cost_amount: admin_optional_decimal_amount(record.cost_amount)?,
         cost_currency: record.cost_currency,
-        billing,
+        billing: super::super::billing_snapshot::prefer_saved(
+            billing,
+            record.billing_snapshot_json.as_ref(),
+        ),
         transport_decision_wait_ms: record.transport_decision_wait_ms,
         connect_ms: record.connect_ms,
         headers_ms: record.headers_ms,
@@ -497,6 +502,7 @@ pub(crate) fn admin_usage_record(
         }
     };
     Ok(admin_observability::UsageRecord {
+        client_api_key_name: record.client_api_key_name,
         id: record.id,
         client_api_key_ref: record.client_api_key_ref,
         config_revision: record.config_revision,
@@ -544,7 +550,10 @@ pub(crate) fn admin_usage_record(
         cost_source: record.cost_source,
         cost_amount: admin_optional_decimal_amount(record.cost_amount)?,
         cost_currency: record.cost_currency,
-        billing,
+        billing: super::super::billing_snapshot::prefer_saved(
+            billing,
+            record.billing_snapshot_json.as_ref(),
+        ),
         transport_decision_wait_ms: record.transport_decision_wait_ms,
         connect_ms: record.connect_ms,
         headers_ms: record.headers_ms,
@@ -699,6 +708,7 @@ pub(crate) fn admin_ops_error_page(
 
 pub(crate) fn admin_ops_error(error: OpsErrorRecord) -> admin_observability::OpsError {
     admin_observability::OpsError {
+        client_api_key_name: error.client_api_key_name,
         source: error.source,
         event_id: error.event_id,
         request_id: error.request_id,
@@ -756,6 +766,8 @@ pub(crate) fn usage_list_record_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<UsageListRecord> {
     Ok(UsageListRecord {
+        client_api_key_name: get(row, "client_api_key_name")?,
+        billing_snapshot_json: get(row, "billing_snapshot_json")?,
         id: get(row, "id")?,
         endpoint: get(row, "endpoint")?,
         client_transport: get(row, "client_transport")?,
@@ -764,6 +776,7 @@ pub(crate) fn usage_list_record_from_row(
         provider_account_ref: get(row, "provider_account_ref")?,
         provider_account_name: get(row, "provider_account_name")?,
         provider_account_email: get(row, "provider_account_email")?,
+        provider_account_custom_name: get(row, "provider_account_custom_name")?,
         provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: get(row, "upstream_transport")?,
@@ -806,6 +819,8 @@ pub(crate) fn usage_list_record_from_row(
 
 pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<UsageRecord> {
     Ok(UsageRecord {
+        client_api_key_name: get(row, "client_api_key_name")?,
+        billing_snapshot_json: get(row, "billing_snapshot_json")?,
         id: get(row, "id")?,
         client_api_key_ref: get(row, "client_api_key_ref")?,
         config_revision: unsigned(row, "config_revision")?,
@@ -890,6 +905,7 @@ pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<
 
 pub(crate) fn ops_error_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<OpsErrorRecord> {
     Ok(OpsErrorRecord {
+        client_api_key_name: get(row, "client_api_key_name")?,
         source: get(row, "source")?,
         event_id: get(row, "event_id")?,
         request_id: get(row, "request_id")?,

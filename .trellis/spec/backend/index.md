@@ -31,6 +31,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Account Relogin](./account-relogin.md) | Login library, create-only import, cancellation and ambiguous push fencing | Local tests; one live Free login passed |
 | [Request Location](./request-location.md) | Default-off global and proxy locations without changing account identity | HTTP/WS payload and persistence contracts |
 | [Managed Turn State](./managed-turn-state.md) | Opt-in state storage, nonblocking observation and exact WS ownership | Workspace/database regression verified; live opt-in acceptance pending |
+| [Stable Upstream Adaptation](./stable-upstream-adaptation.md) | Reasoning replay, recovery, cycle forecasts, account notes and background updates | Local integration contracts |
 
 ---
 

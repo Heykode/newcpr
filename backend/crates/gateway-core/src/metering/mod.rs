@@ -272,12 +272,13 @@ impl CostEstimateStatus {
     }
 }
 
-/// 单次模型请求的总费用，不保存价格版本或 breakdown。
+/// 单次模型请求的总费用及当次确定的本地计算明细。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostEstimate {
     status: CostEstimateStatus,
     source: CostSource,
     total: Option<Money>,
+    breakdown: Option<std::sync::Arc<CalculatedCostBreakdown>>,
 }
 
 /// Provider 在单次请求终态上报的实际已计费总额。
@@ -287,16 +288,18 @@ pub struct ProviderReportedCost {
 }
 
 /// Provider 域依据公开单价和实际用量算出的单次总额。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedCost {
     total: Money,
+    breakdown: Option<std::sync::Arc<CalculatedCostBreakdown>>,
 }
 
 /// Provider 受控价格规则计算出的运行时费用明细。
 ///
-/// 该值只用于生成事件和管理端展示，不是持久化模型；数据库仍只保存最终总额、货币和来源。
+/// 随本地费用事件保存，避免后续价表变化改变历史明细。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalculatedCostBreakdown {
+    long_context_billing_applied: bool,
     input_amount: Money,
     output_amount: Money,
     cache_read_amount: Money,
@@ -373,6 +376,7 @@ impl CalculatedCostBreakdown {
         multiplier_percent: u32,
     ) -> Self {
         Self {
+            long_context_billing_applied: false,
             input_amount: amounts.input,
             output_amount: amounts.output,
             cache_read_amount: amounts.cache_read,
@@ -386,6 +390,17 @@ impl CalculatedCostBreakdown {
             service_tier,
             multiplier_percent,
         }
+    }
+
+    #[must_use]
+    pub const fn with_long_context_billing(mut self, applied: bool) -> Self {
+        self.long_context_billing_applied = applied;
+        self
+    }
+
+    #[must_use]
+    pub const fn long_context_billing_applied(&self) -> bool {
+        self.long_context_billing_applied
     }
 
     #[must_use]
@@ -449,9 +464,10 @@ impl CalculatedCostBreakdown {
     }
 
     #[must_use]
-    pub const fn calculated_cost(&self) -> CalculatedCost {
+    pub fn calculated_cost(&self) -> CalculatedCost {
         CalculatedCost {
             total: self.total_amount,
+            breakdown: Some(std::sync::Arc::new(self.clone())),
         }
     }
 }
@@ -479,6 +495,7 @@ impl ProviderReportedCost {
             status: CostEstimateStatus::Known,
             source: CostSource::ProviderReported,
             total: Some(self.total),
+            breakdown: None,
         }
     }
 }
@@ -492,31 +509,39 @@ impl CalculatedCost {
     pub fn from_usd_ticks(ticks: u128) -> Result<Self, MeteringError> {
         Ok(Self {
             total: Money::new(Decimal::from_scaled(ticks)?, CurrencyCode(*b"USD")),
+            breakdown: None,
         })
     }
 
     #[must_use]
-    pub const fn total(self) -> Money {
+    pub const fn total(&self) -> Money {
         self.total
     }
 
     #[must_use]
-    pub const fn into_estimate(self) -> CostEstimate {
+    pub fn into_estimate(self) -> CostEstimate {
         CostEstimate {
             status: CostEstimateStatus::Known,
             source: CostSource::Calculated,
             total: Some(self.total),
+            breakdown: self.breakdown,
         }
     }
 }
 
 impl CostEstimate {
     #[must_use]
+    pub fn breakdown(&self) -> Option<&CalculatedCostBreakdown> {
+        self.breakdown.as_deref()
+    }
+
+    #[must_use]
     pub const fn unavailable() -> Self {
         Self {
             status: CostEstimateStatus::Unknown,
             source: CostSource::Unavailable,
             total: None,
+            breakdown: None,
         }
     }
 

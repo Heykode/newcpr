@@ -38,6 +38,7 @@ fn provider_usd_ticks_should_map_exactly_to_decimal_scale() {
     let total = estimate.total().expect("provider total");
     assert_eq!(total.amount().scaled(), 12_345_678_901);
     assert_eq!(total.currency().as_str(), "USD");
+    assert!(estimate.breakdown().is_none());
 }
 
 #[test]
@@ -81,6 +82,11 @@ fn calculated_breakdown_should_preserve_runtime_components_without_changing_tota
     assert_eq!(breakdown.service_tier(), Some("default"));
     assert_eq!(breakdown.multiplier_percent(), 100);
     assert_eq!(breakdown.calculated_cost().total().amount().scaled(), 330);
+    assert!(!breakdown.long_context_billing_applied());
+    let breakdown = breakdown.with_long_context_billing(true);
+    let estimate = breakdown.calculated_cost().into_estimate();
+    assert_eq!(estimate.breakdown(), Some(&breakdown));
+    assert_eq!(estimate.total(), Some(breakdown.total_amount()));
 }
 
 #[test]
@@ -91,6 +97,7 @@ fn decimal_should_reject_more_than_ten_fraction_digits() {
 #[test]
 fn unknown_cost_should_not_fabricate_zero() {
     assert_eq!(CostEstimate::unavailable().total(), None);
+    assert!(CostEstimate::unavailable().breakdown().is_none());
 }
 
 #[test]
