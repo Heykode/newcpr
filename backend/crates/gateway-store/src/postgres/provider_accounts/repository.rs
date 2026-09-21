@@ -78,6 +78,17 @@ pub trait ProviderAccountAdminRepository: Send + Sync {
         command: RotateProviderAccount,
     ) -> StoreResult<ProviderAccountAdminRotation>;
 
+    async fn switch_relogin_workspace(
+        &self,
+        command: RotateProviderAccount,
+    ) -> StoreResult<ProviderAccountAdminRotation>;
+
+    async fn rotate_with_workspace_policy(
+        &self,
+        command: RotateProviderAccount,
+        switch_workspace: bool,
+    ) -> StoreResult<ProviderAccountAdminRotation>;
+
     async fn batch_update_provider_accounts_admin(
         &self,
         command: BatchUpdateProviderAccountsAdmin,
@@ -696,6 +707,21 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         &self,
         command: RotateProviderAccount,
     ) -> StoreResult<ProviderAccountAdminRotation> {
+        self.rotate_with_workspace_policy(command, false).await
+    }
+
+    async fn switch_relogin_workspace(
+        &self,
+        command: RotateProviderAccount,
+    ) -> StoreResult<ProviderAccountAdminRotation> {
+        self.rotate_with_workspace_policy(command, true).await
+    }
+
+    async fn rotate_with_workspace_policy(
+        &self,
+        command: RotateProviderAccount,
+        switch_workspace: bool,
+    ) -> StoreResult<ProviderAccountAdminRotation> {
         command.scope.validate()?;
         require_nonempty(ENTITY, "account_id", &command.profile.id)?;
         require_nonempty(ENTITY, "name", &command.profile.name)?;
@@ -723,14 +749,41 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 lock_account_egress_in_transaction(&mut transaction).await?;
             }
             let mut credential = command.credential.clone();
+            if switch_workspace {
+                // This path is separate from ordinary rotation and validated under the same CAS lock.
+                let old = sqlx::query(
+                    "select upstream_user_id, upstream_account_id, email, authentication_kind
+                     from provider_accounts where id=$1 and provider_kind=$2 and credential_revision=$3",
+                ).bind(&credential.account_id).bind(&command.scope.provider_kind)
+                    .bind(to_i64(credential.expected_revision.get())?)
+                    .fetch_optional(&mut *transaction).await
+                    .map_err(|_| postgres_unavailable("lock workspace switch"))?
+                    .ok_or_else(|| StoreError::Conflict { entity: ENTITY, id: credential.account_id.clone(), kind: ConflictKind::StaleRevision })?;
+                let user: Option<String> = get(&old, "upstream_user_id")?;
+                let workspace: Option<String> = get(&old, "upstream_account_id")?;
+                let email: Option<String> = get(&old, "email")?;
+                let authentication: String = get(&old, "authentication_kind")?;
+                let identity = command.replacement_identity.as_ref()
+                    .ok_or_else(|| invalid("workspace switch requires verified identity"))?;
+                if command.scope.provider_kind != "openai" || authentication != "oauth"
+                    || command.relogin_operation_id.is_none()
+                    || user.as_deref().is_none_or(|old| old.is_empty() || old != identity.upstream_user_id())
+                    || workspace.as_deref().is_none_or(str::is_empty)
+                    || identity.upstream_account_id().is_none_or(str::is_empty)
+                    || !email.as_deref().zip(command.profile.email.as_deref())
+                        .is_some_and(|(old, new)| !old.is_empty() && old.eq_ignore_ascii_case(new))
+                {
+                    return Err(invalid("workspace switch principal mismatch"));
+                }
+            }
             credential.provider_credentials_json = self
-                .prepare_rotated_device(
+                .prepare_rotated_device_with_workspace_policy(
                     &mut transaction,
-                    &credential.account_id,
-                    credential.expected_revision.get(),
+                    (&credential.account_id, credential.expected_revision.get()),
                     command.replacement_identity.as_ref(),
                     command.profile.email.as_deref(),
                     &credential.provider_credentials_json,
+                    switch_workspace,
                 )
                 .await?;
             let state_owner = state_retention::StateOwnerSnapshot::capture(
@@ -738,6 +791,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &credential.account_id,
             )
             .await?;
+            if switch_workspace {
+                sqlx::query(
+                    "update provider_accounts set provider_quota_json=null, quota_observed_at=null,
+                     quota_access_state='unknown', quota_evidence=null, quota_access_observed_at=null,
+                     quota_reset_at=null where id=$1",
+                ).bind(&credential.account_id).execute(&mut *transaction).await
+                    .map_err(|_| postgres_unavailable("clear previous workspace quota"))?;
+            }
             let credential_revision = rotate_provider_account_in_transaction(
                 &mut transaction,
                 &command.scope,

@@ -257,6 +257,7 @@ async function main() {
     await page.getByRole('checkbox', { name: '选择 new-one@example.invalid', exact: true }).locator('..').click()
     await page.getByRole('checkbox', { name: '选择 new-two@example.invalid', exact: true }).locator('..').click()
     await page.getByRole('button', { name: '批量重登', exact: true }).click()
+    await page.getByRole('alertdialog', { name: '确认重登', exact: true }).getByRole('button', { name: '确认', exact: true }).click()
     await page.locator('tbody tr').filter({ hasText: 'new-one@example.invalid' }).getByText('重登中', { exact: true }).waitFor()
     assert.deepEqual(mutations.find(item => item.path.endsWith('/queue')).body.ids, ['new-one', 'new-two'])
     await page.getByRole('button', { name: '批量删除资料', exact: true }).click()

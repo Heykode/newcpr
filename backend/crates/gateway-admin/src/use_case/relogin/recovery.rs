@@ -9,6 +9,8 @@ pub struct RecoveryView {
     pub state: &'static str,
     pub message: String,
     pub retry_at: Option<DateTime<Utc>>,
+    pub retries_used: u32,
+    pub max_retries: u32,
 }
 
 impl RecoveryView {
@@ -17,6 +19,8 @@ impl RecoveryView {
             state,
             message: message.into(),
             retry_at: None,
+            retries_used: 0,
+            max_retries: 0,
         }
     }
 
@@ -48,6 +52,22 @@ pub(super) fn view(
     settings: &ReloginSettings,
     now: DateTime<Utc>,
 ) -> RecoveryView {
+    let mut result = eligibility(entry, pool, settings, now);
+    result.retries_used = if entry.synced_at.is_none() {
+        entry.automatic_attempts.saturating_sub(1)
+    } else {
+        0
+    };
+    result.max_retries = settings.max_retries;
+    result
+}
+
+fn eligibility(
+    entry: &ReloginEntry,
+    pool: &[AccountRecord],
+    settings: &ReloginSettings,
+    now: DateTime<Utc>,
+) -> RecoveryView {
     if matches!(
         entry.status,
         ReloginStatus::Uncertain | ReloginStatus::Pushing
@@ -69,6 +89,9 @@ pub(super) fn view(
     if !entry.automatic {
         return RecoveryView::new("disabled", "自动重登已关闭");
     }
+    if let Some(reason) = entry.automatic_stop_reason() {
+        return RecoveryView::new("manual_required", reason.label());
+    }
     let target = match select_target(entry, pool) {
         Ok(Some(target)) => target,
         Ok(None) if !matching_accounts(entry, pool).is_empty() => {
@@ -82,6 +105,12 @@ pub(super) fn view(
     };
     if !account.enabled {
         return RecoveryView::new("account_disabled", "号池账号已暂停调度");
+    }
+    if account.credential_state == CredentialState::Banned
+        || account.last_error_reason
+            == Some(gateway_core::account::AccountErrorReason::AccountBanned)
+    {
+        return RecoveryView::new("manual_required", ReloginStopReason::AccountBanned.label());
     }
     if !worker::needs_relogin(account) {
         return if account.credential_state == CredentialState::Ready {
@@ -103,10 +132,17 @@ pub(super) fn view(
     // A successful delivery, or a genuinely new auth binding, ends the old retry budget.
     // Routine Cookie revisions still match the captured authentication generation.
     if entry.synced_at.is_none() && same_attempt(entry, account) {
-        if entry.automatic_attempts >= 3 {
+        if entry.automatic_attempts > settings.max_retries {
             return RecoveryView::new(
                 "retry_limit",
-                "同一凭据已尝试 3 次，请检查失败原因后手动重登",
+                if settings.max_retries == 0 {
+                    "首次自动重登失败，已设置不重试，请人工处理".to_owned()
+                } else {
+                    format!(
+                        "已用完 {} 次自动重试，请检查失败原因后手动重登",
+                        settings.max_retries
+                    )
+                },
             );
         }
         if let Some(at) = entry.next_attempt_at.filter(|at| *at > now) {
@@ -114,6 +150,7 @@ pub(super) fn view(
                 state: "cooldown",
                 message: "上次恢复未完成，等待重试".to_owned(),
                 retry_at: Some(at),
+                ..RecoveryView::new("cooldown", "")
             };
         }
     }
@@ -127,6 +164,7 @@ pub(super) fn view(
                 starts[starts.len() - MAX_AUTOMATIC_STARTS]
                     + chrono::Duration::minutes(AUTOMATIC_WINDOW_MINUTES),
             ),
+            ..RecoveryView::new("loop_guard", "")
         };
     }
     RecoveryView::new("waiting", "账号凭据已失效，等待可用并发")

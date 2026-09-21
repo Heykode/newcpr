@@ -1529,6 +1529,128 @@ async fn rotation_accepts_relogin_document_and_preserves_the_device() {
 }
 
 #[tokio::test]
+async fn relogin_workspace_switch_requires_same_user_and_complete_new_tokens() {
+    let store = principal_account(Some("user-A"), Some("A")).await;
+    let id = ProviderAccountId::new("acct_principal").unwrap();
+    let before = store.load_current_credential(&id).await.unwrap();
+    let old = CodexCredentialCodec::decode_complete(&before.credential).unwrap();
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .unwrap();
+    for (user, workspace, email, include_id, include_refresh, succeeds) in [
+        (Some("user-A"), Some("B"), "A@example.com", true, true, true),
+        (
+            Some("user-B"),
+            Some("B"),
+            "A@example.com",
+            true,
+            true,
+            false,
+        ),
+        (None, Some("B"), "A@example.com", true, true, false),
+        (Some("user-A"), None, "A@example.com", true, true, false),
+        (
+            Some("user-A"),
+            Some("B"),
+            "other@example.invalid",
+            true,
+            true,
+            false,
+        ),
+        (
+            Some("user-A"),
+            Some("B"),
+            "A@example.com",
+            false,
+            true,
+            false,
+        ),
+        (
+            Some("user-A"),
+            Some("B"),
+            "A@example.com",
+            true,
+            false,
+            false,
+        ),
+    ] {
+        let token = principal_jwt(json!({
+            "email": email,
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": user,
+                "chatgpt_account_id": workspace,
+                "chatgpt_plan_type": "team"
+            }
+        }));
+        let mut document = principal_document(&token, include_id.then_some(token.as_str()))
+            .into_provider_data()
+            .into_inner();
+        if !include_refresh {
+            document.remove("refresh_token");
+        }
+        let document = ProviderDocument::new(OpaqueProviderData::new(document));
+        let result = bundle
+            .admin_provider()
+            .prepare_relogin_workspace_switch(PrepareCredentialRotation {
+                account: account_record(&before.account),
+                provider_material: document.clone(),
+            })
+            .await;
+        assert_eq!(result.is_ok(), succeeds);
+        if let Ok(prepared) = result {
+            let facts = prepared.facts();
+            assert_eq!(
+                facts
+                    .replacement_identity
+                    .as_ref()
+                    .unwrap()
+                    .upstream_account_id(),
+                Some("B")
+            );
+            assert_eq!(facts.plan_type.as_deref(), Some("team"));
+            let new = CodexCredentialCodec::decode_complete(
+                &gateway_core::account::PlaintextCredential::new(
+                    facts
+                        .provider_material
+                        .clone()
+                        .into_provider_data()
+                        .into_inner(),
+                ),
+            )
+            .unwrap();
+            assert_eq!(
+                new.oauth().unwrap().installation_id,
+                old.oauth().unwrap().installation_id
+            );
+            assert_eq!(new.oauth().unwrap().cookies, old.oauth().unwrap().cookies);
+            assert_eq!(
+                new.oauth().unwrap().id_token.as_deref(),
+                Some(token.as_str())
+            );
+            assert!(
+                bundle
+                    .admin_provider()
+                    .prepare_rotation(PrepareCredentialRotation {
+                        account: account_record(&before.account),
+                        provider_material: document,
+                    })
+                    .await
+                    .is_err(),
+                "ordinary rotation remains workspace locked"
+            );
+        }
+        assert_eq!(
+            store.load_current_credential(&id).await.unwrap().account,
+            before.account
+        );
+    }
+}
+
+#[tokio::test]
 async fn rotation_rejects_inconsistent_or_unknown_relogin_metadata() {
     let store = principal_account(Some("user-A"), Some("A")).await;
     let id = ProviderAccountId::new("acct_principal").unwrap();

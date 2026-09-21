@@ -35,6 +35,7 @@ use tokio::sync::Mutex;
 
 mod recovery;
 mod worker;
+mod workspace;
 pub(crate) use worker::contribution;
 
 const MAX_ROTATION_ATTEMPTS: usize = 3;
@@ -53,6 +54,8 @@ pub struct ReloginView {
     pub plan_type: Option<String>,
     pub workspace_id: Option<String>,
     pub preferred_workspace_id: Option<String>,
+    pub workspace_mode: ReloginWorkspaceMode,
+    pub push_targets: Vec<workspace::PushTargetView>,
     pub credential_status: &'static str,
     pub pool_status: &'static str,
     pub pool_account_ids: Vec<String>,
@@ -130,7 +133,24 @@ pub trait ReloginService: Send + Sync {
         context: &MutationContext,
     ) -> Result<(), AdminError>;
     async fn import(&self, text: &str, replace: bool) -> Result<usize, AdminError>;
-    async fn queue(&self, ids: &[String]) -> Result<Vec<ReloginBatchResult>, AdminError>;
+    async fn queue(&self, ids: &[String]) -> Result<Vec<ReloginBatchResult>, AdminError> {
+        self.queue_with_workspace(ids, ReloginWorkspaceMode::Original)
+            .await
+    }
+    async fn queue_with_workspace(
+        &self,
+        ids: &[String],
+        mode: ReloginWorkspaceMode,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError>;
+    async fn push_with_selection(
+        &self,
+        ids: &[String],
+        revisions: &BTreeMap<String, u64>,
+        template: Option<ReloginTemplateSelection>,
+        custom_name: Option<String>,
+        selections: &BTreeMap<String, ReloginPushSelection>,
+        context: &MutationContext,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError>;
     async fn push(
         &self,
         ids: &[String],
@@ -140,7 +160,10 @@ pub trait ReloginService: Send + Sync {
     async fn delete(&self, ids: &[String]) -> Result<(), AdminError>;
     async fn automatic(&self, ids: &[String], enabled: bool) -> Result<(), AdminError>;
     async fn workspace(&self, id: &str, workspace: Option<String>) -> Result<(), AdminError>;
-    async fn configure(&self, settings: ReloginSettings) -> Result<(), AdminError>;
+    async fn configure(&self, settings: ReloginSettings) -> Result<(), AdminError> {
+        self.configure_update(settings.into()).await
+    }
+    async fn configure_update(&self, settings: ReloginSettingsUpdate) -> Result<(), AdminError>;
 }
 
 #[derive(Default)]
@@ -304,6 +327,7 @@ impl DefaultReloginService {
         mut current: AccountRecord,
         document: ProviderDocument,
         context: &MutationContext,
+        switch_workspace: bool,
     ) -> Result<CredentialMutationResult, AdminError> {
         let target = entry
             .target
@@ -314,14 +338,18 @@ impl DefaultReloginService {
             target.account_id, target.credential_revision
         );
         for _ in 0..MAX_ROTATION_ATTEMPTS {
-            let prepared = self
-                .provider
-                .prepare_rotation(PrepareCredentialRotation {
-                    account: current,
-                    provider_material: document.clone(),
-                })
-                .await
-                .map_err(|error| map_provider_error(error, "relogin rotation"))?;
+            let command = PrepareCredentialRotation {
+                account: current,
+                provider_material: document.clone(),
+            };
+            let prepared = if switch_workspace {
+                self.provider
+                    .prepare_relogin_workspace_switch(command)
+                    .await
+            } else {
+                self.provider.prepare_rotation(command).await
+            }
+            .map_err(|error| map_provider_error(error, "relogin rotation"))?;
             current = self.current_rotation_target(entry).await?;
             let expected = prepared.facts().expected_credential_revision;
             if prepared.facts().account_id.as_str() != current.id
@@ -329,21 +357,44 @@ impl DefaultReloginService {
             {
                 return Err(AdminError::conflict("凭据准备结果与目标账号不一致"));
             }
+            if switch_workspace {
+                let credential = entry
+                    .credential
+                    .as_ref()
+                    .ok_or_else(|| AdminError::conflict("缺少已验证凭据"))?;
+                if prepared
+                    .facts()
+                    .replacement_identity
+                    .as_ref()
+                    .is_none_or(|identity| {
+                        identity.upstream_user_id() != credential.user_id
+                            || identity.upstream_account_id()
+                                != Some(credential.workspace_id.as_str())
+                    })
+                {
+                    return Err(AdminError::conflict("准备的工作区与已确认凭据不一致"));
+                }
+            }
             if expected != current.credential_revision {
                 continue;
             }
             // Exact CAS still owns the commit; only a definitive conflict may retry.
             entry.status = ReloginStatus::Pushing;
             self.save(entry).await?;
-            match commit_credential_rotation(
-                self.accounts.as_ref(),
-                prepared,
-                context,
-                "relogin rotation",
-                Some(operation_id.clone()),
-            )
-            .await
-            {
+            let outcome = if switch_workspace {
+                self.commit_workspace_switch(prepared, context, operation_id.clone())
+                    .await
+            } else {
+                commit_credential_rotation(
+                    self.accounts.as_ref(),
+                    prepared,
+                    context,
+                    "relogin rotation",
+                    Some(operation_id.clone()),
+                )
+                .await
+            };
+            match outcome {
                 Ok(result) => return Ok(result),
                 Err(error) if error.kind() == AdminErrorKind::Conflict => {
                     entry.status = ReloginStatus::Ready;
@@ -378,6 +429,7 @@ impl DefaultReloginService {
         let credential = entry
             .credential
             .as_ref()
+            .cloned()
             .ok_or_else(|| AdminError::invalid("尚未获取凭证"))?;
         if credential.expires_at <= Utc::now() {
             return Err(AdminError::invalid("缓存凭证已过期，请重新登录"));
@@ -387,13 +439,22 @@ impl DefaultReloginService {
         }
         let pool = self.pool().await?;
         let matches = matching_accounts(entry, &pool);
+        let switch_workspace = entry.workspace_mode == ReloginWorkspaceMode::Highest
+            && !entry.automatic_job
+            && entry.manual_push_context.is_none()
+            && entry
+                .target
+                .as_ref()
+                .is_some_and(|target| target.workspace_id != credential.workspace_id);
         let current = if let Some(target) = &entry.target {
             let current = pool
                 .iter()
                 .find(|account| account.id == target.account_id)
                 .ok_or_else(|| AdminError::conflict("原账号已删除，不能自动重新入池"))?;
             if current.upstream_user_id.as_deref() != Some(credential.user_id.as_str())
-                || current.upstream_account_id.as_deref() != Some(credential.workspace_id.as_str())
+                || (!switch_workspace
+                    && current.upstream_account_id.as_deref()
+                        != Some(credential.workspace_id.as_str()))
                 || current
                     .email
                     .as_ref()
@@ -414,6 +475,18 @@ impl DefaultReloginService {
                     "原凭据已变化，本次结果未覆盖，请重新获取凭证",
                 ));
             }
+            if switch_workspace
+                && pool.iter().any(|other| {
+                    other.id != current.id
+                        && other.upstream_user_id.as_deref() == Some(credential.user_id.as_str())
+                        && other.upstream_account_id.as_deref()
+                            == Some(credential.workspace_id.as_str())
+                })
+            {
+                return Err(AdminError::conflict(
+                    "该工作区已在号池中，请选择已有账号并重新确认",
+                ));
+            }
             Some(current)
         } else {
             if !matches.is_empty() {
@@ -429,13 +502,22 @@ impl DefaultReloginService {
                 return Ok(());
             }
             let result = self
-                .rotate_existing(entry, current.clone(), document, context)
+                .rotate_existing(entry, current.clone(), document, context, switch_workspace)
                 .await?;
             self.provider
                 .account_facts_changed(std::slice::from_ref(&result.account_id))
                 .await;
             publish_committed(self.snapshot.as_ref(), result.config_revision).await?;
-            entry.target = Some(ReloginTarget::from_account(current)?);
+            let updated = self
+                .accounts
+                .credential_details(self.provider.provider_kind(), &result.account_id)
+                .await
+                .map_err(store_error)?
+                .ok_or_else(|| AdminError::conflict("推送后账号已变化"))?;
+            entry.target = Some(ReloginTarget::from_account(&updated.credential)?);
+            if entry.workspace_mode == ReloginWorkspaceMode::Highest {
+                entry.preferred_workspace_id = Some(credential.workspace_id.clone());
+            }
         } else {
             let mut settings = template.map(ReloginTemplateConfig::settings).transpose()?;
             if let Some(name) = custom_name {
@@ -483,8 +565,11 @@ impl DefaultReloginService {
         entry.synced_at = Some(Utc::now());
         entry.next_attempt_at = None;
         entry.automatic_attempts = 0;
+        entry.stop_reason = None;
         entry.attempted_target = None;
         entry.status = ReloginStatus::Ready;
+        entry.workspace_mode = ReloginWorkspaceMode::Original;
+        entry.workspace_targets.clear();
         entry.message = "凭据已同步到号池".to_owned();
         self.save(entry).await
     }
@@ -667,6 +752,8 @@ impl ReloginService for DefaultReloginService {
             ));
         }
         entry.target = Some(target.clone());
+        entry.workspace_mode = ReloginWorkspaceMode::Original;
+        entry.workspace_targets.clear();
         entry.automatic_job = false;
         entry.manual_push_context = Some(context.clone());
         entry.credential = None;
@@ -724,7 +811,10 @@ impl ReloginService for DefaultReloginService {
                 } else {
                     "present"
                 };
+                let push_targets = workspace::push_targets(&entry, &pool);
                 ReloginView {
+                    workspace_mode: entry.workspace_mode,
+                    push_targets,
                     recovery,
                     id: entry.id,
                     revision: entry.revision,
@@ -835,11 +925,14 @@ impl ReloginService for DefaultReloginService {
                 entry.password = input.password;
                 entry.mfa_secret = input.mfa_secret;
                 entry.automatic_attempts = 0;
+                entry.stop_reason = None;
                 entry.next_attempt_at = None;
                 entry.status = ReloginStatus::Pending;
                 entry.credential = None;
                 entry.synced_at = None;
                 entry.target = None;
+                entry.workspace_mode = ReloginWorkspaceMode::Original;
+                entry.workspace_targets.clear();
                 entry.message = "资料已更新，等待处理".to_owned();
                 let expected = entry.revision;
                 entry.revision = expected
@@ -863,8 +956,11 @@ impl ReloginService for DefaultReloginService {
                     credential: None,
                     target: None,
                     automatic_job: false,
+                    workspace_mode: ReloginWorkspaceMode::Original,
+                    workspace_targets: Vec::new(),
                     manual_push_context: None,
                     automatic_attempts: 0,
+                    stop_reason: None,
                     automatic_started_at: Vec::new(),
                     attempted_target: None,
                     next_attempt_at: None,
@@ -882,7 +978,11 @@ impl ReloginService for DefaultReloginService {
         Ok(count)
     }
 
-    async fn queue(&self, ids: &[String]) -> Result<Vec<ReloginBatchResult>, AdminError> {
+    async fn queue_with_workspace(
+        &self,
+        ids: &[String],
+        mode: ReloginWorkspaceMode,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         validate_ids(ids)?;
         let gate = self.gate.lock().await;
         let entries = self.entries().await?;
@@ -899,7 +999,7 @@ impl ReloginService for DefaultReloginService {
                 if entry.status.active() || gate.active.contains_key(&entry.email) {
                     return Err(AdminError::conflict("账号已有活动任务"));
                 }
-                entry.target = select_target(&entry, &pool)?;
+                workspace::prepare_queue(&mut entry, &pool, mode)?;
                 entry.automatic_job = false;
                 entry.manual_push_context = None;
                 entry.status = ReloginStatus::Queued;
@@ -930,6 +1030,26 @@ impl ReloginService for DefaultReloginService {
         custom_name: Option<String>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
+        self.push_with_selection(
+            ids,
+            revisions,
+            template,
+            custom_name,
+            &BTreeMap::new(),
+            context,
+        )
+        .await
+    }
+
+    async fn push_with_selection(
+        &self,
+        ids: &[String],
+        revisions: &BTreeMap<String, u64>,
+        template: Option<ReloginTemplateSelection>,
+        custom_name: Option<String>,
+        selections: &BTreeMap<String, ReloginPushSelection>,
+        context: &MutationContext,
+    ) -> Result<Vec<ReloginBatchResult>, AdminError> {
         validate_ids(ids)?;
         let custom_name = crate::model::accounts::normalize_custom_name(custom_name.as_deref())?;
         let _gate = self.gate.lock().await;
@@ -942,13 +1062,19 @@ impl ReloginService for DefaultReloginService {
         for id in ids {
             let outcome = match entries.iter().find(|entry| &entry.id == id) {
                 Some(entry) if revisions.get(id) == Some(&entry.revision) => {
-                    self.push_entry_with_template(
-                        &mut entry.clone(),
-                        template.as_ref().map(|template| &template.config),
-                        custom_name.as_deref(),
-                        context,
-                    )
-                    .await
+                    let mut entry = entry.clone();
+                    match workspace::confirm_target(&mut entry, selections.get(id)) {
+                        Ok(()) => {
+                            self.push_entry_with_template(
+                                &mut entry,
+                                template.as_ref().map(|template| &template.config),
+                                custom_name.as_deref(),
+                                context,
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
                 Some(_) => Err(AdminError::conflict("资料已变化，请刷新列表后重新确认推送")),
                 None => Err(AdminError::not_found("资料不存在")),
@@ -1028,16 +1154,28 @@ impl ReloginService for DefaultReloginService {
         entry.preferred_workspace_id = workspace;
         entry.credential = None;
         entry.target = None;
+        entry.workspace_mode = ReloginWorkspaceMode::Original;
+        entry.workspace_targets.clear();
         entry.synced_at = None;
         entry.automatic_attempts = 0;
+        entry.stop_reason = None;
         entry.status = ReloginStatus::Pending;
         entry.message = "工作区选择已更新，等待重新获取凭据".to_owned();
         self.save(&mut entry).await
     }
 
-    async fn configure(&self, settings: ReloginSettings) -> Result<(), AdminError> {
-        settings.validate()?;
+    async fn configure_update(&self, update: ReloginSettingsUpdate) -> Result<(), AdminError> {
         let gate = self.gate.lock().await;
+        let mut settings = self.store()?.settings().await.map_err(store_error)?;
+        settings.concurrency = update.concurrency;
+        settings.paused = update.paused;
+        if let Some(value) = update.max_retries {
+            settings.max_retries = value;
+        }
+        if let Some(value) = update.retry_interval_minutes {
+            settings.retry_interval_minutes = value;
+        }
+        settings.validate()?;
         self.store()?
             .save_settings(&settings)
             .await

@@ -65,6 +65,202 @@ async fn register(repository: &PgProviderAccountRepository) {
 }
 
 #[tokio::test]
+async fn relogin_workspace_switch_is_atomic_preserves_settings_device_and_fences_conflicts() {
+    let Some(database) = TestDatabase::create("relogin_workspace").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    register(&repository).await;
+    let id = "acct_workspace_switch";
+    let mut seed = device_account(id, "same-user", "original-device", "old-token");
+    seed.enabled = false;
+    seed.weight = gateway_core::account::AccountWeight::new(17).unwrap();
+    seed.concurrency_limit = gateway_core::account::AccountConcurrencyLimit::new(5);
+    seed.plan_type = Some("free".into());
+    repository.insert_provider_account(seed).await.unwrap();
+    sqlx::query(
+        "update provider_accounts set custom_name='Keep name',
+        quota_access_state='exhausted', quota_evidence='usage_limit_reached',
+        quota_access_observed_at=now(), updated_at=now() where id=$1",
+    )
+    .bind(id)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let before = repository.load_provider_account(id).await.unwrap().unwrap();
+    let command = || {
+        let mut credential = credential_update(id, 1, "new-token");
+        credential.provider_credentials_json = device_material("runner-device", "new-token");
+        let mut profile = profile(id, &before.summary.name);
+        profile.email = before.summary.email.clone();
+        profile.plan_type = Some("team".into());
+        RotateProviderAccount {
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".into(),
+            },
+            profile,
+            replacement_identity: Some(ProviderAccountIdentity::new(
+                "same-user".into(),
+                Some("workspace-business".into()),
+            )),
+            credential,
+            relogin_operation_id: Some("workspace-switch-operation".into()),
+            audit: audit("workspace-switch-audit", "relogin_workspace_switch", id),
+        }
+    };
+    assert!(repository.rotate_provider_account(command()).await.is_err());
+    for (user, audit_id, revision) in [
+        ("different-user", "wrong-user", 1),
+        ("same-user", "stale", 9),
+    ] {
+        let mut invalid = command();
+        invalid.replacement_identity = Some(ProviderAccountIdentity::new(
+            user.into(),
+            Some("workspace-business".into()),
+        ));
+        invalid.credential.expected_revision = Revision::new(revision).unwrap();
+        invalid.audit = audit(audit_id, "relogin_workspace_switch", id);
+        assert!(repository.switch_relogin_workspace(invalid).await.is_err());
+        assert_eq!(
+            repository.load_provider_account(id).await.unwrap().unwrap(),
+            before
+        );
+    }
+    repository
+        .switch_relogin_workspace(command())
+        .await
+        .unwrap();
+    let after = repository.load_provider_account(id).await.unwrap().unwrap();
+    assert_device(&repository, id, "original-device", "new-token").await;
+    assert_eq!(
+        after.summary.upstream_account_id.as_deref(),
+        Some("workspace-business")
+    );
+    assert_eq!(
+        after.summary.upstream_user_id,
+        before.summary.upstream_user_id
+    );
+    assert_eq!(after.summary.custom_name, before.summary.custom_name);
+    assert_eq!(after.summary.name, before.summary.name);
+    assert_eq!(after.summary.enabled, before.summary.enabled);
+    assert_eq!(after.summary.weight, before.summary.weight);
+    assert_eq!(
+        after.summary.concurrency_limit,
+        before.summary.concurrency_limit
+    );
+    assert_eq!(after.summary.outbound_proxy, before.summary.outbound_proxy);
+    assert_eq!(after.summary.relogin_count, 1);
+    let quota: String =
+        sqlx::query_scalar("select quota_access_state from provider_accounts where id=$1")
+            .bind(id)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(quota, "unknown");
+    let bindings: Vec<(String, String)> = sqlx::query_as(
+        "select upstream_account_id, installation_id from provider_device_identities order by upstream_account_id",
+    ).fetch_all(&database.pool).await.unwrap();
+    assert_eq!(
+        bindings,
+        vec![("workspace-business".into(), "original-device".into())]
+    );
+    assert!(
+        repository
+            .switch_relogin_workspace(command())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        repository.load_provider_account(id).await.unwrap().unwrap(),
+        after
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn relogin_workspace_switch_cannot_steal_existing_destination_or_device() {
+    for existing_pool in [false, true] {
+        let Some(database) = TestDatabase::create("relogin_workspace_conflict").await else {
+            return;
+        };
+        let repository = PgProviderAccountRepository::new(database.pool.clone());
+        register(&repository).await;
+        let id = "acct_switch_source";
+        repository
+            .insert_provider_account(device_account(
+                id,
+                "same-user",
+                "source-device",
+                "old-token",
+            ))
+            .await
+            .unwrap();
+        let mut destination = device_account(
+            "acct_destination",
+            "same-user",
+            "destination-device",
+            "destination-token",
+        );
+        destination.upstream_account_id = Some("workspace-business".into());
+        repository
+            .insert_provider_account(destination)
+            .await
+            .unwrap();
+        if !existing_pool {
+            repository
+                .delete_provider_account("acct_destination")
+                .await
+                .unwrap();
+        }
+        let before = repository.load_provider_account(id).await.unwrap().unwrap();
+        let bindings: Vec<serde_json::Value> = sqlx::query_scalar(
+            "select to_jsonb(d) from provider_device_identities d order by upstream_account_id",
+        )
+        .fetch_all(&database.pool)
+        .await
+        .unwrap();
+        let mut credential = credential_update(id, 1, "new-token");
+        credential.provider_credentials_json = device_material("source-device", "new-token");
+        let mut profile = profile(id, "Preserved");
+        profile.email = before.summary.email.clone();
+        assert!(
+            repository
+                .switch_relogin_workspace(RotateProviderAccount {
+                    scope: ProviderAccountAdminScope {
+                        provider_kind: "openai".into()
+                    },
+                    profile,
+                    replacement_identity: Some(ProviderAccountIdentity::new(
+                        "same-user".into(),
+                        Some("workspace-business".into())
+                    )),
+                    credential,
+                    relogin_operation_id: Some("conflicting-workspace-operation".into()),
+                    audit: audit(
+                        "conflicting-workspace-audit",
+                        "relogin_workspace_switch",
+                        id
+                    ),
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            repository.load_provider_account(id).await.unwrap().unwrap(),
+            before
+        );
+        let after: Vec<serde_json::Value> = sqlx::query_scalar(
+            "select to_jsonb(d) from provider_device_identities d order by upstream_account_id",
+        )
+        .fetch_all(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(after, bindings);
+        database.close().await;
+    }
+}
+
+#[tokio::test]
 async fn relogin_create_only_import_uses_device_registry_and_preserves_existing_tokens() {
     let Some(database) = TestDatabase::create("relogin_devices").await else {
         return;

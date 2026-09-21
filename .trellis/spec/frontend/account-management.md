@@ -431,6 +431,18 @@ successful list refreshes, so polling cannot erase a failed push message.
 Regression runners: `frontend/tests/relogin.test.mjs` and
 `frontend/tests/browser/relogin.mjs` (isolated fake API, desktop/mobile screenshots).
 
+The relogin toolbar's automatic-recovery settings dialog edits failed retries
+(0..10, default 2, excluding the first attempt) and fixed retry interval
+(1..1440 minutes, default 5). Keep string drafts separate from polled saved values;
+opening resets drafts, cancel discards them, and failed saves retain them with an
+inline error. Reject blank, fractional and out-of-range input without a mutation.
+Concurrency/pause actions omit retry fields so they cannot reset saved settings.
+Show server-projected `retriesUsed/maxRetries`, cooldown countdown or the short
+`manual_required` cause; preserve the precedence and disabled push button for
+uncertain delivery. Keep the status column wide enough for the extra line.
+`frontend/tests/browser/relogin-retry-settings.mjs` covers zero persistence,
+validation, polling, failed saves, legacy settings payloads and narrow layouts.
+
 Both lists share `ReloginCountCell`, reading backend `reloginCount` and
 `lastReloginAt`. Place the sortable account column after last use, and the relogin
 column after pool membership. Zero is neutral; unresolved workspace counts are

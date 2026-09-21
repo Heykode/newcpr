@@ -89,6 +89,7 @@ pub(super) struct FakeProviderAdmin {
     subscription_result: Mutex<Result<Option<ProviderSubscription>, ProviderAdminErrorKind>>,
     personal_info_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
     pub(super) relogin_result: Mutex<Option<gateway_admin::model::relogin::ReloginCredential>>,
+    pub(super) relogin_error: Mutex<Option<ProviderAdminError>>,
     pub(super) relogin_delay: Mutex<std::time::Duration>,
     pub(super) relogin_requests: Mutex<Vec<Option<String>>>,
     pub(super) relogin_active: std::sync::atomic::AtomicUsize,
@@ -118,6 +119,7 @@ impl FakeProviderAdmin {
             subscription_result: Mutex::new(Ok(None)),
             personal_info_barrier: Mutex::new(None),
             relogin_result: Mutex::new(None),
+            relogin_error: Mutex::new(None),
             relogin_delay: Mutex::new(std::time::Duration::ZERO),
             relogin_requests: Mutex::new(Vec::new()),
             relogin_active: std::sync::atomic::AtomicUsize::new(0),
@@ -273,6 +275,9 @@ impl ProviderAdmin for FakeProviderAdmin {
         let _active = Active(&self.relogin_active);
         let delay = *self.relogin_delay.lock().unwrap();
         tokio::time::sleep(delay).await;
+        if let Some(error) = self.relogin_error.lock().unwrap().clone() {
+            return Err(error);
+        }
         let mut credential = self
             .relogin_result
             .lock()
@@ -476,6 +481,21 @@ impl ProviderAdmin for FakeProviderAdmin {
         Ok(self.prepared_rotation(&command.account))
     }
 
+    async fn prepare_relogin_workspace_switch(
+        &self,
+        command: PrepareCredentialRotation,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        let prepared = self.prepare_rotation(command).await?;
+        let (mut facts, guard) = prepared.into_parts();
+        let credential = self.relogin_result.lock().unwrap().clone().unwrap();
+        facts.replacement_identity = Some(gateway_core::account::ProviderAccountIdentity::new(
+            credential.user_id,
+            Some(credential.workspace_id),
+        ));
+        facts.plan_type = Some(credential.plan_type);
+        Ok(PreparedCredentialRotation::new(facts, guard))
+    }
+
     async fn prepare_refresh(
         &self,
         command: PrepareCredentialRefresh,
@@ -579,7 +599,7 @@ impl ProviderAdmin for FakeProviderAdmin {
 
 pub(super) struct FakeAccountStore {
     events: EventLog,
-    accounts: Mutex<Vec<AccountRecord>>,
+    pub(super) accounts: Mutex<Vec<AccountRecord>>,
     account_after_probe: Mutex<Option<AccountRecord>>,
     fail_commit: Mutex<bool>,
     pub(super) rotation_updates: Mutex<Vec<AccountRecord>>,
@@ -1035,6 +1055,25 @@ impl AccountStore for FakeAccountStore {
             account.credential_state = CredentialState::Ready;
         }
         Ok(rotation_result(command))
+    }
+
+    async fn commit_relogin_workspace_switch(
+        &self,
+        command: CredentialRotationCommit,
+        context: &MutationContext,
+    ) -> AdminStoreResult<CredentialMutationResult> {
+        let identity = command.prepared.replacement_identity.clone().unwrap();
+        let plan = command.prepared.plan_type.clone();
+        let result = self.commit_credential_rotation(command, context).await?;
+        let mut accounts = self.accounts.lock().unwrap();
+        let account = accounts
+            .iter_mut()
+            .find(|account| account.id == result.account_id.as_str())
+            .unwrap();
+        account.upstream_user_id = Some(identity.upstream_user_id().to_owned());
+        account.upstream_account_id = identity.upstream_account_id().map(str::to_owned);
+        account.plan_type = plan;
+        Ok(result)
     }
 
     async fn commit_credential_refresh(

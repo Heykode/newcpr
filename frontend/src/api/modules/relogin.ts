@@ -3,6 +3,13 @@ import type { AccountTemplateSelection } from './account-templates'
 import request from '../request'
 
 export type ReloginStatus = 'pending' | 'queued' | 'running' | 'ready' | 'pushing' | 'uncertain' | 'failed'
+export type ReloginWorkspaceMode = 'original' | 'highest'
+export interface ReloginPushSelection { accountId: string, switchWorkspace: boolean }
+export interface ReloginPushTarget extends ReloginPushSelection {
+  workspaceId: string
+  planType: string | null
+  available: boolean
+}
 export interface ReloginPoolAccount {
   id: string
   workspaceId: string | null
@@ -20,10 +27,12 @@ export interface ReloginEntry {
   automatic: boolean
   status: ReloginStatus
   message: string
-  recovery?: { state: string, message: string, retryAt: string | null }
+  recovery?: { state: string, message: string, retryAt: string | null, retriesUsed?: number, maxRetries?: number }
   planType: string | null
   workspaceId: string | null
   preferredWorkspaceId: string | null
+  workspaceMode?: ReloginWorkspaceMode
+  pushTargets?: ReloginPushTarget[]
   credentialStatus: 'none' | 'verified' | 'expired'
   poolStatus: 'absent' | 'present' | 'pending_push' | 'synced'
   poolAccountIds: string[]
@@ -36,7 +45,8 @@ export interface ReloginEntry {
   importedAt?: string | null
   updatedAt: string
 }
-export interface ReloginSettings { concurrency: number, paused: boolean }
+export interface ReloginSettings { concurrency: number, paused: boolean, maxRetries: number, retryIntervalMinutes: number }
+export type ReloginSettingsUpdate = Pick<ReloginSettings, 'concurrency' | 'paused'> & Partial<Pick<ReloginSettings, 'maxRetries' | 'retryIntervalMinutes'>>
 export interface ReloginList { settings: ReloginSettings, items: ReloginEntry[] }
 export interface ReloginBatchResult { id: string, success: boolean, message: string }
 
@@ -70,13 +80,13 @@ export function getRelogin(options: RequestOptions = {}) {
 export function importRelogin(text: string, replaceExisting: boolean) {
   return request<{ imported: number }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
 }
-export function queueRelogin(ids: string[]) {
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids } })
+export function queueRelogin(ids: string[], workspaceMode: ReloginWorkspaceMode = 'original') {
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids, workspaceMode } })
 }
-export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string) {
+export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>) {
   const ids = rows.map(row => row.id)
   const revisions = Object.fromEntries(rows.map(row => [row.id, row.revision]))
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}) }, timeout: 120000 })
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}) }, timeout: 120000 })
 }
 export function deleteRelogin(ids: string[]) {
   return request<void>({ url: '/api/admin/relogin/delete', method: 'POST', data: { ids } })
@@ -87,6 +97,6 @@ export function setReloginAutomatic(ids: string[], enabled: boolean) {
 export function setReloginWorkspace(id: string, workspaceId: string | null) {
   return request<void>({ url: '/api/admin/relogin/workspace', method: 'POST', data: { id, workspaceId } })
 }
-export function configureRelogin(data: ReloginSettings) {
+export function configureRelogin(data: ReloginSettingsUpdate) {
   return request<void>({ url: '/api/admin/relogin/settings', method: 'POST', data })
 }

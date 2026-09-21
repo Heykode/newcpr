@@ -14,7 +14,46 @@ function load(path, dependencies = {}) {
   return exports
 }
 const { importPreview } = load('../src/views/relogin/import-preview.ts')
-const { processingStatus, recoveryCountdown, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace } = load('../src/views/relogin/presentation.ts')
+const { processingStatus, recoveryCountdown, retryProgress, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace } = load('../src/views/relogin/presentation.ts')
+
+test('terminal relogin failures show manual handling and retries never hide uncertain pushes', () => {
+  const row = {
+    status: 'failed',
+    message: '原工作区不可访问',
+    recovery: { state: 'manual_required', message: '自动重登已停止', retryAt: null, retriesUsed: 0, maxRetries: 2 },
+  }
+  assert.equal(processingStatus(row).label, '需人工处理')
+  assert.match(processingStatus(row).detail, /原工作区不可访问/)
+  assert.equal(retryProgress(row), '已重试 0/2')
+  row.recovery.state = 'retry_limit'
+  row.recovery.maxRetries = 0
+  assert.equal(retryProgress(row), '已重试 0/0')
+  row.status = 'uncertain'
+  assert.equal(processingStatus(row).label, '推送待核实')
+  assert.equal(retryProgress(row), '')
+  row.status = 'pushing'
+  assert.equal(retryProgress(row), '')
+  row.status = 'failed'
+  delete row.recovery.maxRetries
+  assert.equal(retryProgress(row), '')
+})
+
+test('relogin settings preserve explicit zero and omit retry fields on legacy concurrency updates', async () => {
+  const calls = []
+  const { configureRelogin } = load('../src/api/modules/relogin.ts', {
+    '../request': async config => calls.push(config),
+  })
+  await configureRelogin({ concurrency: 1, paused: false, maxRetries: 0, retryIntervalMinutes: 17 })
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].data)), {
+    concurrency: 1,
+    paused: false,
+    maxRetries: 0,
+    retryIntervalMinutes: 17,
+  })
+  await configureRelogin({ concurrency: 2, paused: true })
+  assert.equal(Object.hasOwn(calls[1].data, 'maxRetries'), false)
+  assert.equal(Object.hasOwn(calls[1].data, 'retryIntervalMinutes'), false)
+})
 
 test('recovery diagnostics supersede old sync messages but never an active or uncertain push', () => {
   const row = {
@@ -151,5 +190,24 @@ test('relogin push sends exactly the confirmed row versions and does not replay'
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0].data)), {
     ids: ['a', 'b'],
     revisions: { a: 7, b: 12 },
+  })
+})
+
+test('highest workspace acquisition and exact push target are explicit opt-ins', async () => {
+  const calls = []
+  const { queueRelogin, pushRelogin } = load('../src/api/modules/relogin.ts', {
+    '../request': async config => calls.push(config),
+  })
+  await queueRelogin(['a'])
+  await queueRelogin(['a'], 'highest')
+  assert.equal(calls[0].data.workspaceMode, 'original')
+  assert.equal(calls[1].data.workspaceMode, 'highest')
+  await pushRelogin([{ id: 'a', revision: 17 }], undefined, undefined, {
+    a: { accountId: 'original-free', switchWorkspace: true },
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[2].data)), {
+    ids: ['a'],
+    revisions: { a: 17 },
+    selections: { a: { accountId: 'original-free', switchWorkspace: true } },
   })
 })

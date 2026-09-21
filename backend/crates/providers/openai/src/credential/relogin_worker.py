@@ -157,6 +157,13 @@ class Login:
             path = urlparse(url).path
             if response.status_code == 429:
                 raise LoginError("rate_limited")
+            error = self.body(response).get("error")
+            if response.status_code in (400, 401, 403) and isinstance(error, dict):
+                code = error.get("code")
+                if code in ("account_banned", "account_deactivated", "account_disabled", "account_suspended"):
+                    raise LoginError("account_banned")
+                if code in ("deactivated_workspace", "workspace_deactivated", "organization_disabled"):
+                    raise LoginError("workspace_unavailable")
             if "password/verify" in path:
                 raise LoginError("password_rejected")
             if "mfa/verify" in path:

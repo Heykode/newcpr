@@ -10,6 +10,21 @@ pub const MAX_ENTRIES: usize = 10_000;
 pub const MAX_BATCH: usize = 500;
 pub const MAX_IMPORT_BYTES: usize = 512 * 1024;
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloginWorkspaceMode {
+    #[default]
+    Original,
+    Highest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReloginPushSelection {
+    pub account_id: String,
+    pub switch_workspace: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReloginStatus {
@@ -20,6 +35,29 @@ pub enum ReloginStatus {
     Pushing,
     Uncertain,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloginStopReason {
+    AccountBanned,
+    WorkspaceUnavailable,
+}
+
+impl ReloginStopReason {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AccountBanned => "账号已封禁",
+            Self::WorkspaceUnavailable => "原工作区不可访问",
+        }
+    }
+
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::AccountBanned => "账号已封禁，自动重登已停止，请人工处理",
+            Self::WorkspaceUnavailable => "原工作区不可访问，自动重登已停止，请人工处理",
+        }
+    }
 }
 
 impl ReloginStatus {
@@ -95,10 +133,17 @@ pub struct ReloginEntry {
     pub credential: Option<ReloginCredential>,
     pub target: Option<ReloginTarget>,
     pub automatic_job: bool,
+    #[serde(default)]
+    pub workspace_mode: ReloginWorkspaceMode,
+    /// Frozen before manual acquisition, never adopted from a later pool snapshot.
+    #[serde(default)]
+    pub workspace_targets: Vec<ReloginTarget>,
     /// Explicit account-menu confirmation; absent on legacy and library-only jobs.
     #[serde(default)]
     pub manual_push_context: Option<super::MutationContext>,
     pub automatic_attempts: u32,
+    #[serde(default)]
+    pub stop_reason: Option<ReloginStopReason>,
     /// Rolling start budget survives successful pushes and Cookie-only revisions.
     #[serde(default)]
     pub automatic_started_at: Vec<DateTime<Utc>>,
@@ -111,6 +156,17 @@ pub struct ReloginEntry {
 }
 
 impl ReloginEntry {
+    pub fn automatic_stop_reason(&self) -> Option<ReloginStopReason> {
+        if self.status != ReloginStatus::Failed {
+            return None;
+        }
+        self.stop_reason.or_else(|| {
+            // Only this exact historic worker message proves a missing workspace.
+            (self.message == "指定工作区不可访问，未回退到个人空间")
+                .then_some(ReloginStopReason::WorkspaceUnavailable)
+        })
+    }
+
     pub fn import_time(&self) -> Option<DateTime<Utc>> {
         self.imported_at.or_else(|| {
             // Legacy rows have immutable UUIDv7 creation times, not an import timestamp.
@@ -136,6 +192,8 @@ impl ReloginEntry {
 pub struct ReloginSettings {
     pub concurrency: usize,
     pub paused: bool,
+    pub max_retries: u32,
+    pub retry_interval_minutes: u32,
 }
 
 impl Default for ReloginSettings {
@@ -143,6 +201,8 @@ impl Default for ReloginSettings {
         Self {
             concurrency: 1,
             paused: false,
+            max_retries: 2,
+            retry_interval_minutes: 5,
         }
     }
 }
@@ -152,7 +212,33 @@ impl ReloginSettings {
         if !(1..=8).contains(&self.concurrency) {
             return Err(AdminError::invalid("重登并发必须为 1 至 8"));
         }
+        if self.max_retries > 10 {
+            return Err(AdminError::invalid("失败重试次数必须为 0 至 10"));
+        }
+        if !(1..=1440).contains(&self.retry_interval_minutes) {
+            return Err(AdminError::invalid("重试间隔必须为 1 至 1440 分钟"));
+        }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReloginSettingsUpdate {
+    pub concurrency: usize,
+    pub paused: bool,
+    pub max_retries: Option<u32>,
+    pub retry_interval_minutes: Option<u32>,
+}
+
+impl From<ReloginSettings> for ReloginSettingsUpdate {
+    fn from(settings: ReloginSettings) -> Self {
+        Self {
+            concurrency: settings.concurrency,
+            paused: settings.paused,
+            max_retries: Some(settings.max_retries),
+            retry_interval_minutes: Some(settings.retry_interval_minutes),
+        }
     }
 }
 

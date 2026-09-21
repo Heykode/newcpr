@@ -55,6 +55,7 @@ pub struct ProviderAdminError {
     kind: ProviderAdminErrorKind,
     message: Option<String>,
     public_message: Option<&'static str>,
+    relogin_stop_reason: Option<crate::model::relogin::ReloginStopReason>,
 }
 
 impl std::fmt::Debug for ProviderAdminError {
@@ -64,6 +65,7 @@ impl std::fmt::Debug for ProviderAdminError {
             .field("kind", &self.kind)
             .field("message", &self.message.as_ref().map(|_| "<redacted>"))
             .field("public_message", &self.public_message)
+            .field("relogin_stop_reason", &self.relogin_stop_reason)
             .finish()
     }
 }
@@ -75,6 +77,7 @@ impl ProviderAdminError {
             kind,
             message: None,
             public_message: None,
+            relogin_stop_reason: None,
         }
     }
 
@@ -94,6 +97,20 @@ impl ProviderAdminError {
     #[must_use]
     pub const fn public_message(&self) -> Option<&'static str> {
         self.public_message
+    }
+
+    #[must_use]
+    pub const fn with_relogin_stop_reason(
+        mut self,
+        reason: crate::model::relogin::ReloginStopReason,
+    ) -> Self {
+        self.relogin_stop_reason = Some(reason);
+        self
+    }
+
+    #[must_use]
+    pub const fn relogin_stop_reason(&self) -> Option<crate::model::relogin::ReloginStopReason> {
+        self.relogin_stop_reason
     }
 
     #[must_use]
@@ -220,6 +237,15 @@ pub trait ProviderAdmin: Send + Sync {
         &self,
         command: PrepareCredentialRotation,
     ) -> Result<PreparedCredentialRotation, ProviderAdminError>;
+
+    /// Explicit manual relogin only; ordinary refresh/rotation remains workspace-locked.
+    async fn prepare_relogin_workspace_switch(
+        &self,
+        _command: PrepareCredentialRotation,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Invalid)
+            .with_public_message("不支持手动切换工作区"))
+    }
 
     async fn prepare_refresh(
         &self,
