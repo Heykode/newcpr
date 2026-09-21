@@ -762,6 +762,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
 .account-table :deep([data-column-key='groups']),
 .account-table :deep([data-column-key='lastUsedAt']),
+.account-table :deep([data-column-key='weight']),
 .account-table :deep([data-column-key='addedAt']),
 .account-table :deep([data-column-key='accessTokenExpiresAtDisplay']) {
   padding-inline: 12px;

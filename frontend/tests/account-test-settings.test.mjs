@@ -162,20 +162,28 @@ test('invalid prompts never open an upstream test; byte boundaries and multiline
   }
 })
 
-test('saved column choices migrate once, adding relogin count without revealing old hidden columns', () => {
+test('saved column choices migrate once, adding new columns without revealing old hidden columns', () => {
   const columns = loadModule(new URL('../src/views/accounts/constants.ts', import.meta.url), {
     '@/components/base/BaseTable/columns': { defineTableColumns: value => value },
   })
   const read = raw => Array.from(columns.readAccountColumnKeys(raw))
-  assert.deepEqual(read('["identity","addedAtDisplay","provider","accountId","health",null]'), ['identity', 'addedAt', 'health', 'reloginCount'])
-  assert.deepEqual(read('["identity"]'), ['identity', 'reloginCount'])
-  assert.deepEqual(read('[]'), ['reloginCount'])
-  assert.deepEqual(read('["addedAt","addedAtDisplay"]'), ['addedAt', 'reloginCount'])
+  assert.deepEqual(read('["identity","addedAtDisplay","provider","accountId","health",null]'), ['identity', 'addedAt', 'health', 'weight', 'reloginCount'])
+  assert.deepEqual(read('["identity"]'), ['identity', 'weight', 'reloginCount'])
+  assert.deepEqual(read('[]'), ['weight', 'reloginCount'])
+  assert.deepEqual(read('["addedAt","addedAtDisplay"]'), ['addedAt', 'weight', 'reloginCount'])
+  for (const keys of [[], ['identity'], ['identity', 'reloginCount'], ['weight', 'weight']]) {
+    const migrated = read(JSON.stringify({ version: 2, keys }))
+    assert.deepEqual(migrated, [...new Set([...keys, 'weight'])])
+    assert.deepEqual(read(columns.writeAccountColumnKeys(migrated)), migrated)
+  }
+  assert.equal(JSON.parse(columns.writeAccountColumnKeys([])).version, 3)
   assert.deepEqual(read(columns.writeAccountColumnKeys(['identity'])), ['identity'])
   assert.deepEqual(read(columns.writeAccountColumnKeys([])), [])
   assert.deepEqual(read(columns.writeAccountColumnKeys(['identity', 'reloginCount'])), ['identity', 'reloginCount'])
-  for (const raw of ['null', '{}', '"old"', 'broken']) {
+  assert.deepEqual(read(columns.writeAccountColumnKeys(['identity', 'weight'])), ['identity', 'weight'])
+  for (const raw of ['null', '{}', '"old"', 'broken', '{"version":2,"keys":null}', '{"version":4,"keys":[]}']) {
     assert.ok(read(raw).includes('addedAt'))
+    assert.ok(read(raw).includes('weight'))
     assert.ok(!read(raw).includes('accountId'))
   }
 })
