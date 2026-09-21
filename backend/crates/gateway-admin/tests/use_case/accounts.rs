@@ -963,6 +963,12 @@ impl AccountStore for FakeAccountStore {
         self.require_commit()?;
         Ok(CredentialImportResult {
             config_revision: revision(2),
+            credential_emails: command
+                .prepared
+                .credentials
+                .iter()
+                .map(|credential| (credential.account_id.clone(), credential.email.clone()))
+                .collect(),
             credential_ids: command
                 .prepared
                 .credentials

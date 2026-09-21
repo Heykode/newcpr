@@ -94,6 +94,7 @@ struct ItemView {
     provider: String,
     status: &'static str,
     account_ids: Vec<String>,
+    account_emails: std::collections::BTreeMap<String, Option<String>>,
     message: Option<String>,
 }
 
@@ -112,6 +113,11 @@ impl From<ImportTaskDetail> for DetailView {
                         .account_ids
                         .into_iter()
                         .map(|id| id.to_string())
+                        .collect(),
+                    account_emails: item
+                        .account_emails
+                        .into_iter()
+                        .map(|(id, email)| (id.to_string(), email))
                         .collect(),
                     message: item.message,
                 })

@@ -192,6 +192,7 @@ impl DefaultImportTasksService {
             Ok(Ok(result)) => {
                 item.status = ImportItemStatus::Succeeded;
                 item.account_ids = result.credential_ids;
+                item.account_emails = result.credential_emails;
             }
             Ok(Err(error)) => {
                 // Storage/publication can fail after commit. Never replay a possible RT exchange.
@@ -270,6 +271,7 @@ impl ImportTasksService for DefaultImportTasksService {
                 provider: input.provider.clone(),
                 status: ImportItemStatus::Pending,
                 account_ids: Vec::new(),
+                account_emails: Default::default(),
                 message: None,
             })
             .collect();

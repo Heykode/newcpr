@@ -358,6 +358,7 @@ export interface AccountImportTaskItem {
   provider: string
   status: ImportItemStatus
   accountIds: string[]
+  accountEmails?: Record<string, string | null>
   message: string | null
 }
 

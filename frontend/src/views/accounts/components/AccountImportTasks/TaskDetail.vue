@@ -104,11 +104,11 @@ watch(() => props.task.taskId, () => {
               </p>
               <details v-if="item.accountIds.length" class="mt-1">
                 <summary class="cursor-pointer text-cp-text">
-                  账号 ID（{{ item.accountIds.length }}）
+                  已导入账号（{{ item.accountIds.length }}）
                 </summary>
                 <ul class="mt-1 mb-0 max-h-24 list-none overflow-y-auto p-0 font-mono text-[11px]">
                   <li v-for="(id, index) in item.accountIds" :key="index">
-                    {{ id }}
+                    {{ item.accountEmails?.[id]?.trim() || id }}
                   </li>
                 </ul>
               </details>

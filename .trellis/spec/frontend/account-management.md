@@ -46,7 +46,11 @@
   an initial read failure from an authoritative empty list.
 - Task detail defaults to all items, not attention-only when any item failed.
   Keep the explicit attention filter, creation/completion times and expandable
-  saved account IDs. Returning to the account list is not a batch filter.
+  saved accounts, displaying `accountEmails[id]` before falling back to the ID.
+  Emails are committed-import snapshots keyed by the actual account ID, independent
+  of current account-list paging. Keep duplicate result entries and wrap long emails.
+  Task reads must not add per-account lookups or upstream requests.
+  Returning to the account list is not a batch filter.
 - Account-column preferences already exist and remain authoritative. Usage and
   error tables use separate storage keys, keep required identity/actions and error
   columns visible, tolerate invalid stored values and retain original layout.

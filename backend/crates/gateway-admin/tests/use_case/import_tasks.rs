@@ -345,6 +345,21 @@ async fn imports_keep_existing_service_commit_settings_and_account_ids() {
             ["acct_first", "acct_second"]
         );
         assert_eq!(store.import_settings(), vec![Some(settings)]);
+        assert_eq!(detail.items[0].account_emails.len(), 2);
+        for id in &detail.items[0].account_ids {
+            assert_eq!(
+                detail.items[0].account_emails[id].as_deref(),
+                Some("prepared@example.invalid")
+            );
+        }
+        let stopped = services
+            .import_tasks()
+            .stop(&context("stop-completed"), task.task_id)
+            .unwrap();
+        assert_eq!(
+            stopped.items[0].account_emails,
+            detail.items[0].account_emails
+        );
         let log = recorded(&log);
         assert_eq!(
             log.iter()

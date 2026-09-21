@@ -935,7 +935,7 @@ test('real task SFCs render all outcomes, safe errors, accessible progress and n
     })),
   })
   const html = await renderToString(vue.createSSRApp(component, { task: summary, stopping: false }))
-  for (const label of ['等待中', '处理中', '已入库', '失败', '待核对', '未执行', '不要直接重试原 Token', '停止未开始条目', '返回账号列表', '账号 ID', 'acct_saved_example'])
+  for (const label of ['等待中', '处理中', '已入库', '失败', '待核对', '未执行', '不要直接重试原 Token', '停止未开始条目', '返回账号列表', '已导入账号', 'acct_saved_example'])
     assert.ok(html.includes(label), label)
   assert.match(html, /role="progressbar"[^>]*aria-label="条目处理进度"[^>]*aria-valuenow="4"[^>]*aria-valuemax="6"/)
   assert.match(html, /已入库 3 个账号/)
@@ -997,4 +997,36 @@ test('task presenters distinguish stopping, terminal attention and per-document 
   assert.equal(presenter.taskLabel(completed('task-a', { counts: { ...completed().counts, unknown: 1 } })), '已结束 · 有待处理项')
   assert.equal(presenter.itemDescription({ status: 'succeeded', message: null, accountIds: ['account-a', 'account-b'] }), '已保存 2 个账号')
   assert.equal(presenter.itemDescription({ status: 'unknown', message: null, accountIds: [] }), '请检查账号列表，确认是否已入库')
+})
+
+test('imported accounts show their own email, retain duplicates, and safely fall back for missing emails', async () => {
+  const component = componentLoader()(`${taskComponentPath}TaskDetail.vue`).default
+  const html = await renderToString(vue.createSSRApp(component, {
+    task: completed('email-batch', {
+      total: 1,
+      items: [{
+        index: 1,
+        provider: 'openai',
+        status: 'succeeded',
+        accountIds: ['acct_second', 'acct_first', 'acct_first', 'acct_missing', 'acct_null', 'acct_blank', 'acct_escaped'],
+        accountEmails: {
+          acct_first: ' first@example.com ',
+          acct_second: 'second+workspace@example.com',
+          acct_null: null,
+          acct_blank: '  ',
+          acct_escaped: '<script>@example.com',
+          acct_unrelated: 'unrelated@example.com',
+        },
+        message: null,
+      }],
+    }),
+    stopping: false,
+  }))
+  assert.match(html, /已导入账号（7）/)
+  assert.equal(html.match(/first@example\.com/g)?.length, 2)
+  assert.ok(html.indexOf('second+workspace@example.com') < html.indexOf('first@example.com'))
+  for (const id of ['acct_missing', 'acct_null', 'acct_blank'])
+    assert.ok(html.includes(id), id)
+  assert.match(html, /&lt;script&gt;@example\.com/)
+  assert.doesNotMatch(html, /acct_first|acct_second|acct_escaped|unrelated@example|<script>/)
 })

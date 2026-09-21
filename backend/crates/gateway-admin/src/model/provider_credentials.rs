@@ -1,6 +1,6 @@
 //! Provider 管理能力交换的中立 Command 与 Result。
 
-use std::{fmt, num::NonZeroU32, pin::Pin};
+use std::{collections::BTreeMap, fmt, num::NonZeroU32, pin::Pin};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -129,6 +129,8 @@ impl fmt::Debug for ImportCredentials {
 pub struct CredentialImportResult {
     pub config_revision: Revision,
     pub credential_ids: Vec<ProviderAccountId>,
+    /// Display-only email snapshot keyed by the committed account ID.
+    pub credential_emails: BTreeMap<ProviderAccountId, Option<String>>,
 }
 
 /// Provider 解析导入文档时只接收不透明文档，不接触 revision 或审计上下文。
