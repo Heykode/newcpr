@@ -267,12 +267,29 @@ class Rollout:
         print(json.dumps(result), flush=True)
         return 0 if result["status"] == "deployed" else 1
 
-    def run(self):
+    def run(self, *, prepare_only=False):
         # Shared with earlier deployments; an independent lock per worktree is unsafe.
         with self.compose.with_name(".cpr-deployment.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             try:
                 self.prepare()
+                if prepare_only:
+                    self.check_unchanged()
+                    if not healthy(self.profile):
+                        raise RuntimeError("Application became unhealthy during preparation")
+                    result = {
+                        "status": "prepared_not_deployed",
+                        "target_commit": self.selected["target_commit"],
+                        "tested_commit": self.proof["source_commit"],
+                        "version": self.proof["version"],
+                        "image": self.new_image,
+                        "previous_image": self.old_image,
+                        "migrations_changed": self.upgrade is not None,
+                        "egress_before": self.egress_before,
+                    }
+                    (self.backup / "preparation.json").write_text(json.dumps(result, indent=2))
+                    print(json.dumps(result), flush=True)
+                    return 0
                 return self.switch()
             finally:
                 if self.pending is not None:
@@ -300,10 +317,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--archive", type=Path, required=True)
-    parser.add_argument("--apply", action="store_true")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--prepare", action="store_true", help="Online preparation only; never switch")
     args = parser.parse_args()
-    if not args.apply:
-        parser.error("Server mutation requires --apply")
     os.umask(0o077)
     def interrupted(signum, frame):
         # A dropped SSH session should enter rollback, not abandon the cutover.
@@ -314,7 +331,7 @@ def main():
     signal.signal(signal.SIGHUP, interrupted)
     signal.signal(signal.SIGTERM, interrupted)
     try:
-        return Rollout(json.loads(args.request.read_text()), args.archive).run()
+        return Rollout(json.loads(args.request.read_text()), args.archive).run(prepare_only=args.prepare)
     except Exception as error:
         # Keep private config values out of terminal output.
         print("Deployment stopped; inspect the private deployment result: " + type(error).__name__)

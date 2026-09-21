@@ -1,0 +1,8 @@
+{
+  "from_version": "3.14.0",
+  "to_version": "3.15.0",
+  "from_migrations_tree": "f06265e1a7d0b96fbb038533eddb6d4ec21bab9b",
+  "to_migrations_tree": "08832b2445518833a1f140861050bdb14f4dcde1",
+  "added": ["0033_request_billing_snapshots.sql"],
+  "recovery": "manual"
+}

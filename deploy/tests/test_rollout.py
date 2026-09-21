@@ -104,6 +104,57 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(yaml.safe_load((self.worker.backup / "rollback.yaml").read_text())
                          ["services"]["app"]["image"], "sha256:old")
 
+    def test_prepare_only_never_calls_switch_or_records_deployment(self):
+        before = self.compose.read_bytes()
+        with patch.object(self.worker, "switch") as switch:
+            self.assertEqual(self.worker.run(prepare_only=True), 0)
+        switch.assert_not_called()
+        self.assertEqual(self.compose.read_bytes(), before)
+        self.assertEqual(self.app["Id"], "old-container")
+        self.assertFalse(self.worker.pending.exists())
+        self.assertFalse((self.directory / ".cpr-release.json").exists())
+        self.assertFalse((self.worker.backup / "result.json").exists())
+        report = json.loads((self.worker.backup / "preparation.json").read_text())
+        self.assertEqual(report["status"], "prepared_not_deployed")
+        self.assertFalse(any("up" in args for args in self.commands))
+        # Preparation exits and releases the shared deployment lock.
+        with self.compose.with_name(".cpr-deployment.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_prepare_only_migration_backs_up_but_never_switches(self):
+        self.worker.upgrade = {"before": {"1": "example"}, "after": {"1": "example", "2": "new"}}
+        def backup(worker):
+            worker.migration_database = "example-db-1"
+        with patch("migration_backup.prepare", side_effect=backup) as prepare, \
+                patch("migration_backup.check_schema") as schema, \
+                patch.object(self.worker, "switch") as switch:
+            self.assertEqual(self.worker.run(prepare_only=True), 0)
+        prepare.assert_called_once_with(self.worker)
+        schema.assert_called_once_with("example-db-1", self.worker.upgrade["before"])
+        switch.assert_not_called()
+        self.assertFalse(any("up" in args for args in self.commands))
+
+    def test_prepare_only_rejects_changes_and_cleans_candidate(self):
+        real_prepare = self.worker.prepare
+        def prepare():
+            real_prepare()
+            self.app["Id"] = "external-replacement"
+        with patch.object(self.worker, "prepare", side_effect=prepare), \
+                patch.object(self.worker, "switch") as switch, \
+                self.assertRaisesRegex(RuntimeError, "Another deployment"):
+            self.worker.run(prepare_only=True)
+        switch.assert_not_called()
+        self.assertFalse(self.worker.pending.exists())
+        self.assertFalse((self.worker.backup / "preparation.json").exists())
+
+    def test_prepare_only_rejects_unhealthy_service(self):
+        with patch.object(rollout, "healthy", side_effect=[True, False]), \
+                patch.object(self.worker, "switch") as switch, \
+                self.assertRaisesRegex(RuntimeError, "unhealthy"):
+            self.worker.run(prepare_only=True)
+        switch.assert_not_called()
+        self.assertFalse(self.worker.pending.exists())
+
     def test_wrong_archive_stops_before_docker_load(self):
         self.archive.write_bytes(b"corrupt")
         with self.assertRaisesRegex(RuntimeError, "checksum"):
@@ -239,6 +290,18 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(args[-7:], ["up", "-d", "--no-deps", "--no-build", "--pull", "never", "app"])
         self.assertIn("--project-name", args)
         self.assertNotIn("down", args)
+
+
+class RolloutCliTests(unittest.TestCase):
+    def test_cli_requires_exactly_one_mutation_mode(self):
+        script = str(Path(rollout.__file__))
+        for modes in ([], ["--prepare", "--apply"]):
+            with self.subTest(modes=modes):
+                result = subprocess.run([
+                    sys.executable, script, "--request", "/nonexistent/request.json",
+                    "--archive", "/nonexistent/image.tar.gz", *modes,
+                ], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
 
 
 class HealthGapTests(unittest.TestCase):

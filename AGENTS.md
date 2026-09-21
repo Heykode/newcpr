@@ -43,6 +43,12 @@ release and deployment require the user's applicable authorization.
   "$HOME/.config/cpr/deploy-production.json" --commit <full-main-commit>`.
   This is a read-only plan. Add `--apply` only when the user authorized deployment.
   The real profile stays outside Git with mode 0600; never put its contents in PRs.
+- If approval is required immediately before interruption, use `--prepare` first.
+  It stages the verified image, checks egress and creates online backups, then exits
+  without switching containers or applying migrations. Wait for separate approval;
+  only then use `--apply --staged <returned-directory>` with the same target and plan.
+  Apply revalidates evidence and refreshes backups; never leave an apply process
+  running while waiting for user approval.
 - Reuse only the verified image selected by that command. Do not rebuild on the
   production server, generate a one-off rollout script, skip failed checks, or
   select a different artifact just because a previous deployment was slow.

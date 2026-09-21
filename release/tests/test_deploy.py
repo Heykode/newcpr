@@ -1,6 +1,9 @@
 import contextlib
 import io
+import json
 from pathlib import Path
+import shlex
+import subprocess
 import sys
 import unittest
 from unittest.mock import patch
@@ -143,6 +146,98 @@ class DeployTests(unittest.TestCase):
         security.assert_called_once_with(REPOSITORY, SOURCE)
         self.assertEqual(command.call_count, 1)
         self.assertEqual(command.call_args.args[0][0], "git")
+
+    def test_invalid_modes_fail_before_fetch_or_remote_access(self):
+        for options in (
+            {"apply": True, "prepare": True},
+            {"apply": False, "staged": "/var/tmp/cpr-deploy.example"},
+            {"apply": False, "prepare": True, "staged": "/var/tmp/cpr-deploy.example"},
+            {"apply": True, "staged": "/var/tmp/cpr-deploy.example/../other"},
+            {"apply": True, "staged": ""},
+        ):
+            with self.subTest(options=options), patch.object(images, "git") as git, \
+                    patch.object(deploy, "ssh") as ssh, self.assertRaises(images.Unavailable):
+                deploy.run(profile(), SOURCE, **options)
+            git.assert_not_called()
+            ssh.assert_not_called()
+
+    def run_mutation(self, *, prepare=False, staged=None, change_request=None,
+                     archive_digest=None, server_status=0):
+        _, proof, artifact = fixtures()
+        selected = {"target_commit": SOURCE, "proof": proof, "artifact": artifact}
+        request = {"profile": profile(), "selected": selected, "expected_old_image": "old"}
+        if change_request:
+            change_request(request)
+        remote = "/var/tmp/cpr-deploy.example"
+        output = io.StringIO()
+        commands = []
+        def command(args, **kwargs):
+            commands.append(args)
+            return subprocess.CompletedProcess(args, server_status if args[0] == "ssh" else 0)
+        with contextlib.redirect_stdout(output), \
+                patch.object(images, "git", return_value="same"), \
+                patch.object(images, "command", return_value=REPOSITORY), \
+                patch.object(images, "require_security") as security, \
+                patch.object(images, "resolve", return_value=selected), \
+                patch.object(deploy, "current_image", return_value=("old", {})), \
+                patch.object(deploy, "validate_upgrade"), \
+                patch.object(deploy, "require_target_ci") as ci, \
+                patch.object(images, "artifact_file") as download, \
+                patch.object(images, "sha256", return_value=archive_digest or proof["archive_sha256"]), \
+                patch.object(deploy, "ssh", return_value=json.dumps(request) if staged else remote) as ssh, \
+                patch.object(deploy.subprocess, "run", side_effect=command):
+            deploy.run(profile(), SOURCE, not prepare, prepare=prepare, staged=staged)
+        return commands, output.getvalue(), download, ssh, ci, security
+
+    def test_prepare_invokes_only_server_prepare(self):
+        commands, output, download, _, ci, security = self.run_mutation(prepare=True)
+        self.assertEqual([args[0] for args in commands], ["git", "scp", "ssh"])
+        args = shlex.split(commands[-1][-1])
+        self.assertIn("--prepare", args)
+        self.assertNotIn("--apply", args)
+        self.assertIn("prepared_not_deployed", output)
+        self.assertIn("/var/tmp/cpr-deploy.example", output)
+        download.assert_called_once()
+        ci.assert_called_once_with(REPOSITORY, SOURCE)
+        security.assert_called_once_with(REPOSITORY, SOURCE)
+
+    def test_prepared_apply_reuses_archive_but_rechecks_evidence(self):
+        commands, output, download, ssh, ci, security = self.run_mutation(
+            staged="/var/tmp/cpr-deploy.example")
+        download.assert_not_called()
+        ssh.assert_called_once_with("example-alias", "cat", "/var/tmp/cpr-deploy.example/request.json")
+        self.assertNotIn("image.tar.gz", " ".join(commands[1]))
+        self.assertIn("--apply", shlex.split(commands[-1][-1]))
+        self.assertNotIn("prepared_not_deployed", output)
+        ci.assert_called_once_with(REPOSITORY, SOURCE)
+        security.assert_called_once_with(REPOSITORY, SOURCE)
+
+    def test_prepared_request_mismatch_refuses_transfer_and_switch(self):
+        for field in ("profile", "selected", "expected_old_image", "migration_upgrade"):
+            with self.subTest(field=field), self.assertRaisesRegex(images.Unavailable, "Prepared request"):
+                self.run_mutation(staged="/var/tmp/cpr-deploy.example",
+                                  change_request=lambda request: request.update({field: "changed"}))
+
+    def test_prepare_rejects_bad_download_or_server_failure(self):
+        with self.assertRaisesRegex(images.Unavailable, "checksum"):
+            self.run_mutation(prepare=True, archive_digest="invalid")
+        with self.assertRaisesRegex(images.Unavailable, "failed"):
+            self.run_mutation(prepare=True, server_status=1)
+
+    def test_apply_without_staging_preserves_existing_workflow(self):
+        commands, output, download, _, _, _ = self.run_mutation()
+        download.assert_called_once()
+        self.assertIn("image.tar.gz", " ".join(commands[1]))
+        self.assertIn("--apply", shlex.split(commands[-1][-1]))
+        self.assertNotIn("prepared_not_deployed", output)
+
+    def test_cli_rejects_conflicting_modes(self):
+        result = subprocess.run([
+            sys.executable, str(Path(deploy.__file__)), "--profile", "/nonexistent",
+            "--commit", SOURCE, "--prepare", "--apply",
+        ], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not allowed", result.stderr)
 
 
 if __name__ == "__main__":

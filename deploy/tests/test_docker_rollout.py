@@ -100,6 +100,19 @@ class DockerRolloutTests(unittest.TestCase):
                     }
                     request_file = directory / "request.json"
                     request_file.write_text(json.dumps(request))
+                    original_compose = compose.read_bytes()
+                    original_app = rollout.inspect(name + "-app")
+                    prepared = subprocess.run([
+                        sys.executable, str(Path(rollout.__file__)), "--request", str(request_file),
+                        "--archive", str(archive), "--prepare",
+                    ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180)
+                    self.assertEqual(prepared.returncode, 0, prepared.stdout)
+                    self.assertIn("prepared_not_deployed", prepared.stdout)
+                    self.assertEqual(compose.read_bytes(), original_compose)
+                    self.assertEqual(rollout.inspect(name + "-app")["Id"], original_app["Id"])
+                    self.assertEqual(rollout.inspect(name + "-app")["State"]["StartedAt"],
+                                     original_app["State"]["StartedAt"])
+                    self.assertTrue(rollout.healthy(profile))
                     result = subprocess.run([
                         sys.executable, str(Path(rollout.__file__)), "--request", str(request_file),
                         "--archive", str(archive), "--apply",
