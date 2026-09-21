@@ -305,6 +305,21 @@ impl CodexCredentialSelector {
         self
     }
 
+    fn account_in_scope(
+        &self,
+        account: &ProviderAccount,
+        request: &CredentialSelectionInput<'_>,
+    ) -> bool {
+        account.provider() == &self.provider_kind
+            && (request.attempt.is_diagnostic_required_account()
+                || request.attempt.account_scope().is_some_and(|scope| {
+                    request.upstream_model.map_or_else(
+                        || scope.allows(account.id()),
+                        |model| scope.allows_model(account.id(), model),
+                    )
+                }))
+    }
+
     async fn state_allows(
         &self,
         account: &ProviderAccount,
@@ -418,14 +433,7 @@ impl CodexCredentialSelector {
         }
         let accounts = accounts
             .into_iter()
-            .filter(|account| {
-                account.provider() == &self.provider_kind
-                    && (diagnostic
-                        || request
-                            .attempt
-                            .account_scope()
-                            .is_some_and(|scope| scope.allows(account.id())))
-            })
+            .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
         let accounts = self.state_ready_accounts(accounts, request).await;
         if !diagnostic {

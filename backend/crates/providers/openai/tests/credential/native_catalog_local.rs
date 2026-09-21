@@ -86,6 +86,7 @@ async fn replace_account_facts(store: &MemoryAccountStore, account: ProviderAcco
         .expect("remove fixture");
     store
         .create_account(NewProviderAccount {
+            model_access: Some(account.model_access().clone()),
             account,
             credential: loaded.credential,
         })

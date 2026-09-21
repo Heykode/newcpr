@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AccountGroup } from '@/api'
+import type { AccountGroup, AccountModelAccess } from '@/api'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
@@ -12,6 +12,7 @@ defineProps<{
   saving: boolean
   hasUpdates: boolean
   turnStateAvailable: boolean
+  catalogAccountId?: string
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +26,8 @@ const enabled = defineModel<boolean>('enabled', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
+const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
+const updateModelAccess = defineModel<boolean>('updateModelAccess', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
@@ -51,6 +54,8 @@ const updateProxy = defineModel<boolean>('updateProxy', { required: true })
       v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
       v-model:concurrency-limit="concurrencyLimit"
       v-model:weight="weight"
+      v-model:model-access="modelAccess"
+      v-model:update-model-access="updateModelAccess"
       v-model:selected-group-ids="selectedGroupIds"
       v-model:proxy-mode="proxyMode"
       v-model:proxy-id="proxyId"
@@ -61,6 +66,8 @@ const updateProxy = defineModel<boolean>('updateProxy', { required: true })
       v-model:update-groups="updateGroups"
       v-model:update-proxy="updateProxy"
       name-available
+      model-access-available
+      :account-id="catalogAccountId"
       :groups="groups"
       :groups-loading="groupsLoading"
       :turn-state-available="turnStateAvailable"

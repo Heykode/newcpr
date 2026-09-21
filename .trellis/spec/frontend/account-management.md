@@ -1,5 +1,19 @@
 # Account Management Contracts
 
+## Account Model Access
+
+- Follow the shared contract in `../backend/account-model-access.md`.
+- Enable `AccountSettingsFields.modelAccessAvailable` only for account single/batch
+  editing and imports. Templates remain unchanged and omit the policy.
+- Import defaults to preserve; single edit defaults old responses to all and only
+  submits changed policies. Clone the model array so editing does not mutate rows
+  or pending payloads. Batch `updateModelAccess` is unchecked and reset every open.
+- Manual exact IDs remain editable when catalog reads fail or omit a stored model.
+  Only load a catalog for an enabled restricted field with an account ID. Abort and
+  invalidate when the account/enable state changes or the component unmounts.
+- Test all eight batch opt-in fields together and independently, plus catalog errors,
+  import validation, narrow viewports and explicit clearing with all.
+
 ## Custom Account Names
 
 - `Account.customName?: string | null` is independent display metadata. Prefer it
@@ -10,7 +24,7 @@
 - Single editing records the opened custom-name baseline and sends a name only
   when changed. Editing other settings must not replay a stale name from a refreshed
   account list. Explicit null/blank clears; imports omit blank names.
-- Batch editing has seven opt-in fields including State and custom name. Name
+- Batch editing has eight opt-in fields including State, model access and custom name. Name
   editing follows the same unchecked-by-default/reset rules as all other fields.
   Only normalize and submit a checked name; unchecked invalid drafts are ignored.
 - Shared `AccountSettingsFields.nameAvailable` defaults false. Enable it only in

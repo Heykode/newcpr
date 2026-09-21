@@ -143,7 +143,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
@@ -189,11 +189,11 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                outbound_proxy_url, outbound_proxy_id, id, provider_kind, name, email, upstream_user_id,
                upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
                has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-               concurrency_limit, weight, credential_state, provider_quota_json,
+               concurrency_limit, weight, model_access_json, credential_state, provider_quota_json,
                credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
              ) values (
                $18, $19, $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-               $14, $15, $16, null, $17, null, null, now(), greatest(now(), $17)
+               $14, $15, coalesce($20, '{\"mode\":\"all\",\"models\":[]}'::jsonb), $16, null, $17, null, null, now(), greatest(now(), $17)
              )",
         )
         .bind(&account.id)
@@ -215,6 +215,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         .bind(account.credential_observed_at)
         .bind(account.outbound_proxy.as_ref().map(|proxy| proxy.expose_url()))
         .bind(proxy_id)
+        .bind(account.model_access.as_ref().map(sqlx::types::Json))
         .execute(&mut *transaction)
         .await
         .map_err(|_| postgres_unavailable("insert provider account"))?;
@@ -664,11 +665,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 update_provider_accounts_scheduling_in_transaction(
                     &mut transaction,
                     &unique_ids,
-                    Some(settings.enabled),
-                    Some(settings.concurrency_limit),
-                    Some(settings.weight),
-                    settings.turn_state_injection_enabled,
-                    None,
+                    AccountSchedulingPatch {
+                        enabled: Some(settings.enabled),
+                        concurrency_limit: Some(settings.concurrency_limit),
+                        weight: Some(settings.weight),
+                        turn_state_injection_enabled: settings.turn_state_injection_enabled,
+                        model_access: settings.model_access.as_ref(),
+                        outbound_proxy: None,
+                    },
                 )
                 .await?;
                 if let Some(name) = gateway_admin::model::accounts::normalize_custom_name(
@@ -871,11 +875,14 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             update_provider_accounts_scheduling_in_transaction(
                 &mut transaction,
                 &command.account_ids,
-                command.enabled,
-                command.concurrency_limit,
-                command.weight,
-                command.turn_state_injection_enabled,
-                command.outbound_proxy.as_ref(),
+                AccountSchedulingPatch {
+                    enabled: command.enabled,
+                    concurrency_limit: command.concurrency_limit,
+                    weight: command.weight,
+                    turn_state_injection_enabled: command.turn_state_injection_enabled,
+                    model_access: command.model_access.as_ref(),
+                    outbound_proxy: command.outbound_proxy.as_ref(),
+                },
             )
             .await?;
             if let Some(name) = &command.custom_name {
@@ -1056,11 +1063,11 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            outbound_proxy_url, outbound_proxy_id, id, provider_kind, name, email, upstream_user_id,
            upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision,
            has_refresh_token, access_token_expires_at, next_refresh_at, enabled,
-           concurrency_limit, weight, credential_state, provider_quota_json,
+           concurrency_limit, weight, model_access_json, credential_state, provider_quota_json,
            credential_observed_at, quota_access_observed_at, quota_observed_at, created_at, updated_at
          ) values (
            $18, $19, $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13,
-           $14, $15, $16, null, $17, null, null, now(), greatest(now(), $17)
+           $14, $15, coalesce($21, '{\"mode\":\"all\",\"models\":[]}'::jsonb), $16, null, $17, null, null, now(), greatest(now(), $17)
          )
          on conflict (
            provider_kind,
@@ -1080,6 +1087,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
            access_token_expires_at = excluded.access_token_expires_at,
            next_refresh_at = excluded.next_refresh_at,
            enabled = excluded.enabled,
+           model_access_json = coalesce($21, provider_accounts.model_access_json),
            credential_state = excluded.credential_state,
            provider_quota_json = null,
            quota_access_state = 'unknown',
@@ -1114,6 +1122,7 @@ pub(crate) async fn upsert_provider_account_in_transaction(
     .bind(account.outbound_proxy.as_ref().map(|proxy| proxy.expose_url()))
     .bind(proxy_id)
     .bind(require_new)
+    .bind(account.model_access.as_ref().map(sqlx::types::Json))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| {
@@ -1212,15 +1221,28 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     Revision::new(to_u64(next)?)
 }
 
-pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
-    transaction: &mut Transaction<'_, Postgres>,
-    account_ids: &[String],
+struct AccountSchedulingPatch<'a> {
     enabled: Option<bool>,
     concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     weight: Option<AccountWeight>,
     turn_state_injection_enabled: Option<bool>,
-    outbound_proxy: Option<&gateway_admin::model::proxies::AccountProxySelection>,
+    model_access: Option<&'a gateway_core::account::AccountModelAccess>,
+    outbound_proxy: Option<&'a gateway_admin::model::proxies::AccountProxySelection>,
+}
+
+async fn update_provider_accounts_scheduling_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    patch: AccountSchedulingPatch<'_>,
 ) -> StoreResult<()> {
+    let AccountSchedulingPatch {
+        enabled,
+        concurrency_limit,
+        weight,
+        turn_state_injection_enabled,
+        model_access,
+        outbound_proxy,
+    } = patch;
     lock_account_egress_in_transaction(transaction).await?;
     let (proxy_id, proxy) = match outbound_proxy {
         Some(selection) => {
@@ -1236,7 +1258,8 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
              turn_state_injection_enabled = coalesce($6, turn_state_injection_enabled),
              updated_at = greatest(now(), updated_at),
              outbound_proxy_url = case when $7 then $8 else outbound_proxy_url end,
-             outbound_proxy_id = case when $7 then $9 else outbound_proxy_id end
+             outbound_proxy_id = case when $7 then $9 else outbound_proxy_id end,
+             model_access_json = coalesce($10, model_access_json)
          where id = any($1::text[])
          returning id",
     )
@@ -1258,6 +1281,7 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
             .map(gateway_core::account::OutboundProxy::expose_url),
     )
     .bind(proxy_id)
+    .bind(model_access.map(sqlx::types::Json))
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?

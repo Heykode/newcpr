@@ -62,6 +62,7 @@ pub struct SnapshotProviderAccountData {
     pub id: String,
     pub provider_kind: String,
     pub concurrency_limit: Option<u32>,
+    pub model_access: gateway_core::account::AccountModelAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +199,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                         .map(|id| {
                             SnapshotProviderAccountFacts::new(id, account.provider_kind)
                                 .with_concurrency_limit(account.concurrency_limit)
+                                .with_model_access(account.model_access)
                         })
                         .map_err(|_| SnapshotStoreError::unavailable())
                 })
@@ -427,18 +429,24 @@ async fn load_account_groups(
 async fn load_provider_accounts(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<SnapshotProviderAccountData>> {
-    let rows = sqlx::query_as::<_, (String, String, Option<i64>)>(
-        "select id, provider_kind, concurrency_limit from provider_accounts order by id",
+    let rows = sqlx::query_as::<_, (
+        String,
+        String,
+        Option<i64>,
+        sqlx::types::Json<gateway_core::account::AccountModelAccess>,
+    )>(
+        "select id, provider_kind, concurrency_limit, model_access_json from provider_accounts order by id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("load snapshot provider accounts"))?;
     rows.into_iter()
-        .map(|(id, provider_kind, concurrency_limit)| {
+        .map(|(id, provider_kind, concurrency_limit, model_access)| {
             Ok(SnapshotProviderAccountData {
                 id,
                 provider_kind,
                 concurrency_limit: concurrency_limit.map(to_u32).transpose()?,
+                model_access: model_access.0,
             })
         })
         .collect()

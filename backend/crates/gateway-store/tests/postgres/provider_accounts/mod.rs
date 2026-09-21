@@ -5,6 +5,7 @@ use std::{
 };
 
 mod auth_recovery;
+mod model_access;
 mod quota_forecast;
 mod state_retention;
 
@@ -74,6 +75,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
     .unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        model_access: Default::default(),
         custom_name: Some(Some("  Local batch  ".into())),
         account_ids: ids.clone(),
         enabled: None,
@@ -131,6 +133,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         store
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    model_access: Default::default(),
                     custom_name: Some(Some("Not committed".into())),
                     group_ids: Some(vec![
                         AccountGroupId::new("grp_00000000000000000000000000000099").unwrap()
@@ -162,6 +165,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         store
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    model_access: Default::default(),
                     custom_name: name.clone(),
                     ..command.clone()
                 },
@@ -207,6 +211,7 @@ async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
         repository
             .import_provider_accounts(ImportProviderAccounts {
                 settings: Some(AccountImportSettings {
+                    model_access: Default::default(),
                     custom_name: name.map(str::to_owned),
                     enabled: true,
                     turn_state_injection_enabled: None,
@@ -1179,6 +1184,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
             store
                 .update_account(
                     UpdateAccount {
+                        model_access: Default::default(),
                         custom_name: None,
                         account_id: id.clone(),
                         enabled,
@@ -1906,6 +1912,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
                 account_id: "acct_terminal_mutation".to_owned(),
@@ -1987,6 +1994,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        model_access: Default::default(),
         custom_name: None,
         account_id: "acct_proxy".to_owned(),
         enabled: true,
@@ -2010,6 +2018,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                model_access: Default::default(),
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse(
                         "socks5h://next:new-secret@127.0.0.1:1080",
@@ -2026,6 +2035,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                model_access: Default::default(),
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Direct),
                 ..command
             },
@@ -2129,6 +2139,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     let enabled = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                model_access: Default::default(),
                 custom_name: None,
                 account_ids: vec!["acct_recovery".to_owned()],
                 enabled: Some(true),
@@ -2258,6 +2269,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
@@ -2299,6 +2311,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
                 account_ids: account_ids.clone(),
@@ -2503,6 +2516,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         .commit_authorization(
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    model_access: Default::default(),
                     custom_name: None,
                     enabled: false,
                     turn_state_injection_enabled: Some(true),
@@ -2518,6 +2532,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     AuthorizationOwnerBinding::from_context(&context),
                 ),
                 credential: AuthorizationCredentialCommit::Create(PreparedCredentialCreate {
+                    model_access: Default::default(),
                     outbound_proxy: None,
                     account_id: ProviderAccountId::new("acct_authorization_candidate")
                         .expect("candidate account ID"),
@@ -2684,6 +2699,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     repository
         .insert_provider_account(NewProviderAccount {
+            model_access: Default::default(),
             outbound_proxy: None,
             id: "acct_core_refresh".to_owned(),
             provider_kind: "xai".to_owned(),
@@ -3025,6 +3041,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            model_access: Default::default(),
             custom_name: None,
             outbound_proxy: None,
             account_ids: vec!["acct_admin_a".to_owned()],
@@ -3397,6 +3414,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
 
 pub(super) fn account(id: &str, upstream_user_id: &str) -> NewProviderAccount {
     NewProviderAccount {
+        model_access: Default::default(),
         outbound_proxy: None,
         id: id.to_owned(),
         provider_kind: "openai".to_owned(),
@@ -3601,6 +3619,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                model_access: Default::default(),
                 custom_name: None,
                 account_id: id.as_str().to_owned(),
                 enabled: true,
@@ -3658,7 +3677,13 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     .execute(&database.pool)
     .await
     .expect("seed group");
+    let policy = gateway_core::account::AccountModelAccess::new(
+        gateway_core::account::AccountModelAccessMode::Allowlist,
+        vec!["model-import".into()],
+    )
+    .unwrap();
     let settings = AccountImportSettings {
+        model_access: Some(policy.clone()),
         custom_name: None,
         enabled: false,
         turn_state_injection_enabled: Some(true),
@@ -3693,6 +3718,16 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .expect("saved settings");
         assert_eq!(row, (false, Some(3), 7, true));
         assert_eq!(account_group_ids(&database.pool, id).await, [GROUP_ID]);
+        assert_eq!(
+            repository
+                .load_provider_account(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .summary
+                .model_access,
+            policy,
+        );
     }
     let before = repository
         .load_provider_account("acct_existing_settings")
@@ -3761,6 +3796,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
     .enumerate()
     {
         let settings = AccountImportSettings {
+            model_access: Default::default(),
             custom_name: None,
             enabled: true,
             turn_state_injection_enabled: state,

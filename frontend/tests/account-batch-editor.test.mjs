@@ -9,7 +9,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 
 const require = createRequire(import.meta.url)
-const updateFields = ['updateEnabled', 'updateTurnStateInjectionEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName']
+const updateFields = ['updateEnabled', 'updateTurnStateInjectionEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
 
 function loadModule(filename, dependencies = {}) {
   const exports = {}
@@ -19,6 +19,7 @@ function loadModule(filename, dependencies = {}) {
   runInNewContext(outputText, {
     exports,
     require: name => dependencies[name] ?? require(name),
+    TextEncoder,
   }, { filename: String(filename) })
   return exports
 }
@@ -73,6 +74,7 @@ function mountEditor(t, options = {}) {
     '@/components/base/BaseToast': { toast },
     '@/composables/useAsyncAction': asyncAction,
     '../utils/schedulingForm': schedulingForm,
+    '../utils/modelAccess': loadModule(new URL('../src/views/accounts/utils/modelAccess.ts', import.meta.url)),
     '@/utils/account-name': loadModule(new URL('../src/utils/account-name.ts', import.meta.url)),
   })
   const scope = vue.effectScope()
@@ -102,6 +104,38 @@ function assertNoRequest(editor) {
   assert.deepEqual(editor.messages.success, [])
   assert.equal(editor.state.saving.value, false)
 }
+
+test('model restrictions are opt-in, validate only when checked and clear explicitly', async (t) => {
+  const editor = mountEditor(t, {
+    accounts: [account('account-a', { modelAccess: { mode: 'denylist', models: ['model-a'] } })],
+  })
+  const { state } = editor
+  state.open()
+  assert.equal(state.catalogAccountId.value, 'account-a')
+  state.modelAccess.value = { mode: 'allowlist', models: [] }
+  state.updateModelAccess.value = true
+  await state.save()
+  assertNoRequest(editor)
+  assert.equal(editor.messages.warning.length, 1)
+  state.updateModelAccess.value = false
+  state.updateWeight.value = true
+  await state.save()
+  assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], weight: 17 }])
+  await vue.nextTick()
+  editor.selectedIds.value = new Set(['account-a'])
+  state.open()
+  assertNoUpdates(state)
+  state.updateModelAccess.value = true
+  state.modelAccess.value = { mode: 'denylist', models: ['model-b'] }
+  await state.save()
+  assert.deepEqual(editor.requests[1], {
+    accountIds: ['account-a'],
+    modelAccess: { mode: 'denylist', models: ['model-b'] },
+  })
+  await vue.nextTick()
+  assert.equal(state.modelAccess.value, undefined)
+  assert.equal(state.catalogAccountId.value, undefined)
+})
 
 test('custom names require opt-in, support clear, and ignore unchecked invalid text', async (t) => {
   for (const [value, expected] of [['  Batch name  ', 'Batch name'], ['', null]]) {
@@ -279,6 +313,7 @@ test('every single field and combination sends exactly the opted-in patch after 
     { groupIds: ['group-new', 'group-other'] },
     { outboundProxyId: 'proxy-next' },
     { customName: null },
+    { modelAccess: { mode: 'all', models: [] } },
   ]
 
   for (let mask = 1; mask < 2 ** updateFields.length; mask += 1) {

@@ -523,6 +523,7 @@ impl DefaultReloginService {
             if let Some(name) = custom_name {
                 let settings =
                     settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
+                        model_access: None,
                         custom_name: None,
                         enabled: true,
                         turn_state_injection_enabled: None,

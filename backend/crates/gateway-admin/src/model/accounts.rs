@@ -28,6 +28,7 @@ pub struct AccountImportSettings {
     pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
 }
 
@@ -158,6 +159,7 @@ pub struct AccountRecord {
     pub turn_state_injection_enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
+    pub model_access: gateway_core::account::AccountModelAccess,
     pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
@@ -342,6 +344,7 @@ pub struct UpdateAccount {
     pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
     pub outbound_proxy: Option<super::proxies::AccountProxySelection>,
 }
@@ -362,6 +365,7 @@ pub struct BatchUpdateAccounts {
     pub turn_state_injection_enabled: Option<bool>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     pub weight: Option<AccountWeight>,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Option<Vec<gateway_core::routing::AccountGroupId>>,
     pub outbound_proxy: Option<super::proxies::AccountProxySelection>,
 }

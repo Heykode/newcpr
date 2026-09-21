@@ -79,6 +79,7 @@ pub struct BatchUpdateAccountsRequest {
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub concurrency_limit: Option<Option<u64>>,
     pub weight: Option<u64>,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Option<Vec<String>>,
 }
 
@@ -145,6 +146,7 @@ impl BatchUpdateAccountsRequest {
             && self.turn_state_injection_enabled.is_none()
             && self.concurrency_limit.is_none()
             && self.weight.is_none()
+            && self.model_access.is_none()
             && self.group_ids.is_none()
             && self.outbound_proxy_id.is_none()
             && self.outbound_proxy_url.is_none()
@@ -170,6 +172,7 @@ impl BatchUpdateAccountsRequest {
                 .map(parse_concurrency_limit)
                 .transpose()?,
             weight: self.weight.map(parse_account_weight).transpose()?,
+            model_access: self.model_access,
             group_ids: self
                 .group_ids
                 .map(|group_ids| validate_wire_group_ids(&group_ids))
@@ -336,6 +339,7 @@ pub struct AccountView {
     pub concurrency_limit: Option<u32>,
     pub effective_concurrency_limit: u32,
     pub weight: u16,
+    pub model_access: gateway_core::account::AccountModelAccess,
     pub access_token_expires_at: Option<String>,
     pub access_token_expires_at_display: Option<String>,
     pub refresh_token_expires_at: Option<String>,

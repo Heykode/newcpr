@@ -163,6 +163,7 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
             .batch_update(
                 context,
                 BatchUpdateAccounts {
+                    model_access: settings.model_access,
                     custom_name: None,
                     account_ids,
                     enabled: Some(settings.enabled),

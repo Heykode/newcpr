@@ -1,11 +1,12 @@
 import type { Ref } from 'vue'
-import type { getAccounts } from '@/api'
+import type { AccountModelAccess, getAccounts } from '@/api'
 
 import { computed, ref, shallowRef, watch } from 'vue'
 import { updateAccount } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
+import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -23,6 +24,8 @@ export function useAccountEditor(options: {
   const turnStateInjectionEnabled = shallowRef(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
+  const modelAccess = ref<AccountModelAccess | undefined>()
+  let initialModelAccess = ''
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
@@ -45,6 +48,10 @@ export function useAccountEditor(options: {
     turnStateInjectionEnabled.value = account.turnStateInjectionEnabled
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
+    modelAccess.value = account.modelAccess
+      ? { ...account.modelAccess, models: [...account.modelAccess.models] }
+      : { mode: 'all', models: [] }
+    initialModelAccess = JSON.stringify(modelAccess.value)
     selectedGroupIds.value = account.groups.map(group => group.id)
     showEditModal.value = true
   }
@@ -53,6 +60,11 @@ export function useAccountEditor(options: {
     const accountId = editingAccountId.value
     if (!accountId || saving.value)
       return
+    const modelError = accountModelAccessError(modelAccess.value)
+    if (modelError) {
+      toast.warning(modelError)
+      return
+    }
     const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
     if (proxyMode.value === 'proxy' && !proxyId.value.trim()) {
       toast.warning('请选择已通过测试的代理')
@@ -75,6 +87,8 @@ export function useAccountEditor(options: {
       const name = normalizeAccountName(customName.value)
       if (name !== normalizeAccountName(initialCustomName))
         payload.customName = name
+      if (modelAccess.value && JSON.stringify(modelAccess.value) !== initialModelAccess)
+        payload.modelAccess = { ...modelAccess.value, models: [...modelAccess.value.models] }
       if (editingAccount.value?.provider === 'openai')
         payload.turnStateInjectionEnabled = turnStateInjectionEnabled.value
       await updateAccount(payload)
@@ -96,6 +110,8 @@ export function useAccountEditor(options: {
     turnStateInjectionEnabled.value = false
     concurrencyLimit.value = ''
     weight.value = '1'
+    modelAccess.value = undefined
+    initialModelAccess = ''
     selectedGroupIds.value = []
   })
 
@@ -107,6 +123,7 @@ export function useAccountEditor(options: {
     turnStateInjectionEnabled,
     concurrencyLimit,
     weight,
+    modelAccess,
     proxyMode,
     proxyId,
     selectedGroupIds,

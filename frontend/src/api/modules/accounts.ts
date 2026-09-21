@@ -120,6 +120,11 @@ export interface AccountUsage {
   models: AccountModelUsage[]
 }
 
+export interface AccountModelAccess {
+  mode: 'all' | 'allowlist' | 'denylist'
+  models: string[]
+}
+
 export interface AccountHealthBucket {
   key: string
   startAt: string
@@ -176,6 +181,7 @@ export interface Account {
   concurrencyLimit: number | null
   effectiveConcurrencyLimit: number
   weight: number
+  modelAccess?: AccountModelAccess
   accessTokenExpiresAt: string | null
   accessTokenExpiresAtDisplay: string | null
   refreshTokenExpiresAt: string | null
@@ -422,6 +428,7 @@ interface AccountUpdateParam {
   turnStateInjectionEnabled?: boolean
   concurrencyLimit: number | null
   weight: number
+  modelAccess?: AccountModelAccess
   groupIds: string[]
 }
 
@@ -434,6 +441,7 @@ interface AccountBatchUpdateParam {
   turnStateInjectionEnabled?: boolean
   concurrencyLimit?: number | null
   weight?: number
+  modelAccess?: AccountModelAccess
   groupIds?: string[]
 }
 
@@ -448,6 +456,7 @@ interface AccountImportSettings {
   turnStateInjectionEnabled?: boolean
   concurrencyLimit: number | null
   weight: number
+  modelAccess?: AccountModelAccess
   groupIds: string[]
 }
 

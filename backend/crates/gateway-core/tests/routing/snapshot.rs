@@ -168,6 +168,44 @@ fn compiler_should_reject_revision_changed_during_consistent_read() {
 }
 
 #[test]
+fn compiler_keeps_model_policy_when_applying_group_membership() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+    let group =
+        gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
+    let account = ProviderAccountId::new("acct_model_group").unwrap();
+    let facts = SnapshotFacts::new(
+        revision(1),
+        revision(1),
+        SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None),
+        Vec::new(),
+        vec![SnapshotAccountGroupFacts::new(
+            group.clone(),
+            "Model group".into(),
+            true,
+        )],
+        vec![
+            SnapshotProviderAccountFacts::new(account.clone(), "alpha").with_model_access(
+                AccountModelAccess::new(AccountModelAccessMode::Allowlist, vec!["model-a".into()])
+                    .unwrap(),
+            ),
+        ],
+        vec![SnapshotAccountGroupMemberFacts::new(group, account.clone())],
+    );
+    let snapshot = block_on(
+        RuntimeSnapshotCompiler::new(
+            Arc::new(TestSnapshotStore::new(Ok(facts))),
+            Arc::new(TestCatalog::Unavailable),
+        )
+        .compile(),
+    )
+    .unwrap();
+    let scope = snapshot.all_account_scope();
+    assert!(scope.allows(&account));
+    assert!(scope.allows_model(&account, "model-a"));
+    assert!(!scope.allows_model(&account, "model-b"));
+}
+
+#[test]
 fn request_location_is_frozen_in_snapshot_and_routing_plan() {
     use gateway_core::account::RequestLocation;
 

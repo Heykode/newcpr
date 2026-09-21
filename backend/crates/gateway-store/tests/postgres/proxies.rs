@@ -38,6 +38,7 @@ fn success() -> ProxyTestResult {
 
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
+        model_access: Default::default(),
         custom_name: None,
         account_id: account_id.to_owned(),
         enabled: true,
@@ -244,6 +245,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         .await
         .unwrap();
     let mut command = BatchUpdateAccounts {
+        model_access: Default::default(),
         custom_name: None,
         account_ids: vec!["acct_partial_one".to_owned(), "acct_partial_two".to_owned()],
         enabled: None,
@@ -984,6 +986,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    model_access: Default::default(),
                     custom_name: None,
                     account_ids: vec!["acct_one".to_owned(), "acct_missing".to_owned()],
                     enabled: Some(false),

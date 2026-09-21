@@ -30,6 +30,7 @@ pub struct AccountImportSettingsRequest {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<String>,
 }
 
@@ -51,6 +52,7 @@ impl AccountImportSettingsRequest {
             turn_state_injection_enabled: self.turn_state_injection_enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
+            model_access: self.model_access,
             group_ids: validate_wire_group_ids(&self.group_ids)?,
         })
     }
@@ -234,6 +236,7 @@ pub struct UpdateAccountRequest {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<String>,
 }
 
@@ -265,6 +268,7 @@ impl UpdateAccountRequest {
             turn_state_injection_enabled: self.turn_state_injection_enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
+            model_access: self.model_access,
             group_ids: validate_wire_group_ids(&self.group_ids)?,
         })
     }

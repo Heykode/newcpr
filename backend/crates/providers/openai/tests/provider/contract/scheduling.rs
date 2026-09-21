@@ -114,6 +114,51 @@ async fn managed_state_gates_both_selectors_by_account_model_and_restores_when_d
             .put_candidate(candidate(model.clone(), SystemTime::now()))
             .await
             .unwrap();
+        let denied_scope = Arc::new(FrozenAccountScope::new(
+            Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+                account.id().clone(),
+                RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new())
+                    .with_model_access(
+                        gateway_core::account::AccountModelAccess::new(
+                            gateway_core::account::AccountModelAccessMode::Denylist,
+                            vec![model.as_str().to_owned()],
+                        )
+                        .unwrap(),
+                    ),
+            )]))),
+            ClientRoutingScope::all_accounts(),
+        ));
+        for websocket in [false, true] {
+            let denied = context_with_account_scope(
+                "req_managed_denied",
+                CancellationToken::new(),
+                denied_scope.clone(),
+            )
+            .with_request_tuning(gateway_core::routing::RequestTuning {
+                account_busy_wait_enabled: wait,
+                ..Default::default()
+            });
+            let mut transport = Map::from_iter([("use_websocket".to_owned(), json!(websocket))]);
+            if websocket {
+                transport.insert(
+                    "downstream_websocket_connection_id".to_owned(),
+                    json!("ws_model_denied"),
+                );
+            }
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                generation(None, "hello")
+                    .protocol_payload()
+                    .clone()
+                    .with_context(transport),
+            ));
+            let error = provider
+                .execute(planned_request("openai", operation), denied)
+                .await
+                .err()
+                .expect("valid State cannot bypass a manual model restriction");
+            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            assert!(server.received_requests().await.unwrap().is_empty());
+        }
         let mut stream = provider
             .execute(
                 planned_request("openai", http_generate_operation()),

@@ -311,6 +311,53 @@ mod batch_update {
     use serde_json::json;
 
     #[test]
+    fn model_access_only_patch_validates_without_changing_other_settings() {
+        for policy in [
+            json!({"mode":"all","models":[]}),
+            json!({"mode":"allowlist","models":["model-a"]}),
+            json!({"mode":"denylist","models":["model-b"]}),
+        ] {
+            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+                "accountIds":["acct_test"], "modelAccess":policy
+            }))
+            .unwrap();
+            request.validate().unwrap();
+            assert_eq!(
+                serde_json::to_value(request.model_access.unwrap()).unwrap(),
+                policy
+            );
+            assert!(request.enabled.is_none());
+            assert!(request.turn_state_injection_enabled.is_none());
+            assert!(request.concurrency_limit.is_none());
+            assert!(request.weight.is_none());
+            assert!(request.group_ids.is_none());
+            assert!(request.outbound_proxy_id.is_none());
+        }
+        for policy in [
+            json!({"mode":"allowlist","models":[]}),
+            json!({"mode":"denylist","models":["model-*"]}),
+            json!({"mode":"all","models":["model-a"]}),
+            json!({"mode":"all","models":[],"extra":true}),
+        ] {
+            assert!(
+                serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                    "accountIds":["acct_test"], "modelAccess":policy
+                }))
+                .is_err()
+            );
+        }
+        let null: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds":["acct_test"], "modelAccess":null, "weight":2
+        }))
+        .unwrap();
+        assert!(
+            null.model_access.is_none(),
+            "null preserves, all explicitly clears"
+        );
+        null.validate().unwrap();
+    }
+
+    #[test]
     fn custom_name_updates_distinguish_omission_and_explicit_clear() {
         let omitted: BatchUpdateAccountsRequest = serde_json::from_value(json!({
             "accountIds": ["acct_test"], "weight": 1
@@ -1429,6 +1476,7 @@ mod response {
             turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                model_access: Default::default(),
                 custom_name: None,
                 id: "acct_cost".to_owned(),
                 provider_kind: ProviderKind::new("openai").expect("provider"),

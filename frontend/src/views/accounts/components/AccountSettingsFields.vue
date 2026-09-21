@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { AccountGroup } from '@/api'
+import type { AccountGroup, AccountModelAccess } from '@/api'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountProxyField from './AccountProxyField.vue'
 
 withDefaults(defineProps<{
@@ -18,7 +19,9 @@ withDefaults(defineProps<{
   proxyError?: string
   turnStateAvailable?: boolean
   nameAvailable?: boolean
-}>(), { preserveProxy: true, batch: false, turnStateAvailable: false, nameAvailable: false })
+  modelAccessAvailable?: boolean
+  preserveModelAccess?: boolean
+}>(), { preserveProxy: true, batch: false, turnStateAvailable: false, nameAvailable: false, modelAccessAvailable: false, preserveModelAccess: false })
 
 const customName = defineModel<string>('customName', { default: '' })
 const updateCustomName = defineModel<boolean>('updateCustomName', { default: false })
@@ -26,6 +29,8 @@ const enabled = defineModel<boolean>('enabled', { required: true })
 const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
+const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess')
+const updateModelAccess = defineModel<boolean>('updateModelAccess', { default: false })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
@@ -134,6 +139,18 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         />
       </BaseFormItem>
     </div>
+
+    <AccountModelAccessField
+      v-if="modelAccessAvailable"
+      v-model="modelAccess"
+      :account-id="accountId"
+      :disabled="disabled || (batch && !updateModelAccess)"
+      :allow-preserve="preserveModelAccess"
+    >
+      <template v-if="batch" #extra>
+        <BaseCheckbox v-model="updateModelAccess" label="应用模型限制更改" title="应用模型限制更改" :disabled="disabled" />
+      </template>
+    </AccountModelAccessField>
 
     <BaseFormItem label="所属分组">
       <template v-if="batch" #extra>

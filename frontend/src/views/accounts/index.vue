@@ -242,6 +242,9 @@ const {
   turnStateInjectionEnabled: batchTurnStateInjectionEnabled,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
+  modelAccess: batchModelAccess,
+  updateModelAccess: batchUpdateModelAccess,
+  catalogAccountId: batchCatalogAccountId,
   proxyMode: batchProxyMode,
   proxyId: batchProxyId,
   selectedGroupIds: batchGroupIds,
@@ -270,6 +273,7 @@ const {
   turnStateInjectionEnabled,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
+  modelAccess: editingModelAccess,
   proxyMode: editingProxyMode,
   proxyId: editingProxyId,
   selectedGroupIds: editingGroupIds,
@@ -634,6 +638,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
+      v-model:model-access="editingModelAccess"
       v-model:proxy-mode="editingProxyMode"
       v-model:proxy-id="editingProxyId"
       v-model:selected-group-ids="editingGroupIds"
@@ -652,6 +657,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:turn-state-injection-enabled="batchTurnStateInjectionEnabled"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
+      v-model:model-access="batchModelAccess"
+      v-model:update-model-access="batchUpdateModelAccess"
       v-model:proxy-mode="batchProxyMode"
       v-model:proxy-id="batchProxyId"
       v-model:selected-group-ids="batchGroupIds"
@@ -661,6 +668,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-weight="batchUpdateWeight"
       v-model:update-groups="batchUpdateGroups"
       v-model:update-proxy="batchUpdateProxy"
+      :catalog-account-id="batchCatalogAccountId"
       :has-updates="batchHasUpdates"
       :turn-state-available="batchTurnStateAvailable"
       :selected-count="selectedIds.size"

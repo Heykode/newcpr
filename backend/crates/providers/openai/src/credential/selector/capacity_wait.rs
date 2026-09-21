@@ -565,17 +565,13 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
     ) -> Result<Vec<AccountCandidate>, CredentialSelectionError> {
         let mut candidates = Vec::new();
+        let accounts = accounts
+            .into_iter()
+            .filter(|account| self.account_in_scope(account, request))
+            .collect();
         let accounts = self.state_ready_accounts(accounts, request).await;
         self.quota.prepare_scheduling(&accounts).await;
         for account in accounts {
-            if account.provider() != &self.provider_kind
-                || !request
-                    .attempt
-                    .account_scope()
-                    .is_some_and(|scope| scope.allows(account.id()))
-            {
-                continue;
-            }
             let cooldown = self
                 .quota
                 .rate_limited_until(account.id())

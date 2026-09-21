@@ -176,10 +176,14 @@ async fn all_credential_renewal_paths_retain_slots_and_clocks_but_fence_old_writ
         .await
         .unwrap();
     let id = ProviderAccountId::new("acct_renewal").unwrap();
-    accounts
-        .insert_provider_account(seed(id.as_str(), "synthetic-initial"))
-        .await
-        .unwrap();
+    let policy = gateway_core::account::AccountModelAccess::new(
+        gateway_core::account::AccountModelAccessMode::Denylist,
+        vec!["model-b".into()],
+    )
+    .unwrap();
+    let mut initial = seed(id.as_str(), "synthetic-initial");
+    initial.model_access = Some(policy.clone());
+    accounts.insert_provider_account(initial).await.unwrap();
     enable(&database).await;
     let states = PgProviderTurnStateRepository::new(database.pool.clone());
     let model = UpstreamModelId::new("model-a").unwrap();
@@ -224,6 +228,11 @@ async fn all_credential_renewal_paths_retain_slots_and_clocks_but_fence_old_writ
         let old = accounts.get_account(&id).await.unwrap().unwrap();
         renew(&accounts, &id, path).await;
         let current = accounts.get_account(&id).await.unwrap().unwrap();
+        assert_eq!(
+            current.model_access(),
+            &policy,
+            "renewal path {path} preserves policy"
+        );
         assert!(current.turn_state_binding_revision() > old.turn_state_binding_revision());
         assert!(
             accounts

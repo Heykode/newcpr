@@ -1630,5 +1630,69 @@
     "file_sha256": "eba2538b3dd5d59913435350c8b6c041f522599612402d11257b47664985a5f2",
     "line_sha256": "1f4e54601e99cfed60e0375d1c5bc9324fa74ea5b88ebe97e8805f00df10bbf2",
     "reason": "Manually re-reviewed unchanged static preview-10 fixture and prior line digest; adding a null accountCustomName default only shifts the line. No network request is made."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1987,
+    "file_sha256": "a9b290a9035c07c0fb863baed212f2c5bc6837dec265a8506b932b11bfc96b70",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Re-reviewed byte-identical synthetic loopback fixture against HEAD and its approved line digest. Model policy fields and import assertions shift surrounding code only."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 2016,
+    "file_sha256": "a9b290a9035c07c0fb863baed212f2c5bc6837dec265a8506b932b11bfc96b70",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Re-reviewed the unchanged normalized loopback assertion against its prior digest. Model policy adaptation changes no proxy credentials or redaction assertions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 236,
+    "file_sha256": "6fd3069eaa73069f6f955a73b188e3df9b6f6ae69e7da8136abe5cb715a9c737",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Re-reviewed unchanged synthetic loopback batch proxy fixture; this file only supplies omitted model policy fields in existing constructors."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 343,
+    "file_sha256": "6fd3069eaa73069f6f955a73b188e3df9b6f6ae69e7da8136abe5cb715a9c737",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Re-reviewed unchanged synthetic account-removal loopback fixture; line content matches HEAD and the previous approval."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 810,
+    "file_sha256": "6fd3069eaa73069f6f955a73b188e3df9b6f6ae69e7da8136abe5cb715a9c737",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Re-reviewed unchanged managed-proxy loopback fixture; model policy constructor additions only shift its position."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 967,
+    "file_sha256": "6fd3069eaa73069f6f955a73b188e3df9b6f6ae69e7da8136abe5cb715a9c737",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Re-reviewed unchanged legacy synthetic loopback proxy fixture against its previously approved line digest."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1039,
+    "file_sha256": "6fd3069eaa73069f6f955a73b188e3df9b6f6ae69e7da8136abe5cb715a9c737",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Re-reviewed unchanged synthetic loopback migration assertion. Only optional model policy fields were added to unrelated test constructors."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 315,
+    "file_sha256": "599c16ccdfdcaa04e5b5e774be30acd6ccb08c4839714be551c145951c8ed1d6",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Re-reviewed byte-identical synthetic catalog proxy fixture; its address comes from a loopback listener. A model policy field in fixture reconstruction shifts the line by one."
   }
 ]

@@ -12,6 +12,7 @@ import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { useCopyText } from '@/composables/useCopyText'
 import { normalizeAccountName } from '@/utils/account-name'
+import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 import AccountIdentityCell from '../AccountIdentityCell.vue'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
@@ -43,6 +44,7 @@ const accountCopyValue = computed(() =>
 const busy = computed(() => props.saving || props.oauthLoading)
 const proxyError = computed(() => accountProxyError(form.value))
 const scheduling = computed(() => parseAccountSchedulingForm(form.value.concurrencyLimit, form.value.weight))
+const modelError = computed(() => accountModelAccessError(form.value.modelAccess))
 const nameError = computed(() => {
   try {
     normalizeAccountName(form.value.customName)
@@ -75,7 +77,7 @@ const importText = computed({
 })
 
 function continueToImport() {
-  if (form.value.provider && scheduling.value.valid && !nameError.value && !props.groupsLoading && !proxyError.value && !busy.value)
+  if (form.value.provider && scheduling.value.valid && !modelError.value && !nameError.value && !props.groupsLoading && !proxyError.value && !busy.value)
     form.value.step = 'import'
 }
 </script>
@@ -182,7 +184,7 @@ function continueToImport() {
       <BaseButton v-else class="mr-auto" variant="secondary" :disabled="busy" @click="form.step = 'settings'">
         上一步
       </BaseButton>
-      <BaseButton v-if="view.configuring" variant="primary" :disabled="!form.provider || !scheduling.valid || Boolean(nameError) || groupsLoading || Boolean(proxyError) || busy" @click="continueToImport">
+      <BaseButton v-if="view.configuring" variant="primary" :disabled="!form.provider || !scheduling.valid || Boolean(modelError) || Boolean(nameError) || groupsLoading || Boolean(proxyError) || busy" @click="continueToImport">
         继续导入
       </BaseButton>
       <BaseButton v-else variant="primary" :loading="saving || oauthLoading" :disabled="!view.canSubmit" @click="emit('create')">
