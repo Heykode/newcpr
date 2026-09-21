@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
@@ -6,7 +7,17 @@ import { createServer } from 'vite'
 async function main() {
   const server = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
-    server: { host: '127.0.0.1', port: 5198, strictPort: true },
+    server: {
+      host: '127.0.0.1',
+      port: 5198,
+      strictPort: true,
+      fs: {
+        allow: [
+          fileURLToPath(new URL('..', import.meta.url)),
+          realpathSync(new URL('../node_modules', import.meta.url)),
+        ],
+      },
+    },
     plugins: [{
       name: 'isolated-import-tasks-preview',
       configResolved(config) {

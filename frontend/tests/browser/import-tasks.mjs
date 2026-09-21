@@ -22,6 +22,7 @@ async function main() {
     serviceWorkers: 'block',
   })
   const errors = []
+  const assetFailures = []
   const unexpected = []
   const submissions = []
   const stops = []
@@ -31,6 +32,11 @@ async function main() {
   let accountReads = 0
   const emptyPage = { items: [], page: { page: 1, pageSize: 20, total: 0, totalPages: 1 }, configRevision: 1 }
   page.on('pageerror', error => errors.push(error.message))
+  page.on('response', (response) => {
+    const path = new URL(response.url()).pathname
+    if (response.status() >= 400 && !/^\/(?:dev\/)?api\//.test(path))
+      assetFailures.push(`${response.status()} ${path}`)
+  })
 
   function summarize(job) {
     const counts = { pending: 0, running: 0, succeeded: 0, failed: 0, unknown: 0, skipped: 0, importedAccounts: 0 }
@@ -134,8 +140,7 @@ async function main() {
   }
 
   async function screenshots(label, dialogName = '导入任务') {
-    for (const button of await page.getByRole('button', { name: /^关闭.*通知$/ }).all())
-      await button.click()
+    await page.getByRole('button', { name: /^关闭.*通知$/ }).first().waitFor({ state: 'hidden' })
     for (const theme of ['light', 'dark']) {
       await page.emulateMedia({ colorScheme: theme })
       await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, theme)
@@ -254,21 +259,25 @@ async function main() {
     const second = [...jobs.values()][1]
     second.items[0].status = 'succeeded'
     second.items[0].accountIds = ['acct_saved_example', 'acct_saved_example']
+    const savedEmail = `${'long-imported-account-'.repeat(3)}+workspace@example.com`
+    second.items[0].accountEmails = { acct_saved_example: savedEmail }
     second.items[1].status = 'failed'
     second.items[1].message = 'Synthetic rejected credential'
     second.items[2].status = 'unknown'
     second.items[2].message = 'Synthetic indeterminate import'
     second.finishedAt = new Date().toISOString()
     await page.getByRole('heading', { name: '已结束 · 有待处理项', exact: true }).waitFor()
-    await page.getByText('账号 ID（2）', { exact: true }).click()
-    assert.equal(await page.getByText('acct_saved_example', { exact: true }).count(), 2)
+    await page.getByText('已导入账号（2）', { exact: true }).click()
+    assert.equal(await page.getByText(savedEmail, { exact: true }).count(), 2)
+    assert.equal(await page.getByText('acct_saved_example', { exact: true }).count(), 0)
     await page.getByText('Synthetic rejected credential', { exact: true }).waitFor()
     await page.getByRole('region', { name: '导入任务详情' }).locator('p').filter({ hasText: /结束/ }).waitFor()
     await page.getByRole('radio', { name: '需处理', exact: true }).click()
-    await page.getByText('账号 ID（2）', { exact: true }).waitFor({ state: 'hidden' })
+    await page.getByText('已导入账号（2）', { exact: true }).waitFor({ state: 'hidden' })
     await page.getByText('Synthetic rejected credential', { exact: true }).waitFor()
     await page.getByRole('radio', { name: '全部', exact: true }).click()
-    await page.getByText('账号 ID（2）', { exact: true }).click()
+    await page.getByText('已导入账号（2）', { exact: true }).click()
+    assert.equal(await page.getByText(savedEmail, { exact: true }).count(), 2)
     await screenshots('multiple-batches')
 
     await page.reload()
@@ -285,6 +294,7 @@ async function main() {
     await page.getByText(/完成后保留 1 小时/).waitFor()
     assert.equal(submissions.length, 3, 'lost history must not replay credentials')
     assert.deepEqual(errors, [])
+    assert.deepEqual(assetFailures, [])
     assert.deepEqual(unexpected, [])
     process.stdout.write(`Passed synthetic import lifecycle; screenshots: ${output}\n`)
   }

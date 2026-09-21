@@ -1,5 +1,7 @@
 //! Process-local import inputs and credential-free progress snapshots.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use gateway_core::{account::ProviderAccountId, routing::ProviderKind};
 use uuid::Uuid;
@@ -51,6 +53,7 @@ pub struct ImportTaskItem {
     pub provider: ProviderKind,
     pub status: ImportItemStatus,
     pub account_ids: Vec<ProviderAccountId>,
+    pub account_emails: BTreeMap<ProviderAccountId, Option<String>>,
     pub message: Option<String>,
 }
 

@@ -21,6 +21,7 @@ mod execution;
 mod execution_buffer;
 mod group_monitor_snapshots;
 mod health;
+mod import_email_snapshots;
 mod observability;
 mod ops_events;
 mod outbound_user_agent;

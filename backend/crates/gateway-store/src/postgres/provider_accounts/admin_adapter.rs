@@ -274,6 +274,11 @@ impl PgAdminAccountStore {
         require_new: bool,
     ) -> AdminStoreResult<CredentialImportResult> {
         let provider_kind = prepared.provider_kind.as_str().to_owned();
+        let emails = prepared
+            .credentials
+            .iter()
+            .map(|credential| credential.email.clone())
+            .collect::<Vec<_>>();
         let accounts = prepared
             .credentials
             .into_iter()
@@ -313,20 +318,24 @@ impl PgAdminAccountStore {
             )
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
+        let credential_ids = imported
+            .account_ids
+            .into_iter()
+            .map(CoreProviderAccountId::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                AdminStoreError::new(
+                    AdminStoreErrorKind::Unavailable,
+                    ENTITY,
+                    "provider account import returned an invalid account ID",
+                )
+            })?;
+        // Upserts return IDs in input order, including reused IDs and duplicates.
+        let credential_emails = credential_ids.iter().cloned().zip(emails).collect();
         Ok(CredentialImportResult {
             config_revision: admin_revision(imported.config_revision)?,
-            credential_ids: imported
-                .account_ids
-                .into_iter()
-                .map(CoreProviderAccountId::new)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| {
-                    AdminStoreError::new(
-                        AdminStoreErrorKind::Unavailable,
-                        ENTITY,
-                        "provider account import returned an invalid account ID",
-                    )
-                })?,
+            credential_ids,
+            credential_emails,
         })
     }
 
@@ -926,6 +935,7 @@ impl AccountStore for PgAdminAccountStore {
                 let CredentialImportResult {
                     config_revision,
                     credential_ids,
+                    ..
                 } = self
                     .commit_prepared_import(
                         PreparedCredentialImport {

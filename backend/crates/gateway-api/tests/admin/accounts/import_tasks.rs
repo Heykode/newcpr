@@ -105,7 +105,7 @@ async fn accepts_lists_restores_stops_and_deduplicates_without_echoing_credentia
     assert_eq!(detail["data"]["taskId"], id);
     assert_eq!(
         detail["data"]["items"][0],
-        json!({"index": 1, "provider": "openai", "status": "pending", "accountIds": [], "message": null})
+        json!({"index": 1, "provider": "openai", "status": "pending", "accountIds": [], "accountEmails": {}, "message": null})
     );
     let (status, stopped) = send(
         &fixture,

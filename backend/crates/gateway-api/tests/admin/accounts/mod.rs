@@ -1846,6 +1846,7 @@ mod actions {
         let response = AccountImportData::from_result(CredentialImportResult {
             config_revision: Revision::new(8).expect("revision"),
             credential_ids: vec![ProviderAccountId::new("acct_imported").expect("account ID")],
+            credential_emails: Default::default(),
         });
         assert_eq!(
             serde_json::to_value(response).expect("serialize account import"),
