@@ -20,7 +20,7 @@ export interface ReloginEntry {
   automatic: boolean
   status: ReloginStatus
   message: string
-  recovery?: { state: string, message: string, retryAt: string | null }
+  recovery?: { state: string, message: string, retryAt: string | null, retriesUsed?: number, maxRetries?: number }
   planType: string | null
   workspaceId: string | null
   preferredWorkspaceId: string | null
@@ -36,7 +36,8 @@ export interface ReloginEntry {
   importedAt?: string | null
   updatedAt: string
 }
-export interface ReloginSettings { concurrency: number, paused: boolean }
+export interface ReloginSettings { concurrency: number, paused: boolean, maxRetries: number, retryIntervalMinutes: number }
+export type ReloginSettingsUpdate = Pick<ReloginSettings, 'concurrency' | 'paused'> & Partial<Pick<ReloginSettings, 'maxRetries' | 'retryIntervalMinutes'>>
 export interface ReloginList { settings: ReloginSettings, items: ReloginEntry[] }
 export interface ReloginBatchResult { id: string, success: boolean, message: string }
 
@@ -87,6 +88,6 @@ export function setReloginAutomatic(ids: string[], enabled: boolean) {
 export function setReloginWorkspace(id: string, workspaceId: string | null) {
   return request<void>({ url: '/api/admin/relogin/workspace', method: 'POST', data: { id, workspaceId } })
 }
-export function configureRelogin(data: ReloginSettings) {
+export function configureRelogin(data: ReloginSettingsUpdate) {
   return request<void>({ url: '/api/admin/relogin/settings', method: 'POST', data })
 }

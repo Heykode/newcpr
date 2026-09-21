@@ -143,7 +143,10 @@ impl DefaultReloginService {
                 {
                     entry.status = ReloginStatus::Failed;
                     entry.message = "上次重登已中断，未确认推送结果".to_owned();
-                    entry.next_attempt_at = Some(Utc::now() + chrono::Duration::minutes(5));
+                    entry.next_attempt_at = Some(
+                        Utc::now()
+                            + chrono::Duration::minutes(i64::from(settings.retry_interval_minutes)),
+                    );
                     self.save(entry).await?;
                 }
             }
@@ -234,6 +237,7 @@ impl DefaultReloginService {
                     entry.automatic_started_at.push(now);
                 }
                 entry.attempted_target = entry.target.clone();
+                entry.stop_reason = None;
                 entry.synced_at = None;
                 entry.credential = None;
                 entry.status = ReloginStatus::Running;
@@ -266,12 +270,15 @@ impl DefaultReloginService {
     ) -> Result<(), AdminError> {
         let outcome = tokio::select! {
             biased;
-            () = shutdown.cancelled() => Err(AdminError::conflict("服务正在停止，任务已取消")),
-            () = cancellation.cancelled() => Err(AdminError::conflict("重登任务已取消")),
+            () = shutdown.cancelled() => Err((AdminError::conflict("服务正在停止，任务已取消"), None)),
+            () = cancellation.cancelled() => Err((AdminError::conflict("重登任务已取消"), None)),
             outcome = tokio::time::timeout(Duration::from_secs(300), self.provider.relogin(request)) => {
                 match outcome {
-                    Ok(outcome) => outcome.map_err(|error| map_provider_error(error, "relogin")),
-                    Err(_) => Err(AdminError::unavailable("重登超时，请检查网络和代理")),
+                    Ok(outcome) => outcome.map_err(|error| {
+                        let reason = error.relogin_stop_reason();
+                        (map_provider_error(error, "relogin"), reason)
+                    }),
+                    Err(_) => Err((AdminError::unavailable("重登超时，请检查网络和代理"), None)),
                 }
             }
         };
@@ -288,6 +295,13 @@ impl DefaultReloginService {
         if current.revision != entry.revision || cancellation.is_cancelled() {
             return Ok(());
         }
+        let retry_interval = chrono::Duration::minutes(i64::from(
+            self.store()?
+                .settings()
+                .await
+                .map_err(store_error)?
+                .retry_interval_minutes,
+        ));
         match outcome {
             Ok(credential) => {
                 if !credential.email.eq_ignore_ascii_case(&current.email)
@@ -310,16 +324,16 @@ impl DefaultReloginService {
                     current.message = "已获取新 JSON，凭证验证通过".to_owned();
                 }
             }
-            Err(error) => {
+            Err((error, reason)) => {
                 current.status = ReloginStatus::Failed;
                 current.message = error.message().to_owned();
+                current.stop_reason = reason;
             }
         }
-        current.next_attempt_at = if current.status == ReloginStatus::Failed {
-            Some(
-                Utc::now()
-                    + chrono::Duration::minutes(5 * i64::from(current.automatic_attempts.max(1))),
-            )
+        current.next_attempt_at = if current.status == ReloginStatus::Failed
+            && current.automatic_stop_reason().is_none()
+        {
+            Some(Utc::now() + retry_interval)
         } else {
             None
         };
@@ -338,12 +352,7 @@ impl DefaultReloginService {
                     request_id: format!("relogin_{}", uuid::Uuid::now_v7()),
                 });
             if let Err(error) = self.push_entry(&mut current, &context).await {
-                current.next_attempt_at = Some(
-                    Utc::now()
-                        + chrono::Duration::minutes(
-                            5 * i64::from(current.automatic_attempts.max(1)),
-                        ),
-                );
+                current.next_attempt_at = Some(Utc::now() + retry_interval);
                 if current.status == ReloginStatus::Ready && current.manual_push_context.is_some() {
                     current.status = ReloginStatus::Failed;
                 }

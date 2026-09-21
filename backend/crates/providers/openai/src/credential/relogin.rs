@@ -5,7 +5,7 @@ use gateway_admin::model::provider_credentials::ProviderDocument;
 use gateway_admin::{
     model::{
         provider_credentials::PrepareCredentialImport,
-        relogin::{ReloginCredential, ReloginRequest},
+        relogin::{ReloginCredential, ReloginRequest, ReloginStopReason},
     },
     ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
 };
@@ -81,12 +81,21 @@ pub(crate) async fn login(
         .await
         .map_err(|_| error("重登超时，请检查网络或代理"))??;
     if payload.get("ok").and_then(Value::as_bool) != Some(true) {
+        let stop_reason = match payload.get("code").and_then(Value::as_str) {
+            Some("account_banned") => Some(ReloginStopReason::AccountBanned),
+            Some("workspace_missing" | "workspace_unavailable") => {
+                Some(ReloginStopReason::WorkspaceUnavailable)
+            }
+            _ => None,
+        };
+        if let Some(reason) = stop_reason {
+            return Err(error(reason.message()).with_relogin_stop_reason(reason));
+        }
         return Err(error(match payload.get("code").and_then(Value::as_str) {
             Some("runtime_missing") => "重登运行环境缺少 curl_cffi 或 pyotp",
             Some("password_rejected") => "账号密码被拒绝，请检查资料或账号状态",
             Some("mfa_rejected" | "mfa_factor_missing") => "2FA 验证失败，请检查密钥和服务器时间",
             Some("invalid_material") => "请重新导入邮箱、密码和有效的 2FA 密钥",
-            Some("workspace_missing") => "指定工作区不可访问，未回退到个人空间",
             Some("workspace_plan_unknown" | "workspace_unknown") => {
                 "无法确认工作区套餐，请指定工作区 ID"
             }

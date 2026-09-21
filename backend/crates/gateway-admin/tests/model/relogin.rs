@@ -63,11 +63,33 @@ fn relogin_parser_rejects_all_mailbox_formats() {
 fn relogin_settings_and_batch_limits_are_bounded() {
     assert_eq!(ReloginSettings::default().concurrency, 1);
     assert!(!ReloginSettings::default().paused);
+    assert_eq!(ReloginSettings::default().max_retries, 2);
+    assert_eq!(ReloginSettings::default().retry_interval_minutes, 5);
+    for (max_retries, retry_interval_minutes, valid) in [
+        (0, 1, true),
+        (10, 1440, true),
+        (11, 5, false),
+        (2, 0, false),
+        (2, 1441, false),
+        (u32::MAX, u32::MAX, false),
+    ] {
+        assert_eq!(
+            ReloginSettings {
+                max_retries,
+                retry_interval_minutes,
+                ..ReloginSettings::default()
+            }
+            .validate()
+            .is_ok(),
+            valid
+        );
+    }
     for concurrency in [0, 9, usize::MAX] {
         assert!(
             ReloginSettings {
                 concurrency,
-                paused: false
+                paused: false,
+                ..ReloginSettings::default()
             }
             .validate()
             .is_err()

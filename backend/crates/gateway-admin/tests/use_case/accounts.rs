@@ -89,6 +89,7 @@ pub(super) struct FakeProviderAdmin {
     subscription_result: Mutex<Result<Option<ProviderSubscription>, ProviderAdminErrorKind>>,
     personal_info_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
     pub(super) relogin_result: Mutex<Option<gateway_admin::model::relogin::ReloginCredential>>,
+    pub(super) relogin_error: Mutex<Option<ProviderAdminError>>,
     pub(super) relogin_delay: Mutex<std::time::Duration>,
     pub(super) relogin_requests: Mutex<Vec<Option<String>>>,
     pub(super) relogin_active: std::sync::atomic::AtomicUsize,
@@ -118,6 +119,7 @@ impl FakeProviderAdmin {
             subscription_result: Mutex::new(Ok(None)),
             personal_info_barrier: Mutex::new(None),
             relogin_result: Mutex::new(None),
+            relogin_error: Mutex::new(None),
             relogin_delay: Mutex::new(std::time::Duration::ZERO),
             relogin_requests: Mutex::new(Vec::new()),
             relogin_active: std::sync::atomic::AtomicUsize::new(0),
@@ -273,6 +275,9 @@ impl ProviderAdmin for FakeProviderAdmin {
         let _active = Active(&self.relogin_active);
         let delay = *self.relogin_delay.lock().unwrap();
         tokio::time::sleep(delay).await;
+        if let Some(error) = self.relogin_error.lock().unwrap().clone() {
+            return Err(error);
+        }
         let mut credential = self
             .relogin_result
             .lock()

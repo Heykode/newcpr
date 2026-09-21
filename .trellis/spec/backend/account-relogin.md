@@ -23,7 +23,7 @@
   snapshots need no guessed generation or migration. Never compare only the emails
   or allow a target revision from the future.
 - Use the same target check for account-menu confirmation, queued execution and
-  automatic attempt budgeting. Cookie writes must not reset the three-attempt limit.
+  automatic attempt budgeting. Cookie writes must not reset the configured attempt limit.
   After Provider preparation, reread the target and match the exact prepared revision
   before the Store CAS; a Provider may have reloaded newer material during preparation.
   Existing-account pushes may prepare/commit at most three times when proven-safe
@@ -62,15 +62,39 @@
   hold the gate across an asynchronous save. Awaiting claim alone can deadlock it.
   Keep execution owned by the scheduled cycle, not detached tasks; dropped cycle
   owners release stale occupancy and orphan persisted rows retain failure fences.
-- Confirmed push clears failure cooldown, per-generation attempts and attempted target.
-  Failed recovery keeps bounded backoff and at most three attempts per authentication
-  generation. A new binding can recover immediately; Cookie writes cannot reset it.
+- Confirmed push immediately clears failure cooldown, per-generation attempts,
+  attempted target and stop reason. A subsequent expiry gets a new retry budget;
+  never require a successful inference request or a health observation period.
+  Failed recovery uses a fixed configured interval and at most `maxRetries + 1`
+  automatic attempts per authentication generation. The first attempt is not a retry;
+  `maxRetries=0` permits it but stops after failure. A new binding can recover
+  immediately unless an explicit terminal reason requires manual intervention;
+  Cookie writes cannot reset the budget.
   Preserve a JSONB-defaulted rolling history of automatic starts across success and
   reimport: at most three starts in fifteen minutes, including across new bindings.
+- `account_relogin_settings` owns `maxRetries` (default 2, range 0..10) and
+  `retryIntervalMinutes` (default 5, range 1..1440), added by migration 0034.
+  Old settings requests that only send concurrency/paused preserve these values.
+  Apply optional updates while holding the service gate. Retry-setting changes do
+  not cancel active jobs, clear counts, or rewrite existing cooldown deadlines.
+  Failures and orphan-running recovery use the interval current at settlement.
+- Persist optional JSONB-defaulted `stop_reason`: `account_banned` or
+  `workspace_unavailable`. The worker consumes typed Provider errors; never classify
+  generic HTTP 401/403, password rejection or arbitrary error text as an account ban.
+  Python recognizes explicit structured denial codes on 400/401/403 and its own
+  missing-locked-workspace result. HTTP 429 remains transient. The one exact legacy
+  message `指定工作区不可访问，未回退到个人空间` is compatible with workspace unavailability.
+  Terminal failed rows remain stopped until manual login, material reimport or a
+  validated workspace change; settings edits and pool credential writes cannot
+  silently resume them. A banned pool account is also ineligible. Manual login
+  remains available without bypassing any identity/workspace/push checks.
 - One shared eligibility projection drives the worker and the safe list `recovery`
   field. Expose waiting, cooldown/retry time, pause, missing material, workspace
-  ambiguity, retry limits and loop protection without secrets. An uncertain push
-  remains blocked; manually obtained valid credentials await explicit push.
+  ambiguity, retry limits, `manual_required` with its short cause, loop protection
+  and retry progress (`retriesUsed` excludes the initial attempt) without secrets.
+  `Pushing`/`Uncertain` take precedence and never automatically replay; neither
+  settings edits nor terminal metadata changes settle an uncertain push.
+  Manually obtained valid credentials await explicit push.
 - Pausing, deleting, editing material or changing per-entry automatic/workspace state
   cancels in-flight results using both cancellation and revision fencing.
 - The current worker assumes a single CPR instance. Multi-replica relogin requires a
@@ -222,7 +246,8 @@
   the device and fallback refresh token.
 
 Run the relogin model/service tests, API auth/wire tests, isolated PostgreSQL relogin
-tests and existing device-registry regressions. Run `relogin_worker_test.py` offline.
+tests and existing device-registry regressions. Run Python offline tests with
+`python3 -m unittest discover -s backend/crates/providers/openai/tests -p 'relogin*_test.py'`.
 Verify both new push and original in-place rotation paths. Never use real credentials
 as fixtures. Deployment and live login acceptance require separate authorization.
 On 2026-09-15 one explicitly authorized Free account passed the live Python worker

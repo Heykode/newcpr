@@ -39,6 +39,7 @@ async function main() {
     workspaceId: accounts[0].accountId,
   })
   const templates = []
+  const reloginSettings = { concurrency: 1, paused: false, maxRetries: 2, retryIntervalMinutes: 5 }
   const groups = [{
     id: 'grp_00000000000000000000000000000091',
     name: '测试分组',
@@ -112,7 +113,7 @@ async function main() {
                 data = { revision: 1, defaultMode: 'unchanged', addresses: [], accountOverrides: {}, fixedBindings: {} }
                 break
               case '/api/admin/relogin':
-                data = { settings: { concurrency: 1, paused: false }, items: library }
+                data = { settings: reloginSettings, items: library }
                 break
               case '/api/admin/relogin/templates':
                 data = templates
@@ -121,6 +122,14 @@ async function main() {
                 data = { items: [] }
                 break
             }
+          }
+          else if (request.method === 'POST' && path === '/api/admin/relogin/settings') {
+            let raw = ''
+            for await (const chunk of request)
+              raw += chunk
+            const body = JSON.parse(raw)
+            Object.assign(reloginSettings, body)
+            data = null
           }
           else if (request.method === 'POST' && ['/api/admin/accounts/update', '/api/admin/accounts/batch-update'].includes(path)) {
             let raw = ''

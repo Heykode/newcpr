@@ -36,7 +36,7 @@ import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
-import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
+import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
 
 const entries = shallowRef<ReloginEntry[]>([])
 const loading = shallowRef(false)
@@ -54,6 +54,11 @@ const pageSize = shallowRef(20)
 const concurrency = shallowRef('1')
 const savedConcurrency = shallowRef(1)
 const paused = shallowRef(false)
+const retrySettingsOpen = shallowRef(false)
+const maxRetries = shallowRef('2')
+const retryIntervalMinutes = shallowRef('5')
+const savedRetrySettings = shallowRef({ maxRetries: 2, retryIntervalMinutes: 5 })
+const retrySettingsError = shallowRef('')
 const now = useNow({ interval: 1000 })
 const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries({ ...statusLabels, ...recoveryLabels }).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
 const poolOptions = [
@@ -82,7 +87,7 @@ const columns = defineTableColumns<ReloginEntry>([
   { key: 'selection', kind: 'selection' },
   { key: 'identity', label: '账号', kind: 'identity', size: 'xl', grow: 1 },
   { key: 'plan', label: 'PLAN / 工作区', kind: 'custom', size: 'lg' },
-  { key: 'status', label: '处理状态', kind: 'status' },
+  { key: 'status', label: '处理状态', kind: 'status', size: 'lg' },
   { key: 'credential', label: '本次凭据', kind: 'status' },
   { key: 'pool', label: '号池状态', kind: 'status' },
   { key: 'reloginCount', label: '重登次数', kind: 'numeric', size: 'sm', align: 'center' },
@@ -118,6 +123,10 @@ async function reload(silent = false) {
     if (concurrency.value === String(savedConcurrency.value))
       concurrency.value = String(result.settings.concurrency)
     savedConcurrency.value = result.settings.concurrency
+    savedRetrySettings.value = {
+      maxRetries: result.settings.maxRetries ?? 2,
+      retryIntervalMinutes: result.settings.retryIntervalMinutes ?? 5,
+    }
     const ids = new Set(result.items.map(row => row.id))
     const retainedSelection = new Set([...selected.value].filter(id => ids.has(id)))
     if (retainedSelection.size !== selected.value.size)
@@ -204,6 +213,42 @@ function configure(nextPaused = paused.value) {
     await configureRelogin({ concurrency: value, paused: nextPaused })
     savedConcurrency.value = value
     paused.value = nextPaused
+  })
+}
+function openRetrySettings() {
+  maxRetries.value = String(savedRetrySettings.value.maxRetries)
+  retryIntervalMinutes.value = String(savedRetrySettings.value.retryIntervalMinutes)
+  retrySettingsError.value = ''
+  retrySettingsOpen.value = true
+}
+function saveRetrySettings() {
+  const retries = Number(maxRetries.value)
+  const interval = Number(retryIntervalMinutes.value)
+  if (!maxRetries.value.trim() || !Number.isInteger(retries) || retries < 0 || retries > 10) {
+    retrySettingsError.value = '失败重试次数必须为 0 至 10'
+    return
+  }
+  if (!retryIntervalMinutes.value.trim() || !Number.isInteger(interval) || interval < 1 || interval > 1440) {
+    retrySettingsError.value = '重试间隔必须为 1 至 1440 分钟'
+    return
+  }
+  retrySettingsError.value = ''
+  return action(async () => {
+    try {
+      await configureRelogin({
+        concurrency: savedConcurrency.value,
+        paused: paused.value,
+        maxRetries: retries,
+        retryIntervalMinutes: interval,
+      })
+      savedRetrySettings.value = { maxRetries: retries, retryIntervalMinutes: interval }
+      retrySettingsOpen.value = false
+      toast.success('自动重登设置已保存')
+    }
+    catch (error) {
+      retrySettingsError.value = errorMessage(error)
+      throw error
+    }
   })
 }
 const importing = shallowRef(false)
@@ -342,6 +387,9 @@ onBeforeUnmount(() => {
         <BaseIconButton :label="paused ? '恢复重登队列' : '暂停重登队列'" :disabled="busy" @click="configure(!paused)">
           <Play v-if="paused" class="size-4 text-cp-success" /><Pause v-else class="size-4" />
         </BaseIconButton>
+        <BaseIconButton label="自动重登设置" :disabled="busy" @click="openRetrySettings">
+          <Settings2 class="size-4" />
+        </BaseIconButton>
         <BaseButton variant="primary" :disabled="busy" @click="importing = true">
           <template #icon>
             <Upload class="size-4" />
@@ -432,6 +480,8 @@ onBeforeUnmount(() => {
         </template>
         <template #status="{ row }">
           <span class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
+          <span v-if="retryProgress(row)" class="block text-cp-xs tabular-nums text-cp-text-tertiary">{{ retryProgress(row) }}</span>
+          <span v-if="processingStatus(row).key === 'manual_required'" class="block whitespace-normal break-words text-cp-xs text-cp-error">{{ row.recovery?.message }}</span>
           <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
         </template>
         <template #credential="{ row }">
@@ -474,6 +524,27 @@ onBeforeUnmount(() => {
     <BaseTablePagination :pagination="{ currentPage: page, pageSize, total: filtered.length }" :loading="busy" @page-change="page = $event" @page-size-change="pageSize = $event" />
     <div v-if="overlayStyle" :style="overlayStyle" class="pointer-events-none fixed z-50 border border-cp-primary bg-cp-primary/10" />
 
+    <BaseModal v-model="retrySettingsOpen" title="自动重登设置" size="sm" :dismissible="!busy">
+      <div class="grid min-w-0 gap-4">
+        <BaseFormItem label="失败重试次数（不含首次，0 为不重试）">
+          <BaseInput v-model="maxRetries" type="number" min="0" max="10" step="1" aria-label="失败重试次数" :disabled="busy" />
+        </BaseFormItem>
+        <BaseFormItem label="重试间隔（分钟）">
+          <BaseInput v-model="retryIntervalMinutes" type="number" min="1" max="1440" step="1" aria-label="重试间隔（分钟）" :disabled="busy" />
+        </BaseFormItem>
+        <div v-if="retrySettingsError" class="break-words text-cp-sm text-cp-error" role="alert">
+          {{ retrySettingsError }}
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton :disabled="busy" @click="retrySettingsOpen = false">
+          取消
+        </BaseButton>
+        <BaseButton variant="primary" :loading="busy" @click="saveRetrySettings">
+          保存
+        </BaseButton>
+      </template>
+    </BaseModal>
     <BaseModal v-model="importing" title="导入重登资料" size="lg" :dismissible="!busy">
       <div class="grid gap-3">
         <div class="flex items-center justify-between gap-2">

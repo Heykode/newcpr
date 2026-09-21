@@ -143,6 +143,31 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
 }
 
 #[tokio::test]
+async fn relogin_retry_settings_reject_wrong_types_before_accessing_storage() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for extra in [
+        json!({"maxRetries": -1}),
+        json!({"maxRetries": 1.5}),
+        json!({"maxRetries": "2"}),
+        json!({"retryIntervalMinutes": -1}),
+        json!({"retryIntervalMinutes": 0.5}),
+        json!({"retryIntervalMinutes": true}),
+    ] {
+        let mut body = json!({"concurrency": 1, "paused": false});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert_eq!(
+            request(&fixture, "/api/admin/relogin/settings", Some(body), true)
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+}
+
+#[tokio::test]
 async fn relogin_push_accepts_optional_camel_case_name_and_validates_before_store_access() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");

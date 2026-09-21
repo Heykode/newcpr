@@ -15,6 +15,7 @@ export const recoveryLabels: Record<string, string> = {
   cooldown: '重试冷却中',
   loop_guard: '频繁失效保护',
   retry_limit: '自动重试已停止',
+  manual_required: '需人工处理',
   disabled: '自动重登已关闭',
   paused: '队列已暂停',
   account_disabled: '账号已暂停调度',
@@ -56,6 +57,16 @@ export function recoveryCountdown(row: ReloginEntry, now: number) {
     return '等待下一轮检查'
   const seconds = Math.ceil(remaining / 1000)
   return `剩余 ${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, '0')}秒`
+}
+
+export function retryProgress(row: ReloginEntry) {
+  const recovery = row.recovery
+  if (['pushing', 'uncertain'].includes(row.status)
+    || !recovery || !['cooldown', 'retry_limit', 'waiting', 'running', 'manual_required'].includes(recovery.state)
+    || recovery.retriesUsed == null || recovery.maxRetries == null) {
+    return ''
+  }
+  return `已重试 ${recovery.retriesUsed}/${recovery.maxRetries}`
 }
 
 export function credentialLabel(row: ReloginEntry) {

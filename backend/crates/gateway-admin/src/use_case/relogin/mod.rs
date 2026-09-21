@@ -140,7 +140,10 @@ pub trait ReloginService: Send + Sync {
     async fn delete(&self, ids: &[String]) -> Result<(), AdminError>;
     async fn automatic(&self, ids: &[String], enabled: bool) -> Result<(), AdminError>;
     async fn workspace(&self, id: &str, workspace: Option<String>) -> Result<(), AdminError>;
-    async fn configure(&self, settings: ReloginSettings) -> Result<(), AdminError>;
+    async fn configure(&self, settings: ReloginSettings) -> Result<(), AdminError> {
+        self.configure_update(settings.into()).await
+    }
+    async fn configure_update(&self, settings: ReloginSettingsUpdate) -> Result<(), AdminError>;
 }
 
 #[derive(Default)]
@@ -483,6 +486,7 @@ impl DefaultReloginService {
         entry.synced_at = Some(Utc::now());
         entry.next_attempt_at = None;
         entry.automatic_attempts = 0;
+        entry.stop_reason = None;
         entry.attempted_target = None;
         entry.status = ReloginStatus::Ready;
         entry.message = "凭据已同步到号池".to_owned();
@@ -835,6 +839,7 @@ impl ReloginService for DefaultReloginService {
                 entry.password = input.password;
                 entry.mfa_secret = input.mfa_secret;
                 entry.automatic_attempts = 0;
+                entry.stop_reason = None;
                 entry.next_attempt_at = None;
                 entry.status = ReloginStatus::Pending;
                 entry.credential = None;
@@ -865,6 +870,7 @@ impl ReloginService for DefaultReloginService {
                     automatic_job: false,
                     manual_push_context: None,
                     automatic_attempts: 0,
+                    stop_reason: None,
                     automatic_started_at: Vec::new(),
                     attempted_target: None,
                     next_attempt_at: None,
@@ -1030,14 +1036,24 @@ impl ReloginService for DefaultReloginService {
         entry.target = None;
         entry.synced_at = None;
         entry.automatic_attempts = 0;
+        entry.stop_reason = None;
         entry.status = ReloginStatus::Pending;
         entry.message = "工作区选择已更新，等待重新获取凭据".to_owned();
         self.save(&mut entry).await
     }
 
-    async fn configure(&self, settings: ReloginSettings) -> Result<(), AdminError> {
-        settings.validate()?;
+    async fn configure_update(&self, update: ReloginSettingsUpdate) -> Result<(), AdminError> {
         let gate = self.gate.lock().await;
+        let mut settings = self.store()?.settings().await.map_err(store_error)?;
+        settings.concurrency = update.concurrency;
+        settings.paused = update.paused;
+        if let Some(value) = update.max_retries {
+            settings.max_retries = value;
+        }
+        if let Some(value) = update.retry_interval_minutes {
+            settings.retry_interval_minutes = value;
+        }
+        settings.validate()?;
         self.store()?
             .save_settings(&settings)
             .await

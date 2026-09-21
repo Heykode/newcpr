@@ -202,20 +202,26 @@ impl ReloginStore for PgReloginStore {
     }
     async fn settings(&self) -> AdminStoreResult<ReloginSettings> {
         let row =
-            sqlx::query("select concurrency,paused from account_relogin_settings where singleton")
+            sqlx::query("select concurrency,paused,max_retries,retry_interval_minutes from account_relogin_settings where singleton")
                 .fetch_one(&self.pool)
                 .await
                 .map_err(unavailable)?;
         Ok(ReloginSettings {
             concurrency: row.try_get::<i32, _>("concurrency").map_err(unavailable)? as usize,
             paused: row.try_get("paused").map_err(unavailable)?,
+            max_retries: row.try_get::<i32, _>("max_retries").map_err(unavailable)? as u32,
+            retry_interval_minutes: row
+                .try_get::<i32, _>("retry_interval_minutes")
+                .map_err(unavailable)? as u32,
         })
     }
     async fn save_settings(&self, settings: &ReloginSettings) -> AdminStoreResult<()> {
         settings.validate().map_err(unavailable)?;
-        sqlx::query("update account_relogin_settings set concurrency=$1,paused=$2 where singleton")
+        sqlx::query("update account_relogin_settings set concurrency=$1,paused=$2,max_retries=$3,retry_interval_minutes=$4 where singleton")
             .bind(settings.concurrency as i32)
             .bind(settings.paused)
+            .bind(settings.max_retries as i32)
+            .bind(settings.retry_interval_minutes as i32)
             .execute(&self.pool)
             .await
             .map_err(unavailable)?;

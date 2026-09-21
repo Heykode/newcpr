@@ -6,7 +6,7 @@ use gateway_admin::{
     model::{
         PageSize,
         accounts::{AccountListQuery, AccountSort, AccountSortField, SortDirection},
-        relogin::{ReloginEntry, ReloginSettings, ReloginStatus, ReloginTarget},
+        relogin::{ReloginEntry, ReloginSettings, ReloginStatus, ReloginStopReason, ReloginTarget},
     },
     ports::{relogin::ReloginStore, store::AccountStore},
 };
@@ -33,6 +33,7 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
         automatic_job: false,
         manual_push_context: None,
         automatic_attempts: 0,
+        stop_reason: None,
         automatic_started_at: Vec::new(),
         attempted_target: None,
         next_attempt_at: None,
@@ -315,6 +316,8 @@ async fn relogin_storage_fences_rows_and_rolls_back_entire_import() {
     let mut changed = initial.clone();
     changed.revision = 2;
     changed.automatic = false;
+    changed.status = ReloginStatus::Failed;
+    changed.stop_reason = Some(ReloginStopReason::WorkspaceUnavailable);
     store.save(&changed, Some(1)).await.unwrap();
     assert!(store.save(&initial, Some(1)).await.is_err());
     assert!(store.delete(&initial.id, 1).await.is_err());
@@ -331,19 +334,51 @@ async fn relogin_storage_fences_rows_and_rolls_back_entire_import() {
     assert_eq!(rows[0].password, "test-only-password");
     assert!(!rows[0].automatic);
     assert_eq!(store.settings().await.unwrap().concurrency, 1);
+    assert_eq!(store.settings().await.unwrap().max_retries, 2);
+    assert_eq!(store.settings().await.unwrap().retry_interval_minutes, 5);
     store
         .save_settings(&ReloginSettings {
             concurrency: 3,
             paused: true,
+            max_retries: 0,
+            retry_interval_minutes: 37,
         })
         .await
         .unwrap();
     assert!(store.settings().await.unwrap().paused);
+    let restarted = PgReloginStore::new(database.pool.clone());
+    assert_eq!(
+        restarted.entries().await.unwrap()[0].automatic_stop_reason(),
+        Some(ReloginStopReason::WorkspaceUnavailable)
+    );
+    assert_eq!(restarted.settings().await.unwrap().max_retries, 0);
+    assert_eq!(
+        restarted.settings().await.unwrap().retry_interval_minutes,
+        37
+    );
+    for (retries, interval) in [(11, 5), (2, 0), (2, 1441)] {
+        assert!(
+            restarted
+                .save_settings(&ReloginSettings {
+                    max_retries: retries,
+                    retry_interval_minutes: interval,
+                    ..ReloginSettings::default()
+                })
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(restarted.settings().await.unwrap().max_retries, 0);
+    assert_eq!(
+        restarted.settings().await.unwrap().retry_interval_minutes,
+        37
+    );
     assert!(
         store
             .save_settings(&ReloginSettings {
                 concurrency: 0,
-                paused: false
+                paused: false,
+                ..ReloginSettings::default()
             })
             .await
             .is_err()

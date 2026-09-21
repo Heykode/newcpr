@@ -816,6 +816,7 @@ async fn relogin_access_token_expiry_still_requires_valid_material_and_automatic
                         .configure(ReloginSettings {
                             concurrency: 1,
                             paused: true,
+                            ..ReloginSettings::default()
                         })
                         .await
                         .unwrap();
@@ -1480,6 +1481,7 @@ async fn relogin_cancel_delete_pause_and_auto_off_fence_inflight_results() {
                 .configure(ReloginSettings {
                     concurrency: 1,
                     paused: true,
+                    ..ReloginSettings::default()
                 })
                 .await
                 .unwrap(),
@@ -1523,6 +1525,7 @@ async fn relogin_queue_is_deduplicated_and_shares_bounded_concurrency() {
         .configure(ReloginSettings {
             concurrency: 2,
             paused: false,
+            ..ReloginSettings::default()
         })
         .await
         .unwrap();
@@ -1570,6 +1573,7 @@ async fn relogin_partial_claim_failure_cannot_leave_phantom_active_jobs() {
         .configure(ReloginSettings {
             concurrency: 2,
             paused: false,
+            ..ReloginSettings::default()
         })
         .await
         .unwrap();
@@ -1858,6 +1862,7 @@ async fn account_relogin_rejects_stale_material_target_wrong_email_and_pause_bef
                 .configure(ReloginSettings {
                     concurrency: 1,
                     paused: true,
+                    ..ReloginSettings::default()
                 })
                 .await
                 .unwrap(),
@@ -1956,6 +1961,7 @@ async fn account_relogin_cancel_and_library_queue_do_not_reuse_manual_push_inten
                 .configure(ReloginSettings {
                     concurrency: 1,
                     paused: true,
+                    ..ReloginSettings::default()
                 })
                 .await
                 .unwrap(),

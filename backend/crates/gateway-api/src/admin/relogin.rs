@@ -9,7 +9,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use gateway_admin::model::relogin::{ReloginSettings, ReloginTarget};
+use gateway_admin::model::relogin::{ReloginSettingsUpdate, ReloginTarget};
 use gateway_admin::model::relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection};
 use serde::Deserialize;
 
@@ -328,7 +328,7 @@ where
 async fn settings<S>(
     _: AdminAuth,
     State(state): State<S>,
-    AdminJson(request): AdminJson<ReloginSettings>,
+    AdminJson(request): AdminJson<ReloginSettingsUpdate>,
 ) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,
@@ -336,7 +336,7 @@ where
     state
         .admin_services()
         .relogin()
-        .configure(request)
+        .configure_update(request)
         .await
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
