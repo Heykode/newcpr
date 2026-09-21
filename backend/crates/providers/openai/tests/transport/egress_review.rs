@@ -1,6 +1,6 @@
 use super::*;
 
-use std::{collections::BTreeMap, net::Ipv6Addr};
+use std::{collections::BTreeMap, io, net::Ipv6Addr};
 
 use futures::future::BoxFuture;
 use gateway_core::{
@@ -73,14 +73,56 @@ async fn fixture(
     (backend, store, runtime, pool)
 }
 
+async fn bind_dual_loopback_pair(mut ipv4: TcpListener) -> io::Result<(TcpListener, TcpListener)> {
+    // A port free on IPv4 can still belong to another IPv6 listener or connection.
+    for _ in 0..32 {
+        let port = ipv4.local_addr()?.port();
+        match TcpListener::bind((Ipv6Addr::LOCALHOST, port)).await {
+            Ok(ipv6) => return Ok((ipv4, ipv6)),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                ipv4 = TcpListener::bind("127.0.0.1:0").await?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AddrInUse,
+        "could not reserve a shared loopback port",
+    ))
+}
+
+#[tokio::test]
+async fn dual_loopback_pair_retries_a_port_already_reserved_on_ipv6() {
+    let (ipv4, occupied_ipv6) =
+        bind_dual_loopback_pair(TcpListener::bind("127.0.0.1:0").await.unwrap())
+            .await
+            .unwrap();
+    let occupied_port = occupied_ipv6.local_addr().unwrap().port();
+    assert_eq!(
+        TcpListener::bind((Ipv6Addr::LOCALHOST, occupied_port))
+            .await
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AddrInUse
+    );
+    let (ipv4, ipv6) = bind_dual_loopback_pair(ipv4).await.unwrap();
+    assert_ne!(ipv4.local_addr().unwrap().port(), occupied_port);
+    assert_eq!(
+        ipv4.local_addr().unwrap().port(),
+        ipv6.local_addr().unwrap().port()
+    );
+    assert!(ipv4.local_addr().unwrap().is_ipv4());
+    assert!(ipv6.local_addr().unwrap().is_ipv6());
+    assert_eq!(occupied_ipv6.local_addr().unwrap().port(), occupied_port);
+}
+
 #[tokio::test]
 async fn default_ipv4_and_explicit_ipv6_switch_real_http_and_ws_connections() {
     for websocket in [false, true] {
-        let ipv4 = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = ipv4.local_addr().unwrap().port();
-        let ipv6 = TcpListener::bind((Ipv6Addr::LOCALHOST, port))
+        let (ipv4, ipv6) = bind_dual_loopback_pair(TcpListener::bind("127.0.0.1:0").await.unwrap())
             .await
             .unwrap();
+        let port = ipv4.local_addr().unwrap().port();
         let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut servers = Vec::new();
         for listener in [ipv4, ipv6] {
