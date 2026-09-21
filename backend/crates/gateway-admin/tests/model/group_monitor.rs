@@ -67,7 +67,7 @@ fn monitor_deduplicates_accounts_and_uses_shared_rate_without_subtracting_expiry
 }
 
 #[test]
-fn monitor_distinguishes_unknown_partial_learning_idle_and_disabled() {
+fn monitor_keeps_estimated_accounts_ready_while_new_accounts_await_quota() {
     let mut a = account("a");
     a.remaining_usd = None;
     assert_eq!(
@@ -81,15 +81,22 @@ fn monitor_distinguishes_unknown_partial_learning_idle_and_disabled() {
             .remaining_status,
         "unknown"
     );
-    let partial = project_group_monitor(
+    a.unavailable = false;
+    let mixed = project_group_monitor(
         group(),
         &[a, account("b")],
         &MonitorUsage::default(),
         Some(2),
     );
-    assert_eq!(partial.remaining_status, "partial");
-    assert_eq!(partial.eta_minutes, None);
-    assert_eq!(partial.expected_expiry_usd, None);
+    assert_eq!(mixed.eligible_accounts, 2);
+    assert_eq!(mixed.estimated_accounts, 1);
+    assert_eq!(mixed.remaining_status, "ready");
+    assert_eq!(mixed.remaining_usd, Some(100.0));
+    assert_eq!(mixed.quota_consume_usd_per_minute, Some(2.0));
+    assert_eq!(mixed.eta_status, "ready");
+    assert_eq!(mixed.eta_minutes, Some(50.0));
+    assert_eq!(mixed.expiry_status, "ready");
+    assert_eq!(mixed.expected_expiry_usd, Some(80.0));
     let mut a = account("a");
     a.consumption.usd = 0.0;
     let idle = project_group_monitor(group(), &[a.clone()], &MonitorUsage::default(), Some(2));
@@ -110,6 +117,29 @@ fn monitor_distinguishes_unknown_partial_learning_idle_and_disabled() {
     let empty = project_group_monitor(group(), &[], &MonitorUsage::default(), Some(0));
     assert_eq!(empty.remaining_usd, Some(0.0));
     assert_eq!(empty.eta_status, "empty");
+}
+
+#[test]
+fn unestimated_account_usage_does_not_reduce_estimated_balance_eta() {
+    let estimated = account("estimated");
+    let mut awaiting = account("awaiting");
+    awaiting.remaining_usd = None;
+    awaiting.consumption.usd = 50.0;
+    awaiting.reset_at = Some(Utc::now() - Duration::hours(1));
+
+    let item = project_group_monitor(
+        group(),
+        &[estimated, awaiting],
+        &MonitorUsage::default(),
+        Some(0),
+    );
+
+    assert_eq!((item.estimated_accounts, item.eligible_accounts), (1, 2));
+    assert_eq!(item.remaining_status, "ready");
+    assert_eq!(item.quota_consume_usd_per_minute, Some(2.0));
+    assert_eq!(item.eta_minutes, Some(50.0));
+    assert_eq!(item.expected_expiry_usd, Some(80.0));
+    assert!(item.earliest_reset_at.is_none());
 }
 
 #[test]
