@@ -66,6 +66,10 @@
 重复采样、恢复、旧采样、分目标重试和测试通知。API 覆盖认证、严格 DTO、
 伪造密钥标记和全局投递读取。Host 使用本地模拟 SMTP/Bark，禁止真实凭据。
 前端测试位于 `group-monitor-alerts.test.mjs` 和 `browser/group-alerts.mjs`。
+Admin 阈值测试使用 `tests/use_case/notifications.rs` 中的公开服务入口，Host
+传输测试使用 `tests/notifications.rs` 中的 `HostBundle::notification_delivery`。
+不得在生产 `src` 内增加测试模块或为测试开放私有接口；必须运行网关应用的
+跨工作区架构检查，不能仅验证 Admin、Store、API、Host 包。
 
 ## 7. 错误与正确写法
 
