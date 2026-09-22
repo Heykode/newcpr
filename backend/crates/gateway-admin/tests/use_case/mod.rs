@@ -5,6 +5,7 @@ mod auth;
 mod backup;
 mod client_keys;
 mod import_tasks;
+mod notifications;
 mod observability;
 mod openai;
 mod proxies;
@@ -252,7 +253,10 @@ impl AdminHarness {
             Arc::new(NoopSnapshot),
             (self.probe, self.proxy_probe),
             Arc::new(NoopClientDistribution),
-            self.system,
+            (
+                self.system,
+                Arc::new(gateway_admin::ports::notification::DisabledNotificationDelivery),
+            ),
         )
         .await
         .expect("initialize admin test harness")

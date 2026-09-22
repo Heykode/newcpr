@@ -12,6 +12,7 @@ pub mod egress;
 pub mod group_monitor;
 pub mod group_monitor_quota;
 pub mod import_tasks;
+pub mod notifications;
 pub mod observability;
 pub mod provider_credentials;
 pub mod proxies;

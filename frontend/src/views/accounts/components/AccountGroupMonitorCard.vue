@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import type { AccountGroup, GroupMonitorItem } from '@/api'
-import { Info, Pin, PinOff } from '@lucide/vue'
+import { Pin, PinOff, Settings } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import BasePopover from '@/components/base/BasePopover.vue'
 import { monitorEta, monitorMoney } from './group-monitor-presentation'
 
 const props = defineProps<{
@@ -16,7 +15,7 @@ const props = defineProps<{
   loading: boolean
   now: number
 }>()
-defineEmits<{ pin: [] }>()
+defineEmits<{ pin: [], settings: [] }>()
 
 const expired = computed(() => !!props.snapshot?.earliestResetAt && Date.parse(props.snapshot.earliestResetAt) <= props.now)
 const status = computed(() => !props.group.enabled ? 'disabled' : expired.value ? 'unknown' : props.snapshot?.remainingStatus ?? 'unknown')
@@ -29,6 +28,7 @@ const metrics = computed(() => [
 const percentage = computed(() => props.snapshot?.usedSlots != null && props.snapshot.totalSlots > 0
   ? Math.min(100, props.snapshot.usedSlots / props.snapshot.totalSlots * 100)
   : 0)
+const alerting = computed(() => Boolean(props.snapshot?.activeAlerts?.length))
 </script>
 
 <template>
@@ -38,35 +38,9 @@ const percentage = computed(() => props.snapshot?.usedSlots != null && props.sna
       <h3 class="min-w-0 flex-1 truncate text-cp-xs font-heavy text-cp-text" :title="group.name">
         {{ group.name }}
       </h3>
-      <BasePopover trigger="hover-click" placement="bottom-end" :hover-delay="150">
-        <template #trigger>
-          <BaseIconButton label="查看监控口径" size="sm" class="monitor-action">
-            <Info class="size-3.5" :class="stale || expired ? 'text-cp-warning-text' : ''" />
-          </BaseIconButton>
-        </template>
-        <div class="max-w-[min(320px,calc(100vw-32px))] space-y-2 p-3 text-cp-sm">
-          <p class="break-words font-heavy">
-            {{ group.name }}
-          </p>
-          <p v-if="stale" class="text-cp-warning-text">
-            数据未更新，当前保留上次观测。
-          </p>
-          <p v-if="expired" class="text-cp-warning-text">
-            额度窗口已到期，等待新的有效观测。
-          </p>
-          <p>7D 额度估算覆盖 {{ snapshot?.estimatedAccounts ?? 0 }} / {{ snapshot?.eligibleAccounts ?? 0 }} 个可调度账号；优先按自身本轮消费与已用比例计算。新号无自身估值时，参考同 Provider、套餐及窗口最新最多 3 个有效账号的平均总额度，再按自身已用比例计算剩余。不包含未来重置补充，短期限额仍可能限制使用。</p>
-          <p v-if="snapshot?.remainingStatus === 'partial'">
-            部分可调度账号暂无有效额度估值，当前仅汇总已可计算账号。
-          </p>
-          <p v-if="snapshot?.lowSample">
-            样本较少，估算可能波动。
-          </p>
-          <p>预计过期额度依据同 Provider、同套餐最近最多 5 个未恢复失效账号的平均寿命。恢复后撤销样本；普通 Token 到期、限流和额度耗尽不计死亡。已超过平均寿命的账号跳过；全部超出或其余账号资料缺失时保持未知，不从剩余额度扣除。</p>
-          <p>每分钟消耗为最近 60 秒已完成推理请求的已记录 USD，按请求授权分组范围归属，跨组可能重叠。</p>
-          <p>可支撑时间按共享账号在所有分组的消耗 {{ monitorMoney(snapshot?.quotaConsumeUsdPerMinute, 'unknown', 4) }} /分计算。</p>
-          <p>并发为本组 API Key 的当前占用 /（本组占用 + 可调度账号的共享空位）。其他组占用共享账号时，本组可用上限随之减少。Key 绑定多个组时占用可能重叠，不同分组的额度及并发不可直接相加。</p>
-        </div>
-      </BasePopover>
+      <BaseIconButton :label="`设置 ${group.name} 预警`" size="sm" class="monitor-action" @click="$emit('settings')">
+        <Settings class="size-3.5" :class="alerting ? 'text-cp-error-text' : stale || expired ? 'text-cp-warning-text' : ''" />
+      </BaseIconButton>
       <BaseIconButton
         :label="`${pinned ? '取消置顶' : '置顶'} ${group.name}`"
         size="sm"

@@ -83,6 +83,7 @@ mod auth;
 mod client_keys;
 mod egress;
 mod errors;
+mod notifications;
 mod observability;
 mod outbound_user_agent;
 mod proxies;
@@ -184,7 +185,10 @@ impl AdminTestFixture {
             Arc::new(NoopSnapshot),
             (Arc::new(NoopProbe), Arc::new(proxies::SuccessfulProbe)),
             Arc::new(StaticClientDistribution),
-            system,
+            (
+                system,
+                Arc::new(gateway_admin::ports::notification::DisabledNotificationDelivery),
+            ),
         )
         .await
         .expect("initialize test admin services");

@@ -55,6 +55,8 @@ function loadSource(filename) {
   runInNewContext(outputText, {
     exports,
     require(name) {
+      if (name === './GroupAlertSettingsModal.vue')
+        return defineComponent({ setup: () => () => null })
       if (name === '../composables/useGroupMonitor') {
         return { useGroupMonitor: () => ({
           page: ref(0),

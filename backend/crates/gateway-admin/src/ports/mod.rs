@@ -2,6 +2,7 @@
 
 pub mod backup;
 pub mod client_distribution;
+pub mod notification;
 pub mod provider;
 pub mod proxy;
 pub mod relogin;

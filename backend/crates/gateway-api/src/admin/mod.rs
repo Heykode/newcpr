@@ -16,6 +16,7 @@ pub mod client_keys;
 pub mod egress;
 mod extract;
 pub mod group_monitor;
+pub mod notifications;
 pub mod observability;
 pub mod outbound_user_agent;
 pub mod presenter;
@@ -48,6 +49,7 @@ where
         .merge(backups::router::<S>())
         .merge(client_keys::router::<S>())
         .merge(observability::router::<S>())
+        .merge(notifications::router::<S>())
         .merge(settings::router::<S>())
         .merge(outbound_user_agent::router::<S>())
         .merge(system::router::<S>())

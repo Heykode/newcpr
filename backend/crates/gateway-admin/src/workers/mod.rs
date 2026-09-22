@@ -16,6 +16,7 @@ use crate::{model::AdminError, use_case::user_agent::DefaultOutboundUserAgentSer
 const CYCLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) mod group_monitor;
+pub(crate) mod notifications;
 
 pub(crate) fn user_agent_reconciliation(
     service: Arc<DefaultOutboundUserAgentService>,

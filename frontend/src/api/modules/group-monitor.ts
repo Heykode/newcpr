@@ -4,6 +4,7 @@ import request from '../request'
 export type MonitorStatus = 'ready' | 'partial' | 'learning' | 'unknown' | 'disabled' | 'idle' | 'empty'
 
 export interface GroupMonitorItem {
+  activeAlerts?: string[]
   id: string
   name: string
   color: string

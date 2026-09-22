@@ -50,6 +50,7 @@ struct MonitorItemView {
     eta_status: &'static str,
     low_sample: bool,
     earliest_reset_at: Option<DateTime<Utc>>,
+    active_alerts: Vec<String>,
 }
 
 impl From<GroupMonitorItem> for MonitorItemView {
@@ -74,6 +75,7 @@ impl From<GroupMonitorItem> for MonitorItemView {
             eta_status: item.eta_status,
             low_sample: item.low_sample,
             earliest_reset_at: item.earliest_reset_at,
+            active_alerts: Vec::new(),
         }
     }
 }
@@ -112,13 +114,37 @@ where
         AdminPrincipal::Session { admin_user_id } => format!("admin:{admin_user_id}"),
         AdminPrincipal::ApiKey => "admin-api-key".to_owned(),
     };
+    // Notification storage must not make the monitor unavailable.
+    let services = state.admin_services();
+    let active = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        services.notifications().active_alerts(),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok);
+    let items = report
+        .items
+        .into_iter()
+        .map(|item| {
+            let mut view = MonitorItemView::from(item);
+            if let Some(active) = &active {
+                view.active_alerts = active
+                    .iter()
+                    .filter(|(id, _)| id == &view.id)
+                    .map(|(_, kind)| kind.clone())
+                    .collect();
+            }
+            view
+        })
+        .collect();
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(MonitorView {
             viewer_scope,
             generated_at: report.generated_at,
             rate_window_seconds: 60,
-            items: report.items.into_iter().map(Into::into).collect(),
+            items,
         }),
     ))
 }

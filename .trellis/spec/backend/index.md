@@ -19,6 +19,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Admin Security And Budget](./admin-security-and-budget.md) | 管理密码撤销、原子审计与预算重置 | 当前分支局部适配 |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
+| [分组监控通知](./group-monitor-alerts.md) | 独立渠道、告警确认、事务去重与隔离投递 | 本地实现 |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Proxy and Responses Delivery](./proxy-and-delivery-contracts.md) | Managed proxies, partial account updates and buffered delivery | Verified PR 60 integration |
 | [Account Cumulative Costs](./account-cumulative-costs.md) | 独立累计、请求去重、日志保留及金额容量 | 已验证消费合同 |

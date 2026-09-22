@@ -10,10 +10,30 @@ pub(crate) struct AdminAuthStoreAdapter {
 
 pub(crate) struct AdminSettingsStoreAdapter {
     pub(crate) control_plane: postgres::PgControlPlaneRepository,
+    pub(crate) notifications: postgres::PgNotificationRepository,
 }
 
 #[async_trait::async_trait]
 impl SettingsStore for AdminSettingsStoreAdapter {
+    async fn load_notification_channels(
+        &self,
+    ) -> AdminStoreResult<gateway_admin::model::notifications::StoredNotificationChannels> {
+        self.notifications
+            .load_channels()
+            .await
+            .map_err(|error| admin_store_error("notification channels", error))
+    }
+
+    async fn replace_notification_channels(
+        &self,
+        command: gateway_admin::model::notifications::ReplaceNotificationChannels,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::notifications::NotificationChannelsView> {
+        self.notifications
+            .replace_channels(command, context)
+            .await
+            .map_err(|error| admin_store_error("notification channels", error))
+    }
     async fn load_user_agent_override(
         &self,
         provider_kind: &gateway_core::routing::ProviderKind,

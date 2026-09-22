@@ -13,6 +13,7 @@ import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
+import NotificationChannelsCard from './components/NotificationChannelsCard.vue'
 import OutboundUserAgentCard from './components/OutboundUserAgentCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
@@ -126,6 +127,8 @@ watch(
         @request-delete="showDeleteAdminKeyModal = true"
         @copy="copyAdminApiKey"
       />
+
+      <NotificationChannelsCard />
 
       <RuntimeSettingsCard
         v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"

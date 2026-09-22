@@ -21,6 +21,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
 | [State Management](./state-management.md) | Local state, global state, server state | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
+| [分组预警设置](./group-alert-settings.md) | 折叠渠道、独立策略、测试和异步生命周期 | 本地实现 |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 
 ---
