@@ -45,6 +45,7 @@ export function turnStateProbeReason(reason?: string | null): string | null {
     account_stopped: '账号采集已停止',
     rate_limited: '账号限流冷却',
     probe_rate_limited: '当前模型探测限流',
+    collection_retry: '采集任务异常，等待重试',
   }
   return labels[reason] ?? (/^upstream_\d{3}$/.test(reason) ? `上游HTTP ${reason.slice(9)}` : '探测失败')
 }

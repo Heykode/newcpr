@@ -523,6 +523,18 @@ export function refreshAccount(data: AccountIdParam, options: RequestOptions = {
   })
 }
 
+export function requestAccountTurnStateProbe(
+  data: AccountIdParam & { modelId: string },
+  options: RequestOptions = {},
+) {
+  return request<{ status: 'queued' | 'already_running' }>({
+    url: '/api/admin/accounts/turn-state/probe',
+    method: 'POST',
+    data,
+    ...options,
+  })
+}
+
 export function recoverAccount(data: AccountIdParam, options: RequestOptions = {}) {
   return request<AccountRefreshResponse>({
     url: '/api/admin/accounts/recover',

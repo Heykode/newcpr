@@ -19,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   refreshQuota: [accountId: string]
   accountUpdated: [account: AccountRow]
+  probeQueued: []
 }>()
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
@@ -90,7 +91,7 @@ const profileOpen = shallowRef(false)
       </p>
     </div>
 
-    <AccountTurnStatePanel :account="account" />
+    <AccountTurnStatePanel :account="account" @probe-queued="emit('probeQueued')" />
   </section>
 
   <AccountProfileModal

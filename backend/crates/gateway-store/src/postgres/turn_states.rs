@@ -35,13 +35,16 @@ struct TurnStateRow {
     active_state: Option<String>,
     active_issued_at: Option<DateTime<Utc>>,
     active_expires_at: Option<DateTime<Utc>>,
+    active_captured_at: Option<DateTime<Utc>>,
     standby_state: Option<String>,
     standby_issued_at: Option<DateTime<Utc>>,
     standby_expires_at: Option<DateTime<Utc>>,
+    standby_captured_at: Option<DateTime<Utc>>,
     state_version: i64,
     refresh_status: String,
     last_observed_length: Option<i16>,
     suspect_count: i16,
+    probe_refresh_at: Option<DateTime<Utc>>,
 }
 
 impl ProviderTurnStatePort for PgProviderTurnStateRepository {
@@ -83,7 +86,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                    probe_http_status = case when s.probe_cooldown_until is null or $4 >= s.probe_cooldown_until then $5 else s.probe_http_status end,
                    probe_retry_from_upstream = case when s.probe_cooldown_until is null or $4 >= s.probe_cooldown_until then $6 else s.probe_retry_from_upstream end,
                    probe_error_code = case when s.probe_cooldown_until is null or $4 >= s.probe_cooldown_until then $7 else s.probe_error_code end,
-                   last_probe_reason = 'probe_rate_limited',
+                   last_probe_reason = case when $5 is null then 'collection_retry' else 'probe_rate_limited' end,
                    refresh_status = 'cooldown', last_probe_at = now(), updated_at = now()
                  from provider_accounts a
                  where s.provider_account_id = $1 and s.upstream_model = $2
@@ -122,6 +125,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
                        probe_total_attempts::numeric + greatest($4 - probe_attempts, 0))::bigint,
                      probe_attempts = greatest(probe_attempts, $4), last_probe_reason = $5,
                      successful_probe_attempt = $6,
+                     probe_refresh_at = case when $6 is not null then now() + interval '30 seconds' else probe_refresh_at end,
                      probe_returned_length = coalesce($7, probe_returned_length),
                      last_probe_at = now(), updated_at = now()
                  where provider_account_id = $1 and upstream_model = $2
@@ -258,9 +262,9 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
         Box::pin(async move {
             let row = sqlx::query_as::<_, TurnStateRow>(
                 "select provider_account_id, upstream_model, normal_length,
-                        active_state, active_issued_at, active_expires_at,
-                        standby_state, standby_issued_at, standby_expires_at,
-                        state_version, refresh_status, last_observed_length, suspect_count
+                        active_state, active_issued_at, active_expires_at, active_captured_at,
+                        standby_state, standby_issued_at, standby_expires_at, standby_captured_at,
+                        state_version, refresh_status, last_observed_length, suspect_count, probe_refresh_at
                  from provider_turn_states s
                  where provider_account_id = $1 and upstream_model = $2
                    and s.credential_revision = $3
@@ -287,7 +291,7 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
 
     fn put_candidate(
         &self,
-        mut candidate: ProviderTurnStateCandidate,
+        candidate: ProviderTurnStateCandidate,
     ) -> futures::future::BoxFuture<'_, Result<ProviderTurnStateRecord, ProviderStoreError>> {
         Box::pin(async move {
             validate_candidate(&candidate)?;
@@ -317,45 +321,29 @@ impl ProviderTurnStatePort for PgProviderTurnStateRepository {
             {
                 return decode_row(current);
             }
-            // A captured standby echoed by a probe/response keeps its original lifetime.
-            if current.standby_state.as_deref()
-                == Some(candidate.value.state().expose_to_provider())
-                && let (Some(issued), Some(expires)) =
-                    (current.standby_issued_at, current.standby_expires_at)
-            {
-                candidate.value = ProviderTurnStateValue::new(
-                    candidate.value.state().clone(),
-                    issued.into(),
-                    expires.into(),
-                );
-                if !candidate.value.is_valid_at(candidate.observed_at) {
-                    return decode_row(current);
-                }
-            }
             let candidate_value = candidate.value.state().expose_to_provider();
-            let (same_value, replace) = match candidate.slot {
-                ProviderTurnStateSlot::Active => (
-                    current.active_state.as_deref() == Some(candidate_value),
+            let same_active = current.active_state.as_deref() == Some(candidate_value);
+            let same_standby = current.standby_state.as_deref() == Some(candidate_value);
+            let replace = match candidate.slot {
+                ProviderTurnStateSlot::Active => {
                     current.active_expires_at.is_none_or(|expires| {
                         SystemTime::from(expires) <= candidate.observed_at + Duration::from_secs(60)
-                    }) && current.active_issued_at.is_none_or(|issued| {
-                        candidate.value.issued_at() >= SystemTime::from(issued)
-                    }),
-                ),
-                ProviderTurnStateSlot::Standby => (
-                    current.active_state.as_deref() == Some(candidate_value)
-                        || current.standby_state.as_deref() == Some(candidate_value),
+                    }) && current
+                        .active_captured_at
+                        .is_none_or(|captured| candidate.observed_at >= SystemTime::from(captured))
+                }
+                ProviderTurnStateSlot::Standby => {
                     current.active_expires_at.is_some_and(|expires| {
                         SystemTime::from(expires) < candidate.value.expires_at()
-                    }) && current.standby_issued_at.is_none_or(|issued| {
-                        candidate.value.issued_at() >= SystemTime::from(issued)
-                    }),
-                ),
+                    }) && current
+                        .standby_captured_at
+                        .is_none_or(|captured| candidate.observed_at >= SystemTime::from(captured))
+                }
             };
-            if !same_value && replace {
+            if same_active || (same_standby && candidate.slot == ProviderTurnStateSlot::Standby) {
+                renew_candidate(&mut transaction, &candidate, same_active).await?;
+            } else if replace {
                 update_candidate(&mut transaction, &candidate).await?;
-            } else {
-                touch_success(&mut transaction, &candidate).await?;
             }
             let row = load_locked(
                 &mut transaction,
@@ -590,6 +578,7 @@ async fn ensure_row(
            suspect_count = 0, probe_attempts = 0, last_probe_reason = null, successful_probe_attempt = null,
            probe_cooldown_until = null, probe_retry_from_upstream = null,
            probe_http_status = null, probe_error_code = null, probe_returned_length = null,
+           probe_refresh_at = null,
            state_version = provider_turn_states.state_version + 1,
            refresh_status = 'missing', last_observed_length = null,
            last_probe_at = excluded.last_probe_at, updated_at = excluded.updated_at
@@ -618,9 +607,9 @@ async fn load_locked(
 ) -> Result<TurnStateRow, ProviderStoreError> {
     sqlx::query_as::<_, TurnStateRow>(
         "select provider_account_id, upstream_model, normal_length,
-                active_state, active_issued_at, active_expires_at,
-                standby_state, standby_issued_at, standby_expires_at,
-                state_version, refresh_status, last_observed_length, suspect_count
+                active_state, active_issued_at, active_expires_at, active_captured_at,
+                standby_state, standby_issued_at, standby_expires_at, standby_captured_at,
+                state_version, refresh_status, last_observed_length, suspect_count, probe_refresh_at
          from provider_turn_states
          where provider_account_id = $1 and upstream_model = $2 for update",
     )
@@ -678,23 +667,36 @@ async fn update_candidate(
     Ok(())
 }
 
-async fn touch_success(
+async fn renew_candidate(
     transaction: &mut Transaction<'_, Postgres>,
     candidate: &ProviderTurnStateCandidate,
+    active: bool,
 ) -> Result<(), ProviderStoreError> {
     sqlx::query(
         "update provider_turn_states
          set last_observed_length = $3,
-             last_probe_at = $4, last_success_at = $4, updated_at = $4
+             active_expires_at = case when $5 then greatest(active_expires_at, $6) else active_expires_at end,
+             active_captured_at = case when $5 then greatest(active_captured_at, $4) else active_captured_at end,
+             standby_expires_at = case when not $5 then greatest(standby_expires_at, $6) else standby_expires_at end,
+             standby_captured_at = case when not $5 then greatest(standby_captured_at, $4) else standby_captured_at end,
+             suspect_count = case when $5 then 0 else suspect_count end,
+             refresh_status = 'ready',
+             last_probe_at = greatest(last_probe_at, $4),
+             last_success_at = greatest(last_success_at, $4), updated_at = greatest(updated_at, $4)
          where provider_account_id = $1 and upstream_model = $2",
     )
     .bind(candidate.account_id.as_str())
     .bind(candidate.upstream_model.as_str())
-    .bind(i16::try_from(candidate.normal_length).map_err(|_| invalid("turn state length"))?)
+    .bind(
+        i16::try_from(candidate.value.state().expose_to_provider().len())
+            .map_err(|_| invalid("turn state length"))?,
+    )
     .bind(DateTime::<Utc>::from(candidate.observed_at))
+    .bind(active)
+    .bind(DateTime::<Utc>::from(candidate.value.expires_at()))
     .execute(&mut **transaction)
     .await
-    .map_err(|_| unavailable("touch provider turn state candidate"))?;
+    .map_err(|_| unavailable("renew provider turn state candidate"))?;
     Ok(())
 }
 
@@ -723,7 +725,8 @@ fn decode_row(row: TurnStateRow) -> Result<ProviderTurnStateRecord, ProviderStor
             .map(u16::try_from)
             .transpose()
             .map_err(|_| invalid("turn state observed length"))?,
-    ))
+    )
+    .with_probe_refresh_at(row.probe_refresh_at.map(Into::into)))
 }
 
 fn decode_value(

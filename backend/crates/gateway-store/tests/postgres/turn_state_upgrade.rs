@@ -1,5 +1,17 @@
 use super::TestDatabase;
 
+pub(super) fn before_observed_lease() -> sqlx::migrate::Migrator {
+    sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 36)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    }
+}
+
 async fn insert_legacy_account(database: &TestDatabase) {
     // Use the old schema, not the latest repository's required columns.
     sqlx::query(
@@ -93,8 +105,9 @@ async fn probe_concurrency_upgrade_defaults_to_three_without_touching_state_or_s
             .fetch_one(&database.pool)
             .await
             .unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    // The later lease migration deliberately shortens clocks; isolate this contract.
+    before_observed_lease().run(&database.pool).await.unwrap();
+    before_observed_lease().run(&database.pool).await.unwrap();
     let state_after: serde_json::Value =
         sqlx::query_scalar("select to_jsonb(provider_turn_states) from provider_turn_states")
             .fetch_one(&database.pool)
@@ -153,7 +166,7 @@ async fn lifecycle_upgrade_preserves_existing_state_and_rejects_old_migrator() {
     .fetch_one(&database.pool)
     .await
     .unwrap();
-    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    before_observed_lease().run(&database.pool).await.unwrap();
     let after: (String, String, String, String) = sqlx::query_as(
         "select active_state, standby_state, active_expires_at::text,
                 standby_expires_at::text from provider_turn_states",

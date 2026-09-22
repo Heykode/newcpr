@@ -14,6 +14,8 @@ const modules = new Map()
 const fixedNow = new Date('2026-09-18T12:00:00Z')
 const icons = {
   ShieldCheck: defineComponent({ setup: () => () => h('svg', { 'data-icon': 'ShieldCheck' }) }),
+  RefreshCw: defineComponent({ setup: () => () => h('svg', { 'data-icon': 'RefreshCw' }) }),
+  LoaderCircle: defineComponent({ setup: () => () => h('svg', { 'data-icon': 'LoaderCircle' }) }),
 }
 
 function loadSource(filename) {
@@ -34,6 +36,10 @@ function loadSource(filename) {
   runInNewContext(outputText, {
     exports,
     require(name) {
+      if (name === '@/api')
+        return { requestAccountTurnStateProbe: () => { throw new Error('SSR must not probe') } }
+      if (name === '@/components/base/BaseToast')
+        return { toast: {} }
       if (name === '@lucide/vue')
         return icons
       if (name === '@vueuse/core')
@@ -51,6 +57,12 @@ function loadSource(filename) {
 }
 
 const component = loadSource(new URL('../src/views/accounts/components/AccountTurnStatePanel.vue', import.meta.url)).default
+
+test('collection setup retry is distinguished from upstream rate limiting', () => {
+  const { turnStateProbeReason } = loadSource(new URL('../src/views/accounts/utils/turnState.ts', import.meta.url))
+  assert.equal(turnStateProbeReason('collection_retry'), '采集任务异常，等待重试')
+  assert.equal(turnStateProbeReason('probe_rate_limited'), '当前模型探测限流')
+})
 
 function account(fields = {}) {
   return {
@@ -176,6 +188,25 @@ test('State panel explains disabled and unavailable states without inventing cap
 
 test('non-OpenAI accounts do not render the managed State panel', async () => {
   assert.doesNotMatch(await render({ provider: 'xai' }), /data-account-turn-state-panel/)
+})
+
+test('manual probe controls are bounded and unavailable during collection, cooldown or opt-out', async () => {
+  const html = await render()
+  const buttons = html.match(/<button[^>]*data-state-probe[^>]*>/g)
+  assert.equal(buttons.length, 3)
+  assert.match(buttons[0], /立即探测/)
+  assert.doesNotMatch(buttons[0], / disabled[ >]/)
+  assert.match(buttons[1], / disabled[ >]/)
+  assert.match(buttons[2], / disabled[ >]/)
+  for (const fixture of [
+    { turnStateInjectionEnabled: false },
+    { enabled: false },
+    { status: 'error', errorReason: 'credential_expired' },
+    { turnState: { ...account().turnState, enabled: false } },
+  ]) {
+    const disabled = (await render(fixture)).match(/<button[^>]*data-state-probe[^>]*>/g)
+    assert.ok(disabled.every(button => / disabled[ >]/.test(button)))
+  }
 })
 
 test('credential errors and paused accounts override historical ready or refreshing slots', async () => {

@@ -1220,6 +1220,19 @@ impl ProviderAdmin for UnusedProvider {
 
     async fn account_unavailable(&self, _: &ProviderAccountId) {}
 
+    async fn request_turn_state_probe(
+        &self,
+        _: &ProviderAccountId,
+        model: &gateway_core::routing::UpstreamModelId,
+    ) -> Result<gateway_admin::model::accounts::TurnStateProbeOutcome, ProviderAdminError> {
+        use gateway_admin::model::accounts::TurnStateProbeOutcome;
+        Ok(if model.as_str() == "busy-model" {
+            TurnStateProbeOutcome::AlreadyRunning
+        } else {
+            TurnStateProbeOutcome::Queued
+        })
+    }
+
     fn connection_test_operation(
         &self,
         _: &gateway_core::routing::UpstreamModelId,

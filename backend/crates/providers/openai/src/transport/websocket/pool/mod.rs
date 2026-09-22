@@ -489,7 +489,7 @@ impl CodexWebSocketPool {
             .filter(|key| {
                 key.managed_version(account, model)
                     .is_some_and(|old| old < version)
-                    && !key.managed_state_expired()
+                    && key.turn_state_expires_at != Some(std::time::UNIX_EPOCH)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -499,6 +499,40 @@ impl CodexWebSocketPool {
         for mut key in keys {
             if let Some(slot) = state.slots.remove(&key) {
                 key.turn_state_expires_at = Some(std::time::UNIX_EPOCH);
+                state.slots.insert(key, slot);
+            }
+        }
+        self.capacity_changed.send_replace(());
+    }
+
+    pub(crate) fn renew_managed_state(
+        &self,
+        account: &str,
+        model: &str,
+        version: u64,
+        expires_at: std::time::SystemTime,
+    ) {
+        let mut state = self.lock_state();
+        if state.slots.keys().any(|key| {
+            key.managed_version(account, model)
+                .is_some_and(|stored| stored > version)
+        }) {
+            return;
+        }
+        let keys = state
+            .slots
+            .keys()
+            .filter(|key| {
+                key.managed_version(account, model) == Some(version)
+                // An explicit retirement is not a renewable lease.
+                && key.turn_state_expires_at != Some(std::time::UNIX_EPOCH)
+                && key.turn_state_expires_at.is_some_and(|old| expires_at > old)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for mut key in keys {
+            if let Some(slot) = state.slots.remove(&key) {
+                key.turn_state_expires_at = Some(expires_at);
                 state.slots.insert(key, slot);
             }
         }

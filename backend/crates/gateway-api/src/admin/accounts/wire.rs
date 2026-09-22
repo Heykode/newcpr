@@ -691,6 +691,37 @@ impl AccountActionRequest {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountTurnStateProbeRequest {
+    pub account_id: String,
+    pub model_id: String,
+}
+
+impl AccountTurnStateProbeRequest {
+    pub(super) fn into_target(
+        self,
+    ) -> Result<(ProviderAccountId, UpstreamModelId), WireValidationError> {
+        require_account_id(&self.account_id, "accountId")?;
+        if self.model_id.trim().is_empty()
+            || self.model_id.len() > MAX_ID_BYTES
+            || self.model_id.chars().any(char::is_control)
+        {
+            return Err(WireValidationError::new("modelId"));
+        }
+        Ok((
+            ProviderAccountId::new(self.account_id)
+                .map_err(|_| WireValidationError::new("accountId"))?,
+            UpstreamModelId::new(self.model_id).map_err(|_| WireValidationError::new("modelId"))?,
+        ))
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountTurnStateProbeData {
+    pub status: &'static str,
+}
+
 /// 主动额度重置卡消费请求。幂等键由 UI 生成并在不确定重试时复用，与官方一致。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

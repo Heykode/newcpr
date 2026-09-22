@@ -526,6 +526,15 @@ height or 96px narrow-screen height; cap the list at three rows and scroll furth
 models internally. One/two-model lists retain their natural height. Overflowing
 lists are named keyboard-focusable regions; long model names retain full titles.
 Neither the panel nor its title attributes may contain the opaque State value.
+Each model has a compact refresh icon with a named tooltip for manual early
+collection. Keep the fixed row height and existing internal scrolling. Disable it
+when policy/account eligibility is unavailable, the model is queued/collecting,
+or the authoritative cooldown has not expired. Use a synchronous per-model
+submission guard and generation fencing for account changes and disposal.
+Submit only account/model to the dedicated State command, never credential/quota
+refresh. Successful queue acceptance rereads the ordinary account list; no extra
+polling or optimistic State readiness. Display queue acceptance separately from
+actual acquisition success. Backend queue deduplication remains authoritative.
 There is no permanent spare placeholder. Show `待切换` only when a next slot exists;
 off retains original countdowns, while cached slots do not imply scheduling readiness.
 Cover the real SFC, legacy fallback, totals and countdowns in

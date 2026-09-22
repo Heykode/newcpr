@@ -1013,7 +1013,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
-            if (completed || terminal_failure.is_some())
+            if completed && terminal_failure.is_none() && !terminal_response_is_incomplete(&events)
                 && let Some(manager) = turn_states.as_ref()
                 && let Some((value, observed_at)) = managed_state_observation.take()
             {
@@ -1180,7 +1180,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             .iter()
             .flat_map(ProviderEvent::canonical_facts)
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
-        if (completed || terminal_failure.is_some())
+        if completed && terminal_failure.is_none() && !terminal_response_is_incomplete(&events)
             && let Some(manager) = turn_states.as_ref()
             && let Some((value, observed_at)) = managed_state_observation.take()
         {

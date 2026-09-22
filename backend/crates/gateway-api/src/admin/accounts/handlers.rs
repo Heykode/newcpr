@@ -49,6 +49,10 @@ where
         )
         .route("/api/admin/accounts/models", get(account_models::<S>))
         .route(
+            "/api/admin/accounts/turn-state/probe",
+            post(request_turn_state_probe::<S>),
+        )
+        .route(
             "/api/admin/accounts/models/refresh",
             post(refresh_account_models::<S>),
         )
@@ -601,6 +605,31 @@ where
         .map_err(map_service_error)?;
     let data = account_models_data(result);
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
+async fn request_turn_state_probe<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<AccountTurnStateProbeRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let (account_id, model) = request.into_target().map_err(map_wire_error)?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .request_turn_state_probe(&account_id, &model)
+        .await
+        .map_err(map_service_error)?;
+    let status = match result {
+        gateway_admin::model::accounts::TurnStateProbeOutcome::Queued => "queued",
+        gateway_admin::model::accounts::TurnStateProbeOutcome::AlreadyRunning => "already_running",
+    };
+    Ok(AdminResponse::new(
+        StatusCode::ACCEPTED,
+        AdminEnvelope::ok(AccountTurnStateProbeData { status }),
+    ))
 }
 
 async fn test_account_connection<S>(

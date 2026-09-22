@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
 use gateway_admin::model::Revision;
 use gateway_admin::model::accounts::AccountRecord;
-use gateway_admin::model::accounts::ConnectionTestEndpoint;
+use gateway_admin::model::accounts::{ConnectionTestEndpoint, TurnStateProbeOutcome};
 use gateway_admin::model::observability::{
     CalculatedBillingBreakdown, CurrencyCost, DashboardDesktopRelease, DashboardWireAttribute,
     DashboardWireProfile, DashboardWireTarget, DecimalAmount, DesktopReleaseStatus,
@@ -226,6 +226,16 @@ impl ProviderAdmin for OpenAiAdminProvider {
         if self.reload_egress().await.is_err() {
             tracing::warn!("OpenAI egress state could not reload after account unavailability");
         }
+    }
+
+    async fn request_turn_state_probe(
+        &self,
+        account_id: &ProviderAccountId,
+        model: &UpstreamModelId,
+    ) -> Result<TurnStateProbeOutcome, ProviderAdminError> {
+        self.turn_state_maintenance
+            .request_probe(account_id, model)
+            .await
     }
 
     async fn account_facts_changed(&self, account_ids: &[ProviderAccountId]) {

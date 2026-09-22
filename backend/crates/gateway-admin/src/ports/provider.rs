@@ -10,7 +10,7 @@ use gateway_core::{
 };
 use heck::ToUpperCamelCase;
 
-use crate::model::accounts::ConnectionTestEndpoint;
+use crate::model::accounts::{ConnectionTestEndpoint, TurnStateProbeOutcome};
 use crate::model::observability::{
     CalculatedBillingBreakdown, DashboardWireProfile, ProviderBillingInput,
 };
@@ -176,6 +176,14 @@ pub trait ProviderAdmin: Send + Sync {
     /// 该通知发生在 Store 事务成功之后、下一份 RuntimeSnapshot 编译之前；通知
     /// 不参与已提交事务成败。没有账号派生状态的 Provider 可使用默认空实现。
     async fn account_facts_changed(&self, _account_ids: &[ProviderAccountId]) {}
+
+    async fn request_turn_state_probe(
+        &self,
+        _account_id: &ProviderAccountId,
+        _model: &UpstreamModelId,
+    ) -> Result<TurnStateProbeOutcome, ProviderAdminError> {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
 
     /// Egress policy changed after a successful control-plane transaction.
     async fn egress_configuration_changed(&self) -> Result<(), ProviderAdminError> {
