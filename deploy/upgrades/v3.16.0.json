@@ -1,0 +1,12 @@
+{
+  "from_version": "3.14.0",
+  "to_version": "3.16.0",
+  "from_migrations_tree": "f06265e1a7d0b96fbb038533eddb6d4ec21bab9b",
+  "to_migrations_tree": "f6fc9598552dc050f96ed7cc983cb98ef3be7675",
+  "added": [
+    "0033_request_billing_snapshots.sql",
+    "0034_relogin_retry_settings.sql",
+    "0035_account_model_access.sql"
+  ],
+  "recovery": "manual"
+}
