@@ -167,6 +167,51 @@ async fn expired_managed_pool_rejects_new_chains_but_keeps_exact_continuation() 
 }
 
 #[tokio::test]
+async fn same_state_renewal_preserves_socket_identity_and_cannot_revive_retired_generations() {
+    let (pool, _) = pool(2);
+    let now = std::time::SystemTime::now();
+    let owner = key(1)
+        .with_model_state("model-a", 1)
+        .with_state_expiry(Some(now + Duration::from_secs(60)));
+    let (connection, lease, _peer) = connected(&pool, &owner).await;
+    let connection_id = connection.websocket.connection_id();
+    pool.renew_managed_state("account", "model-a", 1, now + Duration::from_secs(180));
+    pool.renew_managed_state("account", "model-a", 1, now + Duration::from_secs(90));
+    lease.put(connection).await;
+    {
+        let state = pool.lock_state();
+        let (stored, _) = state.slots.get_key_value(&owner).unwrap();
+        assert_eq!(stored.stable_hash(), owner.stable_hash());
+        assert_eq!(
+            stored.turn_state_expires_at,
+            Some(now + Duration::from_secs(180))
+        );
+    }
+    match pool.acquire(&owner, None).await {
+        WebSocketPoolAcquire::Reused { connection, lease } => {
+            assert_eq!(connection.websocket.connection_id(), connection_id);
+            // Retire a generation even if its old local lease has already elapsed.
+            {
+                let mut state = pool.lock_state();
+                let slot = state.slots.remove(&owner).unwrap();
+                state.slots.insert(
+                    owner
+                        .clone()
+                        .with_state_expiry(Some(now - Duration::from_secs(1))),
+                    slot,
+                );
+            }
+            pool.retire_managed_state("account", "model-a", 2);
+            pool.renew_managed_state("account", "model-a", 1, now + Duration::from_secs(240));
+            assert!(pool.managed_version_retired("account", "model-a", 1));
+            lease.put(*connection).await;
+        }
+        _ => panic!("renewal must preserve the physical socket"),
+    }
+    pool.shutdown().await;
+}
+
+#[tokio::test]
 async fn retired_managed_socket_without_continuation_closes_on_return() {
     let (pool, _) = pool(2);
     let owner = key(1).with_model_state("model-a", 1);

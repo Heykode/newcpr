@@ -113,7 +113,8 @@ impl ProviderEgressStorePort for LoopbackEgress {
 pub(super) struct ProbeStates {
     pub(super) records:
         Mutex<BTreeMap<(ProviderAccountId, UpstreamModelId), ProviderTurnStateRecord>>,
-    writes: AtomicUsize,
+    pub(super) writes: AtomicUsize,
+    pub(super) observations: Mutex<Vec<ProviderTurnStateAnomaly>>,
     failed: AtomicUsize,
     cancelled: AtomicUsize,
     promoted: AtomicUsize,
@@ -173,6 +174,14 @@ impl ProviderTurnStatePort for ProbeStates {
         progress: ProviderTurnStateProbeProgress,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async move {
+            if progress.successful_attempt.is_some() {
+                let mut records = self.records.lock().unwrap();
+                if let Some(record) = records.get_mut(&(account.clone(), model.clone())) {
+                    *record = record
+                        .clone()
+                        .with_probe_refresh_at(Some(SystemTime::now() + Duration::from_secs(30)));
+                }
+            }
             self.progress.lock().unwrap().insert(
                 (account.clone(), model.clone()),
                 (
@@ -269,6 +278,39 @@ impl ProviderTurnStatePort for ProbeStates {
             }) {
                 return Ok(previous.unwrap().clone());
             }
+            if let Some(previous) = previous
+                && [previous.active(), previous.standby()]
+                    .into_iter()
+                    .flatten()
+                    .any(|value| value.state() == candidate.value.state())
+            {
+                let renew = |value: Option<&ProviderTurnStateValue>| {
+                    value.map(|value| {
+                        if value.state() == candidate.value.state() {
+                            ProviderTurnStateValue::new(
+                                value.state().clone(),
+                                value.issued_at(),
+                                value.expires_at().max(candidate.value.expires_at()),
+                            )
+                        } else {
+                            value.clone()
+                        }
+                    })
+                };
+                let record = ProviderTurnStateRecord::new(
+                    candidate.account_id,
+                    candidate.upstream_model,
+                    candidate.normal_length,
+                    renew(previous.active()),
+                    renew(previous.standby()),
+                    previous.state_version(),
+                    ProviderTurnStateRefreshStatus::Ready,
+                    Some(candidate.normal_length),
+                )
+                .with_probe_refresh_at(previous.probe_refresh_at());
+                records.insert(key, record.clone());
+                return Ok(record);
+            }
             let (active, standby, status) = match candidate.slot {
                 ProviderTurnStateSlot::Active => (
                     Some(candidate.value),
@@ -292,7 +334,8 @@ impl ProviderTurnStatePort for ProbeStates {
                 version,
                 status,
                 Some(candidate.normal_length),
-            );
+            )
+            .with_probe_refresh_at(previous.and_then(ProviderTurnStateRecord::probe_refresh_at));
             records.insert(key, record.clone());
             Ok(record)
         })
@@ -300,9 +343,16 @@ impl ProviderTurnStatePort for ProbeStates {
 
     fn record_anomaly(
         &self,
-        _: ProviderTurnStateAnomaly,
+        observation: ProviderTurnStateAnomaly,
     ) -> BoxFuture<'_, Result<ProviderTurnStateRecord, ProviderStoreError>> {
-        Box::pin(async { panic!("unused anomaly path") })
+        Box::pin(async move {
+            let key = (
+                observation.account_id.clone(),
+                observation.upstream_model.clone(),
+            );
+            self.observations.lock().unwrap().push(observation);
+            Ok(self.records.lock().unwrap().get(&key).unwrap().clone())
+        })
     }
 
     fn mark_refresh_status<'a>(
@@ -330,7 +380,8 @@ impl ProviderTurnStatePort for ProbeStates {
                 old.map_or(0, ProviderTurnStateRecord::state_version),
                 status,
                 None,
-            );
+            )
+            .with_probe_refresh_at(old.and_then(ProviderTurnStateRecord::probe_refresh_at));
             records.insert(key, record.clone());
             Ok(record)
         })
@@ -605,7 +656,7 @@ impl Respond for BudgetResponder {
     }
 }
 
-fn fresh_state(value: usize) -> String {
+pub(super) fn fresh_state(value: usize) -> String {
     state_at(value, SystemTime::now())
 }
 
@@ -689,7 +740,7 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
                 let state = ProviderTurnStateValue::new(
                     OpaqueTurnState::new(state_at(1, captured)),
                     captured,
-                    captured + Duration::from_secs(3600),
+                    issued_at + Duration::from_secs(200),
                 );
                 states.records.lock().unwrap().insert(
                     (id.clone(), model.clone()),
@@ -746,7 +797,7 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
         } else if !succeed {
             2200..=usize::MAX as u64
         } else if repeat_first {
-            12..=24
+            4..=4
         } else if soft_cookie {
             8..=24
         } else {
@@ -888,7 +939,7 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
     } else if !succeed {
         *count >= 550
     } else if repeat_first {
-        (3..=6).contains(count)
+        *count == 1
     } else if soft_cookie {
         (2..=6).contains(count)
     } else {
@@ -899,30 +950,21 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
         0,
         "ordinary misses never terminate at a fixed request budget"
     );
-    if repeat_first {
-        let times = responder.times.lock().unwrap();
-        let first_second = times
-            .iter()
-            .filter(|(n, _)| *n == 2)
-            .map(|(_, at)| *at)
-            .min()
-            .unwrap();
-        let earliest_third = times
-            .iter()
-            .filter(|(n, _)| *n == 3)
-            .map(|(_, at)| *at)
-            .min()
-            .unwrap();
-        assert!(
-            earliest_third.duration_since(first_second) < Duration::from_secs(5),
-            "standby retries use staged batches without six-second pacing"
-        );
-    }
     if succeed {
         let records = states.records.lock().unwrap();
         assert_eq!(records.len(), 4);
         for record in records.values() {
-            if refresh || repeat_first {
+            if repeat_first {
+                assert!(record.active().unwrap().issued_at() <= captured);
+                assert!(
+                    record.active().unwrap().expires_at() > issued_at + Duration::from_secs(230)
+                );
+                assert!(
+                    record.standby().is_none(),
+                    "an echoed active is not a distinct backup"
+                );
+                assert_eq!(record.state_version(), 1);
+            } else if refresh {
                 assert!(record.active().unwrap().issued_at() <= captured);
                 assert!(record.standby().unwrap().issued_at() > captured);
                 assert_eq!(record.state_version(), 1);
@@ -941,15 +983,8 @@ async fn bounded_collectors(scenario: AcquisitionScenario) {
         assert!(
             requests
                 .iter()
-                .filter(|request| {
-                    request
-                        .headers
-                        .get("cookie")
-                        .is_some_and(|value| value == "__cf_bm=synthetic-fresh")
-                })
-                .count()
-                >= 4,
-            "the next batch must reload each account's Cookie material"
+                .all(|request| !request.headers.contains_key("cookie")),
+            "probes must remain cookie-free even after account Cookie material changes"
         );
         assert_eq!(
             states.cancelled.load(Ordering::SeqCst),
@@ -976,7 +1011,7 @@ async fn parallel_account_model_tasks_only_acquire_active_initially() {
 }
 
 #[tokio::test]
-async fn standby_repeats_are_rejected_and_retried_with_staged_batches() {
+async fn repeated_active_renews_its_lease_without_manufacturing_a_standby() {
     bounded_collectors(AcquisitionScenario::RepeatedStandby).await;
 }
 
@@ -988,7 +1023,7 @@ async fn first_five_accounts_run_all_models_while_later_accounts_wait() {
 }
 
 #[tokio::test]
-async fn fifteen_minute_refresh_keeps_active_until_switch_cutoff() {
+async fn thirty_second_refresh_keeps_active_until_switch_cutoff() {
     bounded_collectors(AcquisitionScenario::RefreshActive).await;
 }
 
@@ -1132,10 +1167,52 @@ impl CredentialRecoveryFixture {
     }
 }
 
-#[tokio::test]
-async fn probe_batches_warm_up_and_apply_live_concurrency_at_the_next_boundary() {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+async fn accept_probe(
+    listener: &tokio::net::TcpListener,
+) -> tokio::io::BufReader<tokio::net::TcpStream> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(socket);
+        let mut body_length = 0;
+        loop {
+            let mut line = String::new();
+            assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                assert!(!name.eq_ignore_ascii_case("cookie"));
+                assert!(!name.eq_ignore_ascii_case("x-codex-turn-state"));
+                if name.eq_ignore_ascii_case("content-length") {
+                    body_length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+        }
+        let mut body = vec![0; body_length];
+        reader.read_exact(&mut body).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["model"], "model-a");
+        reader
+    })
+    .await
+    .expect("expected rolling probe request")
+}
 
+async fn fail_probe(mut reader: tokio::io::BufReader<tokio::net::TcpStream>) {
+    use tokio::io::AsyncWriteExt;
+    reader
+        .get_mut()
+        .write_all(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn probes_warm_up_refill_slow_siblings_and_apply_live_limits() {
+    use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy = gateway_core::account::OutboundProxy::parse(&format!(
         "http://{}",
@@ -1151,64 +1228,214 @@ async fn probe_batches_warm_up_and_apply_live_concurrency_at_the_next_boundary()
         .publish_openai_turn_state_policy(policy.clone());
     fixture.discover().await;
 
-    // Hold every response so batch boundaries are verified by actual requests,
-    // not by how quickly the test machine constructs clients.
-    for (round, (expected, next_concurrency)) in
-        [(1, 3), (1, 3), (1, 3), (3, 10), (10, 1), (1, 5), (5, 5)]
-            .into_iter()
-            .enumerate()
-    {
-        let mut requests = Vec::new();
-        for _ in 0..expected {
-            let reader = tokio::time::timeout(Duration::from_secs(10), async {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut reader = BufReader::new(socket);
-                let mut body_length = 0;
-                loop {
-                    let mut line = String::new();
-                    assert_ne!(reader.read_line(&mut line).await.unwrap(), 0);
-                    if line == "\r\n" {
-                        break;
-                    }
-                    if let Some((name, value)) = line.split_once(':')
-                        && name.eq_ignore_ascii_case("content-length")
-                    {
-                        body_length = value.trim().parse::<usize>().unwrap();
-                    }
-                }
-                let mut body = vec![0; body_length];
-                reader.read_exact(&mut body).await.unwrap();
-                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-                assert_eq!(body["model"], "model-a");
-                reader
-            })
-            .await
-            .expect("expected batch request");
-            // Keep the complete reader alive until the whole batch is dispatched.
-            requests.push(reader);
-        }
-        fixture.tuning.publish_openai_turn_state_policy(
-            policy.clone().with_probe_concurrency(next_concurrency),
-        );
-        let quiet = if round == 3 { 1100 } else { 50 };
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(policy.clone().with_probe_concurrency(3));
+    for _ in 0..3 {
+        let request = accept_probe(&listener).await;
         assert!(
-            tokio::time::timeout(Duration::from_millis(quiet), listener.accept())
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
                 .await
-                .is_err(),
-            "round {round} exceeded its batch size"
+                .is_err()
         );
-        assert_eq!(
-            fixture.states.cancelled.load(Ordering::SeqCst),
-            0,
-            "a numeric setting update must not cancel collection"
-        );
-        assert_eq!(fixture.states.writes.load(Ordering::SeqCst), 0);
-        for mut reader in requests {
-            reader.get_mut().write_all(
-                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            ).await.unwrap();
-        }
+        fail_probe(request).await;
     }
+    let slow_a = accept_probe(&listener).await;
+    let slow_b = accept_probe(&listener).await;
+    fail_probe(accept_probe(&listener).await).await;
+    // The two slow siblings remain held while the empty slot is reused repeatedly.
+    fail_probe(accept_probe(&listener).await).await;
+    let replacement = accept_probe(&listener).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(policy.clone().with_probe_concurrency(1));
+    for request in [slow_a, slow_b] {
+        fail_probe(request).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+    fail_probe(replacement).await;
+    let held = accept_probe(&listener).await;
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(policy.with_probe_concurrency(4));
+    let mut winner = accept_probe(&listener).await;
+    let other_a = accept_probe(&listener).await;
+    let other_b = accept_probe(&listener).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+    assert_eq!(fixture.states.cancelled.load(Ordering::SeqCst), 0);
+    let body =
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+    winner.get_mut().write_all(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Codex-Turn-State: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        state_at(7, SystemTime::now()), body.len(),
+    ).as_bytes()).await.unwrap();
+    wait_count(&fixture.states.writes, 1).await;
+    wait_count(&fixture.states.cancelled, 1).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+    drop((held, other_a, other_b));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn manual_probe_refreshes_only_one_model_retains_active_and_coalesces() {
+    use gateway_admin::model::accounts::TurnStateProbeOutcome;
+    let fixture = CredentialRecoveryFixture::new().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(1))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n"),
+        )
+        .mount(&fixture.server)
+        .await;
+    fixture.discover().await;
+    wait_count(&fixture.states.writes, 2).await;
+    wait_count(&fixture.states.cancelled, 2).await;
+    let account = fixture.accounts.account("acct_recovery_probe").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let before = fixture.states.records.lock().unwrap().clone();
+    let active = before[&(account.id().clone(), model.clone())]
+        .active()
+        .cloned();
+    fixture.server.reset().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-codex-turn-state", fresh_state(2))
+                .set_body_string("data: {\"type\":\"response.completed\"}\n\n")
+                .set_delay(Duration::from_millis(300)),
+        )
+        .mount(&fixture.server)
+        .await;
+    assert_eq!(
+        fixture
+            .admin
+            .request_turn_state_probe(account.id(), &model)
+            .await
+            .unwrap(),
+        TurnStateProbeOutcome::Queued
+    );
+    for _ in 0..10 {
+        assert_eq!(
+            fixture
+                .admin
+                .request_turn_state_probe(account.id(), &model)
+                .await
+                .unwrap(),
+            TurnStateProbeOutcome::AlreadyRunning
+        );
+    }
+    assert_eq!(
+        fixture.states.records.lock().unwrap()[&(account.id().clone(), model.clone())].active(),
+        active.as_ref()
+    );
+    wait_count(&fixture.states.writes, 3).await;
+    wait_count(&fixture.states.cancelled, 3).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
+    let records = fixture.states.records.lock().unwrap().clone();
+    assert_eq!(
+        records[&(account.id().clone(), model.clone())].active(),
+        active.as_ref()
+    );
+    assert!(records[&(account.id().clone(), model)].standby().is_some());
+    let other_key = (
+        account.id().clone(),
+        UpstreamModelId::new("model-b").unwrap(),
+    );
+    assert_eq!(records[&other_key], before[&other_key]);
+    assert_eq!(
+        fixture
+            .accounts
+            .account(account.id().as_str())
+            .unwrap()
+            .revision(),
+        account.revision()
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn manual_probe_respects_policy_credential_and_probe_cooldown() {
+    let fixture = CredentialRecoveryFixture::new().await;
+    let account = fixture.accounts.account("acct_recovery_probe").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let other = UpstreamModelId::new("excluded-model").unwrap();
+    assert!(
+        fixture
+            .admin
+            .request_turn_state_probe(account.id(), &other)
+            .await
+            .is_err()
+    );
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(OpenAiTurnStatePolicy::default());
+    assert!(
+        fixture
+            .admin
+            .request_turn_state_probe(account.id(), &model)
+            .await
+            .is_err()
+    );
+    fixture
+        .tuning
+        .publish_openai_turn_state_policy(OpenAiTurnStatePolicy::new(true, [model.clone()].into()));
+    fixture
+        .states
+        .record_probe_cooldown(
+            account.id(),
+            &model,
+            account.turn_state_binding_revision(),
+            ProviderTurnStateProbeCooldown {
+                until: SystemTime::now() + Duration::from_secs(60),
+                http_status: Some(429),
+                retry_from_upstream: true,
+                error_code: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .admin
+            .request_turn_state_probe(account.id(), &model)
+            .await
+            .is_err()
+    );
+    fixture.states.probe_cooldowns.lock().unwrap().clear();
+    fixture
+        .accounts
+        .repository()
+        .apply_state(&account, CredentialState::Expired, SystemTime::now())
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .admin
+            .request_turn_state_probe(account.id(), &model)
+            .await
+            .is_err()
+    );
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
     fixture.stop().await;
 }
 

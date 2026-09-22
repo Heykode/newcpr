@@ -17,12 +17,24 @@ async function main() {
   const page = await browser.newPage({ reducedMotion: 'reduce' })
   const errors = []
   const mutations = []
+  const probeRequests = []
+  let finishProbe
+  let manuallyQueuedModel = null
   let enabled = true
   let ready = true
   let modelCount = 2
   let errorReason = null
   page.on('pageerror', error => errors.push(error.message))
   const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
+  await page.route('**/dev/api/admin/accounts/turn-state/probe', async (route) => {
+    assert.equal(route.request().method(), 'POST')
+    probeRequests.push(route.request().postDataJSON())
+    await new Promise((resolve) => {
+      finishProbe = resolve
+    })
+    manuallyQueuedModel = probeRequests.at(-1).modelId
+    await fulfill(route, { status: 'queued' })
+  })
   await page.route('**/dev/api/admin/auth/status', route => fulfill(route, { authenticated: true }))
   await page.route('**/dev/api/admin/system/version', route => fulfill(route, {
     version: '3.12.0',
@@ -86,7 +98,7 @@ async function main() {
                   },
                   ...Array.from({ length: modelCount - 2 }, (_, index) => ({
                     model: `model-extra-${index}-with-a-long-name-for-overflow-checks`,
-                    refreshStatus: 'ready',
+                    refreshStatus: manuallyQueuedModel === `model-extra-${index}-with-a-long-name-for-overflow-checks` ? 'queued' : 'ready',
                     active: { chars: 332, expiresAt: expiresAt(40) },
                     standby: { chars: 332, expiresAt: expiresAt(45) },
                   })),
@@ -269,6 +281,30 @@ async function main() {
       await page.locator('button[title="展开统计"]').first().click()
       await panel.waitFor()
     }
+    modelCount = 4
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.reload()
+    await page.locator('button[title="展开统计"]').first().click()
+    await panel.waitFor()
+    const probeButtons = panel.locator('[data-state-probe]')
+    assert.equal(await probeButtons.nth(0).isDisabled(), true)
+    assert.equal(await probeButtons.nth(1).isDisabled(), true)
+    const probeButton = probeButtons.nth(2)
+    await probeButton.click()
+    await page.waitForFunction(() =>
+      document.querySelectorAll('[data-state-probe]')[2]?.getAttribute('aria-busy') === 'true')
+    assert.equal(await probeButton.isDisabled(), true)
+    assert.equal(probeRequests.length, 1)
+    assert.deepEqual(probeRequests[0], {
+      accountId: accounts[0].id,
+      modelId: 'model-extra-0-with-a-long-name-for-overflow-checks',
+    })
+    finishProbe()
+    await page.waitForFunction(() =>
+      document.querySelectorAll('[data-state-probe]')[2]?.title.includes('正在排队'))
+    assert.equal(await probeButton.isDisabled(), true)
+    assert.match(await panel.textContent(), /332 字符/)
+    modelCount = 2
     for (const [reason, label] of [
       ['credential_expired', '凭据已失效，需要重新登录'],
       ['access_token_expired', '凭据已过期，等待自动刷新'],
@@ -312,7 +348,7 @@ async function main() {
     }
     assert.equal(mutations.length, 2)
     assert.deepEqual(errors, [])
-    process.stdout.write('Passed: State readiness panel, credential error/recovery, 2/3/4/10 models, bounded scrolling and keyboard access, slot lengths/countdowns, green/gold/error avatar, menu toggle, partial update, 2FA coexistence, provider guard, light/dark and 1440/390/320px.\n')
+    process.stdout.write('Passed: manual probe target/pending/cooldown/queued controls, State readiness panel, credential error/recovery, 2/3/4/10 models, bounded scrolling and keyboard access, slot lengths/countdowns, green/gold/error avatar, menu toggle, partial update, 2FA coexistence, provider guard, light/dark and 1440/390/320px.\n')
   }
   finally {
     await browser.close()

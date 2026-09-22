@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
-import { ShieldCheck } from '@lucide/vue'
+import { RefreshCw, ShieldCheck } from '@lucide/vue'
 import { computed } from 'vue'
 
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { useUiClock } from '@/composables/useUiClock'
+import { useTurnStateProbe } from '../composables/useTurnStateProbe'
 import { turnStateBlockReason, turnStateProbeReason } from '../utils/turnState'
 
 const props = defineProps<{
   account: AccountRow
 }>()
 
+const emit = defineEmits<{ probeQueued: [] }>()
 const now = useUiClock()
 const blockedReason = computed(() => turnStateBlockReason(props.account))
 const enabled = computed(() => props.account.turnStateInjectionEnabled && props.account.turnState?.enabled !== false)
@@ -119,6 +122,24 @@ const rows = computed(() => models.value.map((model) => {
 
 const readyCount = computed(() => rows.value.filter(row => row.ready).length)
 const capturedCount = computed(() => rows.value.reduce((total, row) => total + row.captured, 0))
+
+function probeDisabledReason(row: typeof rows.value[number]) {
+  if (!enabled.value || !props.account.turnState)
+    return 'State 注入未启用'
+  if (blockedReason.value)
+    return blockedReason.value
+  if (row.cooldownSeconds > 0)
+    return `探测冷却中，${row.cooldownSeconds}s 后重试`
+  if (['queued', 'refreshing'].includes(row.refreshStatus))
+    return '该模型正在排队或采集中'
+  return ''
+}
+
+const { pending, requestProbe } = useTurnStateProbe({
+  accountId: () => props.account.id,
+  canProbe: model => rows.value.some(row => row.model === model && !probeDisabledReason(row)),
+  onQueued: () => emit('probeQueued'),
+})
 
 function slotCountdown(slot: StateSlot | null) {
   if (!slot)
@@ -253,13 +274,26 @@ function probeTitle(row: StateModel) {
           data-account-turn-state-model
           class="h-20 border-t border-cp-border-secondary py-2 first:border-t-0 max-sm:h-24"
         >
-          <div class="flex min-w-0 items-center justify-between gap-3">
+          <div class="flex h-5 min-w-0 items-center justify-between gap-2">
             <span class="min-w-0 truncate font-mono text-cp-xs font-heavy text-cp-text" :title="row.model">
               {{ row.model }}
             </span>
-            <span class="shrink-0 text-[10px] leading-3.5 font-heavy" :class="row.statusClass">
-              {{ row.status }}
-            </span>
+            <div class="flex shrink-0 items-center gap-1">
+              <span class="text-[10px] leading-3.5 font-heavy" :class="row.statusClass">
+                {{ row.status }}
+              </span>
+              <BaseIconButton
+                data-state-probe
+                size="sm"
+                class="!size-5"
+                :label="`${row.model}：${probeDisabledReason(row) || '立即探测'}`"
+                :disabled="Boolean(probeDisabledReason(row))"
+                :loading="pending.has(row.model)"
+                @click="requestProbe(row.model)"
+              >
+                <RefreshCw class="size-3" />
+              </BaseIconButton>
+            </div>
           </div>
           <div class="mt-1.5 grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[10px] leading-3.5 max-sm:grid-cols-1">
             <div

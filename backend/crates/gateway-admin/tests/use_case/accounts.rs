@@ -17,7 +17,7 @@ use gateway_core::{
     },
     error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind},
     operation::{GenerateRequest, Operation, ProtocolPayload},
-    routing::ProviderKind,
+    routing::{ProviderKind, UpstreamModelId},
     upstream::UpstreamSendState,
 };
 
@@ -575,6 +575,18 @@ impl ProviderAdmin for FakeProviderAdmin {
             models: Vec::new(),
             observed_at: None,
         })
+    }
+
+    async fn request_turn_state_probe(
+        &self,
+        account: &ProviderAccountId,
+        model: &UpstreamModelId,
+    ) -> Result<gateway_admin::model::accounts::TurnStateProbeOutcome, ProviderAdminError> {
+        self.record("provider.turn_state_probe");
+        assert_eq!(account.as_str(), "acct_test");
+        assert_eq!(model.as_str(), "model-a");
+        self.require_available()?;
+        Ok(gateway_admin::model::accounts::TurnStateProbeOutcome::Queued)
     }
 
     async fn export_credentials(
@@ -3170,6 +3182,45 @@ async fn accounts_list_should_not_attach_account_usage_to_model_specific_quota_w
             .as_ref()
             .and_then(|usage| usage.total_tokens),
         Some(12_818_806),
+    );
+}
+
+#[tokio::test]
+async fn manual_state_probe_delegates_without_credential_refresh_or_snapshot_publication() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider.clone(), store).await;
+    let account = ProviderAccountId::new("acct_test").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    assert_eq!(
+        services
+            .accounts()
+            .request_turn_state_probe(&account, &model)
+            .await
+            .unwrap(),
+        gateway_admin::model::accounts::TurnStateProbeOutcome::Queued,
+    );
+    assert_eq!(
+        recorded(&events),
+        ["store.load_account", "provider.turn_state_probe"]
+    );
+    provider.fail_next(ProviderAdminErrorKind::Conflict);
+    assert!(
+        services
+            .accounts()
+            .request_turn_state_probe(&account, &model)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        recorded(&events),
+        [
+            "store.load_account",
+            "provider.turn_state_probe",
+            "store.load_account",
+            "provider.turn_state_probe"
+        ]
     );
 }
 

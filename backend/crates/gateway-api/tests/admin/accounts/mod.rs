@@ -704,6 +704,37 @@ mod response {
     }
 
     #[tokio::test]
+    async fn manual_state_probe_returns_only_safe_queue_status() {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        *fixture.account.lock().unwrap() = Some(account_fixture());
+        let app =
+            gateway_api::admin::accounts::router::<AdminTestState>().with_state(fixture.state());
+        for (model, status) in [("model-a", "queued"), ("busy-model", "already_running")] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/api/admin/accounts/turn-state/probe")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::COOKIE, "cpr_admin_session=valid-session")
+                        .header("x-request-id", "manual-probe")
+                        .body(Body::from(
+                            json!({"accountId":"acct_cost","modelId":model}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let body = to_bytes(response.into_body(), 4096).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["data"], json!({"status":status}));
+        }
+    }
+
+    #[tokio::test]
     async fn connection_test_get_and_post_require_admin_authentication() {
         let fixture = AdminTestFixture::new().await;
         let app =

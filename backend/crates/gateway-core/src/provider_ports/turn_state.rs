@@ -126,6 +126,7 @@ pub struct ProviderTurnStateRecord {
     state_version: u64,
     refresh_status: ProviderTurnStateRefreshStatus,
     last_observed_length: Option<u16>,
+    probe_refresh_at: Option<SystemTime>,
 }
 
 impl ProviderTurnStateRecord {
@@ -150,7 +151,19 @@ impl ProviderTurnStateRecord {
             state_version,
             refresh_status,
             last_observed_length,
+            probe_refresh_at: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_probe_refresh_at(mut self, value: Option<SystemTime>) -> Self {
+        self.probe_refresh_at = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn probe_refresh_at(&self) -> Option<SystemTime> {
+        self.probe_refresh_at
     }
 
     #[must_use]
@@ -205,7 +218,7 @@ pub struct ProviderTurnStateCandidate {
     pub account_id: ProviderAccountId,
     /// Account State binding generation, not the credential-material write CAS.
     pub expected_revision: CredentialRevision,
-    /// Fence passive responses to their injected version; independent probes use None.
+    /// Fence business responses to the injected version and probes to their dispatch version.
     pub expected_active_version: Option<u64>,
     pub upstream_model: UpstreamModelId,
     pub normal_length: u16,

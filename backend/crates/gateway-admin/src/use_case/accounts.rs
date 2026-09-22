@@ -8,7 +8,7 @@ use futures::StreamExt as _;
 use gateway_core::{
     account::{AccountConcurrencyLimit, ProviderAccountId},
     engine::probe::{AccountProbe, AccountProbeRequest},
-    routing::ProviderKind,
+    routing::{ProviderKind, UpstreamModelId},
     runtime::SnapshotControl,
 };
 
@@ -18,7 +18,7 @@ use crate::{
         accounts::{
             AccountConnectionTest, AccountConnectionTestEvent, AccountConnectionTestEventStream,
             AccountListQuery, AccountPageItem, AccountUpdateResult, AccountUsageWindowQuery,
-            AccountsUpdateResult, BatchUpdateAccounts, UpdateAccount,
+            AccountsUpdateResult, BatchUpdateAccounts, TurnStateProbeOutcome, UpdateAccount,
         },
         observability::TimeRange,
         provider_credentials::{
@@ -101,6 +101,14 @@ fn apply_current_quota_estimates(quota: &ProviderQuota, report: &mut AccountQuot
 /// 统一账号页消费的服务。
 #[async_trait]
 pub trait AccountsService: Send + Sync {
+    async fn request_turn_state_probe(
+        &self,
+        _account_id: &ProviderAccountId,
+        _model: &UpstreamModelId,
+    ) -> Result<TurnStateProbeOutcome, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持 State 探测"))
+    }
+
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError>;
 
     async fn export(
@@ -1001,6 +1009,18 @@ impl AccountsService for DefaultAccountsService {
             .models(account_id, refresh)
             .await
             .map_err(|error| map_provider_error(error, "provider model catalog"))
+    }
+
+    async fn request_turn_state_probe(
+        &self,
+        account_id: &ProviderAccountId,
+        model: &UpstreamModelId,
+    ) -> Result<TurnStateProbeOutcome, AdminError> {
+        let (_, provider) = self.provider_for_account(account_id).await?;
+        provider
+            .request_turn_state_probe(account_id, model)
+            .await
+            .map_err(|error| map_provider_error(error, "provider turn state probe"))
     }
 
     async fn test_connection(

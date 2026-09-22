@@ -150,6 +150,30 @@ async fn probe_cooldown_is_model_scoped_persistent_and_never_changes_state_readi
             .unwrap()
             .is_none()
     );
+    store
+        .record_probe_cooldown(
+            &id,
+            &model,
+            revision(),
+            ProviderTurnStateProbeCooldown {
+                until: SystemTime::now() + Duration::from_secs(300),
+                http_status: None,
+                retry_from_upstream: false,
+                error_code: None,
+            },
+        )
+        .await
+        .unwrap();
+    let retry: (String, Option<i16>) = sqlx::query_as(
+        "select last_probe_reason, probe_http_status from provider_turn_states
+         where provider_account_id = $1 and upstream_model = $2",
+    )
+    .bind(id.as_str())
+    .bind(model.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(retry, ("collection_retry".to_owned(), None));
     database.close().await;
 }
 
@@ -1014,7 +1038,11 @@ async fn proactive_promotion_preserves_clock_and_rejects_late_or_short_lived_sta
         292,
     );
     let echoed = store.put_candidate(echo).await.unwrap();
-    assert_eq!(echoed.active(), promoted.active());
+    assert_eq!(
+        echoed.active().unwrap().issued_at(),
+        promoted.active().unwrap().issued_at()
+    );
+    assert!(echoed.active().unwrap().expires_at() > promoted.active().unwrap().expires_at());
     assert_eq!(echoed.state_version(), promoted.state_version());
     sqlx::query(
         "update provider_accounts set credential_revision = 2, turn_state_binding_revision = 2",
@@ -1027,7 +1055,7 @@ async fn proactive_promotion_preserves_clock_and_rejects_late_or_short_lived_sta
 }
 
 #[tokio::test]
-async fn a_standby_echo_cannot_renew_its_original_capture_lifetime() {
+async fn a_standby_echo_renews_its_lease_when_promoted_to_active() {
     let Some(database) = TestDatabase::create("turn_state_echo_clock").await else {
         return;
     };
@@ -1074,7 +1102,11 @@ async fn a_standby_echo_cannot_renew_its_original_capture_lifetime() {
         ))
         .await
         .unwrap();
-    assert_eq!(echoed.active(), before.standby());
+    assert_eq!(
+        echoed.active().unwrap().state(),
+        before.standby().unwrap().state()
+    );
+    assert!(echoed.active().unwrap().expires_at() > before.standby().unwrap().expires_at());
     let mut expired_echo = candidate(
         &id,
         &model,
@@ -1088,8 +1120,181 @@ async fn a_standby_echo_cannot_renew_its_original_capture_lifetime() {
     assert_eq!(
         old.active(),
         echoed.active(),
-        "expired standby echo cannot be renewed"
+        "an older observation cannot shorten the renewed lease"
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn observation_leases_renew_both_slots_without_version_churn_and_reject_late_echoes() {
+    let Some(database) = TestDatabase::create("observed_lease").await else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_lease", "lease-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_lease").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let now = SystemTime::now();
+    let issued_at = now - Duration::from_secs(7200);
+    let make = |value: &str, slot, observed_at| ProviderTurnStateCandidate {
+        account_id: id.clone(),
+        expected_revision: revision(),
+        expected_active_version: None,
+        upstream_model: model.clone(),
+        normal_length: 292,
+        slot,
+        value: ProviderTurnStateValue::new(
+            OpaqueTurnState::new(value.repeat(292)),
+            issued_at,
+            observed_at + Duration::from_secs(240),
+        ),
+        observed_at,
+    };
+    let active = make(
+        "a",
+        ProviderTurnStateSlot::Active,
+        now - Duration::from_secs(20),
+    );
+    let initial = store.put_candidate(active.clone()).await.unwrap();
+    let standby = make(
+        "b",
+        ProviderTurnStateSlot::Standby,
+        now - Duration::from_secs(10),
+    );
+    store.put_candidate(standby).await.unwrap();
+    store
+        .record_probe_progress(
+            &id,
+            &model,
+            revision(),
+            ProviderTurnStateProbeProgress {
+                attempts: 1,
+                reason: None,
+                successful_attempt: Some(1),
+                returned_length: Some(292),
+            },
+        )
+        .await
+        .unwrap();
+    let probe_refresh_at = store
+        .read(&id, &model, revision())
+        .await
+        .unwrap()
+        .unwrap()
+        .probe_refresh_at()
+        .unwrap();
+    assert!(probe_refresh_at >= now + Duration::from_secs(29));
+    assert!(probe_refresh_at <= SystemTime::now() + Duration::from_secs(30));
+    let renewal = make("a", ProviderTurnStateSlot::Standby, now);
+    let renewed = store.put_candidate(renewal).await.unwrap();
+    assert_eq!(renewed.probe_refresh_at(), Some(probe_refresh_at));
+    assert_eq!(renewed.state_version(), initial.state_version());
+    assert_eq!(
+        renewed.active().unwrap().issued_at(),
+        initial.active().unwrap().issued_at()
+    );
+    assert_eq!(
+        chrono::DateTime::<chrono::Utc>::from(renewed.active().unwrap().expires_at())
+            .timestamp_micros(),
+        chrono::DateTime::<chrono::Utc>::from(now + Duration::from_secs(240)).timestamp_micros(),
+    );
+    assert_eq!(
+        store.put_candidate(active).await.unwrap().active(),
+        renewed.active()
+    );
+    let next = make(
+        "b",
+        ProviderTurnStateSlot::Standby,
+        now + Duration::from_secs(1),
+    );
+    let paired = store.put_candidate(next.clone()).await.unwrap();
+    assert_eq!(paired.probe_refresh_at(), Some(probe_refresh_at));
+    assert_eq!(paired.state_version(), renewed.state_version());
+    assert!(paired.standby().unwrap().expires_at() > paired.active().unwrap().expires_at());
+    let promoted = store
+        .record_anomaly(ProviderTurnStateAnomaly {
+            account_id: id.clone(),
+            expected_revision: revision(),
+            expected_active_version: paired.state_version(),
+            upstream_model: model.clone(),
+            normal_length: 292,
+            observed_length: None,
+            suspect: true,
+            promote_standby: true,
+            observed_at: now,
+        })
+        .await
+        .unwrap();
+    assert_eq!(promoted.active(), paired.standby());
+    let mut late = make(
+        "a",
+        ProviderTurnStateSlot::Active,
+        now + Duration::from_secs(2),
+    );
+    late.expected_active_version = Some(paired.state_version());
+    assert_eq!(store.put_candidate(late).await.unwrap(), promoted);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn observed_lease_upgrade_shortens_old_clocks_without_renewing_or_changing_versions() {
+    let old = super::turn_state_upgrade::before_observed_lease();
+    let Some(database) = TestDatabase::create_with_migrator("observed_lease_upgrade", &old).await
+    else {
+        return;
+    };
+    PgProviderAccountRepository::new(database.pool.clone())
+        .insert_provider_account(account("acct_lease_upgrade", "lease-upgrade-owner"))
+        .await
+        .unwrap();
+    enable(&database).await;
+    let store = PgProviderTurnStateRepository::new(database.pool.clone());
+    let id = ProviderAccountId::new("acct_lease_upgrade").unwrap();
+    let model = UpstreamModelId::new("model-a").unwrap();
+    let now = SystemTime::now();
+    sqlx::query(
+        "insert into provider_turn_states (
+            provider_account_id, upstream_model, credential_revision, normal_length,
+            active_state, active_issued_at, active_captured_at, active_expires_at,
+            standby_state, standby_issued_at, standby_captured_at, standby_expires_at,
+            state_version
+        ) values ($1, $2, 1, 292, repeat('a',292), $3, $3, $3 + interval '1 hour',
+            repeat('b',292), $4, $4, $4 + interval '1 hour', 7)",
+    )
+    .bind(id.as_str())
+    .bind(model.as_str())
+    .bind(chrono::DateTime::<chrono::Utc>::from(
+        now - Duration::from_secs(300),
+    ))
+    .bind(chrono::DateTime::<chrono::Utc>::from(
+        now - Duration::from_secs(100),
+    ))
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let after = store.read(&id, &model, revision()).await.unwrap().unwrap();
+    assert_eq!(after.state_version(), 7);
+    assert!(
+        after.probe_refresh_at().is_none(),
+        "legacy slots should be eligible for a fresh probe"
+    );
+    assert!(after.active().unwrap().expires_at() < now);
+    assert!(after.standby().unwrap().expires_at() > now);
+    for value in [after.active(), after.standby()].into_iter().flatten() {
+        assert_eq!(
+            value
+                .expires_at()
+                .duration_since(value.issued_at())
+                .unwrap(),
+            Duration::from_secs(240)
+        );
+    }
     database.close().await;
 }
 

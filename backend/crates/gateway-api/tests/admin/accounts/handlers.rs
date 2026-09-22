@@ -8,6 +8,66 @@ use tower::ServiceExt as _;
 use super::super::{AdminTestFixture, AdminTestState};
 
 #[tokio::test]
+async fn manual_state_probe_requires_auth_and_a_strict_target_body() {
+    use serde_json::json;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (body, authenticated, expected) in [
+        (json!({}), false, StatusCode::UNAUTHORIZED),
+        (
+            json!({"accountId":"acct_test"}),
+            true,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"accountId":"acct_test","modelId":"model-a","force":true}),
+            true,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"accountId":"bad","modelId":"model-a"}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"accountId":"acct_test","modelId":" "}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"accountId":"acct_test","modelId":"model\n"}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"accountId":"acct_test","modelId":"x".repeat(257)}),
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"accountId":"acct_test","modelId":"model-a"}),
+            true,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/admin/accounts/turn-state/probe")
+            .header("x-request-id", "manual-state-probe")
+            .header(header::CONTENT_TYPE, "application/json");
+        if authenticated {
+            request = request.header(header::COOKIE, "cpr_admin_session=valid-session");
+        }
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
 async fn account_template_apply_requires_admin_version_and_only_selection_fields() {
     use serde_json::json;
     let fixture = AdminTestFixture::new().await;

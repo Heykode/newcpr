@@ -452,3 +452,9 @@ pub enum AccountConnectionTestEvent {
 /// 每次连接测试独占的有限事件流。
 pub type AccountConnectionTestEventStream =
     Pin<Box<dyn Stream<Item = AccountConnectionTestEvent> + Send + 'static>>;
+/// Manual acquisition only advances scheduling; it does not return opaque State.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnStateProbeOutcome {
+    Queued,
+    AlreadyRunning,
+}

@@ -546,6 +546,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                   :account="row"
                   :refreshing="refreshingQuotaAccountIds.has(row.id)"
                   @account-updated="void replaceAccount($event)"
+                  @probe-queued="void loadAccounts({ silent: true })"
                   @refresh-quota="handleRefreshQuota"
                 />
                 <AccountUsagePanel
