@@ -15,6 +15,7 @@ export * from './modules/backups'
 export * from './modules/dashboard'
 
 export * from './modules/group-monitor'
+export * from './modules/notifications'
 
 export * from './modules/proxies'
 

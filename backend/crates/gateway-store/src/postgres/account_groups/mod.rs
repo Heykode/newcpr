@@ -110,6 +110,102 @@ impl PgAccountGroupRepository {
 
 #[async_trait]
 impl AccountGroupStore for PgAccountGroupRepository {
+    async fn active_group_alerts(&self) -> AdminStoreResult<Vec<(String, String)>> {
+        crate::postgres::PgNotificationRepository::new(self.pool.clone())
+            .active_alerts()
+            .await
+            .map_err(|error| crate::admin_store_error("group active alerts", error))
+    }
+
+    async fn latest_notification_test(
+        &self,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        Option<gateway_admin::model::notifications::NotificationDeliveryRecord>,
+    > {
+        crate::postgres::PgNotificationRepository::new(self.pool.clone())
+            .latest_test()
+            .await
+            .map_err(|error| crate::admin_store_error("notification test", error))
+    }
+
+    async fn load_group_alert_policy(
+        &self,
+        group_id: &AccountGroupId,
+    ) -> AdminStoreResult<gateway_admin::model::notifications::GroupAlertPolicy> {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .load_policy(group_id)
+            .await
+            .map_err(|error| admin_store_error("group alert policy", error))
+    }
+
+    async fn replace_group_alert_policy(
+        &self,
+        policy: gateway_admin::model::notifications::GroupAlertPolicy,
+        context: &MutationContext,
+    ) -> AdminStoreResult<gateway_admin::model::notifications::GroupAlertPolicy> {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .replace_policy(policy, context)
+            .await
+            .map_err(|error| admin_store_error("group alert policy", error))
+    }
+
+    async fn apply_group_alert_observations(
+        &self,
+        observations: &[gateway_admin::model::notifications::AlertObservation],
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<()> {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .apply_observations(observations, observed_at)
+            .await
+            .map_err(|error| admin_store_error("group alert observations", error))
+    }
+
+    async fn claim_notification_delivery(
+        &self,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<Option<gateway_admin::model::notifications::ClaimedNotificationDelivery>>
+    {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .claim_delivery(observed_at)
+            .await
+            .map_err(|error| admin_store_error("notification delivery", error))
+    }
+
+    async fn finish_notification_delivery(
+        &self,
+        delivery_id: &str,
+        delivered: bool,
+        error: Option<&str>,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<()> {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .finish_delivery(delivery_id, delivered, error, observed_at)
+            .await
+            .map_err(|error| admin_store_error("notification delivery", error))
+    }
+
+    async fn enqueue_test_notification(
+        &self,
+        delivery: gateway_admin::model::notifications::ClaimedNotificationDelivery,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<String> {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .enqueue_test(delivery, observed_at)
+            .await
+            .map_err(|error| admin_store_error("notification test", error))
+    }
+
+    async fn recent_notification_deliveries(
+        &self,
+        group_id: Option<&AccountGroupId>,
+        limit: u32,
+    ) -> AdminStoreResult<Vec<gateway_admin::model::notifications::NotificationDeliveryRecord>>
+    {
+        super::PgNotificationRepository::new(self.pool.clone())
+            .recent_deliveries(group_id, limit)
+            .await
+            .map_err(|error| admin_store_error("notification deliveries", error))
+    }
     async fn load_group_monitor(
         &self,
         observed_at: chrono::DateTime<chrono::Utc>,

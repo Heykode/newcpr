@@ -25,6 +25,7 @@ use crate::{
     ports::store::{AccountGroupStore, AccountRuntimeStore},
 };
 
+use super::notifications::NotificationsService;
 use super::{accounts::AccountsService, map_store_error};
 
 const SAMPLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -44,6 +45,7 @@ pub(crate) struct DefaultGroupMonitorService {
     groups: Arc<dyn AccountGroupStore>,
     runtime: Arc<dyn AccountRuntimeStore>,
     accounts: Arc<dyn AccountsService>,
+    notifications: Arc<dyn NotificationsService>,
     last_sample: Mutex<Option<(Instant, Result<(), AdminError>)>>,
     readers: Semaphore,
 }
@@ -53,11 +55,13 @@ impl DefaultGroupMonitorService {
         groups: Arc<dyn AccountGroupStore>,
         runtime: Arc<dyn AccountRuntimeStore>,
         accounts: Arc<dyn AccountsService>,
+        notifications: Arc<dyn NotificationsService>,
     ) -> Self {
         Self {
             groups,
             runtime,
             accounts,
+            notifications,
             last_sample: Mutex::new(None),
             readers: Semaphore::new(2),
         }
@@ -220,16 +224,24 @@ impl DefaultGroupMonitorService {
             );
             items.push(item);
         }
+        let report = GroupMonitorReport {
+            generated_at: now,
+            items,
+        };
         self.groups
-            .save_group_monitor(
-                &GroupMonitorReport {
-                    generated_at: now,
-                    items,
-                },
-                facts.config_revision,
-            )
+            .save_group_monitor(&report, facts.config_revision)
             .await
-            .map_err(|error| map_store_error(error, "group monitor snapshot"))
+            .map_err(|error| map_store_error(error, "group monitor snapshot"))?;
+        match tokio::time::timeout(Duration::from_secs(3), self.notifications.observe(&report))
+            .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "group monitor alert evaluation failed")
+            }
+            Err(_) => tracing::warn!("group monitor alert evaluation timed out"),
+        }
+        Ok(())
     }
 
     async fn sample_requested(&self, requested: Instant) -> Result<(), AdminError> {

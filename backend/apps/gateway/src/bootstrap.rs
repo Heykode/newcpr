@@ -99,7 +99,7 @@ pub async fn run() -> Result<(), BootstrapError> {
             host.proxy_probe(provider_openai::build_reqwest_client_with_custom_ca),
         ),
         host.client_distribution_resolver(),
-        host.system_operations(),
+        (host.system_operations(), host.notification_delivery()?),
     )
     .await?;
     host.report_startup_ready("Admin");

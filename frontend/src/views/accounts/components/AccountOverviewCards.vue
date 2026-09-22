@@ -10,6 +10,7 @@ import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { formatInteger } from '@/utils/number'
 import { useGroupMonitor } from '../composables/useGroupMonitor'
 import AccountGroupMonitorCard from './AccountGroupMonitorCard.vue'
+import GroupAlertSettingsModal from './GroupAlertSettingsModal.vue'
 
 const props = defineProps<{
   summary: Awaited<ReturnType<typeof getAccounts>>['summary']
@@ -17,6 +18,12 @@ const props = defineProps<{
   groupsLoading: boolean
 }>()
 const root = ref<HTMLElement>()
+const alertGroup = ref<AccountGroup | null>(null)
+const alertOpen = ref(false)
+function openAlertSettings(group: AccountGroup) {
+  alertGroup.value = group
+  alertOpen.value = true
+}
 const { width } = useElementSize(root)
 const pageSize = computed(() => width.value >= 960 ? 3 : width.value >= 650 ? 2 : 1)
 const {
@@ -98,6 +105,7 @@ const {
       :loading="loading"
       :now="now"
       @pin="togglePin(group.id)"
+      @settings="openAlertSettings(group)"
     >
       <template v-if="index === visible.length - 1" #actions>
         <BaseIconButton label="立即刷新分组监控" size="sm" class="monitor-action" :loading="loading" @click="refreshNow">
@@ -117,6 +125,7 @@ const {
         <RefreshCw class="size-3.5" />
       </BaseIconButton>
     </div>
+    <GroupAlertSettingsModal v-model="alertOpen" :group="alertGroup" :snapshot="alertGroup ? records.get(alertGroup.id) : undefined" :stale="stale" :now="now" />
   </div>
 </template>
 

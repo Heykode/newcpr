@@ -22,6 +22,7 @@ mod execution_buffer;
 mod group_monitor_snapshots;
 mod health;
 mod import_email_snapshots;
+mod notifications;
 mod observability;
 mod ops_events;
 mod outbound_user_agent;
@@ -237,6 +238,8 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "account_cumulative_cost_entries",
             "account_cumulative_costs",
             "account_group_accounts",
+            "account_group_alert_incidents",
+            "account_group_alert_policies",
             "account_group_monitor_snapshots",
             "account_groups",
             "account_relogin_entries",
@@ -253,6 +256,8 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "client_key_charge_events",
             "model_requests",
             "monitor_account_lifecycles",
+            "notification_channels",
+            "notification_outbox",
             "ops_events",
             "outbound_proxies",
             "provider_accounts",

@@ -25,6 +25,7 @@ mod workers;
 pub use use_case::account_templates::AccountTemplatesService;
 pub use use_case::group_monitor::GroupMonitorService;
 pub use use_case::import_tasks::ImportTasksService;
+pub use use_case::notifications::NotificationsService;
 pub use use_case::relogin::{ReloginBatchResult, ReloginList, ReloginService, ReloginView};
 pub use use_case::user_agent::OutboundUserAgentService;
 pub use use_case::{
@@ -175,6 +176,7 @@ pub struct AdminServices {
     xai: Arc<dyn XaiService>,
     import_tasks: Arc<dyn ImportTasksService>,
     backups: Arc<dyn BackupService>,
+    notifications: Arc<dyn NotificationsService>,
 }
 
 impl AdminServices {
@@ -266,6 +268,11 @@ impl AdminServices {
     pub fn backups(&self) -> &dyn BackupService {
         self.backups.as_ref()
     }
+
+    #[must_use]
+    pub fn notifications(&self) -> &dyn NotificationsService {
+        self.notifications.as_ref()
+    }
 }
 
 /// Admin 初始化完成后的封闭能力包。
@@ -298,8 +305,12 @@ pub async fn initialize(
     snapshot: Arc<dyn SnapshotControl>,
     probes: (Arc<dyn AccountProbe>, Arc<dyn ports::proxy::ProxyProbe>),
     client_distribution: Arc<dyn ClientDistributionResolver>,
-    system: Arc<dyn SystemOperations>,
+    host_operations: (
+        Arc<dyn SystemOperations>,
+        Arc<dyn ports::notification::NotificationDelivery>,
+    ),
 ) -> Result<AdminBundle, AdminError> {
+    let (system, notification_delivery) = host_operations;
     let (probe, proxy_probe) = probes;
     config
         .resolve_and_validate(Path::new("."))
@@ -349,10 +360,16 @@ pub async fn initialize(
         registry.clone(),
         snapshot.clone(),
     ));
+    let notifications = Arc::new(use_case::notifications::DefaultNotificationsService::new(
+        store.settings(),
+        store.account_groups(),
+        notification_delivery,
+    ));
     let group_monitor = Arc::new(use_case::group_monitor::DefaultGroupMonitorService::new(
         store.account_groups(),
         store.account_runtime(),
         accounts.clone(),
+        notifications.clone(),
     ));
     let openai_service = Arc::new(DefaultOpenAiService::new(
         openai.clone(),
@@ -429,6 +446,7 @@ pub async fn initialize(
         xai: xai_service,
         import_tasks,
         backups,
+        notifications: notifications.clone(),
     };
     let mut worker_contributions = backup_worker_contribution(backup_task)?;
     let id = WorkerId::try_new(WorkerKind::AccountImport, "admin")
@@ -452,6 +470,7 @@ pub async fn initialize(
         provider_kinds,
     )?);
     worker_contributions.push(workers::group_monitor::contribution(group_monitor)?);
+    worker_contributions.push(workers::notifications::contribution(notifications)?);
     Ok(AdminBundle {
         services,
         worker_contributions,

@@ -28,6 +28,10 @@ use crate::model::{
         NewClientKey, SetClientKeyEnabled, UpdateClientKey,
     },
     egress::{ProviderEgressMutation, ReplaceProviderEgress, SetProviderAccountEgress},
+    notifications::{
+        AlertObservation, ClaimedNotificationDelivery, GroupAlertPolicy, NotificationChannelsView,
+        NotificationDeliveryRecord, ReplaceNotificationChannels, StoredNotificationChannels,
+    },
     observability::{
         DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
         OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageCalculatedBillingFact,
@@ -374,6 +378,80 @@ pub trait ClientKeyStore: Send + Sync {
 /// Provider-neutral account group management transactions.
 #[async_trait]
 pub trait AccountGroupStore: Send + Sync {
+    async fn active_group_alerts(&self) -> AdminStoreResult<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
+    async fn latest_notification_test(
+        &self,
+    ) -> AdminStoreResult<Option<NotificationDeliveryRecord>> {
+        Ok(None)
+    }
+
+    async fn load_group_alert_policy(
+        &self,
+        group_id: &gateway_core::routing::AccountGroupId,
+    ) -> AdminStoreResult<GroupAlertPolicy> {
+        Ok(GroupAlertPolicy::defaults(group_id.clone(), Utc::now()))
+    }
+
+    async fn replace_group_alert_policy(
+        &self,
+        _policy: GroupAlertPolicy,
+        _context: &MutationContext,
+    ) -> AdminStoreResult<GroupAlertPolicy> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "group alert policy",
+            "not supported",
+        ))
+    }
+
+    async fn apply_group_alert_observations(
+        &self,
+        _observations: &[AlertObservation],
+        _observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<()> {
+        Ok(())
+    }
+
+    async fn claim_notification_delivery(
+        &self,
+        _observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<Option<ClaimedNotificationDelivery>> {
+        Ok(None)
+    }
+
+    async fn finish_notification_delivery(
+        &self,
+        _delivery_id: &str,
+        _delivered: bool,
+        _error: Option<&str>,
+        _observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<()> {
+        Ok(())
+    }
+
+    async fn enqueue_test_notification(
+        &self,
+        _delivery: ClaimedNotificationDelivery,
+        _observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<String> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "notification test",
+            "not supported",
+        ))
+    }
+
+    async fn recent_notification_deliveries(
+        &self,
+        _group_id: Option<&gateway_core::routing::AccountGroupId>,
+        _limit: u32,
+    ) -> AdminStoreResult<Vec<NotificationDeliveryRecord>> {
+        Ok(Vec::new())
+    }
+
     async fn load_group_monitor(
         &self,
         observed_at: chrono::DateTime<chrono::Utc>,
@@ -489,6 +567,49 @@ pub trait ObservabilityStore: Send + Sync {
 /// Runtime settings 与管理员 API Key 写入。
 #[async_trait]
 pub trait SettingsStore: Send + Sync {
+    async fn load_notification_channels(&self) -> AdminStoreResult<StoredNotificationChannels> {
+        Ok(StoredNotificationChannels {
+            smtp: crate::model::notifications::StoredSmtpChannel {
+                view: crate::model::notifications::SmtpChannelView {
+                    enabled: false,
+                    host: String::new(),
+                    port: 587,
+                    security: crate::model::notifications::SmtpSecurity::StartTls,
+                    username: None,
+                    password_set: false,
+                    from_name: None,
+                    from_email: None,
+                },
+                password: None,
+            },
+            bark: crate::model::notifications::StoredBarkChannel {
+                view: crate::model::notifications::BarkChannelView {
+                    enabled: false,
+                    server_url: "https://api.day.app".to_owned(),
+                    device_key_set: false,
+                    level: crate::model::notifications::BarkLevel::Active,
+                    sound: None,
+                    volume: 5,
+                    call: false,
+                },
+                device_key: None,
+            },
+            updated_at: Utc::now(),
+        })
+    }
+
+    async fn replace_notification_channels(
+        &self,
+        _command: ReplaceNotificationChannels,
+        _context: &MutationContext,
+    ) -> AdminStoreResult<NotificationChannelsView> {
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "notification channels",
+            "not supported",
+        ))
+    }
+
     async fn load_runtime_settings(&self) -> AdminStoreResult<RuntimeSettings>;
 
     async fn admin_api_key_exists(&self) -> AdminStoreResult<bool>;

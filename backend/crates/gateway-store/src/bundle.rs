@@ -129,6 +129,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         )),
         Arc::new(AdminSettingsStoreAdapter {
             control_plane: postgres::PgControlPlaneRepository::new(pool.clone()),
+            notifications: postgres::PgNotificationRepository::new(pool.clone()),
         }),
         backup_ports(pool.clone(), &config)?,
     )

@@ -3,6 +3,7 @@
 pub mod client_distribution;
 pub mod config;
 mod logging;
+mod notifications;
 pub mod proxy_probe;
 pub mod serve;
 pub mod system_update;
@@ -23,6 +24,7 @@ pub use config::{ConfigError, HostConfig, LoadableConfig, load_config};
 
 use self::client_distribution::RgAdguardClientDistribution;
 use self::logging::{LogGuard, initialize_logging};
+use self::notifications::HostNotificationDelivery;
 use self::serve::{ConnectionTracker, serve_router};
 use self::system_update::ProcessSystemOperations;
 use self::workers::WorkerSupervisor;
@@ -74,6 +76,17 @@ impl HostBundle {
     #[must_use]
     pub fn system_operations(&self) -> Arc<dyn SystemOperations> {
         self.system.clone()
+    }
+
+    pub fn notification_delivery(
+        &self,
+    ) -> Result<Arc<dyn gateway_admin::ports::notification::NotificationDelivery>, HostError> {
+        HostNotificationDelivery::new()
+            .map(|delivery| {
+                Arc::new(delivery)
+                    as Arc<dyn gateway_admin::ports::notification::NotificationDelivery>
+            })
+            .map_err(|_| HostError::Notifications)
     }
 
     #[must_use]
@@ -140,6 +153,8 @@ impl HostBundle {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
+    #[error("notification delivery initialization failed")]
+    Notifications,
     #[error(transparent)]
     Logging(#[from] logging::LogError),
     #[error(transparent)]

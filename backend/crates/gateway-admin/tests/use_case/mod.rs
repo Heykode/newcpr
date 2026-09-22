@@ -252,7 +252,10 @@ impl AdminHarness {
             Arc::new(NoopSnapshot),
             (self.probe, self.proxy_probe),
             Arc::new(NoopClientDistribution),
-            self.system,
+            (
+                self.system,
+                Arc::new(gateway_admin::ports::notification::DisabledNotificationDelivery),
+            ),
         )
         .await
         .expect("initialize admin test harness")
