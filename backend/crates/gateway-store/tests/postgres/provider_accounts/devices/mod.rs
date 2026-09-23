@@ -4,6 +4,8 @@ use gateway_core::account::{ProviderDeviceCodec, ProviderDeviceCodecError};
 
 use super::*;
 
+mod credential_locking;
+
 struct TestDeviceCodec;
 
 impl ProviderDeviceCodec for TestDeviceCodec {

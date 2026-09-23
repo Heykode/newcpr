@@ -2070,13 +2070,17 @@ mod tests {
             "authorization",
             "chatgpt-account-id",
             "user-agent",
-            "x-codex-installation-id",
             "cookie",
         ] {
             assert!(requests[0].headers.contains_key(name), "{name}");
         }
+        assert!(!requests[0].headers.contains_key("x-codex-installation-id"));
         assert!(!requests[0].headers.contains_key("x-codex-turn-state"));
         let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(
+            body["client_metadata"]["x-codex-installation-id"],
+            "synthetic-device"
+        );
         assert_eq!(body["store"], true);
         assert_eq!(body["stream"], true);
         assert!(body.get("temperature").is_none());

@@ -126,20 +126,87 @@ impl PgProviderAccountRepository {
         .await
     }
 
-    pub(crate) async fn prepare_rotated_device(
+    pub(crate) async fn prepare_credential_device(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         account_id: &str,
         expected_revision: u64,
-        replacement_identity: Option<&ProviderAccountIdentity>,
-        replacement_email: Option<&str>,
         incoming: &JsonObject,
     ) -> StoreResult<JsonObject> {
+        if self.device_codecs.is_empty()? {
+            return Ok(incoming.clone());
+        }
+        // Read a single committed snapshot without taking row/registry locks.
+        // Lock/revalidate a known binding before projecting it; never escalate
+        // from that account lock to the global registry lock.
+        // A missing binding falls back BEFORE any row lock, preserving lock order.
+        let row = sqlx::query(
+            "select a.provider_kind, a.upstream_user_id, a.upstream_account_id,
+                    a.provider_credentials_json, d.installation_id
+             from provider_accounts a
+             join provider_device_identities d
+               on d.provider_kind = a.provider_kind
+              and d.upstream_user_id = a.upstream_user_id
+              and d.upstream_account_id = a.upstream_account_id
+             where a.id = $1 and a.credential_revision = $2
+               and a.upstream_user_id <> '' and a.upstream_account_id <> ''",
+        )
+        .bind(account_id)
+        .bind(to_i64(expected_revision)?)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("load bound provider device for credential CAS"))?;
+        if let Some(row) = row {
+            let provider: String = get(&row, "provider_kind")?;
+            if let Some(codec) = self.device_codecs.get(&provider)? {
+                let retained: String = get(&row, "installation_id")?;
+                let current = row_credential(&row)?;
+                if codec
+                    .installation_id(&current)
+                    .map_err(device_codec_error)?
+                    != retained
+                {
+                    return Err(device_conflict(
+                        "existing account conflicts with its durable device",
+                    ));
+                }
+                // Revision alone cannot distinguish deletion/recreation with a
+                // reused row ID. Preserve ordinary profile/observation updates.
+                let locked = sqlx::query_scalar::<_, String>(
+                    "select id from provider_accounts
+                     where id = $1 and credential_revision = $2
+                       and provider_kind = $3 and upstream_user_id = $4
+                       and upstream_account_id = $5 and provider_credentials_json = $6
+                     for update",
+                )
+                .bind(account_id)
+                .bind(to_i64(expected_revision)?)
+                .bind(&provider)
+                .bind(get::<String>(&row, "upstream_user_id")?)
+                .bind(get::<String>(&row, "upstream_account_id")?)
+                .bind(sqlx::types::Json(current.expose_to_provider()))
+                .fetch_optional(&mut **transaction)
+                .await
+                .map_err(|_| postgres_unavailable("lock bound provider credential"))?;
+                if locked.is_none() {
+                    return Err(StoreError::Conflict {
+                        entity: ENTITY,
+                        id: account_id.to_owned(),
+                        kind: ConflictKind::StaleRevision,
+                    });
+                }
+                return project_material(
+                    codec.as_ref(),
+                    &PlaintextCredential::new(incoming.fields().clone()),
+                    &retained,
+                );
+            }
+        }
         self.prepare_rotated_device_with_workspace_policy(
             transaction,
             (account_id, expected_revision),
-            replacement_identity,
-            replacement_email,
+            None,
+            None,
             incoming,
             false,
         )
@@ -343,9 +410,9 @@ async fn rebind_identity(
     .map(|_| ())
 }
 
-// Account mutation only, never request dispatch. A single transaction-scoped
-// lock avoids missing-row import/delete races and reversed registry/row lock
-// order. Admin paths take config_revision first, then this lock.
+// Binding mutations share a transaction-scoped lock to avoid missing-row
+// import/delete races and reversed registry/row lock order. Bound credential
+// CAS only reads the archive. Admin paths take config_revision first.
 async fn lock_device_mutation(transaction: &mut Transaction<'_, Postgres>) -> StoreResult<()> {
     sqlx::query(
         "select pg_advisory_xact_lock(hashtextextended(current_schema() || ':cpr.provider-devices', 0))",
@@ -381,8 +448,16 @@ async fn bind_material(
             "existing account conflicts with its durable device",
         ));
     }
+    project_material(codec, &material, &retained)
+}
+
+fn project_material(
+    codec: &dyn ProviderDeviceCodec,
+    material: &PlaintextCredential,
+    installation_id: &str,
+) -> StoreResult<JsonObject> {
     let updated = codec
-        .with_installation_id(&material, &retained)
+        .with_installation_id(material, installation_id)
         .map_err(device_codec_error)?;
     JsonObject::try_from_value(
         "provider_credentials_json",

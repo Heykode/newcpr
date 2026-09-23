@@ -222,11 +222,8 @@ pub fn apply_response_headers(
     request: &CodexResponsesRequest,
     context: CodexRequestContext<'_>,
 ) -> CodexClientResult<()> {
-    let installation = context
-        .installation_id
-        .filter(|value| !value.trim().is_empty())
-        .map(HeaderValue::from_str)
-        .transpose()?;
+    // Installation identity belongs in account-scoped body metadata, not a standalone header.
+    headers.remove("x-codex-installation-id");
     let conversation = protocol_value(request.client_conversation_id.as_deref());
     let ids = wire_identity(request, context);
     let session = ids
@@ -276,7 +273,6 @@ pub fn apply_response_headers(
         })
         .transpose()?;
     for (name, value) in [
-        ("x-codex-installation-id", installation),
         ("session-id", session.clone()),
         ("session_id", session),
         ("thread-id", thread.clone()),

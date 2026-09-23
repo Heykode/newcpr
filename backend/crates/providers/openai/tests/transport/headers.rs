@@ -11,7 +11,7 @@ const DOWNSTREAM_TRANSPORT_HEADERS: &[(&str, &str)] = &[
     ("CF-Visitor", r#"{"scheme":"https"}"#),
     ("cf-connecting-ip", "192.0.2.1"),
     ("cf-connecting-ipv6", "2001:db8::1"),
-    ("cf-pseudo-ipv4", "240.0.0.1"),
+    ("cf-pseudo-ipv4", "192.0.2.2"),
     ("cf-ray", "downstream-ray"),
     ("cf-ipcountry", "US"),
     ("cf-warp-tag-id", "downstream-warp"),
@@ -403,7 +403,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         ("session-id", "cp_derived"),
         ("session_id", "cp_derived"),
         ("thread-id", "cp_derived"),
-        ("x-codex-installation-id", "install-123"),
     ] {
         assert!(
             headers
@@ -412,6 +411,7 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
         );
     }
     for forbidden in [
+        "x-codex-installation-id",
         "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "accept",
@@ -510,7 +510,6 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         ("x-still-valid", b"after-invalid".as_slice()),
         ("authorization", b"Bearer lease-token".as_slice()),
         ("chatgpt-account-id", b"lease-account".as_slice()),
-        ("x-codex-installation-id", b"lease-installation".as_slice()),
         ("traceparent", b"synthetic-trace".as_slice()),
         ("tracestate", b"synthetic-state".as_slice()),
     ] {
@@ -530,6 +529,7 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         vec![expected_core_version.into_bytes()]
     );
     for dropped in [
+        "x-codex-installation-id",
         "openai-beta",
         "chatgpt-project-id",
         "openai-organization",
@@ -687,10 +687,7 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
         values("chatgpt-account-id"),
         vec![b"lease-account".to_vec()]
     );
-    assert_eq!(
-        values("x-codex-installation-id"),
-        vec![b"lease-installation".to_vec()]
-    );
+    assert!(values("x-codex-installation-id").is_empty());
     assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
     assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
     assert_eq!(values("tracestate"), vec![b"synthetic-state".to_vec()]);
@@ -814,7 +811,6 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         "cookie",
         "accept",
         "x-client-request-id",
-        "x-codex-installation-id",
         "session-id",
         "x-codex-window-id",
         "x-codex-turn-state",
@@ -827,6 +823,7 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
         assert!(header_names.iter().any(|name| name == required));
     }
     for forbidden in [
+        "x-codex-installation-id",
         "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "sec-ch-ua",
@@ -1050,10 +1047,7 @@ async fn backend_http_should_force_upstream_sse_for_non_streaming_client_request
         read_header_value(head, "user-agent"),
         Some(test_wire_profile().snapshot().user_agent().as_str())
     );
-    assert_eq!(
-        read_header_value(head, "x-codex-installation-id"),
-        Some("account-installation")
-    );
+    assert_eq!(read_header_value(head, "x-codex-installation-id"), None);
     assert_eq!(read_header_value(head, "content-encoding"), None);
     let json: serde_json::Value =
         serde_json::from_slice(&raw[separator + 4..]).expect("small body should be valid JSON");
