@@ -59,7 +59,7 @@ fn assert_identity_header(name: &str, value: Option<&str>, qx: bool) {
         "thread-id" => Some("existing-thread"),
         "x-client-request-id" => Some("existing-thread"),
         "x-codex-turn-metadata" => Some(TURN_METADATA),
-        "x-codex-installation-id" => Some(INSTALLATION_ID),
+        "x-codex-installation-id" => None,
         "session_id" => Some("existing-session"),
         _ => panic!("unexpected fixture header"),
     };
@@ -265,7 +265,7 @@ async fn global_qx_http_uses_cli_headers_and_preserves_existing_device_metadata(
 }
 
 #[tokio::test]
-async fn both_profiles_send_only_the_selected_account_installation_over_http_and_ws() {
+async fn both_profiles_omit_standalone_installation_headers_over_http_and_ws() {
     for qx in [false, true] {
         for websocket in [false, true] {
             for installation in [
@@ -274,8 +274,8 @@ async fn both_profiles_send_only_the_selected_account_installation_over_http_and
                 None,
                 Some(""),
                 Some("   "),
+                Some("device\r\nx-injected: invalid"),
             ] {
-                let expected = installation.filter(|value| !value.trim().is_empty());
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let profile = test_wire_profile();
                 select_profile(&profile, qx);
@@ -319,13 +319,8 @@ async fn both_profiles_send_only_the_selected_account_installation_over_http_and
                     if websocket {
                         let mut socket =
                             accept_codex_test_websocket_with(stream, |request, response| {
-                                let values = request
-                                    .headers()
-                                    .get_all("x-codex-installation-id")
-                                    .iter()
-                                    .map(|value| value.to_str().unwrap())
-                                    .collect::<Vec<_>>();
-                                assert_eq!(values, expected.into_iter().collect::<Vec<_>>());
+                                assert!(!request.headers().contains_key("x-codex-installation-id"));
+                                assert!(!request.headers().contains_key("x-injected"));
                                 response.headers_mut().insert(
                                     "sec-websocket-extensions",
                                     "permessage-deflate".parse().unwrap(),
@@ -337,14 +332,15 @@ async fn both_profiles_send_only_the_selected_account_installation_over_http_and
                         let raw = read_http_request_with_body(&mut stream).await;
                         let end = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
                         let head = std::str::from_utf8(&raw[..end]).unwrap();
-                        assert_eq!(read_header_value(head, "x-codex-installation-id"), expected);
+                        assert_eq!(read_header_value(head, "x-codex-installation-id"), None);
+                        assert_eq!(read_header_value(head, "x-injected"), None);
                         assert_eq!(
                             head.lines()
                                 .filter(|line| line
                                     .to_ascii_lowercase()
                                     .starts_with("x-codex-installation-id:"))
                                 .count(),
-                            usize::from(expected.is_some())
+                            0
                         );
                         assert_eq!(read_header_value(head, "content-encoding"), None);
                         assert_body(
@@ -381,46 +377,6 @@ async fn both_profiles_send_only_the_selected_account_installation_over_http_and
                 .await
                 .expect("bounded installation header fixture");
             }
-        }
-    }
-}
-
-#[tokio::test]
-async fn both_profiles_reject_unsafe_installation_before_connecting() {
-    for qx in [false, true] {
-        for websocket in [false, true] {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let profile = test_wire_profile();
-            select_profile(&profile, qx);
-            let backend = CodexBackendClient::new(
-                reqwest::Client::builder().no_proxy().build().unwrap(),
-                format!("http://{}", listener.local_addr().unwrap()),
-                profile,
-            )
-            .with_websocket_pool(Arc::new(CodexWebSocketPool::new(Duration::from_mins(1))));
-            let mut request = fixture_request();
-            request.force_http_sse = !websocket;
-            if websocket {
-                request = websocket_only_request(request);
-            }
-            let mut context = identity_context("unsafe-device");
-            context.installation_id = Some("device\r\nx-injected: invalid");
-            let result = timeout(
-                Duration::from_secs(2),
-                backend.create_response(&request, context),
-            )
-            .await
-            .expect("invalid installation must fail promptly");
-            assert!(matches!(
-                result,
-                Err(CodexClientError::InvalidHeaderValue(_))
-            ));
-            assert!(
-                timeout(Duration::from_millis(20), listener.accept())
-                    .await
-                    .is_err(),
-                "unsafe installation must be rejected before network activity"
-            );
         }
     }
 }
@@ -542,7 +498,7 @@ async fn assert_profile_switch_keeps_exact_owner(initial_qx: bool, identical_ide
 }
 
 #[tokio::test]
-async fn cpr_to_qx_keeps_exact_ws_owner_and_switches_independent_chain() {
+async fn default_to_custom_ua_keeps_exact_ws_owner_and_switches_independent_chain() {
     assert_profile_switch_keeps_exact_owner(false, false).await;
 }
 

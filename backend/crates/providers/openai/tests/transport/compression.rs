@@ -128,10 +128,7 @@ async fn http_compression_threshold_preserves_identity_and_bytes_across_profiles
                 read_header_value(head, "user-agent"),
                 Some(user_agent.as_str())
             );
-            assert_eq!(
-                read_header_value(head, "x-codex-installation-id"),
-                compression_context().installation_id,
-            );
+            assert_eq!(read_header_value(head, "x-codex-installation-id"), None);
             assert_eq!(
                 read_header_value(head, "chatgpt-account-id"),
                 compression_context().account_id,

@@ -88,8 +88,8 @@ fn resolved_ids_override_passthrough_without_mutating_body_or_continuation() {
         headers.insert(name, HeaderValue::from_static(value));
     }
     apply_response_headers(&mut headers, &request, context).unwrap();
+    assert!(!headers.contains_key("x-codex-installation-id"));
     for (name, expected) in [
-        ("x-codex-installation-id", INSTALLATION),
         ("session-id", "cpr-session"),
         ("session_id", "cpr-session"),
         ("thread-id", "cpr-thread"),
@@ -258,15 +258,21 @@ fn beta_features_preserve_existing_empty_and_multivalue_declarations() {
 }
 
 #[test]
-fn invalid_authoritative_installation_returns_error_before_mutation() {
+fn installation_identity_is_not_interpreted_as_a_header_value() {
     let request = request();
     let mut context = context();
     context.installation_id = Some("invalid\r\ninstallation");
     let mut headers = HeaderMap::new();
     headers.insert("x-custom", HeaderValue::from_static("preserve"));
-    let before = headers.clone();
-    assert!(apply_response_headers(&mut headers, &request, context).is_err());
-    assert_eq!(headers, before);
+    headers.insert(
+        "x-codex-installation-id",
+        HeaderValue::from_static("downstream-device"),
+    );
+    let body_before = request.body().clone();
+    apply_response_headers(&mut headers, &request, context).unwrap();
+    assert!(!headers.contains_key("x-codex-installation-id"));
+    assert_eq!(headers["x-custom"], "preserve");
+    assert_eq!(request.body(), &body_before);
 }
 
 fn scoped_request(key: &str) -> CodexResponsesRequest {

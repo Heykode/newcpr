@@ -268,12 +268,10 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             .await
             .map_err(|_| postgres_unavailable("begin provider credential CAS"))?;
         update.provider_credentials_json = self
-            .prepare_rotated_device(
+            .prepare_credential_device(
                 &mut transaction,
                 &update.account_id,
                 update.expected_revision.get(),
-                None,
-                None,
                 &update.provider_credentials_json,
             )
             .await?;

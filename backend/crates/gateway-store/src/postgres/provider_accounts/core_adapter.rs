@@ -185,12 +185,10 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .await
             .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
         let credentials = match self
-            .prepare_rotated_device(
+            .prepare_credential_device(
                 &mut transaction,
                 &account_id,
                 expected_revision.get(),
-                None,
-                None,
                 &credentials,
             )
             .await

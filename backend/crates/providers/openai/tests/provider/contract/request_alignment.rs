@@ -66,7 +66,17 @@ async fn capture(
                 ("turn_metadata".into(), json!(raw_metadata)),
                 (
                     "opaque_request_headers".into(),
-                    json!([["x-codex-turn-metadata", STANDARD.encode(raw_metadata)]]),
+                    json!([
+                        ["x-codex-turn-metadata", STANDARD.encode(raw_metadata)],
+                        [
+                            "x-codex-installation-id",
+                            STANDARD.encode("downstream-device-a")
+                        ],
+                        [
+                            "X-Codex-Installation-Id",
+                            STANDARD.encode("downstream-device-b")
+                        ]
+                    ]),
                 ),
             ])),
     ));
@@ -179,14 +189,19 @@ async fn capture(
             .as_str()
             .is_some_and(|value| !value.is_empty())
     );
-    for name in [
-        "authorization",
-        "chatgpt-account-id",
-        "x-codex-installation-id",
-        "session_id",
-    ] {
+    for name in ["authorization", "chatgpt-account-id", "session_id"] {
         assert!(!headers[name].is_empty(), "{name}");
     }
+    assert!(!headers.contains_key("x-codex-installation-id"));
+    let selected = accounts
+        .repository()
+        .load_runtime_credential(&accounts.account(account_id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        body["client_metadata"]["x-codex-installation-id"],
+        selected.installation_id
+    );
     Capture {
         headers,
         body,
@@ -222,6 +237,7 @@ fn stable_facts(capture: &Capture) -> Value {
     .collect();
     json!({
         "headers":headers, "affinity":capture.affinity,
+        "installation":capture.body["client_metadata"]["x-codex-installation-id"],
         "input":capture.body["input"], "cache":capture.body["prompt_cache_key"],
         "account":capture.state["account_id"], "seed":capture.state["identity_seed"],
         "conversation":capture.state["conversation_id"],
@@ -299,11 +315,9 @@ async fn installation_alias_shape_keeps_account_fingerprint_routing_and_cache() 
                 same_account,
             )
             .await;
-            let device = clean.headers["x-codex-installation-id"].to_str().unwrap();
-            assert_eq!(
-                clean.body["client_metadata"]["x-codex-installation-id"],
-                device
-            );
+            let device = clean.body["client_metadata"]["x-codex-installation-id"]
+                .as_str()
+                .unwrap();
             assert!(
                 clean.body["client_metadata"]
                     .get("installation_id")

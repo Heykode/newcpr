@@ -3851,16 +3851,8 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
         body.pointer("/client_metadata/x-codex-installation-id")
     );
     assert!(body.pointer("/client_metadata/installation_id").is_none());
-    assert_eq!(
-        captured_header_values(&request, "x-codex-installation-id"),
-        vec![
-            body["client_metadata"]["x-codex-installation-id"]
-                .as_str()
-                .expect("account installation")
-                .as_bytes()
-                .to_vec()
-        ]
-    );
+    assert!(body["client_metadata"]["x-codex-installation-id"].is_string());
+    assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
 }
 
 #[tokio::test]
@@ -3901,16 +3893,8 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
         Some(&json!(["future", "shape"]))
     );
     assert_eq!(body.get("future_field"), Some(&json!({"keep": true})));
-    assert_eq!(
-        captured_header_values(&request, "x-codex-installation-id"),
-        vec![
-            body["installation_id"]
-                .as_str()
-                .expect("selected account installation")
-                .as_bytes()
-                .to_vec()
-        ]
-    );
+    assert!(body["installation_id"].is_string());
+    assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
     assert_ne!(
         body.get("installation_id"),
         Some(&json!("client-installation"))
@@ -3918,7 +3902,7 @@ async fn cross_account_scope_removes_only_account_bound_body_fields() {
 }
 
 #[tokio::test]
-async fn cross_account_device_header_and_body_use_the_selected_stored_identity() {
+async fn cross_account_body_uses_stored_identity_without_a_standalone_device_header() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account_with_enabled(&store, "acct_scope_old", false).await;
     create_account(&store, "acct_scope_new").await;
@@ -3986,10 +3970,7 @@ async fn cross_account_device_header_and_body_use_the_selected_stored_identity()
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     let body = captured_request_body(request);
-    assert_eq!(
-        captured_header_values(request, "x-codex-installation-id"),
-        vec![selected.installation_id.as_bytes().to_vec()]
-    );
+    assert!(captured_header_values(request, "x-codex-installation-id").is_empty());
     for pointer in [
         "/installation_id",
         "/client_metadata/installation_id",

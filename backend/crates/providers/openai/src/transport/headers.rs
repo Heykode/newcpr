@@ -142,13 +142,6 @@ impl CodexBackendClient {
     ) -> CodexClientResult<HeaderMap> {
         let profile = self.profile.snapshot();
         let mut headers = self.model_request_headers(&profile, context)?;
-        insert_optional_header(
-            &mut headers,
-            "x-codex-installation-id",
-            context
-                .installation_id
-                .filter(|value| !value.trim().is_empty()),
-        )?;
         headers.insert(
             HeaderName::from_static("x-client-request-id"),
             HeaderValue::from_str(context.request_id)?,

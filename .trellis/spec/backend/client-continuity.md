@@ -88,9 +88,27 @@ editing prior entries.
 - Preserve valid active installation IDs. Ambiguous existing archives fail
   validation instead of silently changing devices. Deployment preflight must
   detect this condition before restarting production.
+- Responses HTTP/WS omit the standalone `x-codex-installation-id` header,
+  including downstream mixed-case/repeated copies and the final QX projection.
+  Retain the selected device in body metadata, existing turn-metadata aliases,
+  session derivation and connection ownership. Do not add another generator or
+  alter device persistence/locking when aligning the outbound header contract.
 - Account/import/delete and affinity mutations share transactions. Acquire the
   egress settings fence before device/account locks; preserve existing managed
   proxy/config revision lock order.
+- Credential-only CAS reads the complete account/device archive binding in one
+  snapshot, verifies the active installation and projects incoming credentials
+  without the global device lock or an archive UPSERT. Lock and revalidate the
+  account's revision, principal and credential before projection so deletion and
+  recreation with a reused local ID cannot pass an old snapshot. Keep the final
+  CAS and account/State retention unchanged. Missing bindings use the serialized binding
+  path before acquiring any account row lock. Never escalate from an account row
+  lock to the registry lock, silently repair a conflicting archive, or permit a
+  binding mutation without advancing the account credential revision.
+- Verify lock scope with real PostgreSQL: hold the registry/unrelated-account
+  locks while a bound credential CAS completes, verify same-account conflicts,
+  missing-archive lock order and rollback, and race CAS with import/delete.
+  This removes demonstrated lock contention, not a measured upstream TTFT cost.
 - No source pool means normal import still works. A historical fixed binding
   survives deletion, but only live accounts count as occupants when allocating
   vacant addresses. A missing historical address must not be silently replaced.

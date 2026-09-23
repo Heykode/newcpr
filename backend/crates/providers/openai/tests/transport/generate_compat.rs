@@ -158,7 +158,7 @@ fn assert_identity_header(name: &str, value: Option<&str>) {
         "chatgpt-account-id" => Some("acct-compat"),
         "session-id" => Some("session-compat"),
         "user-agent" => Some(user_agent.as_str()),
-        "x-codex-installation-id" => Some("installation-compat"),
+        "x-codex-installation-id" => None,
         _ => panic!("unexpected identity header"),
     };
     assert_eq!(value, expected, "{name}");
