@@ -1,0 +1,11 @@
+{
+  "from_version": "3.16.0",
+  "to_version": "3.17.0",
+  "from_migrations_tree": "f6fc9598552dc050f96ed7cc983cb98ef3be7675",
+  "to_migrations_tree": "97aa2ee7536b957367da8ac005dcf1605a263272",
+  "added": [
+    "0036_turn_state_observed_lease.sql",
+    "0037_group_monitor_alerts.sql"
+  ],
+  "recovery": "manual"
+}
