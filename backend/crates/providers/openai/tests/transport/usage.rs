@@ -77,6 +77,76 @@ fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() 
 }
 
 #[test]
+fn gpt6_sol_and_luna_billing_should_preserve_components_tiers_and_context_boundary() {
+    // Published USD/1M rates in ten-thousandths: input, cache read, cache write, output.
+    for (model, rates) in [
+        ("gpt-6-sol", [20_000_u128, 2_000, 25_000, 100_000]),
+        ("gpt-6-luna", [1_000_u128, 100, 1_250, 5_000]),
+    ] {
+        for input in [100, 272_000, 272_001] {
+            let long_context = input > 272_000;
+            let standard_rates = if long_context {
+                [rates[0] * 2, rates[1] * 2, rates[2] * 2, rates[3] * 3 / 2]
+            } else {
+                rates
+            };
+            let quantities = [u128::from(input - 30), 20, 10, 5];
+            let standard_total: u128 = standard_rates
+                .iter()
+                .zip(quantities)
+                .map(|(rate, quantity)| rate * quantity)
+                .sum();
+            for (tier, multiplier) in [
+                (None, 100_u32),
+                (Some("default"), 100),
+                (Some("standard"), 100),
+                (Some("flex"), 50),
+                (Some("fast"), 200),
+                (Some("priority"), 200),
+            ] {
+                let breakdown =
+                    openai_billing_breakdown(model, billing_usage(input, 5, 20, 10), tier)
+                        .expect("published GPT-6 Sol/Luna pricing");
+                let expected_rates = standard_rates.map(|rate| rate * u128::from(multiplier) / 100);
+                let prices = [
+                    breakdown.input_price_per_million(),
+                    breakdown.cache_read_price_per_million(),
+                    breakdown.cache_write_price_per_million(),
+                    breakdown.output_price_per_million(),
+                ]
+                .map(|price| price.amount().scaled());
+                let amounts = [
+                    breakdown.input_amount(),
+                    breakdown.cache_read_amount(),
+                    breakdown.cache_write_amount(),
+                    breakdown.output_amount(),
+                ]
+                .map(|amount| amount.amount().scaled());
+                let expected_amounts =
+                    std::array::from_fn(|index| expected_rates[index] * quantities[index]);
+                assert_eq!(
+                    prices,
+                    expected_rates.map(|rate| rate * 1_000_000),
+                    "{model}, tier={tier:?}, input={input}"
+                );
+                assert_eq!(amounts, expected_amounts);
+                assert_eq!(
+                    breakdown.total_amount().amount().scaled(),
+                    expected_amounts.iter().sum::<u128>()
+                );
+                assert_eq!(
+                    breakdown.standard_amount().amount().scaled(),
+                    standard_total
+                );
+                assert_eq!(breakdown.multiplier_percent(), multiplier);
+                assert_eq!(breakdown.long_context_billing_applied(), long_context);
+                assert_eq!(breakdown.service_tier(), Some(tier.unwrap_or("default")));
+            }
+        }
+    }
+}
+
+#[test]
 fn billing_breakdown_should_preserve_input_output_and_cache_components() {
     let breakdown = openai_billing_breakdown("gpt-5.6-sol", billing_usage(100, 5, 20, 10), None)
         .expect("known model pricing");
@@ -344,6 +414,10 @@ fn billing_should_not_inherit_prices_for_unknown_models_or_tiers() {
     for model in [
         "gpt-6-astra-future",
         "gpt-6-astra-2099-01-01",
+        "gpt-6-sol-future",
+        "gpt-6-sol-2099-01-01",
+        "gpt-6-luna-future",
+        "gpt-6-luna-2099-01-01",
         "gpt-5.6-sol-wm",
         "gpt-5.6-cyber-future",
         "gpt-5.4-cyber",
@@ -365,6 +439,8 @@ fn billing_should_not_inherit_prices_for_unknown_models_or_tiers() {
         ("gpt-5.3-codex", 1, Some("flex")),
         ("gpt-6-astra", 1, Some("auto")),
         ("gpt-6-astra", 1, Some("ultrafast")),
+        ("gpt-6-sol", 1, Some("auto")),
+        ("gpt-6-luna", 1, Some("ultrafast")),
     ] {
         assert!(
             openai_billing_breakdown(model, billing_usage(input, 1, 0, 0), tier).is_none(),

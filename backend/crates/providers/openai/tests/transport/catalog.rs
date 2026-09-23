@@ -39,6 +39,49 @@ fn native_document_keeps_unknown_nested_fields_nulls_and_model_instructions() {
 }
 
 #[test]
+fn gpt6_catalog_should_preserve_declared_capabilities_and_native_document() {
+    for slug in ["gpt-6-sol", "gpt-6-luna"] {
+        let efforts = ["none", "low", "medium", "high", "xhigh", "max"];
+        let levels: Vec<Value> = efforts
+            .iter()
+            .map(|effort| json!({"effort": effort, "description": "Synthetic test level"}))
+            .collect();
+        let original = json!({
+            "slug": slug,
+            "display_name": slug,
+            "supported_in_api": true,
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": levels,
+            "context_window": 272_000,
+            "max_context_window": 1_050_000,
+            "input_modalities": ["text", "image"],
+            "future_field": {"enabled": true}
+        });
+        let snapshot = parse_codex_model_catalog(
+            &serde_json::to_vec(&json!({"models": [original]})).expect("catalog JSON"),
+            None,
+        )
+        .expect("GPT-6 catalog");
+        let model = &snapshot.models()[0];
+        assert_eq!(model.request_model().as_str(), slug);
+        assert_eq!(model.capabilities().reasoning_efforts(), efforts);
+        assert_eq!(
+            model.capabilities().reasoning(),
+            CodexCatalogCapabilityEvidence::DeclaredNative
+        );
+        assert_eq!(
+            model
+                .limits()
+                .max_context_window_tokens()
+                .map(|value| value.get()),
+            Some(1_050_000)
+        );
+        let preserved: Value = serde_json::from_slice(model.document().body()).expect("document");
+        assert_eq!(preserved, original);
+    }
+}
+
+#[test]
 fn official_fixture_should_produce_safe_full_snapshot() {
     let snapshot = parse_codex_model_catalog(OFFICIAL_FIXTURE, Some("W/\"codex-v1\""))
         .expect("official fixture should parse");

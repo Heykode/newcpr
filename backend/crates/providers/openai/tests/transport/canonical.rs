@@ -256,7 +256,13 @@ fn decoder_should_bill_the_sent_model_independently_of_the_response_model() {
         ("gpt-5.6-sol", Some("gpt-6-astra"), Some(6_875_000)),
         ("gpt-5.6-sol", Some("gpt-5.6-sol"), Some(6_875_000)),
         ("gpt-5.6-sol", None, Some(6_875_000)),
-        ("gpt-6-sol", Some("gpt-5.6-sol"), None),
+        ("gpt-6-sol", Some("gpt-5.6-sol"), Some(2_550_000)),
+        ("gpt-6-sol", Some("gpt-6-sol"), Some(2_550_000)),
+        ("gpt-6-sol", None, Some(2_550_000)),
+        ("gpt-6-luna", Some("gpt-5.6-luna"), Some(127_500)),
+        ("gpt-6-luna", Some("gpt-6-luna"), Some(127_500)),
+        ("gpt-6-luna", None, Some(127_500)),
+        ("gpt-6-future", Some("gpt-6-sol"), None),
     ] {
         let created =
             json!({"type":"response.created","response":{"id":"resp_model_cost","model":returned}});
@@ -396,24 +402,45 @@ fn decoder_should_use_non_reasoning_preview_web_search_price() {
 }
 
 #[test]
-fn astra_decoder_should_use_reasoning_preview_web_search_price() {
-    let body = concat!(
-        "event: response.created\n",
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_preview_search_cost\",\"model\":\"gpt-6-astra\"}}\n\n",
-        "event: response.completed\n",
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_preview_search_cost\",\"model\":\"gpt-6-astra\",\"status\":\"completed\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\",\"action\":{\"type\":\"search\"}}],\"usage\":{\"input_tokens\":0,\"output_tokens\":0,\"total_tokens\":0}}}\n\n",
-    );
-    let tools = vec![json!({ "type": "web_search_preview" })];
-    let events = CodexCanonicalDecoder::new("gpt-6-astra")
-        .with_request_tool_pricing("gpt-6-astra", Some(&tools))
-        .push(body.as_bytes())
-        .expect("canonical preview web search response");
+fn gpt6_decoder_should_use_reasoning_preview_web_search_price() {
+    for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+        let created = json!({
+            "type": "response.created",
+            "response": {"id": "resp_preview_search_cost", "model": model}
+        });
+        let completed = json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_preview_search_cost", "model": model, "status": "completed",
+                "output": [{
+                    "type": "web_search_call", "id": "ws_1", "status": "completed",
+                    "action": {"type": "search"}
+                }],
+                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            }
+        });
+        let body = format!("data: {created}\n\ndata: {completed}\n\n");
+        for tool_type in [
+            "web_search",
+            "web_search_preview",
+            "web_search_preview_2025_03_11",
+        ] {
+            let tools = vec![json!({ "type": tool_type })];
+            let events = CodexCanonicalDecoder::new(model)
+                .with_request_tool_pricing(model, Some(&tools))
+                .push(body.as_bytes())
+                .expect("canonical web search response");
 
-    assert!(canonical_facts(&events).into_iter().any(|event| matches!(
-        event,
-        GatewayEvent::CalculatedCost(cost)
-            if cost.total().amount().scaled() == 100_000_000
-    )));
+            assert!(
+                canonical_facts(&events).into_iter().any(|event| matches!(
+                    event,
+                    GatewayEvent::CalculatedCost(cost)
+                        if cost.total().amount().scaled() == 100_000_000
+                )),
+                "{model}, tool={tool_type}"
+            );
+        }
+    }
 }
 
 #[test]

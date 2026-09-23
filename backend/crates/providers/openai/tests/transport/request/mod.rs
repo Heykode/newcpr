@@ -100,6 +100,31 @@ fn encoder_should_patch_model_and_preserve_supported_generate_semantics() {
 }
 
 #[test]
+fn gpt6_encoder_should_preserve_model_and_reasoning_efforts() {
+    for model in ["gpt-6-sol", "gpt-6-luna"] {
+        for effort in ["none", "low", "medium", "high", "xhigh", "max"] {
+            let reasoning = json!({"effort": effort, "summary": "auto"});
+            let tools = json!([{"type": "function", "name": "lookup", "strict": true}]);
+            let request = request(Map::from_iter([
+                ("model".to_owned(), json!(model)),
+                ("input".to_owned(), json!("hello")),
+                ("reasoning".to_owned(), reasoning.clone()),
+                ("tools".to_owned(), tools.clone()),
+                ("service_tier".to_owned(), json!("priority")),
+            ]));
+
+            let encoded = encode_generate_request(&request, model, &Default::default())
+                .expect("GPT-6 request");
+            assert_eq!(encoded.body().get("model"), Some(&json!(model)));
+            assert_eq!(encoded.body().get("reasoning"), Some(&reasoning));
+            assert_eq!(encoded.body().get("tools"), Some(&tools));
+            assert_eq!(encoded.body().get("service_tier"), Some(&json!("priority")));
+            assert!(!encoded.force_http_sse);
+        }
+    }
+}
+
+#[test]
 fn encoder_should_remove_unsupported_fields_from_upstream_body() {
     let request = request(Map::from_iter([
         ("model".to_owned(), json!("client-model")),
