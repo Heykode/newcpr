@@ -94,15 +94,18 @@ async function test(channel: 'email' | 'bark') {
     return
   }
   testing.value = channel
+  let saved = false
   try {
-    if (!await save())
+    saved = await save()
+    if (!saved)
       return
     await testNotification({ channel, target: channel === 'email' ? testRecipient.value.trim() : 'default' })
     toast.success(channel === 'email' ? '测试邮件已发送' : 'Bark 测试已发送')
   }
   catch (error) { toast.error(errorMessage(error, '通知测试失败')) }
   finally {
-    await load()
+    if (saved)
+      await load()
     testing.value = null
   }
 }

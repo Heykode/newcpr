@@ -5,6 +5,8 @@ import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
+import * as vue from 'vue'
+import { compileScript, parse } from 'vue/compiler-sfc'
 
 const require = createRequire(import.meta.url)
 
@@ -24,6 +26,144 @@ function loadApi() {
   })
   return { api: exports, calls }
 }
+
+function channelHarness() {
+  const calls = { reads: 0, saves: [], tests: [] }
+  const errors = []
+  const failures = { save: false, send: false, reload: false }
+  let saved = {
+    smtp: { enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: null, passwordSet: false, fromName: null, fromEmail: 'alerts@example.com' },
+    bark: { enabled: true, serverUrl: 'https://push.example.com', deviceKeySet: true, level: 'active', sound: null, volume: 5, call: false },
+    lastTest: null,
+    updatedAt: '2026-09-23T00:00:00Z',
+  }
+  const snapshot = value => structuredClone(vue.toRaw(value))
+  const { descriptor } = parse(source('../src/views/settings/components/NotificationChannelsCard.vue'))
+  const compiled = compileScript(descriptor, { id: 'notification-channels-test' })
+  const { outputText } = ts.transpileModule(compiled.content, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
+  })
+  const dependencies = {
+    'vue': { ...vue, onMounted: () => {} },
+    '@vueuse/core': { useLocalStorage: (_key, fallback) => vue.ref(fallback) },
+    '@lucide/vue': {},
+    '@/api': {
+      getNotificationChannels: async () => {
+        calls.reads += 1
+        if (failures.reload)
+          throw new Error('Synthetic reload failure')
+        return snapshot(saved)
+      },
+      updateNotificationChannels: async (form) => {
+        const body = snapshot(form)
+        calls.saves.push(body)
+        if (failures.save)
+          throw new Error('Synthetic save failure')
+        saved = snapshot(body)
+        saved.smtp.passwordSet ||= Boolean(saved.smtp.password)
+        saved.bark.deviceKeySet ||= Boolean(saved.bark.deviceKey)
+        delete saved.smtp.password
+        delete saved.bark.deviceKey
+        return snapshot(saved)
+      },
+      testNotification: async (body) => {
+        calls.tests.push(snapshot(body))
+        saved.lastTest = {
+          id: 'synthetic-test',
+          channel: body.channel,
+          target: body.target,
+          status: failures.send ? 'failed' : 'sent',
+          test: true,
+          attempts: 1,
+          createdAt: saved.updatedAt,
+          finishedAt: saved.updatedAt,
+        }
+        if (failures.send)
+          throw new Error('Synthetic delivery failure')
+      },
+    },
+    '@/components/base/BaseToast': { toast: { error: message => errors.push(message), success: () => {} } },
+    '@/utils/async': { errorMessage: error => error.message },
+  }
+  const exports = {}
+  runInNewContext(outputText, {
+    exports,
+    require: name => name.endsWith('.vue') ? {} : dependencies[name] ?? require(name),
+  })
+  const scope = vue.effectScope()
+  const state = scope.run(() => exports.default.setup({}, { expose: () => {} }))
+  return { state, calls, errors, failures, snapshot, stop: () => scope.stop() }
+}
+
+for (const channel of ['email', 'bark']) {
+  test(`${channel} test preserves both channel drafts after a rejected save and allows retry`, async (t) => {
+    const h = channelHarness()
+    t.after(h.stop)
+    await h.state.load()
+    Object.assign(h.state.form.smtp, { host: 'new-smtp.example.com', username: 'synthetic-user', password: 'synthetic-password' })
+    Object.assign(h.state.form.bark, { serverUrl: 'https://new-push.example.com', deviceKey: 'synthetic-device-key' })
+    h.state.testRecipient.value = 'ops@example.com'
+    const draft = h.snapshot(h.state.form)
+    h.failures.save = true
+
+    await h.state.test(channel)
+
+    assert.equal(h.calls.saves.length, 1)
+    assert.equal(h.calls.tests.length, 0)
+    assert.equal(h.calls.reads, 1)
+    assert.deepEqual(h.snapshot(h.state.form), draft)
+    assert.equal(h.state.testRecipient.value, 'ops@example.com')
+    assert.equal(h.state.saving.value, false)
+    assert.equal(h.state.testing.value, null)
+    assert.deepEqual(h.errors, ['Synthetic save failure'])
+
+    h.failures.save = false
+    await h.state.test(channel)
+    assert.equal(h.calls.saves.length, 2)
+    assert.deepEqual(h.calls.saves[1], draft)
+    assert.equal(h.calls.tests.length, 1)
+    assert.equal(h.calls.tests[0].channel, channel)
+    assert.equal(h.calls.tests[0].target, channel === 'email' ? 'ops@example.com' : 'default')
+    assert.equal(h.calls.reads, 2)
+    assert.equal(h.state.form.lastTest.status, 'sent')
+    assert.equal(h.state.form.smtp.password, '')
+    assert.equal(h.state.form.bark.deviceKey, '')
+  })
+}
+
+test('delivery failure still reloads the saved test result without retrying the notification', async (t) => {
+  const h = channelHarness()
+  t.after(h.stop)
+  await h.state.load()
+  h.failures.send = true
+
+  const pending = h.state.test('email')
+  await h.state.test('bark')
+  await pending
+
+  assert.equal(h.calls.saves.length, 1)
+  assert.equal(h.calls.tests.length, 1)
+  assert.equal(h.calls.reads, 2)
+  assert.equal(h.state.form.lastTest.status, 'failed')
+  assert.equal(h.state.testing.value, null)
+  assert.deepEqual(h.errors, ['Synthetic delivery failure'])
+})
+
+test('test result reload failure releases the busy state without resending', async (t) => {
+  const h = channelHarness()
+  t.after(h.stop)
+  await h.state.load()
+  h.failures.reload = true
+
+  await h.state.test('bark')
+
+  assert.equal(h.calls.saves.length, 1)
+  assert.equal(h.calls.tests.length, 1)
+  assert.equal(h.calls.reads, 2)
+  assert.equal(h.state.loading.value, false)
+  assert.equal(h.state.testing.value, null)
+  assert.deepEqual(h.errors, ['Synthetic reload failure'])
+})
 
 test('notification API keeps channel, policy and test routes separate', async () => {
   const { api, calls } = loadApi()
