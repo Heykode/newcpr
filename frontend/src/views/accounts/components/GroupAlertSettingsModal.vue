@@ -4,6 +4,7 @@ import { BellRing, ChevronDown, Mail, Send } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { getGroupAlertPolicy, getNotificationChannels, testNotification, updateGroupAlertPolicy } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
+import FormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
@@ -11,6 +12,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
+import { barkLevelHints, barkLevelOptions } from '@/utils/notification-presentation'
 import { monitorMoney } from './group-monitor-presentation'
 
 const props = defineProps<{ group: AccountGroup | null, snapshot?: GroupMonitorItem, stale?: boolean, now?: number }>()
@@ -45,20 +47,19 @@ const barkReady = computed(() => channels.value?.bark.enabled && channels.value.
 const expired = computed(() => !!props.snapshot?.earliestResetAt && Date.parse(props.snapshot.earliestResetAt) <= (props.now ?? Date.now()))
 const levelOptions = [
   { label: '继承全局', value: '' },
-  { label: '普通提醒', value: 'active' },
-  { label: '时效提醒', value: 'timeSensitive' },
-  { label: '重要警告', value: 'critical' },
-  { label: '静默记录', value: 'passive' },
+  ...barkLevelOptions,
 ]
 const barkLevel = computed({ get: () => form.barkLevel ?? '', set: value => form.barkLevel = (value || null) as BarkLevel | null })
+const effectiveBarkLevel = computed(() => form.barkLevel ?? channels.value?.bark.level)
+const effectiveBarkLabel = computed(() => barkLevelOptions.find(option => option.value === effectiveBarkLevel.value)?.label ?? '读取中')
 const barkCall = computed({
   get: () => form.barkCall === null ? '' : String(form.barkCall),
   set: (value: string) => form.barkCall = value === '' ? null : value === 'true',
 })
 const callOptions = [
-  { label: '响铃：继承全局', value: '' },
-  { label: '持续响铃', value: 'true' },
-  { label: '普通响铃', value: 'false' },
+  { label: '继承全局', value: '' },
+  { label: '持续响铃约 30 秒', value: 'true' },
+  { label: '只响一次', value: 'false' },
 ]
 const customVolume = computed({
   get: () => form.barkVolume !== null,
@@ -184,11 +185,13 @@ watch([open, () => props.group?.id], ([visible]) => {
               </template>测试
             </BaseButton>
           </div>
-          <BaseInput v-model="recipientsText" class="mt-2" placeholder="收件人，多个用逗号分隔" />
+          <FormItem class="mt-2" label="收件地址" description="多个地址用英文逗号分隔">
+            <BaseInput v-model="recipientsText" placeholder="ops@example.com" />
+          </FormItem>
         </section>
         <section class="border-b border-cp-border-secondary pb-3">
           <div class="flex items-center gap-2">
-            <BellRing class="size-4" /><b class="flex-1">Bark 铃声</b><span class="text-cp-xs" :class="barkReady ? 'text-cp-success-text' : 'text-cp-warning-text'">{{ barkReady ? '已配置' : '未配置' }}</span>
+            <BellRing class="size-4" /><b class="flex-1">Bark 提醒</b><span class="text-cp-xs" :class="barkReady ? 'text-cp-success-text' : 'text-cp-warning-text'">{{ barkReady ? '已配置' : '未配置' }}</span>
           </div>
           <div class="mt-2 flex items-center justify-between">
             <BaseSwitch v-model="form.barkEnabled" label="启用 Bark" /><BaseButton size="sm" :disabled="!barkReady" :loading="testing === 'bark'" @click="test('bark')">
@@ -197,18 +200,34 @@ watch([open, () => props.group?.id], ([visible]) => {
               </template>测试
             </BaseButton>
           </div>
-          <button class="mt-2 flex w-full items-center gap-2 text-left text-cp-xs text-cp-text-secondary" @click="advancedOpen = !advancedOpen">
-            提醒样式覆盖<ChevronDown class="size-3.5" :class="advancedOpen ? 'rotate-180' : ''" />
+          <button class="mt-2 flex w-full items-center gap-2 text-left text-cp-xs text-cp-text-secondary" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
+            提醒等级与铃声<ChevronDown class="size-3.5" :class="advancedOpen ? 'rotate-180' : ''" />
           </button>
-          <div v-if="advancedOpen" class="mt-2 grid gap-2">
-            <BaseSelect v-model="barkLevel" :options="levelOptions" aria-label="提醒等级" />
-            <BaseInput v-model="form.barkSound!" placeholder="铃声名称，留空继承全局" />
-            <BaseSelect v-model="barkCall" :options="callOptions" aria-label="响铃方式" />
+          <p class="mt-1 text-cp-xs text-cp-text-tertiary">
+            {{ form.barkLevel === null ? '继承全局' : '本组' }} · {{ effectiveBarkLabel }}
+          </p>
+          <div v-if="advancedOpen" class="mt-3 grid gap-3">
+            <FormItem label="提醒等级">
+              <BaseSelect v-model="barkLevel" class="w-full" :options="levelOptions" aria-describedby="group-bark-level-hint" />
+            </FormItem>
+            <p v-if="effectiveBarkLevel" id="group-bark-level-hint" class="text-cp-xs text-cp-text-secondary" aria-live="polite">
+              {{ barkLevelHints[effectiveBarkLevel] }}
+            </p>
+            <FormItem label="铃声名称">
+              <BaseInput v-model="form.barkSound!" placeholder="alarm（留空继承全局）" />
+            </FormItem>
+            <FormItem label="响铃时长">
+              <BaseSelect v-model="barkCall" class="w-full" :options="callOptions" />
+            </FormItem>
+            <p class="text-cp-xs text-cp-text-tertiary">
+              持续响铃只延长时长，不会改变静音设置。
+            </p>
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex items-center gap-2 text-cp-xs">
-                <BaseSwitch v-model="customVolume" label="自定义音量" />自定义音量
+                <BaseSwitch v-model="customVolume" label="自定义重要警告音量" />重要警告音量（0–10）
               </div>
               <BaseNumberInput v-if="customVolume" v-model="volume" label="重要警告音量" :min="0" :max="10" />
+              <span v-else class="text-cp-xs text-cp-text-tertiary">继承全局 · {{ channels?.bark.volume ?? 5 }}</span>
             </div>
           </div>
         </section>
