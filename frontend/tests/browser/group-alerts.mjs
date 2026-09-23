@@ -20,6 +20,7 @@ async function main() {
   const tests = []
   const policies = new Map()
   let failLoad = false
+  let failSave = false
   let failTest = false
   let channels = {
     smtp: { enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: null, passwordSet: false, fromName: 'Synthetic', fromEmail: 'alerts@example.com' },
@@ -57,6 +58,8 @@ async function main() {
     if (path === '/api/admin/notifications/channels/update') {
       const body = req.postDataJSON()
       saves.push(body)
+      if (failSave)
+        return route.fulfill({ status: 400, json: { code: 400, message: 'Synthetic save failure', data: null } })
       channels = { ...channels, ...body }
       delete channels.smtp.password
       delete channels.bark.deviceKey
@@ -128,6 +131,20 @@ async function main() {
       }
     }
     const settings = page.locator('#notifications')
+    await settings.getByPlaceholder('SMTP 主机').fill('edited-smtp.example.com')
+    await settings.getByPlaceholder('密码', { exact: true }).fill('synthetic-password')
+    await settings.getByPlaceholder('https://api.day.app', { exact: true }).fill('https://edited-push.example.com')
+    await settings.getByPlaceholder('已保存，留空保持不变', { exact: true }).fill('synthetic-device-key')
+    failSave = true
+    await settings.getByRole('button', { name: '发送测试邮件', exact: true }).click()
+    await page.waitForFunction(() => document.body.textContent.includes('Synthetic save failure'))
+    await page.waitForFunction(() => !document.querySelector('#notifications fieldset').disabled)
+    assert.equal(await settings.getByPlaceholder('SMTP 主机').inputValue(), 'edited-smtp.example.com')
+    assert.equal(await settings.getByPlaceholder('密码', { exact: true }).inputValue(), 'synthetic-password')
+    assert.equal(await settings.getByPlaceholder('https://api.day.app', { exact: true }).inputValue(), 'https://edited-push.example.com')
+    assert.equal(await settings.getByPlaceholder('已保存，留空保持不变', { exact: true }).inputValue(), 'synthetic-device-key')
+    assert.equal(tests.length, 0)
+    failSave = false
     await settings.getByRole('button', { name: '发送测试邮件', exact: true }).click()
     await settings.getByText(/SMTP 测试成功/u).waitFor()
     assert.equal(tests.at(-1).target, 'alerts@example.com')
