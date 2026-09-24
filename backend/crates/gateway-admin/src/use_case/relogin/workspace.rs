@@ -41,6 +41,8 @@ pub(super) fn prepare_queue(
     };
     entry.workspace_mode = mode;
     entry.workspace_targets = targets;
+    entry.workspace_choices.clear();
+    entry.selected_workspace_id = None;
     Ok(())
 }
 
@@ -121,6 +123,63 @@ pub(super) fn confirm_target(
 }
 
 impl DefaultReloginService {
+    pub(super) async fn resume_selected_workspace(
+        &self,
+        id: &str,
+        revision: u64,
+        workspace_id: &str,
+    ) -> Result<(), AdminError> {
+        validate_ids(&[id.to_owned()])?;
+        let gate = self.gate.lock().await;
+        let mut entry = self
+            .entries()
+            .await?
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| AdminError::not_found("重登资料不存在"))?;
+        entry.validate_totp()?;
+        if entry.revision != revision || entry.status != ReloginStatus::AwaitingWorkspace {
+            return Err(AdminError::conflict("工作区候选已变化，请刷新后重新选择"));
+        }
+        if gate.active.contains_key(&entry.email)
+            || self.store()?.settings().await.map_err(store_error)?.paused
+        {
+            return Err(AdminError::conflict("重登正在进行或队列已暂停"));
+        }
+        validate_workspace_choices(&entry.workspace_choices)?;
+        if !entry
+            .workspace_choices
+            .iter()
+            .any(|choice| choice.id == workspace_id)
+        {
+            return Err(AdminError::invalid("请选择本次登录发现的工作区"));
+        }
+        if entry.automatic_job || entry.manual_push_context.is_some() || entry.target.is_some() {
+            return Err(AdminError::conflict("原工作区恢复不能切换工作区"));
+        }
+        let pool = self.pool().await?;
+        if entry.workspace_targets.iter().any(|target| {
+            !pool.iter().any(|account| {
+                target.matches_account(account)
+                    && account
+                        .email
+                        .as_ref()
+                        .is_some_and(|email| email.eq_ignore_ascii_case(&entry.email))
+            })
+        }) {
+            return Err(AdminError::conflict("原账号已变化，请重新获取工作区"));
+        }
+        entry.selected_workspace_id = Some(workspace_id.to_owned());
+        entry.workspace_choices.clear();
+        entry.credential = None;
+        entry.synced_at = None;
+        entry.next_attempt_at = None;
+        entry.stop_reason = None;
+        entry.status = ReloginStatus::Queued;
+        entry.message = "已选择工作区，等待继续获取凭据".to_owned();
+        self.save(&mut entry).await
+    }
+
     pub(super) async fn commit_workspace_switch(
         &self,
         prepared: PreparedCredentialRotation,

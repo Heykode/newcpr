@@ -11,6 +11,7 @@ import {
   importRelogin,
   pushRelogin,
   queueRelogin,
+  resumeReloginWorkspace,
   setReloginAutomatic,
   setReloginWorkspace,
 } from '@/api/modules/relogin'
@@ -360,25 +361,41 @@ function executeConfirmed() {
 const editing = shallowRef(false)
 const editRow = shallowRef<ReloginEntry>()
 const workspace = shallowRef('')
+const workspaceError = shallowRef('')
+const awaitingWorkspace = computed(() => editRow.value?.status === 'awaiting_workspace')
+const workspaceStale = computed(() => !!editRow.value
+  && entries.value.find(row => row.id === editRow.value?.id)?.revision !== editRow.value.revision)
 const workspaceOptions = computed(() => [
-  { value: '', label: '自动选择（已有账号沿用原工作区）' },
+  ...awaitingWorkspace.value ? [] : [{ value: '', label: '自动选择（已有账号沿用原工作区）' }],
   ...editRow.value ? workspaceChoices(editRow.value) : [],
 ])
 const workspaceKnown = computed(() => workspaceOptions.value.some(option => option.value === workspace.value))
+const selectedWorkspace = computed(() => editRow.value?.workspaceChoices?.find(choice => choice.id === workspace.value))
 function edit(row: ReloginEntry) {
   editRow.value = row
-  workspace.value = row.preferredWorkspaceId ?? ''
+  workspaceError.value = ''
+  workspace.value = row.status === 'awaiting_workspace' ? '' : row.preferredWorkspaceId ?? ''
   editing.value = true
 }
 function saveWorkspace() {
   const row = editRow.value
   if (!row)
     return
-  if (!workspaceKnown.value)
+  if (!workspaceKnown.value || workspaceStale.value)
     return
   return action(async () => {
-    await setReloginWorkspace(row.id, workspace.value.trim() || null)
-    editing.value = false
+    workspaceError.value = ''
+    try {
+      if (row.status === 'awaiting_workspace')
+        await resumeReloginWorkspace(row.id, row.revision, workspace.value)
+      else
+        await setReloginWorkspace(row.id, workspace.value.trim() || null)
+      editing.value = false
+    }
+    catch (error) {
+      workspaceError.value = errorMessage(error)
+      throw error
+    }
   })
 }
 watch([search, plan, status, pool, automatic, pageSize], () => {
@@ -519,7 +536,10 @@ onBeforeUnmount(() => {
           </div>
         </template>
         <template #status="{ row }">
-          <span class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
+          <button v-if="row.status === 'awaiting_workspace'" type="button" class="block cursor-pointer border-0 bg-transparent p-0 text-left text-cp-sm text-cp-warning underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50" :disabled="busy || paused" @click="edit(row)">
+            待选择工作区
+          </button>
+          <span v-else class="block whitespace-normal break-words" :class="processingStatus(row).tone" :title="processingStatus(row).detail">{{ processingStatus(row).label }}</span>
           <span v-if="retryProgress(row)" class="block text-cp-xs tabular-nums text-cp-text-tertiary">{{ retryProgress(row) }}</span>
           <span v-if="processingStatus(row).key === 'manual_required'" class="block whitespace-normal break-words text-cp-xs text-cp-error">{{ row.recovery?.message }}</span>
           <span v-if="row.recovery?.retryAt" class="block whitespace-normal break-words text-cp-xs tabular-nums text-cp-text-tertiary">{{ recoveryCountdown(row, now.getTime()) }}</span>
@@ -666,15 +686,47 @@ onBeforeUnmount(() => {
     </BaseConfirmModal>
     <AccountTemplatesModal v-model="templatesOpen" />
     <BaseModal v-model="editing" title="选择登录工作区" :dismissible="!busy">
-      <div class="grid gap-3">
+      <div class="grid min-w-0 grid-cols-1 gap-3">
         <p class="m-0 break-all text-cp-sm">
           {{ editRow?.email }}
         </p>
-        <BaseSelect v-model="workspace" :options="workspaceOptions" aria-label="登录工作区" :disabled="busy" />
-        <p v-if="!workspaceKnown" class="m-0 text-cp-sm text-cp-warning">
+        <BaseSelect v-model="workspace" class="min-w-0" :options="workspaceOptions" placeholder="请选择工作区" aria-label="登录工作区" :disabled="busy" />
+        <dl v-if="awaitingWorkspace && selectedWorkspace" class="m-0 grid min-w-0 grid-cols-1 gap-2 text-cp-sm">
+          <div>
+            <dt class="text-cp-text-secondary">
+              工作区
+            </dt>
+            <dd class="m-0 break-words">
+              {{ selectedWorkspace.name || '未命名工作区' }}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-cp-text-secondary">
+              套餐
+            </dt>
+            <dd class="m-0">
+              {{ selectedWorkspace.planType.toUpperCase() }}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-cp-text-secondary">
+              工作区 ID
+            </dt>
+            <dd class="m-0 break-all font-mono text-cp-xs">
+              {{ selectedWorkspace.id }}
+            </dd>
+          </div>
+        </dl>
+        <p v-if="workspaceStale" class="m-0 text-cp-sm text-cp-warning">
+          账号状态已更新，请关闭后重新选择。
+        </p>
+        <p v-if="workspaceError" role="alert" class="m-0 break-words text-cp-sm text-cp-error">
+          {{ workspaceError }}
+        </p>
+        <p v-else-if="!awaitingWorkspace && !workspaceKnown" class="m-0 text-cp-sm text-cp-warning">
           原指定工作区尚未被识别，请重新选择。
         </p>
-        <dl class="m-0 grid gap-2 text-cp-sm text-cp-text-secondary">
+        <dl v-if="!awaitingWorkspace" class="m-0 grid gap-2 text-cp-sm text-cp-text-secondary">
           <div class="flex justify-between gap-3">
             <dt>已有号池账号</dt><dd class="m-0">
               沿用选中账号的原工作区
@@ -693,8 +745,8 @@ onBeforeUnmount(() => {
         </dl>
       </div>
       <template #footer>
-        <BaseButton variant="primary" :loading="busy" :disabled="!workspaceKnown || workspace === (editRow?.preferredWorkspaceId ?? '')" @click="saveWorkspace">
-          保存
+        <BaseButton variant="primary" :loading="busy" :disabled="!workspaceKnown || workspaceStale || (awaitingWorkspace ? paused : workspace === (editRow?.preferredWorkspaceId ?? ''))" @click="saveWorkspace">
+          {{ awaitingWorkspace ? '选择并继续' : '保存' }}
         </BaseButton>
       </template>
     </BaseModal>

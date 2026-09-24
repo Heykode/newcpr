@@ -449,6 +449,17 @@ successful list refreshes, so polling cannot erase a failed push message.
 Regression runners: `frontend/tests/relogin.test.mjs` and
 `frontend/tests/browser/relogin.mjs` (isolated fake API, desktop/mobile screenshots).
 
+`awaiting_workspace` renders a clickable processing status and reuses the login
+workspace modal with captured `workspaceChoices` only, not pool IDs or a stored
+preference. Start with no selection. Show name/plan/full ID; long names and IDs
+must wrap inside 320/390px dialogs. Confirmation sends only ID, observed revision
+and candidate workspace ID to `/api/admin/relogin/workspace/resume`, never a
+separate preference save, generic queue or push. Lock double submission locally,
+disable after a polled revision change, and show failures inside the modal.
+Cancel sends nothing. Reopening resets choice/error; polling does not retry.
+`browser/relogin-workspace-selection.mjs` covers these lifecycle/viewport contracts.
+The backend executable contract is in `backend/account-relogin.md`.
+
 The relogin toolbar's automatic-recovery settings dialog edits failed retries
 (0..10, default 2, excluding the first attempt) and fixed retry interval
 (1..1440 minutes, default 5). Keep string drafts separate from polled saved values;

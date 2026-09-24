@@ -56,6 +56,7 @@ pub struct ProviderAdminError {
     message: Option<String>,
     public_message: Option<&'static str>,
     relogin_stop_reason: Option<crate::model::relogin::ReloginStopReason>,
+    relogin_workspace_choices: Vec<crate::model::relogin::ReloginWorkspaceChoice>,
 }
 
 impl std::fmt::Debug for ProviderAdminError {
@@ -66,6 +67,10 @@ impl std::fmt::Debug for ProviderAdminError {
             .field("message", &self.message.as_ref().map(|_| "<redacted>"))
             .field("public_message", &self.public_message)
             .field("relogin_stop_reason", &self.relogin_stop_reason)
+            .field(
+                "relogin_workspace_choices",
+                &self.relogin_workspace_choices.len(),
+            )
             .finish()
     }
 }
@@ -78,6 +83,7 @@ impl ProviderAdminError {
             message: None,
             public_message: None,
             relogin_stop_reason: None,
+            relogin_workspace_choices: Vec::new(),
         }
     }
 
@@ -111,6 +117,19 @@ impl ProviderAdminError {
     #[must_use]
     pub const fn relogin_stop_reason(&self) -> Option<crate::model::relogin::ReloginStopReason> {
         self.relogin_stop_reason
+    }
+
+    #[must_use]
+    pub fn with_relogin_workspace_choices(
+        mut self,
+        choices: Vec<crate::model::relogin::ReloginWorkspaceChoice>,
+    ) -> Self {
+        self.relogin_workspace_choices = choices;
+        self
+    }
+
+    pub fn relogin_workspace_choices(&self) -> &[crate::model::relogin::ReloginWorkspaceChoice] {
+        &self.relogin_workspace_choices
     }
 
     #[must_use]

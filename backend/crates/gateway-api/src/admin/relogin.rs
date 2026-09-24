@@ -77,6 +77,14 @@ struct WorkspaceRequest {
     workspace_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkspaceResumeRequest {
+    id: String,
+    revision: u64,
+    workspace_id: String,
+}
+
 pub fn router<S>() -> Router<S>
 where
     S: AdminSessionState + Clone + Send + Sync + 'static,
@@ -89,6 +97,10 @@ where
         .route("/api/admin/relogin/delete", post(delete::<S>))
         .route("/api/admin/relogin/automatic", post(automatic::<S>))
         .route("/api/admin/relogin/workspace", post(workspace::<S>))
+        .route(
+            "/api/admin/relogin/workspace/resume",
+            post(resume_workspace::<S>),
+        )
         .route("/api/admin/relogin/settings", post(settings::<S>))
         .route("/api/admin/relogin/templates", get(templates::<S>))
         .route(
@@ -333,6 +345,23 @@ where
         .admin_services()
         .relogin()
         .workspace(&request.id, request.workspace_id)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
+}
+
+async fn resume_workspace<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<WorkspaceResumeRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .relogin()
+        .resume_workspace(&request.id, request.revision, &request.workspace_id)
         .await
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
