@@ -20,6 +20,7 @@ import { usePagedQuery } from '@/composables/usePagedQuery'
 import { formatDateTime } from '@/utils/date'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
 import ProxyFormModal from './components/ProxyFormModal.vue'
+import { proxyLocationMessage, proxyTestFeedback } from './utils/location'
 
 const search = shallowRef('')
 const query = usePagedQuery({
@@ -31,6 +32,7 @@ const pagination = computed(() => ({ currentPage: query.page.value, pageSize: qu
 const columns = defineTableColumns<OutboundProxyRecord>([
   { key: 'identity', label: '代理', kind: 'identity' },
   { key: 'exitIp', label: '出口 IP', kind: 'custom' },
+  { key: 'location', label: '地区 / 时区', kind: 'custom' },
   { key: 'latency', label: '耗时', kind: 'custom', size: 'sm' },
   { key: 'accounts', label: '关联账号', kind: 'custom', size: 'sm' },
   { key: 'testedAt', label: '测试时间', kind: 'datetime' },
@@ -38,7 +40,7 @@ const columns = defineTableColumns<OutboundProxyRecord>([
 ])
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
-const form = reactive({ name: '', proxyUrl: '', locationEnabled: false, location: defaultRequestLocation() })
+const form = reactive({ name: '', proxyUrl: '', autoLocation: false, locationEnabled: false, location: defaultRequestLocation() })
 const saveAction = useAsyncAction()
 const { loading: saving } = saveAction
 const deleteAction = useAsyncAction()
@@ -55,6 +57,7 @@ function openForm(proxy: OutboundProxyRecord | null = null) {
   editing.value = proxy
   form.name = proxy?.name ?? ''
   form.proxyUrl = ''
+  form.autoLocation = proxy?.autoLocation ?? false
   form.locationEnabled = Boolean(proxy?.requestLocation)
   form.location = proxy?.requestLocation ? { ...proxy.requestLocation } : defaultRequestLocation()
   showForm.value = true
@@ -66,10 +69,15 @@ async function checkProxy(proxy: OutboundProxyRecord) {
   testingIds.value.add(proxy.id)
   try {
     const result = await testProxy({ id: proxy.id, revision: proxy.revision })
-    if (result.lastTest?.success)
-      toast.success(`${result.name}：连接成功`)
-    else
-      toast.error(result.lastTest?.message ?? '代理测试失败')
+    if (editing.value?.id === result.id)
+      editing.value = result
+    if (result.lastTest) {
+      const feedback = proxyTestFeedback(result.lastTest)
+      toast[feedback.tone](feedback.tone === 'warning' ? feedback.message : `${result.name}：${feedback.message}`)
+    }
+    else {
+      toast.error('代理测试未返回结果')
+    }
   }
   catch {}
   finally {
@@ -83,6 +91,10 @@ async function testConnection() {
     return
   const proxyUrl = form.proxyUrl.trim()
   if (!proxyUrl && editing.value) {
+    if (form.autoLocation !== (editing.value.autoLocation ?? false)) {
+      toast.warning('请先保存自动出口地区设置，再测试连接')
+      return
+    }
     await checkProxy(editing.value)
     return
   }
@@ -91,11 +103,9 @@ async function testConnection() {
     return
   }
   await formTestAction.run(async () => {
-    const result = await probeProxy({ proxyUrl })
-    if (result.success)
-      toast.success(`连接成功，耗时 ${result.latencyMs} ms`)
-    else
-      toast.error(result.message)
+    const result = await probeProxy({ proxyUrl, detectLocation: form.autoLocation })
+    const feedback = proxyTestFeedback(result)
+    toast[feedback.tone](feedback.message)
   })
 }
 
@@ -111,12 +121,17 @@ async function save() {
   await saveAction.run(async () => {
     const requestLocation = form.locationEnabled ? { ...form.location } : null
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
-    await (editing.value
-      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, requestLocation })
-      : createProxy({ name, proxyUrl, requestLocation }))
+    const result = await (editing.value
+      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, autoLocation: form.autoLocation, requestLocation })
+      : createProxy({ name, proxyUrl, autoLocation: form.autoLocation, requestLocation }))
     showForm.value = false
     form.proxyUrl = ''
     toast.success('代理已保存')
+    if (result.record.autoLocation && result.record.lastTest) {
+      const feedback = proxyTestFeedback(result.record.lastTest)
+      if (feedback.tone !== 'success')
+        toast[feedback.tone](feedback.message)
+    }
     search.value = ''
     query.page.value = 1
     await query.execute()
@@ -221,6 +236,12 @@ onMounted(() => void query.execute())
               <span v-else-if="row.lastTest" class="text-cp-error" :title="`${row.lastTest.message}（耗时 ${row.lastTest.latencyMs} ms）`">失败</span>
               <span v-else class="text-cp-text-quaternary">未测试</span>
             </template>
+            <template #location="{ row }">
+              <div class="grid min-w-0 gap-1">
+                <span class="text-cp-xs text-cp-text-quaternary">{{ row.autoLocation ? '自动' : row.requestLocation ? '手动' : '默认' }}</span>
+                <span class="truncate text-cp-xs text-cp-text-secondary" :title="proxyLocationMessage(row)">{{ proxyLocationMessage(row) }}</span>
+              </div>
+            </template>
             <template #accounts="{ row }">
               <button type="button" class="inline-flex cursor-pointer items-center gap-1.5 rounded-sm border-0 bg-transparent p-0 text-cp-sm text-cp-text-secondary outline-none transition-colors hover:text-cp-primary-text focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container" :aria-label="`查看 ${row.name} 的 ${row.accountCount} 个关联账号`" @click="inspected = row; showAccounts = true">
                 <Users class="size-3.5" aria-hidden="true" />
@@ -253,6 +274,7 @@ onMounted(() => void query.execute())
       v-model="showForm"
       v-model:name="form.name"
       v-model:proxy-url="form.proxyUrl"
+      v-model:auto-location="form.autoLocation"
       v-model:location-enabled="form.locationEnabled"
       v-model:location="form.location"
       :proxy="editing"

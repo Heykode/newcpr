@@ -335,6 +335,21 @@ impl RuntimeSnapshotCompiler {
 
     /// 读取一个 revision，并为已注册 Provider 查询实时模型目录。
     pub async fn compile(&self) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
+        self.compile_inner(None).await
+    }
+
+    /// Publish committed configuration without querying remote model catalogs.
+    pub(crate) async fn compile_with_cached_catalog(
+        &self,
+        previous: &RuntimeSnapshot,
+    ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
+        self.compile_inner(Some(previous)).await
+    }
+
+    async fn compile_inner(
+        &self,
+        previous: Option<&RuntimeSnapshot>,
+    ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
         for _ in 0..MAXIMUM_CATALOG_STABILITY_ATTEMPTS {
             let catalog_generations = self.catalogs.catalog_generations();
             let facts = self
@@ -347,7 +362,12 @@ impl RuntimeSnapshotCompiler {
             }
             let provider_kinds = catalog_generations.keys().cloned().collect();
             let snapshot =
-                compile_runtime_snapshot(facts, self.catalogs.as_ref(), provider_kinds).await?;
+                compile_runtime_snapshot(facts, self.catalogs.as_ref(), provider_kinds, previous)
+                    .await?;
+            if previous.is_some() {
+                // An empty generation map keeps catalog reconciliation pending.
+                return Ok(snapshot);
+            }
             let observed_generations = self.catalogs.catalog_generations();
             if catalog_generations == observed_generations {
                 return Ok(snapshot.with_provider_catalog_generations(observed_generations));
@@ -361,6 +381,7 @@ async fn compile_runtime_snapshot(
     facts: SnapshotFacts,
     catalogs: &dyn ProviderCatalogPort,
     provider_kinds: Vec<ProviderKind>,
+    previous: Option<&RuntimeSnapshot>,
 ) -> Result<RuntimeSnapshot, RuntimeSnapshotCompileError> {
     let registered_providers = provider_kinds.iter().cloned().collect::<BTreeSet<_>>();
 
@@ -368,6 +389,26 @@ async fn compile_runtime_snapshot(
     let mut provider_models = Vec::new();
     let mut exhaustive_provider_catalogs = BTreeSet::new();
     for provider in &provider_kinds {
+        if let Some(previous) = previous {
+            if previous.exhaustive_provider_catalogs.contains(provider) {
+                exhaustive_provider_catalogs.insert(provider.clone());
+            }
+            if let Some(models) = previous.provider_models.get(provider) {
+                provider_models.extend(models.iter().map(|(model, capabilities)| {
+                    let compiled =
+                        ProviderModel::new(provider.clone(), model.clone(), capabilities.clone());
+                    match previous
+                        .provider_model_presentations
+                        .get(provider)
+                        .and_then(|presentations| presentations.get(model))
+                    {
+                        Some(presentation) => compiled.with_presentation(presentation.clone()),
+                        None => compiled,
+                    }
+                }));
+            }
+            continue;
+        }
         let Ok(models) = catalogs.query_model_capabilities(provider).await else {
             continue;
         };

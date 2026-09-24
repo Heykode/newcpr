@@ -79,6 +79,7 @@ pub(crate) const fn store_diagnostic_dimension(
     match dimension {
         admin_observability::DiagnosticDimension::Provider => DiagnosticDimension::Provider,
         admin_observability::DiagnosticDimension::Model => DiagnosticDimension::Model,
+        admin_observability::DiagnosticDimension::KeyModel => DiagnosticDimension::KeyModel,
         admin_observability::DiagnosticDimension::Account => DiagnosticDimension::Account,
         admin_observability::DiagnosticDimension::ApiKey => DiagnosticDimension::ApiKey,
         admin_observability::DiagnosticDimension::Transport => DiagnosticDimension::Transport,

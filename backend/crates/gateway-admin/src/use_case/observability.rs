@@ -18,13 +18,13 @@ use crate::{
         observability::{
             CostCoverage, CurrencyCost, DashboardAccountUsage, DashboardCapacity,
             DashboardPeriodMetrics, DashboardResult, DecimalAmount, DiagnosticDimension,
-            DiagnosticsItem, DiagnosticsResult, HealthStatus, HealthTimeline, HealthTimelinePoint,
-            OpsErrorPage, OpsErrorQuery, ProviderBillingInput, RequestMetricPoint, RequestMetrics,
-            TimeRange, Trend, TrendKind, TrendPoint, TrendSummary, UsageBilling,
-            UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageInsights, UsageInsightsCost,
-            UsageInsightsCostPoint, UsageInsightsHealth, UsageInsightsHealthPoint,
-            UsageInsightsPerformance, UsageInsightsPerformancePoint, UsageOverview, UsagePage,
-            UsageQuery, UsageSummary, china_day_start,
+            DiagnosticPageQuery, DiagnosticsItem, DiagnosticsResult, HealthStatus, HealthTimeline,
+            HealthTimelinePoint, OpsErrorPage, OpsErrorQuery, ProviderBillingInput,
+            RequestMetricPoint, RequestMetrics, TimeRange, Trend, TrendKind, TrendPoint,
+            TrendSummary, UsageBilling, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
+            UsageInsights, UsageInsightsCost, UsageInsightsCostPoint, UsageInsightsHealth,
+            UsageInsightsHealthPoint, UsageInsightsPerformance, UsageInsightsPerformancePoint,
+            UsageOverview, UsagePage, UsageQuery, UsageSummary, china_day_start,
         },
         provider_credentials::ProviderQuotaRequest,
     },
@@ -121,6 +121,7 @@ pub trait ObservabilityService: Send + Sync {
         range: TimeRange,
         filter: UsageFilter,
         dimension: DiagnosticDimension,
+        page: Option<DiagnosticPageQuery>,
     ) -> Result<DiagnosticsResult, AdminError>;
     async fn ops_errors(&self, query: OpsErrorQuery) -> Result<OpsErrorPage, AdminError>;
 }
@@ -333,16 +334,18 @@ impl ObservabilityService for DefaultObservabilityService {
         range: TimeRange,
         filter: UsageFilter,
         dimension: DiagnosticDimension,
+        page: Option<DiagnosticPageQuery>,
     ) -> Result<DiagnosticsResult, AdminError> {
-        let items = self
+        let result = self
             .store
-            .usage_diagnostics(range, filter, dimension)
+            .usage_diagnostics(range, filter, dimension, page)
             .await
             .map_err(|error| map_store_error(error, "usage diagnostics"))?;
-        let total_requests = items.iter().fold(0_u64, |total, item| {
+        let total_requests = result.items.iter().fold(0_u64, |total, item| {
             total.saturating_add(item.request_count)
         });
-        let mut items = items
+        let mut items = result
+            .items
             .into_iter()
             .map(|item| {
                 let error_rate = rate_or_zero(item.failure_count, item.request_count);
@@ -374,18 +377,28 @@ impl ObservabilityService for DefaultObservabilityService {
                     retry_rate,
                     impact_score,
                     estimated_cost: usd_cost(&item.costs),
+                    cost_incomplete: item.cost_coverage.partial_count > 0
+                        || item.cost_coverage.unavailable_count > 0,
                     attempt_count: item.attempt_count,
                     total_tokens: item.total_tokens,
                 }
             })
             .collect::<Vec<_>>();
-        items.sort_by(|left, right| {
-            right
-                .impact_score
-                .total_cmp(&left.impact_score)
-                .then_with(|| right.request_count.cmp(&left.request_count))
-        });
-        Ok(DiagnosticsResult { dimension, items })
+        if dimension != DiagnosticDimension::KeyModel {
+            items.sort_by(|left, right| {
+                right
+                    .impact_score
+                    .total_cmp(&left.impact_score)
+                    .then_with(|| right.request_count.cmp(&left.request_count))
+            });
+        }
+        Ok(DiagnosticsResult {
+            dimension,
+            items,
+            current_page: result.current_page,
+            page_size: result.page_size,
+            has_more: result.has_more,
+        })
     }
 
     async fn ops_errors(&self, query: OpsErrorQuery) -> Result<OpsErrorPage, AdminError> {

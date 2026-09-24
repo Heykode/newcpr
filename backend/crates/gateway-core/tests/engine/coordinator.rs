@@ -1341,6 +1341,43 @@ fn failure_request_id_prefers_error_then_response_observation() {
 }
 
 #[test]
+fn response_model_diagnostic_uses_observed_model_without_canonical_request_fallback() {
+    for model in [None, Some("actually-declared-model")] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let observation = ProviderResponseObservation::new(
+            UpstreamTransport::new("http_sse").expect("transport"),
+        );
+        let observation = match model {
+            Some(model) => observation.with_upstream_response_model_if_valid(model),
+            None => observation,
+        };
+        let mut items = vec![Ok(ProviderEvent::observation(observation))];
+        items.extend(
+            complete_stream(Some(21))
+                .into_iter()
+                .map(canonical_provider_event),
+        );
+        let (coordinator, _, _) = coordinator(vec![Script::ObservedStream {
+            account_id: "acct_observed",
+            items,
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .expect("session");
+        block_on(session.collect_uncommitted()).expect("existing response");
+        assert_eq!(session.upstream_response_model(), model);
+        block_on(session.commit_downstream(Some(200))).expect("commit");
+    }
+}
+
+#[test]
 fn response_observation_is_persisted_but_never_delivered() {
     let operation = generate_operation();
     let route_plan = plan(&operation);

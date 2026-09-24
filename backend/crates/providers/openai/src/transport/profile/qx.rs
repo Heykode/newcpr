@@ -1,10 +1,10 @@
-//! Supported CLI UA grammar, independent of transport.
+//! Supported CLI/Exec UA grammar, independent of transport.
 
 use super::{CodexWireProfile, CodexWireProfileError, safe_token};
 
 pub const DEFAULT_USER_AGENT: &str = "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color";
 
-/// Parse only a supported CLI grammar, retaining the exact safe header value.
+/// Parse only a supported CLI/Exec grammar, retaining the exact safe header value.
 pub(super) fn parse(
     value: &str,
     desktop: &CodexWireProfile,
@@ -18,7 +18,7 @@ pub(super) fn parse(
     let (originator, version) = product
         .split_once('/')
         .ok_or(CodexWireProfileError::InvalidSyntax)?;
-    if !matches!(originator, "codex-tui" | "codex_cli_rs")
+    if !matches!(originator, "codex-tui" | "codex_cli_rs" | "codex_exec")
         || semver::Version::parse(version).is_err()
     {
         return Err(CodexWireProfileError::Incoherent);

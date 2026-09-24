@@ -13,6 +13,7 @@ use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
     CodexCredentialCatalogError, CodexCredentialCatalogService, ImportCodexOAuthCredential,
 };
+use provider_openai::transport::CodexModelCatalogError;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -140,6 +141,181 @@ pub(super) fn client_scope(accounts: &[ProviderAccount]) -> FrozenAccountScope {
         )),
         ClientRoutingScope::all_accounts(),
     )
+}
+
+#[tokio::test]
+async fn account_catalog_export_uses_selected_disabled_account_and_keeps_native_objects() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let selected = seed_account(&store, "acct_export_selected").await;
+    seed_account(&store, "acct_export_unrelated").await;
+    store
+        .set_enabled(selected.id(), false)
+        .await
+        .expect("disable");
+    let selected = store
+        .account(selected.id().as_str())
+        .expect("disabled account");
+    let server = MockServer::start().await;
+    let native = serde_json::json!({"models":[
+        {"slug":"native-z","display_name":"Selected Z","base_instructions":"selected-account","unknown":{"nested":[true,null,3]}},
+        {"slug":"native-a","display_name":"Selected","context_window":98765}
+    ]});
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .and(header(
+            "authorization",
+            "Bearer access-acct_export_selected",
+        ))
+        .and(header("chatgpt-account-id", "chatgpt-acct_export_selected"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(native.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let (models, _) = service
+        .account_catalog_documents(&selected)
+        .await
+        .expect("export");
+    let documents = models
+        .iter()
+        .map(|model| {
+            assert_eq!(model.document().protocol(), "codex");
+            serde_json::from_slice::<serde_json::Value>(model.document().body()).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(serde_json::json!({"models":documents}), native);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(
+        service.cached().unwrap().is_none(),
+        "export must not publish a plan union"
+    );
+    assert_eq!(service.catalog_generation().get(), 0);
+    assert!(
+        service
+            .read_account_catalog(&selected)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(!store.account(selected.id().as_str()).unwrap().enabled());
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn account_catalog_export_rejects_invalid_or_empty_wire_without_fallback() {
+    for (case, native, expected) in [
+        (
+            "missing_name",
+            serde_json::json!({"models":[{"slug":"native-z","base_instructions":"selected-account"}]}),
+            CodexModelCatalogError::InvalidWire,
+        ),
+        (
+            "empty",
+            serde_json::json!({"models":[]}),
+            CodexModelCatalogError::EmptySnapshot,
+        ),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let selected_id = format!("acct_export_invalid_{case}");
+        let other_id = format!("acct_export_fallback_{case}");
+        let selected = seed_account(&store, &selected_id).await;
+        let other = seed_account(&store, &other_id).await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .and(header("authorization", format!("Bearer access-{other_id}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(OFFICIAL_FIXTURE, "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/codex/models"))
+            .and(header(
+                "authorization",
+                format!("Bearer access-{selected_id}"),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(native))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+        service
+            .refresh_account_catalog(other.id())
+            .await
+            .expect("populate plan cache");
+        let cached_plan = service
+            .read_account_catalog(&selected)
+            .await
+            .expect("plan cache");
+        assert!(cached_plan.is_some());
+        let generation = service.catalog_generation();
+
+        let error = service
+            .account_catalog_documents(&selected)
+            .await
+            .expect_err(case);
+        assert!(
+            matches!(
+                error,
+                CodexCredentialCatalogError::Upstream { detail, status: None, egress: None }
+                    if detail == format!("invalid Codex model catalog: {expected}")
+            ),
+            "{case}: invalid native wire must fail"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(service.catalog_generation(), generation);
+        assert!(service.cached().unwrap().is_none());
+        assert_eq!(
+            service.read_account_catalog(&selected).await.unwrap(),
+            cached_plan
+        );
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn account_catalog_export_failure_never_uses_an_unrelated_account_or_plan_cache() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let selected = seed_account(&store, "acct_export_failure").await;
+    let other = seed_account(&store, "acct_export_other").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .and(header("authorization", "Bearer access-acct_export_failure"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(header("authorization", "Bearer access-acct_export_other"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(OFFICIAL_FIXTURE, "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    service
+        .refresh_account_catalog(other.id())
+        .await
+        .expect("populate a successful catalog for the same plan");
+    assert!(
+        service
+            .read_account_catalog(&selected)
+            .await
+            .expect("plan cache")
+            .is_some()
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert!(matches!(
+        service.account_catalog_documents(&selected).await,
+        Err(CodexCredentialCatalogError::Upstream {
+            status: Some(403),
+            ..
+        })
+    ));
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    server.verify().await;
 }
 
 #[tokio::test]

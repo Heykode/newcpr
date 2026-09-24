@@ -16,8 +16,9 @@ use gateway_admin::{
         MutationContext, PageSize, Revision,
         observability::{
             AccountPoolMetrics, AttemptMetrics, CostCoverage, CurrencyCost, DashboardObservation,
-            DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation, Granularity,
-            HealthStatus, LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PercentileMilliseconds,
+            DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
+            DiagnosticObservationPage, DiagnosticPageQuery, Granularity, HealthStatus,
+            LatencyPercentiles, OpsErrorPage, OpsErrorQuery, PercentileMilliseconds,
             RequestMetricPoint, RequestMetrics, TimeRange, TrendKind, UsageBilling,
             UsageCalculatedBillingFact, UsageDetail, UsageFilter, UsageListRecord, UsageOverview,
             UsagePage, UsageQuery, china_day_start,
@@ -36,6 +37,65 @@ fn external_observability_range_accepts_exactly_366_days() {
     let range = TimeRange::new(end - Duration::days(366), end)
         .expect("366-day external range should be accepted");
     assert_eq!(range.end, end);
+}
+
+#[tokio::test]
+async fn key_model_pages_preserve_store_order_and_partial_exact_costs() {
+    let now = Utc::now();
+    let range = TimeRange::new(now - Duration::hours(1), now).unwrap();
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    let mut known = diagnostic("key-a/model-a", 10);
+    known.costs = vec![CurrencyCost {
+        currency: "USD".to_owned(),
+        amount: "0.1234567891".parse().unwrap(),
+    }];
+    known.cost_coverage.unavailable_count = 1;
+    let mut risky = diagnostic("key-b/model-b", 2);
+    risky.failure_count = 2;
+    risky.success_count = 0;
+    store.replace_diagnostics(vec![known, risky, diagnostic("key-c/model-c", 1)]);
+    let services = observability_services_with_calculated_billing(store).await;
+    let result = services
+        .observability()
+        .diagnostics(
+            range,
+            UsageFilter::default(),
+            DiagnosticDimension::KeyModel,
+            Some(DiagnosticPageQuery {
+                current_page: 1,
+                page_size: PageSize::new(2).unwrap(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (result.current_page, result.page_size, result.has_more),
+        (1, 2, true)
+    );
+    assert_eq!(result.items[0].key, "key-a/model-a");
+    assert_eq!(result.items[1].key, "key-b/model-b");
+    assert_eq!(
+        result.items[0].estimated_cost.as_ref().unwrap().as_str(),
+        "0.1234567891"
+    );
+    assert!(result.items[0].cost_incomplete);
+    assert_eq!(result.items[1].estimated_cost, None);
+    let tail = services
+        .observability()
+        .diagnostics(
+            range,
+            UsageFilter::default(),
+            DiagnosticDimension::KeyModel,
+            Some(DiagnosticPageQuery {
+                current_page: 2,
+                page_size: PageSize::new(2).unwrap(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tail.items.len(), 1);
+    assert_eq!(tail.items[0].key, "key-c/model-c");
+    assert!(!tail.has_more);
 }
 
 #[test]
@@ -396,7 +456,12 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
         .expect("usage insights");
     let diagnostics = services
         .observability()
-        .diagnostics(range, UsageFilter::default(), DiagnosticDimension::Provider)
+        .diagnostics(
+            range,
+            UsageFilter::default(),
+            DiagnosticDimension::Provider,
+            None,
+        )
         .await
         .expect("usage diagnostics");
 
@@ -738,8 +803,23 @@ impl ObservabilityStore for FixtureObservabilityStore {
         _: TimeRange,
         _: UsageFilter,
         _: DiagnosticDimension,
-    ) -> AdminStoreResult<Vec<DiagnosticObservation>> {
-        Ok(self.diagnostics.lock().expect("diagnostics").clone())
+        page: Option<DiagnosticPageQuery>,
+    ) -> AdminStoreResult<DiagnosticObservationPage> {
+        let all = self.diagnostics.lock().expect("diagnostics").clone();
+        let current_page = page.map_or(1, |page| page.current_page);
+        let page_size = page.map_or(100, |page| page.page_size.get());
+        let offset = (current_page as usize - 1) * page_size as usize;
+        let has_more = page.is_some() && all.len() > offset + page_size as usize;
+        Ok(DiagnosticObservationPage {
+            items: all
+                .into_iter()
+                .skip(offset)
+                .take(page_size as usize)
+                .collect(),
+            current_page,
+            page_size,
+            has_more,
+        })
     }
 
     async fn list_ops_errors(&self, _: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {

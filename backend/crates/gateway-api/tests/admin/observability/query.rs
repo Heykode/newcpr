@@ -64,6 +64,59 @@ fn diagnostics_query_should_keep_wire_dimension_name() {
 }
 
 #[test]
+fn key_model_diagnostics_should_default_to_bounded_pages() {
+    let query: DiagnosticsQuery = serde_json::from_value(json!({"dimension": "keyModel"})).unwrap();
+    let dimension = query.dimension().unwrap();
+    assert_eq!(dimension, DiagnosticDimension::KeyModel);
+    assert_eq!(dimension.display_name(), "keyModel");
+    let page = query.page(dimension).unwrap().unwrap();
+    assert_eq!(page.current_page, 1);
+    assert_eq!(page.page_size.get(), 20);
+}
+
+#[test]
+fn diagnostics_pagination_should_reject_invalid_pages_and_other_dimensions() {
+    for (value, field) in [
+        (
+            json!({"dimension": "keyModel", "currentPage": 0}),
+            "currentPage",
+        ),
+        (json!({"dimension": "keyModel", "pageSize": 0}), "pageSize"),
+        (
+            json!({"dimension": "keyModel", "pageSize": 101}),
+            "pageSize",
+        ),
+        (json!({"dimension": "model", "currentPage": 1}), "dimension"),
+        (json!({"dimension": "apiKey", "pageSize": 20}), "dimension"),
+    ] {
+        let query: DiagnosticsQuery = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            query.page(query.dimension().unwrap()).unwrap_err().field(),
+            field
+        );
+    }
+    let query: DiagnosticsQuery = serde_json::from_value(json!({
+        "dimension": "keyModel", "currentPage": 2, "pageSize": 100,
+    }))
+    .unwrap();
+    let page = query.page(query.dimension().unwrap()).unwrap().unwrap();
+    assert_eq!(page.current_page, 2);
+    assert_eq!(page.page_size.get(), 100);
+    assert!(
+        DiagnosticsQuery::default()
+            .page(DiagnosticDimension::Model)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        serde_json::from_value::<DiagnosticsQuery>(json!({
+            "dimension": "keyModel", "currentPage": -1,
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn scalar_query_parsers_should_reject_out_of_range_values_without_echoing_input() {
     assert_eq!(parse_status(Some(99)).unwrap_err().field(), "statusCode");
     assert_eq!(

@@ -505,6 +505,29 @@ impl CodexCredentialCatalogService {
         Ok(catalog)
     }
 
+    /// Explicit admin export uses only the selected account, even when disabled.
+    /// Freeze the effective profile and retain the normal proxy/IPv6/CA path.
+    pub async fn account_catalog_documents(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<(Vec<CodexCatalogModel>, SystemTime), CodexCredentialCatalogError> {
+        let client = self.backend_client();
+        let fetched = tokio::time::timeout(
+            CLIENT_CATALOG_TIMEOUT,
+            self.fetch_account_models(&client, account, None),
+        )
+        .await
+        .map_err(|_| CodexCredentialCatalogError::Upstream {
+            detail: "account model catalog timed out".to_owned(),
+            status: None,
+            egress: None,
+        })??;
+        if fetched.models.is_empty() {
+            return Err(CodexCredentialCatalogError::NoEligibleCredential);
+        }
+        Ok((fetched.models, SystemTime::now()))
+    }
+
     /// 读取当前账号所属套餐的目录 cache，不触发上游请求。
     pub async fn read_account_catalog(
         &self,

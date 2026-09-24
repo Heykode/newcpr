@@ -165,9 +165,11 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
                 ..UsageRecordFilter::default()
             },
             DiagnosticDimension::Account,
+            None,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .items;
     assert_eq!(diagnostics.len(), 1);
     let diagnostic = &diagnostics[0];
     assert_eq!(diagnostic.request_count, 5);

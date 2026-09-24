@@ -1,0 +1,113 @@
+{
+  "sources": {
+    "desktop": {
+      "repository": "huweiATgithub/codex-desktop-ua",
+      "release": "26.917.62051",
+      "commit": "02e4e0b8cdba8e7432b1549fb6ee732f73a0076d",
+      "assetId": 584062339,
+      "sha256": "1977adfbdaedb8cd6111608a572c94cd4cde205ad7faeec60c6803dabc081ccb",
+      "url": "https://github.com/huweiATgithub/codex-desktop-ua/releases/download/v26.917.62051/ua-matrix.json"
+    },
+    "cli": {
+      "repository": "huweiATgithub/codex-ua",
+      "release": "0.156.1",
+      "commit": "14d68d56216148ed8062eba2bc49cb637d50756f",
+      "assetId": 584069027,
+      "sha256": "f695d8474bd0e4856bb6f225a73d0a97949d24d7089be5e67b2d0c4362568c70",
+      "url": "https://github.com/huweiATgithub/codex-ua/releases/download/v0.156.1/ua-matrix.json"
+    }
+  },
+  "samples": [
+    {
+      "id": "desktop-macos-arm64",
+      "client": "Desktop",
+      "environment": "macos-arm64",
+      "platform": "macOS arm64",
+      "userAgent": "Codex Desktop/0.155.0-alpha.16.3 (Mac OS 15.7.9; arm64) unknown (Codex Desktop; 26.917.62051)"
+    },
+    {
+      "id": "desktop-macos-x64",
+      "client": "Desktop",
+      "environment": "macos-x64",
+      "platform": "macOS x64",
+      "userAgent": "Codex Desktop/0.155.0-alpha.16.3 (Mac OS 15.7.9; x86_64) unknown (Codex Desktop; 26.917.62051)"
+    },
+    {
+      "id": "desktop-windows-x64",
+      "client": "Desktop",
+      "environment": "windows-x64",
+      "platform": "Windows x64",
+      "userAgent": "Codex Desktop/0.155.0-alpha.16.3 (Windows 10.0.26100; x86_64) unknown (Codex Desktop; 26.917.62051)"
+    },
+    {
+      "id": "cli-macos-arm64",
+      "client": "CLI",
+      "environment": "macos-arm64",
+      "platform": "macOS arm64",
+      "userAgent": "codex-tui/0.156.1 (Mac OS 15.7.9; arm64) xterm-256color (codex-tui; 0.156.1)"
+    },
+    {
+      "id": "cli-macos-x64",
+      "client": "CLI",
+      "environment": "macos-x64",
+      "platform": "macOS x64",
+      "userAgent": "codex-tui/0.156.1 (Mac OS 15.7.9; x86_64) xterm-256color (codex-tui; 0.156.1)"
+    },
+    {
+      "id": "cli-windows-x64",
+      "client": "CLI",
+      "environment": "windows-x64",
+      "platform": "Windows x64",
+      "userAgent": "codex-tui/0.156.1 (Windows 10.0.26100; x86_64) xterm-256color (codex-tui; 0.156.1)"
+    },
+    {
+      "id": "cli-linux-ubuntu-x64",
+      "client": "CLI",
+      "environment": "linux-ubuntu-x64",
+      "platform": "Ubuntu x64",
+      "userAgent": "codex-tui/0.156.1 (Ubuntu 24.4.0; x86_64) xterm-256color (codex-tui; 0.156.1)"
+    },
+    {
+      "id": "cli-linux-ubuntu-arm64",
+      "client": "CLI",
+      "environment": "linux-ubuntu-arm64",
+      "platform": "Ubuntu arm64",
+      "userAgent": "codex-tui/0.156.1 (Ubuntu 24.4.0; aarch64) xterm-256color (codex-tui; 0.156.1)"
+    },
+    {
+      "id": "exec-macos-arm64",
+      "client": "Exec",
+      "environment": "macos-arm64",
+      "platform": "macOS arm64",
+      "userAgent": "codex_exec/0.156.1 (Mac OS 15.7.9; arm64) xterm-256color (codex_exec; 0.156.1)"
+    },
+    {
+      "id": "exec-macos-x64",
+      "client": "Exec",
+      "environment": "macos-x64",
+      "platform": "macOS x64",
+      "userAgent": "codex_exec/0.156.1 (Mac OS 15.7.9; x86_64) xterm-256color (codex_exec; 0.156.1)"
+    },
+    {
+      "id": "exec-windows-x64",
+      "client": "Exec",
+      "environment": "windows-x64",
+      "platform": "Windows x64",
+      "userAgent": "codex_exec/0.156.1 (Windows 10.0.26100; x86_64) xterm-256color (codex_exec; 0.156.1)"
+    },
+    {
+      "id": "exec-linux-ubuntu-x64",
+      "client": "Exec",
+      "environment": "linux-ubuntu-x64",
+      "platform": "Ubuntu x64",
+      "userAgent": "codex_exec/0.156.1 (Ubuntu 24.4.0; x86_64) xterm-256color (codex_exec; 0.156.1)"
+    },
+    {
+      "id": "exec-linux-ubuntu-arm64",
+      "client": "Exec",
+      "environment": "linux-ubuntu-arm64",
+      "platform": "Ubuntu arm64",
+      "userAgent": "codex_exec/0.156.1 (Ubuntu 24.4.0; aarch64) xterm-256color (codex_exec; 0.156.1)"
+    }
+  ]
+}

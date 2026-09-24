@@ -5,6 +5,7 @@ use serde_json::Value;
 
 const MODEL_DIAGNOSTIC_DIMENSION_SQL: &str =
     "coalesce(mr.upstream_model_id, mr.requested_model_id)";
+const KEY_MODEL_DIAGNOSTIC_DIMENSION_SQL: &str = "json_build_array(mr.client_api_key_ref, coalesce(mr.upstream_model_id, mr.requested_model_id))::text";
 
 pub(crate) fn push_usage_filter(
     query: &mut QueryBuilder<Postgres>,
@@ -385,8 +386,28 @@ pub(crate) async fn usage_diagnostics(
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     dimension: DiagnosticDimension,
-) -> StoreResult<Vec<DiagnosticObservation>> {
+    page: Option<DiagnosticPageQuery>,
+) -> StoreResult<DiagnosticObservationPage> {
     filter.validate()?;
+    let page = if dimension == DiagnosticDimension::KeyModel {
+        Some(page.unwrap_or(DiagnosticPageQuery {
+            current_page: 1,
+            page_size: 20,
+        }))
+    } else if page.is_some() {
+        return Err(invalid("pagination requires key/model diagnostics"));
+    } else {
+        None
+    };
+    let page_size = page.map_or(DIAGNOSTIC_LIMIT, |page| i64::from(page.page_size));
+    let offset = if let Some(page) = page {
+        observability_page_offset(
+            page.current_page,
+            ObservabilityPageSize::new(page.page_size)?,
+        )?
+    } else {
+        0
+    };
     let dimension_sql = diagnostic_dimension_sql(dimension);
     let completed_usage = completed_usage_fact_predicate("mr");
     let mut statement = QueryBuilder::<Postgres>::new("with matched as (select ");
@@ -450,7 +471,10 @@ pub(crate) async fn usage_diagnostics(
             where currency_grouping = 1
             order by request_count desc, dimension_name limit ",
     );
-    statement.push_bind(DIAGNOSTIC_LIMIT);
+    // Fetch one extra dimension, not one extra currency row.
+    statement.push_bind(page_size + i64::from(page.is_some()));
+    statement.push(" offset ");
+    statement.push_bind(offset);
     statement.push(
         ")
          select aggregated.*
@@ -495,6 +519,8 @@ pub(crate) async fn usage_diagnostics(
             _ => return Err(postgres_unavailable("decode usage diagnostic grouping")),
         }
     }
+    let has_more = page.is_some() && observations.len() > page_size as usize;
+    observations.truncate(page_size as usize);
     let mut display_names = match dimension {
         DiagnosticDimension::Account => {
             diagnostic_account_display_names(
@@ -516,6 +542,28 @@ pub(crate) async fn usage_diagnostics(
             )
             .await?
         }
+        DiagnosticDimension::KeyModel => {
+            let pairs = observations
+                .iter()
+                .map(|item| {
+                    serde_json::from_str::<(String, String)>(&item.key)
+                        .map_err(|_| postgres_unavailable("decode key/model diagnostic"))
+                })
+                .collect::<StoreResult<Vec<_>>>()?;
+            let names = diagnostic_api_key_display_names(
+                pool,
+                &pairs.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>(),
+            )
+            .await?;
+            observations
+                .iter()
+                .zip(pairs)
+                .map(|(item, (key, model))| {
+                    let name = names.get(&key).map_or(key.as_str(), String::as_str);
+                    (item.key.clone(), format!("{name} → {model}"))
+                })
+                .collect()
+        }
         _ => HashMap::new(),
     };
     for observation in &mut observations {
@@ -524,7 +572,12 @@ pub(crate) async fn usage_diagnostics(
         }
         observation.costs = costs.remove(&observation.key).unwrap_or_default();
     }
-    Ok(observations)
+    Ok(DiagnosticObservationPage {
+        items: observations,
+        current_page: page.map_or(1, |page| page.current_page),
+        page_size: page.map_or(DIAGNOSTIC_LIMIT as u16, |page| page.page_size),
+        has_more,
+    })
 }
 
 pub(crate) async fn diagnostic_account_display_names(
@@ -594,6 +647,7 @@ pub(crate) fn diagnostic_dimension_sql(dimension: DiagnosticDimension) -> &'stat
     match dimension {
         DiagnosticDimension::Provider => "coalesce(mr.provider_kind, 'unrouted')",
         DiagnosticDimension::Model => MODEL_DIAGNOSTIC_DIMENSION_SQL,
+        DiagnosticDimension::KeyModel => KEY_MODEL_DIAGNOSTIC_DIMENSION_SQL,
         DiagnosticDimension::Account => "coalesce(mr.provider_account_ref, 'unrouted')",
         DiagnosticDimension::ApiKey => "mr.client_api_key_ref",
         DiagnosticDimension::Transport => {
@@ -616,6 +670,11 @@ pub(crate) fn push_diagnostic_dimension_filter(
         }
         DiagnosticDimension::Model => {
             statement.push(" and ");
+            statement.push(MODEL_DIAGNOSTIC_DIMENSION_SQL);
+            statement.push(" is not null");
+        }
+        DiagnosticDimension::KeyModel => {
+            statement.push(" and mr.client_api_key_ref is not null and ");
             statement.push(MODEL_DIAGNOSTIC_DIMENSION_SQL);
             statement.push(" is not null");
         }

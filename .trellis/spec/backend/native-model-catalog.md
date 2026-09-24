@@ -81,3 +81,47 @@ Wrong：照搬官方裸 HTTP client，保留业务模型字段却丢失本地账
 
 Correct：从缓存键的冻结画像构建既有账号 client，经原出站控制面获取连接，
 并用实际 HTTP 请求验证头部与源地址，而不是只比较配置对象。
+
+## 8. 管理员指定账号导出
+
+### Scope / Trigger
+
+管理员显式下载单个账号的原生目录；不是客户端目录的候选取样或推理路径。
+
+### Signatures
+
+- `GET /api/admin/accounts/models/catalog?accountId=...`。
+- `AccountsService::model_catalog_document` 经所选 Provider 的同名 port，
+  进入 `CodexCredentialCatalogService::account_catalog_documents`。
+- 成功 envelope 的 `data` 为 `{modelCount, observedAt, catalog}`；
+  `catalog` 为完整的 `{"models":[...]}`，响应 `private, no-store`。
+
+### Contracts
+
+只加载指定账号的凭据，允许显式指定已停用账号但不启用它。冻结当前 effective
+profile，保留原账号代理、IPv6、CA 和 15 秒超时。不得读取其他账号补结果、
+回退套餐缓存、发布全局目录、生成模型调用或添加 installation 头。
+保留原生对象未知字段、null、嵌套结构和模型数组顺序。
+
+### Validation & Error Matrix
+
+- 未登录：401，不调用 Provider；缺失、非法或额外 query 字段：400。
+- 原生请求失败、空目录、失效出口：返回既有错误，不导出旧缓存或伪目录。
+- 非 Codex 文档：拒绝；活动 IPv6 不可用：失败，不回退 IPv4。
+
+### Good / Base / Bad Cases
+
+Good：停用账号用自己的授权与出口导出。Base：普通模型列表行为不变。
+Bad：以同套餐另一账号成功目录掩盖当前账号的 403。
+
+### Tests Required
+
+Provider 测试覆盖精确授权、禁用账号、原对象、失败、冻结 default/custom 画像、
+代理认证和真实 IPv6 peer/负例；Admin 测试确认单账号派发且无 mutation；
+API 测试实际执行认证、严格 query 和成功 no-store 路由。执行状态单独记录，
+不能把仅新增回归代码视为通过。
+
+### Wrong vs Correct
+
+Wrong：调用 `refresh_account_catalog`，其内部可能按套餐取样其他账号。
+Correct：直接使用所选 `ProviderAccount` 和冻结 client 的既有辅助 GET。

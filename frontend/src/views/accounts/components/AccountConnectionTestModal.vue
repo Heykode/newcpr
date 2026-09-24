@@ -19,6 +19,7 @@ defineProps<{
   account: ConnectionTest['testingAccount']['value']
   status: ConnectionTest['connectionTestStatus']['value']
   model: string
+  upstreamResponseModel?: string | null
   logs: ConnectionTest['connectionTestLogs']['value']
   error: string
   startedAt: string
@@ -206,6 +207,18 @@ function connectionLogClass(tone: string) {
             :title="model || '-'"
           >
             {{ model || '-' }}
+          </p>
+          <p
+            class="mt-3 mb-0 text-cp-xs font-heavy text-cp-text-quaternary"
+            title="仅为上游响应声明，不代表独立型号鉴定"
+          >
+            返回模型（上游声明）
+          </p>
+          <p
+            class="mt-1.5 mb-0 break-all font-mono text-cp-sm font-emphasis text-cp-text"
+            :title="upstreamResponseModel || '未返回'"
+          >
+            {{ upstreamResponseModel || '未返回' }}
           </p>
         </div>
 

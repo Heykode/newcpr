@@ -2,11 +2,12 @@ import type { Ref } from 'vue'
 import type { AccountImportTask, getAccounts } from '@/api'
 import type { RequestOptions } from '@/api/request'
 import dayjs from 'dayjs'
-import { ref, watch } from 'vue'
+import { onScopeDispose, ref, watch } from 'vue'
 import {
   batchUpdateAccounts,
   deleteAccounts,
   exportAccounts,
+  getAccountModelCatalog,
   recoverAccount,
   refreshAccount,
   refreshAccountQuota,
@@ -31,6 +32,7 @@ export function useAccountMutations(options: {
 }) {
   const loadAccounts = options.reload
   const { downloadJson } = useDownload()
+  let downloadQueue = Promise.resolve()
   const onboarding = useAccountOnboarding({
     reload: loadAccounts,
     onImportTaskCreated: options.onImportTaskCreated,
@@ -46,6 +48,13 @@ export function useAccountMutations(options: {
   const deletingAccountAction = useAsyncAction()
   const batchDeletingAction = useAsyncAction()
   const exportingAccountsAction = useAsyncAction()
+  const exportingModelCatalogs = useIdSet<string>()
+  const catalogDownloads = new Map<string, AbortController>()
+  onScopeDispose(() => {
+    for (const controller of catalogDownloads.values())
+      controller.abort()
+    catalogDownloads.clear()
+  })
   const togglingAccountIds = useIdSet<string>()
   const togglingTurnStateAccountIds = useIdSet<string>()
   const recoveringAccountIds = recoveringAccounts.ids
@@ -151,7 +160,7 @@ export function useAccountMutations(options: {
           confirm: 'export_sensitive_accounts',
         })
         const fileName = `cpr-accounts-selected-${selected.length}-${dayjs().format('YYYY-MM-DD')}.json`
-        await downloadJson(payload, fileName)
+        await queueDownloadJson(payload, fileName)
         toast.success(`已导出 ${selected.length} 个账号`)
         showExportModal.value = false
       },
@@ -180,6 +189,45 @@ export function useAccountMutations(options: {
       }
       catch {}
     })
+  }
+
+  async function handleExportModelCatalog(account: AccountRow) {
+    if (account.provider !== 'openai')
+      return
+    const accountId = account.id
+    await exportingModelCatalogs.run(accountId, async () => {
+      const controller = new AbortController()
+      catalogDownloads.set(accountId, controller)
+      try {
+        const result = await getAccountModelCatalog(
+          { accountId },
+          { silent: true, signal: controller.signal },
+        )
+        if (controller.signal.aborted)
+          return
+        const safeId = accountId.replace(/[^\w-]/g, '-')
+        await queueDownloadJson(result.catalog, `cpr-model-catalog-${safeId}.json`, controller.signal)
+        if (!controller.signal.aborted)
+          toast.success(`已导出 ${result.modelCount} 个模型的原生目录`)
+      }
+      catch (error) {
+        if (!controller.signal.aborted)
+          toast.error(errorMessage(error, '模型目录导出失败'))
+      }
+      finally {
+        catalogDownloads.delete(accountId)
+      }
+    })
+  }
+
+  function queueDownloadJson(payload: unknown, fileName: string, signal?: AbortSignal) {
+    // The shared downloader owns one object URL, so only file delivery is serialized.
+    const pending = downloadQueue.then(async () => {
+      if (!signal?.aborted)
+        await downloadJson(payload, fileName)
+    })
+    downloadQueue = pending.catch(() => undefined)
+    return pending
   }
 
   async function handleRefreshQuota(accountId: string) {
@@ -300,6 +348,7 @@ export function useAccountMutations(options: {
     deletingAccount,
     batchDeleting,
     exportingAccounts,
+    exportingModelCatalogIds: exportingModelCatalogs.ids,
     togglingAccountIds: togglingAccountIds.ids,
     togglingTurnStateAccountIds: togglingTurnStateAccountIds.ids,
     requestDeleteAccount,
@@ -307,6 +356,7 @@ export function useAccountMutations(options: {
     handleBatchDelete,
     handleExportAccounts,
     confirmExportAccounts,
+    handleExportModelCatalog,
     handleRecover,
     handleRefresh,
     handleRefreshQuota,

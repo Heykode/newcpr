@@ -97,6 +97,7 @@ impl<'a> WaitControl<'a> {
 
 struct WaitingSelection {
     universe: BTreeSet<ProviderAccountId>,
+    invalid_credentials: BTreeSet<ProviderAccountId>,
     context: AccountSelectionContext,
     pinned: Option<ProviderAccountId>,
     affinity: AffinitySelection,
@@ -109,6 +110,8 @@ enum WaitOutcome {
     Full,
     Changed,
     Retry,
+    // Local corrupt credentials consume a candidate, not a facts/publication rescan.
+    Skipped,
 }
 
 // Interval waiting is a soft-affinity exception, not execution-capacity Busy.
@@ -267,6 +270,7 @@ impl CodexCredentialSelector {
         };
         let mut state = WaitingSelection {
             universe: ids.into_iter().collect(),
+            invalid_credentials: BTreeSet::new(),
             context: AccountSelectionContext {
                 policy: request.attempt.account_selection_policy(),
                 now: SystemTime::now(),
@@ -333,6 +337,7 @@ impl CodexCredentialSelector {
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
                     WaitOutcome::Retry => continue 'rescan,
+                    WaitOutcome::Skipped => {}
                     WaitOutcome::Changed => {
                         if state.pinned.is_some() {
                             return Err(CredentialSelectionError::NoEligibleCredential);
@@ -421,6 +426,9 @@ impl CodexCredentialSelector {
                         {
                             return Ok(lease);
                         }
+                        if state.invalid_credentials.contains(&id) {
+                            continue;
+                        }
                         continue 'rescan;
                     }
                     ProviderLeaseAcquisition::Busy { .. } => {
@@ -438,6 +446,7 @@ impl CodexCredentialSelector {
                             {
                                 WaitOutcome::Acquired(lease) => return Ok(*lease),
                                 WaitOutcome::Retry => continue 'rescan,
+                                WaitOutcome::Skipped => continue,
                                 WaitOutcome::Changed => {
                                     if state.pinned.is_some() {
                                         return Err(CredentialSelectionError::NoEligibleCredential);
@@ -517,6 +526,7 @@ impl CodexCredentialSelector {
                 {
                     WaitOutcome::Acquired(lease) => return Ok(*lease),
                     WaitOutcome::Retry => continue 'rescan,
+                    WaitOutcome::Skipped => continue,
                     WaitOutcome::Full => saw_full = true,
                     WaitOutcome::Changed => {
                         if state.pinned.is_some() {
@@ -543,6 +553,10 @@ impl CodexCredentialSelector {
         attempt: &AttemptContext,
     ) -> Result<(), CredentialSelectionError> {
         state.context.excluded_accounts = attempt.excluded_accounts().clone();
+        state
+            .context
+            .excluded_accounts
+            .extend(state.invalid_credentials.iter().cloned());
         if let Some(scope) = state.cyber_policy_scope.as_mut() {
             scope.state = self
                 .session_exclusions
@@ -704,6 +718,7 @@ impl CodexCredentialSelector {
                             .await?
                         {
                             Some(lease) => WaitOutcome::Acquired(Box::new(lease)),
+                            None if state.invalid_credentials.contains(id) => WaitOutcome::Skipped,
                             None => WaitOutcome::Retry,
                         },
                     );
@@ -815,6 +830,9 @@ impl CodexCredentialSelector {
                                     .await?
                                 {
                                     Some(lease) => WaitOutcome::Acquired(Box::new(lease)),
+                                    None if state.invalid_credentials.contains(id) => {
+                                        WaitOutcome::Skipped
+                                    }
                                     None => WaitOutcome::Retry,
                                 },
                             );
@@ -901,6 +919,16 @@ impl CodexCredentialSelector {
             Ok(runtime) => runtime,
             Err(CredentialRepositoryError::RevisionConflict) => {
                 drop(guard);
+                return Ok(None);
+            }
+            Err(CredentialRepositoryError::InvalidCredentialData) if state.pinned.is_none() => {
+                drop(guard);
+                state.invalid_credentials.insert(id.clone());
+                state.context.excluded_accounts.insert(id.clone());
+                if state.affinity.bound_account() == Some(id) {
+                    state.affinity.escape(AffinityEscapeReason::HardUnavailable);
+                    state.context.preferred_account = None;
+                }
                 return Ok(None);
             }
             Err(error) => return Err(error.into()),

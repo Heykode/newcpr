@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { getUsageRecordInsightsDiagnostics } from '@/api'
-import { CornerDownRight } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, CornerDownRight } from '@lucide/vue'
 
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
-import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
@@ -24,10 +25,12 @@ const props = withDefaults(
   },
 )
 
+defineEmits<{ pageChange: [page: number] }>()
 const dimension = defineModel('dimension', { type: String, required: true })
 
 const dimensionOptions = [
   { label: '模型', value: 'model' },
+  { label: 'Key × 模型', value: 'keyModel' },
   { label: '账号', value: 'account' },
   { label: '密钥', value: 'apiKey' },
   { label: '上游', value: 'provider' },
@@ -35,7 +38,9 @@ const dimensionOptions = [
   { label: '错误', value: 'failureClass' },
 ]
 
-const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
+const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
+
+const diagnosticColumns = computed(() => defineTableColumns<DiagnosticDisplayItem>([
   {
     key: 'nameDisplay',
     label: '维度',
@@ -48,12 +53,14 @@ const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
     kind: 'numeric',
     size: 'sm',
   },
-  {
-    key: 'impactScore',
-    label: '风险分',
-    kind: 'numeric',
-    size: 'sm',
-  },
+  ...(resultDimension.value === 'keyModel'
+    ? []
+    : [{
+        key: 'impactScore',
+        label: '风险分',
+        kind: 'numeric' as const,
+        size: 'sm' as const,
+      }]),
   {
     key: 'errorCount',
     label: '错误 / 未完',
@@ -65,23 +72,26 @@ const diagnosticColumns = defineTableColumns<DiagnosticDisplayItem>([
     key: 'estimatedCost',
     label: '费用',
     kind: 'numeric',
-    size: 'sm',
+    size: 'xl',
   },
-])
+  ...(resultDimension.value === 'keyModel'
+    ? [{ key: 'totalTokens' as const, label: 'Token', kind: 'numeric' as const, size: 'sm' as const }]
+    : []),
+]))
 
 const selectedDimensionLabel = computed(
   () => dimensionOptions.find(option => option.value === dimension.value)?.label ?? '维度',
 )
 
-const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
 const resultDimensionLabel = computed(
   () => dimensionOptions.find(option => option.value === resultDimension.value)?.label ?? '维度',
 )
 
-const sortedItems = computed(() =>
-  [...props.diagnostics.items].sort(
-    (left, right) => right.impactScore - left.impactScore || right.requestCount - left.requestCount,
-  ),
+const sortedItems = computed(() => resultDimension.value === 'keyModel'
+  ? props.diagnostics.items
+  : [...props.diagnostics.items].sort(
+      (left, right) => right.impactScore - left.impactScore || right.requestCount - left.requestCount,
+    ),
 )
 
 type DiagnosticDisplayItem = Diagnostics['items'][number] & {
@@ -91,16 +101,31 @@ type DiagnosticDisplayItem = Diagnostics['items'][number] & {
 const displayItems = computed<DiagnosticDisplayItem[]>(() =>
   sortedItems.value.map(item => ({
     ...item,
-    nameDisplay: diagnosticNameDisplay(item.name),
+    nameDisplay: diagnosticNameDisplay(item.name, item.key),
   })),
 )
 const hasData = computed(() => !props.loading && displayItems.value.length > 0)
 
-function diagnosticNameDisplay(name: string) {
+function diagnosticNameDisplay(name: string, key: string) {
   const raw = name.trim() || '未知'
   const full
     = resultDimension.value === 'transport' ? ({ websocket: 'WS', http_sse: 'SSE' }[raw] ?? raw) : raw
-  if (resultDimension.value !== 'model' && resultDimension.value !== 'account') {
+  if (resultDimension.value === 'keyModel') {
+    try {
+      const pair: unknown = JSON.parse(key)
+      if (Array.isArray(pair) && pair.length === 2 && pair.every(value => typeof value === 'string')) {
+        const model = pair[1] as string
+        const suffix = ` → ${model}`
+        return {
+          primary: full.endsWith(suffix) ? full.slice(0, -suffix.length) : full,
+          secondary: model,
+          full,
+        }
+      }
+    }
+    catch {}
+  }
+  if (!['model', 'account', 'keyModel'].includes(resultDimension.value)) {
     return { primary: full, secondary: '', full }
   }
 
@@ -121,12 +146,12 @@ function diagnosticNameDisplay(name: string) {
     class="h-105 min-h-105 max-h-105 min-w-0 w-full lg:h-full lg:min-h-90 lg:max-h-105"
   >
     <template #actions>
-      <BaseSegmented
+      <BaseSelect
         v-model="dimension"
-        label="诊断维度"
+        aria-label="诊断维度"
         :options="dimensionOptions"
         :disabled="loading"
-        class="w-full min-w-0 lg:w-80"
+        class="w-36 max-w-full"
       />
     </template>
 
@@ -134,7 +159,7 @@ function diagnosticNameDisplay(name: string) {
       <BaseTable
         v-if="hasData"
         :key="resultDimension"
-        class="min-h-0 w-full xl:contain-[size]"
+        class="min-h-0 w-full flex-1 xl:contain-[size]"
         :columns="diagnosticColumns"
         :rows="displayItems"
         density="compact"
@@ -148,7 +173,7 @@ function diagnosticNameDisplay(name: string) {
         <template #nameDisplay="{ row }">
           <div class="inline-grid max-w-full min-w-0 gap-1" :title="row.nameDisplay.full">
             <code
-              class="block max-w-full truncate font-mono text-cp-sm leading-none font-heavy text-cp-text"
+              class="block max-w-full whitespace-normal font-mono text-cp-sm leading-snug font-heavy text-cp-text [overflow-wrap:anywhere]"
             >
               {{ row.nameDisplay.primary }}
             </code>
@@ -161,7 +186,7 @@ function diagnosticNameDisplay(name: string) {
                 class="size-3.25 shrink-0 text-cp-blue-text"
                 stroke-width="2.4"
               />
-              <code class="block truncate font-mono text-cp-xs font-bold">
+              <code class="block min-w-0 whitespace-normal font-mono text-cp-xs font-bold [overflow-wrap:anywhere]">
                 {{ row.nameDisplay.secondary }}
               </code>
             </span>
@@ -176,7 +201,7 @@ function diagnosticNameDisplay(name: string) {
             <strong class="font-bold text-cp-text">
               {{ formatCompactNumber(row.requestCount) }}
             </strong>
-            <small class="text-[10px] font-emphasis text-cp-text-quaternary">
+            <small v-if="resultDimension !== 'keyModel'" class="text-[10px] font-emphasis text-cp-text-quaternary">
               {{ formatPercent(row.requestShare) }}
             </small>
           </span>
@@ -229,9 +254,13 @@ function diagnosticNameDisplay(name: string) {
         </template>
 
         <template #estimatedCost="{ row }">
-          <span class="font-mono font-bold tabular-nums text-cp-green-text">
-            {{ formatUsd(row.estimatedCost) }}
+          <span class="grid justify-items-end gap-1 font-mono font-bold tabular-nums text-cp-green-text" :title="row.costIncomplete ? '部分请求费用未知' : undefined">
+            <span class="whitespace-nowrap">{{ formatUsd(row.estimatedCost) }}</span>
+            <small v-if="row.costIncomplete" class="text-cp-warning-text">部分</small>
           </span>
+        </template>
+        <template #totalTokens="{ row }">
+          <span class="font-mono tabular-nums">{{ formatCompactNumber(row.totalTokens) }}</span>
         </template>
       </BaseTable>
       <BaseEmpty
@@ -240,8 +269,27 @@ function diagnosticNameDisplay(name: string) {
         surface="none"
         :title="loading ? '正在加载热点诊断数据' : '暂无诊断数据'"
         description="当前范围没有可诊断的请求记录"
-        class="h-full place-content-center"
+        class="min-h-0 flex-1 place-content-center"
       />
+      <nav v-if="dimension === 'keyModel'" aria-label="Key 模型分页" class="flex shrink-0 items-center justify-end gap-2 pt-2">
+        <BaseIconButton
+          label="上一页"
+          size="sm"
+          :disabled="loading || diagnostics.dimension !== dimension || diagnostics.currentPage <= 1"
+          @click="$emit('pageChange', diagnostics.currentPage - 1)"
+        >
+          <ChevronLeft class="size-4" />
+        </BaseIconButton>
+        <span class="min-w-14 text-center text-cp-xs text-cp-text-secondary" aria-live="polite">第 {{ diagnostics.dimension === dimension ? diagnostics.currentPage : 1 }} 页</span>
+        <BaseIconButton
+          label="下一页"
+          size="sm"
+          :disabled="loading || diagnostics.dimension !== dimension || !diagnostics.hasMore"
+          @click="$emit('pageChange', diagnostics.currentPage + 1)"
+        >
+          <ChevronRight class="size-4" />
+        </BaseIconButton>
+      </nav>
     </template>
   </BaseCard>
 </template>

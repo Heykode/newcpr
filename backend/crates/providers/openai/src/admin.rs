@@ -731,6 +731,43 @@ impl ProviderAdmin for OpenAiAdminProvider {
         })
     }
 
+    async fn model_catalog_document(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<
+        gateway_admin::model::provider_credentials::ProviderModelCatalogDocument,
+        ProviderAdminError,
+    > {
+        let account = self.account(account_id).await?;
+        let (models, observed_at) = self
+            .catalog
+            .account_catalog_documents(&account)
+            .await
+            .map_err(map_catalog_error)?;
+        let mut entries = Vec::with_capacity(models.len());
+        for model in &models {
+            if model.document().protocol() != "codex" {
+                return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported)
+                    .with_public_message("该账号没有可导出的 Codex 原生模型目录"));
+            }
+            let entry: Value = serde_json::from_slice(model.document().body())
+                .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+            entries.push(entry);
+        }
+        let model_count = entries.len();
+        let body = serde_json::to_vec(&serde_json::json!({ "models": entries }))
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+        let document = gateway_core::operation::RawJsonPayload::new("codex", body.into())
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+        Ok(
+            gateway_admin::model::provider_credentials::ProviderModelCatalogDocument {
+                document,
+                model_count,
+                observed_at: DateTime::<Utc>::from(observed_at),
+            },
+        )
+    }
+
     async fn export_credentials(
         &self,
         credentials: Vec<ProviderExportCredentialInput>,

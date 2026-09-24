@@ -565,3 +565,94 @@ time. Observe actual opening duration and its outcome independently.
   with a held real response: a deliberately shared ID loses its old-runtime
   connection, while a distinct ID's response finishes. Do not change production
   account identity or pool keys to compensate for independent test runtimes.
+
+## 15. Committed Configuration Without Catalog Waits
+
+### Scope / Trigger
+
+Account/configuration publication must not wait for a remote model catalog.
+The fixed provider registry remains unchanged; this does not add plugins.
+
+### Signatures
+
+`RuntimeSnapshotPublisher::publish_committed` and subscription refresh use
+`RuntimeSnapshotCompiler::compile_with_cached_catalog(previous)`.
+Explicit/background catalog refresh continues through `compile()`.
+
+### Contracts
+
+Register committed-refresh priority before acquiring the shared refresh lock.
+Cancel an active background compile, but keep facts reads, publication and
+failure fences serialized. Revision-store reads retain their existing failure
+semantics. Preemption itself must not suspend the published snapshot/capacity.
+Reuse only model capabilities, presentations and exhaustive-provider facts;
+recompile current permissions, account scope, settings and account concurrency.
+Publish snapshot and live concurrency atomically under the existing fence.
+Leave catalog generations empty so background reconciliation remains due.
+
+### Validation & Error Matrix
+
+- Pending commit versus slow catalog: cancel catalog work, publish cached facts.
+- Store/revision failure or rejected publication: retain existing suspension.
+- Catalog-only failure: retain the last valid snapshot under existing rules.
+- Recovery at the same revision: recompile and clear suspension as before.
+
+### Good / Base / Bad Cases
+
+Good: a capacity change publishes while a catalog request is held pending.
+Base: inference only acquires its immutable snapshot, without catalog I/O.
+Bad: dropping the refresh lock while reading lets stale success undo a fence.
+
+### Tests Required
+
+Keep runtime overlap/failure/suspension regressions. New tests must hold a catalog
+future, assert prompt committed publication, preserved catalog, revoked account
+scope, pointer-identical capacity, notifications and later reconciliation.
+
+### Wrong vs Correct
+
+Wrong: cache the whole previous snapshot to make a save fast.
+Correct: cache catalog facts only, recompiling committed authority and capacity.
+
+## 16. WebSocket Exit Diagnostics
+
+### Scope / Trigger
+
+Describe why a response stream ended before its terminal event; do not change
+the pump, heartbeat intervals, retry counts, connection ownership or wire profile.
+
+### Signatures
+
+`CodexWebSocketExchangeError::StreamEndedBeforeTerminal` carries a static safe
+reason, an optional existing keepalive timeout and the last event type.
+`ClosedBeforeTerminal` remains reserved for an actual received Close frame.
+
+### Contracts
+
+Both variants retain `ProviderErrorKind::Transport` and
+`UpstreamSendState::Ambiguous`. Preserve discard, connection observations,
+quota capture timestamps and existing recovery decisions. Do not invent a
+Close code, expose endpoint/authentication data or treat EOF as proof of NotSent.
+
+### Validation & Error Matrix
+
+- Actual Close: `upstream_close`; code 1009 retains `message_too_big` and 413.
+- Pump EOF: `stream_eof`, not a fabricated upstream Close response.
+- Existing Pong/liveness timeout: retain its safe reason and configured duration.
+
+### Good / Base / Bad Cases
+
+Good: distinguish a received Close from local keepalive expiry.
+Base: normally completed responses follow the same delivery path.
+Bad: better diagnosis authorizes post-send replay or changes account health policy.
+
+### Tests Required
+
+Exercise real Close, empty Close, EOF and local timeout with loopback WS.
+Assert error class/send state, discarded ownership, safe diagnostics and
+unchanged original quota/opening observation times.
+
+### Wrong vs Correct
+
+Wrong: turn every pump exit into `ClosedBeforeTerminal` with an absent code.
+Correct: use the pump's recorded reason while preserving transport recovery rules.

@@ -7,6 +7,8 @@ use super::{CodexBundledReleaseProfile, Utc, wire_profile};
 
 const CUSTOM: &str =
     "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)";
+const EXEC: &str =
+    "codex_exec/0.156.1 (Ubuntu 24.4.0; x86_64) xterm-256color (codex_exec; 0.156.1)";
 
 #[test]
 fn request_profile_snapshot_keeps_custom_ua_and_auxiliary_desktop_across_updates() {
@@ -14,6 +16,7 @@ fn request_profile_snapshot_keeps_custom_ua_and_auxiliary_desktop_across_updates
         None,
         Some(CUSTOM),
         Some("codex_cli_rs/0.153.4 (Linux 6.8; x86_64) xterm"),
+        Some(EXEC),
     ] {
         let state = CodexWireProfileState::new(wire_profile());
         if let Some(user_agent) = custom {
@@ -235,6 +238,98 @@ fn qx_parser_rejects_unsafe_unknown_and_incoherent_cli_values() {
 }
 
 #[test]
+fn exec_user_agent_retains_exact_bytes_and_matching_companion_headers() {
+    // Public catalog v0.156.1, asset 584069027; these rows are not artifact verification.
+    for value in [
+        EXEC,
+        "codex_exec/0.156.1 (Ubuntu 24.4.0; aarch64) xterm-256color (codex_exec; 0.156.1)",
+        "codex_exec/0.156.1 (Mac OS 15.7.9; arm64) xterm-256color (codex_exec; 0.156.1)",
+        "codex_exec/0.156.1 (Mac OS 15.7.9; x86_64) xterm-256color (codex_exec; 0.156.1)",
+        "codex_exec/0.156.1 (Windows 10.0.26100; x86_64) xterm-256color (codex_exec; 0.156.1)",
+    ] {
+        let profile = CodexWireProfile::parse_custom_user_agent(value, &wire_profile()).unwrap();
+        assert_eq!(profile.raw_user_agent.as_deref(), Some(value));
+        assert_eq!(profile.user_agent().as_bytes(), value.as_bytes());
+        assert_eq!(profile.originator, "codex_exec");
+        assert_eq!(profile.codex_version, "0.156.1");
+        assert_eq!(profile.verified_at, chrono::DateTime::<Utc>::UNIX_EPOCH);
+        let headers = provider_openai::transport::headers::build_codex_model_headers(
+            &profile, "fixture", None,
+        )
+        .unwrap();
+        assert_eq!(headers["user-agent"].as_bytes(), value.as_bytes());
+        assert_eq!(headers["originator"], "codex_exec");
+        assert_eq!(headers["version"], "0.156.1");
+    }
+    // Grammar fixtures also preserve optional suffixes and full semver bytes.
+    for value in [
+        "codex_exec/0.156.1 (Linux 6.8.0; aarch64) unknown",
+        "codex_exec/0.156.1-alpha.1+build.2 (Mac OS 15.7.9; arm64) Terminal/1.0 (codex_exec; 0.156.1-alpha.1+build.2)",
+    ] {
+        let profile = CodexWireProfile::parse_qx_user_agent(value, &wire_profile()).unwrap();
+        assert_eq!(profile.user_agent(), value);
+    }
+}
+
+#[test]
+fn exec_parser_rejects_incomplete_unsafe_and_conflicting_identity() {
+    for value in [
+        "codex_exec/0.156.1".to_owned(),
+        "codex_exec/0.156.1 (Ubuntu 24.4.0; x86_64)".to_owned(),
+        EXEC.replace("codex_exec", "codex-exec"),
+        EXEC.replace("codex_exec", "codex_exec_extra"),
+        EXEC.replace("codex_exec", "CODEX_EXEC"),
+        EXEC.replacen("0.156.1", "latest", 1),
+        EXEC.replace("(codex_exec; 0.156.1)", "(codex-tui; 0.156.1)"),
+        EXEC.replace("(codex_exec; 0.156.1)", "(codex_exec; 0.156.2)"),
+        EXEC.replace("(codex_exec; 0.156.1)", "(codex_exec; 0.156.1+build)"),
+        EXEC.replace("x86_64", "windows"),
+        EXEC.replace("Ubuntu", "Debian"),
+        EXEC.replace("24.4.0", "latest"),
+        EXEC.replace("xterm-256color", "xterm extra"),
+        EXEC.replace("xterm-256color", ""),
+        EXEC.replace("; x86_64", ";  x86_64"),
+        format!("{EXEC} trailing"),
+        format!(" {EXEC}"),
+        format!("{EXEC} "),
+        format!("{EXEC}\r\nX-Injected: true"),
+        format!("{EXEC}\0"),
+        format!("{EXEC}\t"),
+        format!("{EXEC}\u{7f}"),
+        format!("{EXEC}\u{80}"),
+    ] {
+        assert!(
+            CodexWireProfile::parse_custom_user_agent(&value, &wire_profile()).is_err(),
+            "{value:?}"
+        );
+    }
+}
+
+#[test]
+fn cli_and_exec_parsers_keep_the_512_byte_storage_boundary() {
+    for originator in ["codex-tui", "codex_cli_rs", "codex_exec"] {
+        let version = format!("0.156.1-{}", "a".repeat(180));
+        let frame =
+            format!("{originator}/{version} (Ubuntu 24.4.0; x86_64)  ({originator}; {version})");
+        let terminal = "x".repeat(512 - frame.len());
+        let value = frame.replacen(")  (", &format!(") {terminal} ("), 1);
+        assert_eq!(value.len(), 512);
+        assert_eq!(
+            CodexWireProfile::parse_custom_user_agent(&value, &wire_profile())
+                .unwrap()
+                .user_agent(),
+            value
+        );
+        let oversized = value.replacen(") ", ") x", 1);
+        assert_eq!(oversized.len(), 513);
+        assert_eq!(
+            CodexWireProfile::parse_custom_user_agent(&oversized, &wire_profile()).unwrap_err(),
+            CodexWireProfileError::Unsafe
+        );
+    }
+}
+
+#[test]
 fn cli_selection_is_explicit_and_survives_default_release_updates() {
     {
         let user_agent = qx::DEFAULT_USER_AGENT.to_owned();
@@ -348,6 +443,7 @@ fn unified_selection_parses_desktop_and_cli_with_coherent_auxiliary_surface() {
         CUSTOM,
         qx::DEFAULT_USER_AGENT,
         "codex_cli_rs/0.147.0 (Linux 6.8.0; x86_64) unknown (codex_cli_rs; 0.147.0)",
+        EXEC,
     ] {
         let state = CodexWireProfileState::new(wire_profile());
         let desktop = state.desktop_snapshot();
@@ -375,6 +471,7 @@ fn unified_default_release_updates_only_default_ua_and_frozen_snapshots_stay_coh
         None,
         Some(CUSTOM.to_owned()),
         Some(qx::DEFAULT_USER_AGENT.to_owned()),
+        Some(EXEC.to_owned()),
     ] {
         let state = CodexWireProfileState::new(wire_profile());
         state
@@ -431,6 +528,7 @@ fn unified_invalid_ua_is_rejected_atomically_including_empty_custom() {
         "\r\n",
         "Chrome/123",
         "codex-tui/0.146.0 (Ubuntu 22.4.0; x86_64) unknown (codex_cli_rs; 0.146.0)",
+        "codex_exec/0.156.1 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.156.2)",
     ] {
         assert!(
             state

@@ -1,0 +1,10 @@
+{
+  "from_version": "3.17.1",
+  "to_version": "3.18.0",
+  "from_migrations_tree": "97aa2ee7536b957367da8ac005dcf1605a263272",
+  "to_migrations_tree": "7e00081fb21eab153d5e5080eb5171539e4ca50e",
+  "added": [
+    "0038_proxy_auto_location.sql"
+  ],
+  "recovery": "manual"
+}

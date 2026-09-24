@@ -6,6 +6,215 @@ const MISSING_ITEM: &str = "Item with id 'rs_missing_fixture' not found. \
     Items are not persisted when `store` is set to false.";
 
 #[tokio::test]
+async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_health() {
+    for reuse in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, ACCOUNT_ID).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let (ping_seen_tx, ping_seen_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            websocket.next().await.unwrap().unwrap();
+            if reuse {
+                for event in [
+                    json!({"type":"response.created","response":{"id":"resp_warmup","model":"gpt-5.4"}}),
+                    json!({"type":"response.completed","response":{"id":"resp_warmup","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}),
+                ] {
+                    websocket
+                        .send(Message::Text(event.to_string().into()))
+                        .await
+                        .unwrap();
+                }
+                websocket.next().await.unwrap().unwrap();
+            }
+            for event in [
+                json!({"type":"response.created","response":{"id":"resp_pong","model":"gpt-5.4"}}),
+                json!({"type":"response.output_text.delta","delta":"private-response-body"}),
+            ] {
+                websocket
+                    .send(Message::Text(event.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+            assert!(matches!(
+                websocket.next().await.unwrap().unwrap(),
+                Message::Ping(_)
+            ));
+            ping_seen_tx.send(()).unwrap();
+            // Do not poll again: tungstenite would flush its automatic Pong.
+            futures::future::pending::<()>().await;
+        });
+        let operation = Operation::Generate(websocket_fixture_request(
+            generate_with_persisted_session_context(
+                ACCOUNT_ID,
+                "conversation-pong-exit",
+                "session-pong-exit",
+                "turn-pong-exit",
+            ),
+        ));
+        let provider = provider_with_base_url(&store, base_url);
+        if reuse {
+            let mut warmup = provider
+                .execute(
+                    planned_request("openai", operation.clone()),
+                    context("req_pong_warmup", CancellationToken::new()),
+                )
+                .await
+                .unwrap();
+            while let Some(event) = warmup.next().await {
+                event.unwrap();
+            }
+        }
+        let mut stream = provider
+            .execute(
+                planned_request("openai", operation),
+                context("req_pong_exit", CancellationToken::new()),
+            )
+            .await
+            .unwrap();
+        let mut pool_kind = None;
+        loop {
+            let event = stream.next().await.unwrap().unwrap();
+            if let Some(observation) = event.response_observation() {
+                pool_kind = observation.websocket_pool().or(pool_kind);
+            }
+            if event.has_client_event() {
+                break;
+            }
+        }
+        assert_eq!(
+            pool_kind,
+            Some(if reuse {
+                WebSocketPoolKind::Reuse
+            } else {
+                WebSocketPoolKind::New
+            })
+        );
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(25)).await;
+        // A real I/O barrier must not auto-advance the paused keepalive clock.
+        tokio::time::resume();
+        timeout(Duration::from_secs(5), ping_seen_rx)
+            .await
+            .expect("server observes Ping")
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let error = loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("pump timeout must remain a provider failure"),
+            }
+        };
+        tokio::time::resume();
+        server.abort();
+        let _ = server.await;
+        assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+        assert!(!error.replay_is_safe());
+        assert_eq!(error.pre_delivery_retry(), None);
+        assert_eq!(error.kind(), ProviderErrorKind::Transport);
+        assert_eq!(
+            error.connection_observation().unwrap().exit_reason(),
+            "pong_timeout"
+        );
+        let diagnostic = error.diagnostic().unwrap();
+        assert_eq!(diagnostic.stage(), Some("receive"));
+        assert_eq!(diagnostic.code(), Some("pong_timeout"));
+        assert_eq!(
+            diagnostic.as_str(),
+            "OpenAI WebSocket stream ended before a terminal response (pong_timeout); local keepalive timeout after 30s; last event type: response.output_text.delta"
+        );
+        assert!(error.raw_upstream_error().is_none());
+        assert!(error.client_visible_upstream_error().is_none());
+        assert!(!provider_openai::openai_failure_affects_account_score(
+            &error
+        ));
+        let account = store.account(ACCOUNT_ID).unwrap();
+        assert!(account.enabled());
+        assert_eq!(account.credential_state(), CredentialState::Ready);
+        assert_eq!(account.last_error_reason(), None);
+    }
+}
+
+#[tokio::test]
+async fn websocket_close_diagnosis_requires_an_actual_close_frame() {
+    for code in [None, Some(CloseCode::Normal), Some(CloseCode::Size)] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, ACCOUNT_ID).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_codex_test_websocket(stream).await;
+            websocket.next().await.unwrap().unwrap();
+            websocket
+                .send(Message::Close(code.map(|code| CloseFrame {
+                    code,
+                    reason: "private-close-detail".into(),
+                })))
+                .await
+                .unwrap();
+            let _ = websocket.next().await;
+        });
+        let operation = Operation::Generate(websocket_fixture_request(
+            generate_with_persisted_session_context(
+                ACCOUNT_ID,
+                "conversation-close-exit",
+                "session-close-exit",
+                "turn-close-exit",
+            ),
+        ));
+        let result = provider_with_base_url(&store, base_url)
+            .execute(
+                planned_request("openai", operation),
+                context("req_close_exit", CancellationToken::new()),
+            )
+            .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(mut stream) => loop {
+                match stream.next().await {
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => break error,
+                    None => panic!("Close before terminal must fail"),
+                }
+            },
+        };
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+        assert!(!error.replay_is_safe());
+        assert_eq!(error.pre_delivery_retry(), None);
+        let diagnostic = error.diagnostic().unwrap();
+        assert_eq!(diagnostic.stage(), Some("receive"));
+        assert_eq!(
+            diagnostic.code(),
+            Some(if code == Some(CloseCode::Size) {
+                "message_too_big"
+            } else {
+                "upstream_close"
+            })
+        );
+        assert!(!diagnostic.as_str().contains("private-close-detail"));
+        let raw: Value =
+            serde_json::from_str(error.raw_upstream_error().unwrap().as_str()).unwrap();
+        assert_eq!(raw["type"], "websocket.close");
+        assert_eq!(
+            raw["code"],
+            code.map(u16::from).map_or(Value::Null, Value::from)
+        );
+        assert!(!provider_openai::openai_failure_affects_account_score(
+            &error
+        ));
+    }
+}
+
+#[tokio::test]
 async fn repeated_streamed_404_errors_do_not_invalidate_accounts() {
     for websocket in [false, true] {
         for event in ["error", "response.failed"] {

@@ -82,11 +82,15 @@ function mountEditor(t, options = {}) {
   const state = scope.run(() => module.useAccountBatchEditor({
     accounts,
     selectedIds,
-    reloadAccounts: async (options) => {
+    reloadAccounts: async (requestOptions) => {
       reloads.accounts += 1
-      reloadOptions.push(options)
+      reloadOptions.push(requestOptions)
+      await options.reloadAccounts?.()
     },
-    reloadGroups: async () => { reloads.groups += 1 },
+    reloadGroups: async () => {
+      reloads.groups += 1
+      await options.reloadGroups?.()
+    },
   }))
   return { state, accounts, selectedIds, requests, messages, reloads, reloadOptions }
 }
@@ -96,6 +100,30 @@ function assertNoUpdates(state) {
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
 }
+
+test('a committed batch save completes before slow or failed list reloads', async (t) => {
+  let release
+  const pending = new Promise(resolve => release = resolve)
+  const editor = mountEditor(t, {
+    reloadAccounts: () => pending,
+    reloadGroups: async () => { throw new Error('list refresh failed after commit') },
+  })
+  editor.state.open()
+  editor.state.updateWeight.value = true
+  const saving = editor.state.save()
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(editor.state.saving.value, false)
+    assert.equal(editor.state.showBatchEditModal.value, false)
+    assert.equal(editor.messages.success.length, 1)
+    assert.deepEqual(editor.messages.error, [])
+    assert.equal(editor.selectedIds.value.size, 0)
+  }
+  finally {
+    release()
+    await saving
+  }
+})
 
 function assertNoRequest(editor) {
   assert.deepEqual(editor.requests, [])

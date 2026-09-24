@@ -621,3 +621,54 @@ real row and checks both themes at 1440/390/320px for clipping and overflow.
 - `tests/group-monitor-preview.mjs` is an opt-in local-only fixture server using
   the actual overview component and theme. It disables the regular backend proxy
   and rejects unsupported API operations; never present its samples as live data.
+
+## 10. Native Catalog and Returned Model
+
+### Scope / Trigger
+
+Account-row catalog downloads, existing connection tests and committed editor saves.
+
+### Signatures
+
+`getAccountModelCatalog({accountId}, options)` reads the authenticated catalog GET.
+`test_complete.upstreamResponseModel?: string | null` is display-only.
+Existing connection tests remain POST JSON with prompt, interface, stream and model.
+
+### Contracts
+
+Download `result.catalog` only, not the admin envelope or account credentials.
+Deduplicate each account synchronously, abort pending reads on disposal, and
+serialize Blob delivery across account exports because `useDownload` owns one URL.
+Skip disposed queued downloads and recover the queue after a failed delivery.
+Keep requested and returned models separate; render absent/legacy values as unknown,
+reset on each run and preserve run-generation cancellation fencing.
+Core reads the selected attempt's existing response observation, not canonical
+`GatewayEvent::Started.model`, which may fall back to the requested model.
+Never add active identification, extra model calls or automatic reconnects.
+Single/batch save success closes promptly; account/group reloads cannot make a
+committed mutation appear failed or retain the saving state.
+
+### Validation & Error Matrix
+
+- Native request failure: error, no fallback file and no account mutation.
+- Closed/disposed read: abort and suppress stale download/toast.
+- Missing returned model: `null` / unknown, never the requested model.
+- Reload failure after committed save: retain save success and handle rejection.
+
+### Good / Base / Bad Cases
+
+Good: two accounts fetch concurrently but deliver separate native JSON files.
+Base: an old server omitting the new field still completes the existing test.
+Bad: label canonical requested-model fallback as an upstream declaration.
+
+### Tests Required
+
+Use `account-model-catalog-export`, `account-save-publication`, `account-batch-editor`,
+`account-test-settings` and `account-test-stream` Node regressions. The synthetic
+`browser/account-native-catalog.mjs` checks downloaded bytes, exact POST input,
+declared/absent models and both themes at 1440/390/320px. No production requests.
+
+### Wrong vs Correct
+
+Wrong: export the last globally cached plan catalog for a clicked account.
+Correct: pass only that row's ID and download the selected-account native result.

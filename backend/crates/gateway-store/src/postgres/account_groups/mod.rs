@@ -475,7 +475,7 @@ async fn load_member_facts<'e>(
         "select membership.account_group_id,
                 account.id, account.provider_kind, account.name, account.custom_name, account.email,
                 account.upstream_user_id, account.upstream_account_id, account.plan_type,
-                (select request_location_json from outbound_proxies where outbound_proxies.id = account.outbound_proxy_id) as request_location_json,
+                (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = account.outbound_proxy_id) as request_location_json,
                 account.authentication_kind, account.credential_revision, account.turn_state_binding_revision, account.outbound_proxy_url,
                 account.has_refresh_token, account.access_token_expires_at,
                 account.next_refresh_at, account.enabled, account.turn_state_injection_enabled,
@@ -674,7 +674,11 @@ async fn group_costs(
          from requested_groups
          cross join runtime_settings settings
          left join model_requests mr
-           on mr.routing_group_refs @> array[requested_groups.group_id]::text[]
+           on exists (
+             select 1 from account_group_accounts membership
+              where membership.account_group_id = requested_groups.group_id
+                and membership.provider_account_id = mr.provider_account_ref
+           )
           and mr.started_at >= now() - make_interval(days => settings.usage_retention_days::int)
           and {completed_usage}
           and mr.cost_currency = 'USD'

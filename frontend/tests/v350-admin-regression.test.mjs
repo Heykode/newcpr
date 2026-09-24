@@ -157,9 +157,13 @@ test('outbound UA automatic refresh remains silent while manual reload errors re
     '@/components/base/BaseCard.vue': {},
     '@/components/base/BaseCheckbox.vue': {},
     '@/components/base/BaseForm/FormItem.vue': {},
+    '@/components/base/BaseSelect.vue': {},
     '@/components/base/BaseTextarea.vue': {},
     '@/components/base/BaseToast': { toast: { success: () => {} } },
     '@/utils/async': { errorMessage: error => error.message },
+    './outbound-user-agent-samples': load('views/settings/components/outbound-user-agent-samples.ts', {
+      './outbound-user-agent-samples.json': JSON.parse(readFileSync(source('views/settings/components/outbound-user-agent-samples.json'), 'utf8')),
+    }),
   })
   const scope = vue.effectScope()
   try {

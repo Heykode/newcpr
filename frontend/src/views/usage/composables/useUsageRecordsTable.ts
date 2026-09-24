@@ -29,6 +29,8 @@ interface UsageLoadOptions {
 export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
+  const diagnosticLoading = shallowRef(true)
+  const diagnosticPage = shallowRef(1)
   const records = shallowRef<UsageDisplayRecord[]>([])
   const summary = shallowRef(emptySummary())
   const insights = shallowRef(emptyInsights())
@@ -44,6 +46,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   let tableRequestId = 0
   let analyticsRequestId = 0
   let diagnosticRequestId = 0
+  let diagnosticFilterKey: string | undefined
   let tableController: AbortController | undefined
   let analyticsController: AbortController | undefined
   let diagnosticController: AbortController | undefined
@@ -76,6 +79,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const globalParams = scopedParams()
     if (scope === 'all') {
       resetPagination()
+      diagnosticPage.value = 1
       tableParams = snapshot()
     }
 
@@ -120,7 +124,10 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     analyticsController = new AbortController()
     const requestOptions = { signal: analyticsController.signal }
     const dimension = diagnosticDimension.value
+    const page = diagnosticPage.value
+    resetChangedDiagnosticFilters(globalParams)
     analyticsLoading.value = !background
+    diagnosticLoading.value = true
     try {
       const [nextSummary, overview, diagnostics] = await Promise.all([
         getUsageRecordSummary(globalParams, requestOptions),
@@ -128,6 +135,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
         getUsageRecordInsightsDiagnostics({
           ...globalParams,
           dimension,
+          ...(dimension === 'keyModel' ? { currentPage: page, pageSize: 20 } : {}),
         }, requestOptions),
       ])
       if (requestId !== analyticsRequestId)
@@ -137,7 +145,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       insights.value = {
         overview,
         diagnostics:
-          diagnosticsId === diagnosticRequestId && dimension === diagnosticDimension.value
+          diagnosticsId === diagnosticRequestId
+          && dimension === diagnosticDimension.value && page === diagnosticPage.value
             ? diagnostics
             : insights.value.diagnostics,
       }
@@ -147,6 +156,8 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       if (requestId === analyticsRequestId) {
         analyticsLoading.value = false
       }
+      if (diagnosticsId === diagnosticRequestId)
+        diagnosticLoading.value = false
     }
   }
 
@@ -155,20 +166,61 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     diagnosticController?.abort()
     diagnosticController = new AbortController()
     const dimension = diagnosticDimension.value
+    const page = diagnosticPage.value
     const params = scopedParams()
+    resetChangedDiagnosticFilters(params)
+    diagnosticLoading.value = true
     try {
       const diagnostics = await getUsageRecordInsightsDiagnostics({
         ...params,
         dimension,
+        ...(dimension === 'keyModel' ? { currentPage: page, pageSize: 20 } : {}),
       }, { signal: diagnosticController.signal })
-      if (requestId !== diagnosticRequestId || dimension !== diagnosticDimension.value)
+      if (requestId !== diagnosticRequestId || dimension !== diagnosticDimension.value
+        || page !== diagnosticPage.value) {
         return
+      }
       insights.value = {
         ...insights.value,
         diagnostics,
       }
     }
     catch {}
+    finally {
+      if (requestId === diagnosticRequestId)
+        diagnosticLoading.value = false
+    }
+  }
+
+  function resetChangedDiagnosticFilters(params: ReturnType<typeof scopedParams>) {
+    const key = JSON.stringify(params)
+    if (key !== diagnosticFilterKey) {
+      diagnosticFilterKey = key
+      insights.value = {
+        ...insights.value,
+        diagnostics: {
+          ...emptyDiagnostics(),
+          dimension: diagnosticDimension.value,
+          pageSize: diagnosticDimension.value === 'keyModel' ? 20 : 100,
+        },
+      }
+    }
+  }
+
+  function handleDiagnosticPageChange(nextPage: number) {
+    if (diagnosticLoading.value || diagnosticDimension.value !== 'keyModel'
+      || diagnosticFilterKey !== JSON.stringify(scopedParams())
+      || !Number.isInteger(nextPage) || nextPage < 1) {
+      return
+    }
+    const current = insights.value.diagnostics
+    if (current.dimension !== diagnosticDimension.value
+      || (nextPage !== current.currentPage - 1
+        && !(nextPage === current.currentPage + 1 && current.hasMore))) {
+      return
+    }
+    diagnosticPage.value = nextPage
+    void loadDiagnostics()
   }
 
   async function refreshUsageRecords() {
@@ -213,6 +265,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
 
   watch(diagnosticDimension, () => {
+    diagnosticPage.value = 1
     void loadDiagnostics()
   })
 
@@ -257,6 +310,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     usagePagination,
     loading,
     analyticsLoading,
+    diagnosticLoading,
     records,
     summary,
     insights,
@@ -266,6 +320,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     refreshUsageRecords,
     handlePageChange,
     handlePageSizeChange,
+    handleDiagnosticPageChange,
   }
 }
 
@@ -354,6 +409,9 @@ function emptyDiagnostics() {
   const diagnostics: Awaited<ReturnType<typeof getUsageRecordInsightsDiagnostics>> = {
     dimension: 'model',
     items: [],
+    currentPage: 1,
+    pageSize: 100,
+    hasMore: false,
   }
   return diagnostics
 }

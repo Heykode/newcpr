@@ -157,13 +157,17 @@ impl PgAccountGroupRepository {
         let predicate = completed_usage_fact_predicate("mr");
         let query = format!(
             "with recent as (
-               select mr.provider_account_ref, mr.routing_group_refs, mr.cost_amount, mr.cost_currency
+               select mr.provider_account_ref, mr.cost_amount, mr.cost_currency
                  from model_requests mr
                 where mr.completed_at > $2 and mr.completed_at <= $3 and {predicate}
-                  and (mr.provider_account_ref = any($4::text[]) or mr.routing_group_refs && $1::text[])
+                  and mr.provider_account_ref = any($4::text[])
              ), attributed as (
                select 'group' as kind, g.id, r.cost_amount, r.cost_currency
-                 from unnest($1::text[]) g(id) join recent r on r.routing_group_refs @> array[g.id]
+                 from unnest($1::text[]) g(id) join recent r on exists (
+                   select 1 from account_group_accounts membership
+                    where membership.account_group_id = g.id
+                      and membership.provider_account_id = r.provider_account_ref
+                 )
                union all
                select 'account', provider_account_ref, cost_amount, cost_currency from recent
                  where provider_account_ref = any($4::text[])

@@ -8,8 +8,8 @@ use axum::{
 use gateway_admin::model::{
     PageSize, Revision,
     proxies::{
-        NewProxy, ProxyAccountListQuery, ProxyListQuery, ProxyMutation, ProxyRecord,
-        ProxyTestResult, UpdateProxy,
+        DetectedProxyLocation, NewProxy, ProxyAccountListQuery, ProxyListQuery,
+        ProxyLocationDetection, ProxyMutation, ProxyRecord, ProxyTestResult, UpdateProxy,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,8 @@ struct RemoveAccountRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateRequest {
+    #[serde(default)]
+    auto_location: bool,
     request_location: Option<gateway_core::account::RequestLocation>,
     name: String,
     proxy_url: AccountProxyUpdate,
@@ -55,6 +57,7 @@ struct CreateRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateRequest {
+    auto_location: Option<bool>,
     #[serde(default, deserialize_with = "optional_location")]
     request_location: Option<Option<gateway_core::account::RequestLocation>>,
     id: String,
@@ -73,12 +76,15 @@ struct IdRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProbeRequest {
+    #[serde(default)]
+    detect_location: bool,
     proxy_url: AccountProxyUpdate,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyTestView {
+    location: ProxyLocationDetection,
     success: bool,
     latency_ms: u64,
     exit_ip: Option<String>,
@@ -90,6 +96,7 @@ struct ProxyTestView {
 impl From<ProxyTestResult> for ProxyTestView {
     fn from(result: ProxyTestResult) -> Self {
         Self {
+            location: result.location,
             success: result.success,
             latency_ms: result.latency_ms,
             exit_ip: result.exit_ip.map(|ip| ip.to_string()),
@@ -117,6 +124,9 @@ struct ProxyAccountView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyView {
+    auto_location: bool,
+    detected_location: Option<DetectedProxyLocation>,
+    effective_location: Option<gateway_core::account::RequestLocation>,
     request_location: Option<gateway_core::account::RequestLocation>,
     id: String,
     name: String,
@@ -133,7 +143,11 @@ struct ProxyView {
 impl From<ProxyRecord> for ProxyView {
     fn from(record: ProxyRecord) -> Self {
         let endpoint = record.proxy.endpoint();
+        let effective_location = record.effective_location().cloned();
         Self {
+            auto_location: record.auto_location,
+            detected_location: record.detected_location,
+            effective_location,
             id: record.id,
             request_location: record.request_location,
             name: record.name,
@@ -324,6 +338,8 @@ where
         .proxies()
         .create(
             NewProxy {
+                auto_location: request.auto_location,
+                test: None,
                 request_location: request.request_location,
                 name: request.name,
                 proxy,
@@ -383,6 +399,8 @@ where
         .proxies()
         .update(
             UpdateProxy {
+                auto_location: request.auto_location,
+                test: None,
                 request_location: request.request_location,
                 id: request.id,
                 revision: revision(request.revision)?,
@@ -462,7 +480,7 @@ where
     let result = state
         .admin_services()
         .proxies()
-        .probe(&proxy)
+        .probe(&proxy, request.detect_location)
         .await
         .map_err(map_error)?;
     Ok(AdminResponse::new(

@@ -140,7 +140,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let rows = sqlx::query(
             "select
-                    (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+                    (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
