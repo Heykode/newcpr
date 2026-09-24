@@ -19,7 +19,22 @@ export function monitorMoney(value: number | null | undefined, status: MonitorSt
     return '已停用'
   if (value != null && Number.isFinite(value) && value >= 0)
     return `$${value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
+  if (status === 'lifespan_learning')
+    return '寿命学习中'
+  if (status === 'rate_sampling')
+    return '消耗采样中'
+  if (status === 'all_accounts_outlived_average')
+    return '已超平均寿命'
   return status === 'learning' ? '暂无估值' : '未知'
+}
+
+export function monitorExpiryHint(status: MonitorStatus | undefined) {
+  if (status === 'all_accounts_outlived_average')
+    return '参与估算的账号均已超过同 Plan 最近最多 5 个有效死亡样本的平均寿命，暂不估算过期额度；不影响预计可支撑。'
+  if (status === 'lifespan_learning')
+    return '同 Plan 尚无有效死亡样本，有第 1 个样本后即可估算。'
+  if (status === 'rate_sampling')
+    return '已有寿命样本，等待账号消耗数据。'
 }
 
 export function monitorEta(minutes: number | null | undefined, status: MonitorStatus) {

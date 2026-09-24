@@ -765,13 +765,14 @@ async fn monitor_failed_sample_retains_original_snapshot_and_timestamp() {
         .await
         .expect("first");
     groups.failed.store(true, Ordering::SeqCst);
-    assert!(
-        services
-            .group_monitor()
-            .read(vec![group_id()], true)
-            .await
-            .is_err()
-    );
+    let fallback = services
+        .group_monitor()
+        .read(vec![group_id()], true)
+        .await
+        .expect("display previous sample when manual refresh fails");
+    assert!(fallback.refreshing);
+    assert_eq!(fallback.generated_at, first.generated_at);
+    assert_eq!(fallback.items, first.items);
     let retained = services
         .group_monitor()
         .read(vec![group_id()], false)

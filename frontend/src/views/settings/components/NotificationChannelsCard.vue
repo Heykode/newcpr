@@ -135,6 +135,9 @@ onMounted(() => {
       <ChevronDown class="size-4 transition-transform" :class="open ? 'rotate-180' : ''" />
     </button>
     <fieldset v-if="open" class="min-w-0 space-y-3 border-t border-cp-border p-4" :disabled="loading || !loaded || saving || testing !== null">
+      <p v-if="form.lastTest?.status === 'failed' && form.lastTest.error" class="m-0 break-words text-cp-xs text-cp-error-text" role="status">
+        {{ form.lastTest.error }}
+      </p>
       <section class="border-b border-cp-border-secondary pb-3">
         <button class="flex w-full items-center gap-2 py-1 text-left" :aria-expanded="smtpOpen" @click="smtpOpen = !smtpOpen">
           <Mail class="size-4" /><b class="flex-1">SMTP 发件配置</b><span class="text-cp-xs text-cp-text-tertiary">{{ form.smtp.enabled ? '已启用' : '未启用' }}</span><ChevronDown class="size-4" :class="smtpOpen ? 'rotate-180' : ''" />

@@ -12,24 +12,51 @@ use gateway_admin::{
         },
         group_monitor::{GroupMonitorFacts, GroupMonitorItem, GroupMonitorReport},
         notifications::{
-            AlertConditionKind, AlertObservation, BarkChannelView, BarkLevel, GroupAlertPolicy,
-            SmtpChannelView, SmtpSecurity, StoredBarkChannel, StoredNotificationChannels,
-            StoredSmtpChannel,
+            AlertConditionKind, AlertObservation, BarkChannelView, BarkLevel,
+            ClaimedNotificationDelivery, GroupAlertPolicy, NotificationChannelKind,
+            NotificationChannelsView, ReplaceNotificationChannels, SmtpChannelView, SmtpSecurity,
+            StoredBarkChannel, StoredNotificationChannels, StoredSmtpChannel,
+            TestNotificationCommand,
         },
         settings::{AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings},
     },
     ports::store::{AccountGroupStore, AdminStoreResult, SettingsStore},
 };
 use gateway_core::routing::AccountGroupId;
+use secrecy::{ExposeSecret as _, SecretString};
 
 struct NotificationStore {
     policy: GroupAlertPolicy,
     channels: StoredNotificationChannels,
     observations: Mutex<Vec<AlertObservation>>,
+    saved: Mutex<Option<ReplaceNotificationChannels>>,
+    finished: Mutex<Vec<(bool, Option<String>)>>,
 }
 
 #[async_trait]
 impl AccountGroupStore for NotificationStore {
+    async fn enqueue_test_notification(
+        &self,
+        delivery: ClaimedNotificationDelivery,
+        _: DateTime<Utc>,
+    ) -> AdminStoreResult<String> {
+        Ok(delivery.id)
+    }
+
+    async fn finish_notification_delivery(
+        &self,
+        _: &str,
+        sent: bool,
+        error: Option<&str>,
+        _: DateTime<Utc>,
+    ) -> AdminStoreResult<()> {
+        self.finished
+            .lock()
+            .unwrap()
+            .push((sent, error.map(str::to_owned)));
+        Ok(())
+    }
+
     async fn load_group_alert_policy(
         &self,
         group_id: &AccountGroupId,
@@ -114,6 +141,21 @@ impl AccountGroupStore for NotificationStore {
 
 #[async_trait]
 impl SettingsStore for NotificationStore {
+    async fn replace_notification_channels(
+        &self,
+        command: ReplaceNotificationChannels,
+        _: &MutationContext,
+    ) -> AdminStoreResult<NotificationChannelsView> {
+        let view = NotificationChannelsView {
+            smtp: command.smtp.view.clone(),
+            bark: command.bark.view.clone(),
+            last_test: None,
+            updated_at: Utc::now(),
+        };
+        *self.saved.lock().unwrap() = Some(command);
+        Ok(view)
+    }
+
     async fn load_notification_channels(&self) -> AdminStoreResult<StoredNotificationChannels> {
         Ok(self.channels.clone())
     }
@@ -159,6 +201,8 @@ async fn observe(
         policy,
         channels,
         observations: Mutex::new(Vec::new()),
+        saved: Mutex::new(None),
+        finished: Mutex::new(Vec::new()),
     });
     let services = super::AdminHarness::new()
         .settings(store.clone())
@@ -169,6 +213,8 @@ async fn observe(
         .notifications()
         .observe(&GroupMonitorReport {
             generated_at: Utc::now(),
+            refreshing: false,
+            pending_group_ids: Vec::new(),
             items: vec![item],
         })
         .await
@@ -321,5 +367,114 @@ async fn unknown_values_never_trigger_and_zero_conditions_do() {
             .find(|row| row.kind == AlertConditionKind::Availability)
             .unwrap()
             .active
+    );
+}
+
+#[tokio::test]
+async fn display_only_snapshots_never_trigger_or_recover_alerts() {
+    let mut policy = GroupAlertPolicy::defaults(item().group.id, Utc::now());
+    policy.enabled = true;
+    policy.bark_enabled = true;
+    let store = Arc::new(NotificationStore {
+        policy,
+        channels: channels(true),
+        observations: Mutex::new(Vec::new()),
+        saved: Mutex::new(None),
+        finished: Mutex::new(Vec::new()),
+    });
+    let services = super::AdminHarness::new()
+        .settings(store.clone())
+        .account_groups(store.clone())
+        .build()
+        .await;
+    for (refreshing, pending_group_ids) in [(true, vec![]), (false, vec![item().group.id])] {
+        services
+            .notifications()
+            .observe(&GroupMonitorReport {
+                generated_at: Utc::now(),
+                refreshing,
+                pending_group_ids,
+                items: vec![item()],
+            })
+            .await
+            .unwrap();
+    }
+    assert!(store.observations.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn notification_save_normalizes_bark_only_and_persists_safe_delivery_failure() {
+    let mut configured = channels(true);
+    configured.smtp.password = Some(SecretString::from(" synthetic password "));
+    configured.smtp.view.password_set = true;
+    configured.bark.device_key = Some(SecretString::from("synthetic-existing"));
+    let store = Arc::new(NotificationStore {
+        policy: GroupAlertPolicy::defaults(item().group.id, Utc::now()),
+        channels: configured.clone(),
+        observations: Mutex::new(Vec::new()),
+        saved: Mutex::new(None),
+        finished: Mutex::new(Vec::new()),
+    });
+    let services = super::AdminHarness::new()
+        .settings(store.clone())
+        .account_groups(store.clone())
+        .build()
+        .await;
+    let mut command = ReplaceNotificationChannels {
+        smtp: configured.smtp,
+        bark: configured.bark,
+    };
+    command.bark.device_key = Some(SecretString::from(" synthetic-device/ \n"));
+    let context = MutationContext {
+        actor: gateway_admin::model::MutationActor::System,
+        request_id: "notification-test".to_owned(),
+    };
+    services
+        .notifications()
+        .replace_channels(command.clone(), &context)
+        .await
+        .unwrap();
+    {
+        let saved = store.saved.lock().unwrap();
+        let saved = saved.as_ref().unwrap();
+        assert_eq!(
+            saved.bark.device_key.as_ref().unwrap().expose_secret(),
+            "synthetic-device"
+        );
+        assert_eq!(
+            saved.smtp.password.as_ref().unwrap().expose_secret(),
+            " synthetic password "
+        );
+    }
+    command.smtp.password = None;
+    command.smtp.view.password_set = false;
+    command.bark.device_key = None;
+    command.bark.view.device_key_set = false;
+    services
+        .notifications()
+        .replace_channels(command, &context)
+        .await
+        .unwrap();
+    {
+        let saved = store.saved.lock().unwrap();
+        let saved = saved.as_ref().unwrap();
+        assert!(saved.bark.device_key.is_none());
+        assert!(saved.bark.view.device_key_set);
+        assert!(saved.smtp.password.is_none());
+        assert!(saved.smtp.view.password_set);
+    }
+    let error = services
+        .notifications()
+        .test(TestNotificationCommand {
+            channel: NotificationChannelKind::Email,
+            target: "ops@example.com".to_owned(),
+            group_id: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.message(), "通知传输未启用");
+    assert_eq!(
+        *store.finished.lock().unwrap(),
+        vec![(false, Some(error.message().to_owned()))]
     );
 }

@@ -24,6 +24,8 @@ struct MonitorQuery {
 struct MonitorView {
     viewer_scope: String,
     generated_at: DateTime<Utc>,
+    refreshing: bool,
+    pending_group_ids: Vec<String>,
     rate_window_seconds: u32,
     items: Vec<MonitorItemView>,
 }
@@ -143,6 +145,12 @@ where
         AdminEnvelope::ok(MonitorView {
             viewer_scope,
             generated_at: report.generated_at,
+            refreshing: report.refreshing,
+            pending_group_ids: report
+                .pending_group_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             rate_window_seconds: 60,
             items,
         }),

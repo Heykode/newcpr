@@ -3,7 +3,8 @@ use gateway_admin::{
     model::{
         MutationActor, MutationContext,
         account_groups::{
-            AccountGroupColor, DeleteAccountGroup, NewAccountGroup, UpdateAccountGroup,
+            AccountGroupColor, DeleteAccountGroup, NewAccountGroup, SetAccountGroupEnabled,
+            UpdateAccountGroup,
         },
         group_monitor::{
             GroupMonitorFacts, GroupMonitorReport, MonitorUsage, project_group_monitor,
@@ -47,6 +48,8 @@ async fn seed(repo: &PgAccountGroupRepository) -> Vec<AccountGroupId> {
 fn report(facts: &GroupMonitorFacts, at: DateTime<Utc>) -> GroupMonitorReport {
     GroupMonitorReport {
         generated_at: at,
+        refreshing: false,
+        pending_group_ids: Vec::new(),
         items: facts
             .groups
             .iter()
@@ -84,11 +87,15 @@ async fn monitor_snapshot_round_trip_reopen_atomic_rollback_and_late_write_prote
     let at = DateTime::from_timestamp(Utc::now().timestamp(), 0).expect("sample time");
     let facts = repo.load_group_monitor(at).await.expect("global facts");
     assert_eq!(facts.groups.len(), 4);
+    let pending = repo.read_group_monitor(&ids[..3]).await.unwrap().unwrap();
+    assert!(pending.refreshing);
+    assert!(pending.items.is_empty());
+    assert_eq!(pending.pending_group_ids, ids[..3]);
+    assert_eq!(pending.generated_at, DateTime::<Utc>::UNIX_EPOCH);
     assert!(
-        repo.read_group_monitor(&ids[..3])
+        repo.save_group_monitor(&pending, facts.config_revision)
             .await
-            .expect("before first sample")
-            .is_none()
+            .is_err()
     );
     let expected = report(&facts, at);
     let revision: i64 =
@@ -176,7 +183,7 @@ async fn monitor_snapshot_round_trip_reopen_atomic_rollback_and_late_write_prote
 }
 
 #[tokio::test]
-async fn monitor_snapshot_config_changes_wait_for_resample_and_group_deletion_removes_only_its_snapshot()
+async fn monitor_snapshot_config_changes_retain_previous_values_and_deletion_removes_only_its_snapshot()
  {
     let Some(db) = TestDatabase::create("monitor_snapshot_config").await else {
         return;
@@ -200,23 +207,28 @@ async fn monitor_snapshot_config_changes_wait_for_resample_and_group_deletion_re
     )
     .await
     .expect("changed config");
+    let retained = repo.read_group_monitor(&ids[..3]).await.unwrap().unwrap();
+    assert!(retained.refreshing);
+    assert_eq!(retained.generated_at, at);
+    assert_eq!(retained.items[0].group.name, "Renamed");
+    assert_eq!(retained.items[0].remaining_usd, Some(120.25));
     assert!(
-        repo.read_group_monitor(&ids[..3])
+        repo.save_group_monitor(&retained, facts.config_revision)
             .await
-            .expect("invalidated sample")
-            .is_none()
+            .is_err()
     );
     repo.save_group_monitor(
         &report(&facts, at + Duration::seconds(10)),
         facts.config_revision,
     )
     .await
-    .expect("old configuration still unreadable");
+    .expect("old configuration remains displayable");
     assert!(
         repo.read_group_monitor(&ids[..3])
             .await
-            .expect("still invalidated")
-            .is_none()
+            .unwrap()
+            .unwrap()
+            .refreshing
     );
     let current = repo.load_group_monitor(at).await.expect("new facts");
     repo.save_group_monitor(
@@ -225,6 +237,14 @@ async fn monitor_snapshot_config_changes_wait_for_resample_and_group_deletion_re
     )
     .await
     .expect("new sample");
+    assert!(
+        !repo
+            .read_group_monitor(&ids[..3])
+            .await
+            .unwrap()
+            .unwrap()
+            .refreshing
+    );
     assert_eq!(
         repo.read_group_monitor(&ids[..1])
             .await
@@ -257,5 +277,69 @@ async fn monitor_snapshot_config_changes_wait_for_resample_and_group_deletion_re
             .expect("no resurrection"),
         3
     );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn new_unsampled_group_does_not_hide_existing_groups_and_disabled_state_is_current() {
+    let Some(db) = TestDatabase::create("monitor_snapshot_pending").await else {
+        return;
+    };
+    let repo = PgAccountGroupRepository::new(db.pool.clone());
+    let ids = seed(&repo).await;
+    let at = DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let facts = repo.load_group_monitor(at).await.unwrap();
+    let mut sample = report(&facts, at);
+    sample.items.retain(|item| item.group.id != ids[1]);
+    sample.items[0].expiry_status = "all_accounts_outlived_average";
+    sample.items[1].expiry_status = "lifespan_learning";
+    sample.items[2].expiry_status = "rate_sampling";
+    repo.save_group_monitor(&sample, facts.config_revision)
+        .await
+        .unwrap();
+    // Reopening the repository must retain samples, not just a page-local cache.
+    let reopened = PgAccountGroupRepository::new(db.pool.clone());
+    let read = reopened
+        .read_group_monitor(&ids[..3])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.items.len(), 2);
+    assert_eq!(read.pending_group_ids, vec![ids[1].clone()]);
+    assert!(read.refreshing);
+    assert_eq!(read.generated_at, at);
+    assert_eq!(read.items[0].expiry_status, "all_accounts_outlived_average");
+    assert_eq!(read.items[1].expiry_status, "lifespan_learning");
+    assert_eq!(
+        reopened
+            .read_group_monitor(&ids[3..])
+            .await
+            .unwrap()
+            .unwrap()
+            .items[0]
+            .expiry_status,
+        "rate_sampling"
+    );
+    repo.set_account_group_enabled(
+        SetAccountGroupEnabled {
+            id: ids[0].clone(),
+            enabled: false,
+        },
+        &context(),
+    )
+    .await
+    .unwrap();
+    let disabled = reopened
+        .read_group_monitor(&ids[..1])
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(disabled.refreshing);
+    assert!(!disabled.items[0].group.enabled);
+    assert_eq!(disabled.items[0].remaining_status, "disabled");
+    assert_eq!(disabled.items[0].expiry_status, "disabled");
+    assert_eq!(disabled.items[0].eta_status, "disabled");
+    assert_eq!(disabled.items[0].eligible_accounts, 0);
+    assert_eq!(disabled.generated_at, at);
     db.close().await;
 }

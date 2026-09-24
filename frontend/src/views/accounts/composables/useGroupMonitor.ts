@@ -13,6 +13,7 @@ export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<numbe
   const sampleTimes = shallowRef(new Map<string, string>())
   const error = ref(false)
   const loading = ref(false)
+  const refreshing = ref(false)
   const now = ref(Date.now())
   const visibility = useDocumentVisibility()
   const ordered = computed(() => orderMonitorGroups(groups.value, pins.value))
@@ -23,7 +24,7 @@ export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<numbe
   // An all-empty catalog still needs the authenticated scope to restore saved pins.
   const requestSignature = computed(() => signature.value || (!viewer.value ? groups.value[0]?.id ?? '' : ''))
   const storageKey = computed(() => `cpr.accounts.monitor.pins.${viewer.value}`)
-  const stale = computed(() => error.value || visible.value.some((group) => {
+  const stale = computed(() => error.value || refreshing.value || visible.value.some((group) => {
     const time = Date.parse(sampleTimes.value.get(group.id) ?? '')
     return !Number.isFinite(time) || now.value - time > 45_000
   }))
@@ -72,14 +73,15 @@ export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<numbe
         viewer.value = response.viewerScope
         records.value = new Map()
         sampleTimes.value = new Map()
+        refreshing.value = false
         restorePins()
       }
-      if (response.items.length !== ids.length || ids.some(id => !response.items.some(item => item.id === id)))
+      const pending = response.pendingGroupIds ?? []
+      const returnedIds = [...response.items.map(item => item.id), ...pending]
+      if (returnedIds.length !== ids.length || new Set(returnedIds).size !== ids.length || ids.some(id => !returnedIds.includes(id)))
         throw new Error('Incomplete group monitor response')
       const next = new Map(records.value)
       const times = new Map(sampleTimes.value)
-      for (const id of ids)
-        next.delete(id)
       for (const item of response.items) {
         if (ids.includes(item.id)) {
           next.set(item.id, item)
@@ -90,6 +92,7 @@ export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<numbe
       records.value = new Map([...next].filter(([id]) => existing.has(id)))
       sampleTimes.value = new Map([...times].filter(([id]) => existing.has(id)))
       now.value = Date.now()
+      refreshing.value = Boolean(response.refreshing || pending.length)
       error.value = false
     }
     catch {
@@ -128,5 +131,5 @@ export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<numbe
     generation += 1
     controller?.abort()
   })
-  return { page, pins, viewer, visible, displayedCount, totalPages, records, stale, loading, error, now, togglePin, refresh, refreshNow }
+  return { page, pins, viewer, visible, displayedCount, totalPages, records, stale, loading, refreshing, error, now, togglePin, refresh, refreshNow }
 }

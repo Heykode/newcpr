@@ -2,6 +2,7 @@ import type { RequestOptions } from '../request'
 import request from '../request'
 
 export type MonitorStatus = 'ready' | 'partial' | 'learning' | 'unknown' | 'disabled' | 'idle' | 'empty'
+  | 'lifespan_learning' | 'rate_sampling' | 'all_accounts_outlived_average'
 
 export interface GroupMonitorItem {
   activeAlerts?: string[]
@@ -29,6 +30,8 @@ export interface GroupMonitorItem {
 export interface GroupMonitorResponse {
   viewerScope: string
   generatedAt: string
+  refreshing?: boolean
+  pendingGroupIds?: string[]
   rateWindowSeconds: number
   items: GroupMonitorItem[]
 }

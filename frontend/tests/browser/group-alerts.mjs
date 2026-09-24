@@ -22,6 +22,8 @@ async function main() {
   let failLoad = false
   let failSave = false
   let failTest = false
+  let monitorMode = 'lifespan'
+  const originalSampleTime = new Date().toISOString()
   let channels = {
     smtp: { enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: null, passwordSet: false, fromName: 'Synthetic', fromEmail: 'alerts@example.com' },
     bark: { enabled: true, serverUrl: 'https://push.example.com', deviceKeySet: true, level: 'critical', sound: null, volume: 5, call: false },
@@ -51,8 +53,24 @@ async function main() {
     const url = new URL(req.url())
     const path = url.pathname.replace(/^\/dev/u, '')
     const ok = data => route.fulfill({ json: { code: 200, message: 'ok', data } })
-    if (path === '/api/admin/account-groups/monitor')
-      return ok(monitorResponse((url.searchParams.get('groupIds') ?? '').split(',')))
+    if (path === '/api/admin/account-groups/monitor') {
+      if (monitorMode === 'failure')
+        return route.fulfill({ status: 503, json: { code: 503, message: 'Synthetic monitor failure', data: null } })
+      const report = monitorResponse((url.searchParams.get('groupIds') ?? '').split(','))
+      if (monitorMode === 'lifespan') {
+        report.items.forEach((item, index) => {
+          item.expectedExpiryUsd = null
+          item.expiryStatus = ['all_accounts_outlived_average', 'lifespan_learning', 'rate_sampling'][index]
+        })
+      }
+      if (monitorMode === 'pending') {
+        report.items = report.items.filter(item => item.id !== groups[2].id)
+        report.pendingGroupIds = [groups[2].id]
+        report.refreshing = true
+        report.generatedAt = originalSampleTime
+      }
+      return ok(report)
+    }
     if (path === '/api/admin/notifications/channels')
       return ok(channels)
     if (path === '/api/admin/notifications/channels/update') {
@@ -95,7 +113,7 @@ async function main() {
         status: failTest ? 'failed' : 'sent',
         test: true,
         attempts: 1,
-        error: failTest ? 'delivery failed' : null,
+        error: failTest ? 'Bark 服务返回 HTTP 401，请检查服务地址和 Device Key' : null,
         createdAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
       }
@@ -192,6 +210,7 @@ async function main() {
     failTest = true
     await settings.getByRole('button', { name: '发送测试通知', exact: true }).click()
     await settings.getByText(/Bark 测试失败/u).waitFor()
+    await settings.getByText('Bark 服务返回 HTTP 401，请检查服务地址和 Device Key', { exact: true }).waitFor()
     failTest = false
     await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()
     const dialog = page.getByRole('dialog')
@@ -236,8 +255,34 @@ async function main() {
     await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()
     await page.waitForFunction(() => document.body.textContent.includes('Synthetic read failure'))
     assert.equal(await dialog.getByRole('button', { name: '保存', exact: true }).isDisabled(), true)
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.reload()
+    await page.getByText('已超平均寿命', { exact: true }).waitFor()
+    await page.getByText('寿命学习中', { exact: true }).waitFor()
+    await page.getByText('消耗采样中', { exact: true }).waitFor()
+    const third = page.getByRole('article', { name: groups[2].name, exact: true })
+    const prior = await third.locator('dl').textContent()
+    monitorMode = 'pending'
+    await page.getByRole('button', { name: '立即刷新分组监控', exact: true }).click()
+    await page.getByRole('button', { name: '等待新采样，点击立即刷新', exact: true }).waitFor()
+    assert.equal(await third.locator('dl').textContent(), prior)
+    assert.equal(await page.getByText('监控更新失败', { exact: true }).count(), 0)
+    await page.screenshot({ path: `${output}/monitor-retained.png`, fullPage: true })
+    await page.reload()
+    await third.getByText('采样中', { exact: true }).first().waitFor()
+    assert.equal(await page.getByText('监控更新失败', { exact: true }).count(), 0)
+    await page.screenshot({ path: `${output}/monitor-first-sample.png`, fullPage: true })
+    monitorMode = 'lifespan'
+    await page.getByRole('button', { name: '等待新采样，点击立即刷新', exact: true }).click()
+    await third.getByText('消耗采样中', { exact: true }).waitFor()
+    monitorMode = 'failure'
+    await page.getByRole('button', { name: '立即刷新分组监控', exact: true }).click()
+    await page.getByText('监控更新失败', { exact: true }).waitFor()
+    await third.getByText('消耗采样中', { exact: true }).waitFor()
     assert.deepEqual(errors, [])
-    process.stdout.write(`${JSON.stringify({ screenshots: 24, saves: saves.length, tests: tests.length, pageErrors: errors })}\n`)
+    process.stdout.write(`${JSON.stringify({ screenshots: 26, saves: saves.length, tests: tests.length, pageErrors: errors })}\n`)
   }
   finally {
     await browser.close()
