@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::{
     model::{
@@ -11,6 +12,7 @@ use crate::{
             AlertConditionKind, AlertObservation, ClaimedNotificationDelivery, GroupAlertPolicy,
             NotificationChannelKind, NotificationChannelsView, NotificationDeliveryRecord,
             ReplaceNotificationChannels, StoredNotificationChannels, TestNotificationCommand,
+            normalized_bark_device_key,
         },
     },
     ports::{
@@ -74,7 +76,7 @@ impl DefaultNotificationsService {
             .finish_notification_delivery(
                 &claimed.id,
                 result.is_ok(),
-                result.as_ref().err().map(|_| "delivery failed"),
+                result.as_ref().err().map(AdminError::message),
                 Utc::now(),
             )
             .await
@@ -163,7 +165,7 @@ impl DefaultNotificationsService {
                     .await
             }
         };
-        result.map_err(|_| AdminError::unavailable("通知发送失败"))
+        result.map_err(|error| AdminError::unavailable(error.to_string()))
     }
 }
 
@@ -210,6 +212,12 @@ impl NotificationsService for DefaultNotificationsService {
         }
         if command.bark.device_key.is_none() {
             command.bark.view.device_key_set = current.bark.view.device_key_set;
+        }
+        if let Some(key) = &command.bark.device_key {
+            let normalized = normalized_bark_device_key(key.expose_secret()).ok_or_else(|| {
+                AdminError::invalid("Bark Device Key 格式不正确，只填写设备密钥，不要填写完整链接")
+            })?;
+            command.bark.device_key = Some(SecretString::from(normalized.to_owned()));
         }
         validate_channels(&command)?;
         self.settings
@@ -305,6 +313,9 @@ impl NotificationsService for DefaultNotificationsService {
     }
 
     async fn observe(&self, report: &GroupMonitorReport) -> Result<(), AdminError> {
+        if report.refreshing || !report.pending_group_ids.is_empty() {
+            return Ok(());
+        }
         let channels = self
             .settings
             .load_notification_channels()

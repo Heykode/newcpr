@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use gateway_core::routing::AccountGroupId;
 
 use super::{
     account_groups::{AccountGroupMemberFact, AccountGroupRef},
@@ -55,6 +56,9 @@ pub struct GroupMonitorFacts {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupMonitorReport {
     pub generated_at: DateTime<Utc>,
+    /// Display-only fallback; never publish or evaluate as a new sample.
+    pub refreshing: bool,
+    pub pending_group_ids: Vec<AccountGroupId>,
     pub items: Vec<GroupMonitorItem>,
 }
 
@@ -184,6 +188,9 @@ pub fn project_group_monitor(
     let mut remaining = 0.0;
     let mut expiry = Some(0.0);
     let mut calculable_expiry = 0;
+    let mut outlived = 0;
+    let mut missing_lifespan = false;
+    let mut missing_rate = false;
     let mut free_slots = Some(0_u64);
     let mut unavailable = false;
     for account in eligible {
@@ -212,14 +219,18 @@ pub fn project_group_monitor(
                 .remaining_life_minutes
                 .filter(|minutes| minutes.is_finite())
             {
-                Some(minutes) if minutes <= 0.0 => {}
+                Some(minutes) if minutes <= 0.0 => outlived += 1,
                 Some(minutes) => {
+                    missing_rate |= usable_usage(&account.consumption).is_none();
                     expiry = expiry
                         .zip(usable_usage(&account.consumption))
                         .map(|(total, rate)| total + (amount - rate * minutes).max(0.0));
                     calculable_expiry += 1;
                 }
-                None => expiry = None,
+                None => {
+                    missing_lifespan = true;
+                    expiry = None;
+                }
             }
         }
     }
@@ -249,6 +260,12 @@ pub fn project_group_monitor(
             .map(|value| value.min(remaining));
         item.expiry_status = if item.expected_expiry_usd.is_some() {
             "ready"
+        } else if missing_lifespan {
+            "lifespan_learning"
+        } else if missing_rate {
+            "rate_sampling"
+        } else if outlived > 0 && outlived == item.estimated_accounts {
+            "all_accounts_outlived_average"
         } else {
             "learning"
         };

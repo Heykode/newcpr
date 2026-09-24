@@ -36,6 +36,7 @@ const {
   records,
   stale,
   loading,
+  refreshing,
   error,
   now,
   togglePin,
@@ -108,8 +109,8 @@ const {
       @settings="openAlertSettings(group)"
     >
       <template v-if="index === visible.length - 1" #actions>
-        <BaseIconButton label="立即刷新分组监控" size="sm" class="monitor-action" :loading="loading" @click="refreshNow">
-          <RefreshCw class="size-3.5" />
+        <BaseIconButton :label="refreshing ? '等待新采样，点击立即刷新' : '立即刷新分组监控'" size="sm" class="monitor-action" :loading="loading" @click="refreshNow">
+          <RefreshCw class="size-3.5" :class="refreshing ? 'text-cp-warning-text' : ''" />
         </BaseIconButton>
       </template>
     </AccountGroupMonitorCard>

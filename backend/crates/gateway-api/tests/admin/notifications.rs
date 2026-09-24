@@ -118,3 +118,23 @@ async fn secret_presence_flags_cannot_enable_unconfigured_channels() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(json_body(response).await["data"], json!([]));
 }
+
+#[tokio::test]
+async fn bark_full_links_and_path_fragments_are_rejected_without_echoing_secrets() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let app = app(fixture.state());
+    for key in [
+        "https://push.example.com/synthetic-private-value",
+        "synthetic-private-value/path",
+    ] {
+        let response = app.clone().oneshot(request(Method::POST, "/api/admin/notifications/channels/update", Some(json!({
+            "smtp": { "enabled": false, "host": "", "port": 465, "security": "tls", "username": null, "password": null, "passwordSet": false, "fromName": null, "fromEmail": null },
+            "bark": { "enabled": true, "serverUrl": "https://push.example.com", "deviceKey": key, "deviceKeySet": false, "level": "active", "sound": null, "volume": 5, "call": false }
+        })))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value = json_body(response).await.to_string();
+        assert!(value.contains("Device Key"));
+        assert!(!value.contains("synthetic-private-value"));
+    }
+}

@@ -4,7 +4,7 @@ import { Pin, PinOff, Settings } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import { monitorEta, monitorMoney } from './group-monitor-presentation'
+import { monitorEta, monitorExpiryHint, monitorMoney } from './group-monitor-presentation'
 
 const props = defineProps<{
   group: AccountGroup
@@ -21,9 +21,9 @@ const expired = computed(() => !!props.snapshot?.earliestResetAt && Date.parse(p
 const status = computed(() => !props.group.enabled ? 'disabled' : expired.value ? 'unknown' : props.snapshot?.remainingStatus ?? 'unknown')
 const metrics = computed(() => [
   { label: '预计剩余额度', value: monitorMoney(expired.value ? null : props.snapshot?.remainingUsd, status.value) },
-  { label: '预计过期额度', value: monitorMoney(expired.value ? null : props.snapshot?.expectedExpiryUsd, expired.value ? 'unknown' : props.snapshot?.expiryStatus ?? status.value) },
+  { label: '预计过期额度', value: monitorMoney(expired.value ? null : props.snapshot?.expectedExpiryUsd, !props.group.enabled ? 'disabled' : expired.value ? 'unknown' : props.snapshot?.expiryStatus ?? status.value), hint: monitorExpiryHint(props.snapshot?.expiryStatus) },
   { label: '每分钟消耗', value: monitorMoney(props.snapshot?.consumeUsdPerMinute, 'unknown', 4), unit: '/分' },
-  { label: '预计可支撑', value: monitorEta(expired.value ? null : props.snapshot?.etaMinutes, expired.value ? 'unknown' : props.snapshot?.etaStatus ?? status.value) },
+  { label: '预计可支撑', value: monitorEta(expired.value ? null : props.snapshot?.etaMinutes, !props.group.enabled ? 'disabled' : expired.value ? 'unknown' : props.snapshot?.etaStatus ?? status.value) },
 ])
 const percentage = computed(() => props.snapshot?.usedSlots != null && props.snapshot.totalSlots > 0
   ? Math.min(100, props.snapshot.usedSlots / props.snapshot.totalSlots * 100)
@@ -58,8 +58,8 @@ const alerting = computed(() => Boolean(props.snapshot?.activeAlerts?.length))
         <dt class="monitor-label text-cp-text-tertiary">
           {{ metric.label }}
         </dt>
-        <dd class="monitor-value" :title="metric.value">
-          {{ loading && !snapshot ? '读取中' : metric.value }}
+        <dd class="monitor-value" :title="metric.hint ?? metric.value">
+          {{ !snapshot ? (loading ? '读取中' : '采样中') : metric.value }}
           <span v-if="metric.unit && snapshot?.consumeUsdPerMinute != null" class="text-cp-xs font-normal text-cp-text-tertiary">{{ metric.unit }}</span>
         </dd>
       </div>
