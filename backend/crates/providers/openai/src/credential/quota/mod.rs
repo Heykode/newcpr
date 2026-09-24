@@ -26,9 +26,7 @@ use gateway_core::account::{
 };
 use gateway_core::provider_ports::{ProviderCooldown, ProviderCooldownPort};
 use gateway_core::runtime::RequestTuningHandle;
-use gateway_protocol::openai::events::{
-    ParsedRateLimits, RateLimitDetails, RateLimitWindow, parse_rate_limit_headers,
-};
+use gateway_protocol::openai::events::{ParsedRateLimits, RateLimitDetails, RateLimitWindow};
 use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::{Map, Value};
@@ -39,7 +37,7 @@ use uuid::Uuid;
 use crate::transport::egress::CodexEgressRuntime;
 use crate::transport::profile::CodexWireProfileState;
 use crate::transport::{
-    CodexBackendClient, CodexClientError, CodexRateLimitResetCredits,
+    CodexBackendClient, CodexClientError, CodexRateLimitObservation, CodexRateLimitResetCredits,
     CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
 };
 
@@ -192,8 +190,10 @@ pub struct CodexCredentialQuotaService {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QuotaRefreshAuthority {
+pub enum QuotaRefreshAuthority {
+    /// Active refresh, or a passive snapshot backed by successful inference.
     ObserveAccess,
+    /// Snapshot-only access; passive failure observations also preserve the plan.
     PreserveAccess,
 }
 
@@ -908,11 +908,14 @@ impl CodexCredentialQuotaService {
         &self,
         account: &ProviderAccount,
         headers: &[(String, String)],
+        observed_at: SystemTime,
+        authority: QuotaRefreshAuthority,
     ) -> Result<bool, CodexCredentialQuotaError> {
-        let Some(rate_limits) = parse_rate_limit_headers(headers) else {
+        let Some(observation) = CodexRateLimitObservation::from_headers(headers, observed_at)
+        else {
             return Ok(false);
         };
-        self.synchronize_passive_rate_limits(account, std::slice::from_ref(&rate_limits))
+        self.synchronize_passive_rate_limits(account, std::slice::from_ref(&observation), authority)
             .await
     }
 
@@ -920,17 +923,12 @@ impl CodexCredentialQuotaService {
     pub async fn synchronize_passive_rate_limits(
         &self,
         account: &ProviderAccount,
-        rate_limits: &[ParsedRateLimits],
+        observations: &[CodexRateLimitObservation],
+        authority: QuotaRefreshAuthority,
     ) -> Result<bool, CodexCredentialQuotaError> {
-        if rate_limits.is_empty() {
+        if observations.is_empty() {
             return Ok(false);
         }
-        let has_quota_facts = rate_limits.iter().any(|observation| {
-            observation
-                .limits
-                .values()
-                .any(|details| passive_rate_limit_snapshot(details).is_some())
-        });
         let existing = self
             .store
             .get_quotas(std::slice::from_ref(account.id()))
@@ -940,7 +938,47 @@ impl CodexCredentialQuotaService {
                 observation.account_id == *account.id()
                     && observation.expected_revision == account.revision()
             });
+        let mut fresh: Vec<_> = observations
+            .iter()
+            .filter(|observation| {
+                existing
+                    .as_ref()
+                    .is_none_or(|existing| observation.observed_at > existing.observed_at)
+            })
+            .collect();
+        fresh.sort_by_key(|observation| observation.observed_at);
+        let Some(observed_at) = fresh.last().map(|observation| observation.observed_at) else {
+            if authority == QuotaRefreshAuthority::ObserveAccess {
+                return Ok(self
+                    .store
+                    .apply_quota_access(QuotaAccessChange {
+                        account_id: account.id().clone(),
+                        expected_revision: account.revision(),
+                        state: QuotaState::allowed(SystemTime::now()),
+                    })
+                    .await?
+                    != QuotaWriteOutcome::Conflict);
+            }
+            return Ok(false);
+        };
+        let rate_limits: Vec<_> = fresh
+            .into_iter()
+            .map(|observation| {
+                let mut limits = observation.rate_limits.clone();
+                if authority == QuotaRefreshAuthority::PreserveAccess {
+                    limits.plan_type = None;
+                }
+                limits
+            })
+            .collect();
+        let has_quota_facts = rate_limits.iter().any(|observation| {
+            observation
+                .limits
+                .values()
+                .any(|details| passive_rate_limit_snapshot(details).is_some())
+        });
         let existing_state = existing.as_ref().map(|observation| observation.state);
+        let existing_observed_at = existing.as_ref().map(|observation| observation.observed_at);
         let current_plan = existing
             .as_ref()
             .and_then(|observation| observation.plan_type.as_deref())
@@ -961,7 +999,7 @@ impl CodexCredentialQuotaService {
         // 套餐、credits 等元数据可以更新，但没有额度窗口事实时必须保留旧观察时刻，
         // 也不能借旧快照重新推导 quota state。
         if !has_quota_facts {
-            let Some(state) = existing_state else {
+            let Some((state, observed_at)) = existing_state.zip(existing_observed_at) else {
                 return Ok(false);
             };
             let outcome = self
@@ -970,23 +1008,25 @@ impl CodexCredentialQuotaService {
                     plan_type,
                     account_id: account.id().clone(),
                     expected_revision: account.revision(),
-                    quota: OpaqueProviderData::new(merge_passive_quota(existing, rate_limits)),
-                    observed_at: SystemTime::now(),
+                    quota: OpaqueProviderData::new(merge_passive_quota(existing, &rate_limits)),
+                    observed_at,
                     state,
                 })
                 .await?;
             return Ok(outcome != QuotaWriteOutcome::Conflict);
         }
-        let quota = merge_passive_quota(existing, rate_limits);
-        let observed_at = SystemTime::now();
+        let quota = merge_passive_quota(existing, &rate_limits);
         let snapshot = parse_account_quota_snapshot(
             account.id().clone(),
             account.revision(),
             observed_at,
             &Value::Object(quota.clone()),
         )?;
-        // 这些 headers 来自一次成功推理，访问结论优先于可能滞后的百分比。
-        let state = QuotaState::allowed(observed_at);
+        let state = match authority {
+            // Success has its own access clock; old headers do not become fresh quota samples.
+            QuotaRefreshAuthority::ObserveAccess => QuotaState::allowed(SystemTime::now()),
+            QuotaRefreshAuthority::PreserveAccess => existing_state.unwrap_or(account.quota()),
+        };
         let outcome = self
             .store
             .compare_and_swap_quota(QuotaObservation {

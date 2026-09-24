@@ -711,8 +711,14 @@ OAuth start 使用：
   `quota_exhausted`。额度观测不会清除凭据过期、无效或封禁事实；这些事实统一投影为 `error`，并由
   `errorReason` 区分。额度接口的 401/403 也不足以判定 refresh token 永久失效，credential 终态只由
   OAuth refresh 的明确永久错误写入。
-- 正常 Responses 请求会解析上游响应的 rate-limit headers，合并进同一 quota 快照并同步状态。Free、
-  K12 等套餐共用该状态机；套餐只参与账号展示和按套餐隔离的模型目录 cache，不存在 K12 专属额度路径。
+- Responses 的响应头、`codex.rate_limits` 和 SSE/WS 错误事件中的额度白名单字段合并进同一 quota 快照，
+  保留原始采集时间；迟到的旧样本不覆盖新快照，仅有套餐或 credits 元数据时不刷新旧额度窗口的年龄。
+  失败或纯观察不能恢复账号可用，也不从新增错误头学习套餐、Cookie 或 State；真实推理成功仍是
+  可用证据，即使响应额度为 100% 或附带旧快照。Free、K12 等套餐共用该状态机，不增加专属额度路径。
+- 明确的额度耗尽错误保留有效的 `resets_at`，支持数值和数字字符串；没有有效未来绝对时间时使用正数
+  `resets_in_seconds`。普通 `Retry-After` 仍是临时冷却，不作为额度重置时间。缺失或非法 reset 不增加
+  永久冻结，现有周期复核不变。活动具名桶的通用额度头归入该桶，`premium` 保留普通桶语义；
+  此归属修正不新增按模型或额度桶硬阻断规则。
 - 账号展开区的 Token 结构、模型排行和列表 Token 汇总优先使用账号级周额度窗口，无可统计的周窗口时
   使用月额度窗口；`usage.windowLabelDisplay` 随选中的窗口返回“周额度窗口”或“月额度窗口”。查询边界
   严格为 `[resetAt - windowSeconds, resetAt)`，不是自然周/月或最近 7/30 天；额度刷新若返回了更早的

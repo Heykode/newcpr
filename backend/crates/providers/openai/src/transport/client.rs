@@ -726,6 +726,8 @@ pub struct CodexBackendStreamingResponse {
     pub set_cookie_headers: Vec<String>,
     /// 上游透传的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
+    /// 响应头的原始采集时刻；不随缓冲或连接复用刷新。
+    pub rate_limit_observed_at: std::time::SystemTime,
     /// live stream 期间捕获的结构化限流更新。
     pub rate_limit_updates: Option<CodexRateLimitUpdates>,
     /// live stream 期间捕获的请求级 metadata 更新。
@@ -750,6 +752,7 @@ pub struct CodexBackendJsonResponse {
     pub set_cookie_headers: Vec<String>,
     /// 上游透传的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
+    pub rate_limit_observed_at: std::time::SystemTime,
     /// 上游诊断元数据。
     pub diagnostics: CodexUpstreamDiagnostics,
     /// 已筛选、可交给客户端的响应头。

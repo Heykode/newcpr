@@ -8,12 +8,12 @@ use std::{pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use futures::Stream;
-use gateway_protocol::openai::events::ParsedRateLimits;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::transport::{
-    diagnostics::CodexUpstreamDiagnostics, response_meta::CodexResponseMetadata,
+    CodexRateLimitObservation, diagnostics::CodexUpstreamDiagnostics,
+    response_meta::CodexResponseMetadata,
 };
 
 use super::error::CodexWebSocketExchangeError;
@@ -35,6 +35,7 @@ pub struct CodexWebSocketStreamingExchange {
     pub set_cookie_headers: Vec<String>,
     /// 上游握手响应里的限流头。
     pub rate_limit_headers: Vec<(String, String)>,
+    pub rate_limit_observed_at: std::time::SystemTime,
     /// 上游内部 `codex.rate_limits` 事件里的结构化动态更新。
     pub rate_limit_updates: CodexWebSocketRateLimitUpdates,
     /// 上游内部 metadata 事件里的请求级动态更新。
@@ -53,7 +54,7 @@ pub struct CodexWebSocketStreamingExchange {
 pub type CodexWebSocketSseStream =
     Pin<Box<dyn Stream<Item = Result<Bytes, CodexWebSocketExchangeError>> + Send + 'static>>;
 /// live 流中的结构化限流动态更新。
-pub type CodexWebSocketRateLimitUpdates = Arc<Mutex<Vec<ParsedRateLimits>>>;
+pub type CodexWebSocketRateLimitUpdates = Arc<Mutex<Vec<CodexRateLimitObservation>>>;
 /// 单次响应的动态 metadata，与连接池保存的握手快照隔离。
 #[derive(Debug, Default)]
 pub struct CodexWebSocketResponseMetadataUpdate {

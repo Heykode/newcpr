@@ -747,3 +747,115 @@ fn codex_quota_header_filter_should_only_match_client_quota_signals() {
         [true, true, true, true, false, false, false, false]
     );
 }
+
+#[test]
+fn active_only_named_quota_headers_do_not_overwrite_the_core_bucket() {
+    let headers = vec![
+        (
+            "X-Codex-Active-Limit".to_owned(),
+            "codex_example".to_owned(),
+        ),
+        ("x-codex-primary-used-percent".to_owned(), "100".to_owned()),
+        (
+            "x-codex-primary-window-minutes".to_owned(),
+            "10080".to_owned(),
+        ),
+    ];
+    let parsed = parse_rate_limit_headers(&headers).unwrap();
+    assert!(!parsed.limits.contains_key("codex"));
+    assert_eq!(
+        parsed.limits["codex_example"].primary.unwrap().used_percent,
+        100.0
+    );
+}
+
+#[test]
+fn premium_active_quota_remains_the_core_bucket() {
+    let headers = vec![
+        ("x-codex-active-limit".to_owned(), "premium".to_owned()),
+        ("x-codex-primary-used-percent".to_owned(), "100".to_owned()),
+    ];
+    let parsed = parse_rate_limit_headers(&headers).unwrap();
+    assert_eq!(parsed.limits.len(), 1);
+    assert_eq!(parsed.limits["codex"].primary.unwrap().used_percent, 100.0);
+}
+
+#[test]
+fn active_named_quota_metadata_does_not_hide_generic_windows() {
+    let headers = vec![
+        (
+            "x-codex-active-limit".to_owned(),
+            "codex_example".to_owned(),
+        ),
+        (
+            "x-codex-example-limit-name".to_owned(),
+            "Example".to_owned(),
+        ),
+        ("x-codex-primary-used-percent".to_owned(), "100".to_owned()),
+    ];
+    let parsed = parse_rate_limit_headers(&headers).unwrap();
+    assert!(!parsed.limits.contains_key("codex"));
+    let named = &parsed.limits["codex_example"];
+    assert_eq!(named.primary.unwrap().used_percent, 100.0);
+    assert_eq!(named.limit_name.as_deref(), Some("Example"));
+}
+
+#[test]
+fn sse_error_label_can_supply_missing_body_type_for_quota_observation() {
+    use gateway_protocol::openai::events::parse_error_rate_limits;
+    let value = serde_json::json!({
+        "error":{"type":"usage_limit_reached"},
+        "headers":{"x-codex-primary-used-percent":"100"}
+    });
+    assert!(parse_error_rate_limits(&value, None).is_none());
+    assert!(parse_error_rate_limits(&value, Some("response.completed")).is_none());
+    assert_eq!(
+        parse_error_rate_limits(&value, Some("error"))
+            .unwrap()
+            .limits["codex"]
+            .primary
+            .unwrap()
+            .used_percent,
+        100.0
+    );
+}
+
+#[test]
+fn error_quota_headers_are_whitelisted_without_plan_or_identity_updates() {
+    use gateway_protocol::openai::events::parse_error_rate_limits;
+    for value in [
+        serde_json::json!({
+            "type":"error",
+            "headers":{
+                "X-Codex-Primary-Used-Percent":100,
+                "X-Codex-Primary-Window-Minutes":["10080"],
+                "X-Codex-Plan-Type":"team",
+                "x-codex-turn-state":"opaque-state",
+                "authorization":"not-a-credential",
+                "set-cookie":"not-a-cookie"
+            }
+        }),
+        serde_json::json!({
+            "type":"response.failed",
+            "response":{"error":{"headers":{
+                "x-codex-primary-used-percent":"100",
+                "x-codex-primary-window-minutes":"10080",
+                "x-codex-plan-type":"team"
+            }}}
+        }),
+    ] {
+        let parsed = parse_error_rate_limits(&value, None).unwrap();
+        assert!(parsed.plan_type.is_none());
+        assert_eq!(parsed.limits["codex"].primary.unwrap().used_percent, 100.0);
+        assert_eq!(
+            parsed.limits["codex"].primary.unwrap().window_minutes,
+            Some(10080)
+        );
+        let headers = rate_limits_to_header_pairs(&parsed);
+        assert!(
+            headers
+                .iter()
+                .all(|(name, _)| is_codex_quota_header_name(name))
+        );
+    }
+}

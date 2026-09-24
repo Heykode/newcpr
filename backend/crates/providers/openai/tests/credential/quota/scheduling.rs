@@ -13,7 +13,7 @@ use gateway_core::account::{
 };
 use serde_json::{Value, json};
 
-use super::{MemoryAccountStore, create_account, quota_service};
+use super::{MemoryAccountStore, QuotaRefreshAuthority, create_account, quota_service};
 
 async fn persist_snapshot(
     store: &Arc<MemoryAccountStore>,
@@ -237,7 +237,12 @@ async fn fresh_reset_observation_should_clear_previous_scheduling_signals() {
     ];
     assert!(
         service
-            .synchronize_passive_headers(&account, &headers)
+            .synchronize_passive_headers(
+                &account,
+                &headers,
+                SystemTime::now(),
+                QuotaRefreshAuthority::ObserveAccess
+            )
             .await
             .expect("reset observation")
     );

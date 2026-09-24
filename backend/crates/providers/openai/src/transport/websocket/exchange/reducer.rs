@@ -32,6 +32,7 @@ pub(super) struct ReducedWebSocketEvent {
     pub(super) action: ExchangeAction,
     pub(super) diagnostic_event_type: Option<String>,
     pub(super) turn_state_update: Option<String>,
+    pub(super) error_rate_limits: Option<events::ParsedRateLimits>,
 }
 
 pub(super) fn reduce_websocket_event(
@@ -46,6 +47,7 @@ pub(super) fn reduce_websocket_event(
             action: ExchangeAction::Ignore,
             diagnostic_event_type: None,
             turn_state_update: None,
+            error_rate_limits: None,
         });
     };
     let diagnostic_event_type = diagnostic_event_type(websocket_event_type(&value));
@@ -56,6 +58,7 @@ pub(super) fn reduce_websocket_event(
             action: ExchangeAction::RateLimits(parsed),
             diagnostic_event_type,
             turn_state_update: None,
+            error_rate_limits: None,
         });
     }
 
@@ -95,6 +98,7 @@ pub(super) fn reduce_websocket_event(
         action,
         diagnostic_event_type,
         turn_state_update,
+        error_rate_limits: events::parse_error_rate_limits(&value, None),
     })
 }
 

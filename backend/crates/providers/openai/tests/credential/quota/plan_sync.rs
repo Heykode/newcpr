@@ -72,7 +72,12 @@ async fn passive_headers_without_plan_do_not_replay_an_old_account_plan() {
             headers.push(("x-codex-plan-type".to_owned(), plan.to_owned()));
         }
         service
-            .synchronize_passive_headers(&original, &headers)
+            .synchronize_passive_headers(
+                &original,
+                &headers,
+                SystemTime::now(),
+                QuotaRefreshAuthority::ObserveAccess,
+            )
             .await
             .unwrap();
         assert_eq!(

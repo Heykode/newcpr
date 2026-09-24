@@ -14,6 +14,7 @@ pub mod profile_avatar;
 pub mod profile_statistics;
 pub mod protocol;
 pub mod qx_application;
+mod rate_limits;
 pub mod request;
 pub mod reset_credits;
 mod response_meta;
@@ -56,6 +57,7 @@ pub use self::{
         CodexProfileStatistics, CodexProfileStatisticsSummary,
         MAX_CODEX_PROFILE_STATISTICS_BODY_BYTES,
     },
+    rate_limits::CodexRateLimitObservation,
     request::{CodexRequestEncodeError, encode_generate_request},
     reset_credits::{
         CodexRateLimitResetCredit, CodexRateLimitResetCredits,

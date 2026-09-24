@@ -386,6 +386,7 @@ async fn connected_with_buffer(
             turn_state: None,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
+            rate_limit_observed_at: std::time::SystemTime::now(),
             response_metadata: Default::default(),
             diagnostics: Default::default(),
         },

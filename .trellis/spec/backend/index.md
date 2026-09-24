@@ -34,6 +34,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Request Location](./request-location.md) | Default-off global and proxy locations without changing account identity | HTTP/WS payload and persistence contracts |
 | [Managed Turn State](./managed-turn-state.md) | Opt-in state storage, nonblocking observation and exact WS ownership | Workspace/database regression verified; live opt-in acceptance pending |
 | [Stable Upstream Adaptation](./stable-upstream-adaptation.md) | Reasoning replay, recovery, cycle forecasts, account notes and background updates | Local integration contracts |
+| [Quota Observation Integrity](./quota-observation-integrity.md) | Passive authority, capture clocks, error quota facts and named buckets | Local/Linux, isolated stores and bounded live HTTP/WS verified |
 
 ---
 

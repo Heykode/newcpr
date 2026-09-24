@@ -222,6 +222,7 @@ impl CodexBackendClient {
         }
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
+        let rate_limit_observed_at = std::time::SystemTime::now();
         let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
@@ -285,6 +286,7 @@ impl CodexBackendClient {
             set_cookie_headers,
             rate_limit_headers,
             rate_limit_updates: Some(rate_limit_updates),
+            rate_limit_observed_at,
             response_metadata_updates: None,
             websocket_pool_decision: None,
             diagnostics,
@@ -753,6 +755,7 @@ impl CodexBackendClient {
                     turn_state: exchange.turn_state,
                     set_cookie_headers: exchange.set_cookie_headers,
                     rate_limit_headers: exchange.rate_limit_headers,
+                    rate_limit_observed_at: exchange.rate_limit_observed_at,
                     rate_limit_updates: Some(exchange.rate_limit_updates),
                     response_metadata_updates: Some(exchange.response_metadata_updates),
                     websocket_pool_decision: exchange.pool_decision,
@@ -1011,19 +1014,26 @@ async fn append_http_sse_rate_limit_updates(
     updates: &CodexRateLimitUpdates,
 ) {
     let mut observations = Vec::new();
+    let observed_at = std::time::SystemTime::now();
     for frame in frames {
         for event in frame.events() {
-            if event
-                .event
-                .as_deref()
-                .is_some_and(|event| event != "codex.rate_limits")
-            {
+            if event.event.as_deref().is_some_and(|kind| {
+                !matches!(kind, "codex.rate_limits" | "error" | "response.failed")
+            }) {
                 continue;
             }
-            let Some(rate_limits) = events::parse_rate_limits_event_raw(&event.data) else {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) else {
                 continue;
             };
-            observations.push(rate_limits);
+            let Some(rate_limits) = events::parse_rate_limits_event(&value)
+                .or_else(|| events::parse_error_rate_limits(&value, event.event.as_deref()))
+            else {
+                continue;
+            };
+            observations.push(crate::transport::CodexRateLimitObservation {
+                rate_limits,
+                observed_at,
+            });
         }
     }
     if !observations.is_empty() {

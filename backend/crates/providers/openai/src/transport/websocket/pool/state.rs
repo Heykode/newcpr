@@ -312,6 +312,7 @@ pub(crate) struct CodexWebSocketConnectionMetadata {
     pub(crate) turn_state: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
     pub(crate) rate_limit_headers: Vec<(String, String)>,
+    pub(crate) rate_limit_observed_at: std::time::SystemTime,
     pub(crate) response_metadata: CodexResponseMetadata,
     pub(crate) diagnostics: CodexUpstreamDiagnostics,
 }

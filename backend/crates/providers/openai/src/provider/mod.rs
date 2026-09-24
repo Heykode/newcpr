@@ -42,9 +42,7 @@ use gateway_core::task::{
     WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
-use gateway_protocol::openai::events::{
-    ParsedRateLimits, parse_rate_limit_headers, rate_limits_to_header_pairs,
-};
+use gateway_protocol::openai::events::rate_limits_to_header_pairs;
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};

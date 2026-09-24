@@ -532,6 +532,8 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 &request.quota,
                 &active_account,
                 &response.rate_limit_headers,
+                response.rate_limit_observed_at,
+                crate::credential::QuotaRefreshAuthority::ObserveAccess,
             )
             .await;
             if !response.set_cookie_headers.is_empty()
@@ -812,9 +814,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             failure_diagnostics.request_id = None;
         }
         let failure_set_cookie_headers = response.set_cookie_headers.clone();
-        let failure_rate_limit_headers = response.rate_limit_headers.clone();
         let mut passive_quota_observation =
-            OpenAiPassiveQuotaObservation::new(response.rate_limit_headers);
+            OpenAiPassiveQuotaObservation::new(response.rate_limit_headers, response.rate_limit_observed_at);
         let rate_limit_updates = response.rate_limit_updates;
         let response_metadata_updates = response.response_metadata_updates;
         // OpenAI 线路为透明代理：HTTP SSE 与 WebSocket 两条上游均启用 raw 透传，
@@ -827,6 +828,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             .with_request_tool_pricing(upstream_model.as_str(), request.tools())
             .with_raw_sse_passthrough();
         let mut pre_commit_events = PreCommitClientEvents::new();
+        let mut quota_success = false;
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
                 if allows_account_state_mutation {
@@ -834,6 +836,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &quota,
                         &active_account,
                         passive_quota_observation.rate_limits(),
+                        crate::credential::QuotaRefreshAuthority::PreserveAccess,
                     )
                     .await;
                 }
@@ -932,6 +935,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             &quota,
                             &active_account,
                             passive_quota_observation.rate_limits(),
+                            crate::credential::QuotaRefreshAuthority::PreserveAccess,
                         )
                         .await;
                     }
@@ -997,7 +1001,6 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         error,
                         &failure_diagnostics,
                         &failure_set_cookie_headers,
-                        &failure_rate_limit_headers,
                         ReplayBoundary::from_semantic_output(
                             semantic_output_seen || pre_commit_events.is_committed(),
                         ),
@@ -1013,6 +1016,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
+            let quota_completed = terminal_failure.is_none() && passive_quota_success(&events);
+            quota_success |= quota_completed;
             if completed && terminal_failure.is_none() && !terminal_response_is_incomplete(&events)
                 && let Some(manager) = turn_states.as_ref()
                 && let Some((value, observed_at)) = managed_state_observation.take()
@@ -1034,11 +1039,16 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             {
                 session_transport_recovery.websocket_succeeded(key);
             }
-            if allows_account_state_mutation && (completed || terminal_failure.is_some()) {
+            if allows_account_state_mutation && (quota_completed || terminal_failure.is_some()) {
                 synchronize_passive_quota(
                     &quota,
                     &active_account,
                     passive_quota_observation.rate_limits(),
+                    if quota_success && terminal_failure.is_none() {
+                        crate::credential::QuotaRefreshAuthority::ObserveAccess
+                    } else {
+                        crate::credential::QuotaRefreshAuthority::PreserveAccess
+                    },
                 )
                 .await;
             }
@@ -1132,7 +1142,6 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     error,
                     &failure_diagnostics,
                     &failure_set_cookie_headers,
-                    &failure_rate_limit_headers,
                     ReplayBoundary::from_semantic_output(
                         semantic_output_seen || pre_commit_events.is_committed(),
                     ),
@@ -1154,11 +1163,21 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             passive_quota_observation.observe(&updates);
             observation_state.merge_rate_limit_headers(&rate_limit_update_headers(&updates))
         };
+        let completed = events
+            .iter()
+            .flat_map(ProviderEvent::canonical_facts)
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+        quota_success |= terminal_failure.is_none() && passive_quota_success(&events);
         if allows_account_state_mutation {
             synchronize_passive_quota(
                 &quota,
                 &active_account,
                 passive_quota_observation.rate_limits(),
+                if quota_success && terminal_failure.is_none() {
+                    crate::credential::QuotaRefreshAuthority::ObserveAccess
+                } else {
+                    crate::credential::QuotaRefreshAuthority::PreserveAccess
+                },
             )
             .await;
         }
@@ -1176,10 +1195,6 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         .await
         .unwrap_or(false);
         attach_openai_session_update(&mut events, &mut session_capture);
-        let completed = events
-            .iter()
-            .flat_map(ProviderEvent::canonical_facts)
-            .any(|event| matches!(event, GatewayEvent::Completed(_)));
         if completed && terminal_failure.is_none() && !terminal_response_is_incomplete(&events)
             && let Some(manager) = turn_states.as_ref()
             && let Some((value, observed_at)) = managed_state_observation.take()

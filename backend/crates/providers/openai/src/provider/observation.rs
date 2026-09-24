@@ -1,6 +1,8 @@
 //! OpenAI 请求、响应与 transport 观测事实归一化。
 
 use super::*;
+use crate::credential::QuotaRefreshAuthority;
+use crate::transport::CodexRateLimitObservation;
 
 pub(super) fn endpoint_requested_model(
     payload: &gateway_core::operation::RawJsonPayload,
@@ -41,7 +43,7 @@ pub(super) struct OpenAiResponseObservationState {
 }
 
 pub(super) struct OpenAiPassiveQuotaObservation {
-    rate_limits: Vec<ParsedRateLimits>,
+    rate_limits: Vec<CodexRateLimitObservation>,
 }
 
 pub(super) fn attach_turn_state_snapshot(
@@ -81,17 +83,19 @@ fn bounded_observation_metadata(
 }
 
 impl OpenAiPassiveQuotaObservation {
-    pub(super) fn new(headers: Vec<(String, String)>) -> Self {
+    pub(super) fn new(headers: Vec<(String, String)>, observed_at: SystemTime) -> Self {
         Self {
-            rate_limits: parse_rate_limit_headers(&headers).into_iter().collect(),
+            rate_limits: CodexRateLimitObservation::from_headers(&headers, observed_at)
+                .into_iter()
+                .collect(),
         }
     }
 
-    pub(super) fn observe(&mut self, updates: &[ParsedRateLimits]) {
+    pub(super) fn observe(&mut self, updates: &[CodexRateLimitObservation]) {
         self.rate_limits.extend_from_slice(updates);
     }
 
-    pub(super) fn rate_limits(&self) -> &[ParsedRateLimits] {
+    pub(super) fn rate_limits(&self) -> &[CodexRateLimitObservation] {
         &self.rate_limits
     }
 }
@@ -556,17 +560,19 @@ pub(super) fn insert_first_timing(target: &mut Option<u64>, started_at: Instant)
 
 pub(super) async fn take_rate_limit_updates(
     updates: Option<&CodexRateLimitUpdates>,
-) -> Vec<ParsedRateLimits> {
+) -> Vec<CodexRateLimitObservation> {
     let Some(updates) = updates else {
         return Vec::new();
     };
     std::mem::take(&mut *updates.lock().await)
 }
 
-pub(super) fn rate_limit_update_headers(updates: &[ParsedRateLimits]) -> Vec<(String, String)> {
+pub(super) fn rate_limit_update_headers(
+    updates: &[CodexRateLimitObservation],
+) -> Vec<(String, String)> {
     updates
         .iter()
-        .flat_map(rate_limits_to_header_pairs)
+        .flat_map(|observation| rate_limits_to_header_pairs(&observation.rate_limits))
         .collect()
 }
 
@@ -592,16 +598,43 @@ pub(super) fn terminal_response_is_incomplete(events: &[ProviderEvent]) -> bool 
         .unwrap_or(false)
 }
 
+pub(super) fn passive_quota_success(events: &[ProviderEvent]) -> bool {
+    events.iter().any(|event| {
+        let Some(wire) = event.wire_event() else {
+            return event
+                .canonical_facts()
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
+        };
+        let kind = wire
+            .event_type()
+            .or_else(|| wire.data().get("type").and_then(Value::as_str));
+        // A transparent terminal can be valid without a preceding response.created.
+        matches!(kind, Some("response.completed" | "response.incomplete"))
+            && wire.data().get("response").is_some_and(|response| {
+                response
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                    && response.get("status").is_none_or(|status| {
+                        matches!(status.as_str(), Some("completed" | "incomplete"))
+                    })
+                    && response.get("error").is_none_or(Value::is_null)
+            })
+    })
+}
+
 pub(super) async fn synchronize_passive_quota(
     quota: &CodexCredentialQuotaService,
     account: &ProviderAccount,
-    rate_limits: &[ParsedRateLimits],
+    rate_limits: &[CodexRateLimitObservation],
+    authority: QuotaRefreshAuthority,
 ) {
     if rate_limits.is_empty() {
         return;
     }
     if let Err(error) = quota
-        .synchronize_passive_rate_limits(account, rate_limits)
+        .synchronize_passive_rate_limits(account, rate_limits, authority)
         .await
     {
         tracing::warn!(
@@ -616,11 +649,19 @@ pub(super) async fn synchronize_passive_quota_headers(
     quota: &CodexCredentialQuotaService,
     account: &ProviderAccount,
     headers: &[(String, String)],
+    observed_at: SystemTime,
+    authority: QuotaRefreshAuthority,
 ) {
-    let Some(rate_limits) = parse_rate_limit_headers(headers) else {
+    let Some(observation) = CodexRateLimitObservation::from_headers(headers, observed_at) else {
         return;
     };
-    synchronize_passive_quota(quota, account, std::slice::from_ref(&rate_limits)).await;
+    synchronize_passive_quota(
+        quota,
+        account,
+        std::slice::from_ref(&observation),
+        authority,
+    )
+    .await;
 }
 
 pub(super) const fn actual_transport_name(transport: CodexBackendTransport) -> &'static str {
