@@ -577,6 +577,29 @@ impl ProviderAdmin for FakeProviderAdmin {
         })
     }
 
+    async fn model_catalog_document(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<
+        gateway_admin::model::provider_credentials::ProviderModelCatalogDocument,
+        ProviderAdminError,
+    > {
+        self.record("provider.model_catalog_document");
+        assert_eq!(account_id.as_str(), "acct_test");
+        self.require_available()?;
+        Ok(
+            gateway_admin::model::provider_credentials::ProviderModelCatalogDocument {
+                document: gateway_core::operation::RawJsonPayload::new(
+                    "codex",
+                    r#"{"models":[{"slug":"native-only","future":{"value":null}}]}"#.into(),
+                )
+                .expect("catalog"),
+                model_count: 1,
+                observed_at: Utc::now(),
+            },
+        )
+    }
+
     async fn request_turn_state_probe(
         &self,
         account: &ProviderAccountId,
@@ -1352,6 +1375,72 @@ fn provider_registry_should_reject_duplicate_kind() {
         result,
         Err(error) if error.kind() == ProviderAdminErrorKind::Conflict
     ));
+}
+
+#[tokio::test]
+async fn account_native_catalog_export_dispatches_only_the_selected_account_without_mutation() {
+    let log = events();
+    let provider = FakeProviderAdmin::new("custom-provider", log.clone());
+    let mut account = account_record("custom-provider");
+    account.enabled = false;
+    let store = FakeAccountStore::with_account(account, log.clone());
+    let services = accounts_service(provider.clone(), store).await;
+    log.lock().expect("events").clear();
+    let result = services
+        .accounts()
+        .model_catalog_document(&ProviderAccountId::new("acct_test").expect("id"))
+        .await
+        .expect("catalog");
+    assert_eq!(result.model_count, 1);
+    assert_eq!(result.document.protocol(), "codex");
+    assert_eq!(
+        *log.lock().expect("events"),
+        vec!["store.load_account", "provider.model_catalog_document"]
+    );
+    assert!(provider.export_inputs().is_empty());
+    assert!(
+        services
+            .accounts()
+            .model_catalog_document(&ProviderAccountId::new("acct_missing").expect("id"),)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        *log.lock().expect("events"),
+        vec![
+            "store.load_account",
+            "provider.model_catalog_document",
+            "store.load_account"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn connection_test_preserves_the_returned_model_and_request_settings() {
+    let provider = FakeProviderAdmin::new("xai", events());
+    let store = FakeAccountStore::with_account(account_record("xai"), events());
+    let services = accounts_service(provider, store).await;
+    let events = services
+        .accounts()
+        .test_connection(gateway_admin::model::accounts::AccountConnectionTest {
+            account_id: ProviderAccountId::new("acct_test").expect("id"),
+            upstream_model: UpstreamModelId::new("requested-model").expect("model"),
+            endpoint: gateway_admin::model::accounts::ConnectionTestEndpoint::Responses,
+            input_text: "Keep this prompt".to_owned(),
+            stream: true,
+        })
+        .await
+        .expect("test")
+        .collect::<Vec<_>>()
+        .await;
+    assert!(matches!(&events[1], AccountConnectionTestEvent::Request {
+        model, input_text, stream: true, store: false, ..
+    } if model == "requested-model" && input_text == "Keep this prompt"));
+    assert!(
+        matches!(events.last(), Some(AccountConnectionTestEvent::Completed {
+        upstream_response_model: Some(model),
+    }) if model == "returned-model")
+    );
 }
 
 #[tokio::test]
@@ -3714,6 +3803,7 @@ impl AccountProbe for SuccessfulAccountProbe {
         Box::pin(async {
             Ok(AccountProbeResult {
                 text: vec!["OK".to_owned()],
+                upstream_response_model: Some("returned-model".to_owned()),
             })
         })
     }

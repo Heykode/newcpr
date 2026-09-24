@@ -727,9 +727,11 @@ async fn recovered_continuation_failure_should_be_visible_in_ops_but_hidden_from
             range,
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
-        .expect("diagnostics without recovered intermediates");
+        .expect("diagnostics without recovered intermediates")
+        .items;
     assert_eq!(diagnostics[0].request_count, 2);
     assert_eq!(diagnostics[0].failure_count, 0);
 
@@ -907,9 +909,11 @@ async fn account_health_non_completion_counts_match_diagnostics_and_scope() {
                     ..UsageRecordFilter::default()
                 },
                 DiagnosticDimension::Account,
+                None,
             )
             .await
-            .expect("load account diagnostics");
+            .expect("load account diagnostics")
+            .items;
         assert_eq!(diagnostics.len(), 1, "{case}");
         let diagnostic = &diagnostics[0];
         assert_eq!(diagnostic.key, "acct_observe", "{case}");
@@ -1465,9 +1469,11 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
             range,
             admin_observability::UsageFilter::default(),
             admin_observability::DiagnosticDimension::Account,
+            None,
         )
         .await
-        .expect("admin diagnostics");
+        .expect("admin diagnostics")
+        .items;
     assert_eq!(diagnostics[0].key, "acct_observe");
     assert_eq!(diagnostics[0].name, "account@example.invalid");
     assert_eq!(diagnostics[0].cost_coverage.provider_reported_count, 1);
@@ -1882,9 +1888,11 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
             range,
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
-        .expect("usage diagnostics");
+        .expect("usage diagnostics")
+        .items;
     assert_eq!(diagnostics[0].key, "acct_observe");
     assert_eq!(diagnostics[0].name, "account@example.invalid");
     assert_eq!(diagnostics[0].request_count, 3);

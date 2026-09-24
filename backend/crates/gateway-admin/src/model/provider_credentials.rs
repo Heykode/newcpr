@@ -1109,6 +1109,14 @@ pub struct ProviderModels {
     pub observed_at: Option<DateTime<Utc>>,
 }
 
+/// Provider-owned native catalog; only the provider interprets its objects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelCatalogDocument {
+    pub document: gateway_core::operation::RawJsonPayload,
+    pub model_count: usize,
+    pub observed_at: DateTime<Utc>,
+}
+
 /// Provider 执行 refresh 时所需的当前公共账号事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrepareCredentialRefresh {

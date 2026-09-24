@@ -5,6 +5,51 @@ use gateway_admin::model::{
 use gateway_api::admin::accounts::AccountQuotaForecastData;
 
 #[test]
+fn native_catalog_keeps_unknown_fields_order_and_never_adds_account_data() {
+    use gateway_admin::model::provider_credentials::ProviderModelCatalogDocument;
+    use gateway_api::admin::accounts::AccountModelCatalogData;
+    use gateway_core::operation::RawJsonPayload;
+    let original = serde_json::json!({"models":[
+        {"slug":"model-z","base_instructions":"original","unknown":{"null":null,"array":[1,true]}},
+        {"slug":"model-a","service_tiers":["default","priority"],"context_window":123456}
+    ]});
+    let payload = serde_json::to_vec(&original).unwrap();
+    let document = ProviderModelCatalogDocument {
+        document: RawJsonPayload::new("codex", payload.into()).unwrap(),
+        model_count: 2,
+        observed_at: "2026-09-24T00:00:00Z".parse().unwrap(),
+    };
+    let value =
+        serde_json::to_value(AccountModelCatalogData::try_from(document.clone()).unwrap()).unwrap();
+    assert_eq!(value["catalog"], original);
+    assert_eq!(value["modelCount"], 2);
+    assert_eq!(value.as_object().unwrap().len(), 3);
+    let unsupported = ProviderModelCatalogDocument {
+        document: RawJsonPayload::new("openai", r#"{"data":[{"id":"model-only"}]}"#.into())
+            .unwrap(),
+        ..document
+    };
+    assert!(AccountModelCatalogData::try_from(unsupported).is_err());
+}
+
+#[test]
+fn returned_model_wire_preserves_absence_and_does_not_replace_requested_model() {
+    use gateway_admin::model::accounts::AccountConnectionTestEvent as DomainEvent;
+    use gateway_api::admin::accounts::AccountConnectionTestEvent;
+    for model in [None, Some("declared-model".to_owned())] {
+        let event = AccountConnectionTestEvent::from(DomainEvent::Completed {
+            upstream_response_model: model.clone(),
+        });
+        assert_eq!(
+            event.data["upstreamResponseModel"],
+            serde_json::json!(model)
+        );
+        assert_eq!(event.data["success"], true);
+        assert!(event.data.get("model").is_none());
+    }
+}
+
+#[test]
 fn quota_forecast_projection_only_exposes_capacity_and_preserves_null_zero() {
     let now = "2026-09-12T00:00:00Z".parse().unwrap();
     let forecast = AccountQuotaForecast {

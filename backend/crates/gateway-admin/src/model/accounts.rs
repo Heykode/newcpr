@@ -435,7 +435,9 @@ pub enum AccountConnectionTestEvent {
     Content {
         text: String,
     },
-    Completed,
+    Completed {
+        upstream_response_model: Option<String>,
+    },
     Failed {
         source: AccountProbeErrorSource,
         gateway_error_code: GatewayErrorKind,

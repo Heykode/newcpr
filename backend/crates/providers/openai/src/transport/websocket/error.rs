@@ -76,6 +76,13 @@ pub enum CodexWebSocketExchangeError {
     /// 上游在 terminal 事件前关闭。
     #[error("{0}")]
     ClosedBeforeTerminal(CodexWebSocketCloseError),
+    /// The stream ended without a Close frame; only safe pump facts are retained.
+    #[error("websocket stream ended before terminal event ({reason})")]
+    StreamEndedBeforeTerminal {
+        reason: &'static str,
+        timeout: Option<Duration>,
+        last_event_type: Option<String>,
+    },
     /// 上游在指定时间内没有发送任何事件。
     #[error("websocket receive idle timeout after {timeout:?}")]
     ReceiveIdleTimeout {

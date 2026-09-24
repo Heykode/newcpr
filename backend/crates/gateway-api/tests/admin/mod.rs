@@ -36,8 +36,9 @@ use gateway_admin::{
         },
         observability::{
             DashboardObservation, DecimalAmount, DiagnosticDimension, DiagnosticObservation,
-            OpsError, OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageDetail,
-            UsageFilter, UsageListRecord, UsageOverview, UsagePage, UsageQuery,
+            DiagnosticObservationPage, DiagnosticPageQuery, OpsError, OpsErrorPage, OpsErrorQuery,
+            RequestMetricPoint, TimeRange, UsageDetail, UsageFilter, UsageListRecord,
+            UsageOverview, UsagePage, UsageQuery,
         },
         provider_credentials::{
             AccountDirectoryItem, AuthorizationCommit, AuthorizationStarted, CompleteAuthorization,
@@ -1194,8 +1195,25 @@ impl ObservabilityStore for UnusedStore {
         _: TimeRange,
         _: UsageFilter,
         _: DiagnosticDimension,
-    ) -> AdminStoreResult<Vec<DiagnosticObservation>> {
-        Ok(self.diagnostics.lock().expect("diagnostics").clone())
+        page: Option<DiagnosticPageQuery>,
+    ) -> AdminStoreResult<DiagnosticObservationPage> {
+        let items = self.diagnostics.lock().expect("diagnostics").clone();
+        let Some(page) = page else {
+            return Ok(DiagnosticObservationPage {
+                page_size: 100,
+                current_page: 1,
+                has_more: false,
+                items: items.into_iter().take(100).collect(),
+            });
+        };
+        let offset = (page.current_page as usize - 1) * usize::from(page.page_size.get());
+        let size = usize::from(page.page_size.get());
+        Ok(DiagnosticObservationPage {
+            has_more: items.len() > offset + size,
+            items: items.into_iter().skip(offset).take(size).collect(),
+            current_page: page.current_page,
+            page_size: page.page_size.get(),
+        })
     }
 
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> AdminStoreResult<OpsErrorPage> {
@@ -1341,6 +1359,41 @@ impl ProviderAdmin for UnusedProvider {
         _: bool,
     ) -> Result<ProviderModels, ProviderAdminError> {
         Err(unsupported_provider())
+    }
+
+    async fn model_catalog_document(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<
+        gateway_admin::model::provider_credentials::ProviderModelCatalogDocument,
+        ProviderAdminError,
+    > {
+        if let Some(error) = self.error.lock().expect("provider error").clone() {
+            return Err(error);
+        }
+        let matches = self
+            .account
+            .lock()
+            .expect("account fixture")
+            .as_ref()
+            .is_some_and(|account| {
+                account.account.id == account_id.as_str()
+                    && account.account.provider_kind == self.kind
+            });
+        if !matches {
+            return Err(unsupported_provider());
+        }
+        Ok(
+            gateway_admin::model::provider_credentials::ProviderModelCatalogDocument {
+                document: gateway_core::operation::RawJsonPayload::new(
+                    "codex",
+                    r#"{"models":[{"slug":"native-selected","unknown":{"null":null,"array":[true,3]}}]}"#.into(),
+                )
+                .expect("native fixture"),
+                model_count: 1,
+                observed_at: "2026-09-24T00:00:00Z".parse().expect("observed time"),
+            },
+        )
     }
 
     async fn export_credentials(

@@ -14,6 +14,7 @@ export function defaultRequestLocation(): RequestLocation {
 }
 
 export interface OutboundProxyTest {
+  location?: ProxyLocationDetection
   success: boolean
   latencyMs: number
   exitIp: string | null
@@ -22,7 +23,23 @@ export interface OutboundProxyTest {
   message: string
 }
 
+export type ProxyLocationDetection
+  = | { status: 'notRequested' }
+    | { status: 'detected', location: RequestLocation }
+    | { status: 'failed', message: string }
+    | { status: 'conflict' }
+
+export interface DetectedProxyLocation {
+  location: RequestLocation
+  exitIpv4: string | null
+  exitIpv6: string | null
+  detectedAt: string
+}
+
 export interface OutboundProxyRecord {
+  autoLocation?: boolean
+  detectedLocation?: DetectedProxyLocation | null
+  effectiveLocation?: RequestLocation | null
   requestLocation?: RequestLocation | null
   id: string
   name: string
@@ -90,20 +107,22 @@ export function getProxies(params: { page: number, pageSize: number, search?: st
   })
 }
 
-export function createProxy(data: { name: string, proxyUrl: string, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
+export function createProxy(data: { name: string, proxyUrl: string, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/create',
     method: 'POST',
     data,
+    timeout: 30000,
     ...options,
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
+export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     method: 'POST',
     data,
+    timeout: 30000,
     ...options,
   })
 }
@@ -127,7 +146,7 @@ export function testProxy(data: { id: string, revision: number }, options: Reque
   })
 }
 
-export function probeProxy(data: { proxyUrl: string }, options: RequestOptions = {}) {
+export function probeProxy(data: { proxyUrl: string, detectLocation?: boolean }, options: RequestOptions = {}) {
   return request<OutboundProxyTest>({
     url: '/api/admin/proxies/probe',
     method: 'POST',

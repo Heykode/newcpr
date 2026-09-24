@@ -627,6 +627,22 @@ impl CodexCredentialSelector {
                     excluded.insert(account.id().clone());
                 }
                 ProviderLeaseAcquisition::Acquired(guard) => {
+                    // Validate before claiming affinity. A corrupt unpinned candidate is
+                    // local to this unsent selection, never an account-health mutation.
+                    let runtime = match self.repository.load_runtime_credential(&account).await {
+                        Ok(runtime) => runtime,
+                        Err(CredentialRepositoryError::InvalidCredentialData)
+                            if pinned_account.is_none() =>
+                        {
+                            drop(guard);
+                            if affinity.bound_account() == Some(account.id()) {
+                                affinity.escape(AffinityEscapeReason::HardUnavailable);
+                            }
+                            excluded.insert(account.id().clone());
+                            continue;
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
                     let initial_affinity_claim = if !diagnostic
                         && observed_affinity_account.is_none()
                         && let Some(key) = request.session_affinity_key
@@ -687,7 +703,6 @@ impl CodexCredentialSelector {
                             .is_some_and(CodexSessionAffinity::session_id_present),
                         "OpenAI account selected"
                     );
-                    let runtime = self.repository.load_runtime_credential(&account).await?;
                     let cookies = runtime
                         .cookies
                         .into_iter()

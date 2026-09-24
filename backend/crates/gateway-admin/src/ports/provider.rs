@@ -339,6 +339,14 @@ pub trait ProviderAdmin: Send + Sync {
         refresh: bool,
     ) -> Result<ProviderModels, ProviderAdminError>;
 
+    async fn model_catalog_document(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderModelCatalogDocument, ProviderAdminError>
+    {
+        Err(ProviderAdminError::new(ProviderAdminErrorKind::Unsupported))
+    }
+
     async fn export_credentials(
         &self,
         credentials: Vec<ProviderExportCredentialInput>,

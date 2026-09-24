@@ -1007,6 +1007,7 @@ fn provider_managed_header(name: &str) -> bool {
             "authorization"
                 | "x-api-key"
                 | "x-openai-actor-authorization"
+                | "x-authenticateresponse"
                 | "cookie"
                 | "cookie2"
                 | "chatgpt-account-id"

@@ -14,9 +14,11 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
+import { sampleSource, userAgentSampleClients, userAgentSampleOptions, userAgentSamples } from './outbound-user-agent-samples'
 
 const settings = ref<OutboundUserAgentSettings | null>(null)
 const preview = ref<OutboundUserAgentSettings | null>(null)
@@ -36,6 +38,28 @@ const displayedInput = computed({
 const selection = computed<OutboundUserAgentSelection>(() => useDefault.value
   ? { mode: 'default' }
   : { mode: 'custom', userAgent: custom.value })
+const selectedSample = computed(() => useDefault.value
+  ? undefined
+  : userAgentSamples.find(sample => sample.userAgent === custom.value))
+const selectedSource = computed(() => selectedSample.value ? sampleSource(selectedSample.value) : null)
+const sampleClient = ref('Desktop')
+const sampleOptions = computed(() => userAgentSampleOptions.filter(option => option.client === sampleClient.value))
+
+watch(selectedSample, (sample) => {
+  if (sample)
+    sampleClient.value = sample.client
+})
+
+function applySample(id: string) {
+  if (useDefault.value || busy.value || !settings.value)
+    return
+  const sample = userAgentSamples.find(sample => sample.id === id)
+  if (!sample)
+    return
+  custom.value = sample.userAgent
+  error.value = ''
+  preview.value = null
+}
 
 function populate(value: OutboundUserAgentSettings) {
   settings.value = value
@@ -144,6 +168,49 @@ useIntervalFn(() => void load(false, true), 30_000)
         刷新实际配置
       </BaseButton>
     </div>
+
+    <details v-if="!useDefault" class="mt-4 min-w-0 text-xs">
+      <summary class="cursor-pointer font-emphasis text-cp-text">
+        固定版本样本（可选）
+      </summary>
+      <div class="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+        <BaseFormItem class="min-w-0" label="客户端样本">
+          <BaseSelect
+            v-model="sampleClient"
+            class="w-full min-w-0"
+            aria-label="客户端样本"
+            :options="userAgentSampleClients"
+            :disabled="busy || !settings"
+          />
+        </BaseFormItem>
+        <BaseFormItem class="min-w-0" label="UA 样本">
+          <BaseSelect
+            class="w-full min-w-0"
+            aria-label="UA 样本"
+            :model-value="selectedSample?.id ?? ''"
+            :options="sampleOptions"
+            :disabled="busy || !settings"
+            placeholder="选择样本"
+            @update:model-value="applySample"
+          />
+        </BaseFormItem>
+      </div>
+      <p class="mt-2 mb-0 text-cp-text-secondary">
+        第三方采集 · 固定版本 · 未经官方制品核验
+      </p>
+      <p v-if="selectedSample && selectedSource" class="mt-2 mb-0 break-words text-cp-text-secondary">
+        {{ selectedSample.client }} · {{ selectedSample.platform }} · {{ selectedSource.release }}
+        <a
+          class="mt-1 block break-all text-cp-primary-text underline"
+          :href="selectedSource.url"
+          :title="`SHA-256: ${selectedSource.sha256}`"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {{ selectedSource.repository }} · v{{ selectedSource.release }}
+        </a>
+      </p>
+    </details>
 
     <BaseFormItem
       class="mt-4"

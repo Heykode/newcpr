@@ -829,6 +829,101 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
             &serde_json::json!("account"),
         )
     );
+    assert_eq!(value["data"]["currentPage"], 1);
+    assert_eq!(value["data"]["pageSize"], 100);
+    assert_eq!(value["data"]["hasMore"], false);
+}
+
+#[tokio::test]
+async fn key_model_diagnostics_require_admin_and_project_pagination_and_cost_coverage() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use gateway_admin::model::observability::{CostCoverage, CurrencyCost, DiagnosticObservation};
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    fixture
+        .diagnostics
+        .lock()
+        .unwrap()
+        .extend((0..3).map(|index| DiagnosticObservation {
+            key: serde_json::json!(["key_synthetic", format!("model-{index}")]).to_string(),
+            name: format!("Named Key → model-{index}"),
+            request_count: 3 - index,
+            success_count: 3 - index,
+            failure_count: 0,
+            attempt_count: 3 - index,
+            total_tokens: 10,
+            average_latency_ms: None,
+            latency_p95_ms: None,
+            first_token_p95_ms: None,
+            non_completion_count: 0,
+            retry_count: 0,
+            cost_coverage: CostCoverage {
+                unavailable_count: 1,
+                ..Default::default()
+            },
+            costs: vec![CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: "0.1234567891".parse().unwrap(),
+            }],
+        }));
+    let app = observability::router::<AdminTestState>().with_state(fixture.state());
+    let uri = "/api/admin/usage/insights/diagnostics?dimension=keyModel&currentPage=2&pageSize=1";
+    let unauthorized = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header(header::COOKIE, "cpr_admin_session=valid-session")
+                .header("x-request-id", "req_key_model_diagnostics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = &value["data"];
+    assert_eq!(data["dimension"], "keyModel");
+    assert_eq!(data["currentPage"], 2);
+    assert_eq!(data["pageSize"], 1);
+    assert_eq!(data["hasMore"], true);
+    assert_eq!(data["items"].as_array().unwrap().len(), 1);
+    assert_eq!(data["items"][0]["name"], "Named Key → model-1");
+    assert_eq!(data["items"][0]["estimatedCost"], "0.1234567891");
+    assert_eq!(data["items"][0]["costIncomplete"], true);
+    for query in [
+        "dimension=keyModel&currentPage=0",
+        "dimension=keyModel&pageSize=101",
+        "dimension=model&pageSize=1",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/usage/insights/diagnostics?{query}"))
+                    .header(header::COOKIE, "cpr_admin_session=valid-session")
+                    .header("x-request-id", "req_invalid_key_model_diagnostics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 fn usage_record_with_account(

@@ -12,6 +12,7 @@ use super::TestDatabase;
 
 fn result(success: bool) -> ProxyTestResult {
     ProxyTestResult {
+        location: Default::default(),
         success,
         latency_ms: 10,
         exit_ip: None,
@@ -35,6 +36,8 @@ async fn stale_proxy_test_releases_lock_before_next_valid_result() {
     let created = first
         .create(
             NewProxy {
+                auto_location: false,
+                test: None,
                 name: "Lock fixture".to_owned(),
                 proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
                 request_location: None,
@@ -47,6 +50,8 @@ async fn stale_proxy_test_releases_lock_before_next_valid_result() {
     let current = first
         .update(
             UpdateProxy {
+                auto_location: None,
+                test: None,
                 id: created.id.clone(),
                 revision: created.revision,
                 name: "Updated lock fixture".to_owned(),
@@ -73,7 +78,11 @@ async fn stale_proxy_test_releases_lock_before_next_valid_result() {
             .record_test(&current.id, current.revision, result(true), &context)
             .await
             .unwrap();
-        assert_eq!(saved.last_test, Some(result(true)), "attempt {attempt}");
+        assert_eq!(
+            saved.record.last_test,
+            Some(result(true)),
+            "attempt {attempt}"
+        );
     }
     database.close().await;
 }

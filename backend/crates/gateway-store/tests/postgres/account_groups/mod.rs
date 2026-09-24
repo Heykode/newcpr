@@ -247,14 +247,14 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
     assert_eq!(mixed.account_summary.total, 0);
     assert_eq!(mixed.capacity.used_slots, None);
     assert_eq!(mixed.capacity.total_slots, 0);
-    assert_eq!(mixed.usage.today_usd.as_str(), "0");
-    assert_eq!(mixed.usage.retained_total_usd.as_str(), "0");
+    assert_eq!(mixed.usage.today_usd.as_str(), "1.5");
+    assert_eq!(mixed.usage.retained_total_usd.as_str(), "1.5");
     let empty = by_id.get(EMPTY_GROUP).expect("empty group");
     assert_eq!(empty.member_count, 0);
     assert!(empty.provider_counts.is_empty());
     assert_eq!(empty.client_key_count, 1);
-    assert_eq!(empty.usage.today_usd.as_str(), "1.5");
-    assert_eq!(empty.usage.retained_total_usd.as_str(), "1.5");
+    assert_eq!(empty.usage.today_usd.as_str(), "0");
+    assert_eq!(empty.usage.retained_total_usd.as_str(), "0");
 
     let all_key = keys
         .reveal_client_key(&client_key_id("key_all_accounts"))
@@ -379,6 +379,7 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
         )
         .await
         .expect("create statusless cost group");
+    assign_accounts(&database.pool, EMPTY_GROUP, &["acct_group_statusless"]).await;
     for (request_id, cost_amount) in [
         ("req_group_http_success", "1.5"),
         ("req_group_statusless_websocket", "2"),
@@ -548,7 +549,7 @@ async fn monitor_snapshot_uses_completion_window_shared_costs_and_durable_identi
         .expect("monitor snapshot");
     assert_eq!(facts.groups.len(), 3);
     assert_eq!(facts.members.len(), 3);
-    assert_eq!(facts.group_usage[MIXED_GROUP].usd, 2.0);
+    assert_eq!(facts.group_usage[MIXED_GROUP].usd, 5.0);
     assert_eq!(facts.group_usage[MIXED_GROUP].missing_costs, 1);
     assert_eq!(facts.group_usage[EMPTY_GROUP].usd, 5.0);
     assert_eq!(facts.account_usage["acct_shared"].usd, 5.0);
@@ -575,6 +576,114 @@ async fn monitor_snapshot_uses_completion_window_shared_costs_and_durable_identi
             .await
             .expect("after");
     assert_eq!(accounts_before, accounts_after);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn list_and_monitor_attribute_all_scopes_to_current_serving_memberships_once() {
+    let Some(database) = TestDatabase::create("group_usage_memberships").await else {
+        return;
+    };
+    const THIRD_GROUP: &str = "grp_00000000000000000000000000000003";
+    let groups = PgAccountGroupRepository::new(database.pool.clone());
+    for id in [MIXED_GROUP, EMPTY_GROUP, THIRD_GROUP] {
+        groups
+            .create_account_group(
+                NewAccountGroup {
+                    id: group_id(id),
+                    name: id.to_owned(),
+                    description: None,
+                    color: group_color("#2563EBFF"),
+                    disable_fast: false,
+                },
+                &context(id),
+            )
+            .await
+            .unwrap();
+    }
+    for id in ["acct_shared_cost", "acct_other_cost", "acct_ungrouped_cost"] {
+        seed_account(&database.pool, id, "openai", id).await;
+    }
+    assign_accounts(&database.pool, MIXED_GROUP, &["acct_shared_cost"]).await;
+    assign_accounts(&database.pool, EMPTY_GROUP, &["acct_shared_cost"]).await;
+    assign_accounts(&database.pool, THIRD_GROUP, &["acct_other_cost"]).await;
+    for (id, account, amount) in [
+        ("req_scope_all", "acct_shared_cost", "1"),
+        ("req_scope_many", "acct_shared_cost", "2"),
+        ("req_wrong_scope", "acct_other_cost", "4"),
+        ("req_no_membership", "acct_ungrouped_cost", "8"),
+    ] {
+        seed_group_cost_snapshot(&database.pool, id, account, MIXED_GROUP, amount).await;
+    }
+    sqlx::query("update model_requests set routing_scope = 'all', routing_group_refs = '{}', routing_group_names_snapshot = '[]' where id = 'req_scope_all'")
+        .execute(&database.pool).await.unwrap();
+    sqlx::query("update model_requests set routing_group_refs = array[$1, $2], routing_group_names_snapshot = jsonb_build_array($1::text, $2::text) where id = 'req_scope_many'")
+        .bind(MIXED_GROUP).bind(EMPTY_GROUP).execute(&database.pool).await.unwrap();
+    let now = chrono::Utc::now();
+    let history_before: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(mr) from model_requests mr order by id")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap();
+    let ledger_before: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(cost) from account_cumulative_costs cost order by provider_account_ref, currency"
+    ).fetch_all(&database.pool).await.unwrap();
+
+    for expected in [["3", "3", "4"], ["0", "3", "7"], ["0", "0", "4"]] {
+        let page = groups
+            .list_account_groups(AccountGroupListQuery {
+                page: 1,
+                page_size: PageSize::new(20).unwrap(),
+                search: None,
+                enabled: None,
+            })
+            .await
+            .unwrap();
+        let facts = groups.load_group_monitor(now).await.unwrap();
+        for (id, amount) in [MIXED_GROUP, EMPTY_GROUP, THIRD_GROUP]
+            .into_iter()
+            .zip(expected)
+        {
+            let record = page
+                .items
+                .iter()
+                .find(|record| record.id.as_str() == id)
+                .unwrap();
+            assert_eq!(record.usage.retained_total_usd.as_str(), amount);
+            assert_eq!(
+                facts.group_usage.get(id).map_or(0.0, |usage| usage.usd),
+                amount.parse::<f64>().unwrap(),
+            );
+        }
+        assert_eq!(facts.account_usage["acct_other_cost"].usd, 4.0);
+        assert!(!facts.account_usage.contains_key("acct_ungrouped_cost"));
+        if expected[0] == "3" {
+            assert_eq!(facts.account_usage["acct_shared_cost"].usd, 3.0);
+            sqlx::query("delete from account_group_accounts where account_group_id = $1 and provider_account_id = 'acct_shared_cost'")
+                .bind(MIXED_GROUP).execute(&database.pool).await.unwrap();
+            assign_accounts(&database.pool, THIRD_GROUP, &["acct_shared_cost"]).await;
+        } else if expected[1] == "3" {
+            assert_eq!(facts.account_usage["acct_shared_cost"].usd, 3.0);
+            sqlx::query(
+                "delete from account_group_accounts where provider_account_id = 'acct_shared_cost'",
+            )
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        } else {
+            assert!(!facts.account_usage.contains_key("acct_shared_cost"));
+        }
+    }
+    let history_after: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(mr) from model_requests mr order by id")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap();
+    let ledger_after: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select to_jsonb(cost) from account_cumulative_costs cost order by provider_account_ref, currency"
+    ).fetch_all(&database.pool).await.unwrap();
+    assert_eq!(history_before, history_after);
+    assert_eq!(ledger_before, ledger_after);
     database.close().await;
 }
 

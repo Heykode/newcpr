@@ -175,6 +175,7 @@ const {
   authorizingOAuth,
   batchDeleting,
   exportingAccounts,
+  exportingModelCatalogIds,
   reauthorizingAccount,
   createForm,
   handleCreate,
@@ -186,6 +187,7 @@ const {
   handleBatchDelete,
   handleExportAccounts,
   confirmExportAccounts,
+  handleExportModelCatalog,
   handleRecover,
   handleRefresh,
   handleRefreshQuota,
@@ -204,6 +206,7 @@ const {
   testingAccount,
   connectionTestStatus,
   connectionTestModel,
+  connectionTestUpstreamResponseModel,
   connectionTestLogs,
   connectionTestError,
   connectionTestStartedAt,
@@ -527,6 +530,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :refreshing="refreshingAccountIds.has(row.id)"
                 :toggling-turn-state="togglingTurnStateAccountIds.has(row.id)"
                 :testing="testingConnectionIds.has(row.id)"
+                :exporting-model-catalog="exportingModelCatalogIds.has(row.id)"
                 :relogin="reloginActions[row.id]"
                 :relogin-unavailable="Boolean(reloginReadError)"
                 @edit="openAccountEdit"
@@ -535,6 +539,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 @refresh="handleRefresh"
                 @reauthorize="openReauthorizeAccount"
                 @test="openConnectionTest"
+                @export-model-catalog="handleExportModelCatalog"
                 @toggle-turn-state="handleToggleTurnState"
                 @relogin="requestRelogin"
               />
@@ -596,6 +601,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :refreshing-models="refreshingConnectionTestModels"
       :logs="connectionTestLogs"
       :model="connectionTestModel"
+      :upstream-response-model="connectionTestUpstreamResponseModel"
       :model-options="connectionTestModelOptions"
       :started-at="connectionTestStartedAt"
       :status="connectionTestStatus"

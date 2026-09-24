@@ -6,7 +6,7 @@ pub use account_concurrency::{AccountConcurrencyHandle, AccountConcurrencySnapsh
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as SyncMutex, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
@@ -220,6 +220,61 @@ pub trait SnapshotControl: Send + Sync {
     fn publish_committed(&self, committed_revision: ConfigRevision) -> BoxFuture<'_, ()>;
 }
 
+#[derive(Default)]
+struct RefreshPriorityState {
+    pending_commits: usize,
+    active_background: Option<CancellationToken>,
+}
+
+struct CommittedRefreshGuard(Arc<SyncMutex<RefreshPriorityState>>);
+
+impl CommittedRefreshGuard {
+    fn begin(priority: Arc<SyncMutex<RefreshPriorityState>>) -> Self {
+        let active = {
+            let mut state = lock_unpoisoned(&priority);
+            state.pending_commits += 1;
+            state.active_background.clone()
+        };
+        if let Some(active) = active {
+            active.cancel();
+        }
+        Self(priority)
+    }
+}
+
+impl Drop for CommittedRefreshGuard {
+    fn drop(&mut self) {
+        lock_unpoisoned(&self.0).pending_commits -= 1;
+    }
+}
+
+struct BackgroundRefreshGuard {
+    priority: Arc<SyncMutex<RefreshPriorityState>>,
+    cancellation: CancellationToken,
+}
+
+impl BackgroundRefreshGuard {
+    fn begin(priority: Arc<SyncMutex<RefreshPriorityState>>) -> Option<Self> {
+        let mut state = lock_unpoisoned(&priority);
+        if state.pending_commits != 0 {
+            return None;
+        }
+        let cancellation = CancellationToken::new();
+        state.active_background = Some(cancellation.clone());
+        drop(state);
+        Some(Self {
+            priority,
+            cancellation,
+        })
+    }
+}
+
+impl Drop for BackgroundRefreshGuard {
+    fn drop(&mut self) {
+        lock_unpoisoned(&self.priority).active_background = None;
+    }
+}
+
 /// 配置提交后的本进程快照发布与跨进程失效通知。
 #[derive(Clone)]
 pub struct RuntimeSnapshotPublisher {
@@ -228,6 +283,7 @@ pub struct RuntimeSnapshotPublisher {
     request_tuning: RequestTuningHandle,
     subscriptions: Arc<dyn SnapshotSubscriptionPort>,
     refresh_lock: Arc<Mutex<()>>,
+    refresh_priority: Arc<SyncMutex<RefreshPriorityState>>,
 }
 
 impl RuntimeSnapshotPublisher {
@@ -258,6 +314,7 @@ impl RuntimeSnapshotPublisher {
             request_tuning,
             subscriptions,
             refresh_lock: Arc::new(Mutex::new(())),
+            refresh_priority: Arc::new(SyncMutex::new(RefreshPriorityState::default())),
         }
     }
 
@@ -265,16 +322,41 @@ impl RuntimeSnapshotPublisher {
     pub async fn refresh(&self) -> Result<ConfigRevision, RuntimeSnapshotCompileError> {
         // Serialize facts reads through publication or suspension; request reads skip this lock.
         let _refresh = self.refresh_lock.lock().await;
-        self.refresh_locked(true).await
+        let background = BackgroundRefreshGuard::begin(Arc::clone(&self.refresh_priority))
+            .ok_or(RuntimeSnapshotCompileError::RevisionChanged)?;
+        self.refresh_locked(true, Some(&background.cancellation))
+            .await
+    }
+
+    async fn refresh_committed(&self) -> Result<ConfigRevision, RuntimeSnapshotCompileError> {
+        let _committed = CommittedRefreshGuard::begin(Arc::clone(&self.refresh_priority));
+        let _refresh = self.refresh_lock.lock().await;
+        self.refresh_locked(true, None).await
     }
 
     async fn refresh_locked(
         &self,
         suspend_on_error: bool,
+        cancellation: Option<&CancellationToken>,
     ) -> Result<ConfigRevision, RuntimeSnapshotCompileError> {
         let concurrency = &self.request_tuning.account_concurrency;
         let fence = Arc::clone(&read_unpoisoned(&concurrency.state).fence);
-        let compiled = self.compiler.compile().await;
+        let compiled = if let Some(cancellation) = cancellation {
+            let cancelled = cancellation.cancelled().fuse();
+            let compiled = self.compiler.compile().fuse();
+            pin_mut!(cancelled, compiled);
+            // Preemption is not a load failure and must not suspend published capacity.
+            select_biased! {
+                _ = cancelled => return Err(RuntimeSnapshotCompileError::RevisionChanged),
+                result = compiled => result,
+            }
+        } else {
+            let previous = read_unpoisoned(&self.snapshots.state).current.clone();
+            match previous {
+                Some(previous) => self.compiler.compile_with_cached_catalog(&previous).await,
+                None => self.compiler.compile().await,
+            }
+        };
         // Keep publication and explicit suspension ordered without holding a sync lock over I/O.
         let mut state = write_unpoisoned(&concurrency.state);
         if !Arc::ptr_eq(&fence, &state.fence) {
@@ -324,7 +406,7 @@ impl RuntimeSnapshotPublisher {
 
     /// 数据库提交不能被目录或通知基础设施的暂时故障伪装成回滚。
     async fn publish_committed_inner(&self, committed_revision: ConfigRevision) {
-        let _ = self.refresh().await;
+        let _ = self.refresh_committed().await;
         let _ = self
             .subscriptions
             .publish_snapshot_revision(committed_revision)
@@ -375,6 +457,8 @@ impl RuntimeSnapshotPublisher {
 
     async fn reconcile(&self) -> Result<(), WorkerTaskError> {
         let _refresh = self.refresh_lock.lock().await;
+        let background = BackgroundRefreshGuard::begin(Arc::clone(&self.refresh_priority))
+            .ok_or_else(|| WorkerTaskError::safe("runtime snapshot commit is pending"))?;
         let persisted_revision = match self.compiler.store().current_config_revision().await {
             Ok(revision) => revision,
             Err(_) => {
@@ -395,9 +479,12 @@ impl RuntimeSnapshotPublisher {
             return Ok(());
         }
         // A catalog-only failure can retain the previous immutable request snapshot.
-        self.refresh_locked(configuration_changed || needs_recovery)
-            .await
-            .map_err(|_| WorkerTaskError::safe("runtime snapshot reconciliation failed"))?;
+        self.refresh_locked(
+            configuration_changed || needs_recovery,
+            Some(&background.cancellation),
+        )
+        .await
+        .map_err(|_| WorkerTaskError::safe("runtime snapshot reconciliation failed"))?;
         Ok(())
     }
 }
@@ -458,7 +545,7 @@ impl DaemonTask for RuntimeSnapshotSubscriptionTask {
                     };
                     match notified {
                         Some(Ok(_)) => {
-                            let _ = self.publisher.refresh().await;
+                            let _ = self.publisher.refresh_committed().await;
                         }
                         Some(Err(_)) | None => break,
                     }
@@ -494,5 +581,10 @@ fn read_unpoisoned<T>(lock: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
 
 fn write_unpoisoned<T>(lock: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
     lock.write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn lock_unpoisoned<T>(lock: &SyncMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    lock.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

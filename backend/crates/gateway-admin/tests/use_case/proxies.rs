@@ -18,11 +18,12 @@ struct ControlledProbe {
 
 #[async_trait]
 impl ProxyProbe for ControlledProbe {
-    async fn test(&self, proxy: &OutboundProxy) -> ProxyTestResult {
+    async fn test(&self, proxy: &OutboundProxy, _: bool) -> ProxyTestResult {
         assert_eq!(proxy.endpoint(), "http://proxy.example:8080/");
         self.entered.add_permits(1);
         self.release.acquire().await.unwrap().forget();
         ProxyTestResult {
+            location: Default::default(),
             success: self.success,
             latency_ms: 12,
             exit_ip: self.success.then(|| "203.0.113.2".parse().unwrap()),
@@ -57,7 +58,10 @@ async fn unsaved_proxy_probe_returns_success_and_failure_without_store_access() 
         let services = super::AdminHarness::new().proxy_probe(probe).build().await;
         let result = services
             .proxies()
-            .probe(&OutboundProxy::parse("http://proxy.example:8080").unwrap())
+            .probe(
+                &OutboundProxy::parse("http://proxy.example:8080").unwrap(),
+                false,
+            )
             .await
             .expect("probe must not access unavailable store");
         assert_eq!(result.success, success);
@@ -82,19 +86,27 @@ async fn unsaved_proxy_probe_shares_test_limit_and_releases_slot_on_cancellation
             .await,
     );
     let mut tasks = Vec::new();
-    for _ in 0..4 {
+    for detect_location in [false, true, false, true] {
         let service = services.clone();
         tasks.push(tokio::spawn(async move {
             service
                 .proxies()
-                .probe(&OutboundProxy::parse("http://proxy.example:8080").unwrap())
+                .probe(
+                    &OutboundProxy::parse("http://proxy.example:8080").unwrap(),
+                    detect_location,
+                )
                 .await
         }));
     }
     wait_for_probes(&probe, 4).await;
     let proxy = OutboundProxy::parse("http://proxy.example:8080").unwrap();
     assert_eq!(
-        services.proxies().probe(&proxy).await.unwrap_err().kind(),
+        services
+            .proxies()
+            .probe(&proxy, true)
+            .await
+            .unwrap_err()
+            .kind(),
         AdminErrorKind::RateLimited
     );
     assert_eq!(
@@ -115,7 +127,7 @@ async fn unsaved_proxy_probe_shares_test_limit_and_releases_slot_on_cancellation
     assert!(cancelled.await.unwrap_err().is_cancelled());
     let service = services.clone();
     tasks.push(tokio::spawn(async move {
-        service.proxies().probe(&proxy).await
+        service.proxies().probe(&proxy, false).await
     }));
     wait_for_probes(&probe, 1).await;
     probe.release.add_permits(4);
@@ -216,14 +228,14 @@ impl ProxyStore for TestProxies {
         _: Revision,
         _: ProxyTestResult,
         _: &MutationContext,
-    ) -> AdminStoreResult<ProxyRecord> {
+    ) -> AdminStoreResult<ProxyMutation> {
         Err(super::unavailable("proxy"))
     }
 }
 
 #[async_trait]
 impl ProxyProbe for TestProxies {
-    async fn test(&self, _: &OutboundProxy) -> ProxyTestResult {
+    async fn test(&self, _: &OutboundProxy, _: bool) -> ProxyTestResult {
         panic!("unexpected proxy probe")
     }
 }

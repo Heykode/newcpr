@@ -194,6 +194,13 @@ pub trait AccountsService: Send + Sync {
         refresh: bool,
     ) -> Result<ProviderModels, AdminError>;
 
+    async fn model_catalog_document(
+        &self,
+        _account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderModelCatalogDocument, AdminError> {
+        Err(AdminError::invalid("当前 Provider 不支持原生模型目录导出"))
+    }
+
     async fn test_connection(
         &self,
         command: AccountConnectionTest,
@@ -1023,6 +1030,17 @@ impl AccountsService for DefaultAccountsService {
             .map_err(|error| map_provider_error(error, "provider turn state probe"))
     }
 
+    async fn model_catalog_document(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<crate::model::provider_credentials::ProviderModelCatalogDocument, AdminError> {
+        let (_, provider) = self.provider_for_account(account_id).await?;
+        provider
+            .model_catalog_document(account_id)
+            .await
+            .map_err(|error| map_provider_error(error, "provider native model catalog"))
+    }
+
     async fn test_connection(
         &self,
         command: AccountConnectionTest,
@@ -1072,7 +1090,9 @@ impl AccountsService for DefaultAccountsService {
                     };
                     text.into_iter()
                         .map(|text| AccountConnectionTestEvent::Content { text })
-                        .chain(std::iter::once(AccountConnectionTestEvent::Completed))
+                        .chain(std::iter::once(AccountConnectionTestEvent::Completed {
+                            upstream_response_model: result.upstream_response_model,
+                        }))
                         .collect()
                 }
                 Err(error) => {

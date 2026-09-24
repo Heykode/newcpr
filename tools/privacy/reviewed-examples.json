@@ -1,5 +1,141 @@
 [
   {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 388,
+    "file_sha256": "84926a0dd845a8f26c6bd79ca0474c3a12a2f142866600cbe47bfdf27fdbe895",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Independently re-reviewed unchanged loopback configuration rejection fixture after updating the account snapshot test; parsing only, no database connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 274,
+    "file_sha256": "659580cb43162e1e7df2c94042355da49f02d6618ef585f1df70325186a27bec",
+    "line_sha256": "a64a4ebd4745816bca847998941cb69d613488075fddc35523e9618944445362",
+    "reason": "Independently re-reviewed unchanged documentation-domain proxy fixture after automatic-location API additions; in-memory store and synthetic probe only."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 334,
+    "file_sha256": "659580cb43162e1e7df2c94042355da49f02d6618ef585f1df70325186a27bec",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Independently re-reviewed unchanged credential-preservation fixture after automatic-location API additions; documentation domain and synthetic credentials."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 533,
+    "file_sha256": "659580cb43162e1e7df2c94042355da49f02d6618ef585f1df70325186a27bec",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Independently re-reviewed unchanged unsaved proxy fixture after automatic-location tests moved its line; synthetic probe makes no real proxy connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 574,
+    "file_sha256": "659580cb43162e1e7df2c94042355da49f02d6618ef585f1df70325186a27bec",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Independently re-reviewed unchanged saved-connection isolation fixture; documentation-domain test URL used only by an in-memory store and synthetic probe."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 680,
+    "file_sha256": "659580cb43162e1e7df2c94042355da49f02d6618ef585f1df70325186a27bec",
+    "line_sha256": "6ca8102fb3d417f5b9c43b2b86187c41e05688ea3a984cfa48578f057c3e4d93",
+    "reason": "Independently reviewed new automatic-location draft test reusing the existing documentation-domain synthetic proxy; no real endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 783,
+    "file_sha256": "659580cb43162e1e7df2c94042355da49f02d6618ef585f1df70325186a27bec",
+    "line_sha256": "c36a0dbdd71274dfb45379085d8b6535806e84789a7edb39c1c60e508b0a311b",
+    "reason": "Independently reviewed new unsaved-mode probe test reusing synthetic proxy data with an in-memory store and SuccessfulProbe; no external proxy is contacted."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 26,
+    "file_sha256": "516dbd8af1531d377f2653d1dff95411e287c7c3e8259f9f6514d898202096fb",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Independently re-reviewed existing proxy authentication fixture; dynamic address belongs to a local loopback test listener."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 195,
+    "file_sha256": "516dbd8af1531d377f2653d1dff95411e287c7c3e8259f9f6514d898202096fb",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Independently reviewed automatic-location test reusing synthetic authentication; MockServer is verified to bind loopback only."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1987,
+    "file_sha256": "a0472814afd9b8dfa5a8131713e1611f4651619c3861672bf274a77c1709cb78",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Independently re-reviewed unchanged loopback proxy persistence fixture after adding automatic-location fields; isolated test schema only."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 2016,
+    "file_sha256": "a0472814afd9b8dfa5a8131713e1611f4651619c3861672bf274a77c1709cb78",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Independently re-reviewed unchanged loopback proxy read-back assertion after optional location fields changed the fixture file."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 247,
+    "file_sha256": "349c74158de6a2cdb1c8f3a16b9eff02f9ecf5a5a8694465b6116b893f86be2e",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Independently re-reviewed unchanged synthetic loopback batch-binding fixture after automatic-location persistence tests were added."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 356,
+    "file_sha256": "349c74158de6a2cdb1c8f3a16b9eff02f9ecf5a5a8694465b6116b893f86be2e",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Independently re-reviewed unchanged synthetic loopback account-removal fixture; no actual deployment connection."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 835,
+    "file_sha256": "349c74158de6a2cdb1c8f3a16b9eff02f9ecf5a5a8694465b6116b893f86be2e",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Independently re-reviewed unchanged managed proxy persistence fixture; synthetic credentials with a loopback endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1000,
+    "file_sha256": "349c74158de6a2cdb1c8f3a16b9eff02f9ecf5a5a8694465b6116b893f86be2e",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Independently re-reviewed unchanged synthetic loopback rollback fixture after automatic-location additions moved the test."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1072,
+    "file_sha256": "349c74158de6a2cdb1c8f3a16b9eff02f9ecf5a5a8694465b6116b893f86be2e",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Independently re-reviewed unchanged loopback migration fixture; synthetic credentials remain confined to an isolated test schema."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 408,
+    "file_sha256": "fd81b05253307c3dd999de8c878a9849b1d328ceccb15943e0a23b673bbf3427",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Independently re-reviewed unchanged native catalog proxy authentication fixture after export tests moved its line; explicit loopback ephemeral listener only."
+  },
+  {
     "path": ".trellis/spec/backend/client-continuity.md",
     "rule": "gitleaks:cpr-api-key",
     "line": 496,

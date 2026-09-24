@@ -72,6 +72,12 @@ async function main() {
         else if (path === '/api/admin/settings/admin-api-key') {
           data = { exists: false }
         }
+        else if (path === '/api/admin/notifications/channels') {
+          data = {
+            smtp: { enabled: false, host: '', port: 587, security: 'startTls', passwordSet: false },
+            bark: { enabled: false, serverUrl: '', deviceKeySet: false },
+          }
+        }
         else if (path === '/api/admin/settings/openai-user-agent') {
           data = {
             mode: 'default',
@@ -123,8 +129,8 @@ async function main() {
       await page.getByRole('button', { name: '新增代理', exact: true }).click()
       await page.getByRole('textbox', { name: '代理名称' }).fill('Location fixture')
       await page.getByLabel('代理 URL', { exact: true }).fill('http://127.0.0.1:8080')
-      await page.getByText('代理独立地区（地区总开关开启时生效）', { exact: true }).click()
-      assert.equal(await page.getByRole('switch', { name: '代理独立地区（地区总开关开启时生效）' }).isChecked(), true)
+      await page.getByText('手动独立地区（地区总开关开启时生效）', { exact: true }).click()
+      assert.equal(await page.getByRole('switch', { name: '手动独立地区（地区总开关开启时生效）' }).isChecked(), true)
       await page.getByRole('textbox', { name: '城市', exact: true }).fill('Tokyo')
       await page.screenshot({ path: `${output}/proxy-${width}.png` })
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))

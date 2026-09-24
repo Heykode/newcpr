@@ -1,8 +1,8 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use gateway_store::postgres::{
-    DiagnosticDimension, ModelRequestAttemptStart, ModelRequestRepository, NewModelRequest,
-    ObservabilityPageSize, ObservabilityRange, ObservabilityRepository, OpsErrorFilter,
-    OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
+    DiagnosticDimension, DiagnosticPageQuery, ModelRequestAttemptStart, ModelRequestRepository,
+    NewModelRequest, ObservabilityPageSize, ObservabilityRange, ObservabilityRepository,
+    OpsErrorFilter, OpsErrorQuery, OpsEvent, OpsEventLevel, OpsEventRepository, PgExecutionStore,
     PgOpsEventRepository, ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
@@ -109,9 +109,11 @@ async fn completed_usage_projections_should_accept_statusless_websocket_but_reje
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
-        .expect("load statusless usage diagnostics");
+        .expect("load statusless usage diagnostics")
+        .items;
     assert_eq!(
         (
             diagnostics[0].request_count,
@@ -513,9 +515,11 @@ async fn diagnostics_should_group_same_email_accounts_by_stable_ref() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
-        .expect("account diagnostics");
+        .expect("account diagnostics")
+        .items;
     assert_eq!(diagnostics.len(), 2);
     assert_eq!(
         diagnostics
@@ -585,9 +589,11 @@ async fn diagnostics_should_fallback_to_name_then_ref_for_missing_snapshots() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
-        .expect("account diagnostics");
+        .expect("account diagnostics")
+        .items;
     let by_key = diagnostics
         .iter()
         .map(|item| (item.key.as_str(), item.name.as_str()))
@@ -650,9 +656,11 @@ async fn diagnostics_should_prefer_the_latest_non_null_email_snapshot() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Account,
+            None,
         )
         .await
-        .expect("account diagnostics");
+        .expect("account diagnostics")
+        .items;
 
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "acct_snapshot_history");
@@ -711,9 +719,11 @@ async fn failure_diagnostics_should_only_include_errored_requests() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Failure,
+            None,
         )
         .await
-        .expect("failure diagnostics");
+        .expect("failure diagnostics")
+        .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "rate_limited");
     assert_eq!(diagnostics[0].request_count, 1);
@@ -775,9 +785,11 @@ async fn model_diagnostics_should_exclude_provider_endpoints_without_a_model() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::Model,
+            None,
         )
         .await
-        .expect("model diagnostics");
+        .expect("model diagnostics")
+        .items;
 
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "upstream-model");
@@ -884,9 +896,11 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::ApiKey,
+            None,
         )
         .await
-        .expect("api key diagnostics");
+        .expect("api key diagnostics")
+        .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "key_diag");
     assert_eq!(diagnostics[0].name, "My Key");
@@ -902,13 +916,206 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             range_around(started_at),
             UsageRecordFilter::default(),
             DiagnosticDimension::ApiKey,
+            None,
         )
         .await
-        .expect("api key diagnostics after deletion");
+        .expect("api key diagnostics after deletion")
+        .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "key_diag");
     assert_eq!(diagnostics[0].name, "key_diag");
 
+    database.close().await;
+}
+
+#[tokio::test]
+async fn key_model_diagnostics_page_stable_pairs_with_complete_currency_groups() {
+    let Some(database) = TestDatabase::create("key_model_pages").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_api_key(&database.pool, "key_diag", "Named Key", now).await;
+    sqlx::query(
+        "insert into model_requests (
+           id, client_api_key_ref, config_revision, routing_scope, protocol, operation, endpoint,
+           client_transport, requested_model_id, upstream_model_id, provider_kind,
+           provider_account_ref, upstream_transport,
+           attempt_count, upstream_send_state, outcome, client_status_code,
+           downstream_committed_at, completed_at, started_at, deadline_at,
+           total_tokens, cost_source, cost_amount, cost_currency, request_kind
+         )
+         select 'req_key_model_' || n, case when n = 110 then 'key_other' when n % 2 = 0 or n >= 105 then 'key_diag' else 'key_other' end,
+                1, 'all', 'openai', 'responses', '/v1/responses', 'http_sse',
+                case when n = 109 then null else 'alias' end,
+                case when n in (109, 111) then null else 'model-' || lpad((case when n >= 105 then 0 else n end)::text, 3, '0') end,
+                'openai', 'acct_key_model', 'http_sse',
+                1, 'sent', case when n = 107 then 'failed' else 'succeeded' end,
+                case when n = 107 then 500 else 200 end,
+                $1, $1, $1, $1 + interval '30 seconds', 10,
+                case when n = 106 then 'unavailable' else 'provider_reported' end,
+                case when n = 106 then null else 0.1 end,
+                case when n = 106 then null when n = 105 then 'EUR' else 'USD' end,
+                case when n = 108 then 'prewarm' else null end
+           from generate_series(0, 111) n",
+    ).bind(now).execute(&database.pool).await.expect("seed diagnostic pairs");
+    let repository = observability_repository(&database.pool);
+    let range = range_around(now);
+    let first = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter::default(),
+            DiagnosticDimension::KeyModel,
+            Some(DiagnosticPageQuery {
+                current_page: 1,
+                page_size: 20,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (first.current_page, first.page_size, first.has_more),
+        (1, 20, true)
+    );
+    assert_eq!(first.items.len(), 20);
+    let item = &first.items[0];
+    assert_eq!(
+        serde_json::from_str::<(String, String)>(&item.key).unwrap(),
+        ("key_diag".to_owned(), "model-000".to_owned())
+    );
+    assert_eq!(item.name, "Named Key → model-000");
+    assert_eq!(
+        (item.request_count, item.success_count, item.failure_count),
+        (5, 4, 1)
+    );
+    assert_eq!(
+        item.total_tokens, 30,
+        "unknown cost still has tokens; failed/prewarm do not"
+    );
+    assert_eq!(item.cost_coverage.unavailable_count, 1);
+    assert_eq!(
+        item.costs.len(),
+        2,
+        "page limit applies to dimensions, not currencies"
+    );
+    assert!(item.costs.iter().all(|cost| cost.amount.as_str() == "0.1"));
+
+    let mut keys = first
+        .items
+        .iter()
+        .map(|item| item.key.clone())
+        .collect::<Vec<_>>();
+    for current_page in 2..=6 {
+        let page = repository
+            .usage_diagnostics(
+                range,
+                UsageRecordFilter::default(),
+                DiagnosticDimension::KeyModel,
+                Some(DiagnosticPageQuery {
+                    current_page,
+                    page_size: 20,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.has_more, current_page < 6);
+        assert_eq!(page.items.len(), if current_page == 6 { 7 } else { 20 });
+        keys.extend(page.items.into_iter().map(|item| item.key));
+    }
+    assert_eq!(keys.len(), 107, "pagination must not silently stop at 100");
+    assert_eq!(
+        keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        107
+    );
+    let pairs = keys
+        .iter()
+        .map(|key| serde_json::from_str::<(String, String)>(key).unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(pairs.contains(&("key_diag".to_owned(), "model-000".to_owned())));
+    assert!(pairs.contains(&("key_other".to_owned(), "model-000".to_owned())));
+    assert!(pairs.contains(&("key_diag".to_owned(), "alias".to_owned())));
+    let repeated = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter::default(),
+            DiagnosticDimension::KeyModel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeated, first, "ties and defaults are stable");
+    let empty = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter::default(),
+            DiagnosticDimension::KeyModel,
+            Some(DiagnosticPageQuery {
+                current_page: 7,
+                page_size: 20,
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(empty.items.is_empty());
+    assert!(!empty.has_more);
+    let filtered = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter {
+                client_api_key_ref: Some("key_diag".to_owned()),
+                model: Some("model-000".to_owned()),
+                ..Default::default()
+            },
+            DiagnosticDimension::KeyModel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered.items, vec![first.items[0].clone()]);
+    sqlx::query("delete from client_api_keys where id = 'key_diag'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let deleted = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter::default(),
+            DiagnosticDimension::KeyModel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.items[0].key, first.items[0].key);
+    assert_eq!(deleted.items[0].name, "key_diag → model-000");
+    assert!(
+        repository
+            .usage_diagnostics(
+                range,
+                UsageRecordFilter::default(),
+                DiagnosticDimension::Model,
+                Some(DiagnosticPageQuery {
+                    current_page: 1,
+                    page_size: 20
+                }),
+            )
+            .await
+            .is_err()
+    );
+    for (current_page, page_size) in [(0, 20), (1, 0), (1, 101)] {
+        assert!(
+            repository
+                .usage_diagnostics(
+                    range,
+                    UsageRecordFilter::default(),
+                    DiagnosticDimension::KeyModel,
+                    Some(DiagnosticPageQuery {
+                        current_page,
+                        page_size
+                    }),
+                )
+                .await
+                .is_err()
+        );
+    }
     database.close().await;
 }
 

@@ -1934,6 +1934,506 @@ async fn capacity_select(
         .await
 }
 
+async fn corrupt_credential(store: &MemoryAccountStore, id: &str) {
+    use gateway_core::account::{NewProviderAccount, PlaintextCredential};
+
+    let account = store.account(id).expect("account");
+    store.delete_account(account.id()).await.unwrap();
+    store
+        .create_account(NewProviderAccount {
+            account,
+            credential: PlaintextCredential::new(Default::default()),
+            model_access: None,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn corrupt_unpinned_candidate_releases_lease_without_claiming_or_renewing_affinity() {
+    use std::sync::atomic::Ordering;
+
+    for waiting in [false, true] {
+        for bound in [false, true] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_original", "at-original");
+            create_account(&store, "acct_other", "at-other");
+            store.set_scheduling("acct_original", None, AccountWeight::new(100).unwrap());
+            store.set_scheduling("acct_other", None, AccountWeight::new(1).unwrap());
+            corrupt_credential(&store, "acct_original").await;
+            let original = store.account("acct_original").unwrap();
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            let affinity = Arc::new(MemorySessionAffinity::default());
+            let provider = ProviderKind::new("openai").unwrap();
+            let key = ProviderSessionAffinityKey::try_new("corrupt-candidate").unwrap();
+            if bound {
+                affinity
+                    .bind(&provider, &key, original.id(), Duration::from_secs(60))
+                    .await
+                    .unwrap();
+            }
+            let selector = selector_with_affinity(&store, Arc::clone(&leases), affinity.clone())
+                .with_account_concurrency(capacity_handle(&["acct_original", "acct_other"], 2));
+            let mut attempt = attempt(BTreeSet::new());
+            if waiting {
+                attempt = attempt.with_request_tuning(capacity_tuning());
+            }
+            let lease = capacity_select(&selector, &attempt, Some(&key))
+                .await
+                .expect("healthy candidate must remain selectable");
+            assert_eq!(lease.account_id().as_str(), "acct_other");
+            assert_eq!(store.account("acct_original"), Some(original.clone()));
+            assert!(affinity.renewal_ttls().is_empty());
+            assert_eq!(
+                affinity.load(&provider, &key).await.unwrap(),
+                Some(if bound {
+                    original.id().clone()
+                } else {
+                    lease.account_id().clone()
+                })
+            );
+            if bound {
+                assert_eq!(lease.escape_reason(), Some("hard_unavailable"));
+                assert!(lease.account_switch());
+                assert!(!lease.affinity_hit());
+            }
+            assert_eq!(leases.requests.lock().unwrap().len(), 2);
+            assert_eq!(
+                leases.capacity.signals.lock().unwrap()[original.id()].in_flight,
+                0
+            );
+            assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+            drop(lease);
+            assert!(
+                leases
+                    .capacity
+                    .signals
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .all(|signal| signal.in_flight == 0)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn corrupt_required_native_and_replay_owner_candidates_never_switch_accounts() {
+    use std::sync::atomic::Ordering;
+
+    for waiting in [false, true] {
+        for pin in ["required", "native", "replay_owner"] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_original", "at-original");
+            create_account(&store, "acct_other", "at-other");
+            corrupt_credential(&store, "acct_original").await;
+            let original = store.account("acct_original").unwrap();
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            let affinity = Arc::new(MemorySessionAffinity::default());
+            let selector = selector_with_affinity(&store, Arc::clone(&leases), affinity.clone())
+                .with_account_concurrency(capacity_handle(&["acct_original", "acct_other"], 2));
+            let mut attempt = if pin != "required" {
+                AttemptContext::new(
+                    RequestAttemptContext::new(
+                        ModelRequestId::new("req_corrupt_native").unwrap(),
+                        ClientApiKeyId::new("key_codex_contract").unwrap(),
+                    ),
+                    NonZeroU32::MIN,
+                    SystemTime::now() + Duration::from_secs(30),
+                    account_policy(),
+                    AccountAttemptContext::new(
+                        BTreeSet::new(),
+                        None,
+                        (pin == "replay_owner").then(|| {
+                            gateway_core::engine::ProviderAccountStateOwner::new(
+                                ProviderKind::new("openai").unwrap(),
+                                original.id().clone(),
+                            )
+                        }),
+                    )
+                    .with_account_scope(contract_account_scope()),
+                    Some(ContinuationBinding::Pinned(NativeContinuationPin::new(
+                        PreviousResponseId::new("previous-response"),
+                        PreviousResponseId::new("upstream-response"),
+                        ClientApiKeyId::new("key_codex_contract").unwrap(),
+                        ProviderKind::new("openai").unwrap(),
+                        original.id().clone(),
+                    ))),
+                    CancellationToken::new(),
+                )
+                .with_continuation_attempt(if pin == "replay_owner" {
+                    gateway_core::engine::ContinuationAttempt::ReplayOwner
+                } else {
+                    gateway_core::engine::ContinuationAttempt::Native
+                })
+            } else {
+                attempt_with_required(BTreeSet::new(), Some(original.id().clone()))
+            };
+            if waiting {
+                attempt = attempt.with_request_tuning(capacity_tuning());
+            }
+            let key = ProviderSessionAffinityKey::try_new("corrupt-pinned").unwrap();
+            let error = capacity_select(&selector, &attempt, Some(&key))
+                .await
+                .expect_err("corruption must not relax a fixed owner");
+            match error {
+                CredentialSelectionError::PinnedAccount { source, owner_lost } if waiting => {
+                    assert!(!owner_lost);
+                    assert!(matches!(
+                        *source,
+                        CredentialSelectionError::InvalidCredential
+                    ));
+                }
+                CredentialSelectionError::InvalidCredential if !waiting => {}
+                error => panic!("unexpected pinned failure: {error}"),
+            }
+            assert_eq!(store.account("acct_original"), Some(original));
+            assert_eq!(affinity.binding_count(), 0);
+            let requests = leases.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].account_id().as_str(), "acct_original");
+            assert!(
+                leases
+                    .capacity
+                    .signals
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .all(|signal| signal.in_flight == 0)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn corrupt_candidates_do_not_exhaust_the_snapshot_rescan_budget() {
+    use std::sync::atomic::Ordering;
+
+    let broken = [
+        "acct_original",
+        "acct_primary",
+        "acct_fallback",
+        "acct_first",
+    ];
+    for waiting in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        for (index, id) in broken.iter().enumerate() {
+            create_account(&store, id, "at-corrupt-candidate");
+            store.set_scheduling(
+                id,
+                None,
+                AccountWeight::new(100 - u16::try_from(index).unwrap()).unwrap(),
+            );
+            corrupt_credential(&store, id).await;
+        }
+        create_account(&store, "acct_other", "at-other");
+        store.set_scheduling("acct_other", None, AccountWeight::new(1).unwrap());
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        let selector =
+            selector(&store, Arc::clone(&leases)).with_account_concurrency(capacity_handle(
+                &[
+                    "acct_original",
+                    "acct_primary",
+                    "acct_fallback",
+                    "acct_first",
+                    "acct_other",
+                ],
+                2,
+            ));
+        let mut attempt = attempt(BTreeSet::new());
+        if waiting {
+            attempt = attempt.with_request_tuning(capacity_tuning());
+        }
+        let lease = capacity_select(&selector, &attempt, None).await.unwrap();
+        assert_eq!(lease.account_id().as_str(), "acct_other");
+        assert_eq!(leases.requests.lock().unwrap().len(), 5);
+        assert_eq!(leases.capacity.state_reads.load(Ordering::SeqCst), 1);
+        drop(lease);
+        assert!(
+            leases
+                .capacity
+                .signals
+                .lock()
+                .unwrap()
+                .values()
+                .all(|signal| signal.in_flight == 0)
+        );
+    }
+}
+
+#[tokio::test]
+async fn capacity_wait_corrupt_promotions_preserve_rescans_deadline_and_cleanup() {
+    use gateway_core::engine::AccountWaitMode;
+    use std::sync::atomic::Ordering;
+
+    let ids = [
+        "acct_original",
+        "acct_primary",
+        "acct_fallback",
+        "acct_other",
+    ];
+    for entry in ["fallback", "sticky", "raced-sticky", "ready-sticky"] {
+        for ending in ["success", "cancel-wait", "cancel-promoted"] {
+            let store = Arc::new(MemoryAccountStore::default());
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            for (index, id) in ids.iter().enumerate() {
+                create_account(&store, id, "at-wait-candidate");
+                store.set_scheduling(
+                    id,
+                    None,
+                    AccountWeight::new(100 - u16::try_from(index).unwrap()).unwrap(),
+                );
+                if index < 3 {
+                    corrupt_credential(&store, id).await;
+                }
+                leases.capacity.set_load(id, 1);
+            }
+            let original_accounts = ids.map(|id| store.account(id).unwrap());
+            if entry == "raced-sticky" {
+                // The original is Ready in the snapshot, but loses execution admission.
+                leases.capacity.set_load(ids[0], 0);
+                leases.capacity.race_busy.store(true, Ordering::SeqCst);
+            } else if entry == "ready-sticky" {
+                // The original becomes Ready between the Busy snapshot and wait entry.
+                let capacity = Arc::clone(&leases.capacity);
+                *leases.capacity.after_state_load.lock().unwrap() = Some(Box::new(move || {
+                    capacity.set_load("acct_original", 0);
+                }));
+            }
+            let bound = entry != "fallback";
+            let affinity = Arc::new(MemorySessionAffinity::default());
+            let provider = ProviderKind::new("openai").unwrap();
+            let key = ProviderSessionAffinityKey::try_new("corrupt-wait-promotion").unwrap();
+            if bound {
+                affinity
+                    .bind(
+                        &provider,
+                        &key,
+                        original_accounts[0].id(),
+                        Duration::from_secs(60),
+                    )
+                    .await
+                    .unwrap();
+            }
+            let selector = selector_with_affinity(&store, Arc::clone(&leases), affinity.clone())
+                .with_account_concurrency(capacity_handle(&ids, 1));
+            let attempt = attempt(BTreeSet::new()).with_request_tuning(
+                gateway_core::routing::RequestTuning {
+                    account_busy_wait_sticky_timeout_seconds: 5,
+                    account_busy_wait_fallback_timeout_seconds: 5,
+                    ..capacity_tuning()
+                },
+            );
+            let selected = capacity_select(&selector, &attempt, Some(&key));
+            tokio::pin!(selected);
+            let first_queued = usize::from(entry == "ready-sticky");
+            let mut deadline = None;
+            for (index, id) in ids.iter().enumerate().skip(first_queued) {
+                let queued = index + 1 - first_queued;
+                tokio::select! {
+                    result = &mut selected => {
+                        panic!("{entry}/{ending}: must reach queue {queued}: {result:?}");
+                    }
+                    () = async {
+                        tokio::time::timeout(Duration::from_secs(2), async {
+                            while leases.capacity.waits.lock().unwrap().len() < queued
+                                || leases.capacity.waiting.load(Ordering::SeqCst) == 0
+                            {
+                                tokio::task::yield_now().await;
+                            }
+                        })
+                        .await
+                        .expect("next candidate reaches its own queue");
+                    } => {}
+                }
+                assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 1);
+                {
+                    let waits = leases.capacity.waits.lock().unwrap();
+                    assert_eq!(waits.len(), queued, "{entry}/{ending}");
+                    let wait = &waits[queued - 1];
+                    assert_eq!(wait.account_id().as_str(), *id, "{entry}/{ending}");
+                    assert_eq!(
+                        wait.mode(),
+                        if index == 0 && bound {
+                            AccountWaitMode::Sticky
+                        } else {
+                            AccountWaitMode::Fallback
+                        },
+                    );
+                    assert_eq!(*deadline.get_or_insert(wait.deadline()), wait.deadline());
+                    assert!(wait.deadline() < attempt.deadline());
+                }
+                {
+                    let signals = leases.capacity.signals.lock().unwrap();
+                    for skipped in &original_accounts[..index] {
+                        assert_eq!(
+                            signals[skipped.id()].in_flight,
+                            0,
+                            "{entry}/{ending}: corrupt promotion must release execution",
+                        );
+                    }
+                }
+                assert!(affinity.renewal_ttls().is_empty());
+                assert_eq!(affinity.binding_count(), usize::from(bound));
+                if index < 3 {
+                    // Only the queued target is freed, so each bad credential uses try_promote.
+                    leases.capacity.race_busy.store(false, Ordering::SeqCst);
+                    leases.capacity.set_load(id, 0);
+                }
+            }
+            assert_eq!(
+                leases.capacity.safe_acquires.load(Ordering::SeqCst),
+                match entry {
+                    "raced-sticky" => 2,
+                    "ready-sticky" => 1,
+                    _ => 0,
+                },
+                "queued corrupt candidates must not use the ready acquisition path",
+            );
+            assert!(leases.capacity.promotions.load(Ordering::SeqCst) >= 3 - first_queued);
+            assert_eq!(leases.capacity.state_reads.load(Ordering::SeqCst), 1);
+
+            if ending == "cancel-wait" {
+                attempt.cancellation().cancel();
+            } else {
+                if ending == "cancel-promoted" {
+                    let store = Arc::clone(&store);
+                    *leases.capacity.after_acquire.lock().unwrap() = Some(Box::new(move || {
+                        store.pause_account_read.store(true, Ordering::SeqCst);
+                    }));
+                }
+                leases.capacity.set_load(ids[3], 0);
+                if ending == "cancel-promoted" {
+                    tokio::select! {
+                        result = &mut selected => panic!("must pause after promotion: {result:?}"),
+                        () = async {
+                            tokio::time::timeout(Duration::from_secs(2), async {
+                                while leases.capacity.waiting.load(Ordering::SeqCst) != 0 {
+                                    tokio::task::yield_now().await;
+                                }
+                            })
+                            .await
+                            .expect("healthy candidate promotes before cancellation");
+                        } => {}
+                    }
+                    assert!(store.pause_account_read.load(Ordering::SeqCst));
+                    assert_eq!(
+                        leases.capacity.signals.lock().unwrap()[original_accounts[3].id()]
+                            .in_flight,
+                        1,
+                    );
+                    attempt.cancellation().cancel();
+                }
+            }
+            let result = tokio::time::timeout(Duration::from_secs(2), selected)
+                .await
+                .expect("selection terminates");
+            if ending == "success" {
+                let lease = result.expect("three corrupt promotions must not consume rescans");
+                assert_eq!(lease.account_id().as_str(), ids[3]);
+                assert_eq!(lease.capacity_snapshot().unwrap().used_slots(), 1);
+                if bound {
+                    assert_eq!(lease.escape_reason(), Some("hard_unavailable"));
+                    assert!(lease.account_switch());
+                    assert!(!lease.affinity_hit());
+                }
+                drop(lease);
+            } else {
+                assert!(matches!(result, Err(CredentialSelectionError::Cancelled)));
+            }
+            store.pause_account_read.store(false, Ordering::SeqCst);
+            assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                affinity.load(&provider, &key).await.unwrap(),
+                if bound {
+                    Some(original_accounts[0].id().clone())
+                } else if ending == "success" {
+                    Some(original_accounts[3].id().clone())
+                } else {
+                    None
+                },
+            );
+            assert!(affinity.renewal_ttls().is_empty());
+            for (index, account) in original_accounts.iter().enumerate() {
+                assert_eq!(store.account(ids[index]).as_ref(), Some(account));
+                assert_eq!(
+                    leases.capacity.signals.lock().unwrap()[account.id()].in_flight,
+                    u32::from(index == 3 && ending == "cancel-wait"),
+                    "cleanup must release only this request's execution ownership",
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn corrupt_candidate_skip_never_admits_disabled_or_out_of_scope_accounts() {
+    for waiting in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "at-original");
+        create_account(&store, "acct_other", "at-other");
+        create_account(&store, "acct_outside_frozen_scope", "at-outside");
+        corrupt_credential(&store, "acct_original").await;
+        let disabled = ProviderAccountId::new("acct_other").unwrap();
+        store.set_enabled(&disabled, false).await.unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        let selector =
+            selector(&store, Arc::clone(&leases)).with_account_concurrency(capacity_handle(
+                &["acct_original", "acct_other", "acct_outside_frozen_scope"],
+                2,
+            ));
+        let mut attempt = attempt(BTreeSet::new());
+        if waiting {
+            attempt = attempt.with_request_tuning(capacity_tuning());
+        }
+        assert!(matches!(
+            capacity_select(&selector, &attempt, None).await,
+            Err(CredentialSelectionError::NoEligibleCredential)
+        ));
+        let requests = leases.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].account_id().as_str(), "acct_original");
+        assert!(!store.account("acct_other").unwrap().enabled());
+    }
+}
+
+#[tokio::test]
+async fn disabled_corrupt_diagnostic_does_not_fall_back_or_enable_the_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    create_account(&store, "acct_other", "at-other");
+    corrupt_credential(&store, "acct_primary").await;
+    let id = ProviderAccountId::new("acct_primary").unwrap();
+    store.set_enabled(&id, false).await.unwrap();
+    let original = store.account("acct_primary").unwrap();
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector(&store, Arc::clone(&leases));
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_corrupt_diagnostic").unwrap(),
+            ClientApiKeyId::new("key_codex_contract").unwrap(),
+        ),
+        NonZeroU32::MIN,
+        SystemTime::now() + Duration::from_secs(30),
+        account_policy(),
+        AccountAttemptContext::diagnostic(BTreeSet::new(), id, None),
+        None,
+        CancellationToken::new(),
+    );
+    assert!(matches!(
+        capacity_select(&selector, &attempt, None).await,
+        Err(CredentialSelectionError::InvalidCredential)
+    ));
+    assert_eq!(store.account("acct_primary"), Some(original));
+    let requests = leases.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].account_id().as_str(), "acct_primary");
+}
+
 #[tokio::test]
 async fn capacity_wait_sticky_holds_original_before_an_idle_alternative_and_does_not_advance_rr() {
     use std::sync::atomic::Ordering;

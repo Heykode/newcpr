@@ -32,6 +32,12 @@ const DOWNSTREAM_TRANSPORT_HEADERS: &[(&str, &str)] = &[
     ("sec-ch-ua-platform", "synthetic-platform"),
     ("Sec-Fetch-Site", "cross-site"),
     ("sec-fetch-future-field", "synthetic-context"),
+    ("X-Grok-Model-Override", "synthetic-model"),
+    ("x-grok-session-id", "synthetic-session"),
+    ("X-XAI-Token-Auth", "synthetic-token-auth"),
+    ("x-xai-future-field", "synthetic-extension"),
+    ("X-AuthenticateResponse", "synthetic-authentication"),
+    ("x-authenticateresponse", "duplicate-value"),
 ];
 
 const ORGANIZATION_EXTENSION_HEADERS: &[&str] = &[
@@ -73,6 +79,8 @@ fn request_with_opaque_headers(use_websocket: bool) -> CodexResponsesRequest {
                 ["x-still-valid", STANDARD.encode(b"after-invalid")],
                 ["traceparent", STANDARD.encode(b"synthetic-trace")],
                 ["tracestate", STANDARD.encode(b"synthetic-state")],
+                ["idempotency-key", STANDARD.encode(b"synthetic-idempotency")],
+                ["x-authenticateresponse-business", STANDARD.encode(b"keep")],
                 ["session_id", STANDARD.encode(b"untrusted-raw-alias")],
                 [
                     "session-id",
@@ -512,6 +520,8 @@ async fn backend_http_should_preserve_business_headers_without_downstream_transp
         ("chatgpt-account-id", b"lease-account".as_slice()),
         ("traceparent", b"synthetic-trace".as_slice()),
         ("tracestate", b"synthetic-state".as_slice()),
+        ("idempotency-key", b"synthetic-idempotency".as_slice()),
+        ("x-authenticateresponse-business", b"keep".as_slice()),
     ] {
         assert_eq!(raw_header_values(&raw, name), vec![value.to_vec()]);
     }
@@ -691,6 +701,14 @@ async fn backend_websocket_should_preserve_business_headers_without_downstream_t
     assert_eq!(values("x-codex-turn-state"), vec![b"turn-ascii".to_vec()]);
     assert_eq!(values("traceparent"), vec![b"synthetic-trace".to_vec()]);
     assert_eq!(values("tracestate"), vec![b"synthetic-state".to_vec()]);
+    assert_eq!(
+        values("idempotency-key"),
+        vec![b"synthetic-idempotency".to_vec()]
+    );
+    assert_eq!(
+        values("x-authenticateresponse-business"),
+        vec![b"keep".to_vec()]
+    );
     let sessions = values("session-id");
     assert_eq!(
         sessions.len(),

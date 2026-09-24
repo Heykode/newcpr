@@ -343,6 +343,12 @@ export interface AccountModelsResponse {
   models: Array<{ id: string, label: string }>
 }
 
+export interface AccountModelCatalogResponse {
+  modelCount: number
+  observedAt: string
+  catalog: { models: Array<Record<string, unknown>> }
+}
+
 export interface AccountImportResponse {
   importedCount: number
   accountIds: string[]
@@ -618,6 +624,15 @@ export function refreshAccountModels(data: AccountIdParam, options: RequestOptio
     url: '/api/admin/accounts/models/refresh',
     method: 'POST',
     data,
+    ...options,
+  })
+}
+
+export function getAccountModelCatalog(data: AccountIdParam, options: RequestOptions = {}) {
+  return request<AccountModelCatalogResponse>({
+    url: '/api/admin/accounts/models/catalog',
+    method: 'GET',
+    params: data,
     ...options,
   })
 }

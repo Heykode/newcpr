@@ -93,8 +93,8 @@ export function useAccountEditor(options: {
         payload.turnStateInjectionEnabled = turnStateInjectionEnabled.value
       await updateAccount(payload)
       showEditModal.value = false
-      await Promise.all([options.reloadAccounts(), options.reloadGroups()])
       toast.success('账号已更新')
+      void Promise.all([options.reloadAccounts(), options.reloadGroups()]).catch(() => undefined)
     })
   }
 

@@ -99,6 +99,23 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
 Redis `in_flight` 已含本请求时不得再加一。PG 与 Redis 之间不是跨库强事务，
 发送前仍依赖既有凭据、出口 revision 和传输所有权检查收敛竞态。
 
+### 本地损坏凭据候选
+
+`load_runtime_credential` 返回 `InvalidCredentialData` 时，仅未固定账号的选择
+可释放当前执行 guard、将 ID 加入本次选择排除集后继续。必须在亲和 claim/renew
+之前检查；不写账号健康、不重新读取全部凭据、不增加上游调用。
+普通 Ready、sticky Ready 重取及等待晋升三条路径都遵循同一边界。
+等待路径以 `WaitOutcome::Skipped` 区别本地坏候选与真实 facts/revision 冲突：
+前者消耗一个候选，不消耗原有三轮重扫预算，也不重置共享等待截止。
+`reload_wait_exclusions` 合并此局部排除集；下一次请求仍重新核验。
+
+required、Native、ReplayOwner、管理员指定诊断及 Store/revision 故障保留原错误，
+不能借坏凭据跳过来放宽 owner、账号权限或改用其他账号。
+所有候选损坏返回原有无可用账号错误，不自动停用或持久化冻结。
+回归必须覆盖多于重扫预算的坏候选、sticky/fallback/Ready 竞态、
+晋升前后取消、租约精确释放、亲和未写入及账号健康不变。
+错误做法是把每次坏凭据晋升当作 `Retry`；正确做法是释放并跳到下个合法候选。
+
 ## 6. 请求共享 Deadline
 
 ### 下游 Key 前置排队

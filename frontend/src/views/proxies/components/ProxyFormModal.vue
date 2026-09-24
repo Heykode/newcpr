@@ -11,6 +11,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
+import { proxyLocationMessage } from '../utils/location'
 
 const props = defineProps<{
   proxy: OutboundProxyRecord | null
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ required: true })
 const name = defineModel<string>('name', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const autoLocation = defineModel<boolean>('autoLocation', { required: true })
 const locationEnabled = defineModel<boolean>('locationEnabled', { required: true })
 const location = defineModel<RequestLocation>('location', { required: true })
 const showSecret = shallowRef(false)
@@ -64,8 +66,12 @@ watch(open, () => {
       <p v-if="proxy?.accountCount && proxyUrl.trim()" class="m-0 text-cp-sm text-cp-warning-text">
         将更新 {{ proxy.accountCount }} 个关联账号的出口。
       </p>
-      <BaseSwitch v-model="locationEnabled" label="代理独立地区（地区总开关开启时生效）" show-label :disabled="busy" />
-      <RequestLocationFields v-if="locationEnabled" v-model="location" :disabled="busy" />
+      <BaseSwitch v-model="autoLocation" label="自动出口地区（地区总开关开启时生效）" show-label :disabled="busy" />
+      <p v-if="autoLocation && proxy?.autoLocation" class="m-0 break-words text-cp-sm text-cp-text-secondary">
+        {{ proxyLocationMessage(proxy) }}
+      </p>
+      <BaseSwitch v-model="locationEnabled" label="手动独立地区（地区总开关开启时生效）" show-label :disabled="busy || autoLocation" />
+      <RequestLocationFields v-if="locationEnabled" v-model="location" :disabled="busy || autoLocation" />
     </BaseForm>
     <template #footer>
       <BaseButton variant="secondary" :disabled="busy" @click="open = false">

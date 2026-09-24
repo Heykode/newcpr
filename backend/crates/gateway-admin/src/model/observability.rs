@@ -158,6 +158,7 @@ pub struct OpsErrorQuery {
 pub enum DiagnosticDimension {
     Provider,
     Model,
+    KeyModel,
     Account,
     ApiKey,
     Transport,
@@ -765,6 +766,21 @@ pub struct DiagnosticObservation {
     pub costs: Vec<CurrencyCost>,
 }
 
+/// Only Key/model diagnostics use bounded pages; other dimensions retain their top-100 limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticPageQuery {
+    pub current_page: u32,
+    pub page_size: PageSize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticObservationPage {
+    pub items: Vec<DiagnosticObservation>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub has_more: bool,
+}
+
 /// 统一运维错误记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpsError {
@@ -1144,6 +1160,7 @@ pub struct DiagnosticsItem {
     pub retry_rate: f64,
     pub impact_score: f64,
     pub estimated_cost: Option<DecimalAmount>,
+    pub cost_incomplete: bool,
     pub attempt_count: u64,
     pub total_tokens: u64,
 }
@@ -1153,4 +1170,7 @@ pub struct DiagnosticsItem {
 pub struct DiagnosticsResult {
     pub dimension: DiagnosticDimension,
     pub items: Vec<DiagnosticsItem>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub has_more: bool,
 }

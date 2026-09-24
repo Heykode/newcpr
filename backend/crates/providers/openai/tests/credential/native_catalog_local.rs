@@ -209,6 +209,99 @@ async fn native_catalog_freezes_effective_custom_profile_and_invalidates_default
 }
 
 #[tokio::test]
+async fn account_catalog_export_freezes_current_profile_and_keeps_custom_selection() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account = seed_account(&store, "acct_export_profile").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(OFFICIAL_FIXTURE, "application/json")
+                .set_delay(Duration::from_millis(25)),
+        )
+        .expect(4)
+        .mount(&server)
+        .await;
+    let profile = wire_profile();
+    let initial = profile.snapshot();
+    let service = service_with_profile(&store, server.uri(), profile.clone());
+    let first = tokio::spawn({
+        let service = service.clone();
+        let account = account.clone();
+        async move { service.account_catalog_documents(&account).await }
+    });
+    timeout(Duration::from_secs(5), async {
+        while server
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("first export reached loopback");
+    let custom = CodexWireProfile::parse_user_agent(
+        "Codex Desktop/0.155.1 (Mac OS 15.1; arm64) catalog-contract (Codex Desktop; 26.901.11111)",
+    )
+    .expect("custom profile");
+    profile
+        .apply_override(CodexWireProfileOverride::Custom(Box::new(custom.clone())))
+        .expect("custom override");
+    service
+        .account_catalog_documents(&account)
+        .await
+        .expect("custom export");
+    first.await.expect("join").expect("frozen default export");
+    profile.update_bundled_release(&CodexBundledReleaseProfile {
+        codex_version: "0.156.0".to_owned(),
+        desktop_version: "26.902.11111".to_owned(),
+        desktop_build: "902".to_owned(),
+        verified_at: Utc::now(),
+    });
+    service
+        .account_catalog_documents(&account)
+        .await
+        .expect("custom preserved");
+    profile
+        .apply_override(CodexWireProfileOverride::Default)
+        .expect("default");
+    service
+        .account_catalog_documents(&account)
+        .await
+        .expect("new default");
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 4);
+    for (request, expected) in
+        requests
+            .iter()
+            .zip([initial, custom.clone(), custom, profile.snapshot()])
+    {
+        assert_eq!(request.headers["user-agent"], expected.user_agent());
+        assert_eq!(request.headers["version"], expected.codex_version);
+        assert_eq!(request.headers["originator"], expected.originator);
+        assert!(
+            request
+                .url
+                .query_pairs()
+                .any(|(key, value)| { key == "client_version" && value == expected.codex_version })
+        );
+        assert_eq!(
+            request.headers["authorization"],
+            "Bearer access-acct_export_profile"
+        );
+        assert_eq!(
+            request.headers["chatgpt-account-id"],
+            "chatgpt-acct_export_profile"
+        );
+        assert!(!request.headers.contains_key("x-codex-installation-id"));
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn native_catalog_rechecks_plan_user_account_and_live_eligibility() {
     let store = Arc::new(MemoryAccountStore::default());
     let original = seed_account(&store, "acct_catalog_facts").await;
@@ -316,12 +409,16 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
         listener.local_addr().expect("proxy address")
     ))
     .expect("proxy");
-    replace_account_facts(&store, account.with_outbound_proxy(Some(proxy))).await;
+    let account = account.with_outbound_proxy(Some(proxy));
+    replace_account_facts(&store, account.clone()).await;
     let proxy_task = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.expect("proxy connection");
-        let request = read_headers(&mut stream).await;
-        write_catalog(&mut stream).await;
-        request
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.expect("proxy connection");
+            requests.push(read_headers(&mut stream).await);
+            write_catalog(&mut stream).await;
+        }
+        requests
     });
     timeout(
         Duration::from_secs(5),
@@ -330,20 +427,26 @@ async fn native_catalog_uses_account_proxy_and_does_not_reuse_direct_catalog() {
     .await
     .expect("proxy deadline")
     .expect("proxied catalog");
-    let request = timeout(Duration::from_secs(5), proxy_task)
+    service
+        .account_catalog_documents(&account)
+        .await
+        .expect("proxied admin export");
+    let requests = timeout(Duration::from_secs(5), proxy_task)
         .await
         .expect("proxy captured")
         .expect("join");
-    assert!(request.starts_with(&format!(
-        "GET {}/codex/models?client_version=0.154.0 HTTP/1.1\r\n",
-        server.uri()
-    )));
-    let request = request.to_ascii_lowercase();
-    assert!(
-        request.contains("proxy-authorization: basic y2f0ywxvzy11c2vyomnhdgfsb2ctcgfzcw==\r\n")
-    );
-    assert!(request.contains("authorization: bearer access-acct_catalog_proxy\r\n"));
-    assert!(request.contains("chatgpt-account-id: chatgpt-acct_catalog_proxy\r\n"));
+    for (request, version) in requests.iter().zip(["0.154.0", "0.144.0"]) {
+        assert!(request.starts_with(&format!(
+            "GET {}/codex/models?client_version={version} HTTP/1.1\r\n",
+            server.uri()
+        )));
+        let request = request.to_ascii_lowercase();
+        assert!(
+            request.contains("proxy-authorization: basic y2f0ywxvzy11c2vyomnhdgfsb2ctcgfzcw==\r\n")
+        );
+        assert!(request.contains("authorization: bearer access-acct_catalog_proxy\r\n"));
+        assert!(request.contains("chatgpt-account-id: chatgpt-acct_catalog_proxy\r\n"));
+    }
     server.verify().await;
 }
 
@@ -361,11 +464,14 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
     let service = service_with_catalog_cache(&store, url, catalog_cache())
         .with_egress_runtime(runtime.clone());
     let server = tokio::spawn(async move {
-        let (mut stream, peer) = listener.accept().await.expect("IPv6 connection");
-        assert_eq!(peer.ip(), std::net::IpAddr::V6(Ipv6Addr::LOCALHOST));
-        let request = read_headers(&mut stream).await;
-        write_catalog(&mut stream).await;
-        request
+        let mut requests = Vec::new();
+        for _ in 0..2 {
+            let (mut stream, peer) = listener.accept().await.expect("IPv6 connection");
+            assert_eq!(peer.ip(), std::net::IpAddr::V6(Ipv6Addr::LOCALHOST));
+            requests.push(read_headers(&mut stream).await);
+            write_catalog(&mut stream).await;
+        }
+        requests.join("\n")
     });
     timeout(
         Duration::from_secs(5),
@@ -374,6 +480,10 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
     .await
     .expect("catalog deadline")
     .expect("IPv6 catalog");
+    service
+        .account_catalog_documents(&account)
+        .await
+        .expect("IPv6 admin export");
     let headers = server.await.expect("server").to_ascii_lowercase();
     assert!(headers.contains("authorization: bearer access-acct_catalog_ipv6\r\n"));
     assert!(headers.contains("chatgpt-account-id: chatgpt-acct_catalog_ipv6\r\n"));
@@ -397,6 +507,14 @@ async fn native_catalog_uses_ipv6_source_and_fences_cached_data_after_route_relo
         ),
         "route revision must invalidate a previously successful catalog"
     );
+    assert!(matches!(
+        service.account_catalog_documents(&account).await,
+        Err(CodexCredentialCatalogError::Upstream {
+            egress: Some(CodexEgressError::SourceDisabled),
+            status: None,
+            ..
+        })
+    ));
 }
 
 #[tokio::test]
@@ -424,6 +542,19 @@ async fn native_catalog_explicit_ipv6_never_falls_back_to_ipv4() {
         )
         .await
         .expect("deadline"),
+        Err(CodexCredentialCatalogError::Upstream {
+            egress: Some(_),
+            status: None,
+            ..
+        })
+    ));
+    assert!(matches!(
+        timeout(
+            Duration::from_secs(5),
+            service.account_catalog_documents(&account)
+        )
+        .await
+        .expect("export deadline"),
         Err(CodexCredentialCatalogError::Upstream {
             egress: Some(_),
             status: None,

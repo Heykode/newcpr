@@ -763,6 +763,7 @@ pub struct DiagnosticItemView {
     pub retry_rate: f64,
     pub impact_score: f64,
     pub estimated_cost: Option<String>,
+    pub cost_incomplete: bool,
     pub attempt_count: u64,
     pub total_tokens: u64,
 }
@@ -773,6 +774,9 @@ pub struct DiagnosticItemView {
 pub struct DiagnosticsView {
     pub dimension: String,
     pub items: Vec<DiagnosticItemView>,
+    pub current_page: u32,
+    pub page_size: u16,
+    pub has_more: bool,
 }
 
 /// 运维错误项目。

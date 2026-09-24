@@ -75,6 +75,7 @@ function mountTest(storage, options = {}) {
     stop: () => scope.stop(),
     reloads: () => reloads,
     send: event => send(event),
+    currentSender: () => send,
     end: () => end(),
     // Model the serializer path used by VueUse for a cross-tab storage event.
     receiveStorage: (raw) => { storageRef.value = serializer.read(raw) },
@@ -130,6 +131,38 @@ test('connection test persists preferences across accounts and reloads and sends
   }
   finally {
     reopened.stop()
+  }
+})
+
+test('returned models remain diagnostic-only, absent in legacy results and fenced across accounts', async () => {
+  const query = mountTest(new Map(), { autoComplete: false })
+  try {
+    query.state.openConnectionTest({ id: 'account-a' })
+    await new Promise(resolve => setImmediate(resolve))
+    const first = query.state.handleTestConnection()
+    const oldSender = query.currentSender()
+    query.send({ type: 'test_complete', success: true, upstreamResponseModel: 'declared-model-a' })
+    await first
+    assert.equal(query.state.connectionTestModel.value, 'test-model')
+    assert.equal(query.state.connectionTestUpstreamResponseModel.value, 'declared-model-a')
+    assert.equal(query.requests.length, 1)
+
+    query.state.openConnectionTest({ id: 'account-b' })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(query.state.connectionTestUpstreamResponseModel.value, null)
+    const second = query.state.handleTestConnection()
+    oldSender({ type: 'test_complete', success: true, upstreamResponseModel: 'stale-model' })
+    assert.equal(query.state.connectionTestUpstreamResponseModel.value, null)
+    assert.equal(query.state.connectionTestStatus.value, 'running')
+    query.send({ type: 'test_complete', success: true })
+    await second
+    assert.equal(query.state.connectionTestUpstreamResponseModel.value, null)
+    assert.equal(query.requests.length, 2)
+    assert.equal(query.requests[1].accountId, 'account-b')
+    assert.equal(query.requests[1].interface, 'responses')
+  }
+  finally {
+    query.stop()
   }
 })
 

@@ -811,6 +811,54 @@ mod response {
     }
 
     #[tokio::test]
+    async fn native_catalog_route_returns_selected_document_with_private_no_store() {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        let mut account = account_fixture();
+        account.account.enabled = false;
+        *fixture.account.lock().unwrap() = Some(account);
+        let response = gateway_api::admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/accounts/models/catalog?accountId=acct_cost")
+                    .header("x-request-id", "req_selected_native_catalog")
+                    .header(header::COOKIE, "cpr_admin_session=valid-session")
+                    .body(Body::empty())
+                    .expect("catalog request"),
+            )
+            .await
+            .expect("catalog response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        let body = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("catalog body");
+        let value: Value = serde_json::from_slice(&body).expect("catalog JSON");
+        assert_eq!(
+            value["data"],
+            json!({
+                "modelCount": 1,
+                "observedAt": "2026-09-24T00:00:00+00:00",
+                "catalog": {"models": [{"slug": "native-selected", "unknown": {"null": null, "array": [true, 3]}}]}
+            })
+        );
+        assert!(
+            !fixture
+                .account
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .account
+                .enabled
+        );
+    }
+
+    #[tokio::test]
     async fn account_routes_should_serialize_persisted_relogin_count_and_last_success() {
         let fixture = AdminTestFixture::new().await;
         fixture.auth.insert_session("valid-session");
@@ -2047,7 +2095,9 @@ mod actions {
             DomainConnectionTestEvent::Content {
                 text: "OK".to_owned(),
             },
-            DomainConnectionTestEvent::Completed {},
+            DomainConnectionTestEvent::Completed {
+                upstream_response_model: None,
+            },
             DomainConnectionTestEvent::Failed {
                 source: AccountProbeErrorSource::Upstream,
                 gateway_error_code: GatewayErrorKind::RateLimited,
@@ -2083,7 +2133,7 @@ mod actions {
                     }
                 }),
                 json!({ "type": "content", "text": "OK" }),
-                json!({ "type": "test_complete", "success": true }),
+                json!({ "type": "test_complete", "success": true, "upstreamResponseModel": null }),
                 json!({
                     "type": "error",
                     "source": "upstream",

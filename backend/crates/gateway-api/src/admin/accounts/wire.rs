@@ -866,6 +866,38 @@ pub struct AccountModelsData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountModelCatalogData {
+    pub model_count: usize,
+    pub observed_at: String,
+    pub catalog: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnsupportedModelCatalogDocument;
+
+impl TryFrom<gateway_admin::model::provider_credentials::ProviderModelCatalogDocument>
+    for AccountModelCatalogData
+{
+    type Error = UnsupportedModelCatalogDocument;
+
+    fn try_from(
+        result: gateway_admin::model::provider_credentials::ProviderModelCatalogDocument,
+    ) -> Result<Self, Self::Error> {
+        if result.document.protocol() != "codex" {
+            return Err(UnsupportedModelCatalogDocument);
+        }
+        let catalog = serde_json::from_slice(result.document.body())
+            .map_err(|_| UnsupportedModelCatalogDocument)?;
+        Ok(Self {
+            model_count: result.model_count,
+            observed_at: result.observed_at.to_rfc3339(),
+            catalog,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountRefreshData {
     pub account: AccountView,
 }
@@ -1187,9 +1219,12 @@ impl From<DomainConnectionTestEvent> for AccountConnectionTestEvent {
             DomainConnectionTestEvent::Content { text } => {
                 serde_json::json!({ "type": "content", "text": text })
             }
-            DomainConnectionTestEvent::Completed => serde_json::json!({
+            DomainConnectionTestEvent::Completed {
+                upstream_response_model,
+            } => serde_json::json!({
                 "type": "test_complete",
-                "success": true
+                "success": true,
+                "upstreamResponseModel": upstream_response_model
             }),
             DomainConnectionTestEvent::Failed {
                 source,

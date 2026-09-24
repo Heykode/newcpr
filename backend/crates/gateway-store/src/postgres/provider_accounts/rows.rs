@@ -400,7 +400,7 @@ impl ProviderAccountStateUpdate {
 }
 
 pub(crate) const ACCOUNT_SELECT: &str = "select
-            (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
@@ -410,7 +410,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
      from provider_accounts where id = $1";
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
-            (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
@@ -422,7 +422,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
      order by id";
 
 pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
-            (select request_location_json from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,

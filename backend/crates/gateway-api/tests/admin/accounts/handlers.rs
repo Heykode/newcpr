@@ -123,6 +123,46 @@ async fn account_template_apply_requires_admin_version_and_only_selection_fields
 }
 
 #[tokio::test]
+async fn native_catalog_requires_admin_and_only_a_selected_account_query() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (query, authenticated, expected) in [
+        ("?accountId=acct_test", false, StatusCode::UNAUTHORIZED),
+        ("", true, StatusCode::BAD_REQUEST),
+        ("?accountId=bad", true, StatusCode::BAD_REQUEST),
+        (
+            "?accountId=acct_test&refresh=true",
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "?accountId=acct_test&modelId=probe",
+            true,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "?accountId=acct_test",
+            true,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .uri(format!("/api/admin/accounts/models/catalog{query}"))
+            .header("x-request-id", "req_native_catalog");
+        if authenticated {
+            request = request.header(header::COOKIE, "cpr_admin_session=valid-session");
+        }
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{query}");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+}
+
+#[tokio::test]
 async fn personal_info_requires_admin_and_a_valid_account_query() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");

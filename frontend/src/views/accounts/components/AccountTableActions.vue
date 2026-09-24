@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 import type { AccountReloginAction } from '@/api/modules/relogin'
-import { KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldOff, Trash2, Wifi } from '@lucide/vue'
+import { Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldOff, Trash2, Wifi } from '@lucide/vue'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
@@ -14,6 +14,7 @@ defineProps<{
   refreshing: boolean
   togglingTurnState: boolean
   testing: boolean
+  exportingModelCatalog?: boolean
   relogin?: AccountReloginAction
   reloginUnavailable?: boolean
 }>()
@@ -27,6 +28,7 @@ const emit = defineEmits<{
   reauthorize: [account: AccountRow]
   toggleTurnState: [account: AccountRow, enabled: boolean]
   relogin: [account: AccountRow]
+  exportModelCatalog: [account: AccountRow]
 }>()
 </script>
 
@@ -69,6 +71,17 @@ const emit = defineEmits<{
               <Wifi class="size-3.5 text-cp-text-quaternary" />
             </template>
             测试连接
+          </BaseMenuItem>
+          <BaseMenuItem
+            v-if="account.provider === 'openai'"
+            :loading="exportingModelCatalog"
+            :disabled="exportingModelCatalog"
+            @click.stop="(close(), emit('exportModelCatalog', account))"
+          >
+            <template #icon>
+              <Download class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            导出模型目录
           </BaseMenuItem>
           <BaseMenuItem
             :loading="refreshing"
