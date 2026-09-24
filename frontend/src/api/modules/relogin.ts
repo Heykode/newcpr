@@ -2,7 +2,8 @@ import type { RequestOptions } from '../request'
 import type { AccountTemplateSelection } from './account-templates'
 import request from '../request'
 
-export type ReloginStatus = 'pending' | 'queued' | 'running' | 'ready' | 'pushing' | 'uncertain' | 'failed'
+export type ReloginStatus = 'pending' | 'queued' | 'running' | 'awaiting_workspace' | 'ready' | 'pushing' | 'uncertain' | 'failed'
+export interface ReloginWorkspaceChoice { id: string, name: string, planType: string }
 export type ReloginWorkspaceMode = 'original' | 'highest'
 export interface ReloginPushSelection { accountId: string, switchWorkspace: boolean }
 export interface ReloginPushTarget extends ReloginPushSelection {
@@ -32,6 +33,7 @@ export interface ReloginEntry {
   workspaceId: string | null
   preferredWorkspaceId: string | null
   workspaceMode?: ReloginWorkspaceMode
+  workspaceChoices?: ReloginWorkspaceChoice[]
   pushTargets?: ReloginPushTarget[]
   credentialStatus: 'none' | 'verified' | 'expired'
   poolStatus: 'absent' | 'present' | 'pending_push' | 'synced'
@@ -96,6 +98,9 @@ export function setReloginAutomatic(ids: string[], enabled: boolean) {
 }
 export function setReloginWorkspace(id: string, workspaceId: string | null) {
   return request<void>({ url: '/api/admin/relogin/workspace', method: 'POST', data: { id, workspaceId } })
+}
+export function resumeReloginWorkspace(id: string, revision: number, workspaceId: string) {
+  return request<void>({ url: '/api/admin/relogin/workspace/resume', method: 'POST', data: { id, revision, workspaceId } })
 }
 export function configureRelogin(data: ReloginSettingsUpdate) {
   return request<void>({ url: '/api/admin/relogin/settings', method: 'POST', data })

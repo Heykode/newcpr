@@ -16,6 +16,37 @@ function load(path, dependencies = {}) {
 const { importPreview } = load('../src/views/relogin/import-preview.ts')
 const { processingStatus, recoveryCountdown, retryProgress, credentialLabel, poolPresentation, matchesPool, workspaceChoices, shortWorkspace } = load('../src/views/relogin/presentation.ts')
 
+test('awaiting workspace choices supersede retry labels and exclude pool/preferences', () => {
+  const row = {
+    status: 'awaiting_workspace',
+    message: '请选择工作区',
+    recovery: { state: 'cooldown' },
+    poolAccounts: [{ workspaceId: 'old-free', planType: 'free' }],
+    preferredWorkspaceId: 'unverified',
+    workspaceChoices: [
+      { id: 'team-a', name: 'Research', planType: 'business' },
+      { id: 'team-b', name: '', planType: 'business' },
+    ],
+  }
+  assert.equal(processingStatus(row).label, '待选择工作区')
+  const choices = workspaceChoices(row)
+  assert.deepEqual(Array.from(choices, item => item.value), ['team-a', 'team-b'])
+  assert.equal(choices[0].label, 'Research · BUSINESS')
+  assert.equal(choices[0].description, 'team-a')
+  assert.equal(choices[1].label, '未命名工作区 · BUSINESS')
+})
+
+test('workspace continuation sends one frozen choice and revision, never push permission', async () => {
+  const calls = []
+  const { resumeReloginWorkspace } = load('../src/api/modules/relogin.ts', {
+    '../request': async config => calls.push(config),
+  })
+  await resumeReloginWorkspace('entry-a', 7, 'team-b')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, '/api/admin/relogin/workspace/resume')
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].data)), { id: 'entry-a', revision: 7, workspaceId: 'team-b' })
+})
+
 test('terminal relogin failures show manual handling and retries never hide uncertain pushes', () => {
   const row = {
     status: 'failed',

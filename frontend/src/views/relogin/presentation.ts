@@ -4,6 +4,7 @@ export const statusLabels: Record<ReloginStatus, string> = {
   pending: '待处理',
   queued: '排队中',
   running: '重登中',
+  awaiting_workspace: '待选择工作区',
   ready: '待推送',
   pushing: '推送中',
   uncertain: '推送待核实',
@@ -25,6 +26,8 @@ export const recoveryLabels: Record<string, string> = {
 }
 
 export function processingStatus(row: ReloginEntry) {
+  if (row.status === 'awaiting_workspace')
+    return { key: row.status, label: statusLabels[row.status], tone: 'text-cp-warning', detail: row.message }
   const recovery = row.recovery
   if (!['running', 'pushing', 'uncertain', 'queued'].includes(row.status) && recovery && recoveryLabels[recovery.state]) {
     return {
@@ -139,6 +142,13 @@ export function poolPresentation(row: ReloginEntry) {
 }
 
 export function workspaceChoices(row: ReloginEntry) {
+  if (row.status === 'awaiting_workspace') {
+    return (row.workspaceChoices ?? []).map(choice => ({
+      value: choice.id,
+      label: `${choice.name || '未命名工作区'} · ${choice.planType.toUpperCase()}`,
+      description: choice.id,
+    }))
+  }
   const known = new Map<string, string | null>()
   for (const account of row.poolAccounts ?? []) {
     if (account.workspaceId)

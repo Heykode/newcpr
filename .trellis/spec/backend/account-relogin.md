@@ -119,7 +119,8 @@
   a locked workspace. Normalize the official plan wire aliases consistently across
   memberships, access/id token claims and usage verification: self-serve Business,
   enterprise CBP/ent26/hc, education and prolite retain their paid policy tier.
-  Conflicting plans for one ID, unknown plans and equal top-tier workspaces fail closed.
+  Conflicting plans for one ID and unknown plans fail closed. Equal top-tier workspaces
+  produce bounded choices for explicit manual selection; never guess a workspace.
 - During OAuth account selection, the authentication transaction `session_id` is not
   a selectable login session. Use `unified_sessions` or an explicit selected-session
   field; never use a transaction ID to resolve missing or ambiguous login choices.
@@ -127,6 +128,68 @@
   Keep `pip check`, isolated imports, a public TOTP test vector and browser-session
   initialization in the image build; none of these checks should make login requests.
   Do not suppress container vulnerability gates to retain unused build dependencies.
+
+## Manual Workspace Selection
+
+### 1. Scope / Trigger
+
+Only an unlocked manual acquisition with tied highest-plan memberships can enter
+`AwaitingWorkspace`. Original/automatic/account-menu recovery stays workspace-locked.
+
+### 2. Signatures
+
+- Python `WorkspaceSelectionRequired` emits
+  `{ok:false, code:"workspace_ambiguous", workspaces:[{id,name,planType}]}`.
+- `validate_workspace_choices(&[ReloginWorkspaceChoice])` owns typed validation.
+- `ReloginService::resume_workspace(id, revision, workspace_id)` is exposed by
+  authenticated `POST /api/admin/relogin/workspace/resume`.
+
+### 3. Contracts
+
+Choices contain 2..64 distinct nonempty IDs (<=128 bytes, no whitespace/controls),
+names <=128 characters without controls and the same recognized normalized plan.
+Provider rejects malformed choices and ambiguity for an already locked request.
+No raw membership, login session or credential enters this DTO or error metadata.
+The JSONB entry defaults `workspace_choices` to empty and `selected_workspace_id`
+to None; waiting survives restart without holding an exchange or retrying.
+Resume queues a fresh manual login under the gate using the observed revision and
+one captured candidate. Keep mode and frozen replacement targets; revalidate their
+identity/revision/email, then recheck membership and acquired identity upstream.
+Never set automatic_job or manual_push_context. Successful acquisition stays Ready
+for separate explicit push. New acquisitions/material edits clear old choices.
+Old binaries cannot deserialize the new status: drain/clear waiting rows before
+downgrade. No database schema change or automatic deployment is implied.
+
+### 4. Validation & Error Matrix
+
+- Missing/unknown DTO fields: HTTP extraction rejects before service access.
+- Unknown candidate: invalid request; stale revision/status or paused/active queue:
+  conflict, no mutation.
+- Changed/deleted frozen target or original recovery intent: conflict, no requeue.
+- Cancelled or revised in-flight task: discard candidates, no late waiting state.
+- Selected workspace missing or returned credential mismatch: fail, no Free fallback.
+- Pushing/Uncertain: cannot resume or infer successful settlement.
+
+### 5. Good/Base/Bad Cases
+
+- Base: one Business plus Free still acquires Business with no prompt.
+- Good: tied Business choices wait; confirmed choice acquires, manual push follows.
+- Bad: choose the first candidate, allow typed arbitrary IDs or retry while waiting.
+
+### 6. Tests Required
+
+Python ranking/dedup/sanitization and safe subprocess output; Admin no-retry,
+slot release, original lock, cancellation, stale/unknown selection, target retention,
+no automatic push and wrong-workspace rejection; API auth/required typed fields;
+isolated PostgreSQL waiting/selected JSONB roundtrip and CAS. UI regression:
+`frontend/tests/browser/relogin-workspace-selection.mjs` with mock APIs only.
+
+### 7. Wrong vs Correct
+
+Wrong: save a preferred workspace then issue a normal highest-mode queue request;
+this ignores the choice and may replace the frozen targets with a later snapshot.
+Correct: one revision-fenced resume atomically selects the captured candidate and
+preserves acquisition mode and targets; push is a separate confirmation.
 
 ## Account Menu and Import Templates
 

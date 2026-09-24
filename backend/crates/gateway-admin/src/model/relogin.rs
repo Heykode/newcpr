@@ -31,10 +31,44 @@ pub enum ReloginStatus {
     Pending,
     Queued,
     Running,
+    AwaitingWorkspace,
     Ready,
     Pushing,
     Uncertain,
     Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReloginWorkspaceChoice {
+    pub id: String,
+    pub name: String,
+    pub plan_type: String,
+}
+
+pub fn validate_workspace_choices(choices: &[ReloginWorkspaceChoice]) -> Result<(), AdminError> {
+    let mut ids = std::collections::BTreeSet::new();
+    if !(2..=64).contains(&choices.len())
+        || choices.iter().any(|choice| {
+            choice.id.is_empty()
+                || choice.id.len() > 128
+                || choice
+                    .id
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control())
+                || !ids.insert(&choice.id)
+                || choice.name.chars().count() > 128
+                || choice.name.chars().any(char::is_control)
+                || !matches!(
+                    choice.plan_type.as_str(),
+                    "enterprise" | "edu" | "business" | "pro" | "plus" | "go" | "free"
+                )
+                || choice.plan_type != choices[0].plan_type
+        })
+    {
+        return Err(AdminError::invalid("工作区候选列表不合法，请重新获取"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,6 +172,11 @@ pub struct ReloginEntry {
     /// Frozen before manual acquisition, never adopted from a later pool snapshot.
     #[serde(default)]
     pub workspace_targets: Vec<ReloginTarget>,
+    #[serde(default)]
+    pub workspace_choices: Vec<ReloginWorkspaceChoice>,
+    /// An explicit choice for this acquisition; does not change frozen push targets.
+    #[serde(default)]
+    pub selected_workspace_id: Option<String>,
     /// Explicit account-menu confirmation; absent on legacy and library-only jobs.
     #[serde(default)]
     pub manual_push_context: Option<super::MutationContext>,

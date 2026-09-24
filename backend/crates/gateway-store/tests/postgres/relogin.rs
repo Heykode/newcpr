@@ -33,6 +33,8 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
         automatic_job: false,
         workspace_mode: Default::default(),
         workspace_targets: Vec::new(),
+        workspace_choices: Vec::new(),
+        selected_workspace_id: None,
         manual_push_context: None,
         automatic_attempts: 0,
         stop_reason: None,
@@ -42,6 +44,51 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
         synced_at: None,
         updated_at: chrono::Utc::now(),
     }
+}
+
+#[tokio::test]
+async fn relogin_workspace_wait_and_selected_queue_survive_store_restart() {
+    use gateway_admin::model::relogin::{ReloginWorkspaceChoice, ReloginWorkspaceMode};
+    let Some(database) = TestDatabase::create("relogin_workspace_wait").await else {
+        return;
+    };
+    let store = PgReloginStore::new(database.pool.clone());
+    let mut waiting = entry("workspace-choice", "choice@example.invalid");
+    waiting.status = ReloginStatus::AwaitingWorkspace;
+    waiting.workspace_mode = ReloginWorkspaceMode::Highest;
+    waiting.workspace_choices = ["workspace-one", "workspace-two"]
+        .map(|id| ReloginWorkspaceChoice {
+            id: id.into(),
+            name: format!("Team {id}"),
+            plan_type: "business".into(),
+        })
+        .into();
+    store.save(&waiting, None).await.unwrap();
+    let reopened = PgReloginStore::new(database.pool.clone());
+    let mut loaded = reopened.entries().await.unwrap().remove(0);
+    assert_eq!(loaded.status, ReloginStatus::AwaitingWorkspace);
+    assert_eq!(loaded.workspace_choices, waiting.workspace_choices);
+    assert!(loaded.selected_workspace_id.is_none());
+    loaded.selected_workspace_id = Some("workspace-two".into());
+    loaded.workspace_choices.clear();
+    loaded.status = ReloginStatus::Queued;
+    loaded.revision += 1;
+    reopened
+        .save(&loaded, Some(waiting.revision))
+        .await
+        .unwrap();
+    assert!(store.save(&waiting, Some(waiting.revision)).await.is_err());
+    let queued = store.entries().await.unwrap().remove(0);
+    assert_eq!(queued.status, ReloginStatus::Queued);
+    assert_eq!(queued.workspace_mode, ReloginWorkspaceMode::Highest);
+    assert_eq!(
+        queued.selected_workspace_id.as_deref(),
+        Some("workspace-two")
+    );
+    assert!(queued.workspace_choices.is_empty());
+    assert!(!queued.automatic_job);
+    assert!(queued.manual_push_context.is_none());
+    database.close().await;
 }
 
 #[tokio::test]

@@ -77,6 +77,9 @@ fn eligibility(
     if entry.validate_totp().is_err() {
         return RecoveryView::new("invalid_material", "缺少有效的密码或 2FA 资料");
     }
+    if entry.status == ReloginStatus::AwaitingWorkspace {
+        return RecoveryView::new("awaiting_workspace", "请选择工作区后继续获取凭据");
+    }
     if settings.paused {
         return RecoveryView::new("paused", "重登队列已暂停");
     }
