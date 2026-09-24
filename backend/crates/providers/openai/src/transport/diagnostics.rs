@@ -126,6 +126,7 @@ pub struct CodexUpstreamFailure {
     pub(crate) request_id: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
     pub(crate) rate_limit_headers: Vec<(String, String)>,
+    pub(crate) rate_limit_observed_at: std::time::SystemTime,
     pub(crate) send_phase: CodexUpstreamSendPhase,
     category: CodexFailureCategory,
 }
@@ -171,6 +172,9 @@ impl CodexUpstreamFailure {
             request_id: diagnostics.request_id.clone(),
             set_cookie_headers: set_cookie_headers.to_vec(),
             rate_limit_headers: rate_limit_headers.to_vec(),
+            rate_limit_observed_at: diagnostics
+                .observed_at
+                .unwrap_or_else(std::time::SystemTime::now),
             send_phase,
             category,
         }
@@ -180,7 +184,6 @@ impl CodexUpstreamFailure {
         failure: &ResponsesSseFailure,
         diagnostics: &CodexUpstreamDiagnostics,
         set_cookie_headers: &[String],
-        rate_limit_headers: &[(String, String)],
         send_phase: CodexUpstreamSendPhase,
     ) -> Self {
         let fields = ParsedUpstreamError {
@@ -188,7 +191,7 @@ impl CodexUpstreamFailure {
             error_type: failure.upstream_type.clone(),
             message: failure.message.clone(),
             client_message: Some(failure.message.clone()),
-            resets_at: None,
+            resets_at: ParsedUpstreamError::from_http_response(failure.raw_body()).resets_at,
         };
         let status = failure
             .explicit_status_code
@@ -210,14 +213,19 @@ impl CodexUpstreamFailure {
             raw_body: failure.raw_body().to_owned(),
             client_response: None,
             identity_error_code: diagnostics.identity_error_code.clone(),
-            usage_limit_resets_at: None,
+            usage_limit_resets_at: (category == CodexFailureCategory::UsageLimitExhausted)
+                .then_some(fields.resets_at)
+                .flatten(),
             retry_after_seconds: failure.retry_after_seconds,
             request_id: failure
                 .request_id
                 .clone()
                 .or_else(|| diagnostics.request_id.clone()),
             set_cookie_headers: set_cookie_headers.to_vec(),
-            rate_limit_headers: rate_limit_headers.to_vec(),
+            // Opening headers are captured separately with their original clock.
+            // Current error-event quota facts arrive through the transport update queue.
+            rate_limit_headers: Vec::new(),
+            rate_limit_observed_at: std::time::SystemTime::now(),
             send_phase,
             category,
         }
@@ -304,10 +312,17 @@ impl ParsedUpstreamError {
             .clone()
             .or_else(|| error.as_str().and_then(non_empty_owned))
             .unwrap_or_else(|| body.to_owned());
+        let now = Utc::now().timestamp();
         let resets_at = error
             .get("resets_at")
-            .and_then(Value::as_i64)
-            .filter(|seconds| DateTime::<Utc>::from_timestamp(*seconds, 0).is_some());
+            .and_then(positive_seconds)
+            .filter(|seconds| *seconds > now)
+            .filter(|seconds| DateTime::<Utc>::from_timestamp(*seconds, 0).is_some())
+            .or_else(|| {
+                let seconds = error.get("resets_in_seconds").and_then(positive_seconds)?;
+                now.checked_add(seconds)
+                    .filter(|seconds| DateTime::<Utc>::from_timestamp(*seconds, 0).is_some())
+            });
         Self {
             code,
             error_type,
@@ -318,6 +333,13 @@ impl ParsedUpstreamError {
     }
 }
 
+fn positive_seconds(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_str()?.trim().parse().ok())
+        .filter(|seconds| *seconds > 0)
+}
+
 #[derive(Clone, Copy)]
 enum UpstreamFailureSource {
     HttpResponse,
@@ -326,6 +348,8 @@ enum UpstreamFailureSource {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CodexUpstreamDiagnostics {
+    /// Capture clock, not refreshed when a buffered failure is mapped or persisted.
+    pub observed_at: Option<std::time::SystemTime>,
     pub status_code: Option<u16>,
     pub request_id: Option<String>,
     pub identity_authorization_error: Option<String>,
@@ -359,6 +383,7 @@ impl CodexUpstreamDiagnostics {
 
     pub fn from_headers(status_code: Option<u16>, headers: &HeaderMap) -> Self {
         Self {
+            observed_at: Some(std::time::SystemTime::now()),
             status_code,
             request_id: first_header(headers, UPSTREAM_REQUEST_ID_HEADERS),
             identity_authorization_error: header_value(

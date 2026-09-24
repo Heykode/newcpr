@@ -165,6 +165,7 @@ pub(super) fn websocket_connection_metadata(
         turn_state: response_meta::turn_state(response.headers()),
         set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
         rate_limit_headers: response_meta::rate_limit_headers(response.headers()),
+        rate_limit_observed_at: std::time::SystemTime::now(),
         response_metadata: response_meta::response_metadata(response.headers()),
         diagnostics: response_meta::diagnostics(
             Some(response.status().as_u16()),

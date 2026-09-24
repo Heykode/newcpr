@@ -114,6 +114,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
         turn_state: response_metadata.turn_state,
         set_cookie_headers: response_metadata.set_cookie_headers,
         rate_limit_headers: response_metadata.rate_limit_headers,
+        rate_limit_observed_at: response_metadata.rate_limit_observed_at,
         rate_limit_updates,
         response_metadata_updates,
         pool_decision: None,
@@ -297,6 +298,16 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                 return;
             }
         };
+        let observed_at = std::time::SystemTime::now();
+        if let Some(rate_limits) = reduced.error_rate_limits {
+            rate_limit_updates
+                .lock()
+                .await
+                .push(crate::transport::CodexRateLimitObservation {
+                    rate_limits,
+                    observed_at,
+                });
+        }
         if let Some(event_type) = reduced.diagnostic_event_type {
             last_event_type = Some(event_type);
         }
@@ -311,7 +322,13 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
         }
         let (frame, terminal) = match reduced.action {
             ExchangeAction::RateLimits(rate_limits) => {
-                rate_limit_updates.lock().await.push(rate_limits);
+                rate_limit_updates
+                    .lock()
+                    .await
+                    .push(crate::transport::CodexRateLimitObservation {
+                        rate_limits,
+                        observed_at,
+                    });
                 continue;
             }
             ExchangeAction::Forward { frame, terminal } => (frame, terminal),

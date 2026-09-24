@@ -1,5 +1,6 @@
 //! OpenAI 额度事实边界与展示快照回归。
 
+mod passive_observation;
 mod plan_sync;
 mod recovery;
 mod refresh_timing;
@@ -21,7 +22,9 @@ use gateway_protocol::openai::events::parse_rate_limits_event;
 use provider_openai::OFFICIAL_CODEX_BASE_URL;
 use provider_openai::credential::{
     CodexCredentialQuotaError, CodexCredentialQuotaService, ImportCodexOAuthCredential,
+    QuotaRefreshAuthority,
 };
+use provider_openai::transport::CodexRateLimitObservation;
 use provider_openai::transport::profile::{CodexWireProfile, CodexWireProfileState};
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
@@ -291,7 +294,12 @@ async fn successful_inference_headers_are_authoritative_even_at_full_display_usa
 
     assert!(
         service
-            .synchronize_passive_headers(&account, &headers)
+            .synchronize_passive_headers(
+                &account,
+                &headers,
+                SystemTime::now(),
+                QuotaRefreshAuthority::ObserveAccess
+            )
             .await
             .expect("passive quota")
     );
@@ -339,7 +347,12 @@ async fn passive_quota_updates_keep_core_and_model_specific_buckets_independent(
         ),
     ];
     service
-        .synchronize_passive_headers(&account, &initial_headers)
+        .synchronize_passive_headers(
+            &account,
+            &initial_headers,
+            SystemTime::now(),
+            QuotaRefreshAuthority::ObserveAccess,
+        )
         .await
         .expect("initial passive quota");
 
@@ -374,7 +387,12 @@ async fn passive_quota_updates_keep_core_and_model_specific_buckets_independent(
         ),
     ];
     service
-        .synchronize_passive_headers(&account, &spark_headers)
+        .synchronize_passive_headers(
+            &account,
+            &spark_headers,
+            SystemTime::now(),
+            QuotaRefreshAuthority::ObserveAccess,
+        )
         .await
         .expect("Spark passive quota");
 
@@ -405,7 +423,12 @@ async fn passive_quota_updates_keep_core_and_model_specific_buckets_independent(
         ),
     ];
     service
-        .synchronize_passive_headers(&account, &core_headers)
+        .synchronize_passive_headers(
+            &account,
+            &core_headers,
+            SystemTime::now(),
+            QuotaRefreshAuthority::ObserveAccess,
+        )
         .await
         .expect("core passive quota");
 
@@ -476,7 +499,12 @@ async fn websocket_additional_rate_limit_resolves_by_name_without_touching_core(
         ),
     ];
     service
-        .synchronize_passive_headers(&account, &initial_headers)
+        .synchronize_passive_headers(
+            &account,
+            &initial_headers,
+            SystemTime::now(),
+            QuotaRefreshAuthority::ObserveAccess,
+        )
         .await
         .expect("initial quota metadata");
 
@@ -507,9 +535,16 @@ async fn websocket_additional_rate_limit_resolves_by_name_without_touching_core(
         },
         "credits": null
     });
-    let observation = parse_rate_limits_event(&event).expect("WebSocket rate-limit event");
+    let observation = CodexRateLimitObservation {
+        rate_limits: parse_rate_limits_event(&event).expect("WebSocket rate-limit event"),
+        observed_at: SystemTime::now(),
+    };
     service
-        .synchronize_passive_rate_limits(&account, std::slice::from_ref(&observation))
+        .synchronize_passive_rate_limits(
+            &account,
+            std::slice::from_ref(&observation),
+            QuotaRefreshAuthority::ObserveAccess,
+        )
         .await
         .expect("WebSocket passive quota");
 

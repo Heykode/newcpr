@@ -261,6 +261,7 @@ async fn collect_backend_response(
         set_cookie_headers,
         mut rate_limit_headers,
         rate_limit_updates,
+        rate_limit_observed_at: _,
         response_metadata_updates,
         websocket_pool_decision,
         diagnostics: _,
@@ -280,7 +281,7 @@ async fn collect_backend_response(
     }
     if let Some(updates) = rate_limit_updates {
         for update in updates.lock().await.iter() {
-            rate_limit_headers.extend(rate_limits_to_header_pairs(update));
+            rate_limit_headers.extend(rate_limits_to_header_pairs(&update.rate_limits));
         }
     }
     let mut reported_model = response_metadata.effective_model.clone();

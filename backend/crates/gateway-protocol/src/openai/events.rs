@@ -374,7 +374,7 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
         limit_ids.insert(active_limit.clone());
     }
     limit_ids.insert("codex".to_string());
-    let limits = limit_ids
+    let mut limits = limit_ids
         .into_iter()
         .filter_map(|limit_id| {
             let prefix = format!("x-{}", limit_id.replace('_', "-"));
@@ -382,6 +382,25 @@ pub fn parse_rate_limit_headers(headers: &[(String, String)]) -> Option<ParsedRa
                 .map(|details| (limit_id, details))
         })
         .collect::<BTreeMap<_, _>>();
+    // Generic windows can describe the explicitly active named bucket without
+    // also providing a duplicate set of named headers. Premium is the core tier.
+    if let Some(active) = active_limit
+        .as_ref()
+        .filter(|active| !matches!(active.as_str(), "codex" | "premium"))
+        && limits.get(active).is_none_or(|details| {
+            details.primary.is_none()
+                && details.secondary.is_none()
+                && details.allowed.is_none()
+                && details.limit_reached.is_none()
+        })
+        && let Some(mut details) = limits.remove("codex")
+    {
+        details.limit_id = active.clone();
+        if let Some(named) = limits.remove(active) {
+            details.limit_name = named.limit_name.or(details.limit_name);
+        }
+        limits.insert(active.clone(), details);
+    }
     let credits = parse_credits_from_lookup(&normalized);
     let plan_type = lookup_non_empty(&normalized, "x-codex-plan-type");
     let promo_message = lookup_non_empty(&normalized, "x-codex-promo-message");
@@ -444,6 +463,50 @@ pub fn is_codex_quota_header_name(name: &str) -> bool {
             | "x-codex-primary-over-secondary-limit-percent"
     ) || rate_limit_id_from_header_name(&normalized)
         .is_some_and(|limit_id| limit_id == "codex" || limit_id.starts_with("codex_"))
+}
+
+/// Current error-event quota facts only; never learn identity or plan changes here.
+pub fn parse_error_rate_limits(
+    value: &Value,
+    event_type: Option<&str>,
+) -> Option<ParsedRateLimits> {
+    if !matches!(
+        event_type.or_else(|| value.get("type").and_then(Value::as_str)),
+        Some("error" | "response.failed")
+    ) {
+        return None;
+    }
+    let mut headers = Vec::new();
+    for pointer in [
+        "/headers",
+        "/response/headers",
+        "/error/headers",
+        "/response/error/headers",
+    ] {
+        let Some(values) = value.pointer(pointer).and_then(Value::as_object) else {
+            continue;
+        };
+        for (name, value) in values {
+            if !is_codex_quota_header_name(name)
+                || name.eq_ignore_ascii_case("x-codex-plan-type")
+                || name.eq_ignore_ascii_case("x-codex-promo-message")
+            {
+                continue;
+            }
+            let value = value
+                .as_array()
+                .and_then(|values| values.first())
+                .unwrap_or(value);
+            let value = match value {
+                Value::String(value) => value.clone(),
+                Value::Number(value) => value.to_string(),
+                Value::Bool(value) => value.to_string(),
+                _ => continue,
+            };
+            headers.push((name.clone(), value));
+        }
+    }
+    parse_rate_limit_headers(&headers)
 }
 
 /// 从内部 `codex.rate_limits` 事件中解析限流信息。

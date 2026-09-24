@@ -1430,14 +1430,27 @@ impl CodexTurnStateMaintenanceService {
             }
         };
         let observed_at = SystemTime::now();
-        synchronize_passive_quota_headers(&self.quota, &account, &response.rate_limit_headers)
-            .await;
+        let mut quota_observation = super::observation::OpenAiPassiveQuotaObservation::new(
+            response.rate_limit_headers.clone(),
+            response.rate_limit_observed_at,
+        );
         let state = response.turn_state.take();
         let mut decoder = super::turn_state_probe_response::ProbeResponse::default();
         while let Some(chunk) = response.body.next().await {
+            quota_observation.observe(
+                &super::observation::take_rate_limit_updates(response.rate_limit_updates.as_ref())
+                    .await,
+            );
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(error) => {
+                    super::observation::synchronize_passive_quota(
+                        &self.quota,
+                        &account,
+                        quota_observation.rate_limits(),
+                        crate::credential::QuotaRefreshAuthority::PreserveAccess,
+                    )
+                    .await;
                     let failure = map_client_error(error, UpstreamSendState::Ambiguous, false);
                     return Err(self
                         .observe_probe_failure(&account, &model, failure, "stream_error")
@@ -1445,11 +1458,17 @@ impl CodexTurnStateMaintenanceService {
                 }
             };
             if let Err(error) = decoder.push(&chunk) {
+                super::observation::synchronize_passive_quota(
+                    &self.quota,
+                    &account,
+                    quota_observation.rate_limits(),
+                    crate::credential::QuotaRefreshAuthority::PreserveAccess,
+                )
+                .await;
                 let failure = super::failure::map_canonical_error(
                     error,
                     &response.diagnostics,
                     &response.set_cookie_headers,
-                    &response.rate_limit_headers,
                     super::failure::ReplayBoundary::BeforeSemanticOutput,
                 );
                 return Err(self
@@ -1457,14 +1476,24 @@ impl CodexTurnStateMaintenanceService {
                     .await);
             }
         }
+        quota_observation.observe(
+            &super::observation::take_rate_limit_updates(response.rate_limit_updates.as_ref())
+                .await,
+        );
         let completed = match decoder.finish() {
             Ok(completed) => completed,
             Err(error) => {
+                super::observation::synchronize_passive_quota(
+                    &self.quota,
+                    &account,
+                    quota_observation.rate_limits(),
+                    crate::credential::QuotaRefreshAuthority::PreserveAccess,
+                )
+                .await;
                 let failure = super::failure::map_canonical_error(
                     error,
                     &response.diagnostics,
                     &response.set_cookie_headers,
-                    &response.rate_limit_headers,
                     super::failure::ReplayBoundary::BeforeSemanticOutput,
                 );
                 return Err(self
@@ -1472,6 +1501,17 @@ impl CodexTurnStateMaintenanceService {
                     .await);
             }
         };
+        super::observation::synchronize_passive_quota(
+            &self.quota,
+            &account,
+            quota_observation.rate_limits(),
+            if completed {
+                crate::credential::QuotaRefreshAuthority::ObserveAccess
+            } else {
+                crate::credential::QuotaRefreshAuthority::PreserveAccess
+            },
+        )
+        .await;
         if !completed {
             return Err("missing_completed");
         }
@@ -1499,6 +1539,14 @@ impl CodexTurnStateMaintenanceService {
         failure: super::failure::MappedProviderFailure,
         reason: &'static str,
     ) -> &'static str {
+        synchronize_passive_quota_headers(
+            &self.quota,
+            account,
+            &failure.rate_limit_headers,
+            failure.rate_limit_observed_at,
+            crate::credential::QuotaRefreshAuthority::PreserveAccess,
+        )
+        .await;
         if let Some(CodexAccountFailure::RateLimited { retry_after }) = failure.account_failure {
             let delay = retry_after
                 .unwrap_or_else(|| {
@@ -1605,7 +1653,6 @@ impl CodexTurnStateMaintenanceService {
             );
             return "account_rejected";
         }
-        synchronize_passive_quota_headers(&self.quota, account, &failure.rate_limit_headers).await;
         reason
     }
 

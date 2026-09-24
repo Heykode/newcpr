@@ -74,6 +74,7 @@ mod compact;
 mod generate_compat;
 mod identity_isolation;
 mod quota_continuation;
+mod quota_observation;
 mod raw_identity;
 mod reasoning_replay;
 mod request_alignment;
@@ -7099,16 +7100,21 @@ async fn successful_http_sse_rate_limit_event_persists_structured_exhaustion() {
         )
         .await
         .expect("prepare provider stream");
+    let mut completed = false;
     while let Some(event) = stream.next().await {
-        event.expect("successful upstream response");
+        let event = event.expect("successful upstream response");
+        completed |= event
+            .wire_event()
+            .is_some_and(|wire| wire.event_type() == Some("response.completed"));
     }
 
+    assert!(completed);
+    assert!(store.has_quota(account_id));
     let account = store
         .account(account_id)
         .expect("account after HTTP SSE response");
     assert_eq!(account.credential_state(), CredentialState::Ready);
     assert_eq!(account.quota().access(), QuotaAccessState::Allowed);
-    assert!(store.has_quota(account_id));
 }
 
 #[test]

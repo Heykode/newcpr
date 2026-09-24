@@ -55,6 +55,7 @@ pub(super) struct MappedProviderFailure {
     pub(super) cyber_policy_failure: bool,
     pub(super) set_cookie_headers: Vec<String>,
     pub(super) rate_limit_headers: Vec<(String, String)>,
+    pub(super) rate_limit_observed_at: SystemTime,
     pub(super) observation: Option<ProviderResponseObservation>,
     pub(super) capture_response_cookies: bool,
 }
@@ -69,6 +70,7 @@ impl MappedProviderFailure {
             cyber_policy_failure: false,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),
+            rate_limit_observed_at: SystemTime::now(),
             observation: None,
             capture_response_cookies: false,
         }
@@ -363,7 +365,14 @@ pub(super) async fn apply_failure(
     if !context.allows_account_state_mutation {
         return;
     }
-    synchronize_passive_quota_headers(context.quota, account, &failure.rate_limit_headers).await;
+    synchronize_passive_quota_headers(
+        context.quota,
+        account,
+        &failure.rate_limit_headers,
+        failure.rate_limit_observed_at,
+        crate::credential::QuotaRefreshAuthority::PreserveAccess,
+    )
+    .await;
     let needs_authoritative_quota_refresh =
         should_schedule_authoritative_quota_refresh(failure.account_failure, context.is_diagnostic);
     if failure.cyber_policy_failure {
@@ -804,7 +813,6 @@ pub(super) fn map_canonical_error(
     error: CodexCanonicalError,
     diagnostics: &CodexUpstreamDiagnostics,
     set_cookie_headers: &[String],
-    rate_limit_headers: &[(String, String)],
     replay_boundary: ReplayBoundary,
 ) -> MappedProviderFailure {
     match error {
@@ -814,7 +822,6 @@ pub(super) fn map_canonical_error(
                 &failure,
                 diagnostics,
                 set_cookie_headers,
-                rate_limit_headers,
                 CodexUpstreamSendPhase::AfterPayload,
             ),
             None,
@@ -1410,6 +1417,7 @@ pub(super) fn map_upstream_failure(
         cyber_policy_failure,
         set_cookie_headers: failure.set_cookie_headers,
         rate_limit_headers: failure.rate_limit_headers,
+        rate_limit_observed_at: failure.rate_limit_observed_at,
         observation,
         capture_response_cookies: !matches!(
             category,

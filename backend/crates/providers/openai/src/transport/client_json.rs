@@ -78,6 +78,7 @@ impl CodexBackendClient {
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
         let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
+        let rate_limit_observed_at = std::time::SystemTime::now();
         let response_metadata = response_meta::response_metadata(response.headers());
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
         let transport_metrics = CodexTransportMetrics {
@@ -128,6 +129,7 @@ impl CodexBackendClient {
             body,
             set_cookie_headers,
             rate_limit_headers,
+            rate_limit_observed_at,
             diagnostics,
             response_metadata,
             transport_metrics,
