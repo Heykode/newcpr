@@ -407,6 +407,24 @@ OpenAI 原位替换接受重登文档中的 `email`、`account_id`、`type: code
 工作区设置只接受已知的同邮箱号池工作区或当前验证凭据的工作区；未知 ID 返回错误，
 不清除现有缓存。实际登录仍需验证该工作区可访问及账号主体一致，不因本地记录绕过验证。
 
+未锁定工作区的手动获取遇到并列最高套餐时，`status` 与 `recovery.state` 返回
+`awaiting_workspace`，并返回 `workspaceChoices: [{ id, name, planType }]`。
+候选只包含本次发现的并列最高工作区，按实际 ID 去重，最多 64 个；不包含会话或凭据。
+名称可为空，最多 128 个字符；ID 非空、最长 128 字节，不含空白或控制字符。
+等待不触发自动重试，不占并发；旧资料缺省候选为空。
+
+`POST /api/admin/relogin/workspace/resume` 要求管理员权限，请求示例：
+
+```json
+{ "id": "relogin-example", "revision": 7, "workspaceId": "workspace-example" }
+```
+
+三个字段必填，拒绝额外字段。必须匹配当前资料版本、等待状态及候选 ID；原有目标账号
+已删除或身份/认证绑定变化时拒绝。队列暂停或账号仍有任务时返回冲突。
+成功仅将本次选定工作区的手动获取重新排队，返回空数据的普通成功 envelope，
+不授权推送、不改已有推送目标或工作区模式。新会话重新验证工作区后缓存凭据，
+仍由既有推送接口单独确认。不能用此接口处理原工作区自动恢复或推送不确定状态。
+
 账号视图新增 `cumulativeCosts`，每个币种独立返回
 `{ currency, estimatedAmount, estimatedAmountDisplay }`，金额沿用精确十进制字符串。
 该字段独立于 `usage` 的当前额度窗口，在账号展开详情展示为“累计消费”：

@@ -2,7 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use gateway_admin::{
     model::notifications::{BarkLevel, SmtpSecurity},
-    ports::notification::{BarkMessage, NotificationDelivery, SmtpMessage},
+    ports::notification::{
+        BarkMessage, NotificationDelivery, NotificationDeliveryError, SmtpMessage,
+    },
 };
 use gateway_host::{
     HostConfig,
@@ -74,7 +76,7 @@ async fn bark_delivery_posts_expected_payload_and_checks_response_code() {
         .await
         .send_bark(BarkMessage {
             server_url: format!("{}/push", server.uri()),
-            device_key: SecretString::from("synthetic-device"),
+            device_key: SecretString::from(" synthetic-device/ \n"),
             title: "Synthetic alert".to_owned(),
             body: "Synthetic body".to_owned(),
             group: "CPR/Synthetic".to_owned(),
@@ -184,4 +186,126 @@ async fn smtp_delivers_to_a_local_synthetic_server() {
         .unwrap();
     assert!(message.contains("Subject: Synthetic SMTP test"));
     assert!(message.contains("synthetic delivery"));
+}
+
+fn bark(server_url: String, key: &str) -> BarkMessage {
+    BarkMessage {
+        server_url,
+        device_key: SecretString::from(key.to_owned()),
+        title: "test".to_owned(),
+        body: "test".to_owned(),
+        group: "CPR".to_owned(),
+        level: BarkLevel::Active,
+        sound: None,
+        volume: 5,
+        call: false,
+    }
+}
+
+#[tokio::test]
+async fn bark_diagnostics_are_bounded_and_never_echo_keys_or_upstream_text() {
+    let server = MockServer::start().await;
+    let sender = delivery().await;
+    for (response, expected) in [
+        (
+            ResponseTemplate::new(401).set_body_string("synthetic-private-value"),
+            NotificationDeliveryError::BarkHttp(401),
+        ),
+        (
+            ResponseTemplate::new(302).insert_header("location", "https://push.example.com"),
+            NotificationDeliveryError::BarkHttp(302),
+        ),
+        (
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"code": 400, "message": "synthetic-private-value"}),
+            ),
+            NotificationDeliveryError::BarkRejected(400),
+        ),
+        (
+            ResponseTemplate::new(200).set_body_string("x".repeat(16_385)),
+            NotificationDeliveryError::BarkResponse,
+        ),
+        (
+            ResponseTemplate::new(200).set_body_string("not-json"),
+            NotificationDeliveryError::BarkResponse,
+        ),
+    ] {
+        server.reset().await;
+        Mock::given(method("POST"))
+            .respond_with(response)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = sender
+            .send_bark(bark(server.uri(), "synthetic-device"))
+            .await
+            .unwrap_err();
+        assert_eq!(error, expected);
+        assert!(!error.to_string().contains("synthetic"));
+        assert!(!format!("{error:?}").contains("synthetic"));
+    }
+    server.reset().await;
+    for key in [
+        "https://push.example.com/key",
+        "key/path",
+        "key\nbad",
+        "/",
+        "key?query",
+    ] {
+        assert_eq!(
+            sender.send_bark(bark(server.uri(), key)).await.unwrap_err(),
+            NotificationDeliveryError::BarkDeviceKey
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn smtp_authentication_failure_preserves_only_numeric_code() {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let mut lines = BufReader::new(read).lines();
+        write.write_all(b"220 localhost test\r\n").await.unwrap();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.starts_with("AUTH") {
+                write
+                    .write_all(b"535 5.7.8 rejected synthetic-private-value\r\n")
+                    .await
+                    .unwrap();
+                return;
+            }
+            write
+                .write_all(b"250-localhost\r\n250 AUTH PLAIN LOGIN\r\n")
+                .await
+                .unwrap();
+        }
+    });
+    let error = delivery()
+        .await
+        .send_smtp(SmtpMessage {
+            host: "127.0.0.1".to_owned(),
+            port,
+            security: SmtpSecurity::None,
+            username: Some("login@example.com".to_owned()),
+            password: Some(SecretString::from("synthetic-password")),
+            from_name: None,
+            from_email: "sender@example.com".to_owned(),
+            recipient: "ops@example.com".to_owned(),
+            subject: "test".to_owned(),
+            html_body: "test".to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error, NotificationDeliveryError::SmtpAuthentication(535));
+    assert!(error.to_string().contains("535"));
+    assert!(!error.to_string().contains("synthetic"));
+    assert!(!format!("{error:?}").contains("example.com"));
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
 }

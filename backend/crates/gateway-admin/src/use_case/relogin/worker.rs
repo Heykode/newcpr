@@ -191,6 +191,8 @@ impl DefaultReloginService {
                     entry.automatic_job = true;
                     entry.workspace_mode = ReloginWorkspaceMode::Original;
                     entry.workspace_targets.clear();
+                    entry.workspace_choices.clear();
+                    entry.selected_workspace_id = None;
                     entry.manual_push_context = None;
                 }
                 let target_account = entry
@@ -251,12 +253,13 @@ impl DefaultReloginService {
                     password: entry.password.clone(),
                     mfa_secret: entry.mfa_secret.clone(),
                     workspace_id: if entry.workspace_mode == ReloginWorkspaceMode::Highest {
-                        None
+                        entry.selected_workspace_id.clone()
                     } else {
                         entry
                             .target
                             .as_ref()
                             .map(|target| target.workspace_id.clone())
+                            .or_else(|| entry.selected_workspace_id.clone())
                             .or_else(|| entry.preferred_workspace_id.clone())
                     },
                     outbound_proxy: target_account
@@ -305,17 +308,19 @@ impl DefaultReloginService {
         cancellation: CancellationToken,
         shutdown: &CancellationToken,
     ) -> Result<(), AdminError> {
+        let workspace_locked = request.workspace_id.is_some();
         let outcome = tokio::select! {
             biased;
-            () = shutdown.cancelled() => Err((AdminError::conflict("服务正在停止，任务已取消"), None)),
-            () = cancellation.cancelled() => Err((AdminError::conflict("重登任务已取消"), None)),
+            () = shutdown.cancelled() => Err((AdminError::conflict("服务正在停止，任务已取消"), None, Vec::new())),
+            () = cancellation.cancelled() => Err((AdminError::conflict("重登任务已取消"), None, Vec::new())),
             outcome = tokio::time::timeout(Duration::from_secs(300), self.provider.relogin(request)) => {
                 match outcome {
                     Ok(outcome) => outcome.map_err(|error| {
                         let reason = error.relogin_stop_reason();
-                        (map_provider_error(error, "relogin"), reason)
+                        let choices = error.relogin_workspace_choices().to_vec();
+                        (map_provider_error(error, "relogin"), reason, choices)
                     }),
-                    Err(_) => Err((AdminError::unavailable("重登超时，请检查网络和代理"), None)),
+                    Err(_) => Err((AdminError::unavailable("重登超时，请检查网络和代理"), None, Vec::new())),
                 }
             }
         };
@@ -339,9 +344,14 @@ impl DefaultReloginService {
                 .map_err(store_error)?
                 .retry_interval_minutes,
         ));
+        current.workspace_choices.clear();
         match outcome {
             Ok(credential) => {
                 if !credential.email.eq_ignore_ascii_case(&current.email)
+                    || current
+                        .selected_workspace_id
+                        .as_ref()
+                        .is_some_and(|workspace| workspace != &credential.workspace_id)
                     || current.target.as_ref().is_some_and(|target| {
                         target.user_id != credential.user_id
                             || target.workspace_id != credential.workspace_id
@@ -368,10 +378,22 @@ impl DefaultReloginService {
                     current.message = "已获取新 JSON，凭证验证通过".to_owned();
                 }
             }
-            Err((error, reason)) => {
-                current.status = ReloginStatus::Failed;
-                current.message = error.message().to_owned();
-                current.stop_reason = reason;
+            Err((error, reason, choices)) => {
+                if reason.is_none()
+                    && !workspace_locked
+                    && !current.automatic_job
+                    && current.manual_push_context.is_none()
+                    && current.target.is_none()
+                    && validate_workspace_choices(&choices).is_ok()
+                {
+                    current.status = ReloginStatus::AwaitingWorkspace;
+                    current.message = "有多个同级工作区，请选择后继续".to_owned();
+                    current.workspace_choices = choices;
+                } else {
+                    current.status = ReloginStatus::Failed;
+                    current.message = error.message().to_owned();
+                    current.stop_reason = reason;
+                }
             }
         }
         current.next_attempt_at = if current.status == ReloginStatus::Failed

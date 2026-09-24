@@ -61,7 +61,8 @@
   error as zero usage or substitute a peer estimate for unreadable own facts.
 - Mixed expiry projections skip accounts that outlived their Plan average,
   while retaining calculable accounts. All-outlived groups and otherwise missing
-  lifespan/rate evidence remain unknown. ETA still uses the full known remaining
+  lifespan/rate evidence retain null expiry amounts with distinct statuses.
+  ETA still uses the full known remaining
   amount and estimated accounts' deduplicated cross-group consumption. An
   eligible account awaiting its first usable quota window remains visible in
   coverage and concurrency but does not make existing group projections partial;
@@ -70,6 +71,18 @@
   Own the deduplicated quota IDs before building the buffered async stream:
   a borrowed mapped peer iterator fails `async_trait`'s `Send` generalization
   in this toolchain. Keep that ownership boundary during collection cleanup.
+- Snapshot reads retain the latest completed sample across configuration
+  revisions, with current group metadata, original timestamps and `refreshing`.
+  Groups awaiting their first sample appear only in `pending_group_ids`; they
+  do not hide other groups or fabricate zero balances. An all-pending report
+  uses the Unix epoch timestamp. Deleted groups remain invalid; disabled groups
+  immediately show disabled statuses. Display-only reports cannot be republished
+  or evaluated for alerts. A failed manual sample rereads validated group IDs
+  and returns existing data marked refreshing.
+- Expiry states distinguish `lifespan_learning`, `rate_sampling` and
+  `all_accounts_outlived_average`; none changes the independent ETA estimate.
+  Continue using the existing latest-five valid death average and recovery
+  retraction. No new quota-learning templates or lifecycle tables are introduced.
 - Group burn-rate inputs use a finite positive known USD subtotal even when
   other requests lack cost. A complete zero remains idle; zero known USD with
   missing costs stays unknown. Missing costs alone add no card warning.

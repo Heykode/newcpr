@@ -179,6 +179,7 @@ fn known_cost_survives_missing_costs_but_all_missing_stays_unknown() {
     assert_eq!(all_missing.quota_consume_usd_per_minute, None);
     assert_eq!(all_missing.eta_status, "unknown");
     assert_eq!(all_missing.expected_expiry_usd, None);
+    assert_eq!(all_missing.expiry_status, "rate_sampling");
 
     a.remaining_usd = Some(f64::INFINITY);
     assert_eq!(
@@ -234,6 +235,9 @@ fn outlived_accounts_do_not_hide_calculable_expiry_or_reduce_eta_balance() {
     assert_eq!(item.eta_minutes, Some(50.0));
     let all_old = project_group_monitor(group(), &[old.clone()], &MonitorUsage::default(), Some(0));
     assert_eq!(all_old.expected_expiry_usd, None);
+    assert_eq!(all_old.expiry_status, "all_accounts_outlived_average");
+    assert_eq!(all_old.eta_status, "ready");
+    assert_eq!(all_old.eta_minutes, Some(50.0));
     old.remaining_life_minutes = None;
     let missing = project_group_monitor(
         group(),
@@ -242,6 +246,9 @@ fn outlived_accounts_do_not_hide_calculable_expiry_or_reduce_eta_balance() {
         Some(0),
     );
     assert_eq!(missing.expected_expiry_usd, None);
+    assert_eq!(missing.expiry_status, "lifespan_learning");
+    assert_eq!(missing.eta_status, "ready");
+    assert_eq!(missing.eta_minutes, Some(50.0));
 }
 
 #[test]

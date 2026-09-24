@@ -66,6 +66,10 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
             Some(json!({"id":"a","workspaceId":null})),
         ),
         (
+            "/api/admin/relogin/workspace/resume",
+            Some(json!({"id":"a","revision":1,"workspaceId":"workspace-a"})),
+        ),
+        (
             "/api/admin/relogin/settings",
             Some(json!({"concurrency":1,"paused":false})),
         ),
@@ -82,6 +86,18 @@ async fn relogin_rejects_missing_confirmation_versions_and_unknown_fields() {
     fixture.auth.insert_session("valid-session");
     for (path, body) in [
         ("/api/admin/relogin/push", json!({"ids":["a"]})),
+        (
+            "/api/admin/relogin/workspace/resume",
+            json!({"id":"a","workspaceId":"workspace-a"}),
+        ),
+        (
+            "/api/admin/relogin/workspace/resume",
+            json!({"id":"a","revision":1,"workspaceId":null}),
+        ),
+        (
+            "/api/admin/relogin/workspace/resume",
+            json!({"id":"a","revision":1,"workspaceId":"workspace-a","automaticPush":true}),
+        ),
         (
             "/api/admin/relogin/push",
             json!({"ids":["a"],"revisions":{"a":1},"template":{"id":"t"}}),

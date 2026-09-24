@@ -2,6 +2,18 @@ use chrono::{DateTime, Utc};
 use gateway_core::routing::AccountGroupId;
 use secrecy::SecretString;
 
+/// Shared by configuration writes and delivery of previously saved keys.
+#[must_use]
+pub fn normalized_bark_device_key(value: &str) -> Option<&str> {
+    let key = value.trim().trim_end_matches('/');
+    (!key.is_empty()
+        && key.len() <= 256
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+    .then_some(key)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmtpSecurity {
     None,

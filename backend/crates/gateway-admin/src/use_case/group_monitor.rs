@@ -226,6 +226,8 @@ impl DefaultGroupMonitorService {
         }
         let report = GroupMonitorReport {
             generated_at: now,
+            refreshing: false,
+            pending_group_ids: Vec::new(),
             items,
         };
         self.groups
@@ -295,8 +297,15 @@ impl GroupMonitorService for DefaultGroupMonitorService {
         // Validate current group IDs even before a manual full-pool sample.
         let mut report = self.read_snapshot(&group_ids).await?;
         if refresh_forecasts {
-            self.sample_requested(requested).await?;
+            let result = self.sample_requested(requested).await;
             report = self.read_snapshot(&group_ids).await?;
+            if let Err(error) = result {
+                if let Some(report) = &mut report {
+                    report.refreshing = true;
+                } else {
+                    return Err(error);
+                }
+            }
         }
         report.ok_or_else(|| AdminError::unavailable("分组监控正在等待新采样，请稍后刷新"))
     }

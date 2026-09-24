@@ -5,7 +5,10 @@ use gateway_admin::model::provider_credentials::ProviderDocument;
 use gateway_admin::{
     model::{
         provider_credentials::PrepareCredentialImport,
-        relogin::{ReloginCredential, ReloginRequest, ReloginStopReason},
+        relogin::{
+            ReloginCredential, ReloginRequest, ReloginStopReason, ReloginWorkspaceChoice,
+            validate_workspace_choices,
+        },
     },
     ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind},
 };
@@ -81,6 +84,19 @@ pub(crate) async fn login(
         .await
         .map_err(|_| error("重登超时，请检查网络或代理"))??;
     if payload.get("ok").and_then(Value::as_bool) != Some(true) {
+        if payload.get("code").and_then(Value::as_str) == Some("workspace_ambiguous") {
+            // An explicitly locked workspace must never become a switching prompt.
+            if request.workspace_id.is_some() {
+                return Err(error("指定工作区返回了不明确的结果，请重新获取"));
+            }
+            let choices: Vec<ReloginWorkspaceChoice> =
+                serde_json::from_value(payload.get("workspaces").cloned().unwrap_or(Value::Null))
+                    .map_err(|_| error("重登工作区候选格式不合法"))?;
+            validate_workspace_choices(&choices).map_err(|_| error("重登工作区候选格式不合法"))?;
+            return Err(
+                error("有多个同级工作区，请选择后继续").with_relogin_workspace_choices(choices)
+            );
+        }
         let stop_reason = match payload.get("code").and_then(Value::as_str) {
             Some("account_banned") => Some(ReloginStopReason::AccountBanned),
             Some("workspace_missing" | "workspace_unavailable") => {
@@ -99,7 +115,6 @@ pub(crate) async fn login(
             Some("workspace_plan_unknown" | "workspace_unknown") => {
                 "无法确认工作区套餐，请指定工作区 ID"
             }
-            Some("workspace_ambiguous") => "有多个同级工作区，请指定工作区 ID",
             Some("identity_mismatch" | "plan_mismatch") => "新凭据身份、套餐或工作区不符，未推送",
             Some("interaction_required" | "login_loop") => {
                 "登录需要人工交互或流程已变化，请人工重新授权"

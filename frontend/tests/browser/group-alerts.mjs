@@ -22,9 +22,11 @@ async function main() {
   let failLoad = false
   let failSave = false
   let failTest = false
+  let monitorMode = 'lifespan'
+  const originalSampleTime = new Date().toISOString()
   let channels = {
     smtp: { enabled: true, host: 'smtp.example.com', port: 587, security: 'starttls', username: null, passwordSet: false, fromName: 'Synthetic', fromEmail: 'alerts@example.com' },
-    bark: { enabled: true, serverUrl: 'https://push.example.com', deviceKeySet: true, level: 'active', sound: null, volume: 5, call: false },
+    bark: { enabled: true, serverUrl: 'https://push.example.com', deviceKeySet: true, level: 'critical', sound: null, volume: 5, call: false },
     lastTest: null,
     updatedAt: new Date().toISOString(),
   }
@@ -51,8 +53,24 @@ async function main() {
     const url = new URL(req.url())
     const path = url.pathname.replace(/^\/dev/u, '')
     const ok = data => route.fulfill({ json: { code: 200, message: 'ok', data } })
-    if (path === '/api/admin/account-groups/monitor')
-      return ok(monitorResponse((url.searchParams.get('groupIds') ?? '').split(',')))
+    if (path === '/api/admin/account-groups/monitor') {
+      if (monitorMode === 'failure')
+        return route.fulfill({ status: 503, json: { code: 503, message: 'Synthetic monitor failure', data: null } })
+      const report = monitorResponse((url.searchParams.get('groupIds') ?? '').split(','))
+      if (monitorMode === 'lifespan') {
+        report.items.forEach((item, index) => {
+          item.expectedExpiryUsd = null
+          item.expiryStatus = ['all_accounts_outlived_average', 'lifespan_learning', 'rate_sampling'][index]
+        })
+      }
+      if (monitorMode === 'pending') {
+        report.items = report.items.filter(item => item.id !== groups[2].id)
+        report.pendingGroupIds = [groups[2].id]
+        report.refreshing = true
+        report.generatedAt = originalSampleTime
+      }
+      return ok(report)
+    }
     if (path === '/api/admin/notifications/channels')
       return ok(channels)
     if (path === '/api/admin/notifications/channels/update') {
@@ -60,7 +78,12 @@ async function main() {
       saves.push(body)
       if (failSave)
         return route.fulfill({ status: 400, json: { code: 400, message: 'Synthetic save failure', data: null } })
-      channels = { ...channels, ...body }
+      channels = {
+        ...channels,
+        ...body,
+        smtp: { ...body.smtp, passwordSet: channels.smtp.passwordSet || Boolean(body.smtp.password) },
+        bark: { ...body.bark, deviceKeySet: channels.bark.deviceKeySet || Boolean(body.bark.deviceKey) },
+      }
       delete channels.smtp.password
       delete channels.bark.deviceKey
       return ok(channels)
@@ -90,7 +113,7 @@ async function main() {
         status: failTest ? 'failed' : 'sent',
         test: true,
         attempts: 1,
-        error: failTest ? 'delivery failed' : null,
+        error: failTest ? 'Bark 服务返回 HTTP 401，请检查服务地址和 Device Key' : null,
         createdAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
       }
@@ -115,55 +138,151 @@ async function main() {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
         await page.screenshot({ path: `${output}/collapsed-${theme}-${width}.png`, fullPage: true })
         await settings.getByRole('button', { name: /通知渠道/u }).click()
-        await settings.getByRole('button', { name: /邮件 SMTP/u }).click()
-        await settings.getByRole('button', { name: /Bark 推送/u }).click()
-        await settings.getByPlaceholder('SMTP 主机').waitFor()
+        await settings.getByRole('button', { name: /SMTP 发件配置/u }).click()
+        await settings.getByRole('button', { name: /Bark iPhone 提醒/u }).click()
+        for (const label of ['SMTP 服务器地址', 'SMTP 端口', '登录账号（可选）', '密码 / 授权码', '发件人地址 (From)', '发件人显示名称（可选）', '加密方式', '测试收件地址', 'Bark Server（服务器地址）', 'Device Key（设备密钥）', '提醒等级', '铃声名称（可选）', '重要警告音量'])
+          await settings.getByLabel(label, { exact: true }).waitFor()
+        await settings.getByText(/需在 iPhone 为 Bark 开启「重要警告」/u).waitFor()
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
         await page.screenshot({ path: `${output}/channels-${theme}-${width}.png`, fullPage: true })
         await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()
         const dialog = page.getByRole('dialog')
-        await dialog.getByPlaceholder('收件人，多个用逗号分隔').waitFor()
-        await dialog.getByRole('button', { name: /提醒样式覆盖/u }).click()
-        await dialog.getByRole('combobox', { name: '响铃方式' }).waitFor()
+        await dialog.getByLabel('收件地址', { exact: true }).waitFor()
+        await dialog.getByText('继承全局 · 重要警告（静音仍响铃）', { exact: true }).waitFor()
+        await dialog.getByRole('button', { name: /提醒等级与铃声/u }).click()
+        await dialog.getByRole('combobox', { name: '响铃时长' }).waitFor()
+        await dialog.getByText(/需在 iPhone 为 Bark 开启「重要警告」/u).waitFor()
         assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true)
         await page.screenshot({ path: `${output}/policy-${theme}-${width}.png`, fullPage: true })
+        await dialog.getByRole('switch', { name: '自定义重要警告音量', exact: true }).scrollIntoViewIfNeeded()
+        await page.screenshot({ path: `${output}/policy-bark-${theme}-${width}.png` })
         await dialog.getByRole('button', { name: '取消', exact: true }).click()
       }
     }
     const settings = page.locator('#notifications')
-    await settings.getByPlaceholder('SMTP 主机').fill('edited-smtp.example.com')
-    await settings.getByPlaceholder('密码', { exact: true }).fill('synthetic-password')
-    await settings.getByPlaceholder('https://api.day.app', { exact: true }).fill('https://edited-push.example.com')
-    await settings.getByPlaceholder('已保存，留空保持不变', { exact: true }).fill('synthetic-device-key')
+    const choose = async (container, label, option) => {
+      const trigger = container.getByRole('combobox', { name: label, exact: true })
+      await trigger.click()
+      const listbox = page.locator(`[id="${await trigger.getAttribute('aria-controls')}"]`)
+      await listbox.getByRole('option', { name: option, exact: true }).click()
+    }
+    for (const [label, hint] of [
+      ['普通提醒', '跟随手机静音设置'],
+      ['时效性提醒', '可在专注模式下显示'],
+      ['静默记录', '仅进入通知列表'],
+      ['重要警告（静音仍响铃）', '需在 iPhone 为 Bark 开启「重要警告」'],
+    ]) {
+      await choose(settings, '提醒等级', label)
+      await settings.getByText(hint, { exact: false }).waitFor()
+    }
+    await settings.getByRole('switch', { name: '持续响铃约 30 秒', exact: true }).press('Space')
+    await settings.getByText(/持续响铃只延长时长/u).waitFor()
+    await settings.getByLabel('SMTP 服务器地址', { exact: true }).fill('edited-smtp.example.com')
+    await settings.getByLabel('登录账号（可选）', { exact: true }).fill('login@example.com')
+    await settings.getByLabel('发件人地址 (From)', { exact: true }).fill('sender@example.com')
+    await settings.getByLabel('发件人显示名称（可选）', { exact: true }).fill('Synthetic sender')
+    await settings.getByLabel('测试收件地址', { exact: true }).fill('test@example.com')
+    await settings.getByLabel('密码 / 授权码', { exact: true }).fill('synthetic-password')
+    await settings.getByLabel('Bark Server（服务器地址）', { exact: true }).fill('https://edited-push.example.com')
+    await settings.getByLabel('Device Key（设备密钥）', { exact: true }).fill('synthetic-device-key')
     failSave = true
     await settings.getByRole('button', { name: '发送测试邮件', exact: true }).click()
     await page.waitForFunction(() => document.body.textContent.includes('Synthetic save failure'))
     await page.waitForFunction(() => !document.querySelector('#notifications fieldset').disabled)
-    assert.equal(await settings.getByPlaceholder('SMTP 主机').inputValue(), 'edited-smtp.example.com')
-    assert.equal(await settings.getByPlaceholder('密码', { exact: true }).inputValue(), 'synthetic-password')
-    assert.equal(await settings.getByPlaceholder('https://api.day.app', { exact: true }).inputValue(), 'https://edited-push.example.com')
-    assert.equal(await settings.getByPlaceholder('已保存，留空保持不变', { exact: true }).inputValue(), 'synthetic-device-key')
+    assert.equal(await settings.getByLabel('SMTP 服务器地址', { exact: true }).inputValue(), 'edited-smtp.example.com')
+    assert.equal(await settings.getByLabel('密码 / 授权码', { exact: true }).inputValue(), 'synthetic-password')
+    assert.equal(await settings.getByLabel('Bark Server（服务器地址）', { exact: true }).inputValue(), 'https://edited-push.example.com')
+    assert.equal(await settings.getByLabel('Device Key（设备密钥）', { exact: true }).inputValue(), 'synthetic-device-key')
     assert.equal(tests.length, 0)
     failSave = false
     await settings.getByRole('button', { name: '发送测试邮件', exact: true }).click()
     await settings.getByText(/SMTP 测试成功/u).waitFor()
-    assert.equal(tests.at(-1).target, 'alerts@example.com')
+    assert.equal(tests.at(-1).target, 'test@example.com')
+    assert.equal(saves.at(-1).smtp.username, 'login@example.com')
+    assert.equal(saves.at(-1).smtp.fromEmail, 'sender@example.com')
+    assert.equal(saves.at(-1).smtp.fromName, 'Synthetic sender')
+    assert.equal(saves.at(-1).smtp.security, 'starttls')
+    assert.equal(saves.at(-1).smtp.port, 587)
+    assert.equal(saves.at(-1).bark.level, 'critical')
+    assert.equal(saves.at(-1).bark.call, true)
+    assert.equal(await settings.getByLabel('密码 / 授权码', { exact: true }).getAttribute('placeholder'), '已保存，留空保持不变')
+    assert.equal(await settings.getByLabel('密码 / 授权码', { exact: true }).inputValue(), '')
     failTest = true
     await settings.getByRole('button', { name: '发送测试通知', exact: true }).click()
     await settings.getByText(/Bark 测试失败/u).waitFor()
+    await settings.getByText('Bark 服务返回 HTTP 401，请检查服务地址和 Device Key', { exact: true }).waitFor()
     failTest = false
     await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()
     const dialog = page.getByRole('dialog')
-    await dialog.getByRole('button', { name: '保存', exact: true }).click()
+    const savePolicy = async () => {
+      const response = page.waitForResponse(result => result.url().endsWith('/account-groups/alert-policy/update'))
+      await dialog.getByRole('button', { name: '保存', exact: true }).click()
+      await response
+      await page.waitForFunction(() => !document.querySelector('[role="dialog"] fieldset').disabled)
+    }
+    await dialog.getByLabel('收件地址', { exact: true }).waitFor()
+    await savePolicy()
     await page.waitForFunction(() => document.body.textContent.includes('分组预警设置已保存'))
     assert.ok(policies.has(groups[0].id))
+    for (const key of ['barkLevel', 'barkSound', 'barkVolume', 'barkCall'])
+      assert.equal(policies.get(groups[0].id)[key], null)
+    const advanced = dialog.getByRole('button', { name: /提醒等级与铃声/u })
+    if (await advanced.getAttribute('aria-expanded') === 'false')
+      await advanced.click()
+    await choose(dialog, '提醒等级', '静默记录')
+    await dialog.getByText('仅进入通知列表，不亮屏、不响铃。', { exact: true }).waitFor()
+    await choose(dialog, '提醒等级', '重要警告（静音仍响铃）')
+    await dialog.getByText(/需在 iPhone 为 Bark 开启「重要警告」/u).waitFor()
+    await choose(dialog, '响铃时长', '持续响铃约 30 秒')
+    await dialog.getByRole('switch', { name: '自定义重要警告音量', exact: true }).press('Space')
+    await dialog.getByRole('spinbutton', { name: '重要警告音量', exact: true }).fill('8')
+    await dialog.getByLabel('铃声名称', { exact: true }).fill('alarm')
+    await dialog.getByLabel('收件地址', { exact: true }).fill('ops@example.com, backup@example.com')
+    await savePolicy()
+    assert.equal(policies.get(groups[0].id).barkLevel, 'critical')
+    assert.equal(policies.get(groups[0].id).barkVolume, 8)
+    assert.equal(policies.get(groups[0].id).barkCall, true)
+    assert.equal(policies.get(groups[0].id).barkSound, 'alarm')
+    assert.deepEqual(policies.get(groups[0].id).emailRecipients, ['ops@example.com', 'backup@example.com'])
+    await choose(dialog, '提醒等级', '继承全局')
+    await choose(dialog, '响铃时长', '继承全局')
+    await dialog.getByRole('switch', { name: '自定义重要警告音量', exact: true }).press('Space')
+    await savePolicy()
+    for (const key of ['barkLevel', 'barkVolume', 'barkCall'])
+      assert.equal(policies.get(groups[0].id)[key], null)
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     failLoad = true
     await page.getByRole('button', { name: `设置 ${groups[0].name} 预警`, exact: true }).click()
     await page.waitForFunction(() => document.body.textContent.includes('Synthetic read failure'))
     assert.equal(await dialog.getByRole('button', { name: '保存', exact: true }).isDisabled(), true)
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.reload()
+    await page.getByText('已超平均寿命', { exact: true }).waitFor()
+    await page.getByText('寿命学习中', { exact: true }).waitFor()
+    await page.getByText('消耗采样中', { exact: true }).waitFor()
+    const third = page.getByRole('article', { name: groups[2].name, exact: true })
+    const prior = await third.locator('dl').textContent()
+    monitorMode = 'pending'
+    await page.getByRole('button', { name: '立即刷新分组监控', exact: true }).click()
+    await page.getByRole('button', { name: '等待新采样，点击立即刷新', exact: true }).waitFor()
+    assert.equal(await third.locator('dl').textContent(), prior)
+    assert.equal(await page.getByText('监控更新失败', { exact: true }).count(), 0)
+    await page.screenshot({ path: `${output}/monitor-retained.png`, fullPage: true })
+    await page.reload()
+    await third.getByText('采样中', { exact: true }).first().waitFor()
+    assert.equal(await page.getByText('监控更新失败', { exact: true }).count(), 0)
+    await page.screenshot({ path: `${output}/monitor-first-sample.png`, fullPage: true })
+    monitorMode = 'lifespan'
+    await page.getByRole('button', { name: '等待新采样，点击立即刷新', exact: true }).click()
+    await third.getByText('消耗采样中', { exact: true }).waitFor()
+    monitorMode = 'failure'
+    await page.getByRole('button', { name: '立即刷新分组监控', exact: true }).click()
+    await page.getByText('监控更新失败', { exact: true }).waitFor()
+    await third.getByText('消耗采样中', { exact: true }).waitFor()
     assert.deepEqual(errors, [])
-    process.stdout.write(`${JSON.stringify({ screenshots: 18, saves: saves.length, tests: tests.length, pageErrors: errors })}\n`)
+    process.stdout.write(`${JSON.stringify({ screenshots: 26, saves: saves.length, tests: tests.length, pageErrors: errors })}\n`)
   }
   finally {
     await browser.close()

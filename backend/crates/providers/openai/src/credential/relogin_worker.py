@@ -38,6 +38,12 @@ class LoginError(Exception):
     pass
 
 
+class WorkspaceSelectionRequired(LoginError):
+    def __init__(self, choices):
+        super().__init__("workspace_ambiguous")
+        self.choices = choices
+
+
 def claims(token):
     try:
         payload = token.split(".")[1]
@@ -55,6 +61,7 @@ def normalize_plan(value):
 
 def select_workspace(accounts, preferred=None):
     by_id = {}
+    names = {}
     if isinstance(accounts, dict):
         iterable = accounts.items()
     elif isinstance(accounts, list):
@@ -76,6 +83,9 @@ def select_workspace(accounts, preferred=None):
                 raise LoginError("workspace_plan_unknown")
             # The membership map may expose the same workspace under an alias.
             by_id[identifier] = {"id": identifier, "plan": plan}
+            name = account.get("name")
+            if isinstance(name, str) and name.strip():
+                names[identifier] = "".join(char for char in name if char.isprintable()).strip()[:128]
     items = list(by_id.values())
     if preferred:
         matches = [item for item in items if item["id"] == preferred]
@@ -87,7 +97,16 @@ def select_workspace(accounts, preferred=None):
     priority = max(PLAN_PRIORITY[item["plan"]] for item in items)
     best = [item for item in items if PLAN_PRIORITY[item["plan"]] == priority]
     if len(best) != 1:
-        raise LoginError("workspace_ambiguous")
+        if len(best) > 64 or any(
+            len(item["id"]) > 128 or not item["id"]
+            or any(char.isspace() or not char.isprintable() for char in item["id"])
+            for item in best
+        ):
+            raise LoginError("workspace_unknown")
+        raise WorkspaceSelectionRequired([
+            {"id": item["id"], "name": names.get(item["id"], ""), "planType": item["plan"]}
+            for item in sorted(best, key=lambda item: item["id"])
+        ])
     return best[0]
 
 
@@ -395,6 +414,8 @@ def main():
         result = login.run()
     except ImportError:
         result = {"ok": False, "code": "runtime_missing"}
+    except WorkspaceSelectionRequired as error:
+        result = {"ok": False, "code": "workspace_ambiguous", "workspaces": error.choices}
     except LoginError as error:
         result = {"ok": False, "code": str(error)}
     except Exception:

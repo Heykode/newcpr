@@ -599,15 +599,28 @@ impl AccountGroupStore for MemoryAccountGroupStore {
                 "unknown group",
             ));
         }
-        Ok(state
+        let mut result = state
             .monitor
             .as_ref()
-            .filter(|(revision, _)| *revision == state.revision.get())
-            .map(|(_, report)| {
+            .map(|(revision, report)| {
                 let mut report = report.clone();
+                report.refreshing = *revision != state.revision.get();
                 report.items.retain(|item| ids.contains(&item.group.id));
                 report
-            }))
+            })
+            .unwrap_or_else(|| gateway_admin::model::group_monitor::GroupMonitorReport {
+                generated_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+                refreshing: true,
+                pending_group_ids: Vec::new(),
+                items: Vec::new(),
+            });
+        result.pending_group_ids = ids
+            .iter()
+            .filter(|id| !result.items.iter().any(|item| &item.group.id == *id))
+            .cloned()
+            .collect();
+        result.refreshing |= !result.pending_group_ids.is_empty();
+        Ok(Some(result))
     }
 
     async fn list_account_groups(

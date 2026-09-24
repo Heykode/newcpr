@@ -1,6 +1,58 @@
 use gateway_admin::model::relogin::{ReloginSettings, parse_relogin_import, validate_ids};
 
 #[test]
+fn relogin_workspace_choices_validate_bounds_uniqueness_and_tied_known_plans() {
+    use gateway_admin::model::relogin::{ReloginWorkspaceChoice, validate_workspace_choices};
+    let good = vec![
+        ReloginWorkspaceChoice {
+            id: "a".into(),
+            name: "Team A".into(),
+            plan_type: "business".into(),
+        },
+        ReloginWorkspaceChoice {
+            id: "b".into(),
+            name: "".into(),
+            plan_type: "business".into(),
+        },
+    ];
+    assert!(validate_workspace_choices(&good).is_ok());
+    for variant in [
+        "empty",
+        "single",
+        "duplicate",
+        "unknown",
+        "mixed",
+        "long",
+        "control",
+        "id",
+    ] {
+        let mut choices = good.clone();
+        match variant {
+            "empty" => choices.clear(),
+            "single" => {
+                choices.pop();
+            }
+            "duplicate" => choices[1].id = "a".into(),
+            "unknown" => choices[1].plan_type = "future".into(),
+            "mixed" => choices[1].plan_type = "free".into(),
+            "long" => choices[1].name = "a".repeat(129),
+            "control" => choices[1].name = "a\nb".into(),
+            "id" => choices[1].id = "a b".into(),
+            _ => unreachable!(),
+        }
+        assert!(validate_workspace_choices(&choices).is_err(), "{variant}");
+    }
+    let mut wire = serde_json::to_value(&good[0]).unwrap();
+    wire["access_token"] = serde_json::json!("synthetic-only");
+    assert!(serde_json::from_value::<ReloginWorkspaceChoice>(wire).is_err());
+    let error = gateway_admin::ports::provider::ProviderAdminError::new(
+        gateway_admin::ports::provider::ProviderAdminErrorKind::Unavailable,
+    )
+    .with_relogin_workspace_choices(good);
+    assert!(!format!("{error:?}").contains("Team A"));
+}
+
+#[test]
 fn relogin_parser_preserves_password_and_normalizes_email_and_totp() {
     let rows = parse_relogin_import(
         "\u{feff} Test@Example.invalid ---- p%a----ss ----jbsw y3dp-ehpk3pxp\r\n\n",

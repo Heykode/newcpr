@@ -16,7 +16,7 @@ impl PgAccountGroupRepository {
         config_revision: u64,
     ) -> StoreResult<()> {
         let revision = signed(config_revision)?;
-        if revision == 0 {
+        if revision == 0 || report.refreshing || !report.pending_group_ids.is_empty() {
             return Err(invalid("monitor revision"));
         }
         let mut tx = self
@@ -29,8 +29,8 @@ impl PgAccountGroupRepository {
             .await
             .map_err(|_| unavailable("monitor publication budget"))?;
         for item in &report.items {
-            // Deleted groups are skipped. A changed config revision makes this
-            // sample unreadable until the next cycle, without locking business rows.
+            // Deleted groups are skipped. Previous samples remain displayable
+            // while a changed configuration waits for its next complete cycle.
             sqlx::query(
                 "insert into account_group_monitor_snapshots (
                    group_id, config_revision, sampled_at, total_accounts, eligible_accounts,
@@ -77,10 +77,10 @@ impl PgAccountGroupRepository {
             .map(ToString::to_string)
             .collect::<Vec<_>>();
         let rows = sqlx::query(
-            "select g.id, g.name, g.color, g.enabled, s.*
+            "select g.id, g.name, g.color, g.enabled, r.config_revision as current_revision, s.*
                from account_groups g cross join runtime_settings r
                left join account_group_monitor_snapshots s
-                 on s.group_id = g.id and s.config_revision = r.config_revision
+                 on s.group_id = g.id
               where r.id = 1 and g.id = any($1::text[]) order by g.created_at, g.id",
         )
         .bind(&ids)
@@ -90,22 +90,44 @@ impl PgAccountGroupRepository {
         if rows.len() != ids.len() {
             return Err(invalid("monitor groups changed"));
         }
-        let mut report: Option<GroupMonitorReport> = None;
+        let mut report = GroupMonitorReport {
+            generated_at: DateTime::<Utc>::UNIX_EPOCH,
+            refreshing: false,
+            pending_group_ids: Vec::new(),
+            items: Vec::new(),
+        };
         for row in &rows {
             let Some(sampled_at) = row
                 .try_get::<Option<DateTime<Utc>>, _>("sampled_at")
                 .map_err(|_| invalid("monitor sample time"))?
             else {
-                return Ok(None);
+                report.pending_group_ids.push(
+                    AccountGroupId::new(
+                        row.try_get::<String, _>("id")
+                            .map_err(|_| invalid("monitor group"))?,
+                    )
+                    .map_err(|_| invalid("monitor group"))?,
+                );
+                report.refreshing = true;
+                continue;
             };
-            let result = report.get_or_insert_with(|| GroupMonitorReport {
-                generated_at: sampled_at,
-                items: Vec::new(),
-            });
-            result.generated_at = result.generated_at.min(sampled_at);
-            result.items.push(decode(row)?);
+            report.generated_at = if report.items.is_empty() {
+                sampled_at
+            } else {
+                report.generated_at.min(sampled_at)
+            };
+            report.refreshing |=
+                counter(row, "config_revision")? != counter(row, "current_revision")?;
+            let mut item = decode(row)?;
+            if !item.group.enabled {
+                item.remaining_status = "disabled";
+                item.expiry_status = "disabled";
+                item.eta_status = "disabled";
+                item.eligible_accounts = 0;
+            }
+            report.items.push(item);
         }
-        Ok(report)
+        Ok(Some(report))
     }
 }
 
@@ -129,6 +151,9 @@ fn status(row: &PgRow, name: &str) -> StoreResult<&'static str> {
         "ready" => Ok("ready"),
         "partial" => Ok("partial"),
         "learning" => Ok("learning"),
+        "lifespan_learning" => Ok("lifespan_learning"),
+        "rate_sampling" => Ok("rate_sampling"),
+        "all_accounts_outlived_average" => Ok("all_accounts_outlived_average"),
         "unknown" => Ok("unknown"),
         "disabled" => Ok("disabled"),
         "idle" => Ok("idle"),

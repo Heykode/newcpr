@@ -96,6 +96,10 @@ test('pin parsing rejects malformed data and sorting leaves source order untouch
   assert.equal(presentation.monitorMoney(Infinity), '未知')
   assert.equal(presentation.monitorMoney(null, 'learning'), '暂无估值')
   assert.equal(presentation.monitorMoney(0), '$0.00')
+  assert.equal(presentation.monitorMoney(null, 'lifespan_learning'), '寿命学习中')
+  assert.equal(presentation.monitorMoney(null, 'rate_sampling'), '消耗采样中')
+  assert.equal(presentation.monitorMoney(null, 'all_accounts_outlived_average'), '已超平均寿命')
+  assert.match(presentation.monitorExpiryHint('all_accounts_outlived_average'), /5 个有效死亡样本/u)
   assert.equal(presentation.monitorEta(null, 'idle'), '暂无消耗')
   assert.equal(presentation.monitorEta(Infinity, 'ready'), '未知')
   assert.equal(presentation.monitorEta(50, 'ready'), '50 分钟')
@@ -187,6 +191,82 @@ test('an incomplete reply is an error, never a healthy empty group', async (t) =
   await tick()
   assert.equal(h.state.error.value, true)
   assert.equal(h.state.records.value.size, 0)
+})
+
+test('pending first samples do not erase existing values or fabricate a zero balance', async (t) => {
+  const h = harness(t)
+  const generatedAt = '2026-09-15T00:00:00Z'
+  h.pending[0].resolve({
+    viewerScope: 'admin:one',
+    generatedAt,
+    refreshing: true,
+    pendingGroupIds: ['grp_2'],
+    items: [{ id: 'grp_1', remainingUsd: 120 }],
+  })
+  await tick()
+  assert.equal(h.state.error.value, false)
+  assert.equal(h.state.refreshing.value, true)
+  assert.equal(h.state.records.value.get('grp_1').remainingUsd, 120)
+  assert.equal(h.state.records.value.has('grp_2'), false)
+  h.advance(10_000)
+  h.reply(1)
+  await tick()
+  assert.equal(h.state.refreshing.value, false)
+  assert.equal(h.state.records.value.get('grp_2').remainingUsd, 2)
+
+  h.advance(50_000)
+  h.pending[2].resolve({
+    viewerScope: 'admin:one',
+    generatedAt,
+    refreshing: true,
+    pendingGroupIds: ['grp_2'],
+    items: [{ id: 'grp_1', remainingUsd: 120 }],
+  })
+  await tick()
+  assert.equal(h.state.records.value.get('grp_2').remainingUsd, 2)
+  assert.equal(h.state.stale.value, true)
+  assert.equal(h.state.error.value, false)
+})
+
+test('pending IDs must not duplicate, overlap items, or name another group', async (t) => {
+  const h = harness(t)
+  h.reply(0)
+  await tick()
+  for (const pendingGroupIds of [['grp_1'], ['grp_3'], ['grp_2', 'grp_2']]) {
+    h.advance(10_000)
+    h.pending.at(-1).resolve({
+      viewerScope: 'admin:one',
+      generatedAt: '2026-09-15T00:00:00Z',
+      pendingGroupIds,
+      items: [{ id: 'grp_1', remainingUsd: 900 }],
+    })
+    await tick()
+    assert.equal(h.state.error.value, true)
+    assert.equal(h.state.records.value.get('grp_1').remainingUsd, 1)
+  }
+})
+
+test('a recent sample from an older configuration is retained but marked as updating', async (t) => {
+  const h = harness(t)
+  h.reply(0)
+  await tick()
+  h.advance(10_000)
+  h.pending[1].resolve({
+    viewerScope: 'admin:one',
+    generatedAt: '2026-09-15T00:00:00Z',
+    refreshing: true,
+    pendingGroupIds: [],
+    items: h.pending[1].ids.map(id => ({ id, remainingUsd: 120 })),
+  })
+  await tick()
+  assert.equal(h.state.error.value, false)
+  assert.equal(h.state.refreshing.value, true)
+  assert.equal(h.state.stale.value, true)
+  assert.equal(h.state.records.value.get('grp_1').remainingUsd, 120)
+  h.advance(10_000)
+  h.reply(2)
+  await tick()
+  assert.equal(h.state.stale.value, false)
 })
 
 test('automatic reads share snapshots while manual refresh samples without duplicate requests', async (t) => {

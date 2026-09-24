@@ -313,12 +313,13 @@ async fn monitor_page_reads_never_sample_or_relabel_a_saved_timestamp() {
     let fixture = authenticated_fixture().await;
     let uri = format!("/api/admin/account-groups/monitor?groupIds={PRIMARY_GROUP_ID}");
     for _ in 0..2 {
-        assert_eq!(
-            request(router(&fixture), Method::GET, &uri, None, true)
-                .await
-                .status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
+        let response = request(router(&fixture), Method::GET, &uri, None, true).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = response_json(response).await;
+        assert_eq!(value["data"]["items"], json!([]));
+        assert_eq!(value["data"]["pendingGroupIds"], json!([PRIMARY_GROUP_ID]));
+        assert_eq!(value["data"]["refreshing"], true);
+        assert_eq!(value["data"]["generatedAt"], "1970-01-01T00:00:00Z");
     }
     fixture
         .services
@@ -404,6 +405,8 @@ async fn monitor_route_returns_explicit_wire_and_does_not_change_group_revision(
     let value = response_json(response).await;
     let data = &value["data"];
     assert_eq!(data["rateWindowSeconds"], 60);
+    assert_eq!(data["refreshing"], false);
+    assert_eq!(data["pendingGroupIds"], json!([]));
     assert!(
         data["viewerScope"]
             .as_str()

@@ -55,6 +55,7 @@ pub struct ReloginView {
     pub workspace_id: Option<String>,
     pub preferred_workspace_id: Option<String>,
     pub workspace_mode: ReloginWorkspaceMode,
+    pub workspace_choices: Vec<ReloginWorkspaceChoice>,
     pub push_targets: Vec<workspace::PushTargetView>,
     pub credential_status: &'static str,
     pub pool_status: &'static str,
@@ -160,6 +161,12 @@ pub trait ReloginService: Send + Sync {
     async fn delete(&self, ids: &[String]) -> Result<(), AdminError>;
     async fn automatic(&self, ids: &[String], enabled: bool) -> Result<(), AdminError>;
     async fn workspace(&self, id: &str, workspace: Option<String>) -> Result<(), AdminError>;
+    async fn resume_workspace(
+        &self,
+        id: &str,
+        revision: u64,
+        workspace_id: &str,
+    ) -> Result<(), AdminError>;
     async fn configure(&self, settings: ReloginSettings) -> Result<(), AdminError> {
         self.configure_update(settings.into()).await
     }
@@ -755,6 +762,8 @@ impl ReloginService for DefaultReloginService {
         entry.target = Some(target.clone());
         entry.workspace_mode = ReloginWorkspaceMode::Original;
         entry.workspace_targets.clear();
+        entry.workspace_choices.clear();
+        entry.selected_workspace_id = None;
         entry.automatic_job = false;
         entry.manual_push_context = Some(context.clone());
         entry.credential = None;
@@ -833,6 +842,11 @@ impl ReloginService for DefaultReloginService {
                         material_error.map_or(entry.message, |error| error.message().to_owned())
                     },
                     preferred_workspace_id: entry.preferred_workspace_id,
+                    workspace_choices: if !has_totp {
+                        Vec::new()
+                    } else {
+                        entry.workspace_choices
+                    },
                     plan_type: credential.map(|value| value.plan_type.clone()).or_else(|| {
                         matches
                             .first()
@@ -934,6 +948,8 @@ impl ReloginService for DefaultReloginService {
                 entry.target = None;
                 entry.workspace_mode = ReloginWorkspaceMode::Original;
                 entry.workspace_targets.clear();
+                entry.workspace_choices.clear();
+                entry.selected_workspace_id = None;
                 entry.message = "资料已更新，等待处理".to_owned();
                 let expected = entry.revision;
                 entry.revision = expected
@@ -959,6 +975,8 @@ impl ReloginService for DefaultReloginService {
                     automatic_job: false,
                     workspace_mode: ReloginWorkspaceMode::Original,
                     workspace_targets: Vec::new(),
+                    workspace_choices: Vec::new(),
+                    selected_workspace_id: None,
                     manual_push_context: None,
                     automatic_attempts: 0,
                     stop_reason: None,
@@ -1157,12 +1175,24 @@ impl ReloginService for DefaultReloginService {
         entry.target = None;
         entry.workspace_mode = ReloginWorkspaceMode::Original;
         entry.workspace_targets.clear();
+        entry.workspace_choices.clear();
+        entry.selected_workspace_id = None;
         entry.synced_at = None;
         entry.automatic_attempts = 0;
         entry.stop_reason = None;
         entry.status = ReloginStatus::Pending;
         entry.message = "工作区选择已更新，等待重新获取凭据".to_owned();
         self.save(&mut entry).await
+    }
+
+    async fn resume_workspace(
+        &self,
+        id: &str,
+        revision: u64,
+        workspace_id: &str,
+    ) -> Result<(), AdminError> {
+        self.resume_selected_workspace(id, revision, workspace_id)
+            .await
     }
 
     async fn configure_update(&self, update: ReloginSettingsUpdate) -> Result<(), AdminError> {
