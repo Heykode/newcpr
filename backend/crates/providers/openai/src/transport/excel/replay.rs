@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use gateway_core::{
     account::OpaqueProviderData,
@@ -159,6 +163,7 @@ impl ReplayCapture {
             .and_then(Value::as_array)
             .ok_or(ExcelRequestError::History)?;
         let mut record = self.record.clone();
+        let output_start = record.input.len();
         let mut calls = Vec::new();
         for item in output {
             let mut replay_item = item.clone();
@@ -193,6 +198,7 @@ impl ReplayCapture {
             }
             record.input.push(replay_item);
         }
+        prune_compacted_history(&mut record, output_start);
         validate_record(&record)?;
         for (call_id, item, signature) in calls {
             write(
@@ -210,6 +216,80 @@ impl ReplayCapture {
         )
         .await
     }
+}
+
+fn prune_compacted_history(record: &mut ReplayRecord, output_start: usize) {
+    // Only a genuine successful upstream output can replace our stored window.
+    // Incoming explicit compact windows are already canonical and stay untouched.
+    let Some(index) = record
+        .input
+        .iter()
+        .enumerate()
+        .skip(output_start)
+        .filter(|(_, item)| {
+            item.get("type").and_then(Value::as_str) == Some("compaction")
+                && item
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+        })
+        .map(|(index, _)| index)
+        .next_back()
+    else {
+        return;
+    };
+    let mut pending = BTreeSet::new();
+    for item in &record.input[..index] {
+        let Some(id) = item.get("call_id").and_then(Value::as_str) else {
+            continue;
+        };
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call" | "custom_tool_call") => {
+                pending.insert(id);
+            }
+            Some("function_call_output" | "custom_tool_call_output") => {
+                pending.remove(id);
+            }
+            _ => {}
+        }
+    }
+    if !pending.is_empty() {
+        return;
+    }
+    // Do not orphan a result or repeated call whose native identity precedes the marker.
+    let old_ids: BTreeSet<_> = record.input[..index]
+        .iter()
+        .filter_map(|item| item.get("call_id").and_then(Value::as_str))
+        .collect();
+    if record.input[index..]
+        .iter()
+        .filter_map(|item| item.get("call_id").and_then(Value::as_str))
+        .any(|id| old_ids.contains(id))
+    {
+        return;
+    }
+    let mut position = 0;
+    record.input.retain(|item| {
+        let keep = position >= index
+            || matches!(
+                item.get("role").and_then(Value::as_str),
+                Some("system" | "developer")
+            )
+            || item.get("type").and_then(Value::as_str) == Some("additional_tools");
+        position += 1;
+        keep
+    });
+    let retained: BTreeSet<_> = record
+        .input
+        .iter()
+        .filter_map(|item| item.get("call_id").and_then(Value::as_str))
+        .collect();
+    record
+        .native_calls
+        .retain(|id, _| retained.contains(id.as_str()));
+    record
+        .client_calls
+        .retain(|id, _| retained.contains(id.as_str()));
 }
 
 fn validate_record(record: &ReplayRecord) -> Result<(), ExcelRequestError> {
@@ -263,6 +343,98 @@ async fn write(
 mod tests {
     use super::super::tests::MemoryReplay;
     use super::*;
+
+    #[tokio::test]
+    async fn compaction_prunes_only_successful_upstream_history_and_preserves_scope() {
+        let store: Arc<dyn ProviderReplayPort> = Arc::new(MemoryReplay::default());
+        let tools = ClientTools::parse(
+            json!({"tools":[{"type":"function","name":"read"}]})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        let initial = restore(
+            store.clone(),
+            "owner".into(),
+            "thread".into(),
+            None,
+            &json!([
+                message("developer", "Keep instructions."),
+                message("user", "Remember 521."),
+                {"type":"function_call","name":"read","call_id":"old","arguments":"{}"},
+                {"type":"function_call_output","call_id":"old","output":"ok"}
+            ]),
+        )
+        .await
+        .unwrap();
+        let compact =
+            json!({"type":"compaction","encrypted_content":"opaque-fixture","id":"cmp_fixture"});
+        let next_call = rebuild_history_call(
+            &json!({"type":"function_call","name":"read","call_id":"next","arguments":"{}"}),
+        )
+        .unwrap();
+        initial
+            .capture
+            .commit(
+                &json!({
+                    "id":"resp_compact","status":"completed","output":[compact, next_call]
+                }),
+                &tools,
+            )
+            .await
+            .unwrap();
+        let next = restore(
+            store.clone(),
+            "owner".into(),
+            "new-anchor".into(),
+            Some("resp_compact"),
+            &json!([{"type":"function_call_output","call_id":"next","output":"done"}]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(next.input.len(), 4);
+        assert_eq!(next.input[0], message("developer", "Keep instructions."));
+        assert_eq!(next.input[1], compact);
+        assert_eq!(next.conversation, "thread");
+        assert_eq!(next.native_calls.len(), 1);
+        assert!(next.native_calls.contains_key("next"));
+        assert!(
+            restore(
+                store,
+                "other".into(),
+                "thread".into(),
+                Some("resp_compact"),
+                &json!("next")
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn compaction_never_discards_pending_tools_or_unverified_input() {
+        let compact = json!({"type":"compaction","encrypted_content":"opaque-fixture"});
+        let mut record = ReplayRecord {
+            version: 1,
+            owner: "owner".into(),
+            conversation: "thread".into(),
+            input: vec![message("user", "keep"), compact.clone()],
+            native_calls: BTreeMap::new(),
+            client_calls: BTreeMap::new(),
+        };
+        prune_compacted_history(&mut record, 2);
+        assert_eq!(record.input.len(), 2);
+        record.input[1]["encrypted_content"] = "".into();
+        prune_compacted_history(&mut record, 1);
+        assert_eq!(record.input.len(), 2);
+        record.input = vec![
+            message("user", "keep"),
+            json!({"type":"function_call","call_id":"pending"}),
+            compact,
+        ];
+        prune_compacted_history(&mut record, 2);
+        assert_eq!(record.input.len(), 3);
+    }
 
     #[tokio::test]
     async fn excel_replay_is_incremental_and_scoped_to_owner_and_conversation() {

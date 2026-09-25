@@ -1,6 +1,6 @@
 //! Reference attachment fallback with bounded input and no silent picture removal.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
@@ -42,6 +42,17 @@ pub(crate) fn has_inline(body: &Map<String, Value>) -> bool {
     body.get("input").is_some_and(contains_inline)
 }
 
+pub(crate) fn has_user_inline(body: &Map<String, Value>) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("role").and_then(Value::as_str) == Some("user")
+                    && item.get("content").is_some_and(contains_inline)
+            })
+        })
+}
+
 fn contains_inline(value: &Value) -> bool {
     match value {
         Value::Array(items) => items.iter().any(contains_inline),
@@ -60,8 +71,57 @@ fn contains_inline(value: &Value) -> bool {
 pub(super) struct Picture {
     pub(super) url: String,
     pub(super) media: &'static str,
-    extension: &'static str,
+    pub(super) extension: &'static str,
     pub(super) bytes: Vec<u8>,
+}
+
+/// Upper bound without decoding or copying data URLs, for global relay admission.
+pub(super) fn decoded_budget(value: &Value) -> Result<usize, CodexClientError> {
+    fn visit<'a>(value: &'a Value, urls: &mut BTreeSet<&'a str>) -> Result<(), CodexClientError> {
+        match value {
+            Value::Array(items) => {
+                for item in items {
+                    visit(item, urls)?;
+                }
+            }
+            Value::Object(fields) => {
+                if fields.get("type").and_then(Value::as_str) == Some("input_image")
+                    && let Some(url) = fields
+                        .get("image_url")
+                        .and_then(Value::as_str)
+                        .filter(|url| url.starts_with("data:"))
+                {
+                    urls.insert(url);
+                    if urls.len() > MAX_IMAGES || url.len() > MAX_IMAGE_BYTES * 4 / 3 + 128 {
+                        return Err(invalid("Excel attachment input limit exceeded"));
+                    }
+                } else {
+                    for item in fields.values() {
+                        visit(item, urls)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut urls = BTreeSet::new();
+    visit(value, &mut urls)?;
+    let mut total = 0usize;
+    for url in urls {
+        let (_, data) = url
+            .split_once(',')
+            .ok_or_else(|| invalid("Malformed image data URL"))?;
+        let size = data.len().div_ceil(4) * 3;
+        if size == 0 || size > MAX_IMAGE_BYTES + 2 {
+            return Err(invalid("Excel attachment input limit exceeded"));
+        }
+        total += size;
+    }
+    if total > MAX_TOTAL_BYTES + MAX_IMAGES * 2 {
+        return Err(invalid("Excel attachment input limit exceeded"));
+    }
+    Ok(total)
 }
 
 pub(super) fn collect(

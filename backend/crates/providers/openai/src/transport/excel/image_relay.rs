@@ -7,6 +7,7 @@ use std::{
 use bytes::Bytes;
 use gateway_core::provider_ports::{TemporaryImage, TemporaryImageSource};
 use serde_json::{Map, Value};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
 use super::{ExcelRequestError, images};
@@ -18,6 +19,30 @@ const MAX_ENTRIES: usize = 128;
 pub(crate) struct ImageRelay {
     origin: Option<String>,
     entries: Mutex<BTreeMap<String, Entry>>,
+    byte_budget: Arc<Semaphore>,
+    downloads: Arc<Semaphore>,
+}
+
+struct ImageBytes {
+    bytes: Vec<u8>,
+    _capacity: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for ImageBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+struct DownloadBytes {
+    bytes: Bytes,
+    _slot: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for DownloadBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 struct Entry {
@@ -69,6 +94,8 @@ impl ImageRelay {
         Self {
             origin,
             entries: Mutex::new(BTreeMap::new()),
+            byte_budget: Arc::new(Semaphore::new(MAX_BYTES)),
+            downloads: Arc::new(Semaphore::new(32)),
         }
     }
 
@@ -79,13 +106,20 @@ impl ImageRelay {
         let Some(origin) = &self.origin else {
             return Ok(None);
         };
+        let input = body.get("input").unwrap_or(&Value::Null);
+        let budget = images::decoded_budget(input).map_err(|_| ExcelRequestError::Input)?;
+        if budget == 0 {
+            return Ok(None);
+        }
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, entry| entry.expires > Instant::now());
+        let mut reserved = Arc::clone(&self.byte_budget)
+            .try_acquire_many_owned(budget as u32)
+            .map_err(|_| ExcelRequestError::ImageRelay)?;
         let mut pictures = Vec::new();
-        images::collect(
-            body.get("input").unwrap_or(&Value::Null),
-            &mut pictures,
-            &mut 0,
-        )
-        .map_err(|_| ExcelRequestError::Input)?;
+        images::collect(input, &mut pictures, &mut 0).map_err(|_| ExcelRequestError::Input)?;
         if pictures.is_empty() {
             return Ok(None);
         }
@@ -121,13 +155,7 @@ impl ImageRelay {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         entries.retain(|_, entry| entry.expires > now);
-        let bytes: usize = entries.values().map(|entry| entry.bytes.len()).sum();
-        let added: usize = candidates
-            .iter()
-            .map(|(_, picture)| picture.bytes.len())
-            .sum();
-        if entries.len() + candidates.len() > MAX_ENTRIES || bytes.saturating_add(added) > MAX_BYTES
-        {
+        if entries.len() + candidates.len() > MAX_ENTRIES {
             return Err(ExcelRequestError::ImageRelay);
         }
         let mut replacements = BTreeMap::new();
@@ -140,7 +168,12 @@ impl ImageRelay {
             entries.insert(
                 token.clone(),
                 Entry {
-                    bytes: Bytes::from(picture.bytes),
+                    bytes: Bytes::from_owner(ImageBytes {
+                        _capacity: reserved
+                            .split(picture.bytes.len())
+                            .expect("decoded size is bounded by the base64 estimate"),
+                        bytes: picture.bytes,
+                    }),
                     content_type: picture.media,
                     expires: now + TTL,
                     downloads: 0,
@@ -173,10 +206,15 @@ impl TemporaryImageSource for ImageRelay {
         if entry.downloads >= 16 {
             return None;
         }
+        let slot = Arc::clone(&self.downloads).try_acquire_owned().ok()?;
         entry.downloads += 1;
         Some(TemporaryImage {
             content_type: entry.content_type,
-            bytes: entry.bytes.clone(),
+            // Both permits live until the last HTTP-body clone is released.
+            bytes: Bytes::from_owner(DownloadBytes {
+                bytes: entry.bytes.clone(),
+                _slot: slot,
+            }),
         })
     }
 }
@@ -272,5 +310,65 @@ mod tests {
         ] {
             assert!(!validate_origin(origin));
         }
+    }
+
+    #[test]
+    fn excel_image_capacity_and_download_slots_follow_body_lifetime() {
+        let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
+        let leases: Vec<_> = (0..3)
+            .map(|_| relay.stage(&mut input()).unwrap().unwrap())
+            .collect();
+        let bytes_per_image = relay
+            .entries
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .bytes
+            .len();
+        let mut downloads = Vec::new();
+        for index in 0..32 {
+            downloads.push(relay.read(&leases[index % 3].tokens[0]).unwrap());
+        }
+        assert!(relay.read(&leases[0].tokens[0]).is_none());
+        let token = leases[0].tokens[0].clone();
+        drop(leases);
+        assert!(relay.read(&token).is_none());
+        assert_eq!(
+            relay.byte_budget.available_permits(),
+            MAX_BYTES - 3 * bytes_per_image
+        );
+        let copy = downloads[0].bytes.clone();
+        drop(downloads);
+        assert_eq!(relay.downloads.available_permits(), 31);
+        assert_eq!(
+            relay.byte_budget.available_permits(),
+            MAX_BYTES - bytes_per_image
+        );
+        drop(copy);
+        assert_eq!(relay.byte_budget.available_permits(), MAX_BYTES);
+        assert_eq!(relay.downloads.available_permits(), 32);
+        let all = Arc::clone(&relay.byte_budget)
+            .try_acquire_many_owned(MAX_BYTES as u32)
+            .unwrap();
+        let mut bad = input();
+        bad["input"][0]["content"][0]["image_url"] = "data:image/png;base64,!!!!".into();
+        assert!(matches!(
+            relay.stage(&mut bad),
+            Err(ExcelRequestError::ImageRelay)
+        ));
+        assert!(
+            relay
+                .stage(json!({"input":"text"}).as_object_mut().unwrap())
+                .unwrap()
+                .is_none()
+        );
+        drop(all);
+        assert!(matches!(
+            relay.stage(&mut bad),
+            Err(ExcelRequestError::Input)
+        ));
+        assert_eq!(relay.byte_budget.available_permits(), MAX_BYTES);
     }
 }

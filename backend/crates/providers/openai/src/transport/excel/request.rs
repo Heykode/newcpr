@@ -26,6 +26,10 @@ pub(crate) enum ExcelRequestError {
     Format,
     #[error("Excel image relay is unavailable or full")]
     ImageRelay,
+    #[error(
+        "unsupported Excel image-tool request; use PNG, gpt-image-2 and supported image options"
+    )]
+    Image,
 }
 
 pub(crate) fn prepare_request(
@@ -77,7 +81,9 @@ pub(crate) fn prepare_request(
     .find_map(|name| source.get(*name).and_then(Value::as_str))
     .filter(|value| !value.trim().is_empty())
     .unwrap_or(&root);
-    let (turn, iteration) = turn_identity(&history);
+    let (turn, _) = turn_identity(&history);
+    // Rebuilt native calls may separate output-only items on the wire; count client rounds.
+    let (_, iteration) = turn_identity(raw.as_array().map(Vec::as_slice).unwrap_or(&history));
     let mut input = Vec::with_capacity(history.len() + 3);
     if let Some(instructions) = source.get("instructions").and_then(Value::as_str)
         && !instructions.trim().is_empty()
@@ -275,18 +281,24 @@ fn turn_identity(input: &[Value]) -> (String, usize) {
         .iter()
         .rposition(|item| item.get("role").and_then(Value::as_str) == Some("user"))
         .map_or(usize::from(!input.is_empty()), |index| index + 1);
-    let outputs = input[user_end..]
-        .iter()
-        .filter(|item| {
-            matches!(
-                item.get("type").and_then(Value::as_str),
-                Some("function_call_output" | "custom_tool_call_output")
-            )
-        })
-        .count();
+    let mut rounds = 0;
+    let mut in_results = false;
+    for item in input.iter().skip(
+        input
+            .iter()
+            .rposition(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+            .map_or(0, |index| index + 1),
+    ) {
+        let is_result = matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call_output" | "custom_tool_call_output")
+        );
+        rounds += usize::from(is_result && !in_results);
+        in_results = is_result;
+    }
     (
         stable_hash(&Value::Array(input[..user_end].to_vec())),
-        outputs + 1,
+        rounds + 1,
     )
 }
 
@@ -366,5 +378,25 @@ mod tests {
         ]);
         assert_eq!(turn, continued_turn);
         assert_eq!((iteration, continued_iteration), (1, 2));
+    }
+
+    #[test]
+    fn parallel_results_count_as_one_iteration_per_round() {
+        let user = message("user", "read");
+        let result = json!({"type":"function_call_output","call_id":"a","output":"ok"});
+        let custom = json!({"type":"custom_tool_call_output","call_id":"b","output":"ok"});
+        assert_eq!(turn_identity(&[result.clone(), custom.clone()]).1, 2);
+        assert_eq!(turn_identity(&[user.clone(), result.clone(), custom]).1, 2);
+        assert_eq!(
+            turn_identity(&[
+                user.clone(),
+                result.clone(),
+                message("assistant", "next"),
+                result.clone()
+            ])
+            .1,
+            3
+        );
+        assert_eq!(turn_identity(&[result, user]).1, 1);
     }
 }

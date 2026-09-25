@@ -90,17 +90,39 @@ fn decode_code(mut value: Value) -> Result<Value, ExcelRequestError> {
             value = body.trim().into();
             continue;
         }
-        if let Some(index) = raw.find('{')
-            && index > 0
-            && prose_prefix(&raw[..index])
-            && let Some(decoded) = parse_formatted_json(&raw[index..])
-        {
+        if let Some(decoded) = embedded_envelope(raw) {
             value = decoded;
             continue;
         }
         return Err(INVALID);
     }
     value.is_object().then_some(value).ok_or(INVALID)
+}
+
+fn embedded_envelope(raw: &str) -> Option<Value> {
+    let index = raw.find('{')?;
+    let prefix = raw[..index].trim();
+    let mut decoder = serde_json::Deserializer::from_str(&raw[index..]).into_iter::<Value>();
+    let value = decoder.next()?.ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    let suffix = raw[index + decoder.byte_offset()..].trim();
+    if prose_prefix(prefix) && prose_prefix(suffix) {
+        return Some(value);
+    }
+    // Recognize one inert name({...}) wrapper, not a program or multiple candidates.
+    let wrapper = prefix.strip_suffix('(')?.trim();
+    if !matches!(suffix, ")" | ");")
+        || wrapper.is_empty()
+        || !wrapper
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'.'))
+    {
+        return None;
+    }
+    let declared = name(&value).ok()?;
+    (wrapper == declared || wrapper.strip_prefix("functions.") == Some(declared)).then_some(value)
 }
 
 fn prose_prefix(value: &str) -> bool {

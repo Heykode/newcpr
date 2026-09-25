@@ -101,7 +101,7 @@ pub(super) async fn prepare_excel(
     Ok(())
 }
 
-fn request_error(error: ExcelRequestError) -> ProviderError {
+pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
     if error == ExcelRequestError::ImageRelay {
         return provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
             .with_status(503)
