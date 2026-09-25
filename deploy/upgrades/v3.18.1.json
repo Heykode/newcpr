@@ -1,0 +1,11 @@
+{
+  "from_version": "3.18.0",
+  "to_version": "3.18.1",
+  "from_migrations_tree": "7e00081fb21eab153d5e5080eb5171539e4ca50e",
+  "to_migrations_tree": "ba1a5c58265c8f3ac52f02800c8ea5baaf841bc9",
+  "added": [
+    "0039_account_responses_upstream.sql",
+    "0040_account_excel_models.sql"
+  ],
+  "recovery": "manual"
+}
