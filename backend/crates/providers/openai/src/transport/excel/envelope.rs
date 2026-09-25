@@ -7,7 +7,10 @@ use super::ExcelRequestError;
 const MAX_BYTES: usize = 1024 * 1024;
 const INVALID: ExcelRequestError = ExcelRequestError::ToolCall;
 
-pub(super) fn native_envelope(native: &Value) -> Result<(Value, bool), ExcelRequestError> {
+pub(super) fn native_envelope(
+    native: &Value,
+    resolve: &impl Fn(&str) -> Option<(String, bool)>,
+) -> Result<(Value, bool), ExcelRequestError> {
     let arguments = json_value(native.get("arguments").ok_or(INVALID)?)?;
     let arguments = arguments.as_object().ok_or(INVALID)?;
     if let Some(summary) = arguments.get("summary").and_then(Value::as_str)
@@ -31,7 +34,7 @@ pub(super) fn native_envelope(native: &Value) -> Result<(Value, bool), ExcelRequ
     }
     let mut value = arguments.get("code").cloned().ok_or(INVALID)?;
     for _ in 0..3 {
-        let envelope = decode_code(value)?;
+        let envelope = decode_code(value, resolve)?;
         if !matches!(name(&envelope)?, "run_officejs" | "functions.run_officejs") {
             return Ok((envelope, false));
         }
@@ -67,7 +70,10 @@ pub(super) fn json_value(value: &Value) -> Result<Value, ExcelRequestError> {
     }
 }
 
-fn decode_code(mut value: Value) -> Result<Value, ExcelRequestError> {
+fn decode_code(
+    mut value: Value,
+    resolve: &impl Fn(&str) -> Option<(String, bool)>,
+) -> Result<Value, ExcelRequestError> {
     for _ in 0..4 {
         if value.is_object() {
             return Ok(value);
@@ -80,6 +86,9 @@ fn decode_code(mut value: Value) -> Result<Value, ExcelRequestError> {
         if let Some(decoded) = parse_formatted_json(raw) {
             value = decoded;
             continue;
+        }
+        if let Some(decoded) = catalog_invocation(raw, resolve) {
+            return Ok(decoded);
         }
         if let Some((prefix, fenced)) = raw.split_once("```")
             && prose_prefix(prefix)
@@ -108,21 +117,47 @@ fn embedded_envelope(raw: &str) -> Option<Value> {
         return None;
     }
     let suffix = raw[index + decoder.byte_offset()..].trim();
-    if prose_prefix(prefix) && prose_prefix(suffix) {
-        return Some(value);
+    (prose_prefix(prefix) && prose_prefix(suffix)).then_some(value)
+}
+
+fn catalog_invocation(
+    raw: &str,
+    resolve: &impl Fn(&str) -> Option<(String, bool)>,
+) -> Option<Value> {
+    let mut raw = raw.trim();
+    for keyword in ["return", "await"] {
+        if let Some(tail) = raw.strip_prefix(keyword)
+            && tail.starts_with(char::is_whitespace)
+        {
+            raw = tail.trim_start();
+        }
     }
-    // Recognize one inert name({...}) wrapper, not a program or multiple candidates.
-    let wrapper = prefix.strip_suffix('(')?.trim();
-    if !matches!(suffix, ")" | ");")
-        || wrapper.is_empty()
-        || !wrapper
-            .bytes()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'.'))
+    let (callee, arguments) = raw.split_once('(')?;
+    let callee = callee.trim_end();
+    let mut chars = callee.bytes();
+    if !chars
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == b'_')
+        || !chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'.' | b'-'))
     {
         return None;
     }
-    let declared = name(&value).ok()?;
-    (wrapper == declared || wrapper.strip_prefix("functions.") == Some(declared)).then_some(value)
+    let (name, custom) = resolve(callee)?;
+    let mut decoder = serde_json::Deserializer::from_str(arguments).into_iter::<Value>();
+    let literal = decoder.next()?.ok()?;
+    let tail = arguments[decoder.byte_offset()..]
+        .trim()
+        .strip_prefix(')')?
+        .trim();
+    if !matches!(tail, "" | ";") {
+        return None;
+    }
+    // The callee selects the tool; fields named name/arguments are ordinary payload.
+    match (custom, literal) {
+        (true, Value::String(input)) => Some(json!({"name":name,"input":input})),
+        (false, Value::Object(args)) => Some(json!({"name":name,"arguments":args})),
+        _ => None,
+    }
 }
 
 fn prose_prefix(value: &str) -> bool {

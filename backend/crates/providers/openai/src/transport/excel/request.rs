@@ -18,6 +18,13 @@ pub(crate) enum ExcelRequestError {
     History,
     #[error("unsupported or malformed Excel request input")]
     Input,
+    #[error("unsupported Excel content (path=input[{input}].{field}[{part}]; type={kind})")]
+    Content {
+        input: usize,
+        field: &'static str,
+        part: usize,
+        kind: &'static str,
+    },
     #[error("unsupported client tool or tool choice for Excel")]
     Tool,
     #[error("Excel returned an undeclared or malformed client tool call")]
@@ -53,21 +60,7 @@ pub(crate) fn prepare_request(
     {
         return Err(ExcelRequestError::History);
     }
-    let requested_effort = source
-        .get("reasoning")
-        .and_then(|value| value.get("effort"))
-        .or_else(|| source.get("reasoning_effort"));
-    let effort = match requested_effort {
-        None | Some(Value::Null) => "medium",
-        Some(Value::String(value)) => match value.as_str() {
-            "low" => "low",
-            "medium" => "medium",
-            "high" => "high",
-            "xhigh" | "x-high" | "extra-high" | "extra_high" => "xhigh",
-            _ => return Err(ExcelRequestError::Effort),
-        },
-        _ => return Err(ExcelRequestError::Effort),
-    };
+    let (_, effort) = reasoning_effort(source)?;
     let raw = source.get("input").ok_or(ExcelRequestError::Input)?;
     let history = translate_input(raw, native_calls)?;
     let root = stable_hash(history.first().unwrap_or(&Value::Null));
@@ -137,6 +130,35 @@ pub(crate) fn prepare_request(
     Ok(result)
 }
 
+pub(crate) fn reasoning_effort(
+    source: &Map<String, Value>,
+) -> Result<(String, &'static str), ExcelRequestError> {
+    if source
+        .get("reasoning")
+        .and_then(|value| value.get("mode"))
+        .is_some_and(|value| !value.is_null() && value != "" && value != "standard")
+    {
+        return Err(ExcelRequestError::Effort);
+    }
+    let value = source
+        .get("reasoning")
+        .and_then(|value| value.get("effort"))
+        .or_else(|| source.get("reasoning_effort"));
+    let requested = match value {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(value)) => value.trim().to_ascii_lowercase(),
+        _ => return Err(ExcelRequestError::Effort),
+    };
+    let effective = match requested.as_str() {
+        "" | "medium" => "medium",
+        "none" | "minimal" | "low" => "low",
+        "high" => "high",
+        "xhigh" | "x-high" | "extra-high" | "extra_high" | "max" | "ultra" => "xhigh",
+        _ => return Err(ExcelRequestError::Effort),
+    };
+    Ok((requested, effective))
+}
+
 pub(crate) fn message(role: &str, text: &str) -> Value {
     json!({
         "type": "message", "role": role,
@@ -155,9 +177,11 @@ fn translate_input(
     let mut output = Vec::with_capacity(items.len());
     let mut origins = BTreeMap::new();
     let mut completed = BTreeSet::new();
-    for value in items {
+    let mut trigger = None;
+    for (index, value) in items.iter().enumerate() {
         let mut item = value.as_object().cloned().ok_or(ExcelRequestError::Input)?;
         item.remove("internal_chat_message_metadata_passthrough");
+        validate_content(item.get("content"), index, "content")?;
         match item
             .get("type")
             .and_then(Value::as_str)
@@ -165,6 +189,9 @@ fn translate_input(
         {
             "additional_tools" => continue,
             "configuration_update" => return Err(ExcelRequestError::Input),
+            "compaction_trigger" => {
+                trigger = Some(item.into());
+            }
             "function_call" | "custom_tool_call" => {
                 let id = item
                     .get("call_id")
@@ -209,6 +236,7 @@ fn translate_input(
                 if matches!(origin, "update_plan" | "functions.update_plan") {
                     item.insert("output".into(), "{\"status\":\"ok\"}".into());
                 }
+                validate_content(item.get("output"), index, "output")?;
                 item.insert("type".into(), "function_call_output".into());
                 item.insert("id".into(), function_item_id(&id).into());
                 if item.get("output").is_none_or(|value| {
@@ -236,7 +264,48 @@ fn translate_input(
             _ => output.push(item.into()),
         }
     }
+    output.extend(trigger);
     Ok(output)
+}
+
+fn validate_content(
+    value: Option<&Value>,
+    input: usize,
+    field: &'static str,
+) -> Result<(), ExcelRequestError> {
+    let Some(parts) = value.and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for (part, value) in parts.iter().enumerate() {
+        let kind = match value.get("type").and_then(Value::as_str) {
+            Some("input_text" | "output_text" | "text" | "refusal" | "input_image") => continue,
+            Some("image") => "image",
+            Some("image_url") => "image_url",
+            Some("input_file") => "input_file",
+            Some("file") => "file",
+            Some("document") => "document",
+            Some("input_audio") => "input_audio",
+            Some("output_audio") => "output_audio",
+            Some("audio") => "audio",
+            Some("reasoning_text") => "reasoning_text",
+            Some("summary_text") => "summary_text",
+            Some("tool_use") => "tool_use",
+            Some("tool_result") => "tool_result",
+            Some("thinking") => "thinking",
+            Some("redacted_thinking") => "redacted_thinking",
+            Some(_) => "unknown",
+            None if !value.is_object() => "non_object",
+            None if value.get("type").is_none() => "missing",
+            None => "non_string",
+        };
+        return Err(ExcelRequestError::Content {
+            input,
+            field,
+            part,
+            kind,
+        });
+    }
+    Ok(())
 }
 
 fn stable_hash(value: &Value) -> String {
@@ -353,7 +422,11 @@ mod tests {
     #[test]
     fn unsupported_effort_model_warmup_and_history_fail_before_send() {
         for (field, value, expected) in [
-            ("reasoning_effort", json!("max"), ExcelRequestError::Effort),
+            (
+                "reasoning_effort",
+                json!("unknown"),
+                ExcelRequestError::Effort,
+            ),
             ("model", json!("invalid model"), ExcelRequestError::Model),
             ("generate", json!(false), ExcelRequestError::Warmup),
             (

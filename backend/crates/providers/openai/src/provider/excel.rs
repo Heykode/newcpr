@@ -85,6 +85,19 @@ pub(super) async fn prepare_excel(
     let structured = StructuredOutput::parse(&source).map_err(request_error)?;
     let mut body = prepare_request(&source, &tools, &restored.native_calls, structured.as_ref())
         .map_err(request_error)?;
+    let trace = context.trace();
+    if trace.is_enabled() {
+        let (requested, effective) =
+            crate::transport::excel::reasoning_effort(&source).map_err(request_error)?;
+        trace.record(
+            "excel.compatibility",
+            json!({
+                "requestedReasoningEffort": requested,
+                "effectiveReasoningEffort": effective,
+                "unavailableHostedTools": tools.unavailable(),
+            }),
+        );
+    }
     let image_lease = image_relay.stage(&mut body).map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
     request.force_http_sse = true;

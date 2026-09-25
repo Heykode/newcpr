@@ -26,6 +26,7 @@ pub(crate) fn transform_stream(
         held_bytes: 0,
         terminal: false,
         sequence: 0,
+        effort: prepared.body.get("reasoning_effort").cloned(),
     };
     Box::pin(async_stream::try_stream! {
         let mut decoder = SseEventDecoder::default();
@@ -78,6 +79,7 @@ struct Relay {
     held_bytes: usize,
     terminal: bool,
     sequence: u64,
+    effort: Option<Value>,
 }
 
 impl Relay {
@@ -143,6 +145,9 @@ impl Relay {
         let mut result = Vec::new();
         if let Some(response) = data.get_mut("response").filter(|value| value.is_object()) {
             response["parallel_tool_calls"] = self.tools.parallel_allowed().into();
+            if let Some(effort) = &self.effort {
+                response["reasoning"] = json!({"effort":effort});
+            }
         }
         if let Some(format) = &self.structured
             && let Some(response) = data.get_mut("response").filter(|value| value.is_object())

@@ -69,6 +69,8 @@ Isolated test runners must pass only `CPR_TEST_DATABASE_URL` and
 `CPR_TEST_REDIS_URL`, not application configuration overrides. The bootstrap
 integration suite requires loopback service endpoints. After source transfer,
 verify content equality and invalidate stale timestamp-based build artifacts.
+Exclude macOS AppleDouble `._*` archive sidecars: SQLx otherwise attempts to load
+them as migration files even when every tracked source checksum matches.
 Private Excel protocol tests have exact owner/file/module allowlist entries;
 do not add public test hooks or exempt the whole provider directory.
 
@@ -138,10 +140,42 @@ Small-input rollover acceptance is not maximum-context pressure acceptance.
 Default/true parallel_tool_calls permits independent calls, false must validate
 at most one call before any executable event is emitted. Never silently discard
 extra calls. Count contiguous client tool-result rounds before wire reconstruction.
-Inert name(JSON) wrappers must match the exact inner name; ambiguous trailing
-objects or executable statements fail closed.
+Inert name(JSON) wrappers resolve an exact catalog callee (then optional functions.
+prefix fallback). The JSON literal is the arguments object or custom string;
+name/arguments inside it are payload, not a second tool envelope. Ambiguous
+trailing objects or executable statements fail closed.
 
 Image relay admission precedes base64 decoding. Bytes owners hold memory permits
 through outstanding downloads, including after lease/entry deletion. Separate
 download permits last through the HTTP body lifecycle; text never takes permits.
 Keep acceptance limitations in feature documentation and do not claim native parity.
+
+## 10. Excel Compatibility Diagnostics
+
+Scope: only Excel request/stream conversion. `reasoning_effort` returns the
+validated requested label and actual wire label. max/ultra map to xhigh,
+none/minimal to low; unknown values and nonstandard reasoning modes fail.
+Response reasoning.effort reports the actual value. `excel.compatibility`
+records only validated labels and known unavailable hosted-tool types.
+
+Converted plaintext function calls require `encrypted_function_args: []`,
+including item-added, item-done and final response. Preserve explicit encryption
+only on direct same-client-tool calls; never copy outer transport encryption
+to the inner client arguments. Existing contaminated sessions are not repaired.
+
+Auto-mode known hosted declarations are omitted with a developer capability
+warning. Forced choices, undeclared tools and unknown declarations still fail.
+This does not implement hosted search/image/connector tools.
+
+Content errors contain only input index, fixed content/output field, part index
+and whitelisted type labels. Unknown strings become unknown; missing/non-string/
+non-object types get fixed labels. Never log arbitrary type text or private input.
+Valid images and encrypted reasoning remain intact, and the compaction trigger
+is last. Generic upstream 422 is not permission to retry or drop content.
+
+Required tests: explicit empty versus preserved encryption; exact and aliased
+callees with colliding payload fields; integers above 2^53 and u64; custom
+strings; executable/multi-argument rejection; safe error paths for messages and
+tool outputs; auto declarations versus forced choices; projected effective effort.
+Good: a max request sends xhigh and reports xhigh. Base: native Codex unchanged.
+Bad: deleting genuine encrypted history or pretending filtered hosted tools ran.

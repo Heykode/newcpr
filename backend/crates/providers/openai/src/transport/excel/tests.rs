@@ -107,6 +107,306 @@ fn native_fixture(code: Value) -> Value {
 }
 
 #[test]
+fn excel_plaintext_tool_arguments_are_explicitly_not_encrypted() {
+    let tools = ClientTools::parse(
+        json!({"tools":[
+            {"type":"function","name":"spawn_agent","parameters":{"type":"object",
+                "properties":{"message":{"type":"string","encrypted":true}}}}
+        ]})
+        .as_object()
+        .unwrap(),
+    )
+    .unwrap();
+    let mut native = native_fixture(json!({"name":"spawn_agent","arguments":{"message":"hello"}}));
+    native["encrypted_function_args"] = json!(["code"]);
+    let converted = tools.convert_call(&native).unwrap();
+    assert_eq!(converted["encrypted_function_args"], json!([]));
+    assert_eq!(converted["arguments"], "{\"message\":\"hello\"}");
+    let mut direct = json!({"type":"function_call","name":"spawn_agent",
+        "call_id":"call_direct","arguments":"{\"message\":\"opaque\"}",
+        "encrypted_function_args":["message"]});
+    assert_eq!(
+        tools.convert_call(&direct).unwrap()["encrypted_function_args"],
+        json!(["message"])
+    );
+    direct
+        .as_object_mut()
+        .unwrap()
+        .remove("encrypted_function_args");
+    assert_eq!(
+        tools.convert_call(&direct).unwrap()["encrypted_function_args"],
+        json!([])
+    );
+    let tools = ClientTools::parse(
+        json!({"tools":[{"type":"function","name":"update_plan"}]})
+            .as_object()
+            .unwrap(),
+    )
+    .unwrap();
+    let plan = json!({"type":"function_call","name":"update_plan","call_id":"call_plan",
+        "arguments":json!({"plan":[{"title":"read","status":"todo"}]}).to_string(),
+        "encrypted_function_args":["plan"]});
+    assert_eq!(
+        tools.convert_call(&plan).unwrap()["encrypted_function_args"],
+        json!([])
+    );
+}
+
+#[test]
+fn excel_single_invocation_uses_the_callee_not_payload_fields() {
+    let tools = ClientTools::parse(
+        json!({"tools":[
+            {"type":"function","name":"exec","parameters":{"type":"object"}},
+            {"type":"function","name":"functions.exec","parameters":{"type":"object"}},
+            {"type":"custom","name":"patch"}
+        ]})
+        .as_object()
+        .unwrap(),
+    )
+    .unwrap();
+    let args =
+        r#"{"name":"not_a_tool","arguments":{"id":9007199254740993},"big":18446744073709551617}"#;
+    for prefix in ["", "await ", "return ", "return await ", "return\nawait\t"] {
+        let converted = tools
+            .convert_call(&native_fixture(json!(format!("{prefix}exec({args}) ;"))))
+            .unwrap();
+        assert_eq!(converted["name"], "exec");
+        let result: Value = serde_json::from_str(converted["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(result, serde_json::from_str::<Value>(args).unwrap());
+        assert!(
+            converted["arguments"]
+                .as_str()
+                .unwrap()
+                .contains("18446744073709551617")
+        );
+    }
+    let direct = tools
+        .convert_call(&native_fixture(json!("functions.exec({})")))
+        .unwrap();
+    assert_eq!(direct["name"], "functions.exec");
+    let raw = "line\n\"quoted\"\\exact";
+    let converted = tools
+        .convert_call(&native_fixture(json!(format!(
+            "await patch({})",
+            serde_json::to_string(raw).unwrap()
+        ))))
+        .unwrap();
+    assert_eq!(converted["input"], raw);
+    for code in [
+        "exec({}); exec({})",
+        "exec({}, {})",
+        "exec({}) trailing",
+        "unknown({})",
+        "exec([{}])",
+        "exec(\"text\")",
+        "patch({})",
+        "exec({}",
+        "const x = exec({});",
+        "await return exec({})",
+        "exec({}); // ignored?",
+        "exec({\"x\":1e})",
+    ] {
+        assert!(
+            tools.convert_call(&native_fixture(json!(code))).is_err(),
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn excel_optional_hosted_declarations_do_not_block_text_or_authorize_calls() {
+    for kind in [
+        "web_search",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+        "web_search_2025_08_26",
+        "tool_search",
+        "image_generation",
+        "file_search",
+        "code_interpreter",
+        "computer",
+        "computer_use_preview",
+        "mcp",
+    ] {
+        let mut source = json!({"tool_choice":"auto","tools":[{"type":kind}]});
+        let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+        assert!(tools.instructions().contains("unavailable"));
+        assert!(tools.unavailable().contains(kind));
+        assert!(
+            tools
+                .convert_call(&native_fixture(json!({"name":kind,"arguments":{}})))
+                .is_err()
+        );
+        source["tool_choice"] = json!({"type":kind});
+        assert!(ClientTools::parse(source.as_object().unwrap()).is_err());
+    }
+    let source = json!({"tools":[{"type":"web_search"},{"type":"function","name":"read"}]});
+    let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+    assert!(
+        tools
+            .convert_call(&native_fixture(json!("read({})")))
+            .is_ok()
+    );
+    assert!(tools.instructions().contains("unavailable"));
+    for source in [
+        json!({"tools":[{"type":"unknown"}]}),
+        json!({"tool_choice":"required","tools":[{"type":"web_search"}]}),
+        json!({"tools":[{"type":"function"}]}),
+    ] {
+        assert!(ClientTools::parse(source.as_object().unwrap()).is_err());
+    }
+}
+
+#[test]
+fn excel_effort_normalization_is_explicit_and_content_errors_are_private() {
+    for (requested, effective) in [
+        ("max", "xhigh"),
+        (" ULTRA ", "xhigh"),
+        ("extra_high", "xhigh"),
+        ("none", "low"),
+        ("minimal", "low"),
+        ("", "medium"),
+        ("high", "high"),
+    ] {
+        let source =
+            json!({"model":VERIFIED_MODEL,"input":"hello","reasoning":{"effort":requested}});
+        let body = prepare_request(
+            source.as_object().unwrap(),
+            &ClientTools::default(),
+            &BTreeMap::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(body["reasoning_effort"], effective);
+    }
+    for reasoning in [
+        json!({"effort":7}),
+        json!({"effort":"unknown"}),
+        json!({"mode":"adaptive"}),
+    ] {
+        let source = json!({"model":VERIFIED_MODEL,"input":"hello","reasoning":reasoning});
+        assert_eq!(
+            prepare_request(
+                source.as_object().unwrap(),
+                &ClientTools::default(),
+                &BTreeMap::new(),
+                None
+            ),
+            Err(ExcelRequestError::Effort)
+        );
+    }
+    for (part, label) in [
+        (
+            json!({"type":"input_file","file_data":"PRIVATE_BODY"}),
+            "input_file",
+        ),
+        (json!({"type":"PRIVATE_TYPE\nPRIVATE_BODY"}), "unknown"),
+        (json!("PRIVATE_BODY"), "non_object"),
+        (json!({}), "missing"),
+        (json!({"type":null}), "non_string"),
+    ] {
+        let source = json!({"model":VERIFIED_MODEL,"input":[{"role":"user","content":[
+            {"type":"input_text","text":"PRIVATE_BODY"},part]}]});
+        let error = prepare_request(
+            source.as_object().unwrap(),
+            &ClientTools::default(),
+            &BTreeMap::new(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("unsupported Excel content (path=input[0].content[1]; type={label})")
+        );
+        assert!(!error.to_string().contains("PRIVATE"));
+    }
+    let native_calls = BTreeMap::from([(
+        "call_fixture".into(),
+        native_fixture(json!({"name":"read","arguments":{}})),
+    )]);
+    let source = json!({"model":VERIFIED_MODEL,"input":[
+        {"type":"function_call_output","call_id":"call_fixture","output":[{"type":"input_audio"}]}]});
+    let error = prepare_request(
+        source.as_object().unwrap(),
+        &ClientTools::default(),
+        &native_calls,
+        None,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("input[0].output[0]"));
+}
+
+#[test]
+fn excel_content_validation_preserves_images_encryption_and_final_compaction_trigger() {
+    let source = json!({"model":VERIFIED_MODEL,"input":[
+        {"type":"compaction_trigger"},
+        {"role":"user","content":[{"type":"input_text","text":"describe"},
+            {"type":"input_image","image_url":"https://images.example.com/test.png"}]},
+        {"type":"reasoning","encrypted_content":"opaque-fixture","summary":[]}
+    ]});
+    let body = prepare_request(
+        source.as_object().unwrap(),
+        &ClientTools::default(),
+        &BTreeMap::new(),
+        None,
+    )
+    .unwrap();
+    let input = body["input"].as_array().unwrap();
+    assert_eq!(input[1], source["input"][1]);
+    assert_eq!(input[2], source["input"][2]);
+    assert_eq!(input.last().unwrap(), &json!({"type":"compaction_trigger"}));
+}
+
+#[tokio::test]
+async fn excel_stream_projects_effective_effort_and_plaintext_metadata_on_all_tool_events() {
+    let source = json!({"model":VERIFIED_MODEL,"input":"delegate","reasoning":{"effort":"max"},
+        "tools":[{"type":"function","name":"spawn_agent"}]});
+    let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+    let prepared = ExcelPreparedRequest {
+        body: prepare_request(source.as_object().unwrap(), &tools, &BTreeMap::new(), None).unwrap(),
+        tools,
+        structured: None,
+        _image_lease: None,
+        completed: Default::default(),
+        replay: None,
+        endpoint: RESPONSES_URL.into(),
+    };
+    let events = [
+        json!({"type":"response.created","response":{"id":"resp_fixture","status":"in_progress","output":[]}}),
+        json!({"type":"response.completed","response":{"id":"resp_fixture","status":"completed",
+            "output":[native_fixture(json!("spawn_agent({\"message\":\"hello\"})"))]}}),
+    ];
+    let chunks = events
+        .into_iter()
+        .map(|event| Ok(bytes::Bytes::from(format!("data: {event}\n\n"))));
+    let bytes = transform_stream(Box::pin(futures::stream::iter(chunks)), &prepared)
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let events = gateway_protocol::openai::sse::SseEventDecoder::default()
+        .push(&bytes.concat())
+        .unwrap();
+    let mut responses = 0;
+    let mut tool_items = 0;
+    for event in events {
+        let event: Value = serde_json::from_str(&event.data).unwrap();
+        if let Some(response) = event.get("response") {
+            responses += 1;
+            assert_eq!(response["reasoning"]["effort"], "xhigh");
+            if event["type"] == "response.completed" {
+                assert_eq!(response["output"][0]["encrypted_function_args"], json!([]));
+            }
+        }
+        if let Some(item) = event.get("item") {
+            tool_items += 1;
+            assert_eq!(item["name"], "spawn_agent");
+            assert_eq!(item["encrypted_function_args"], json!([]));
+        }
+    }
+    assert_eq!((responses, tool_items), (2, 2));
+}
+
+#[test]
 fn excel_image_tool_options_are_explicit_and_edits_require_real_images() {
     use super::image_generation::PreparedImage;
     use crate::transport::{CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH};
@@ -263,8 +563,8 @@ fn excel_tool_formatting_aliases_and_raw_custom_preserve_values() {
         json!("```json\n{\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}}\n```"),
         json!("Tool: {\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}}"),
         json!("Tool: {\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}} Done."),
-        json!("read({\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}})"),
-        json!("functions.read({\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}});"),
+        json!("read({\"path\":\"sample.txt\"})"),
+        json!("functions.read({\"path\":\"sample.txt\"});"),
         json!({"name":"run_officejs","arguments":{"code":"{\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}}"}}),
     ] {
         let converted = tools.convert_call(&native_fixture(code)).unwrap();

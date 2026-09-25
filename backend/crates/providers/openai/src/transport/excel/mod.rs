@@ -14,7 +14,7 @@ mod structured;
 mod tests;
 mod tools;
 
-pub(crate) use request::{ExcelRequestError, prepare_request};
+pub(crate) use request::{ExcelRequestError, prepare_request, reasoning_effort};
 pub(crate) use stream::transform_stream;
 pub(crate) use structured::StructuredOutput;
 pub(crate) use tools::ClientTools;
