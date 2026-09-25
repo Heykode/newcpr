@@ -303,6 +303,7 @@ const selectedTemplate = shallowRef<AccountTemplate | null>(null)
 const batchCustomName = shallowRef('')
 const applyExcel = shallowRef(false)
 const excelEnabled = shallowRef(false)
+const excelCacheCreationAsInput = shallowRef(false)
 const excelModelsFollowGlobal = shallowRef(true)
 const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
 const confirmMode = shallowRef<'push' | 'delete'>('push')
@@ -314,6 +315,7 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   batchCustomName.value = ''
   applyExcel.value = false
   excelEnabled.value = false
+  excelCacheCreationAsInput.value = false
   excelModelsFollowGlobal.value = true
   excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
   confirmMode.value = mode
@@ -360,7 +362,7 @@ function executeConfirmed() {
           selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
       }
       const newAccountExcel = newPushCount.value > 0 && applyExcel.value
-        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value)
+        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value)
         : undefined
       batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, newAccountExcel))
     }
@@ -674,6 +676,9 @@ onBeforeUnmount(() => {
           </div>
           <BaseFormItem label="Excel 模型">
             <ExcelModelFields v-model:follow-global="excelModelsFollowGlobal" v-model:models="excelModels" :disabled="busy" />
+          </BaseFormItem>
+          <BaseFormItem label="缓存写入按普通输入计费">
+            <BaseSwitch v-model="excelCacheCreationAsInput" label="新账号缓存写入按普通输入计费" :disabled="busy || !excelEnabled" />
           </BaseFormItem>
         </template>
       </div>

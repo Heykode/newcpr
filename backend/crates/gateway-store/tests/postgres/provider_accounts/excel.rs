@@ -19,6 +19,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         .unwrap()
         .unwrap();
     assert!(global.summary.excel_models_follow_global);
+    assert!(!global.summary.excel_cache_creation_as_input);
     assert_eq!(
         global.summary.effective_excel_models.as_slice(),
         ["gpt-5.6-sol", "gpt-6-astra"]
@@ -36,6 +37,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         account_ids: vec!["acct_excel_global".into(), "acct_excel_custom".into()],
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: None,
+        excel_cache_creation_as_input: Some(true),
         excel_models: None,
         model_access: None,
         custom_name: None,
@@ -106,6 +108,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
             BatchUpdateAccounts {
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(true),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Some(
                     gateway_core::account::ExcelModels::try_from(vec!["ignored-model".into()])
                         .unwrap(),
@@ -157,6 +160,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         .unwrap()
         .unwrap();
     assert!(reimported.summary.excel_models_follow_global);
+    assert!(reimported.summary.excel_cache_creation_as_input);
     assert_eq!(
         reimported.summary.responses_upstream,
         ResponsesUpstream::Excel
@@ -171,6 +175,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
             BatchUpdateAccounts {
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(false),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Some(
                     gateway_core::account::ExcelModels::try_from(Vec::new()).unwrap(),
                 ),
@@ -205,13 +210,14 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let before: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
         account_ids: vec!["acct_excel".into()],
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: Default::default(),
+        excel_cache_creation_as_input: Some(true),
         excel_models: Some(
             gateway_core::account::ExcelModels::try_from(vec![
                 "gpt-5.6-sol".into(),
@@ -237,7 +243,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     assert_eq!(before, after);
     let loaded = repository
@@ -247,6 +253,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap();
     assert_eq!(loaded.summary.responses_upstream, ResponsesUpstream::Excel);
     assert!(!loaded.summary.excel_models_follow_global);
+    assert!(loaded.summary.excel_cache_creation_as_input);
     assert_eq!(
         loaded.summary.excel_models.as_slice(),
         ["gpt-5.6-sol", "gpt-6-astra"]
@@ -256,6 +263,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             BatchUpdateAccounts {
                 responses_upstream: None,
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 weight: Some(gateway_core::account::AccountWeight::new(2).unwrap()),
                 ..command.clone()
@@ -278,6 +286,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap()
         .unwrap();
+    assert!(configured.excel_cache_creation_as_input());
     assert_eq!(
         configured.responses_upstream_for_model("gpt-6-astra"),
         ResponsesUpstream::Excel
@@ -291,6 +300,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             BatchUpdateAccounts {
                 responses_upstream: Some(ResponsesUpstream::Codex),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 ..command
             },
@@ -307,6 +317,15 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             .summary
             .responses_upstream,
         ResponsesUpstream::Codex
+    );
+    assert!(
+        !repository
+            .load_provider_account("acct_excel")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .excel_cache_creation_as_input
     );
     database.close().await;
 }

@@ -245,6 +245,8 @@ const {
   excelEnabled: batchExcelEnabled,
   excelModels: batchExcelModels,
   excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
+  excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
+  updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
   updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
@@ -279,6 +281,7 @@ const {
   excelEnabled,
   excelModels,
   excelModelsFollowGlobal,
+  excelCacheCreationAsInput,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -649,6 +652,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-enabled="excelEnabled"
       v-model:excel-models="excelModels"
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
+      v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -670,6 +674,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-enabled="batchExcelEnabled"
       v-model:excel-models="batchExcelModels"
       v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
+      v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
+      v-model:update-excel-cache-creation-as-input="batchUpdateExcelCacheCreationAsInput"
       v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"

@@ -100,6 +100,21 @@ test('connection test normalizes corrupt and legacy settings before rendering', 
   }
 })
 
+test('new test selects an available Astra model in the actual request, not just a placeholder', async () => {
+  const query = mountTest(new Map(), {
+    getAccountModels: async () => ({ models: [{ id: 'test-model' }, { id: 'gpt-6-astra' }] }),
+  })
+  try {
+    query.state.openConnectionTest({ id: 'account-a' })
+    await new Promise(resolve => setImmediate(resolve))
+    await query.state.handleTestConnection()
+    assert.equal(query.requests[0].modelId, 'gpt-6-astra')
+  }
+  finally {
+    query.stop()
+  }
+})
+
 test('connection test persists preferences across accounts and reloads and sends exact Unicode input', async () => {
   const storage = new Map([[settingsKey, '{"endpoint":"completions","prompt":"old","stream":true}']])
   const query = mountTest(storage)

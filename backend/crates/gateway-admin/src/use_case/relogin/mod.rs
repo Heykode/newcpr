@@ -538,6 +538,7 @@ impl DefaultReloginService {
                         responses_upstream: None,
                         excel_models: None,
                         excel_models_follow_global: None,
+                        excel_cache_creation_as_input: Default::default(),
                         concurrency_limit: None,
                         weight: crate::model::accounts::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),

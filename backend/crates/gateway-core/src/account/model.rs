@@ -680,6 +680,7 @@ pub struct ProviderAccount {
     turn_state_injection_enabled: bool,
     responses_upstream: super::ResponsesUpstream,
     excel_models: super::ExcelModels,
+    excel_cache_creation_as_input: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
     model_access: super::AccountModelAccess,
@@ -721,6 +722,7 @@ impl ProviderAccount {
             turn_state_injection_enabled: false,
             responses_upstream: super::ResponsesUpstream::Codex,
             excel_models: super::ExcelModels::default(),
+            excel_cache_creation_as_input: false,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),
@@ -846,6 +848,17 @@ impl ProviderAccount {
     #[must_use]
     pub const fn excel_models(&self) -> &super::ExcelModels {
         &self.excel_models
+    }
+
+    #[must_use]
+    pub const fn with_excel_cache_creation_as_input(mut self, enabled: bool) -> Self {
+        self.excel_cache_creation_as_input = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn excel_cache_creation_as_input(&self) -> bool {
+        self.excel_cache_creation_as_input
     }
 
     #[must_use]

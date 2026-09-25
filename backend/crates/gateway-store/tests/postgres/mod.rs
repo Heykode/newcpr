@@ -32,11 +32,13 @@ mod proxy_test_locks;
 mod query_budget;
 mod quota_learning;
 mod relogin;
+mod request_capture;
 mod retention;
 mod runtime_settings;
 mod schema_integrity;
 mod snapshot;
 mod snapshots;
+mod token_guard;
 mod turn_state_upgrade;
 mod turn_states;
 
@@ -246,6 +248,8 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "account_relogin_settings",
             "account_relogin_successes",
             "account_relogin_templates",
+            "account_token_guard_config",
+            "account_token_guard_events",
             "admin_audit_events",
             "admin_users",
             "backup_records",
@@ -270,6 +274,9 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "provider_turn_states",
             "quota_learning_accounts",
             "quota_learning_plan_samples",
+            "request_capture_config",
+            "request_capture_records",
+            "request_capture_tasks",
             "runtime_settings",
         ]
     );

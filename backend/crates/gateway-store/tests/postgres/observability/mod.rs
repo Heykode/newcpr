@@ -1556,6 +1556,50 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
 }
 
 #[tokio::test]
+async fn average_output_tps_uses_total_latency_and_does_not_require_first_token() {
+    let Some(database) = TestDatabase::create("average_output_tps").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    let repository = observability_repository(&database.pool);
+    let range =
+        ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    for first in [Some(1999_i64), Some(2000), Some(3000), None] {
+        sqlx::query("update model_requests set output_tokens = 100, latency_ms = 2000, first_token_ms = $1 where outcome = 'succeeded'")
+            .bind(first).execute(&database.pool).await.unwrap();
+        let summary = repository
+            .usage_summary(range, UsageRecordFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(summary.requests.output_throughput_p50, Some(50));
+        let dashboard = repository.dashboard_summary(range, now).await.unwrap();
+        assert!(
+            dashboard
+                .trend
+                .iter()
+                .any(|point| point.metrics.output_throughput_p50 == Some(50))
+        );
+        assert!(dashboard.trend.iter().all(|point| {
+            point
+                .metrics
+                .output_throughput_p50
+                .is_none_or(|value| value == 50)
+        }));
+    }
+    sqlx::query("update model_requests set latency_ms = 0 where outcome = 'succeeded'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let summary = repository
+        .usage_summary(range, UsageRecordFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(summary.requests.output_throughput_p50, None);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn dashboard_summary_totals_include_history_outside_selected_range() {
     let Some(database) = TestDatabase::create("observability_dashboard_totals").await else {
         return;

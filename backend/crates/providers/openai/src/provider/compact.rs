@@ -123,6 +123,9 @@ pub(super) async fn collect_excel_compact(
             ))
         })?;
     completed["object"] = "response.compaction".into();
+    if let Some(prepared) = &request.excel {
+        prepared.usage.project(&mut completed);
+    }
     let body = serde_json::to_vec(&completed)
         .map(Bytes::from)
         .map_err(|_| {

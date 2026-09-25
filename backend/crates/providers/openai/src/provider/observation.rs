@@ -28,6 +28,7 @@ pub(super) fn endpoint_requested_model(
 pub(super) struct OpenAiResponseObservationState {
     transport: CodexBackendTransport,
     excel: bool,
+    excel_usage: Option<crate::transport::excel::usage::ExcelUsagePolicy>,
     diagnostics: CodexUpstreamDiagnostics,
     response_metadata: CodexResponseMetadata,
     metrics: CodexTransportMetrics,
@@ -83,6 +84,10 @@ impl OpenAiResponseObservationState {
         Self {
             transport: response.transport,
             excel: request.excel.is_some(),
+            excel_usage: request
+                .excel
+                .as_ref()
+                .map(|prepared| prepared.usage.clone()),
             diagnostics: response.diagnostics.clone(),
             response_metadata: response.response_metadata.clone(),
             metrics: response.transport_metrics.clone(),
@@ -285,6 +290,9 @@ impl OpenAiResponseObservationState {
             )),
         );
         metadata.insert("requestSummary".to_owned(), self.request_summary.clone());
+        if let Some(usage) = &self.excel_usage {
+            metadata.insert("excelBilling".to_owned(), usage.metadata());
+        }
         if let Some(service_tier) = &self.requested_service_tier {
             metadata.insert(
                 "requestedServiceTier".to_owned(),
@@ -483,6 +491,16 @@ pub(super) fn openai_response_request_summary(
     });
     if trace.is_enabled() {
         summary["cacheFingerprints"] = super::cache_diagnostics::fingerprints(body);
+    }
+    if let Some(prepared) = &request.excel {
+        summary["requestedReasoningEffort"] = crate::transport::excel::reasoning_effort(body)
+            .ok()
+            .map_or(Value::Null, |(requested, _)| json!(requested));
+        summary["effectiveReasoningEffort"] = prepared
+            .body
+            .get("reasoning_effort")
+            .cloned()
+            .unwrap_or(Value::Null);
     }
     summary
 }

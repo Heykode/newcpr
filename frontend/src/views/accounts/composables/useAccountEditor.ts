@@ -25,6 +25,8 @@ export function useAccountEditor(options: {
   let initialExcelEnabled = false
   const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
   const excelModelsFollowGlobal = shallowRef(true)
+  const excelCacheCreationAsInput = shallowRef(false)
+  let initialExcelCacheCreationAsInput = false
   let initialExcelModelsFollowGlobal = true
   let initialExcelModels = ''
   const concurrencyLimit = shallowRef('')
@@ -54,6 +56,8 @@ export function useAccountEditor(options: {
     initialExcelEnabled = excelEnabled.value
     excelModels.value = (account.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
     excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
+    excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
+    initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
     initialExcelModelsFollowGlobal = excelModelsFollowGlobal.value
     initialExcelModels = excelModels.value
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
@@ -115,6 +119,8 @@ export function useAccountEditor(options: {
         if (!excelModelsFollowGlobal.value)
           payload.excelModels = models
       }
+      if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
+        payload.excelCacheCreationAsInput = excelEnabled.value && excelCacheCreationAsInput.value
       await updateAccount(payload)
       showEditModal.value = false
       toast.success('账号已更新')
@@ -135,6 +141,8 @@ export function useAccountEditor(options: {
     initialExcelEnabled = false
     excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
     excelModelsFollowGlobal.value = true
+    excelCacheCreationAsInput.value = false
+    initialExcelCacheCreationAsInput = false
     initialExcelModelsFollowGlobal = true
     initialExcelModels = ''
     concurrencyLimit.value = ''
@@ -152,6 +160,7 @@ export function useAccountEditor(options: {
     excelEnabled,
     excelModels,
     excelModelsFollowGlobal,
+    excelCacheCreationAsInput,
     concurrencyLimit,
     weight,
     modelAccess,

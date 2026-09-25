@@ -31,6 +31,7 @@ pub struct AccountImportSettingsRequest {
     pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
     pub excel_models: Option<gateway_core::account::ExcelModels>,
     pub excel_models_follow_global: Option<bool>,
+    pub excel_cache_creation_as_input: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -57,6 +58,7 @@ impl AccountImportSettingsRequest {
             responses_upstream: self.responses_upstream,
             excel_models: self.excel_models,
             excel_models_follow_global: self.excel_models_follow_global,
+            excel_cache_creation_as_input: self.excel_cache_creation_as_input,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,
@@ -243,6 +245,7 @@ pub struct UpdateAccountRequest {
     pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
     pub excel_models: Option<gateway_core::account::ExcelModels>,
     pub excel_models_follow_global: Option<bool>,
+    pub excel_cache_creation_as_input: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -279,6 +282,7 @@ impl UpdateAccountRequest {
             responses_upstream: self.responses_upstream,
             excel_models: self.excel_models,
             excel_models_follow_global: self.excel_models_follow_global,
+            excel_cache_creation_as_input: self.excel_cache_creation_as_input,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,

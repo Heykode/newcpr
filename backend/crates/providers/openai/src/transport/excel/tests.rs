@@ -72,6 +72,7 @@ fn request(endpoint: String, input: Value) -> CodexResponsesRequest {
         structured: None,
         _image_lease: None,
         completed: Default::default(),
+        usage: Default::default(),
         replay: None,
         endpoint,
     });
@@ -368,6 +369,7 @@ async fn excel_stream_projects_effective_effort_and_plaintext_metadata_on_all_to
         structured: None,
         _image_lease: None,
         completed: Default::default(),
+        usage: Default::default(),
         replay: None,
         endpoint: RESPONSES_URL.into(),
     };
@@ -722,6 +724,7 @@ async fn transformed_fixture(
         structured,
         _image_lease: None,
         completed: Default::default(),
+        usage: Default::default(),
         replay: None,
         endpoint: RESPONSES_URL.into(),
     };

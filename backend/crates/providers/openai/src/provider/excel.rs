@@ -108,6 +108,9 @@ pub(super) async fn prepare_excel(
         structured,
         _image_lease: image_lease,
         completed: Default::default(),
+        usage: crate::transport::excel::usage::ExcelUsagePolicy::new(
+            lease.account().excel_cache_creation_as_input(),
+        ),
         replay: Some(restored.capture),
         endpoint: crate::transport::excel::RESPONSES_URL.into(),
     });
@@ -259,6 +262,7 @@ mod tests {
                 structured: None,
                 _image_lease: None,
                 completed: Default::default(),
+                usage: Default::default(),
                 replay: None,
                 endpoint: format!("{}/fixture", server.uri()),
             });

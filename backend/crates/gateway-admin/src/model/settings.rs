@@ -32,6 +32,9 @@ pub struct RequestTuningOverrides {
     pub websocket_failure_window_ms: Option<u64>,
     pub websocket_failure_open_duration_ms: Option<u64>,
     pub rate_limit_cooldown_seconds: Option<u64>,
+    pub excel_image_relay_bytes: Option<u64>,
+    pub excel_image_relay_downloads: Option<u32>,
+    pub excel_image_relay_entries: Option<u32>,
     pub openai_location_override_enabled: Option<bool>,
     pub openai_request_location: Option<gateway_core::account::RequestLocation>,
     pub max_waiting_per_key: Option<u32>,
@@ -65,6 +68,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_window_ms: Option<u64>,
             websocket_failure_open_duration_ms: Option<u64>,
             rate_limit_cooldown_seconds: Option<u64>,
+            excel_image_relay_bytes: Option<u64>,
+            excel_image_relay_downloads: Option<u32>,
+            excel_image_relay_entries: Option<u32>,
             openai_location_override_enabled: Option<bool>,
             openai_request_location: Option<gateway_core::account::RequestLocation>,
             max_waiting_per_key: Option<u32>,
@@ -89,6 +95,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_window_ms: wire.websocket_failure_window_ms,
             websocket_failure_open_duration_ms: wire.websocket_failure_open_duration_ms,
             rate_limit_cooldown_seconds: wire.rate_limit_cooldown_seconds,
+            excel_image_relay_bytes: wire.excel_image_relay_bytes,
+            excel_image_relay_downloads: wire.excel_image_relay_downloads,
+            excel_image_relay_entries: wire.excel_image_relay_entries,
             openai_location_override_enabled: wire.openai_location_override_enabled,
             openai_request_location: wire.openai_request_location,
             max_waiting_per_key: wire.max_waiting_per_key,
@@ -118,9 +127,18 @@ impl RequestTuningOverrides {
     pub const MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS: u64 = 600;
 
     pub fn validate(&self) -> bool {
-        self.openai_request_location
-            .as_ref()
-            .is_none_or(|value| value.validate())
+        self.excel_image_relay_bytes
+            .is_none_or(|value| (1024 * 1024..=2048 * 1024 * 1024).contains(&value))
+            && self
+                .excel_image_relay_downloads
+                .is_none_or(|value| (1..=128).contains(&value))
+            && self
+                .excel_image_relay_entries
+                .is_none_or(|value| (1..=4096).contains(&value))
+            && self
+                .openai_request_location
+                .as_ref()
+                .is_none_or(|value| value.validate())
             && self.max_waiting_per_key.is_none_or(|value| value <= 1024)
             && self
                 .key_concurrency_wait_timeout_seconds

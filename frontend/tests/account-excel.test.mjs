@@ -98,6 +98,14 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   await state.save()
   assert.equal(updates[8].excelModelsFollowGlobal, false)
   assert.deepEqual(updates[8].excelModels, ['gpt-5.6-sol'])
+  state.open(accounts.value[0])
+  assert.equal(state.excelCacheCreationAsInput.value, false)
+  assert.equal('excelCacheCreationAsInput' in updates[8], false)
+  state.excelEnabled.value = true
+  state.excelCacheCreationAsInput.value = true
+  await state.save()
+  assert.equal(updates[9].excelCacheCreationAsInput, true)
+  assert.equal(updates[9].responsesUpstream, 'excel')
 })
 
 test('Excel import defaults preserve, explicit global follows, mixed providers stay isolated', () => {
@@ -118,6 +126,9 @@ test('Excel import defaults preserve, explicit global follows, mixed providers s
   assert.equal(settings.excelModelsFollowGlobal, true)
   assert.equal(settings.responsesUpstream, 'excel')
   assert.equal('excelModels' in settings, false)
+  assert.equal(settings.excelCacheCreationAsInput, false)
+  form.excelCacheCreationAsInput = true
+  assert.equal(creation.accountImportSettings(form).excelCacheCreationAsInput, true)
   assert.equal('responsesUpstream' in creation.accountImportSettings(form, 'xai'), false)
   form.excelModelsFollowGlobal = false
   form.excelModels = 'gpt-5.6-sol, gpt-6-astra'

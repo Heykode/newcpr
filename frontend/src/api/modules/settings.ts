@@ -16,6 +16,9 @@ export interface RequestTuning {
   websocketFailureWindowMs: number
   websocketFailureOpenDurationMs: number
   rateLimitCooldownSeconds: number
+  excelImageRelayBytes: number
+  excelImageRelayDownloads: number
+  excelImageRelayEntries: number
   openaiLocationOverrideEnabled: boolean
   openaiRequestLocation: RequestLocation | null
   maxWaitingPerKey: number

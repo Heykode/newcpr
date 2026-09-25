@@ -182,6 +182,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 | "transport/excel/tools.rs"
                 | "transport/excel/images.rs"
                 | "transport/excel/image_relay.rs"
+                | "transport/excel/usage.rs"
                 | "transport/excel/stream.rs",
             ),
             Item::Mod(module),
@@ -473,6 +474,7 @@ fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
         "transport/excel/tools.rs",
         "transport/excel/images.rs",
         "transport/excel/image_relay.rs",
+        "transport/excel/usage.rs",
         "transport/excel/stream.rs",
         "transport/excel/mod.rs",
     ] {

@@ -27,6 +27,8 @@ export function useAccountBatchEditor(options: {
   const excelEnabled = shallowRef(false)
   const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
   const excelModelsFollowGlobal = shallowRef(true)
+  const excelCacheCreationAsInput = shallowRef(false)
+  const updateExcelCacheCreationAsInput = ref(false)
   const updateExcelModels = ref(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
@@ -47,6 +49,7 @@ export function useAccountBatchEditor(options: {
     || updateEnabled.value
     || (excelAvailable.value && updateExcelEnabled.value)
     || (excelAvailable.value && updateExcelModels.value)
+    || (excelAvailable.value && updateExcelCacheCreationAsInput.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
     || updateModelAccess.value
@@ -61,6 +64,7 @@ export function useAccountBatchEditor(options: {
     updateEnabled.value = false
     updateExcelEnabled.value = false
     updateExcelModels.value = false
+    updateExcelCacheCreationAsInput.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
     updateModelAccess.value = false
@@ -80,6 +84,7 @@ export function useAccountBatchEditor(options: {
     excelEnabled.value = accounts.every(account => account.responsesUpstream === 'excel')
     excelModels.value = (accounts[0]?.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
     excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
+    excelCacheCreationAsInput.value = accounts.every(account => account.excelCacheCreationAsInput ?? false)
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -132,6 +137,8 @@ export function useAccountBatchEditor(options: {
         payload.enabled = schedulingEnabled.value
       if (excelAvailable.value && updateExcelEnabled.value)
         payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
+      if (excelAvailable.value && updateExcelCacheCreationAsInput.value)
+        payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
       if (excelAvailable.value && updateExcelModels.value && models !== null) {
         payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
         if (!excelModelsFollowGlobal.value)
@@ -206,6 +213,8 @@ export function useAccountBatchEditor(options: {
     excelEnabled,
     excelModels,
     excelModelsFollowGlobal,
+    excelCacheCreationAsInput,
+    updateExcelCacheCreationAsInput,
     updateExcelModels,
     concurrencyLimit,
     weight,

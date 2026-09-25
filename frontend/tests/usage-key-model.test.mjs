@@ -42,6 +42,13 @@ const select = vue.defineComponent({
     vue.h('option', { value: option.value }, option.label))),
 })
 const modules = new Map()
+test('effective Excel reasoning is distinct from requested effort and old records stay unchanged', () => {
+  const { usageReasoningEffort } = loadSource(new URL('../src/views/usage/utils/records.ts', import.meta.url))
+  assert.equal(usageReasoningEffort({ reasoningEffort: 'max', effectiveReasoningEffort: 'xhigh' }), 'max → xhigh')
+  assert.equal(usageReasoningEffort({ reasoningEffort: 'high', effectiveReasoningEffort: 'high' }), 'high')
+  assert.equal(usageReasoningEffort({ reasoningEffort: 'high', reasoningPreset: 'preset' }), 'preset')
+  assert.equal(usageReasoningEffort({ reasoningEffort: null }), '—')
+})
 function loadSource(filename) {
   if (modules.has(filename.href))
     return modules.get(filename.href)

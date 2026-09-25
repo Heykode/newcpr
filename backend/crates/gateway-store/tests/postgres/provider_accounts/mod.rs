@@ -83,6 +83,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         turn_state_injection_enabled: None,
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
+        excel_cache_creation_as_input: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: None,
         weight: None,
@@ -221,6 +222,7 @@ async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
                     turn_state_injection_enabled: None,
                     responses_upstream: Default::default(),
                     excel_models_follow_global: Default::default(),
+                    excel_cache_creation_as_input: Default::default(),
                     excel_models: Default::default(),
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -1198,6 +1200,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
                         turn_state_injection_enabled: Some(false),
                         responses_upstream: Default::default(),
                         excel_models_follow_global: Default::default(),
+                        excel_cache_creation_as_input: Default::default(),
                         excel_models: Default::default(),
                         concurrency_limit: None,
                         weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -1930,6 +1933,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
                 turn_state_injection_enabled: None,
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -1997,7 +2001,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let mut seed = account("acct_proxy", "proxy-user");
     seed.outbound_proxy = Some(
-        gateway_core::account::OutboundProxy::parse("http://initial:secret@127.0.0.1:18080")
+        gateway_core::account::OutboundProxy::parse("http://initial:$secret@127.0.0.1:18080")
             .unwrap(),
     );
     repository.insert_provider_account(seed).await.unwrap();
@@ -2014,6 +2018,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         turn_state_injection_enabled: Some(false),
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
+        excel_cache_creation_as_input: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -2029,7 +2034,10 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     };
     assert_eq!(
         read().await,
-        (Some("http://initial:secret@127.0.0.1:18080/".to_owned()), 1)
+        (
+            Some("http://initial:$secret@127.0.0.1:18080/".to_owned()),
+            1
+        )
     );
     store
         .update_account(
@@ -2037,7 +2045,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
                 model_access: Default::default(),
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse(
-                        "socks5h://next:new-secret@127.0.0.1:1080",
+                        "socks5h://next:$new-secret@127.0.0.1:1080",
                     )
                     .unwrap(),
                 )),
@@ -2162,6 +2170,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
                 turn_state_injection_enabled: None,
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: None,
@@ -2296,6 +2305,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 turn_state_injection_enabled: Some(true),
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: Some(gateway_core::account::AccountConcurrencyLimit::new(7)),
                 weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
@@ -2341,6 +2351,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 turn_state_injection_enabled: Some(false),
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
@@ -2547,6 +2558,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     turn_state_injection_enabled: Some(true),
                     responses_upstream: Default::default(),
                     excel_models_follow_global: Default::default(),
+                    excel_cache_creation_as_input: Default::default(),
                     excel_models: Default::default(),
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
@@ -3082,6 +3094,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             turn_state_injection_enabled: None,
             responses_upstream: Default::default(),
             excel_models_follow_global: Default::default(),
+            excel_cache_creation_as_input: Default::default(),
             excel_models: Default::default(),
             concurrency_limit: None,
             weight: Some(gateway_core::account::AccountWeight::DEFAULT),
@@ -3662,6 +3675,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
                 turn_state_injection_enabled: Some(false),
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -3728,6 +3742,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         turn_state_injection_enabled: Some(true),
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
+        excel_cache_creation_as_input: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
         weight: AccountWeight::new(7).expect("weight"),
@@ -3782,6 +3797,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
                 turn_state_injection_enabled: Some(false),
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092")
@@ -3847,6 +3863,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
             turn_state_injection_enabled: state,
             responses_upstream: Default::default(),
             excel_models_follow_global: Default::default(),
+            excel_cache_creation_as_input: Default::default(),
             excel_models: Default::default(),
             concurrency_limit: None,
             weight: gateway_core::account::AccountWeight::DEFAULT,
