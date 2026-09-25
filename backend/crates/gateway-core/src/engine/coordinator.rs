@@ -201,6 +201,7 @@ where
             pending_retry: None,
             transient_retry_counts: BTreeMap::new(),
             request_profiles: BTreeMap::new(),
+            provider_routes: BTreeMap::new(),
             current: None,
             send_state_watermark: UpstreamSendState::NotSent,
             downstream_committed_at: None,
@@ -295,6 +296,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     continuation: Option<ContinuationBinding>,
     continuation_attempt: ContinuationAttempt,
     account_state_owner: Option<ProviderAccountStateOwner>,
+    provider_routes: BTreeMap<crate::routing::ProviderKind, Arc<std::sync::OnceLock<String>>>,
     cancellation: CancellationToken,
     /// 所有实际上游 attempt 数；包含同账号传输重试，作为持久化序号。
     attempts: u32,
@@ -890,6 +892,11 @@ where
         }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_provider_route(Arc::clone(
+                    self.provider_routes
+                        .entry(candidate.provider().clone())
+                        .or_default(),
+                ))
                 .with_request_profile(
                     self.request_profiles
                         .get(candidate.provider())

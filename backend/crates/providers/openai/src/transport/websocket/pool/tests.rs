@@ -84,35 +84,17 @@ fn client_scope_fences_routing_owner_and_logical_connection_matches() {
     }
 }
 
-#[test]
-fn managed_model_versions_isolate_new_chains_without_changing_exact_owner_scope() {
-    let legacy = key(1).with_client_scope("client-a");
-    let first = legacy.clone().with_model_state("model-a", 1);
-    let same = legacy.clone().with_model_state("model-a", 1);
-    let updated = legacy.clone().with_model_state("model-a", 2);
-    let other_model = legacy.clone().with_model_state("model-b", 1);
-    assert_eq!(first, same);
-    for other in [&legacy, &updated, &other_model] {
-        assert_ne!(&first, other);
-        assert_ne!(first.stable_hash(), other.stable_hash());
-    }
-    assert!(first.matches_routing_owner(&updated));
-    assert!(first.matches_routing_owner(&legacy));
-    assert!(first.same_logical_connection(&updated));
-    assert!(!first.matches_routing_owner(&updated.with_client_scope("client-b")));
-}
-
 #[tokio::test]
-async fn managed_state_update_and_disable_preserve_the_exact_response_socket() {
+async fn profile_update_preserves_the_exact_response_socket() {
     let (pool, _) = pool(2);
-    let owner = key(1).with_model_state("model-a", 1);
+    let owner = key(1).with_connection_profile("profile-one");
     let (mut connection, lease, _peer) = connected(&pool, &owner).await;
     let connection_id = connection.websocket.connection_id();
     connection
         .continuation
         .record_completed("response-owned".to_owned());
     lease.put(connection).await;
-    for next in [key(1).with_model_state("model-a", 2), key(1)] {
+    for next in [key(1).with_connection_profile("profile-two"), key(1)] {
         assert_eq!(
             pool.routing_owner(&next, Some("response-owned")),
             Some(owner.clone()),
@@ -125,129 +107,6 @@ async fn managed_state_update_and_disable_preserve_the_exact_response_socket() {
             _ => panic!("continuation must retain its physical owner"),
         }
     }
-    pool.shutdown().await;
-}
-
-#[tokio::test]
-async fn expired_managed_pool_rejects_new_chains_but_keeps_exact_continuation() {
-    let (pool, _) = pool(2);
-    let owner = key(1)
-        .with_model_state("model-a", 1)
-        .with_state_expiry(Some(
-            std::time::SystemTime::now() + Duration::from_secs(3600),
-        ));
-    let (mut connection, lease, _peer) = connected(&pool, &owner).await;
-    let connection_id = connection.websocket.connection_id();
-    connection
-        .continuation
-        .record_completed("response-owned".to_owned());
-    pool.retire_managed_state("account", "model-a", 2);
-    assert!(
-        !connection.websocket.is_closed(),
-        "retirement must not interrupt a response"
-    );
-    lease.put(connection).await;
-    pool.maintain_idle_connections().await;
-    assert!(pool.managed_version_retired("account", "model-a", 1));
-    assert!(!pool.managed_version_retired("account", "model-b", 1));
-    assert!(!pool.managed_version_retired("other-account", "model-a", 1));
-    assert!(matches!(
-        pool.acquire(&owner, None).await,
-        WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled)
-    ));
-    match pool.acquire(&key(1), Some("response-owned")).await {
-        WebSocketPoolAcquire::Reused { connection, lease } => {
-            assert_eq!(connection.websocket.connection_id(), connection_id);
-            lease.put(*connection).await;
-        }
-        _ => panic!("expired state must preserve exact continuation ownership"),
-    }
-    assert!(pool.managed_version_retired("account", "model-a", 1));
-    pool.shutdown().await;
-}
-
-#[tokio::test]
-async fn same_state_renewal_preserves_socket_identity_and_cannot_revive_retired_generations() {
-    let (pool, _) = pool(2);
-    let now = std::time::SystemTime::now();
-    let owner = key(1)
-        .with_model_state("model-a", 1)
-        .with_state_expiry(Some(now + Duration::from_secs(60)));
-    let (connection, lease, _peer) = connected(&pool, &owner).await;
-    let connection_id = connection.websocket.connection_id();
-    pool.renew_managed_state("account", "model-a", 1, now + Duration::from_secs(180));
-    pool.renew_managed_state("account", "model-a", 1, now + Duration::from_secs(90));
-    lease.put(connection).await;
-    {
-        let state = pool.lock_state();
-        let (stored, _) = state.slots.get_key_value(&owner).unwrap();
-        assert_eq!(stored.stable_hash(), owner.stable_hash());
-        assert_eq!(
-            stored.turn_state_expires_at,
-            Some(now + Duration::from_secs(180))
-        );
-    }
-    match pool.acquire(&owner, None).await {
-        WebSocketPoolAcquire::Reused { connection, lease } => {
-            assert_eq!(connection.websocket.connection_id(), connection_id);
-            // Retire a generation even if its old local lease has already elapsed.
-            {
-                let mut state = pool.lock_state();
-                let slot = state.slots.remove(&owner).unwrap();
-                state.slots.insert(
-                    owner
-                        .clone()
-                        .with_state_expiry(Some(now - Duration::from_secs(1))),
-                    slot,
-                );
-            }
-            pool.retire_managed_state("account", "model-a", 2);
-            pool.renew_managed_state("account", "model-a", 1, now + Duration::from_secs(240));
-            assert!(pool.managed_version_retired("account", "model-a", 1));
-            lease.put(*connection).await;
-        }
-        _ => panic!("renewal must preserve the physical socket"),
-    }
-    pool.shutdown().await;
-}
-
-#[tokio::test]
-async fn retired_managed_socket_without_continuation_closes_on_return() {
-    let (pool, _) = pool(2);
-    let owner = key(1).with_model_state("model-a", 1);
-    let (connection, lease, _peer) = connected(&pool, &owner).await;
-    let termination = connection.websocket.termination_handle();
-    pool.retire_managed_state("account", "model-a", 2);
-    assert!(!connection.websocket.is_closed());
-    lease.put(connection).await;
-    timeout(Duration::from_secs(1), termination.wait())
-        .await
-        .unwrap();
-    pool.shutdown().await;
-}
-
-#[tokio::test]
-async fn ttl_expiry_closes_idle_socket_without_response_owner() {
-    let (pool, _) = pool(2);
-    let owner = key(1)
-        .with_model_state("model-a", 1)
-        .with_state_expiry(Some(
-            std::time::SystemTime::now() + Duration::from_secs(3600),
-        ));
-    let (connection, lease, _peer) = connected(&pool, &owner).await;
-    let termination = connection.websocket.termination_handle();
-    lease.put(connection).await;
-    {
-        let mut state = pool.lock_state();
-        let slot = state.slots.remove(&owner).unwrap();
-        state
-            .slots
-            .insert(owner.with_state_expiry(Some(std::time::UNIX_EPOCH)), slot);
-    }
-    pool.maintain_idle_connections().await;
-    timeout(Duration::from_secs(1), termination.wait())
-        .await
-        .unwrap();
     pool.shutdown().await;
 }
 

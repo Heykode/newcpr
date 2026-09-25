@@ -1,5 +1,9 @@
 # Managed Turn State
 
+> Historical contract. The Excel upstream branch retires managed collection,
+> injection, readiness gates and UI. See `excel-upstream.md`; preserve shared
+> credential/Cookie protection and immutable migrations, not these workers.
+
 ## Ownership and Opt-In
 
 - The global policy, OpenAI account switch and canonical upstream model allowlist

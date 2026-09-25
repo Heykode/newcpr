@@ -56,7 +56,7 @@ export function useAccountMutations(options: {
     catalogDownloads.clear()
   })
   const togglingAccountIds = useIdSet<string>()
-  const togglingTurnStateAccountIds = useIdSet<string>()
+  const togglingExcelAccountIds = useIdSet<string>()
   const recoveringAccountIds = recoveringAccounts.ids
   const refreshingAccountIds = refreshingAccounts.ids
   const refreshingQuotaAccountIds = refreshingQuotaAccounts.ids
@@ -267,17 +267,17 @@ export function useAccountMutations(options: {
     })
   }
 
-  async function handleToggleTurnState(account: AccountRow, enabled: boolean) {
-    if (account.provider !== 'openai')
+  async function handleToggleExcel(account: AccountRow, enabled: boolean) {
+    if (account.provider !== 'openai' || account.authenticationKind !== 'oauth')
       return
-    await togglingTurnStateAccountIds.run(account.id, async () => {
+    await togglingExcelAccountIds.run(account.id, async () => {
+      const responsesUpstream = enabled ? 'excel' : 'codex'
       try {
-        await batchUpdateAccounts({
-          accountIds: [account.id],
-          turnStateInjectionEnabled: enabled,
-        })
-        await options.replaceAccount({ ...account, turnStateInjectionEnabled: enabled })
-        toast.success(enabled ? 'State 注入已开启' : 'State 注入已关闭')
+        await batchUpdateAccounts({ accountIds: [account.id], responsesUpstream })
+        const current = options.accounts.value.find(item => item.id === account.id)
+        if (current)
+          await options.replaceAccount({ ...current, responsesUpstream })
+        toast.success(enabled ? 'Excel 入口已开启' : '已恢复 Codex 入口')
       }
       catch {}
     })
@@ -350,7 +350,7 @@ export function useAccountMutations(options: {
     exportingAccounts,
     exportingModelCatalogIds: exportingModelCatalogs.ids,
     togglingAccountIds: togglingAccountIds.ids,
-    togglingTurnStateAccountIds: togglingTurnStateAccountIds.ids,
+    togglingExcelAccountIds: togglingExcelAccountIds.ids,
     requestDeleteAccount,
     handleDelete,
     handleBatchDelete,
@@ -361,6 +361,6 @@ export function useAccountMutations(options: {
     handleRefresh,
     handleRefreshQuota,
     handleToggleEnabled,
-    handleToggleTurnState,
+    handleToggleExcel,
   }
 }

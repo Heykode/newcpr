@@ -7,7 +7,7 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
 import { accountModelAccessError } from '../utils/modelAccess'
-import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
+import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
@@ -21,7 +21,10 @@ export function useAccountEditor(options: {
   const customName = shallowRef('')
   let initialCustomName = ''
   const schedulingEnabled = shallowRef(true)
-  const turnStateInjectionEnabled = shallowRef(false)
+  const excelEnabled = shallowRef(false)
+  let initialExcelEnabled = false
+  const excelModels = shallowRef('gpt-5.6-sol')
+  let initialExcelModels = ''
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -45,7 +48,10 @@ export function useAccountEditor(options: {
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = account.enabled
-    turnStateInjectionEnabled.value = account.turnStateInjectionEnabled
+    excelEnabled.value = account.responsesUpstream === 'excel'
+    initialExcelEnabled = excelEnabled.value
+    excelModels.value = (account.excelModels ?? ['gpt-5.6-sol']).join(', ')
+    initialExcelModels = excelModels.value
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     modelAccess.value = account.modelAccess
@@ -66,6 +72,11 @@ export function useAccountEditor(options: {
       return
     }
     const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
+    const models = parseExcelModels(excelModels.value)
+    if (models === null) {
+      toast.warning('Excel 模型最多 64 个，每个名称最多 128 个字母、数字、点、下划线或连字符')
+      return
+    }
     if (proxyMode.value === 'proxy' && !proxyId.value.trim()) {
       toast.warning('请选择已通过测试的代理')
       return
@@ -89,8 +100,14 @@ export function useAccountEditor(options: {
         payload.customName = name
       if (modelAccess.value && JSON.stringify(modelAccess.value) !== initialModelAccess)
         payload.modelAccess = { ...modelAccess.value, models: [...modelAccess.value.models] }
-      if (editingAccount.value?.provider === 'openai')
-        payload.turnStateInjectionEnabled = turnStateInjectionEnabled.value
+      if (editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
+        && excelEnabled.value !== initialExcelEnabled) {
+        payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
+      }
+      if (editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
+        && excelModels.value !== initialExcelModels) {
+        payload.excelModels = models
+      }
       await updateAccount(payload)
       showEditModal.value = false
       toast.success('账号已更新')
@@ -107,7 +124,10 @@ export function useAccountEditor(options: {
     proxyMode.value = 'preserve'
     proxyId.value = ''
     schedulingEnabled.value = true
-    turnStateInjectionEnabled.value = false
+    excelEnabled.value = false
+    initialExcelEnabled = false
+    excelModels.value = 'gpt-5.6-sol'
+    initialExcelModels = ''
     concurrencyLimit.value = ''
     weight.value = '1'
     modelAccess.value = undefined
@@ -120,7 +140,8 @@ export function useAccountEditor(options: {
     showEditModal,
     editingAccount,
     schedulingEnabled,
-    turnStateInjectionEnabled,
+    excelEnabled,
+    excelModels,
     concurrencyLimit,
     weight,
     modelAccess,

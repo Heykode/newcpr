@@ -58,7 +58,7 @@ fn runtime_settings_validate_probe_concurrency_bounds() {
 }
 
 #[tokio::test]
-async fn probe_concurrency_defaults_persists_and_reaches_the_snapshot() {
+async fn legacy_probe_concurrency_persists_without_changing_runtime_capacity() {
     let Some(database) = TestDatabase::create("probe_concurrency").await else {
         return;
     };
@@ -90,8 +90,8 @@ async fn probe_concurrency_defaults_persists_and_reaches_the_snapshot() {
                 .await
                 .unwrap()
                 .settings
-                .turn_state_probe_concurrency,
-            expected
+                .max_concurrent_per_account,
+            3
         );
     }
     let revision = repository
@@ -129,7 +129,7 @@ fn runtime_settings_keep_account_rotation_global() {
 }
 
 #[tokio::test]
-async fn probe_proxy_selection_is_validated_preserved_and_resolved_from_catalog() {
+async fn legacy_probe_proxy_is_preserved_but_never_resolved_by_runtime_snapshot() {
     let Some(database) = TestDatabase::create("probe_proxy_settings").await else {
         return;
     };
@@ -191,11 +191,8 @@ async fn probe_proxy_selection_is_validated_preserved_and_resolved_from_catalog(
             .await
             .unwrap()
             .settings
-            .turn_state_probe_proxy
-            .as_ref()
-            .unwrap()
-            .expose_url(),
-        "http://127.0.0.1:18080/"
+            .max_concurrent_per_account,
+        3
     );
     assert!(
         sqlx::query("delete from outbound_proxies where id = 'probe-proxy'")
@@ -204,7 +201,7 @@ async fn probe_proxy_selection_is_validated_preserved_and_resolved_from_catalog(
             .is_err()
     );
     sqlx::query(
-        "update outbound_proxies set proxy_url = 'http://127.0.0.1:18082' where id = 'probe-proxy'",
+        "update outbound_proxies set proxy_url = 'invalid-retired-proxy' where id = 'probe-proxy'",
     )
     .execute(&database.pool)
     .await
@@ -215,23 +212,20 @@ async fn probe_proxy_selection_is_validated_preserved_and_resolved_from_catalog(
             .await
             .unwrap()
             .settings
-            .turn_state_probe_proxy
-            .as_ref()
-            .unwrap()
-            .expose_url(),
-        "http://127.0.0.1:18082/"
+            .max_concurrent_per_account,
+        3
     );
     let mut update = settings_with_margin(3_600);
     update.turn_state_probe_proxy_id = Some(None);
     repository.update_runtime_settings(update).await.unwrap();
-    assert!(
+    assert_eq!(
         snapshots
             .load_runtime_snapshot()
             .await
             .unwrap()
             .settings
-            .turn_state_probe_proxy
-            .is_none()
+            .max_concurrent_per_account,
+        3
     );
     sqlx::query("delete from outbound_proxies where id = 'probe-proxy'")
         .execute(&database.pool)

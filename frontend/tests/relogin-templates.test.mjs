@@ -21,7 +21,7 @@ const { templateForm, templateConfig } = load('../src/components/account-templat
 })
 
 test('templates roundtrip scheduling, groups and proxy without sharing mutable arrays', () => {
-  const config = { name: 'Team', enabled: false, turnStateInjectionEnabled: true, concurrencyLimit: 8, weight: 19, groupIds: ['group-a'], outboundProxyId: 'proxy-a' }
+  const config = { name: 'Team', enabled: false, concurrencyLimit: 8, weight: 19, groupIds: ['group-a'], outboundProxyId: 'proxy-a' }
   const form = templateForm(config)
   assert.equal(JSON.stringify(templateConfig(form)), JSON.stringify(config))
   form.groupIds.push('group-b')
@@ -31,7 +31,6 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
   assert.equal(JSON.stringify(templateConfig(blank)), JSON.stringify({
     name: 'Defaults',
     enabled: true,
-    turnStateInjectionEnabled: false,
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
@@ -77,13 +76,13 @@ test('push snapshots template revision and remains backward compatible without o
   assert.equal(calls[3].data.revision, 4)
 })
 
-test('template State is only a boolean and legacy forms become explicit when saved', () => {
+test('legacy template State fields are ignored and never written back', () => {
   const legacy = templateForm({ name: 'Legacy', turnStateParameters: { model: 'never-copy' } })
-  assert.equal(legacy.turnStateInjectionEnabled, false)
+  assert.equal('turnStateInjectionEnabled' in legacy, false)
   for (const enabled of [true, false]) {
     legacy.turnStateInjectionEnabled = enabled
     const config = templateConfig(legacy)
-    assert.equal(config.turnStateInjectionEnabled, enabled)
+    assert.equal('turnStateInjectionEnabled' in config, false)
     assert.equal('turnStateParameters' in config, false)
   }
 })

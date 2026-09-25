@@ -28,7 +28,7 @@ use crate::transport::egress::CodexEgressRuntime;
 use crate::transport::profile::{
     CodexArtifactProfileCache, CodexDesktopReleaseService, OfficialCodexDesktopReleaseTransport,
 };
-use crate::transport::{CodexBackendClient, CodexWebSocketPool, build_reqwest_client};
+use crate::transport::{CodexWebSocketPool, build_reqwest_client};
 
 pub use config::{CodexWireProfileConfig, OpenAiConfig, OpenAiConfigError};
 pub use provider::{
@@ -50,6 +50,7 @@ pub use transport::{
 
 /// OpenAI 初始化后交给组装根的最小能力集。
 pub struct ProviderBundle {
+    image_relay: Arc<dyn gateway_core::provider_ports::TemporaryImageSource>,
     core_provider: Arc<dyn Provider>,
     admin_provider: Arc<dyn ProviderAdmin>,
     worker_contributions: Vec<WorkerContribution>,
@@ -78,6 +79,18 @@ async fn initialize_with_request_tuning_mode(
     request_tuning: RequestTuningHandle,
     enforce_account_concurrency: bool,
 ) -> Result<ProviderBundle, OpenAiInitializeError> {
+    if config
+        .excel_image_relay_public_url
+        .as_deref()
+        .is_some_and(|url| !transport::excel::image_relay::validate_origin(url))
+    {
+        return Err(OpenAiInitializeError::Config(
+            OpenAiConfigError::InvalidExcelImageRelay,
+        ));
+    }
+    let image_relay = Arc::new(transport::excel::image_relay::ImageRelay::new(
+        config.excel_image_relay_public_url.clone(),
+    ));
     let provider_kind =
         ProviderKind::new("openai").map_err(|_| OpenAiInitializeError::InvalidProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();
@@ -128,14 +141,6 @@ async fn initialize_with_request_tuning_mode(
         .session_identity()
         .map_err(|_| OpenAiInitializeError::SessionIdentity)?;
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
-    let turn_state_manager =
-        provider::CodexTurnStateManager::new(ports.turn_states(), request_tuning.clone());
-    let mut turn_state_client =
-        CodexBackendClient::new(http.clone(), config.base_url().to_owned(), profile.clone())
-            .with_request_tuning(request_tuning.clone());
-    if let Some(runtime) = &egress_runtime {
-        turn_state_client = turn_state_client.with_egress_runtime(Arc::clone(runtime));
-    }
     let desktop_release = Arc::new(CodexDesktopReleaseService::new(
         profile.clone(),
         Arc::new(
@@ -155,7 +160,6 @@ async fn initialize_with_request_tuning_mode(
             pool.with_request_tuning_without_account_concurrency(request_tuning.clone())
         }
     });
-    let turn_state_manager = turn_state_manager.with_websocket_pool(Arc::clone(&websocket_pool));
     let catalog = CodexCredentialCatalogService::new(
         repository.clone(),
         profile.clone(),
@@ -200,8 +204,7 @@ async fn initialize_with_request_tuning_mode(
             Arc::clone(&account_feedback),
             CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,
         )
-        .with_account_concurrency(request_tuning.account_concurrency())
-        .with_turn_states(turn_state_manager.clone()),
+        .with_account_concurrency(request_tuning.account_concurrency()),
     );
     let core_provider = CodexProvider::new(
         Arc::clone(&selector),
@@ -216,7 +219,8 @@ async fn initialize_with_request_tuning_mode(
     )
     .map_err(OpenAiInitializeError::Provider)?
     .with_request_tuning(request_tuning.clone())
-    .with_turn_state_manager(turn_state_manager.clone())
+    .with_excel_replay(ports.replay())
+    .with_excel_image_relay(Arc::clone(&image_relay))
     .with_session_identity(session_identity);
     let core_provider: Arc<dyn Provider> = Arc::new(match &egress_runtime {
         Some(runtime) => core_provider.with_egress_runtime(Arc::clone(runtime)),
@@ -240,7 +244,7 @@ async fn initialize_with_request_tuning_mode(
         .with_personal_access_token_client(token_client),
     );
     let refresh = CodexCredentialRefreshService::new(
-        repository.clone(),
+        repository,
         refresher,
         Arc::clone(&leases),
         credential_state,
@@ -264,20 +268,6 @@ async fn initialize_with_request_tuning_mode(
         )
         .with_oauth_client_id(config.oauth_client_id()),
     );
-    let turn_state_maintenance = Arc::new(provider::CodexTurnStateMaintenanceService::new(
-        repository,
-        leases,
-        turn_state_client,
-        egress_runtime.clone(),
-        turn_state_manager,
-        selector,
-        Arc::clone(&quota),
-        url::Url::parse(&transport::endpoints::endpoint_url(
-            config.base_url(),
-            transport::endpoints::CODEX_RESPONSES_PATH,
-        ))
-        .map_err(|_| OpenAiInitializeError::Transport)?,
-    ));
     let admin_provider = OpenAiAdminProvider::new(
         provider_kind,
         profile,
@@ -288,7 +278,6 @@ async fn initialize_with_request_tuning_mode(
             profile_statistics,
             quota: Arc::clone(&quota),
             catalog: Arc::clone(&catalog),
-            turn_state_maintenance: Arc::clone(&turn_state_maintenance),
         },
         websocket_pool,
         desktop_release_status,
@@ -304,11 +293,11 @@ async fn initialize_with_request_tuning_mode(
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
         desktop_release,
-        turn_state_maintenance,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
 
     Ok(ProviderBundle {
+        image_relay,
         core_provider,
         admin_provider,
         worker_contributions,
@@ -316,6 +305,9 @@ async fn initialize_with_request_tuning_mode(
 }
 
 impl ProviderBundle {
+    pub fn image_relay(&self) -> Arc<dyn gateway_core::provider_ports::TemporaryImageSource> {
+        Arc::clone(&self.image_relay)
+    }
     #[must_use]
     pub fn core_provider(&self) -> Arc<dyn Provider> {
         Arc::clone(&self.core_provider)

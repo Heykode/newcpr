@@ -76,6 +76,8 @@ pub struct BatchUpdateAccountsRequest {
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
+    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    pub excel_models: Option<gateway_core::account::ExcelModels>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub concurrency_limit: Option<Option<u64>>,
     pub weight: Option<u64>,
@@ -144,6 +146,8 @@ impl BatchUpdateAccountsRequest {
         if self.custom_name.is_none()
             && self.enabled.is_none()
             && self.turn_state_injection_enabled.is_none()
+            && self.responses_upstream.is_none()
+            && self.excel_models.is_none()
             && self.concurrency_limit.is_none()
             && self.weight.is_none()
             && self.model_access.is_none()
@@ -167,6 +171,8 @@ impl BatchUpdateAccountsRequest {
             account_ids: self.account_ids,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
+            responses_upstream: self.responses_upstream,
+            excel_models: self.excel_models,
             concurrency_limit: self
                 .concurrency_limit
                 .map(parse_concurrency_limit)
@@ -333,6 +339,8 @@ pub struct AccountView {
     pub error_message: Option<String>,
     pub enabled: bool,
     pub turn_state_injection_enabled: bool,
+    pub responses_upstream: gateway_core::account::ResponsesUpstream,
+    pub excel_models: gateway_core::account::ExcelModels,
     pub turn_state: Option<AccountTurnStateView>,
     pub in_flight: Option<u64>,
     pub health_timeline: Vec<AccountHealthBucketView>,

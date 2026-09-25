@@ -111,19 +111,11 @@ export function useAccountsQuery() {
     return query.execute()
   }
 
-  const refreshInterval = computed(() => query.items.value.some(account =>
-    account.enabled && account.status === 'normal'
-    && account.turnStateInjectionEnabled && account.turnState?.enabled !== false
-    && account.turnState?.models?.some(model => ['queued', 'refreshing', 'cooldown'].includes(model.refreshStatus)),
-  )
-    ? 3_000
-    : 30_000)
-
   useIntervalFn(async () => {
     if (refreshing.value)
       return
     await query.execute({ silent: true })
-  }, refreshInterval)
+  }, 30_000)
 
   return {
     page: query.page,

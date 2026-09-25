@@ -496,6 +496,8 @@ mod provider {
                 next_refresh_at: None,
                 enabled: facts.enabled,
                 turn_state_injection_enabled: false,
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: AccountWeight::default(),
                 outbound_proxy: None,

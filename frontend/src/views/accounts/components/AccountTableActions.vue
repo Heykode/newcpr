@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 import type { AccountReloginAction } from '@/api/modules/relogin'
-import { Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldOff, Trash2, Wifi } from '@lucide/vue'
+import { Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
@@ -12,7 +12,7 @@ defineProps<{
   deleting: boolean
   recovering: boolean
   refreshing: boolean
-  togglingTurnState: boolean
+  togglingExcel?: boolean
   testing: boolean
   exportingModelCatalog?: boolean
   relogin?: AccountReloginAction
@@ -26,7 +26,7 @@ const emit = defineEmits<{
   test: [account: AccountRow]
   refresh: [accountId: string]
   reauthorize: [account: AccountRow]
-  toggleTurnState: [account: AccountRow, enabled: boolean]
+  toggleExcel: [account: AccountRow, enabled: boolean]
   relogin: [account: AccountRow]
   exportModelCatalog: [account: AccountRow]
 }>()
@@ -73,7 +73,7 @@ const emit = defineEmits<{
             测试连接
           </BaseMenuItem>
           <BaseMenuItem
-            v-if="account.provider === 'openai'"
+            v-if="account.provider === 'openai' && account.responsesUpstream !== 'excel'"
             :loading="exportingModelCatalog"
             :disabled="exportingModelCatalog"
             @click.stop="(close(), emit('exportModelCatalog', account))"
@@ -131,16 +131,15 @@ const emit = defineEmits<{
             恢复状态
           </BaseMenuItem>
           <BaseMenuItem
-            v-if="account.provider === 'openai'"
-            :loading="togglingTurnState"
-            :disabled="togglingTurnState"
-            @click.stop="(close(), emit('toggleTurnState', account, !account.turnStateInjectionEnabled))"
+            v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
+            :loading="togglingExcel"
+            :disabled="togglingExcel"
+            @click.stop="(close(), emit('toggleExcel', account, account.responsesUpstream !== 'excel'))"
           >
             <template #icon>
-              <ShieldOff v-if="account.turnStateInjectionEnabled" class="size-3.5 text-cp-text-quaternary" />
-              <ShieldCheck v-else class="size-3.5 text-cp-text-quaternary" />
+              <Table2 class="size-3.5 text-cp-text-quaternary" />
             </template>
-            {{ account.turnStateInjectionEnabled ? '关闭 State 注入' : '开启 State 注入' }}
+            {{ account.responsesUpstream === 'excel' ? '关闭 Excel 入口' : '开启 Excel 入口' }}
           </BaseMenuItem>
         </div>
       </template>

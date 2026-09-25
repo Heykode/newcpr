@@ -121,7 +121,7 @@ onScopeDispose(() => {
         >
           <span class="block truncate">{{ template.config.name }}</span>
           <span class="mt-1 block whitespace-normal break-words text-cp-xs leading-normal text-cp-text-secondary">
-            {{ template.config.enabled ? '启用调度' : '暂停调度' }} · State {{ template.config.turnStateInjectionEnabled == null ? '不修改' : template.config.turnStateInjectionEnabled ? '开' : '关' }} · 并发 {{ template.config.concurrencyLimit ?? '默认' }} · 权重 {{ template.config.weight }}
+            {{ template.config.enabled ? '启用调度' : '暂停调度' }} · 并发 {{ template.config.concurrencyLimit ?? '默认' }} · 权重 {{ template.config.weight }}
           </span>
         </BaseMenuItem>
       </div>

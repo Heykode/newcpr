@@ -25,6 +25,7 @@ pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
 /// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
 #[derive(Clone)]
 pub struct CodexResponsesRequest {
+    pub(crate) excel: Option<crate::transport::excel::ExcelPreparedRequest>,
     /// 上游请求体（唯一真相源）。
     body: Map<String, Value>,
     /// API 边界保存、Provider 逐条恢复的普通客户端请求头。
@@ -62,10 +63,6 @@ pub struct CodexResponsesRequest {
     /// turn state 透传头。
     pub turn_state: Option<String>,
     /// 代理托管 state 的版本；只参与本地 WS 新链连接隔离，不发送上游。
-    pub(crate) managed_turn_state_version: Option<u64>,
-    pub(crate) managed_turn_state_expires_at: Option<std::time::SystemTime>,
-    pub(crate) turn_state_capture:
-        Option<std::sync::Arc<crate::transport::turn_state_capture::TurnStateCapture>>,
     /// turn metadata 透传头。
     pub turn_metadata: Option<String>,
     /// beta features 透传头。
@@ -182,6 +179,9 @@ impl TransportRequirement {
 
 /// 将已完成 history preparation 的请求规范化为唯一 transport requirement。
 pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequirement {
+    if request.excel.is_some() {
+        return TransportRequirement::HttpRequired;
+    }
     if !request.generate() && !request.store() {
         return TransportRequirement::ExplicitWebSocketWarmup;
     }
@@ -507,6 +507,7 @@ impl CodexResponsesRequest {
     /// 协议默认值仅由类型化访问器在本地解释，不写回上游正文。
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
+            excel: None,
             body,
             passthrough_headers: HeaderMap::new(),
             explicit_prompt_cache_key: false,
@@ -525,9 +526,6 @@ impl CodexResponsesRequest {
             use_websocket: false,
             force_http_sse: false,
             turn_state: None,
-            managed_turn_state_version: None,
-            managed_turn_state_expires_at: None,
-            turn_state_capture: None,
             turn_metadata: None,
             beta_features: None,
             version: None,

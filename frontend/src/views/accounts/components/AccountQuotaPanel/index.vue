@@ -7,7 +7,6 @@ import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountProfileModal from '../AccountProfileModal/index.vue'
-import AccountTurnStatePanel from '../AccountTurnStatePanel.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import AccountResetCredits from './ResetCredits.vue'
 
@@ -19,7 +18,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   refreshQuota: [accountId: string]
   accountUpdated: [account: AccountRow]
-  probeQueued: []
 }>()
 
 const quotaEntries = computed(() => groupedAccountQuotaWindows(
@@ -91,7 +89,26 @@ const profileOpen = shallowRef(false)
       </p>
     </div>
 
-    <AccountTurnStatePanel :account="account" @probe-queued="emit('probeQueued')" />
+    <dl v-if="account.responsesUpstream === 'excel'" class="m-0 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-cp-border-secondary pt-3 text-cp-sm max-sm:w-[calc(100vw-5.5rem)]">
+      <dt class="text-cp-text-tertiary">
+        生成入口
+      </dt>
+      <dd class="m-0 text-right text-cp-green-text">
+        Excel
+      </dd>
+      <dt class="text-cp-text-tertiary">
+        上游传输
+      </dt>
+      <dd class="m-0 text-right text-cp-text">
+        HTTP / SSE
+      </dd>
+      <dt class="text-cp-text-tertiary">
+        Excel 模型
+      </dt>
+      <dd class="m-0 break-all text-right font-mono text-cp-text">
+        {{ (account.excelModels ?? ['gpt-5.6-sol']).join(', ') || '无' }}
+      </dd>
+    </dl>
   </section>
 
   <AccountProfileModal

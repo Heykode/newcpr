@@ -22,7 +22,6 @@ pub struct CodexWebSocketRequest {
     pub(crate) connection: CodexWebSocketConnection,
     pub(super) payload_text: String,
     pub(super) continuation: WebSocketContinuationRequirement,
-    pub(crate) injected_turn_state: Option<gateway_core::provider_ports::OpaqueTurnState>,
 }
 
 /// 当前 WebSocket 请求对 previous response 状态的要求。

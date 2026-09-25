@@ -8,7 +8,7 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
 import { accountModelAccessError } from '../utils/modelAccess'
-import { concurrencyLimitInput, parseAccountSchedulingForm } from '../utils/schedulingForm'
+import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 
@@ -22,9 +22,11 @@ export function useAccountBatchEditor(options: {
   const showBatchEditModal = shallowRef(false)
   const customName = shallowRef('')
   const updateCustomName = ref(false)
-  const turnStateAvailable = shallowRef(false)
+  const excelAvailable = shallowRef(false)
   const schedulingEnabled = shallowRef(true)
-  const turnStateInjectionEnabled = shallowRef(false)
+  const excelEnabled = shallowRef(false)
+  const excelModels = shallowRef('gpt-5.6-sol')
+  const updateExcelModels = ref(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
@@ -34,7 +36,7 @@ export function useAccountBatchEditor(options: {
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const updateEnabled = ref(false)
-  const updateTurnStateInjectionEnabled = ref(false)
+  const updateExcelEnabled = ref(false)
   const updateConcurrencyLimit = ref(false)
   const updateWeight = ref(false)
   const updateGroups = ref(false)
@@ -42,7 +44,8 @@ export function useAccountBatchEditor(options: {
   const hasUpdates = computed(() =>
     updateCustomName.value
     || updateEnabled.value
-    || (turnStateAvailable.value && updateTurnStateInjectionEnabled.value)
+    || (excelAvailable.value && updateExcelEnabled.value)
+    || (excelAvailable.value && updateExcelModels.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
     || updateModelAccess.value
@@ -55,7 +58,8 @@ export function useAccountBatchEditor(options: {
   function resetUpdateSelection() {
     updateCustomName.value = false
     updateEnabled.value = false
-    updateTurnStateInjectionEnabled.value = false
+    updateExcelEnabled.value = false
+    updateExcelModels.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
     updateModelAccess.value = false
@@ -71,8 +75,9 @@ export function useAccountBatchEditor(options: {
     customName.value = accounts.every(account => (account.customName ?? '') === firstName) ? firstName : ''
 
     schedulingEnabled.value = accounts.every(account => account.enabled)
-    turnStateAvailable.value = accounts.every(account => account.provider === 'openai')
-    turnStateInjectionEnabled.value = accounts.every(account => account.turnStateInjectionEnabled)
+    excelAvailable.value = accounts.every(account => account.provider === 'openai' && account.authenticationKind === 'oauth')
+    excelEnabled.value = accounts.every(account => account.responsesUpstream === 'excel')
+    excelModels.value = (accounts[0]?.excelModels ?? ['gpt-5.6-sol']).join(', ')
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -100,6 +105,11 @@ export function useAccountBatchEditor(options: {
       updateConcurrencyLimit.value ? concurrencyLimit.value : '',
       updateWeight.value ? weight.value : '1',
     )
+    const models = parseExcelModels(excelModels.value)
+    if (excelAvailable.value && updateExcelModels.value && models === null) {
+      toast.warning('Excel 模型名称不合法，或超过 64 个')
+      return
+    }
     if (updateProxy.value && proxyMode.value === 'proxy' && !proxyId.value.trim()) {
       toast.warning('请选择已通过测试的代理')
       return
@@ -118,8 +128,10 @@ export function useAccountBatchEditor(options: {
         payload.customName = normalizeAccountName(customName.value)
       if (updateEnabled.value)
         payload.enabled = schedulingEnabled.value
-      if (turnStateAvailable.value && updateTurnStateInjectionEnabled.value)
-        payload.turnStateInjectionEnabled = turnStateInjectionEnabled.value
+      if (excelAvailable.value && updateExcelEnabled.value)
+        payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
+      if (excelAvailable.value && updateExcelModels.value && models !== null)
+        payload.excelModels = models
       if (updateConcurrencyLimit.value)
         payload.concurrencyLimit = scheduling.values.concurrencyLimit
       if (updateWeight.value)
@@ -168,8 +180,8 @@ export function useAccountBatchEditor(options: {
       return
     customName.value = ''
     schedulingEnabled.value = true
-    turnStateAvailable.value = false
-    turnStateInjectionEnabled.value = false
+    excelAvailable.value = false
+    excelEnabled.value = false
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = ''
@@ -184,9 +196,11 @@ export function useAccountBatchEditor(options: {
     customName,
     updateCustomName,
     showBatchEditModal,
-    turnStateAvailable,
+    excelAvailable,
     schedulingEnabled,
-    turnStateInjectionEnabled,
+    excelEnabled,
+    excelModels,
+    updateExcelModels,
     concurrencyLimit,
     weight,
     modelAccess,
@@ -196,7 +210,7 @@ export function useAccountBatchEditor(options: {
     proxyId,
     selectedGroupIds,
     updateEnabled,
-    updateTurnStateInjectionEnabled,
+    updateExcelEnabled,
     updateConcurrencyLimit,
     updateWeight,
     updateGroups,

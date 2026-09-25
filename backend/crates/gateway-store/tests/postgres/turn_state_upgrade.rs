@@ -30,7 +30,7 @@ async fn insert_legacy_account(database: &TestDatabase) {
 }
 
 #[tokio::test]
-async fn model_access_upgrade_defaults_existing_accounts_without_touching_identity() {
+async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inheriting_state() {
     let old = sqlx::migrate::Migrator {
         migrations: super::TEST_MIGRATOR
             .iter()
@@ -45,6 +45,10 @@ async fn model_access_upgrade_defaults_existing_accounts_without_touching_identi
         return;
     };
     insert_legacy_account(&database).await;
+    sqlx::query("update provider_accounts set turn_state_injection_enabled=true")
+        .execute(&database.pool)
+        .await
+        .unwrap();
     let before: serde_json::Value =
         sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
             .fetch_one(&database.pool)
@@ -60,6 +64,14 @@ async fn model_access_upgrade_defaults_existing_accounts_without_touching_identi
     assert_eq!(
         after.as_object_mut().unwrap().remove("model_access_json"),
         Some(serde_json::json!({"mode":"all","models":[]})),
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("responses_upstream"),
+        Some(serde_json::json!("codex")),
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("excel_models"),
+        Some(serde_json::json!(["gpt-5.6-sol"]))
     );
     assert_eq!(before, after);
     database.close().await;

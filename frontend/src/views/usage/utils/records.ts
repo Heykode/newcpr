@@ -160,6 +160,8 @@ export function usageTransportType(transport?: string | null) {
 
   if (transport === 'http_sse')
     return 'SSE'
+  if (transport === 'excel_http_sse')
+    return 'Excel SSE'
   if (transport === 'http' || transport === 'http_json')
     return 'HTTP'
   return transport || '—'
@@ -169,7 +171,7 @@ export function usageTransportTypeClass(transport?: string | null) {
   const type = usageTransportType(transport)
   if (type === 'WS')
     return 'bg-cp-blue-container text-cp-blue-on-container'
-  if (type === 'SSE')
+  if (type === 'SSE' || type === 'Excel SSE')
     return 'bg-cp-green-container text-cp-green-on-container'
   return 'bg-cp-fill-tertiary text-cp-text-secondary'
 }

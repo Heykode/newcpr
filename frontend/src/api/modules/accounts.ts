@@ -135,6 +135,8 @@ export interface AccountHealthBucket {
   nonCompletionCount: number
 }
 
+export type ResponsesUpstream = 'codex' | 'excel'
+
 export interface Account {
   customName?: string | null
   outboundProxyEndpoint: string | null
@@ -157,6 +159,8 @@ export interface Account {
   errorMessage: string | null
   enabled: boolean
   turnStateInjectionEnabled: boolean
+  responsesUpstream?: ResponsesUpstream
+  excelModels?: string[]
   turnState?: {
     enabled?: boolean
     requiredModels: string[]
@@ -432,6 +436,8 @@ interface AccountUpdateParam {
   accountId: string
   enabled: boolean
   turnStateInjectionEnabled?: boolean
+  responsesUpstream?: ResponsesUpstream
+  excelModels?: string[]
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
@@ -445,6 +451,8 @@ interface AccountBatchUpdateParam {
   accountIds: string[]
   enabled?: boolean
   turnStateInjectionEnabled?: boolean
+  responsesUpstream?: ResponsesUpstream
+  excelModels?: string[]
   concurrencyLimit?: number | null
   weight?: number
   modelAccess?: AccountModelAccess
@@ -460,6 +468,8 @@ interface AccountImportSettings {
   customName?: string
   enabled: boolean
   turnStateInjectionEnabled?: boolean
+  responsesUpstream?: ResponsesUpstream
+  excelModels?: string[]
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess

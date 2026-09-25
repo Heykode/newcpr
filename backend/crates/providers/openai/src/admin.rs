@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
 use gateway_admin::model::Revision;
 use gateway_admin::model::accounts::AccountRecord;
-use gateway_admin::model::accounts::{ConnectionTestEndpoint, TurnStateProbeOutcome};
+use gateway_admin::model::accounts::ConnectionTestEndpoint;
 use gateway_admin::model::observability::{
     CalculatedBillingBreakdown, CurrencyCost, DashboardDesktopRelease, DashboardWireAttribute,
     DashboardWireProfile, DashboardWireTarget, DecimalAmount, DesktopReleaseStatus,
@@ -85,7 +85,6 @@ pub(crate) struct OpenAiAdminProvider {
     catalog: Arc<CodexCredentialCatalogService>,
     websocket_pool: Arc<CodexWebSocketPool>,
     desktop_release: CodexDesktopReleaseStatus,
-    turn_state_maintenance: Arc<crate::provider::CodexTurnStateMaintenanceService>,
 }
 
 pub(crate) struct OpenAiAdminServices {
@@ -94,7 +93,6 @@ pub(crate) struct OpenAiAdminServices {
     pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
     pub(crate) quota: Arc<CodexCredentialQuotaService>,
     pub(crate) catalog: Arc<CodexCredentialCatalogService>,
-    pub(crate) turn_state_maintenance: Arc<crate::provider::CodexTurnStateMaintenanceService>,
 }
 
 impl OpenAiAdminProvider {
@@ -117,7 +115,6 @@ impl OpenAiAdminProvider {
             profile_statistics: services.profile_statistics,
             quota: services.quota,
             catalog: services.catalog,
-            turn_state_maintenance: services.turn_state_maintenance,
             websocket_pool,
             desktop_release,
         }
@@ -228,16 +225,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
         }
     }
 
-    async fn request_turn_state_probe(
-        &self,
-        account_id: &ProviderAccountId,
-        model: &UpstreamModelId,
-    ) -> Result<TurnStateProbeOutcome, ProviderAdminError> {
-        self.turn_state_maintenance
-            .request_probe(account_id, model)
-            .await
-    }
-
     async fn account_facts_changed(&self, account_ids: &[ProviderAccountId]) {
         if account_ids.is_empty() {
             return;
@@ -257,9 +244,6 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 "OpenAI model catalog invalidation failed after account commit"
             );
         }
-        self.turn_state_maintenance
-            .accounts_changed(account_ids)
-            .await;
     }
 
     async fn egress_configuration_changed(&self) -> Result<(), ProviderAdminError> {
@@ -460,13 +444,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
             (
                 AuthorizationMutationTarget::Create { .. },
                 CompletedCodexOAuthCredential::Create(credential),
-            ) => {
-                prepared_create(credential, Utc::now()).map(PreparedAuthorizationCredential::Create)
-            }
+            ) => prepared_create(*credential, Utc::now())
+                .map(PreparedAuthorizationCredential::Create),
             (
                 AuthorizationMutationTarget::Reauthorize { .. },
                 CompletedCodexOAuthCredential::Reauthorize(credential),
-            ) => prepared_rotation(credential, mutation.provider_kind().clone())
+            ) => prepared_rotation(*credential, mutation.provider_kind().clone())
                 .map(PreparedAuthorizationCredential::Reauthorize),
             _ => Err(provider_admin_error(ProviderAdminErrorKind::Internal)),
         };
@@ -739,6 +722,12 @@ impl ProviderAdmin for OpenAiAdminProvider {
         ProviderAdminError,
     > {
         let account = self.account(account_id).await?;
+        if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Unsupported)
+                .with_public_message(
+                    "Excel 入口不提供 Codex 原生模型目录；账号测试使用 Excel 模型列表",
+                ));
+        }
         let (models, observed_at) = self
             .catalog
             .account_catalog_documents(&account)

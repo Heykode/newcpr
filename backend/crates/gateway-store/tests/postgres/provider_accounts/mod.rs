@@ -5,6 +5,7 @@ use std::{
 };
 
 mod auth_recovery;
+mod excel;
 mod model_access;
 mod quota_forecast;
 mod state_retention;
@@ -80,6 +81,8 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         account_ids: ids.clone(),
         enabled: None,
         turn_state_injection_enabled: None,
+        responses_upstream: Default::default(),
+        excel_models: Default::default(),
         concurrency_limit: None,
         weight: None,
         group_ids: None,
@@ -215,6 +218,8 @@ async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
                     custom_name: name.map(str::to_owned),
                     enabled: true,
                     turn_state_injection_enabled: None,
+                    responses_upstream: Default::default(),
+                    excel_models: Default::default(),
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::DEFAULT,
                     group_ids: vec![],
@@ -1189,6 +1194,8 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
                         account_id: id.clone(),
                         enabled,
                         turn_state_injection_enabled: Some(false),
+                        responses_upstream: Default::default(),
+                        excel_models: Default::default(),
                         concurrency_limit: None,
                         weight: gateway_core::account::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),
@@ -1918,6 +1925,8 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
                 account_id: "acct_terminal_mutation".to_owned(),
                 enabled: false,
                 turn_state_injection_enabled: None,
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -1999,6 +2008,8 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         account_id: "acct_proxy".to_owned(),
         enabled: true,
         turn_state_injection_enabled: Some(false),
+        responses_upstream: Default::default(),
+        excel_models: Default::default(),
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
         group_ids: vec![],
@@ -2144,6 +2155,8 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
                 account_ids: vec!["acct_recovery".to_owned()],
                 enabled: Some(true),
                 turn_state_injection_enabled: None,
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: None,
                 group_ids: None,
@@ -2275,6 +2288,8 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 account_ids: account_ids.clone(),
                 enabled: Some(false),
                 turn_state_injection_enabled: Some(true),
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: Some(gateway_core::account::AccountConcurrencyLimit::new(7)),
                 weight: Some(gateway_core::account::AccountWeight::new(25).expect("weight")),
                 group_ids: Some(vec![AccountGroupId::new(GROUP_ID).expect("group ID")]),
@@ -2317,6 +2332,8 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 account_ids: account_ids.clone(),
                 enabled: Some(true),
                 turn_state_injection_enabled: Some(false),
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(vec![
@@ -2520,6 +2537,8 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     custom_name: None,
                     enabled: false,
                     turn_state_injection_enabled: Some(true),
+                    responses_upstream: Default::default(),
+                    excel_models: Default::default(),
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
                     group_ids: Vec::new(),
@@ -3052,6 +3071,8 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: Some(false),
             turn_state_injection_enabled: None,
+            responses_upstream: Default::default(),
+            excel_models: Default::default(),
             concurrency_limit: None,
             weight: Some(gateway_core::account::AccountWeight::DEFAULT),
             group_ids: Some(Vec::new()),
@@ -3629,6 +3650,8 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
                 account_id: id.as_str().to_owned(),
                 enabled: true,
                 turn_state_injection_enabled: Some(false),
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![],
@@ -3692,6 +3715,8 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         custom_name: None,
         enabled: false,
         turn_state_injection_enabled: Some(true),
+        responses_upstream: Default::default(),
+        excel_models: Default::default(),
         concurrency_limit: Some(AccountConcurrencyLimit::new(3).expect("concurrency")),
         weight: AccountWeight::new(7).expect("weight"),
         group_ids: vec![AccountGroupId::new(GROUP_ID).expect("group ID")],
@@ -3743,6 +3768,8 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
             outbound_proxy: None,
             settings: Some(AccountImportSettings {
                 turn_state_injection_enabled: Some(false),
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092")
                         .expect("missing group"),
@@ -3805,6 +3832,8 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
             custom_name: None,
             enabled: true,
             turn_state_injection_enabled: state,
+            responses_upstream: Default::default(),
+            excel_models: Default::default(),
             concurrency_limit: None,
             weight: gateway_core::account::AccountWeight::DEFAULT,
             group_ids: vec![],

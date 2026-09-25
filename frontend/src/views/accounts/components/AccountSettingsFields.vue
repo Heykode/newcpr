@@ -17,16 +17,18 @@ withDefaults(defineProps<{
   accountId?: string
   preserveProxy?: boolean
   proxyError?: string
-  turnStateAvailable?: boolean
+  excelAvailable?: boolean
   nameAvailable?: boolean
   modelAccessAvailable?: boolean
   preserveModelAccess?: boolean
-}>(), { preserveProxy: true, batch: false, turnStateAvailable: false, nameAvailable: false, modelAccessAvailable: false, preserveModelAccess: false })
+}>(), { preserveProxy: true, batch: false, excelAvailable: false, nameAvailable: false, modelAccessAvailable: false, preserveModelAccess: false })
 
 const customName = defineModel<string>('customName', { default: '' })
 const updateCustomName = defineModel<boolean>('updateCustomName', { default: false })
 const enabled = defineModel<boolean>('enabled', { required: true })
-const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { default: false })
+const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
+const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol' })
+const updateExcelModels = defineModel<boolean>('updateExcelModels', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess')
@@ -35,7 +37,7 @@ const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 const updateEnabled = defineModel<boolean>('updateEnabled', { default: false })
-const updateTurnStateInjectionEnabled = defineModel<boolean>('updateTurnStateInjectionEnabled', { default: false })
+const updateExcelEnabled = defineModel<boolean>('updateExcelEnabled', { default: false })
 const updateConcurrencyLimit = defineModel<boolean>('updateConcurrencyLimit', { default: false })
 const updateWeight = defineModel<boolean>('updateWeight', { default: false })
 const updateGroups = defineModel<boolean>('updateGroups', { default: false })
@@ -74,30 +76,37 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
     </div>
 
     <div
-      v-if="turnStateAvailable"
+      v-if="excelAvailable"
       :class="batch ? 'grid gap-2' : 'flex min-h-6 items-center justify-between gap-3'"
     >
       <div class="flex min-w-0 items-center justify-between gap-3">
-        <div>
-          <span class="text-cp leading-none font-medium text-cp-text-secondary">Turn State 注入</span>
-          <p class="mt-1 mb-0 text-cp-xs text-cp-text-tertiary">
-            仅在全局开启且模型命中维护名单时生效
-          </p>
-        </div>
+        <span class="text-cp leading-none font-medium text-cp-text-secondary">Excel 入口</span>
         <BaseCheckbox
           v-if="batch"
-          v-model="updateTurnStateInjectionEnabled"
-          label="应用 Turn State 注入更改"
-          title="应用 Turn State 注入更改"
+          v-model="updateExcelEnabled"
+          label="应用 Excel 入口更改"
+          title="应用 Excel 入口更改"
           :disabled="disabled"
         />
       </div>
       <BaseSwitch
-        v-model="turnStateInjectionEnabled"
-        label="切换 Turn State 注入"
-        :disabled="disabled || (batch && !updateTurnStateInjectionEnabled)"
+        v-model="excelEnabled"
+        label="切换 Excel 入口"
+        :disabled="disabled || (batch && !updateExcelEnabled)"
       />
     </div>
+
+    <BaseFormItem v-if="excelAvailable" label="Excel 模型">
+      <template v-if="batch" #extra>
+        <BaseCheckbox v-model="updateExcelModels" label="应用 Excel 模型更改" title="应用 Excel 模型更改" :disabled="disabled" />
+      </template>
+      <BaseInput
+        v-model="excelModels"
+        aria-label="Excel 模型"
+        placeholder="gpt-5.6-sol"
+        :disabled="disabled || (batch && !updateExcelModels)"
+      />
+    </BaseFormItem>
 
     <div class="grid gap-4 sm:grid-cols-2">
       <BaseFormItem label="并发限制">

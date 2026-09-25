@@ -132,7 +132,6 @@ onScopeDispose(() => {
       </BaseFormItem>
       <AccountSettingsFields
         v-model:enabled="form.enabled"
-        v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
         v-model:concurrency-limit="form.concurrencyLimit"
         v-model:weight="form.weight"
         v-model:selected-group-ids="form.groupIds"
@@ -141,7 +140,6 @@ onScopeDispose(() => {
         :groups="groups"
         :groups-loading="groupsLoading"
         :preserve-proxy="false"
-        turn-state-available
         :disabled="busy"
       />
       <div v-for="id in missingGroups" :key="id" class="flex min-w-0 items-center gap-2 text-cp-sm text-cp-warning">
@@ -171,7 +169,7 @@ onScopeDispose(() => {
             {{ row.config.name }}
           </div>
           <div class="mt-1 text-cp-xs text-cp-text-secondary">
-            {{ row.config.enabled ? '启用调度' : '暂停调度' }} · State {{ row.config.turnStateInjectionEnabled == null ? '未设置' : row.config.turnStateInjectionEnabled ? '开' : '关' }} · 并发 {{ row.config.concurrencyLimit ?? '默认' }} · 权重 {{ row.config.weight }} · {{ row.config.groupIds.length }} 个分组
+            {{ row.config.enabled ? '启用调度' : '暂停调度' }} · 并发 {{ row.config.concurrencyLimit ?? '默认' }} · 权重 {{ row.config.weight }} · {{ row.config.groupIds.length }} 个分组
           </div>
         </div>
         <BaseIconButton label="编辑模板" :disabled="busy" @click="edit(row)">

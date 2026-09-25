@@ -1575,6 +1575,8 @@ mod response {
                 next_refresh_at: None,
                 enabled: true,
                 turn_state_injection_enabled: false,
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: AccountWeight::DEFAULT,
                 outbound_proxy: None,

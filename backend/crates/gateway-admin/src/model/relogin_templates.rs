@@ -42,6 +42,8 @@ impl ReloginTemplateConfig {
             custom_name: None,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
+            responses_upstream: None,
+            excel_models: None,
             concurrency_limit: self
                 .concurrency_limit
                 .map(|value| {

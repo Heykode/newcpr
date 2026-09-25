@@ -876,10 +876,6 @@ pub(super) fn map_client_error(
         return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
     }
     let mut failure = match error {
-        CodexClientError::TurnStateUnavailable => MappedProviderFailure::plain(provider_error(
-            ProviderErrorKind::Unavailable,
-            UpstreamSendState::NotSent,
-        )),
         CodexClientError::Upstream { .. } => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Protocol,
             UpstreamSendState::Sent,
@@ -1041,11 +1037,6 @@ pub(super) fn map_client_error(
 /// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display。
 fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
-        CodexClientError::TurnStateUnavailable => (
-            "prepare",
-            "managed_turn_state_unavailable",
-            "Managed turn state expired or was retired before sending".to_owned(),
-        ),
         CodexClientError::WebSocket(error) => return Some(websocket_diagnostic(error)),
         CodexClientError::ErrorBodyRead { status, source, .. } => {
             return Some(

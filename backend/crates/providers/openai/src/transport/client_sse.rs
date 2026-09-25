@@ -47,34 +47,6 @@ use crate::transport::{
 use super::client::*;
 
 const HTTP_ZSTD_MIN_BYTES: usize = 1024;
-const PROBE_ERROR_BODY_LIMIT: usize = 16 * 1024;
-const PROBE_ERROR_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-
-async fn read_probe_error_body(response: ReqwestResponse) -> bytes::Bytes {
-    if response
-        .content_length()
-        .is_some_and(|length| length > PROBE_ERROR_BODY_LIMIT as u64)
-    {
-        return bytes::Bytes::new();
-    }
-    tokio::time::timeout(PROBE_ERROR_BODY_TIMEOUT, async move {
-        let mut stream = response.bytes_stream();
-        let mut body = bytes::BytesMut::new();
-        while let Some(chunk) = stream.next().await {
-            let Ok(chunk) = chunk else {
-                return bytes::Bytes::new();
-            };
-            if chunk.len() > PROBE_ERROR_BODY_LIMIT.saturating_sub(body.len()) {
-                return bytes::Bytes::new();
-            }
-            body.extend_from_slice(&chunk);
-        }
-        body.freeze()
-    })
-    .await
-    .unwrap_or_default()
-}
-
 impl CodexBackendClient {
     /// 构造客户端。
     pub fn new(
@@ -121,76 +93,92 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        self.send_response_http_sse(upstream_request, context, false)
-            .await
-    }
-
-    pub(crate) async fn probe_turn_state_response(
-        &self,
-        upstream_request: &CodexResponsesRequest,
-        context: CodexRequestContext<'_>,
-    ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        self.send_response_http_sse(upstream_request, context, true)
-            .await
+        let result = self.send_response_http_sse(upstream_request, context).await;
+        if let Some(excel) = &upstream_request.excel
+            && result
+                .as_ref()
+                .is_err_and(super::excel::images::needs_attachment)
+            && super::excel::images::has_inline(&excel.body)
+        {
+            let body = super::excel::images::upload_inline(
+                self,
+                &self.profile.snapshot(),
+                context,
+                &excel.endpoint,
+                &excel.body,
+            )
+            .await?;
+            let mut retry = upstream_request.clone();
+            if let Some(prepared) = retry.excel.as_mut() {
+                prepared.body = body;
+            }
+            return self.send_response_http_sse(&retry, context).await;
+        }
+        result
     }
 
     async fn send_response_http_sse(
         &self,
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
-        probe: bool,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let profile = self.profile.snapshot();
-        let mut headers = self.request_headers_for_http_response(upstream_request, context)?;
-        if probe && self.outbound_proxy.is_some() {
-            headers.insert(
-                reqwest::header::CONNECTION,
-                reqwest::header::HeaderValue::from_static("close"),
-            );
-        }
+        let excel = upstream_request.excel.as_ref();
+        let headers = if excel.is_some() {
+            super::excel::request_headers(context, &profile.user_agent())?
+        } else {
+            self.request_headers_for_http_response(upstream_request, context)?
+        };
         let headers_started_at = Instant::now();
         // 身份投影先完成，再按最终 JSON 大小决定是否使用 zstd。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
         // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
         // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求。
-        let mut upstream_body = upstream_request.body().clone();
-        super::qx_application::project_response_body(&mut upstream_body, upstream_request, context);
-        normalize_generate_upstream_body(&mut upstream_body);
-        upstream_body.insert("stream".to_owned(), serde_json::Value::Bool(true));
-        upstream_body
-            .entry("store")
-            .or_insert(serde_json::Value::Bool(false));
+        let upstream_body = if let Some(prepared) = excel {
+            prepared.body.clone()
+        } else {
+            let mut body = upstream_request.body().clone();
+            super::qx_application::project_response_body(&mut body, upstream_request, context);
+            normalize_generate_upstream_body(&mut body);
+            body.insert("stream".to_owned(), serde_json::Value::Bool(true));
+            body.entry("store")
+                .or_insert(serde_json::Value::Bool(false));
+            body
+        };
         let body =
             serde_json::to_vec(&upstream_body).map_err(CodexClientError::RequestBodyEncode)?;
-        let endpoint = endpoint_url(&self.base_url, CODEX_RESPONSES_PATH);
+        let endpoint = if let Some(prepared) = excel {
+            prepared.endpoint.clone()
+        } else {
+            endpoint_url(&self.base_url, CODEX_RESPONSES_PATH)
+        };
         let trace = context
             .trace
             .cloned()
             .unwrap_or_default()
-            .exchange("http_sse");
+            .exchange(if excel.is_some() {
+                "excel_http_sse"
+            } else {
+                "http_sse"
+            });
         trace.headers(
             "upstream.request.headers",
             serde_json::json!({
-                "method": "POST", "endpoint": CODEX_RESPONSES_PATH,
+                "method": "POST",
+                "endpoint": if excel.is_some() {super::excel::RESPONSES_PATH} else {CODEX_RESPONSES_PATH},
             }),
             headers
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
         trace.capture("upstream.request.body", &body);
-        let compressed = body.len() >= HTTP_ZSTD_MIN_BYTES;
+        let compressed = excel.is_none() && body.len() >= HTTP_ZSTD_MIN_BYTES;
         let body = if compressed {
             zstd::stream::encode_all(std::io::Cursor::new(body), 3)
                 .map_err(CodexClientError::RequestCompression)?
         } else {
             body
         };
-        if let Some(capture) = &upstream_request.turn_state_capture {
-            let injected = upstream_request
-                .managed_turn_state_version
-                .and_then(|_| headers.get("x-codex-turn-state")?.to_str().ok());
-            capture.dispatch(CodexBackendTransport::HttpSse, injected);
-        }
         let response = self
             .send_profiled(&profile, false, |client| {
                 let builder = client.post(endpoint).headers(headers).body(body);
@@ -216,39 +204,49 @@ impl CodexBackendClient {
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
         );
         let diagnostics = response_meta::diagnostics(Some(status.as_u16()), response.headers());
-        let turn_state = response_meta::turn_state(response.headers());
-        if let Some(capture) = &upstream_request.turn_state_capture {
-            capture.returned(turn_state.as_deref());
-        }
-        let set_cookie_headers = response_meta::set_cookie_headers(response.headers());
+        let turn_state = excel
+            .is_none()
+            .then(|| response_meta::turn_state(response.headers()))
+            .flatten();
+        // The reference Excel protocol is bearer-only; never mix its cookie jar with Codex.
+        let set_cookie_headers = if excel.is_none() {
+            response_meta::set_cookie_headers(response.headers())
+        } else {
+            Vec::new()
+        };
         let rate_limit_headers = response_meta::rate_limit_headers(response.headers());
         let rate_limit_observed_at = std::time::SystemTime::now();
-        let response_metadata = response_meta::response_metadata(response.headers());
+        let mut response_metadata = response_meta::response_metadata(response.headers());
+        if excel.is_some() {
+            response_metadata.models_etag = None;
+            response_metadata
+                .client_headers
+                .retain(|(name, _)| name != "x-codex-turn-state");
+        }
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
-        if !status.is_success() || (probe && status != reqwest::StatusCode::OK) {
+        if !status.is_success() {
             let content_type = response
                 .headers()
                 .get(CONTENT_TYPE)
                 .map(|value| value.as_bytes().to_vec());
-            let client_headers = response_meta::client_headers(response.headers());
-            let raw_body = if probe {
-                read_probe_error_body(response).await
-            } else {
-                read_error_response_body(response).await.map_err(|source| {
-                    CodexClientError::ErrorBodyRead {
-                        source,
-                        status,
-                        diagnostics: Box::new(diagnostics.clone()),
-                        transport: CodexBackendTransport::HttpSse,
-                        transport_metrics: Box::new(CodexTransportMetrics {
-                            upstream_headers_ms: Some(upstream_headers_ms),
-                            http_version: Some(http_version.clone()),
-                            ..CodexTransportMetrics::default()
-                        }),
-                    }
-                })?
-            };
+            let mut client_headers = response_meta::client_headers(response.headers());
+            if excel.is_some() {
+                client_headers.retain(|(name, _)| name != "x-codex-turn-state");
+            }
+            let raw_body = read_error_response_body(response).await.map_err(|source| {
+                CodexClientError::ErrorBodyRead {
+                    source,
+                    status,
+                    diagnostics: Box::new(diagnostics.clone()),
+                    transport: CodexBackendTransport::HttpSse,
+                    transport_metrics: Box::new(CodexTransportMetrics {
+                        upstream_headers_ms: Some(upstream_headers_ms),
+                        http_version: Some(http_version.clone()),
+                        ..CodexTransportMetrics::default()
+                    }),
+                }
+            })?;
             trace.capture("upstream.error.body", &raw_body);
             let body = String::from_utf8_lossy(&raw_body).into_owned();
             let retry_after_seconds =
@@ -278,6 +276,10 @@ impl CodexBackendClient {
 
         let rate_limit_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let body = http_sse_stream(response, Arc::clone(&rate_limit_updates), trace);
+        let body = match excel {
+            Some(prepared) => super::excel::transform_stream(body, prepared),
+            None => body,
+        };
         Ok(CodexBackendStreamingResponse {
             body,
             transport: CodexBackendTransport::HttpSse,
@@ -306,39 +308,11 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        if self.managed_request_expired(request, pool_account_id.or(context.account_id)) {
-            return Err(CodexClientError::TurnStateUnavailable);
-        }
         let prepared = self
             .prepare_response_transport_with_pool_account(request, context, pool_account_id)
             .await;
-        // Opening/capacity waits may cross expiry. Never silently send an unprotected new chain.
-        if self.managed_request_expired(request, pool_account_id.or(context.account_id)) {
-            drop(prepared);
-            return Err(CodexClientError::TurnStateUnavailable);
-        }
         self.create_response_stream_with_prepared(request, context, prepared?)
             .await
-    }
-
-    fn managed_request_expired(
-        &self,
-        request: &CodexResponsesRequest,
-        account: Option<&str>,
-    ) -> bool {
-        let Some(version) = request.managed_turn_state_version else {
-            return false;
-        };
-        request
-            .managed_turn_state_expires_at
-            .is_some_and(|expiry| expiry <= std::time::SystemTime::now())
-            || self
-                .websocket_pool
-                .as_ref()
-                .zip(account)
-                .is_some_and(|(pool, account)| {
-                    pool.managed_version_retired(account, request.model(), version)
-                })
     }
 
     /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening。
@@ -708,15 +682,6 @@ impl CodexBackendClient {
                     request: websocket_request,
                     prepared,
                 } = *route;
-                if let Some(capture) = &request.turn_state_capture {
-                    capture.dispatch(
-                        CodexBackendTransport::WebSocket,
-                        websocket_request
-                            .injected_turn_state
-                            .as_ref()
-                            .map(gateway_core::provider_ports::OpaqueTurnState::expose_to_provider),
-                    );
-                }
                 let mut exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
                     prepared,
@@ -787,11 +752,6 @@ impl CodexBackendClient {
             .with_client_scope(request.client_api_key_id.as_deref().unwrap_or_default())
             .with_egress_key(&self.egress_key)
             .with_connection_profile(connection_profile);
-        if let Some(version) = request.managed_turn_state_version {
-            key = key
-                .with_model_state(request.model(), version)
-                .with_state_expiry(request.managed_turn_state_expires_at);
-        }
         if let Some(connection_id) = request.downstream_websocket_connection_id.as_deref() {
             key = key.with_downstream_connection_id(connection_id);
         }

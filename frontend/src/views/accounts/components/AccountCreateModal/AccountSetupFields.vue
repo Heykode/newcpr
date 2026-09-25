@@ -24,7 +24,6 @@ const form = defineModel<AccountCreateForm>({ required: true })
     <AccountSettingsFields
       v-model:custom-name="form.customName"
       v-model:enabled="form.enabled"
-      v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
       v-model:model-access="form.modelAccess"
@@ -35,7 +34,6 @@ const form = defineModel<AccountCreateForm>({ required: true })
       model-access-available
       preserve-model-access
       :groups="groups"
-      :turn-state-available="form.provider === 'openai' || form.provider === 'batch'"
       :groups-loading="groupsLoading"
       :preserve-proxy="false"
       :disabled="disabled"

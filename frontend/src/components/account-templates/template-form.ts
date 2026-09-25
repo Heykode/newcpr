@@ -5,7 +5,6 @@ export function templateForm(config?: AccountTemplateConfig) {
   return {
     name: config?.name ?? '',
     enabled: config?.enabled ?? true,
-    turnStateInjectionEnabled: config?.turnStateInjectionEnabled ?? false,
     concurrencyLimit: config?.concurrencyLimit == null ? '' : String(config.concurrencyLimit),
     weight: String(config?.weight ?? 1),
     groupIds: [...(config?.groupIds ?? [])],
@@ -26,7 +25,6 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
   return {
     name,
     enabled: form.enabled,
-    turnStateInjectionEnabled: form.turnStateInjectionEnabled,
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     outboundProxyId: form.proxyMode === 'proxy' ? form.proxyId : null,

@@ -18,6 +18,7 @@ use gateway_core::routing::{
     UpstreamModelId,
 };
 use secrecy::ExposeSecret;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::{Notify, OnceCell};
 use tokio::time::Instant;
@@ -49,7 +50,18 @@ impl CodexCatalogScope {
             .filter(|plan| !plan.is_empty())
             .map(str::to_ascii_lowercase)
             .unwrap_or_else(|| "unknown".to_owned());
-        ProviderCatalogScope::new(format!("plan:{plan}"))
+        let scope =
+            if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
+                let encoded = serde_json::to_vec(account.excel_models())
+                    .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+                format!(
+                    "excel-v2:plan:{plan}:{}",
+                    &hex::encode(Sha256::digest(encoded))[..16]
+                )
+            } else {
+                format!("plan:{plan}")
+            };
+        ProviderCatalogScope::new(scope)
             .map(Self)
             .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)
     }
@@ -668,6 +680,26 @@ impl CodexCredentialCatalogService {
                 client_version,
             )
             .await;
+        if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
+            && !account.excel_models().as_slice().is_empty()
+        {
+            let mut models = result
+                .ok()
+                .map(|snapshot| snapshot.models().to_vec())
+                .unwrap_or_default();
+            models.retain(|model| {
+                !account
+                    .excel_models()
+                    .contains(model.request_model().as_str())
+            });
+            for model in account.excel_models().as_slice() {
+                models.push(
+                    crate::transport::catalog::excel_bridge_model(model)
+                        .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?,
+                );
+            }
+            return Ok(FetchedAccountModels { models, etag: None });
+        }
         let snapshot = result.map_err(catalog_client_error)?;
         Ok(FetchedAccountModels {
             models: snapshot.models().to_vec(),

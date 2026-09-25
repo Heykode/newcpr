@@ -289,11 +289,6 @@ impl CodexWebSocketPool {
                     .get_key_value(key)
                     .map_or_else(|| key.clone(), |(stored, _)| stored.clone())
             };
-            if required_response_id.is_none() && key.managed_state_expired() {
-                return Some(WebSocketPoolAcquire::Bypass(
-                    WebSocketPoolBypassReason::Disabled,
-                ));
-            }
             close.extend(self.trim_account_idle(&mut state, key.account_id(), Some(&key)));
             match state.slots.get(&key) {
                 Some(WebSocketPoolSlot::Busy(_)) => {
@@ -416,10 +411,6 @@ impl CodexWebSocketPool {
                 .slots
                 .get_key_value(key)
                 .map_or_else(|| key.clone(), |(stored, _)| stored.clone());
-            let managed_expired = key.managed_state_expired()
-                && connection.as_ref().is_some_and(|connection| {
-                    connection.continuation.latest_response_id().is_none()
-                });
             let owns_reservation = matches!(
                 state.slots.get(&key),
                 Some(WebSocketPoolSlot::Busy(reservation))
@@ -434,7 +425,6 @@ impl CodexWebSocketPool {
                 > self.account_limit(key.account_id()).unwrap_or(0);
             if owns_reservation
                 && (expired
-                    || managed_expired
                     || retire_on_return
                     || over_capacity
                     || state.shutting_down
@@ -447,8 +437,6 @@ impl CodexWebSocketPool {
                         connection,
                         Some(if expired {
                             "max_age_expired"
-                        } else if managed_expired {
-                            "managed_turn_state_retired"
                         } else {
                             "account_capacity_reclaimed"
                         }),
@@ -479,72 +467,6 @@ impl CodexWebSocketPool {
             state.slots.remove(key);
             self.capacity_changed.send_replace(());
         }
-    }
-
-    pub(crate) fn retire_managed_state(&self, account: &str, model: &str, version: u64) {
-        let mut state = self.lock_state();
-        let keys = state
-            .slots
-            .keys()
-            .filter(|key| {
-                key.managed_version(account, model)
-                    .is_some_and(|old| old < version)
-                    && key.turn_state_expires_at != Some(std::time::UNIX_EPOCH)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if keys.is_empty() {
-            return;
-        }
-        for mut key in keys {
-            if let Some(slot) = state.slots.remove(&key) {
-                key.turn_state_expires_at = Some(std::time::UNIX_EPOCH);
-                state.slots.insert(key, slot);
-            }
-        }
-        self.capacity_changed.send_replace(());
-    }
-
-    pub(crate) fn renew_managed_state(
-        &self,
-        account: &str,
-        model: &str,
-        version: u64,
-        expires_at: std::time::SystemTime,
-    ) {
-        let mut state = self.lock_state();
-        if state.slots.keys().any(|key| {
-            key.managed_version(account, model)
-                .is_some_and(|stored| stored > version)
-        }) {
-            return;
-        }
-        let keys = state
-            .slots
-            .keys()
-            .filter(|key| {
-                key.managed_version(account, model) == Some(version)
-                // An explicit retirement is not a renewable lease.
-                && key.turn_state_expires_at != Some(std::time::UNIX_EPOCH)
-                && key.turn_state_expires_at.is_some_and(|old| expires_at > old)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        for mut key in keys {
-            if let Some(slot) = state.slots.remove(&key) {
-                key.turn_state_expires_at = Some(expires_at);
-                state.slots.insert(key, slot);
-            }
-        }
-        self.capacity_changed.send_replace(());
-    }
-
-    pub(crate) fn managed_version_retired(&self, account: &str, model: &str, version: u64) -> bool {
-        self.lock_state().slots.keys().any(|key| {
-            key.managed_version(account, model).is_some_and(|stored| {
-                stored > version || (stored == version && key.managed_state_expired())
-            })
-        })
     }
 
     fn discard_reserved_with_observation(

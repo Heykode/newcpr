@@ -171,10 +171,28 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
-        // Opaque-state parsing and the bounded passive-observation queue remain private.
-        ("crates/providers/openai", Some("provider/turn_state.rs"), Item::Mod(module)) => {
+        // Protocol authorization, bounded attachment parsing and immutable replay
+        // are private implementation details, not production test APIs.
+        (
+            "crates/providers/openai",
+            Some(
+                "provider/excel.rs"
+                | "transport/excel/request.rs"
+                | "transport/excel/replay.rs"
+                | "transport/excel/tools.rs"
+                | "transport/excel/images.rs"
+                | "transport/excel/image_relay.rs"
+                | "transport/excel/stream.rs",
+            ),
+            Item::Mod(module),
+        ) => {
             module.ident == "tests"
                 && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
+        ("crates/providers/openai", Some("transport/excel/mod.rs"), Item::Mod(module)) => {
+            module.ident == "tests"
+                && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
         (
@@ -414,7 +432,7 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
     ));
     assert!(is_audited_private_test(
         "crates/providers/openai",
-        Path::new("provider/turn_state.rs"),
+        Path::new("transport/excel/replay.rs"),
         &item,
     ));
     assert!(!is_audited_private_test(
@@ -442,6 +460,44 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
             !is_audited_private_test("crates/providers/openai", path, &item),
             "{source}"
         );
+    }
+}
+
+#[test]
+fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
+    let owner = "crates/providers/openai";
+    for relative in [
+        "provider/excel.rs",
+        "transport/excel/request.rs",
+        "transport/excel/replay.rs",
+        "transport/excel/tools.rs",
+        "transport/excel/images.rs",
+        "transport/excel/image_relay.rs",
+        "transport/excel/stream.rs",
+        "transport/excel/mod.rs",
+    ] {
+        let path = Path::new(relative);
+        let declaration = if relative.ends_with("/mod.rs") {
+            "#[cfg(test)] mod tests;"
+        } else {
+            "#[cfg(test)] mod tests {}"
+        };
+        let item: Item = syn::parse_str(declaration).unwrap();
+        assert!(is_audited_private_test(owner, path, &item));
+        assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+        for source in [
+            "#[cfg(test)] pub(crate) mod tests {}",
+            "#[cfg(test)] pub mod tests;",
+            "#[cfg(test)] mod other {}",
+            "#[cfg(test)] pub fn test_api() {}",
+            "#[cfg_attr(test, path = \"fixture.rs\")] mod tests;",
+        ] {
+            let item: Item = syn::parse_str(source).unwrap();
+            assert!(
+                !is_audited_private_test(owner, path, &item),
+                "{relative}: {source}"
+            );
+        }
     }
 }
 

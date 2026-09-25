@@ -74,28 +74,12 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 8);
-    for (owner, scheduled) in [
-        ("openai-turn-state", true),
-        ("openai-turn-state-observations", false),
-        ("openai-turn-state-collector", false),
-    ] {
-        let registration = contributions
-            .iter()
-            .find_map(|contribution| match contribution {
-                WorkerContribution::Registration(registration)
-                    if registration.id.owner() == owner =>
-                {
-                    Some(registration)
-                }
-                _ => None,
-            })
-            .expect("managed state worker registered");
-        assert_eq!(
-            matches!(registration.runnable, WorkerRunnable::Scheduled { .. }),
-            scheduled,
-        );
-    }
+    assert_eq!(contributions.len(), 5);
+    assert!(contributions.iter().all(|contribution| match contribution {
+        WorkerContribution::Registration(registration) =>
+            !registration.id.owner().starts_with("openai-turn-state"),
+        _ => true,
+    }));
     assert!(
         contributions
             .iter()
@@ -2225,6 +2209,8 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         next_refresh_at: account.next_refresh_at().map(DateTime::<Utc>::from),
         enabled: account.enabled(),
         turn_state_injection_enabled: false,
+        responses_upstream: Default::default(),
+        excel_models: Default::default(),
         concurrency_limit: account.concurrency_limit(),
         weight: account.weight(),
         credential_state: account.credential_state(),

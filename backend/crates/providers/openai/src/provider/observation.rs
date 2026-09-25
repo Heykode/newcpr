@@ -27,6 +27,7 @@ pub(super) fn endpoint_requested_model(
 /// 持久化和展示这份安全快照，不解释任何 OpenAI 协议字段。
 pub(super) struct OpenAiResponseObservationState {
     transport: CodexBackendTransport,
+    excel: bool,
     diagnostics: CodexUpstreamDiagnostics,
     response_metadata: CodexResponseMetadata,
     metrics: CodexTransportMetrics,
@@ -39,47 +40,14 @@ pub(super) struct OpenAiResponseObservationState {
     rate_limit_headers: Vec<(String, String)>,
     timings: ProviderResponseTimings,
     terminal: Option<OpenAiResponseTerminal>,
-    turn_state_capture: Option<Arc<crate::transport::turn_state_capture::TurnStateCapture>>,
 }
 
 pub(super) struct OpenAiPassiveQuotaObservation {
     rate_limits: Vec<CodexRateLimitObservation>,
 }
 
-pub(super) fn attach_turn_state_snapshot(
-    observation: Option<ProviderResponseObservation>,
-    snapshot: Option<Value>,
-    transport: CodexProviderTransport,
-) -> Option<ProviderResponseObservation> {
-    let Some(snapshot) = snapshot else {
-        return observation;
-    };
-    let actual_transport = snapshot
-        .pointer("/summary/transport")
-        .and_then(Value::as_str)
-        .unwrap_or(transport_name(transport));
-    let observation = observation.unwrap_or(ProviderResponseObservation::new(
-        UpstreamTransport::new(actual_transport).ok()?,
-    ));
-    let mut metadata = observation
-        .provider_metadata()
-        .and_then(|metadata| serde_json::from_str::<Map<String, Value>>(metadata.as_json()).ok())
-        .unwrap_or_default();
-    metadata.insert("turnState".to_owned(), snapshot);
-    Some(match bounded_observation_metadata(metadata) {
-        Some(metadata) => observation.with_provider_metadata(metadata),
-        None => observation,
-    })
-}
-
-fn bounded_observation_metadata(
-    mut metadata: Map<String, Value>,
-) -> Option<ProviderResponseMetadata> {
-    ProviderResponseMetadata::new(serde_json::to_string(&metadata).ok()?).or_else(|| {
-        // Supplemental State evidence must not displace the existing diagnostics.
-        metadata.remove("turnState")?;
-        ProviderResponseMetadata::new(serde_json::to_string(&metadata).ok()?)
-    })
+fn bounded_observation_metadata(metadata: Map<String, Value>) -> Option<ProviderResponseMetadata> {
+    ProviderResponseMetadata::new(serde_json::to_string(&metadata).ok()?)
 }
 
 impl OpenAiPassiveQuotaObservation {
@@ -112,11 +80,9 @@ impl OpenAiResponseObservationState {
         request: &CodexResponsesRequest,
         trace: &gateway_core::diagnostics::TraceContext,
     ) -> Self {
-        if let Some(capture) = &request.turn_state_capture {
-            capture.returned(response.turn_state.as_deref());
-        }
         Self {
             transport: response.transport,
+            excel: request.excel.is_some(),
             diagnostics: response.diagnostics.clone(),
             response_metadata: response.response_metadata.clone(),
             metrics: response.transport_metrics.clone(),
@@ -132,13 +98,6 @@ impl OpenAiResponseObservationState {
                 &response.response_metadata,
             ),
             terminal: None,
-            turn_state_capture: request.turn_state_capture.clone(),
-        }
-    }
-
-    pub(super) fn observe_turn_state(&self, value: &str) {
-        if let Some(capture) = &self.turn_state_capture {
-            capture.returned(Some(value));
         }
     }
 
@@ -163,6 +122,7 @@ impl OpenAiResponseObservationState {
             self.websocket_pool_decision,
             self.timings,
         )?;
+        observation = response_route_observation(observation, self.excel);
         if self.transport == CodexBackendTransport::WebSocket
             && let Some(status) = failure.and_then(ProviderError::upstream_status)
         {
@@ -286,13 +246,6 @@ impl OpenAiResponseObservationState {
     pub(super) fn provider_metadata(&self) -> Option<ProviderResponseMetadata> {
         let mut metadata = Map::new();
         metadata.insert("schemaVersion".to_owned(), json!(2));
-        if let Some(snapshot) = self
-            .turn_state_capture
-            .as_ref()
-            .and_then(|capture| capture.snapshot())
-        {
-            metadata.insert("turnState".to_owned(), snapshot);
-        }
         if self.transport == CodexBackendTransport::WebSocket
             && let Some(request_id) = &self.diagnostics.request_id
         {
@@ -360,6 +313,17 @@ impl OpenAiResponseObservationState {
             metadata.insert("eventStatusCode".to_owned(), json!(200_u16));
         }
         bounded_observation_metadata(metadata)
+    }
+}
+
+pub(super) fn response_route_observation(
+    observation: ProviderResponseObservation,
+    excel: bool,
+) -> ProviderResponseObservation {
+    if excel && let Ok(transport) = UpstreamTransport::new("excel_http_sse") {
+        observation.with_transport(transport)
+    } else {
+        observation
     }
 }
 

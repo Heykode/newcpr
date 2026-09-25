@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url)
 const modules = new Map()
 // Keep icon stubs on the same Vue runtime as the rendered components.
 const icons = Object.fromEntries(
-  ['KeyRound', 'ShieldCheck', 'Key', 'LinkAlt', 'Openai', 'Xai']
+  ['KeyRound', 'Table2', 'Key', 'LinkAlt', 'Openai', 'Xai']
     .map(name => [name, defineComponent({ setup: () => () => h('svg', { 'data-icon': name }) })]),
 )
 
@@ -73,100 +73,47 @@ function mark(html, name) {
   return element
 }
 
-test('account State opt-in renders gold avatar and an accessible badge without changing provider', async () => {
-  const html = await render({ turnStateInjectionEnabled: true })
-  assert.match(mark(html, 'state-avatar'), /bg-amber-100.*ring-2 ring-inset ring-amber-500/)
-  assert.match(mark(html, 'state-avatar'), /\[html\[data-theme=dark\]_&amp;\]:ring-amber-400/)
-  assert.match(mark(html, 'state-mark'), /role="img"/)
-  assert.match(mark(html, 'state-mark'), /title="[^"]*State[^"]*"/)
-  assert.match(mark(html, 'state-mark'), /aria-label="[^"]*State[^"]*"/)
-  assert.match(html, /data-icon="ShieldCheck"/)
+test('Excel selection renders an accessible route icon without changing provider identity', async () => {
+  const html = await render({ responsesUpstream: 'excel' })
+  assert.match(html, /aria-label="Excel 入口"/)
+  assert.match(html, /data-icon="Table2"/)
   assert.match(html, /data-icon="Openai"/)
   assert.match(html, /state-sample@example\.invalid/)
-  assert.ok(!html.includes(stablePresetVisualToneClass(account.id)))
+  assert.ok(html.includes(stablePresetVisualToneClass(account.id)))
 })
 
-test('disabled or absent State field keeps the original avatar and no State badge', async () => {
+test('retired State fields never alter avatars or enable Excel', async () => {
   const original = await render()
-  assert.equal(await render({ turnStateInjectionEnabled: false }), original)
-  assert.equal(await render({ turnStateInjectionEnabled: null }), original)
-  assert.ok(original.includes(stablePresetVisualToneClass(account.id)))
-  assert.doesNotMatch(original, /data-account-state|ShieldCheck|ring-amber|bg-amber/)
-})
-
-test('State badge is OpenAI-only and partial account props remain compatible', async () => {
-  for (const provider of ['xai', undefined]) {
-    const html = await render({ provider, turnStateInjectionEnabled: true })
-    assert.doesNotMatch(html, /data-account-state|ShieldCheck|ring-amber|bg-amber/)
-    assert.ok(html.includes(stablePresetVisualToneClass(account.id)))
+  for (const enabled of [false, true, null]) {
+    assert.equal(await render({
+      turnStateInjectionEnabled: enabled,
+      turnState: { requiredModels: ['model-a'], readyModels: [{ model: 'model-a' }] },
+    }), original)
   }
+  assert.doesNotMatch(original, /data-account-state|Table2|ring-amber|bg-amber/)
 })
 
-test('State and 2FA badges retain separate corners, fixed sizes and swipe selection handles', async () => {
+test('Excel and 2FA indicators retain fixed sizes and swipe selection handles', async () => {
   for (const size of ['md', 'lg']) {
-    const html = await render({ turnStateInjectionEnabled: true }, { size, hasTotp: true })
-    const state = mark(html, 'state-mark')
+    const html = await render({ responsesUpstream: 'excel' }, { size, hasTotp: true })
     const totp = mark(html, 'totp-mark')
-    assert.match(state, /absolute -bottom-1 -right-1/)
     assert.match(totp, /absolute -left-1 -top-1/)
-    for (const badge of [state, totp]) {
-      assert.match(badge, /size-4/)
-      assert.match(badge, /data-swipe-select-handle/)
-    }
-    assert.match(mark(html, 'state-avatar'), size === 'lg' ? /size-10 / : /size-9 /)
-    assert.match(mark(html, 'state-avatar'), /data-swipe-select-handle/)
+    assert.match(totp, /size-4/)
+    assert.match(totp, /data-swipe-select-handle/)
+    assert.match(html, size === 'lg' ? /size-10 / : /size-9 /)
+    assert.match(html, /data-icon="Table2"/)
     assert.match(html, /data-icon="KeyRound"/)
     assert.match(html, /data-swipe-select-ignore/)
   }
 })
 
-test('State styling is derived anew from the account switch and preserves other identity props', async () => {
+test('Excel indicator follows the account switch and preserves other identity props', async () => {
   const props = { size: 'lg', hasTotp: true, showPlan: true, titleMode: 'email' }
-  const off = await render({ turnStateInjectionEnabled: false }, props)
-  const on = await render({ turnStateInjectionEnabled: true }, props)
-  assert.match(on, /data-account-state-mark/)
+  const off = await render({ responsesUpstream: 'codex' }, props)
+  const on = await render({ responsesUpstream: 'excel' }, props)
+  assert.match(on, /data-icon="Table2"/)
   assert.match(on, />Team</)
   assert.match(on, /data-account-totp-mark/)
-  assert.equal(await render({ turnStateInjectionEnabled: false }, props), off)
-  assert.doesNotMatch(off, /data-account-state/)
-})
-
-test('a valid active makes the frame green and names ready versus pending models', async () => {
-  const html = await render({
-    turnStateInjectionEnabled: true,
-    turnState: {
-      requiredModels: ['model-a', 'model-b'],
-      readyModels: [{ model: 'model-a', expiresAt: new Date(Date.now() + 3600000).toISOString() }],
-    },
-  })
-  assert.match(mark(html, 'state-avatar'), /ring-emerald-500/)
-  assert.match(html, /data-account-state-ready/)
-  assert.match(mark(html, 'state-avatar'), /已就绪：model-a；待采集：model-b/)
-})
-
-test('expired, missing, or disabled active never turns the frame green', async () => {
-  for (const turnState of [null, { requiredModels: ['model-a'], readyModels: [] }, {
-    requiredModels: ['model-a'],
-    readyModels: [{ model: 'model-a', expiresAt: new Date(0).toISOString() }],
-  }]) {
-    const html = await render({ turnStateInjectionEnabled: true, turnState })
-    assert.doesNotMatch(html, /data-account-state-ready|ring-emerald/)
-    assert.match(mark(html, 'state-avatar'), /ring-amber-500/)
-  }
-})
-
-test('invalid credentials override ready State and recover with the account status', async () => {
-  const fields = {
-    turnStateInjectionEnabled: true,
-    turnState: {
-      requiredModels: ['model-a'],
-      readyModels: [{ model: 'model-a', expiresAt: new Date(Date.now() + 3600000).toISOString() }],
-    },
-  }
-  for (const errorReason of ['access_token_expired', 'credential_expired', 'account_banned']) {
-    const html = await render({ ...fields, status: 'error', errorReason })
-    assert.match(mark(html, 'state-avatar'), /ring-cp-error/)
-    assert.doesNotMatch(html, /data-account-state-ready|ring-emerald|State 待采集/)
-  }
-  assert.match(await render({ ...fields, status: 'normal', errorReason: null }), /data-account-state-ready/)
+  assert.equal(await render({ responsesUpstream: 'codex' }, props), off)
+  assert.doesNotMatch(off, /data-icon="Table2"|data-account-state/)
 })

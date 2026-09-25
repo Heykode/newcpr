@@ -3,10 +3,12 @@
 mod error;
 mod model;
 mod model_access;
+mod responses_upstream;
 pub use model_access::{
     AccountModelAccess, AccountModelAccessMode, InvalidAccountModelAccess,
     MAX_ACCOUNT_ACCESS_MODELS,
 };
+pub use responses_upstream::{ExcelModels, ResponsesUpstream};
 mod proxy;
 pub use proxy::{InvalidOutboundProxy, OutboundProxy};
 pub mod scope;

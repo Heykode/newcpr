@@ -1,5 +1,8 @@
 # Usage State Diagnostics
 
+> Historical contract. The Excel upstream branch removes this column, popover
+> and live State controls. Existing API/storage history is compatibility-only.
+
 ## 1. Scope / Trigger
 
 Apply when changing the usage State column, its sensitive-detail lifetime or the
