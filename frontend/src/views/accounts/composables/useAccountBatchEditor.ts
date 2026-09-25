@@ -25,7 +25,8 @@ export function useAccountBatchEditor(options: {
   const excelAvailable = shallowRef(false)
   const schedulingEnabled = shallowRef(true)
   const excelEnabled = shallowRef(false)
-  const excelModels = shallowRef('gpt-5.6-sol')
+  const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
+  const excelModelsFollowGlobal = shallowRef(true)
   const updateExcelModels = ref(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
@@ -77,7 +78,8 @@ export function useAccountBatchEditor(options: {
     schedulingEnabled.value = accounts.every(account => account.enabled)
     excelAvailable.value = accounts.every(account => account.provider === 'openai' && account.authenticationKind === 'oauth')
     excelEnabled.value = accounts.every(account => account.responsesUpstream === 'excel')
-    excelModels.value = (accounts[0]?.excelModels ?? ['gpt-5.6-sol']).join(', ')
+    excelModels.value = (accounts[0]?.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
+    excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -105,7 +107,7 @@ export function useAccountBatchEditor(options: {
       updateConcurrencyLimit.value ? concurrencyLimit.value : '',
       updateWeight.value ? weight.value : '1',
     )
-    const models = parseExcelModels(excelModels.value)
+    const models = excelModelsFollowGlobal.value ? [] : parseExcelModels(excelModels.value)
     if (excelAvailable.value && updateExcelModels.value && models === null) {
       toast.warning('Excel 模型名称不合法，或超过 64 个')
       return
@@ -130,8 +132,11 @@ export function useAccountBatchEditor(options: {
         payload.enabled = schedulingEnabled.value
       if (excelAvailable.value && updateExcelEnabled.value)
         payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
-      if (excelAvailable.value && updateExcelModels.value && models !== null)
-        payload.excelModels = models
+      if (excelAvailable.value && updateExcelModels.value && models !== null) {
+        payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
+        if (!excelModelsFollowGlobal.value)
+          payload.excelModels = models
+      }
       if (updateConcurrencyLimit.value)
         payload.concurrencyLimit = scheduling.values.concurrencyLimit
       if (updateWeight.value)
@@ -200,6 +205,7 @@ export function useAccountBatchEditor(options: {
     schedulingEnabled,
     excelEnabled,
     excelModels,
+    excelModelsFollowGlobal,
     updateExcelModels,
     concurrencyLimit,
     weight,

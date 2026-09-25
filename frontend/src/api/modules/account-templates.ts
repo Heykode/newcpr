@@ -4,6 +4,9 @@ import request from '../request'
 export interface AccountTemplateConfig {
   name: string
   enabled: boolean
+  responsesUpstream?: 'codex' | 'excel' | null
+  excelModelsFollowGlobal?: boolean | null
+  excelModels?: string[] | null
   turnStateInjectionEnabled?: boolean | null
   concurrencyLimit: number | null
   weight: number

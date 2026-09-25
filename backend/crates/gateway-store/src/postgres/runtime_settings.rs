@@ -24,6 +24,7 @@ pub struct RuntimeSettings {
     pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<String>,
+    pub excel_default_models: gateway_core::account::ExcelModels,
     pub turn_state_probe_proxy_id: Option<String>,
     pub turn_state_probe_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
@@ -90,6 +91,7 @@ pub struct RuntimeSettingsUpdate {
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Vec<String>,
+    pub excel_default_models: gateway_core::account::ExcelModels,
     pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub turn_state_probe_concurrency: Option<u32>,
     pub responses_max_decompressed_body_bytes: u64,
@@ -211,7 +213,7 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+            "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
@@ -264,7 +266,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
+        "select config_revision, admin_api_key, disable_fast, turn_state_injection_enabled, excel_default_models, turn_state_models, turn_state_probe_proxy_id, responses_max_decompressed_body_bytes, refresh_margin_seconds,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
@@ -322,6 +324,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 turn_state_models = $17,
 	                 turn_state_probe_proxy_id = case when $18 then $19 else turn_state_probe_proxy_id end,
 	                 turn_state_probe_concurrency = coalesce($20, turn_state_probe_concurrency),
+	                 excel_default_models = $21,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -349,6 +352,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.turn_state_probe_proxy_id.is_some())
     .bind(update.turn_state_probe_proxy_id.as_ref().and_then(Option::as_deref))
     .bind(update.turn_state_probe_concurrency.map(i64::from))
+    .bind(update.excel_default_models.as_slice())
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -403,6 +407,7 @@ struct RuntimeSettingsRow {
     disable_fast: bool,
     turn_state_injection_enabled: bool,
     turn_state_models: Vec<String>,
+    excel_default_models: Vec<String>,
     turn_state_probe_proxy_id: Option<String>,
     turn_state_probe_concurrency: i32,
     responses_max_decompressed_body_bytes: i64,
@@ -428,6 +433,10 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         disable_fast: row.disable_fast,
         turn_state_injection_enabled: row.turn_state_injection_enabled,
         turn_state_models: row.turn_state_models,
+        excel_default_models: gateway_core::account::ExcelModels::try_from(
+            row.excel_default_models,
+        )
+        .map_err(|_| invalid_numeric())?,
         turn_state_probe_proxy_id: row.turn_state_probe_proxy_id,
         turn_state_probe_concurrency: to_u32(i64::from(row.turn_state_probe_concurrency))?,
         responses_max_decompressed_body_bytes: to_u64(row.responses_max_decompressed_body_bytes)?,

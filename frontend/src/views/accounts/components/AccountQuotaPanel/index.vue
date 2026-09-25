@@ -106,7 +106,8 @@ const profileOpen = shallowRef(false)
         Excel 模型
       </dt>
       <dd class="m-0 break-all text-right font-mono text-cp-text">
-        {{ (account.excelModels ?? ['gpt-5.6-sol']).join(', ') || '无' }}
+        {{ account.excelModelsFollowGlobal ? '跟随全局' : '自定义' }} ·
+        {{ (account.effectiveExcelModels ?? account.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ') || '无' }}
       </dd>
     </dl>
   </section>

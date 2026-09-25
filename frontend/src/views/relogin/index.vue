@@ -31,10 +31,12 @@ import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
+import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
+import { excelSettings } from '@/utils/excel-settings'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
 import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
@@ -299,6 +301,10 @@ const confirming = shallowRef(false)
 const templatesOpen = shallowRef(false)
 const selectedTemplate = shallowRef<AccountTemplate | null>(null)
 const batchCustomName = shallowRef('')
+const applyExcel = shallowRef(false)
+const excelEnabled = shallowRef(false)
+const excelModelsFollowGlobal = shallowRef(true)
+const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
 const pushAccounts = ref<Record<string, string>>({})
@@ -306,6 +312,10 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   failure.value = ''
   selectedTemplate.value = null
   batchCustomName.value = ''
+  applyExcel.value = false
+  excelEnabled.value = false
+  excelModelsFollowGlobal.value = true
+  excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
   confirmMode.value = mode
   pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
   pushAccounts.value = Object.fromEntries(pendingRows.value.map((row) => {
@@ -349,7 +359,10 @@ function executeConfirmed() {
         if (requiresPushTarget(row) && target)
           selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
       }
-      batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined))
+      const newAccountExcel = newPushCount.value > 0 && applyExcel.value
+        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value)
+        : undefined
+      batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, newAccountExcel))
     }
     else {
       await deleteRelogin(pendingRows.value.map(row => row.id))
@@ -652,11 +665,23 @@ onBeforeUnmount(() => {
         新增 {{ newPushCount }} 项，更新已有账号 {{ pushable.length - newPushCount }} 项，跳过 {{ pendingRows.length - pushable.length }} 项。
       </p>
       <AccountTemplatePicker v-if="confirming && confirmMode === 'push' && newPushCount > 0" v-model="selectedTemplate" :disabled="busy" />
+      <div v-if="confirmMode === 'push' && newPushCount > 0" class="my-4 grid min-w-0 gap-3">
+        <BaseCheckbox v-model="applyExcel" label="指定新账号 Excel 设置（优先于模板）" show-label :disabled="busy" />
+        <template v-if="applyExcel">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-cp-sm">Excel 入口</span>
+            <BaseSwitch v-model="excelEnabled" label="切换新账号 Excel 入口" :disabled="busy" />
+          </div>
+          <BaseFormItem label="Excel 模型">
+            <ExcelModelFields v-model:follow-global="excelModelsFollowGlobal" v-model:models="excelModels" :disabled="busy" />
+          </BaseFormItem>
+        </template>
+      </div>
       <BaseFormItem v-if="confirmMode === 'push' && newPushCount > 0" label="本批账号名称（选填）">
         <BaseInput v-model="batchCustomName" aria-label="本批账号名称" placeholder="默认名称" :disabled="busy" />
       </BaseFormItem>
       <p v-if="confirmMode === 'push' && pushable.length > newPushCount" class="text-cp-sm text-cp-text-secondary">
-        已有账号保留名称、分组、并发和调度配置。
+        已有账号保留名称、分组、并发、调度及 Excel 配置。
       </p>
       <div class="max-h-64 overflow-auto">
         <div v-for="row in pendingRows" :key="row.id" class="border-b border-cp-border py-2 text-cp-sm">

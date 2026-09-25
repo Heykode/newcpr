@@ -11,7 +11,7 @@ use crate::{
             PrepareCredentialRotation, ProviderDocument,
         },
         relogin::*,
-        relogin_templates::{ReloginTemplateConfig, ReloginTemplateSelection},
+        relogin_templates::{ExcelImportSettings, ReloginTemplateConfig, ReloginTemplateSelection},
     },
     ports::{
         provider::ProviderAdmin,
@@ -147,8 +147,7 @@ pub trait ReloginService: Send + Sync {
         &self,
         ids: &[String],
         revisions: &BTreeMap<String, u64>,
-        template: Option<ReloginTemplateSelection>,
-        custom_name: Option<String>,
+        new_account: crate::model::relogin_templates::ReloginNewAccountOptions,
         selections: &BTreeMap<String, ReloginPushSelection>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError>;
@@ -271,7 +270,7 @@ impl DefaultReloginService {
         entry: &mut ReloginEntry,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
-        self.push_entry_with_template(entry, None, None, context)
+        self.push_entry_with_template(entry, None, None, None, context)
             .await
     }
 
@@ -280,10 +279,11 @@ impl DefaultReloginService {
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
         custom_name: Option<&str>,
+        new_account_excel: Option<&ExcelImportSettings>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
         let outcome = self
-            .push_checked(entry, template, custom_name, context)
+            .push_checked(entry, template, custom_name, new_account_excel, context)
             .await;
         if outcome.is_err() && entry.status == ReloginStatus::Pushing {
             entry.status = ReloginStatus::Uncertain;
@@ -424,6 +424,7 @@ impl DefaultReloginService {
         entry: &mut ReloginEntry,
         template: Option<&ReloginTemplateConfig>,
         custom_name: Option<&str>,
+        new_account_excel: Option<&ExcelImportSettings>,
         context: &MutationContext,
     ) -> Result<(), AdminError> {
         entry.validate_totp()?;
@@ -527,7 +528,7 @@ impl DefaultReloginService {
             }
         } else {
             let mut settings = template.map(ReloginTemplateConfig::settings).transpose()?;
-            if let Some(name) = custom_name {
+            if custom_name.is_some() || new_account_excel.is_some() {
                 let settings =
                     settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
                         model_access: None,
@@ -536,11 +537,15 @@ impl DefaultReloginService {
                         turn_state_injection_enabled: None,
                         responses_upstream: None,
                         excel_models: None,
+                        excel_models_follow_global: None,
                         concurrency_limit: None,
                         weight: crate::model::accounts::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),
                     });
-                settings.custom_name = Some(name.to_owned());
+                settings.custom_name = custom_name.map(str::to_owned);
+                if let Some(excel) = new_account_excel {
+                    excel.apply(settings);
+                }
             }
             if let Some(config) = template {
                 self.store()?
@@ -1054,8 +1059,11 @@ impl ReloginService for DefaultReloginService {
         self.push_with_selection(
             ids,
             revisions,
-            template,
-            custom_name,
+            crate::model::relogin_templates::ReloginNewAccountOptions {
+                template,
+                custom_name,
+                excel: None,
+            },
             &BTreeMap::new(),
             context,
         )
@@ -1066,12 +1074,19 @@ impl ReloginService for DefaultReloginService {
         &self,
         ids: &[String],
         revisions: &BTreeMap<String, u64>,
-        template: Option<ReloginTemplateSelection>,
-        custom_name: Option<String>,
+        new_account: crate::model::relogin_templates::ReloginNewAccountOptions,
         selections: &BTreeMap<String, ReloginPushSelection>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError> {
+        let crate::model::relogin_templates::ReloginNewAccountOptions {
+            template,
+            custom_name,
+            excel: new_account_excel,
+        } = new_account;
         validate_ids(ids)?;
+        if let Some(excel) = &new_account_excel {
+            excel.validate()?;
+        }
         let custom_name = crate::model::accounts::normalize_custom_name(custom_name.as_deref())?;
         let _gate = self.gate.lock().await;
         let template = match template {
@@ -1090,6 +1105,7 @@ impl ReloginService for DefaultReloginService {
                                 &mut entry,
                                 template.as_ref().map(|template| &template.config),
                                 custom_name.as_deref(),
+                                new_account_excel.as_ref(),
                                 context,
                             )
                             .await

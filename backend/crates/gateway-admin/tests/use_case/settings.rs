@@ -68,6 +68,7 @@ async fn settings_should_reject_invalid_margin_or_probe_concurrency_before_store
                     turn_state_probe_concurrency,
                     disable_fast: None,
                     turn_state_injection_enabled: None,
+                    excel_default_models: Default::default(),
                     turn_state_models: Some(vec![
                         gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
                             .expect("model"),
@@ -139,6 +140,7 @@ async fn settings_should_reject_invalid_account_busy_wait_before_store_call() {
                         turn_state_probe_concurrency: None,
                         disable_fast: None,
                         turn_state_injection_enabled: None,
+                        excel_default_models: Default::default(),
                         turn_state_models: Some(vec![
                             gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
                                 .expect("model"),

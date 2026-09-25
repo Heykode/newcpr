@@ -8,7 +8,7 @@ pub struct ExcelModels(Vec<String>);
 
 impl Default for ExcelModels {
     fn default() -> Self {
-        Self(vec!["gpt-5.6-sol".into()])
+        Self(vec!["gpt-5.6-sol".into(), "gpt-6-astra".into()])
     }
 }
 

@@ -94,6 +94,9 @@ impl SettingsStore for AdminSettingsStoreAdapter {
             settings: postgres::RuntimeSettingsUpdate {
                 admin_api_key: current.settings.admin_api_key,
                 disable_fast: command.disable_fast,
+                excel_default_models: command
+                    .excel_default_models
+                    .unwrap_or(current.settings.excel_default_models),
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
                 turn_state_probe_proxy_id: command.turn_state_probe_proxy_id,
                 turn_state_probe_concurrency: command.turn_state_probe_concurrency,
@@ -129,6 +132,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "1",
                 vec![
                     "model_mappings_json".to_owned(),
+                    "excel_default_models".to_owned(),
                     "disable_fast".to_owned(),
                     "turn_state_injection_enabled".to_owned(),
                     "turn_state_models".to_owned(),
@@ -238,6 +242,7 @@ pub(crate) fn admin_runtime_settings(
     Ok(AdminRuntimeSettings {
         config_revision: admin_revision(settings.config_revision)?,
         disable_fast: settings.disable_fast,
+        excel_default_models: settings.excel_default_models,
         turn_state_injection_enabled: settings.turn_state_injection_enabled,
         turn_state_probe_proxy_id: settings.turn_state_probe_proxy_id,
         turn_state_probe_concurrency: settings.turn_state_probe_concurrency,

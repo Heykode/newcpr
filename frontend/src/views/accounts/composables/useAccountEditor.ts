@@ -23,7 +23,9 @@ export function useAccountEditor(options: {
   const schedulingEnabled = shallowRef(true)
   const excelEnabled = shallowRef(false)
   let initialExcelEnabled = false
-  const excelModels = shallowRef('gpt-5.6-sol')
+  const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
+  const excelModelsFollowGlobal = shallowRef(true)
+  let initialExcelModelsFollowGlobal = true
   let initialExcelModels = ''
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
@@ -50,7 +52,9 @@ export function useAccountEditor(options: {
     schedulingEnabled.value = account.enabled
     excelEnabled.value = account.responsesUpstream === 'excel'
     initialExcelEnabled = excelEnabled.value
-    excelModels.value = (account.excelModels ?? ['gpt-5.6-sol']).join(', ')
+    excelModels.value = (account.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
+    excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
+    initialExcelModelsFollowGlobal = excelModelsFollowGlobal.value
     initialExcelModels = excelModels.value
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
@@ -72,7 +76,8 @@ export function useAccountEditor(options: {
       return
     }
     const scheduling = parseAccountSchedulingForm(concurrencyLimit.value, weight.value)
-    const models = parseExcelModels(excelModels.value)
+    const excelAvailable = editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
+    const models = !excelAvailable || excelModelsFollowGlobal.value ? [] : parseExcelModels(excelModels.value)
     if (models === null) {
       toast.warning('Excel 模型最多 64 个，每个名称最多 128 个字母、数字、点、下划线或连字符')
       return
@@ -104,9 +109,11 @@ export function useAccountEditor(options: {
         && excelEnabled.value !== initialExcelEnabled) {
         payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
       }
-      if (editingAccount.value?.provider === 'openai' && editingAccount.value.authenticationKind === 'oauth'
-        && excelModels.value !== initialExcelModels) {
-        payload.excelModels = models
+      if (excelAvailable && (excelModelsFollowGlobal.value !== initialExcelModelsFollowGlobal
+        || (!excelModelsFollowGlobal.value && excelModels.value !== initialExcelModels))) {
+        payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
+        if (!excelModelsFollowGlobal.value)
+          payload.excelModels = models
       }
       await updateAccount(payload)
       showEditModal.value = false
@@ -126,7 +133,9 @@ export function useAccountEditor(options: {
     schedulingEnabled.value = true
     excelEnabled.value = false
     initialExcelEnabled = false
-    excelModels.value = 'gpt-5.6-sol'
+    excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
+    excelModelsFollowGlobal.value = true
+    initialExcelModelsFollowGlobal = true
     initialExcelModels = ''
     concurrencyLimit.value = ''
     weight.value = '1'
@@ -142,6 +151,7 @@ export function useAccountEditor(options: {
     schedulingEnabled,
     excelEnabled,
     excelModels,
+    excelModelsFollowGlobal,
     concurrencyLimit,
     weight,
     modelAccess,

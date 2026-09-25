@@ -244,6 +244,7 @@ const {
   schedulingEnabled: batchSchedulingEnabled,
   excelEnabled: batchExcelEnabled,
   excelModels: batchExcelModels,
+  excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
   updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
@@ -277,6 +278,7 @@ const {
   schedulingEnabled,
   excelEnabled,
   excelModels,
+  excelModelsFollowGlobal,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -646,6 +648,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:enabled="schedulingEnabled"
       v-model:excel-enabled="excelEnabled"
       v-model:excel-models="excelModels"
+      v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -666,6 +669,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:enabled="batchSchedulingEnabled"
       v-model:excel-enabled="batchExcelEnabled"
       v-model:excel-models="batchExcelModels"
+      v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"

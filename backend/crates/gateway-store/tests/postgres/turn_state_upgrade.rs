@@ -73,6 +73,13 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
         after.as_object_mut().unwrap().remove("excel_models"),
         Some(serde_json::json!(["gpt-5.6-sol"]))
     );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("excel_models_follow_global"),
+        Some(serde_json::json!(false))
+    );
     assert_eq!(before, after);
     database.close().await;
 }

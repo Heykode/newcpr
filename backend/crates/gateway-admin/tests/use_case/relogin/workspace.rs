@@ -369,8 +369,17 @@ async fn push(h: &Harness, id: &str, target: &AccountRecord, switch_workspace: b
         .push_with_selection(
             &[id.into()],
             &BTreeMap::from([(id.into(), row.revision)]),
-            None,
-            Some("Must not rename existing".into()),
+            gateway_admin::model::relogin_templates::ReloginNewAccountOptions {
+                template: None,
+                custom_name: Some("Must not rename existing".into()),
+                excel: Some(
+                    gateway_admin::model::relogin_templates::ExcelImportSettings {
+                        responses_upstream: gateway_core::account::ResponsesUpstream::Excel,
+                        excel_models_follow_global: true,
+                        excel_models: None,
+                    },
+                ),
+            },
             &BTreeMap::from([(
                 id.into(),
                 ReloginPushSelection {

@@ -142,6 +142,8 @@ pub struct ProviderAccountSummary {
     pub turn_state_injection_enabled: bool,
     pub responses_upstream: gateway_core::account::ResponsesUpstream,
     pub excel_models: gateway_core::account::ExcelModels,
+    pub excel_models_follow_global: bool,
+    pub effective_excel_models: gateway_core::account::ExcelModels,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub model_access: gateway_core::account::AccountModelAccess,
@@ -296,6 +298,9 @@ impl ImportProviderAccounts {
                 s.excel_models
                     .as_ref()
                     .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+                    .or(s
+                        .excel_models_follow_global
+                        .map(|_| gateway_core::account::ResponsesUpstream::Excel))
                     .or(s.responses_upstream)
             }) && !upstream
                 .supports_account(&account.provider_kind, &account.authentication_kind)
@@ -348,6 +353,7 @@ pub struct BatchUpdateProviderAccountsAdmin {
     pub turn_state_injection_enabled: Option<bool>,
     pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
     pub excel_models: Option<gateway_core::account::ExcelModels>,
+    pub excel_models_follow_global: Option<bool>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     pub weight: Option<AccountWeight>,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
@@ -417,7 +423,8 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global,
+            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -427,7 +434,8 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global,
+            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -439,7 +447,8 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global,
+            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -524,7 +533,7 @@ pub(crate) fn core_account_from_summary(
     )
     .with_turn_state_injection_enabled(summary.turn_state_injection_enabled)
     .with_responses_upstream(summary.responses_upstream)
-    .with_excel_models(summary.excel_models.clone())
+    .with_excel_models(summary.effective_excel_models)
     .with_turn_state_binding_revision(binding_revision)
     .with_scheduling(summary.concurrency_limit, summary.weight)
     .with_model_access(summary.model_access)
@@ -625,6 +634,12 @@ pub(crate) fn account_summary_from_row(
             "responses_upstream",
         )?)
         .ok_or_else(|| invalid("invalid responses_upstream"))?,
+        excel_models_follow_global: get(&row, "excel_models_follow_global")?,
+        effective_excel_models: gateway_core::account::ExcelModels::try_from(get::<Vec<String>>(
+            &row,
+            "effective_excel_models",
+        )?)
+        .map_err(invalid)?,
         excel_models: gateway_core::account::ExcelModels::try_from(get::<Vec<String>>(
             &row,
             "excel_models",

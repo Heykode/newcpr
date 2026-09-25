@@ -9,9 +9,18 @@
 - 默认关闭。开启后，选中的模型使用 Excel HTTP/SSE；未选中的模型和关闭开关后的请求使用原 Codex HTTP/WS。
 - `responsesUpstream` 接受 `codex` 或 `excel`。导入、编辑或重新授权时省略该字段，保留已有选择。
 - API Key 账号和其他 Provider 不支持 Excel 入口。旧 State 开关不自动转换为 Excel 开关。
-- `excelModels` 是账号级精确模型列表，默认 `["gpt-5.6-sol"]`，最多 64 项。
-  编辑和批量编辑可修改；省略保留，空数组表示没有模型走 Excel。
+- 系统设置中的 `excelDefaultModels` 初始为 `["gpt-5.6-sol", "gpt-6-astra"]`，可修改。
+- 新账号 `excelModelsFollowGlobal=true`，默认跟随全局；选自定义后使用 `excelModels`。
+  每份列表最多 64 项。省略保留，空数组表示没有文本模型走 Excel。
+  旧客户端仅传 `excelModels` 时自动视为自定义；显式跟随全局不会删除已存的自定义列表。
+  账号展示 `effectiveExcelModels`，全局更新只影响跟随账号的后续请求，不改在途冻结入口。
   匹配路由映射后的模型名，不绕过账号模型白黑名单。添加模型不等于已获上游授权。
+- 升级保留已有账号列表并标记自定义，不猜测旧单模型列表是否为用户主动选择。
+  可用批量编辑统一改为跟随全局。
+- 账号模板可包含 Excel 开关和模型模式；旧模板未包含时保持不覆盖。
+  普通导入默认不指定 Excel 配置；勾选指定后应用到相应 OpenAI OAuth 账号。
+  重登推送的 `newAccountExcel` 只配置新账号且优先于模板；已有账号和自动重登保留
+  原有 Excel 配置。既有账号可在账号编辑、批量编辑或应用模板时修改。
 
 ## 调度和续聊
 
