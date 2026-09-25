@@ -1,0 +1,13 @@
+{
+  "from_version": "3.18.1",
+  "to_version": "3.18.2",
+  "from_migrations_tree": "ba1a5c58265c8f3ac52f02800c8ea5baaf841bc9",
+  "to_migrations_tree": "1699c6fae43c75cb26af34f245c2c0440b42e632",
+  "added": [
+    "0041_excel_global_models.sql",
+    "0042_excel_cache_creation_billing.sql",
+    "0043_account_token_guard.sql",
+    "0044_request_captures.sql"
+  ],
+  "recovery": "manual"
+}

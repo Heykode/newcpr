@@ -36,7 +36,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 }
 
 fn update_body() -> Value {
-    json!({
+    let mut body = json!({
         "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
         "disableFast": false,
         "turnStateInjectionEnabled": false,
@@ -80,7 +80,11 @@ fn update_body() -> Value {
             "accountBusyWaitFallbackMaxWaiting": 101,
             "accountBusyWaitFallbackTimeoutSeconds": 31
         }
-    })
+    });
+    body["requestTuning"]["excelImageRelayBytes"] = Value::Null;
+    body["requestTuning"]["excelImageRelayDownloads"] = Value::Null;
+    body["requestTuning"]["excelImageRelayEntries"] = Value::Null;
+    body
 }
 
 #[test]
@@ -394,55 +398,56 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     };
 
     let value = serde_json::to_value(RuntimeSettingsView::from(settings)).expect("serialize view");
-    assert_eq!(
-        value,
-        json!({
-            "disableFast": false,
-            "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
-            "turnStateInjectionEnabled": false,
-            "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
-            "turnStateProbeProxyId": null,
-            "turnStateProbeConcurrency": 3,
-            "responsesMaxDecompressedBodyBytes": 67108864,
-            "modelMappings": {
-                "gpt-5.4": "gpt-5.5",
-                "grok-latest": "grok-4.5"
-            },
-            "refreshMarginSeconds": 1800,
-            "refreshConcurrency": 4,
-            "maxConcurrentPerAccount": 5,
-            "requestIntervalMs": 25,
-            "rotationStrategy": "round_robin",
-            "minCodexDesktopVersion": "26.825.6671",
-            "minCodexCliVersion": "0.40.0",
-            "usageRetentionDays": 32,
-            "opsEventRetentionDays": 31,
-            "auditRetentionDays": 91,
-            "requestTuning": {
-                "maxAccountSwitches": 7,
-                "maxRequestAttempts": 8,
-                "websocketMaxRetries": 9,
-                "websocketHttpFallbackEnabled": false,
-                "websocketLargeRequestThresholdBytes": 4096,
-                "websocketMaxAgeMs": 60000,
-                "websocketStreamIdleTimeoutMs": 120000,
-                "websocketFailureThreshold": 3,
-                "websocketFailureWindowMs": 30000,
-                "websocketFailureOpenDurationMs": 45000,
-                "rateLimitCooldownSeconds": 60,
-                "openaiLocationOverrideEnabled": true,
-                "openaiRequestLocation": null,
-                "maxWaitingPerKey": 8,
-                "keyConcurrencyWaitTimeoutSeconds": 30,
-                "accountBusyWaitEnabled": true,
-                "accountBusyWaitStickyMaxWaiting": 4,
-                "accountBusyWaitStickyTimeoutSeconds": 121,
-                "accountBusyWaitFallbackMaxWaiting": 101,
-                "accountBusyWaitFallbackTimeoutSeconds": 31
-            },
-            "updatedAt": "2026-08-02T10:30:00Z"
-        })
-    );
+    let mut expected = json!({
+        "disableFast": false,
+        "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
+        "turnStateInjectionEnabled": false,
+        "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
+        "turnStateProbeProxyId": null,
+        "turnStateProbeConcurrency": 3,
+        "responsesMaxDecompressedBodyBytes": 67108864,
+        "modelMappings": {
+            "gpt-5.4": "gpt-5.5",
+            "grok-latest": "grok-4.5"
+        },
+        "refreshMarginSeconds": 1800,
+        "refreshConcurrency": 4,
+        "maxConcurrentPerAccount": 5,
+        "requestIntervalMs": 25,
+        "rotationStrategy": "round_robin",
+        "minCodexDesktopVersion": "26.825.6671",
+        "minCodexCliVersion": "0.40.0",
+        "usageRetentionDays": 32,
+        "opsEventRetentionDays": 31,
+        "auditRetentionDays": 91,
+        "requestTuning": {
+            "maxAccountSwitches": 7,
+            "maxRequestAttempts": 8,
+            "websocketMaxRetries": 9,
+            "websocketHttpFallbackEnabled": false,
+            "websocketLargeRequestThresholdBytes": 4096,
+            "websocketMaxAgeMs": 60000,
+            "websocketStreamIdleTimeoutMs": 120000,
+            "websocketFailureThreshold": 3,
+            "websocketFailureWindowMs": 30000,
+            "websocketFailureOpenDurationMs": 45000,
+            "rateLimitCooldownSeconds": 60,
+            "openaiLocationOverrideEnabled": true,
+            "openaiRequestLocation": null,
+            "maxWaitingPerKey": 8,
+            "keyConcurrencyWaitTimeoutSeconds": 30,
+            "accountBusyWaitEnabled": true,
+            "accountBusyWaitStickyMaxWaiting": 4,
+            "accountBusyWaitStickyTimeoutSeconds": 121,
+            "accountBusyWaitFallbackMaxWaiting": 101,
+            "accountBusyWaitFallbackTimeoutSeconds": 31
+        },
+        "updatedAt": "2026-08-02T10:30:00Z"
+    });
+    expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
+    expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
+    expected["requestTuning"]["excelImageRelayEntries"] = json!(128);
+    assert_eq!(value, expected);
 }
 
 #[test]
