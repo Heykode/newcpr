@@ -12,9 +12,18 @@ HTTP/SSE, downstream WS, tools, images, route fences and replay persistence.
 - `AttemptContext::{provider_route, freeze_provider_route}` is execution-local.
 - `ProviderReplayPort` stores opaque bounded records; Redis namespace is separate.
 - `transport/excel` owns protocol translation, not account selection.
-- `ExcelModels` is a validated account-scoped exact list (default sol, maximum 64).
+- `ExcelModels` is a validated exact list (initial sol/astra, maximum 64).
   Migration 0040 adds it without rewriting 0039. Omission preserves; empty clears.
   Freeze the model-resolved route, not just the account toggle.
+- Migration 0041 adds global `excelDefaultModels` and account `excelModelsFollowGlobal`.
+  Existing accounts preserve their stored custom list; new accounts follow global.
+  Read stored and effective models in the same account query; only effective models
+  enter Core snapshots. Global saves publish the existing configuration revision.
+  Omission preserves; list-only legacy writes select custom. Following global never
+  clears the stored custom list. Do not change credential or identity revisions.
+- Templates carry optional Excel fields. Old templates omit them; import remains
+  opt-in. Relogin `newAccountExcel` overrides templates only for new accounts.
+  Existing and automatic relogin preserve Excel settings and credential CAS fences.
 
 ## 3. Contracts
 

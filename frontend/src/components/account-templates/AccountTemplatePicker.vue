@@ -61,6 +61,22 @@ onScopeDispose(() => controller.abort())
       </dt><dd class="m-0">
         {{ selected.config.enabled ? '启用' : '暂停' }}
       </dd>
+      <template v-if="selected.config.responsesUpstream != null">
+        <dt class="text-cp-text-secondary">
+          Excel 入口
+        </dt>
+        <dd class="m-0">
+          {{ selected.config.responsesUpstream === 'excel' ? '开启' : '关闭' }}
+        </dd>
+      </template>
+      <template v-if="selected.config.excelModelsFollowGlobal != null || selected.config.excelModels != null">
+        <dt class="text-cp-text-secondary">
+          Excel 模型
+        </dt>
+        <dd class="m-0 break-all">
+          {{ selected.config.excelModelsFollowGlobal ? '跟随全局' : (selected.config.excelModels ?? []).join(', ') || '无' }}
+        </dd>
+      </template>
       <dt class="text-cp-text-secondary">
         账号并发
       </dt><dd class="m-0">

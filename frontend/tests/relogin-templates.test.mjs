@@ -17,6 +17,9 @@ function load(path, dependencies = {}) {
   return exports
 }
 const { templateForm, templateConfig } = load('../src/components/account-templates/template-form.ts', {
+  '@/utils/excel-settings': load('../src/utils/excel-settings.ts', {
+    '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
+  }),
   '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
 })
 
@@ -31,11 +34,34 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
   assert.equal(JSON.stringify(templateConfig(blank)), JSON.stringify({
     name: 'Defaults',
     enabled: true,
+    responsesUpstream: 'codex',
+    excelModelsFollowGlobal: true,
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
     outboundProxyId: null,
   }))
+})
+
+test('Excel templates preserve legacy omission and roundtrip global/custom/empty lists', () => {
+  const legacy = templateConfig(templateForm({ name: 'Legacy' }))
+  assert.equal('responsesUpstream' in legacy, false)
+  assert.equal('excelModelsFollowGlobal' in legacy, false)
+  const form = templateForm()
+  form.name = 'Excel'
+  form.excelEnabled = true
+  assert.equal(templateConfig(form).responsesUpstream, 'excel')
+  assert.equal(templateConfig(form).excelModelsFollowGlobal, true)
+  assert.equal('excelModels' in templateConfig(form), false)
+  form.excelModelsFollowGlobal = false
+  form.excelModels = 'gpt-6-astra, gpt-6-astra'
+  assert.equal(JSON.stringify(templateConfig(form).excelModels), '["gpt-6-astra"]')
+  form.excelModels = ''
+  assert.equal(JSON.stringify(templateConfig(form).excelModels), '[]')
+  form.excelModels = 'invalid/model'
+  assert.throws(() => templateConfig(form))
+  form.excelModelsFollowGlobal = true
+  assert.doesNotThrow(() => templateConfig(form))
 })
 
 test('template validation reuses account scheduling limits and rejects missing proxy and invalid names', () => {

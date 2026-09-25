@@ -35,6 +35,7 @@ function mountSettings(initial, onWarning = assert.fail) {
     '@/utils/async': asyncUtils,
   })
   const dependencies = {
+    '@/views/accounts/utils/schedulingForm': loadModule(new URL('../src/views/accounts/utils/schedulingForm.ts', import.meta.url)),
     vue,
     '@/api': {
       getSettings: async () => saved,
@@ -72,6 +73,28 @@ function settings() {
     updatedAt: '2026-09-12T00:00:00Z',
   }
 }
+
+test('global Excel defaults roundtrip exact models including explicit empty and reject invalid IDs', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    assert.equal(query.state.form.excelDefaultModels, 'gpt-5.6-sol, gpt-6-astra')
+    query.state.form.excelDefaultModels = 'gpt-6-astra, gpt-6-astra'
+    await query.state.saveSettings()
+    assert.deepEqual(query.requests.at(-1).excelDefaultModels, ['gpt-6-astra'])
+    query.state.form.excelDefaultModels = 'invalid/model'
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+    assert.equal(warnings.length, 1)
+    query.state.form.excelDefaultModels = ''
+    await query.state.saveSettings()
+    assert.deepEqual(query.requests.at(-1).excelDefaultModels, [])
+    await query.state.loadSettings()
+    assert.equal(query.state.form.excelDefaultModels, '')
+  }
+  finally { query.stop() }
+})
 
 test('location remains opt-in and custom location round trips without changing other tuning', async () => {
   const query = mountSettings(settings())

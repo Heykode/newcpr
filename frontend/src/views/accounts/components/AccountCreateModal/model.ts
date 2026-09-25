@@ -1,5 +1,6 @@
 import type { AccountModelAccess } from '@/api'
 import { normalizeAccountName } from '@/utils/account-name'
+import { excelSettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 
@@ -11,6 +12,10 @@ export interface AccountCreateForm {
   customName: string
   provider: AccountCreateProvider | ''
   enabled: boolean
+  applyExcel: boolean
+  excelEnabled: boolean
+  excelModelsFollowGlobal: boolean
+  excelModels: string
   concurrencyLimit: string
   weight: string
   modelAccess?: AccountModelAccess
@@ -30,6 +35,10 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     customName: '',
     provider: '',
     enabled: true,
+    applyExcel: false,
+    excelEnabled: false,
+    excelModelsFollowGlobal: true,
+    excelModels: 'gpt-5.6-sol, gpt-6-astra',
     concurrencyLimit: '',
     weight: '1',
     groupIds: [],
@@ -52,7 +61,7 @@ export function accountProxyError(form: AccountCreateForm): string | undefined {
   return undefined
 }
 
-export function accountImportSettings(form: AccountCreateForm, _provider = form.provider) {
+export function accountImportSettings(form: AccountCreateForm, provider = form.provider) {
   const modelError = accountModelAccessError(form.modelAccess)
   if (modelError)
     throw new Error(modelError)
@@ -63,6 +72,7 @@ export function accountImportSettings(form: AccountCreateForm, _provider = form.
   return {
     ...(customName ? { customName } : {}),
     enabled: form.enabled,
+    ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels) : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),

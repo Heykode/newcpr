@@ -32,6 +32,7 @@ export type RequestTuningOverrides = {
 }
 
 export interface RuntimeSettings {
+  excelDefaultModels?: string[]
   disableFast?: boolean
   turnStateInjectionEnabled?: boolean
   turnStateModels?: string[]

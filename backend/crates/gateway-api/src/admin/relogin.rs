@@ -48,6 +48,7 @@ struct AccountQueueRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushRequest {
+    new_account_excel: Option<gateway_admin::model::relogin_templates::ExcelImportSettings>,
     custom_name: Option<String>,
     ids: Vec<String>,
     revisions: std::collections::BTreeMap<String, u64>,
@@ -233,8 +234,11 @@ where
         .push_with_selection(
             &request.ids,
             &request.revisions,
-            request.template,
-            request.custom_name,
+            gateway_admin::model::relogin_templates::ReloginNewAccountOptions {
+                template: request.template,
+                custom_name: request.custom_name,
+                excel: request.new_account_excel,
+            },
             &request.selections,
             &auth.context().mutation_context(),
         )

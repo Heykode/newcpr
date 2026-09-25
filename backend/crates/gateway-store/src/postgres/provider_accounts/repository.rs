@@ -143,7 +143,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global,
+            case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
@@ -670,6 +671,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                         turn_state_injection_enabled: settings.turn_state_injection_enabled,
                         responses_upstream: settings.responses_upstream,
                         excel_models: settings.excel_models.as_ref(),
+                        excel_models_follow_global: settings.excel_models_follow_global,
                         model_access: settings.model_access.as_ref(),
                         outbound_proxy: None,
                     },
@@ -882,6 +884,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     turn_state_injection_enabled: command.turn_state_injection_enabled,
                     responses_upstream: command.responses_upstream,
                     excel_models: command.excel_models.as_ref(),
+                    excel_models_follow_global: command.excel_models_follow_global,
                     model_access: command.model_access.as_ref(),
                     outbound_proxy: command.outbound_proxy.as_ref(),
                 },
@@ -1230,6 +1233,7 @@ struct AccountSchedulingPatch<'a> {
     turn_state_injection_enabled: Option<bool>,
     responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
     excel_models: Option<&'a gateway_core::account::ExcelModels>,
+    excel_models_follow_global: Option<bool>,
     model_access: Option<&'a gateway_core::account::AccountModelAccess>,
     outbound_proxy: Option<&'a gateway_admin::model::proxies::AccountProxySelection>,
 }
@@ -1246,12 +1250,14 @@ async fn update_provider_accounts_scheduling_in_transaction(
         turn_state_injection_enabled,
         responses_upstream,
         excel_models,
+        excel_models_follow_global,
         model_access,
         outbound_proxy,
     } = patch;
     lock_account_egress_in_transaction(transaction).await?;
     if let Some(upstream) = excel_models
         .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+        .or(excel_models_follow_global.map(|_| gateway_core::account::ResponsesUpstream::Excel))
         .or(responses_upstream)
     {
         let identities = sqlx::query(
@@ -1287,7 +1293,8 @@ async fn update_provider_accounts_scheduling_in_transaction(
              outbound_proxy_id = case when $7 then $9 else outbound_proxy_id end,
              model_access_json = coalesce($10, model_access_json),
              responses_upstream = coalesce($11, responses_upstream),
-             excel_models = coalesce($12, excel_models)
+             excel_models = case when $13 is true then excel_models else coalesce($12, excel_models) end,
+             excel_models_follow_global = coalesce($13, case when $12::text[] is not null then false else excel_models_follow_global end)
          where id = any($1::text[])
          returning id",
     )
@@ -1312,6 +1319,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
     .bind(model_access.map(sqlx::types::Json))
     .bind(responses_upstream.map(gateway_core::account::ResponsesUpstream::as_str))
     .bind(excel_models.map(gateway_core::account::ExcelModels::as_slice))
+    .bind(excel_models_follow_global)
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?

@@ -1226,6 +1226,7 @@ impl SettingsStore for StaticSettingsStore {
             config_revision: revision(1),
             disable_fast: false,
             turn_state_injection_enabled: false,
+            excel_default_models: Default::default(),
             turn_state_models: vec![
                 gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
                     .expect("model"),
@@ -1810,6 +1811,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
                 enabled: false,
                 turn_state_injection_enabled: Some(false),
                 responses_upstream: Default::default(),
+                excel_models_follow_global: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -1852,6 +1854,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
                 enabled: false,
                 turn_state_injection_enabled: Some(false),
                 responses_upstream: Default::default(),
+                excel_models_follow_global: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -1899,6 +1902,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
                 enabled: Some(false),
                 turn_state_injection_enabled: None,
                 responses_upstream: Default::default(),
+                excel_models_follow_global: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
@@ -3529,6 +3533,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        effective_excel_models: Default::default(),
         model_access: Default::default(),
         custom_name: None,
         outbound_proxy: None,
@@ -3551,6 +3556,7 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         enabled: true,
         turn_state_injection_enabled: false,
         responses_upstream: Default::default(),
+        excel_models_follow_global: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
@@ -3877,6 +3883,7 @@ pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImport
         enabled: false,
         turn_state_injection_enabled: None,
         responses_upstream: Default::default(),
+        excel_models_follow_global: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: Some(
             gateway_core::account::AccountConcurrencyLimit::new(3).expect("concurrency"),

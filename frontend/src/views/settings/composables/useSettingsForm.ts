@@ -7,6 +7,7 @@ import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { errorMessage } from '@/utils/async'
+import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 
 type RotationStrategy = (typeof rotationOptions)[number]['value']
 
@@ -40,6 +41,7 @@ export function useSettingsForm() {
   const error = shallowRef('')
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
+    excelDefaultModels: 'gpt-5.6-sol, gpt-6-astra',
     disableFast: false,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     refreshMarginSeconds: null as number | null,
@@ -90,6 +92,7 @@ export function useSettingsForm() {
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
+    form.excelDefaultModels = (data.excelDefaultModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
     form.disableFast = data.disableFast ?? false
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
@@ -169,6 +172,11 @@ export function useSettingsForm() {
   async function saveSettings() {
     if (saving.value || loading.value)
       return
+    const excelDefaultModels = parseExcelModels(form.excelDefaultModels)
+    if (excelDefaultModels === null) {
+      toast.warning('Excel 模型名称不合法，或超过 64 个')
+      return
+    }
     const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy } = form
     if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy) {
       toast.warning('请完整填写运行参数和调度策略')
@@ -205,6 +213,7 @@ export function useSettingsForm() {
     }
     await saveAction.run(async () => {
       const result = await updateSettings({
+        excelDefaultModels,
         disableFast: form.disableFast,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),

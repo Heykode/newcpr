@@ -33,6 +33,8 @@ function account(id, overrides = {}) {
     id,
     provider: 'openai',
     authenticationKind: 'oauth',
+    excelModels: ['gpt-5.6-sol'],
+    excelModelsFollowGlobal: false,
     enabled: true,
     concurrencyLimit: 8,
     weight: 17,
@@ -152,6 +154,7 @@ test('Excel model lists require opt-in and can be cleared without changing the r
   assert.deepEqual(editor.requests[1], {
     accountIds: ['account-a'],
     excelModels: ['gpt-5.6-sol', 'gpt-6-astra'],
+    excelModelsFollowGlobal: false,
   })
   await vue.nextTick()
   editor.selectedIds.value = new Set(['account-a'])
@@ -159,7 +162,7 @@ test('Excel model lists require opt-in and can be cleared without changing the r
   state.updateExcelModels.value = true
   state.excelModels.value = ''
   await state.save()
-  assert.deepEqual(editor.requests[2], { accountIds: ['account-a'], excelModels: [] })
+  assert.deepEqual(editor.requests[2], { accountIds: ['account-a'], excelModels: [], excelModelsFollowGlobal: false })
 })
 
 test('model restrictions are opt-in, validate only when checked and clear explicitly', async (t) => {
@@ -380,7 +383,7 @@ test('every single field and combination sends exactly the opted-in patch after 
   const patches = [
     { enabled: false },
     { responsesUpstream: 'codex' },
-    { excelModels: ['gpt-5.6-sol'] },
+    { excelModels: ['gpt-5.6-sol'], excelModelsFollowGlobal: false },
     { concurrencyLimit: 6 },
     { weight: 23 },
     { groupIds: ['group-new', 'group-other'] },

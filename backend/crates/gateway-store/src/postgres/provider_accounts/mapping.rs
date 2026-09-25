@@ -34,6 +34,8 @@ pub(crate) fn admin_account_record(
         turn_state_injection_enabled: summary.turn_state_injection_enabled,
         responses_upstream: summary.responses_upstream,
         excel_models: summary.excel_models,
+        excel_models_follow_global: summary.excel_models_follow_global,
+        effective_excel_models: summary.effective_excel_models,
         concurrency_limit: summary.concurrency_limit,
         weight: summary.weight,
         model_access: summary.model_access,

@@ -1902,5 +1902,61 @@
     "file_sha256": "846a016954463ef2c2c090f6ee4af7f6d0ba8a26c5ab94b5ad99ae1db6c92aa6",
     "line_sha256": "e726975f8acce9cd62c0b1dd02916ba1d9c4237d9cd82989da984170434a390d",
     "reason": "Manually re-reviewed the unchanged user/pass example.com parser-rejection fixture after adding relay resource-lifetime tests. Reserved example domain, no network access; the line matches the previously reviewed content exactly."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 2000,
+    "file_sha256": "8ac9e915609a943cfab0a48d4d76d9d5ee8de05af3ecfbf74ad3b046adf73468",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Manually re-reviewed unchanged synthetic loopback persistence fixture against the base diff; only optional Excel inheritance fields were added to existing constructors."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 2032,
+    "file_sha256": "8ac9e915609a943cfab0a48d4d76d9d5ee8de05af3ecfbf74ad3b046adf73468",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Manually re-reviewed byte-identical synthetic loopback read-back assertion; Excel inheritance fields shift its position without changing credential-preservation assertions."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 250,
+    "file_sha256": "58d7ad22d7fed652da97732358036c027d1832607e6143f65257e7b617e39e7a",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Manually re-reviewed unchanged synthetic loopback batch-binding fixture; only default Excel inheritance fields changed elsewhere."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 362,
+    "file_sha256": "58d7ad22d7fed652da97732358036c027d1832607e6143f65257e7b617e39e7a",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Manually re-reviewed unchanged synthetic loopback removal fixture against the base diff; no live proxy is used."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 841,
+    "file_sha256": "58d7ad22d7fed652da97732358036c027d1832607e6143f65257e7b617e39e7a",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Manually re-reviewed unchanged managed-proxy loopback fixture; Excel inheritance defaults only shift surrounding constructor lines."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1006,
+    "file_sha256": "58d7ad22d7fed652da97732358036c027d1832607e6143f65257e7b617e39e7a",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Manually re-reviewed unchanged synthetic legacy loopback fixture; its value and previous line digest are preserved."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1081,
+    "file_sha256": "58d7ad22d7fed652da97732358036c027d1832607e6143f65257e7b617e39e7a",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Manually re-reviewed unchanged loopback migration fixture in an isolated test schema; Excel inheritance constructor additions do not alter this SQL."
   }
 ]

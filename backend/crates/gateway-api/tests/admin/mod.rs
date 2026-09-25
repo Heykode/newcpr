@@ -429,6 +429,7 @@ impl SettingsStore for MemorySettingsStore {
             turn_state_injection_enabled: command
                 .turn_state_injection_enabled
                 .unwrap_or(settings.turn_state_injection_enabled),
+            excel_default_models: Default::default(),
             turn_state_models: command
                 .turn_state_models
                 .unwrap_or_else(|| settings.turn_state_models.clone()),
@@ -1476,6 +1477,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         turn_state_probe_concurrency: 3,
         disable_fast: false,
         turn_state_injection_enabled: false,
+        excel_default_models: Default::default(),
         turn_state_models: vec![
             UpstreamModelId::new("gpt-6-astra").expect("turn state model"),
             UpstreamModelId::new("gpt-5.6-sol").expect("turn state model"),

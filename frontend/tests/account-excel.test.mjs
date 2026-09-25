@@ -84,4 +84,43 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   state.excelModels.value = 'invalid/model'
   await state.save()
   assert.equal(updates.length, 6)
+  state.excelModelsFollowGlobal.value = true
+  await state.save()
+  assert.equal(updates[6].excelModelsFollowGlobal, true)
+  assert.equal('excelModels' in updates[6], false)
+  accounts.value[0].excelModelsFollowGlobal = true
+  accounts.value[0].excelModels = ['gpt-5.6-sol']
+  state.open(accounts.value[0])
+  await state.save()
+  assert.equal('excelModelsFollowGlobal' in updates[7], false)
+  state.open(accounts.value[0])
+  state.excelModelsFollowGlobal.value = false
+  await state.save()
+  assert.equal(updates[8].excelModelsFollowGlobal, false)
+  assert.deepEqual(updates[8].excelModels, ['gpt-5.6-sol'])
+})
+
+test('Excel import defaults preserve, explicit global follows, mixed providers stay isolated', () => {
+  const scheduling = load('../src/views/accounts/utils/schedulingForm.ts')
+  const creation = load('../src/views/accounts/components/AccountCreateModal/model.ts', {
+    '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': scheduling }),
+    '@/utils/account-name': load('../src/utils/account-name.ts'),
+    '../../utils/schedulingForm': scheduling,
+    '../../utils/modelAccess': load('../src/views/accounts/utils/modelAccess.ts'),
+  })
+  const form = creation.emptyAccountCreateForm()
+  form.provider = 'openai'
+  assert.equal(form.excelModelsFollowGlobal, true)
+  assert.equal('responsesUpstream' in creation.accountImportSettings(form), false)
+  form.applyExcel = true
+  form.excelEnabled = true
+  let settings = creation.accountImportSettings(form)
+  assert.equal(settings.excelModelsFollowGlobal, true)
+  assert.equal(settings.responsesUpstream, 'excel')
+  assert.equal('excelModels' in settings, false)
+  assert.equal('responsesUpstream' in creation.accountImportSettings(form, 'xai'), false)
+  form.excelModelsFollowGlobal = false
+  form.excelModels = 'gpt-5.6-sol, gpt-6-astra'
+  settings = creation.accountImportSettings(form)
+  assert.equal(JSON.stringify(settings.excelModels), '["gpt-5.6-sol","gpt-6-astra"]')
 })

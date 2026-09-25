@@ -170,6 +170,7 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
                     turn_state_injection_enabled: settings.turn_state_injection_enabled,
                     responses_upstream: settings.responses_upstream,
                     excel_models: settings.excel_models,
+                    excel_models_follow_global: settings.excel_models_follow_global,
                     concurrency_limit: Some(settings.concurrency_limit),
                     weight: Some(settings.weight),
                     group_ids: Some(settings.group_ids),

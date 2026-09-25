@@ -161,6 +161,8 @@ export interface Account {
   turnStateInjectionEnabled: boolean
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
+  excelModelsFollowGlobal?: boolean
+  effectiveExcelModels?: string[]
   turnState?: {
     enabled?: boolean
     requiredModels: string[]
@@ -438,6 +440,7 @@ interface AccountUpdateParam {
   turnStateInjectionEnabled?: boolean
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
+  excelModelsFollowGlobal?: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
@@ -453,6 +456,7 @@ interface AccountBatchUpdateParam {
   turnStateInjectionEnabled?: boolean
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
+  excelModelsFollowGlobal?: boolean
   concurrencyLimit?: number | null
   weight?: number
   modelAccess?: AccountModelAccess
@@ -470,6 +474,7 @@ interface AccountImportSettings {
   turnStateInjectionEnabled?: boolean
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
+  excelModelsFollowGlobal?: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess

@@ -2,6 +2,199 @@ use super::*;
 use gateway_core::account::ResponsesUpstream;
 
 #[tokio::test]
+async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lists() {
+    let Some(database) = TestDatabase::create("excel_global_models").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    for id in ["acct_excel_global", "acct_excel_custom"] {
+        repository
+            .insert_provider_account(account(id, id))
+            .await
+            .unwrap();
+    }
+    let global = repository
+        .load_provider_account("acct_excel_global")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(global.summary.excel_models_follow_global);
+    assert_eq!(
+        global.summary.effective_excel_models.as_slice(),
+        ["gpt-5.6-sol", "gpt-6-astra"]
+    );
+    let original_identity = (
+        global.summary.credential_revision,
+        global.summary.turn_state_binding_revision,
+    );
+    let store = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "excel-global".into(),
+    };
+    let patch = BatchUpdateAccounts {
+        account_ids: vec!["acct_excel_global".into(), "acct_excel_custom".into()],
+        responses_upstream: Some(ResponsesUpstream::Excel),
+        excel_models_follow_global: None,
+        excel_models: None,
+        model_access: None,
+        custom_name: None,
+        enabled: None,
+        turn_state_injection_enabled: None,
+        concurrency_limit: None,
+        weight: None,
+        group_ids: None,
+        outbound_proxy: None,
+    };
+    store
+        .batch_update_accounts(patch.clone(), &context)
+        .await
+        .unwrap();
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                account_ids: vec!["acct_excel_custom".into()],
+                excel_models: Some(
+                    gateway_core::account::ExcelModels::try_from(vec!["custom-model".into()])
+                        .unwrap(),
+                ),
+                ..patch.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    sqlx::query("update runtime_settings set excel_default_models = array['global-model']::text[] where id=1")
+        .execute(&database.pool).await.unwrap();
+    let global = repository
+        .load_provider_account("acct_excel_global")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        global.summary.effective_excel_models.as_slice(),
+        ["global-model"]
+    );
+    assert_eq!(
+        (
+            global.summary.credential_revision,
+            global.summary.turn_state_binding_revision
+        ),
+        original_identity
+    );
+    let custom = repository
+        .load_provider_account("acct_excel_custom")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!custom.summary.excel_models_follow_global);
+    assert_eq!(
+        custom.summary.effective_excel_models.as_slice(),
+        ["custom-model"]
+    );
+    let frozen = repository
+        .get_account(&ProviderAccountId::new("acct_excel_custom").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        frozen.responses_upstream_for_model("custom-model"),
+        ResponsesUpstream::Excel
+    );
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                account_ids: vec!["acct_excel_custom".into()],
+                excel_models_follow_global: Some(true),
+                excel_models: Some(
+                    gateway_core::account::ExcelModels::try_from(vec!["ignored-model".into()])
+                        .unwrap(),
+                ),
+                ..patch.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    let current = repository
+        .get_account(&ProviderAccountId::new("acct_excel_custom").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        current.responses_upstream_for_model("global-model"),
+        ResponsesUpstream::Excel
+    );
+    assert_eq!(
+        current.responses_upstream_for_model("custom-model"),
+        ResponsesUpstream::Codex
+    );
+    assert_eq!(
+        frozen.responses_upstream_for_model("custom-model"),
+        ResponsesUpstream::Excel
+    );
+    let stored = repository
+        .load_provider_account("acct_excel_custom")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.summary.excel_models.as_slice(), ["custom-model"]);
+    repository
+        .import_provider_accounts(ImportProviderAccounts {
+            settings: None,
+            outbound_proxy: None,
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".into(),
+            },
+            accounts: vec![account("acct_excel_custom", "acct_excel_custom")],
+            audit: audit("audit_excel_reimport", "import", "acct_excel_custom"),
+        })
+        .await
+        .unwrap();
+    let reimported = repository
+        .load_provider_account("acct_excel_custom")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reimported.summary.excel_models_follow_global);
+    assert_eq!(
+        reimported.summary.responses_upstream,
+        ResponsesUpstream::Excel
+    );
+    assert_eq!(reimported.summary.excel_models.as_slice(), ["custom-model"]);
+    assert_eq!(
+        reimported.summary.effective_excel_models.as_slice(),
+        ["global-model"]
+    );
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                account_ids: vec!["acct_excel_custom".into()],
+                excel_models_follow_global: Some(false),
+                excel_models: Some(
+                    gateway_core::account::ExcelModels::try_from(Vec::new()).unwrap(),
+                ),
+                ..patch
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert!(
+        repository
+            .load_provider_account("acct_excel_custom")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .effective_excel_models
+            .as_slice()
+            .is_empty()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     let Some(database) = TestDatabase::create("excel_patch").await else {
         return;
@@ -12,12 +205,13 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let before: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
         account_ids: vec!["acct_excel".into()],
         responses_upstream: Some(ResponsesUpstream::Excel),
+        excel_models_follow_global: Default::default(),
         excel_models: Some(
             gateway_core::account::ExcelModels::try_from(vec![
                 "gpt-5.6-sol".into(),
@@ -43,7 +237,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     assert_eq!(before, after);
     let loaded = repository
@@ -52,6 +246,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap()
         .unwrap();
     assert_eq!(loaded.summary.responses_upstream, ResponsesUpstream::Excel);
+    assert!(!loaded.summary.excel_models_follow_global);
     assert_eq!(
         loaded.summary.excel_models.as_slice(),
         ["gpt-5.6-sol", "gpt-6-astra"]
@@ -60,6 +255,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .batch_update_accounts(
             BatchUpdateAccounts {
                 responses_upstream: None,
+                excel_models_follow_global: Default::default(),
                 excel_models: Default::default(),
                 weight: Some(gateway_core::account::AccountWeight::new(2).unwrap()),
                 ..command.clone()
@@ -94,6 +290,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .batch_update_accounts(
             BatchUpdateAccounts {
                 responses_upstream: Some(ResponsesUpstream::Codex),
+                excel_models_follow_global: Default::default(),
                 excel_models: Default::default(),
                 ..command
             },
