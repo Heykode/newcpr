@@ -271,6 +271,15 @@ fn to_core_request_tuning(
         rate_limit_cooldown_seconds: overrides
             .rate_limit_cooldown_seconds
             .unwrap_or(defaults.rate_limit_cooldown_seconds),
+        excel_image_relay_bytes: overrides
+            .excel_image_relay_bytes
+            .unwrap_or(defaults.excel_image_relay_bytes),
+        excel_image_relay_downloads: overrides
+            .excel_image_relay_downloads
+            .unwrap_or(defaults.excel_image_relay_downloads),
+        excel_image_relay_entries: overrides
+            .excel_image_relay_entries
+            .unwrap_or(defaults.excel_image_relay_entries),
         openai_location_override_enabled: overrides
             .openai_location_override_enabled
             .unwrap_or(defaults.openai_location_override_enabled),

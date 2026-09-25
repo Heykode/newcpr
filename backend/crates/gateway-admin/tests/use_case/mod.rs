@@ -12,6 +12,7 @@ mod proxies;
 mod relogin;
 mod settings;
 mod system;
+mod token_guard;
 mod user_agent;
 mod xai;
 
@@ -99,6 +100,7 @@ pub(super) struct AdminHarness {
     settings: Arc<dyn SettingsStore>,
     backup: BackupStorePorts,
     relogin: Option<Arc<dyn gateway_admin::ports::relogin::ReloginStore>>,
+    token_guard: Option<Arc<dyn gateway_admin::ports::token_guard::TokenGuardStore>>,
     providers: Vec<Arc<dyn ProviderAdmin>>,
     probe: Arc<dyn AccountProbe>,
     proxy_probe: Arc<dyn gateway_admin::ports::proxy::ProxyProbe>,
@@ -121,6 +123,7 @@ impl AdminHarness {
             settings: unavailable,
             backup: BackupStorePorts::disabled(),
             relogin: None,
+            token_guard: None,
             providers: vec![
                 Arc::new(UnavailableProvider::new("openai")),
                 Arc::new(UnavailableProvider::new("xai")),
@@ -156,6 +159,14 @@ impl AdminHarness {
 
     pub(super) fn account_runtime(mut self, store: Arc<dyn AccountRuntimeStore>) -> Self {
         self.account_runtime = store;
+        self
+    }
+
+    pub(super) fn token_guard(
+        mut self,
+        store: Arc<dyn gateway_admin::ports::token_guard::TokenGuardStore>,
+    ) -> Self {
+        self.token_guard = Some(store);
         self
     }
 
@@ -242,6 +253,9 @@ impl AdminHarness {
         );
         if let Some(relogin) = self.relogin {
             stores = stores.with_relogin(relogin);
+        }
+        if let Some(token_guard) = self.token_guard {
+            stores = stores.with_token_guard(token_guard);
         }
         gateway_admin::initialize(
             AdminConfig {

@@ -102,7 +102,28 @@ function assertNoUpdates(state) {
   for (const field of updateFields)
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
+  assert.equal(state.updateExcelCacheCreationAsInput.value, false)
 }
+
+test('Excel cache billing is separately opted in and does not implicitly switch routes', async (t) => {
+  const editor = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })
+  const { state } = editor
+  state.open()
+  assert.equal(state.excelCacheCreationAsInput.value, false)
+  state.excelCacheCreationAsInput.value = true
+  assert.equal(state.hasUpdates.value, false)
+  state.updateExcelCacheCreationAsInput.value = true
+  await state.save()
+  assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], excelCacheCreationAsInput: true }])
+  await vue.nextTick()
+  assertNoUpdates(state)
+  editor.selectedIds.value = new Set(['account-a'])
+  state.open()
+  state.updateExcelCacheCreationAsInput.value = true
+  state.excelCacheCreationAsInput.value = false
+  await state.save()
+  assert.deepEqual(editor.requests[1], { accountIds: ['account-a'], excelCacheCreationAsInput: false })
+})
 
 test('a committed batch save completes before slow or failed list reloads', async (t) => {
   let release

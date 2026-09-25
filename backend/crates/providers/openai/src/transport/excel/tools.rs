@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
@@ -17,6 +17,7 @@ struct ToolSpec {
 pub(crate) struct ClientTools {
     specs: BTreeMap<String, ToolSpec>,
     serial: bool,
+    unavailable: BTreeSet<String>,
 }
 
 impl ClientTools {
@@ -59,14 +60,31 @@ impl ClientTools {
             return Err(ExcelRequestError::Tool);
         }
         for value in values.as_array().ok_or(ExcelRequestError::Tool)? {
+            let kind = value
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or(ExcelRequestError::Tool)?;
+            if matches!(
+                kind,
+                "web_search"
+                    | "web_search_preview"
+                    | "web_search_preview_2025_03_11"
+                    | "web_search_2025_08_26"
+                    | "tool_search"
+                    | "image_generation"
+                    | "file_search"
+                    | "code_interpreter"
+                    | "computer"
+                    | "computer_use_preview"
+                    | "mcp"
+            ) {
+                self.unavailable.insert(kind.into());
+                continue;
+            }
             let name = value
                 .get("name")
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
-                .ok_or(ExcelRequestError::Tool)?;
-            let kind = value
-                .get("type")
-                .and_then(Value::as_str)
                 .ok_or(ExcelRequestError::Tool)?;
             if kind == "namespace" {
                 let nested =
@@ -128,19 +146,37 @@ impl ClientTools {
     }
 
     pub(crate) fn instructions(&self) -> String {
+        let warning = if self.unavailable.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\nThe following declared hosted capabilities are unavailable on this route: {}. \
+                 Do not call them or claim they ran. If required, explain the limitation; \
+                 only use declared client tools for capabilities they actually provide.",
+                self.unavailable
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         if self.specs.is_empty() {
-            return EXTERNAL_CLIENT_INSTRUCTIONS.into();
+            return format!("{EXTERNAL_CLIENT_INSTRUCTIONS}{warning}");
         }
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
             "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=cpr.custom/CATALOG_NAME and put exact raw input directly in code. \
-             For function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}",
+             For function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{warning}",
             if self.serial {
                 "Return at most one client tool call per response; wait for its result before requesting another."
             } else {
                 "Independent client tools may be called in parallel, using a separate native run_officejs call for each."
             }
         )
+    }
+
+    pub(crate) fn unavailable(&self) -> &BTreeSet<String> {
+        &self.unavailable
     }
 
     pub(crate) fn validate_call_count(&self, count: usize) -> Result<(), ExcelRequestError> {
@@ -167,7 +203,13 @@ impl ClientTools {
         let name = native.get("name").and_then(Value::as_str).ok_or(invalid)?;
         let transport = matches!(name, "run_officejs" | "functions.run_officejs");
         let (envelope, marked) = if transport {
-            envelope::native_envelope(native)?
+            envelope::native_envelope(native, &|name| {
+                let (key, spec) = self
+                    .specs
+                    .get_key_value(name)
+                    .or_else(|| self.specs.get_key_value(name.strip_prefix("functions.")?))?;
+                Some((key.clone(), spec.kind == "custom"))
+            })?
         } else {
             (native.clone(), false)
         };
@@ -240,13 +282,26 @@ impl ClientTools {
             } else {
                 raw.clone()
             };
+            let mut preserve_encryption = !transport;
             if !transport && matches!(declared, "update_plan" | "functions.update_plan") {
-                args = normalize_plan(args)?;
+                let normalized = normalize_plan(args.clone())?;
+                preserve_encryption = normalized == args;
+                args = normalized;
             }
             if !args.is_object() || !matches_schema(&args, &spec.schema, 0) {
                 return Err(invalid);
             }
             result["arguments"] = args.to_string().into();
+            // Missing differs from empty: collaboration clients otherwise treat plaintext as ciphertext.
+            result["encrypted_function_args"] = if preserve_encryption {
+                native
+                    .get("encrypted_function_args")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .unwrap_or_else(|| json!([]))
+            } else {
+                json!([])
+            };
         }
         Ok(result)
     }

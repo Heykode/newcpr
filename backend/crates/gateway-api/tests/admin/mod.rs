@@ -86,6 +86,7 @@ mod egress;
 mod errors;
 mod notifications;
 mod observability;
+mod operations;
 mod outbound_user_agent;
 mod proxies;
 mod relogin;

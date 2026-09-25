@@ -286,6 +286,7 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
             responses_upstream: None,
             excel_models: None,
             excel_models_follow_global: None,
+            excel_cache_creation_as_input: Default::default(),
             name: "Team settings".into(),
             enabled: false,
             turn_state_injection_enabled: Some(true),

@@ -162,6 +162,7 @@ export interface Account {
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
+  excelCacheCreationAsInput?: boolean
   effectiveExcelModels?: string[]
   turnState?: {
     enabled?: boolean
@@ -441,6 +442,7 @@ interface AccountUpdateParam {
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
+  excelCacheCreationAsInput?: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
@@ -457,6 +459,7 @@ interface AccountBatchUpdateParam {
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
+  excelCacheCreationAsInput?: boolean
   concurrencyLimit?: number | null
   weight?: number
   modelAccess?: AccountModelAccess
@@ -475,6 +478,7 @@ interface AccountImportSettings {
   responsesUpstream?: ResponsesUpstream
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
+  excelCacheCreationAsInput?: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess

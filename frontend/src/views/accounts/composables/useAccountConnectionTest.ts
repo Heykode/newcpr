@@ -491,7 +491,8 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       model => model.value === previousSelection,
     )
       ? previousSelection
-      : connectionTestModelOptions.value[0]?.value || ''
+      : connectionTestModelOptions.value.find(model => model.value === 'gpt-6-astra')?.value
+        || connectionTestModelOptions.value[0]?.value || ''
   }
 
   async function handleRefreshConnectionTestModels(account = testingAccount.value) {

@@ -22,10 +22,12 @@ pub(crate) fn transform_stream(
         tools: prepared.tools.clone(),
         structured: prepared.structured.clone(),
         completed: Arc::clone(&prepared.completed),
+        usage: prepared.usage.clone(),
         pending_tools: BTreeSet::new(),
         held_bytes: 0,
         terminal: false,
         sequence: 0,
+        effort: prepared.body.get("reasoning_effort").cloned(),
     };
     Box::pin(async_stream::try_stream! {
         let mut decoder = SseEventDecoder::default();
@@ -74,10 +76,12 @@ struct Relay {
     tools: ClientTools,
     structured: Option<StructuredOutput>,
     completed: Arc<Mutex<Option<Value>>>,
+    usage: super::usage::ExcelUsagePolicy,
     pending_tools: BTreeSet<(String, String)>,
     held_bytes: usize,
     terminal: bool,
     sequence: u64,
+    effort: Option<Value>,
 }
 
 impl Relay {
@@ -143,6 +147,9 @@ impl Relay {
         let mut result = Vec::new();
         if let Some(response) = data.get_mut("response").filter(|value| value.is_object()) {
             response["parallel_tool_calls"] = self.tools.parallel_allowed().into();
+            if let Some(effort) = &self.effort {
+                response["reasoning"] = json!({"effort":effort});
+            }
         }
         if let Some(format) = &self.structured
             && let Some(response) = data.get_mut("response").filter(|value| value.is_object())
@@ -239,6 +246,7 @@ impl Relay {
                 });
             }
         }
+        self.usage.normalize(&mut data);
         data["type"] = kind.into();
         result.push(data);
         Ok(result
@@ -286,6 +294,59 @@ mod tests {
     use futures::TryStreamExt;
 
     #[tokio::test]
+    async fn billing_policy_is_identical_for_stream_usage_and_compact_projection() {
+        for enabled in [false, true] {
+            let raw = json!({"id":"resp_billing","status":"completed","output":[],
+                "usage":{"input_tokens":1000,"output_tokens":50,"total_tokens":1050,
+                    "input_tokens_details":{"cached_tokens":100},"cache_creation_input_tokens":200}});
+            let prepared = ExcelPreparedRequest {
+                body: Default::default(),
+                tools: ClientTools::default(),
+                structured: None,
+                _image_lease: None,
+                completed: Default::default(),
+                usage: super::super::usage::ExcelUsagePolicy::new(enabled),
+                replay: None,
+                endpoint: super::super::RESPONSES_URL.into(),
+            };
+            let wire = encode(
+                "response.completed",
+                &json!({"type":"response.completed","response":raw}),
+            );
+            let chunks = wire
+                .chunks(7)
+                .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                .collect::<Vec<_>>();
+            let chunks = transform_stream(Box::pin(futures::stream::iter(chunks)), &prepared)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            let mut decoder = SseEventDecoder::default();
+            let events = decoder.push(&chunks.concat()).unwrap();
+            let downstream: Value = serde_json::from_str(&events.last().unwrap().data).unwrap();
+            let usage =
+                gateway_protocol::openai::events::extract_usage(&downstream["response"]).unwrap();
+            assert_eq!(usage.input_tokens, 1000);
+            assert_eq!(usage.cached_tokens, 100);
+            assert_eq!(usage.cache_write_tokens, if enabled { 0 } else { 200 });
+            assert_eq!(usage.total_tokens, 1050);
+            let mut expected_completion = raw.clone();
+            expected_completion["parallel_tool_calls"] = true.into();
+            assert_eq!(
+                *prepared.completed.lock().unwrap(),
+                Some(expected_completion)
+            );
+            let mut compact = raw;
+            prepared.usage.project(&mut compact);
+            assert_eq!(compact["usage"], downstream["response"]["usage"]);
+            assert_eq!(
+                prepared.usage.metadata()["upstreamUsage"]["/cache_creation_input_tokens"],
+                200
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn text_is_incremental_and_truncation_does_not_invent_completion() {
         let source = futures::stream::iter(vec![Ok(Bytes::from_static(
             b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
@@ -296,6 +357,7 @@ mod tests {
             structured: None,
             _image_lease: None,
             completed: Default::default(),
+            usage: Default::default(),
             replay: None,
             endpoint: super::super::RESPONSES_URL.into(),
         };
@@ -332,6 +394,7 @@ mod tests {
             structured: None,
             _image_lease: None,
             completed: Default::default(),
+            usage: Default::default(),
             replay: None,
             endpoint: super::super::RESPONSES_URL.into(),
         };

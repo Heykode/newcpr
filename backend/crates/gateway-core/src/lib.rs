@@ -54,6 +54,7 @@ pub struct CoreStorePorts {
     snapshot_subscriptions: Arc<dyn SnapshotSubscriptionPort>,
     client_api_key_usage: Arc<dyn ClientApiKeyUsageSink>,
     budget: Option<Arc<dyn engine::budget::ClientBudgetPort>>,
+    captures: Option<Arc<dyn diagnostics::request_capture::RequestCaptureFactory>>,
 }
 
 impl CoreStorePorts {
@@ -82,12 +83,22 @@ impl CoreStorePorts {
             snapshot_subscriptions,
             client_api_key_usage,
             budget: None,
+            captures: None,
         }
     }
 
     #[must_use]
     pub fn with_budget(mut self, budget: Arc<dyn engine::budget::ClientBudgetPort>) -> Self {
         self.budget = Some(budget);
+        self
+    }
+
+    #[must_use]
+    pub fn with_captures(
+        mut self,
+        captures: Arc<dyn diagnostics::request_capture::RequestCaptureFactory>,
+    ) -> Self {
+        self.captures = Some(captures);
         self
     }
 }
@@ -182,6 +193,9 @@ pub async fn initialize_with_request_tuning(
     );
     if let Some(budget) = ports.budget {
         service = service.with_budget(budget);
+    }
+    if let Some(captures) = ports.captures {
+        service = service.with_captures(captures);
     }
     let service = Arc::new(service);
     let execution: Arc<dyn ExecutionService> = service.clone();

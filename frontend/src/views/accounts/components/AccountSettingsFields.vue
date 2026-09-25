@@ -30,6 +30,8 @@ const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
 const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol, gpt-6-astra' })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
+const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
+const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -106,6 +108,21 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         v-model:models="excelModels"
         v-model:follow-global="excelModelsFollowGlobal"
         :disabled="disabled || (batch && !updateExcelModels)"
+      />
+    </BaseFormItem>
+
+    <BaseFormItem v-if="excelAvailable" label="Excel 缓存写入按普通输入计费">
+      <template v-if="batch" #extra>
+        <BaseCheckbox
+          v-model="updateExcelCacheCreationAsInput"
+          label="应用缓存写入计费更改"
+          :disabled="disabled"
+        />
+      </template>
+      <BaseSwitch
+        v-model="excelCacheCreationAsInput"
+        label="缓存写入按普通输入计费"
+        :disabled="disabled || (batch ? !updateExcelCacheCreationAsInput : !excelEnabled)"
       />
     </BaseFormItem>
 

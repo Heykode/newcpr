@@ -55,6 +55,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         turn_state_injection_enabled: None,
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
+        excel_cache_creation_as_input: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: None,
         weight: None,

@@ -179,6 +179,9 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
     assert_eq!(defaults.request_location(), None);
     let location = gateway_core::account::RequestLocation::default();
     let expected = RequestTuning {
+        excel_image_relay_bytes: 128 * 1024 * 1024,
+        excel_image_relay_downloads: 3,
+        excel_image_relay_entries: 25,
         account_busy_wait_enabled: true,
         account_busy_wait_sticky_max_waiting: 7,
         account_busy_wait_sticky_timeout_seconds: 123,
@@ -190,6 +193,9 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         ..RequestTuning::default()
     };
     let overrides = RequestTuningOverrides {
+        excel_image_relay_bytes: Some(expected.excel_image_relay_bytes),
+        excel_image_relay_downloads: Some(expected.excel_image_relay_downloads),
+        excel_image_relay_entries: Some(expected.excel_image_relay_entries),
         openai_request_location: Some(location.clone()),
         account_busy_wait_enabled: Some(expected.account_busy_wait_enabled),
         account_busy_wait_sticky_max_waiting: Some(expected.account_busy_wait_sticky_max_waiting),

@@ -115,6 +115,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         responses_upstream: account.responses_upstream,
         excel_models: account.excel_models,
         excel_models_follow_global: account.excel_models_follow_global,
+        excel_cache_creation_as_input: account.excel_cache_creation_as_input,
         effective_excel_models: account.effective_excel_models,
         turn_state: turn_state.map(|status| {
             let gateway_admin::model::accounts::AccountTurnStateStatus {

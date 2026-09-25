@@ -499,6 +499,7 @@ mod provider {
                 turn_state_injection_enabled: false,
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
+                excel_cache_creation_as_input: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: AccountWeight::default(),

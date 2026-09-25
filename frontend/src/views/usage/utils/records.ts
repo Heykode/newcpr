@@ -62,6 +62,7 @@ export interface UsageViewModel {
   clientIp: string | null
   userAgent: string | null
   reasoningEffort: string | null
+  effectiveReasoningEffort?: string | null
   reasoningPreset: string | null
   compact: boolean
   requestKind: string | null
@@ -131,6 +132,7 @@ export function normalizeUsageRecord(record: UsageRecordDetail): UsageViewModel 
     clientIp: record.clientIp,
     userAgent: record.userAgent,
     reasoningEffort: record.reasoningEffort,
+    effectiveReasoningEffort: record.effectiveReasoningEffort,
     reasoningPreset: record.reasoningPreset,
     compact: record.compact === true,
     requestKind: record.requestKind,
@@ -194,6 +196,8 @@ export function usageUserAgent(record: { userAgent?: string | null }) {
 
 export function usageReasoningEffort(record: UsageCommonRecord) {
   const reasoningEffort = record.reasoningEffort || '—'
+  if (record.effectiveReasoningEffort && record.effectiveReasoningEffort !== record.reasoningEffort)
+    return `${reasoningEffort} → ${record.effectiveReasoningEffort}`
   if (usageIsSubagent(record))
     return reasoningEffort
   return record.reasoningPreset || reasoningEffort

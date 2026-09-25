@@ -301,6 +301,9 @@ impl PgAdminAccountStore {
             if settings.excel_models_follow_global.is_some() {
                 changed_fields.push("excel_models_follow_global".to_owned());
             }
+            if settings.excel_cache_creation_as_input.is_some() {
+                changed_fields.push("excel_cache_creation_as_input".to_owned());
+            }
             if settings.custom_name.is_some() {
                 changed_fields.push("custom_name".to_owned());
             }
@@ -1083,6 +1086,9 @@ impl AccountStore for PgAdminAccountStore {
         if command.excel_models_follow_global.is_some() {
             changed_fields.push("excel_models_follow_global".to_owned());
         }
+        if command.excel_cache_creation_as_input.is_some() {
+            changed_fields.push("excel_cache_creation_as_input".to_owned());
+        }
         if command.custom_name.is_some() {
             changed_fields.push("custom_name".to_owned());
         }
@@ -1099,6 +1105,7 @@ impl AccountStore for PgAdminAccountStore {
                 responses_upstream: command.responses_upstream,
                 excel_models: command.excel_models.clone(),
                 excel_models_follow_global: command.excel_models_follow_global,
+                excel_cache_creation_as_input: command.excel_cache_creation_as_input,
                 concurrency_limit: Some(command.concurrency_limit),
                 weight: Some(command.weight),
                 model_access: command.model_access,
@@ -1189,6 +1196,10 @@ impl AccountStore for PgAdminAccountStore {
                 "excel_models_follow_global",
             ),
             (
+                command.excel_cache_creation_as_input.is_some(),
+                "excel_cache_creation_as_input",
+            ),
+            (
                 command.turn_state_injection_enabled.is_some(),
                 "turn_state_injection_enabled",
             ),
@@ -1217,6 +1228,7 @@ impl AccountStore for PgAdminAccountStore {
                 responses_upstream: command.responses_upstream,
                 excel_models: command.excel_models.clone(),
                 excel_models_follow_global: command.excel_models_follow_global,
+                excel_cache_creation_as_input: command.excel_cache_creation_as_input,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
                 model_access: command.model_access,

@@ -65,6 +65,7 @@ const routeFields = computed(() => visibleFields([
   { label: '上游模型', value: props.record?.upstreamModel, mono: true },
   { label: '记录模型', value: props.record?.model, mono: true },
   { label: '推理强度', value: props.record?.reasoningEffort, mono: true },
+  { label: '实际推理强度', value: props.record?.effectiveReasoningEffort, mono: true },
   { label: '推理预设', value: props.record?.reasoningPreset, mono: true },
   { label: '客户端传输', value: props.record?.clientTransport, mono: true },
   { label: '上游传输', value: props.record?.transport, mono: true },

@@ -46,6 +46,7 @@ fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
         turn_state_injection_enabled: Some(false),
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
+        excel_cache_creation_as_input: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: None,
         weight: AccountWeight::DEFAULT,
@@ -247,7 +248,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
                 test: None,
                 request_location: None,
                 name: "Authenticated proxy".to_owned(),
-                proxy: OutboundProxy::parse("http://user:secret@127.0.0.1:8080").unwrap(),
+                proxy: OutboundProxy::parse("http://user:$secret@127.0.0.1:8080").unwrap(),
             },
             &context,
         )
@@ -266,6 +267,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         turn_state_injection_enabled: None,
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
+        excel_cache_creation_as_input: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: None,
         weight: None,
@@ -359,7 +361,7 @@ async fn proxy_account_removal_preserves_settings_and_rejects_changed_bindings()
                 test: None,
                 request_location: None,
                 name: "解绑测试".to_owned(),
-                proxy: OutboundProxy::parse("http://user:secret@127.0.0.1:17890").unwrap(),
+                proxy: OutboundProxy::parse("http://user:$secret@127.0.0.1:17890").unwrap(),
             },
             &context,
         )
@@ -838,7 +840,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let store = PgProxyRepository::new(database.pool.clone());
     let admin = admin_account_store(&database.pool);
     let context = context();
-    let old_proxy = OutboundProxy::parse("http://user:secret@127.0.0.1:8080").unwrap();
+    let old_proxy = OutboundProxy::parse("http://user:$secret@127.0.0.1:8080").unwrap();
     let created = store
         .create(
             NewProxy {
@@ -934,7 +936,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     assert_eq!(renamed.proxy, old_proxy);
     assert_eq!(renamed.last_test, Some(success()));
     assert!(read().await.iter().all(|row| row.3 == 1));
-    let new_proxy = OutboundProxy::parse("socks5h://next:new-secret@127.0.0.1:1080").unwrap();
+    let new_proxy = OutboundProxy::parse("socks5h://next:$new-secret@127.0.0.1:1080").unwrap();
     let edited = store
         .update(
             UpdateProxy {
@@ -1003,7 +1005,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         return;
     };
     let accounts = PgProviderAccountRepository::new(database.pool.clone());
-    let proxy = OutboundProxy::parse("http://user:secret@127.0.0.1:8080").unwrap();
+    let proxy = OutboundProxy::parse("http://user:$secret@127.0.0.1:8080").unwrap();
     for id in ["acct_one", "acct_two"] {
         let mut seed = account(id, id);
         seed.outbound_proxy = Some(proxy.clone());
@@ -1032,6 +1034,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
                     turn_state_injection_enabled: None,
                     responses_upstream: Default::default(),
                     excel_models_follow_global: Default::default(),
+                    excel_cache_creation_as_input: Default::default(),
                     excel_models: Default::default(),
                     concurrency_limit: Some(None),
                     weight: Some(AccountWeight::DEFAULT),
@@ -1078,7 +1081,7 @@ async fn migration_backfills_shared_proxies_without_changing_credentials() {
     }
     sqlx::raw_sql("alter table runtime_settings drop column turn_state_probe_proxy_id;
         alter table provider_accounts drop column outbound_proxy_id; drop table outbound_proxies;
-        update provider_accounts set outbound_proxy_url = 'http://user:secret@127.0.0.1:8080/' where id <> 'acct_direct';")
+        update provider_accounts set outbound_proxy_url = 'http://user:$secret@127.0.0.1:8080/' where id <> 'acct_direct';")
         .execute(&database.pool).await.unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0005_managed_outbound_proxies.sql"

@@ -35,6 +35,7 @@ pub(crate) fn admin_account_record(
         responses_upstream: summary.responses_upstream,
         excel_models: summary.excel_models,
         excel_models_follow_global: summary.excel_models_follow_global,
+        excel_cache_creation_as_input: summary.excel_cache_creation_as_input,
         effective_excel_models: summary.effective_excel_models,
         concurrency_limit: summary.concurrency_limit,
         weight: summary.weight,

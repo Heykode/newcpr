@@ -36,6 +36,7 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
     enabled: true,
     responsesUpstream: 'codex',
     excelModelsFollowGlobal: true,
+    excelCacheCreationAsInput: false,
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
@@ -53,6 +54,12 @@ test('Excel templates preserve legacy omission and roundtrip global/custom/empty
   assert.equal(templateConfig(form).responsesUpstream, 'excel')
   assert.equal(templateConfig(form).excelModelsFollowGlobal, true)
   assert.equal('excelModels' in templateConfig(form), false)
+  assert.equal(templateConfig(form).excelCacheCreationAsInput, false)
+  form.excelCacheCreationAsInput = true
+  assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
+  form.excelEnabled = false
+  assert.equal(templateConfig(form).excelCacheCreationAsInput, false)
+  form.excelEnabled = true
   form.excelModelsFollowGlobal = false
   form.excelModels = 'gpt-6-astra, gpt-6-astra'
   assert.equal(JSON.stringify(templateConfig(form).excelModels), '["gpt-6-astra"]')

@@ -27,6 +27,8 @@ pub use use_case::group_monitor::GroupMonitorService;
 pub use use_case::import_tasks::ImportTasksService;
 pub use use_case::notifications::NotificationsService;
 pub use use_case::relogin::{ReloginBatchResult, ReloginList, ReloginService, ReloginView};
+pub use use_case::request_capture::RequestCaptureService;
+pub use use_case::token_guard::TokenGuardService;
 pub use use_case::user_agent::OutboundUserAgentService;
 pub use use_case::{
     account_groups::AccountGroupService, accounts::AccountsService, auth::AuthService,
@@ -161,6 +163,8 @@ pub struct AdminServices {
     account_templates: Arc<dyn AccountTemplatesService>,
     group_monitor: Arc<dyn GroupMonitorService>,
     relogin: Arc<dyn ReloginService>,
+    token_guard: Arc<dyn TokenGuardService>,
+    request_capture: Arc<dyn RequestCaptureService>,
     outbound_user_agent: Arc<dyn OutboundUserAgentService>,
     proxies: Arc<dyn ProxiesService>,
     egress: Arc<dyn ProviderEgressService>,
@@ -180,6 +184,15 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn request_capture(&self) -> &dyn RequestCaptureService {
+        self.request_capture.as_ref()
+    }
+    #[must_use]
+    pub fn token_guard(&self) -> &dyn TokenGuardService {
+        self.token_guard.as_ref()
+    }
+
     #[must_use]
     pub fn account_templates(&self) -> &dyn AccountTemplatesService {
         self.account_templates.as_ref()
@@ -398,6 +411,12 @@ pub async fn initialize(
         store.proxies(),
         snapshot.clone(),
     ));
+    let token_guard = Arc::new(use_case::token_guard::DefaultTokenGuardService::new(
+        store.token_guard(),
+        store.accounts(),
+        accounts.clone(),
+        relogin.clone(),
+    ));
     let import_tasks = use_case::import_tasks::DefaultImportTasksService::new(
         openai_service.clone(),
         xai_service.clone(),
@@ -407,6 +426,10 @@ pub async fn initialize(
         account_templates,
         group_monitor: group_monitor.clone(),
         relogin: relogin.clone(),
+        token_guard: token_guard.clone(),
+        request_capture: Arc::new(use_case::request_capture::DefaultRequestCaptureService(
+            store.request_capture(),
+        )),
         outbound_user_agent: outbound_user_agent.clone(),
         egress: Arc::new(DefaultProviderEgressService::new(
             store.egress(),
@@ -464,6 +487,9 @@ pub async fn initialize(
     worker_contributions.push(WorkerContribution::Registration(registration));
     if store.relogin().is_some() {
         worker_contributions.push(use_case::relogin::contribution(relogin)?);
+    }
+    if store.token_guard().is_some() {
+        worker_contributions.push(workers::token_guard::contribution(token_guard)?);
     }
     worker_contributions.push(workers::user_agent_reconciliation(
         outbound_user_agent,

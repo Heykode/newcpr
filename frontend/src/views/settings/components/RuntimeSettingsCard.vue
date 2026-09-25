@@ -55,6 +55,9 @@ const tuningValues = {
   websocketFailureWindowMs: tuningNumber('websocketFailureWindowMs'),
   websocketFailureOpenDurationMs: tuningNumber('websocketFailureOpenDurationMs'),
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
+  excelImageRelayBytes: tuningNumber('excelImageRelayBytes'),
+  excelImageRelayDownloads: tuningNumber('excelImageRelayDownloads'),
+  excelImageRelayEntries: tuningNumber('excelImageRelayEntries'),
   accountBusyWaitStickyMaxWaiting: tuningNumber('accountBusyWaitStickyMaxWaiting'),
   accountBusyWaitStickyTimeoutSeconds: tuningNumber('accountBusyWaitStickyTimeoutSeconds'),
   accountBusyWaitFallbackMaxWaiting: tuningNumber('accountBusyWaitFallbackMaxWaiting'),
@@ -255,6 +258,15 @@ const tuningValues = {
       </button>
 
       <BaseForm v-if="advancedOpen" class="mt-4 max-w-6xl sm:grid-cols-2">
+        <BaseFormItem label="Excel 图片中转字节预算">
+          <BaseInput v-model="tuningValues.excelImageRelayBytes.value" aria-label="Excel 图片中转字节预算" type="number" min="1048576" max="2147483648" step="1048576" />
+        </BaseFormItem>
+        <BaseFormItem label="Excel 图片中转下载并发">
+          <BaseInput v-model="tuningValues.excelImageRelayDownloads.value" aria-label="Excel 图片中转下载并发" type="number" min="1" max="128" step="1" />
+        </BaseFormItem>
+        <BaseFormItem label="Excel 图片中转条目上限">
+          <BaseInput v-model="tuningValues.excelImageRelayEntries.value" aria-label="Excel 图片中转条目上限" type="number" min="1" max="4096" step="1" />
+        </BaseFormItem>
         <BaseFormItem label="同账号传输失败重试次数" description="同一账号传输失败后最多重试次数，范围 0–100">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />
         </BaseFormItem>

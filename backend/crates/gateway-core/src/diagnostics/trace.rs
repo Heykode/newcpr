@@ -22,6 +22,7 @@ const MAX_BUFFER_BYTES: usize = 64 * 1024;
 #[derive(Clone, Default)]
 pub struct TraceContext {
     state: Option<Arc<Mutex<TraceState>>>,
+    capture: Option<Arc<dyn super::request_capture::RequestCaptureObserver>>,
     attempt_index: u32,
     exchange_id: Option<u64>,
 }
@@ -65,6 +66,20 @@ struct TraceEvent {
 }
 
 impl TraceContext {
+    #[must_use]
+    pub fn with_capture(
+        mut self,
+        capture: Option<Arc<dyn super::request_capture::RequestCaptureObserver>>,
+    ) -> Self {
+        self.capture = capture;
+        self
+    }
+
+    #[must_use]
+    pub fn captures_bodies(&self) -> bool {
+        self.capture.is_some()
+    }
+
     /// 是否已启用请求诊断，供调用方避免构造不会保存的事实。
     #[must_use]
     pub const fn is_enabled(&self) -> bool {
@@ -98,6 +113,7 @@ impl TraceContext {
     pub fn attempt(&self, attempt_index: u32) -> Self {
         Self {
             state: self.state.clone(),
+            capture: self.capture.clone(),
             attempt_index,
             exchange_id: None,
         }
@@ -120,6 +136,9 @@ impl TraceContext {
 
     /// details 只允许调用方构造的诊断事实；不接收原始请求/响应正文。
     pub fn record(&self, stage: &'static str, data: Value) {
+        if let Some(capture) = &self.capture {
+            capture.fact(stage, self.attempt_index, &data);
+        }
         self.push(stage, data, false);
     }
 
@@ -216,6 +235,9 @@ impl TraceContext {
 
     /// 完整报文捕获与摘要使用相同 request / attempt / exchange ID。
     pub fn dump(&self, stage: &'static str, bytes: &[u8]) {
+        if let Some(capture) = &self.capture {
+            capture.body(stage, self.attempt_index, self.exchange_id, bytes);
+        }
         if !tracing::enabled!(target: "request_dump", tracing::Level::INFO) {
             return;
         }

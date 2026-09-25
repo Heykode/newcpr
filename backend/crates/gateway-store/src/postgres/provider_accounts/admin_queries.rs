@@ -124,7 +124,7 @@ pub(crate) async fn load_admin_account_page(
                 a.upstream_account_id, a.plan_type, a.authentication_kind,
                 a.credential_revision, a.turn_state_binding_revision, a.relogin_count, a.last_relogin_at,
                 a.has_refresh_token, a.access_token_expires_at,
-                a.next_refresh_at, a.enabled, a.turn_state_injection_enabled, a.responses_upstream, a.excel_models, a.excel_models_follow_global,
+                a.next_refresh_at, a.enabled, a.turn_state_injection_enabled, a.responses_upstream, a.excel_models, a.excel_models_follow_global, excel_cache_creation_as_input,
                 case when a.excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else a.excel_models end as effective_excel_models,
                 a.concurrency_limit, a.weight, a.model_access_json,
                 a.credential_state, a.quota_access_state, a.quota_evidence,

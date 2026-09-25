@@ -210,7 +210,7 @@ pub(crate) async fn append_admin_audit_event_in_transaction(
     insert_admin_audit_event(transaction, event).await
 }
 
-pub(super) async fn insert_admin_audit_event(
+pub(crate) async fn insert_admin_audit_event(
     transaction: &mut Transaction<'_, Postgres>,
     event: AdminAuditEvent,
 ) -> StoreResult<()> {

@@ -15,6 +15,7 @@ export interface AccountCreateForm {
   applyExcel: boolean
   excelEnabled: boolean
   excelModelsFollowGlobal: boolean
+  excelCacheCreationAsInput: boolean
   excelModels: string
   concurrencyLimit: string
   weight: string
@@ -38,6 +39,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     applyExcel: false,
     excelEnabled: false,
     excelModelsFollowGlobal: true,
+    excelCacheCreationAsInput: false,
     excelModels: 'gpt-5.6-sol, gpt-6-astra',
     concurrencyLimit: '',
     weight: '1',
@@ -72,7 +74,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
   return {
     ...(customName ? { customName } : {}),
     enabled: form.enabled,
-    ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels) : {}),
+    ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput) : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),

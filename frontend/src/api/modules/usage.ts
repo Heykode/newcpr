@@ -96,6 +96,7 @@ export interface UsageListRecord {
   clientTransport: string
   upstreamTransport: string | null
   reasoningEffort: string | null
+  effectiveReasoningEffort?: string | null
   reasoningPreset: string | null
   subagentKind: string | null
   compact: boolean
@@ -158,6 +159,7 @@ export interface UsageRecord {
   clientIp: string | null
   userAgent: string | null
   reasoningEffort: string | null
+  effectiveReasoningEffort?: string | null
   reasoningPreset: string | null
   compact: boolean | null
   requestKind: string | null
@@ -299,6 +301,7 @@ export interface OpsError {
   clientIp: string | null
   userAgent: string | null
   reasoningEffort: string | null
+  effectiveReasoningEffort?: string | null
   reasoningPreset: string | null
   requestKind: string | null
   subagentKind: string | null

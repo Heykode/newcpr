@@ -82,6 +82,7 @@ async fn replacement_clears_old_authentication_failure_but_import_uses_explicit_
                     turn_state_injection_enabled: None,
                     responses_upstream: Default::default(),
                     excel_models_follow_global: Default::default(),
+                    excel_cache_creation_as_input: Default::default(),
                     excel_models: Default::default(),
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::DEFAULT,

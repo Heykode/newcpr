@@ -13,8 +13,9 @@ mod structured;
 #[cfg(test)]
 mod tests;
 mod tools;
+pub(crate) mod usage;
 
-pub(crate) use request::{ExcelRequestError, prepare_request};
+pub(crate) use request::{ExcelRequestError, prepare_request, reasoning_effort};
 pub(crate) use stream::transform_stream;
 pub(crate) use structured::StructuredOutput;
 pub(crate) use tools::ClientTools;
@@ -26,6 +27,7 @@ pub(crate) struct ExcelPreparedRequest {
     pub(crate) structured: Option<StructuredOutput>,
     pub(crate) _image_lease: Option<std::sync::Arc<image_relay::ImageLease>>,
     pub(crate) completed: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    pub(crate) usage: usage::ExcelUsagePolicy,
     pub(crate) replay: Option<replay::ReplayCapture>,
     pub(crate) endpoint: String,
 }

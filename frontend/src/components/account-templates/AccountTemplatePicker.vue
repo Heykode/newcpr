@@ -77,6 +77,10 @@ onScopeDispose(() => controller.abort())
           {{ selected.config.excelModelsFollowGlobal ? '跟随全局' : (selected.config.excelModels ?? []).join(', ') || '无' }}
         </dd>
       </template>
+      <template v-if="selected.config.excelCacheCreationAsInput != null">
+        <dt>缓存写入按输入计费</dt>
+        <dd>{{ selected.config.excelCacheCreationAsInput ? '开启' : '关闭' }}</dd>
+      </template>
       <dt class="text-cp-text-secondary">
         账号并发
       </dt><dd class="m-0">

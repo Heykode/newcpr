@@ -109,6 +109,12 @@ const profileOpen = shallowRef(false)
         {{ account.excelModelsFollowGlobal ? '跟随全局' : '自定义' }} ·
         {{ (account.effectiveExcelModels ?? account.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ') || '无' }}
       </dd>
+      <dt class="text-cp-text-tertiary">
+        缓存写入计费
+      </dt>
+      <dd class="m-0">
+        {{ account.excelCacheCreationAsInput ? '按普通输入' : '按缓存写入' }}
+      </dd>
     </dl>
   </section>
 

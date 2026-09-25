@@ -376,6 +376,7 @@ async fn push(h: &Harness, id: &str, target: &AccountRecord, switch_workspace: b
                     gateway_admin::model::relogin_templates::ExcelImportSettings {
                         responses_upstream: gateway_core::account::ResponsesUpstream::Excel,
                         excel_models_follow_global: true,
+                        excel_cache_creation_as_input: Default::default(),
                         excel_models: None,
                     },
                 ),

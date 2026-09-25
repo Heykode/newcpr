@@ -85,6 +85,19 @@ pub(super) async fn prepare_excel(
     let structured = StructuredOutput::parse(&source).map_err(request_error)?;
     let mut body = prepare_request(&source, &tools, &restored.native_calls, structured.as_ref())
         .map_err(request_error)?;
+    let trace = context.trace();
+    if trace.is_enabled() {
+        let (requested, effective) =
+            crate::transport::excel::reasoning_effort(&source).map_err(request_error)?;
+        trace.record(
+            "excel.compatibility",
+            json!({
+                "requestedReasoningEffort": requested,
+                "effectiveReasoningEffort": effective,
+                "unavailableHostedTools": tools.unavailable(),
+            }),
+        );
+    }
     let image_lease = image_relay.stage(&mut body).map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
     request.force_http_sse = true;
@@ -95,6 +108,9 @@ pub(super) async fn prepare_excel(
         structured,
         _image_lease: image_lease,
         completed: Default::default(),
+        usage: crate::transport::excel::usage::ExcelUsagePolicy::new(
+            lease.account().excel_cache_creation_as_input(),
+        ),
         replay: Some(restored.capture),
         endpoint: crate::transport::excel::RESPONSES_URL.into(),
     });
@@ -246,6 +262,7 @@ mod tests {
                 structured: None,
                 _image_lease: None,
                 completed: Default::default(),
+                usage: Default::default(),
                 replay: None,
                 endpoint: format!("{}/fixture", server.uri()),
             });
