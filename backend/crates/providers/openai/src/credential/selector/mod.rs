@@ -300,11 +300,7 @@ impl CodexCredentialSelector {
         account: &ProviderAccount,
         request: &CredentialSelectionInput<'_>,
     ) -> bool {
-        let upstream = request
-            .upstream_model
-            .map_or(gateway_core::account::ResponsesUpstream::Codex, |model| {
-                account.responses_upstream_for_model(model)
-            });
+        let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
             && request
                 .attempt
@@ -315,7 +311,10 @@ impl CodexCredentialSelector {
                     .request_url
                     .path()
                     .ends_with(crate::transport::endpoints::CODEX_RESPONSES_PATH)
-                    || request.request_url.path().ends_with("/responses/compact")))
+                    || request.request_url.path().ends_with("/responses/compact")
+                    || crate::transport::excel::image_generation::is_image_path(
+                        request.request_url.path(),
+                    )))
             && (request.attempt.is_diagnostic_required_account()
                 || request.attempt.account_scope().is_some_and(|scope| {
                     request.upstream_model.map_or_else(
@@ -323,6 +322,21 @@ impl CodexCredentialSelector {
                         |model| scope.allows_model(account.id(), model),
                     )
                 }))
+    }
+
+    fn request_upstream(
+        account: &ProviderAccount,
+        request: &CredentialSelectionInput<'_>,
+    ) -> gateway_core::account::ResponsesUpstream {
+        if let Some(model) = request.upstream_model {
+            account.responses_upstream_for_model(model)
+        } else if crate::transport::excel::image_generation::is_image_path(
+            request.request_url.path(),
+        ) {
+            account.responses_upstream()
+        } else {
+            gateway_core::account::ResponsesUpstream::Codex
+        }
     }
 
     pub async fn select(
@@ -381,14 +395,10 @@ impl CodexCredentialSelector {
         let lease = self
             .select_unfrozen(request, cyber_policy_session_key)
             .await?;
-        if !request.attempt.freeze_provider_route(
-            request
-                .upstream_model
-                .map_or(gateway_core::account::ResponsesUpstream::Codex, |model| {
-                    lease.account().responses_upstream_for_model(model)
-                })
-                .as_str(),
-        ) {
+        if !request
+            .attempt
+            .freeze_provider_route(Self::request_upstream(lease.account(), request).as_str())
+        {
             return Err(CredentialSelectionError::NoEligibleCredential);
         }
         Ok(lease)

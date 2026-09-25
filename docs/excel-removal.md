@@ -27,7 +27,8 @@
    `openai.excel_image_relay_public_url` 配置。默认未启用时无须操作。
 
 关闭 Excel 不会重启旧 State，也不清空账号或其他 CPR 缓存。
-独立图片生成/编辑、搜索和凭据刷新不属于 Excel Responses 路由。
+图片生成/编辑请求也由选中账号的 Excel 开关选择后端，关闭后恢复 Codex。
+搜索和凭据刷新不属于 Excel 路由。
 
 ## 代码移除边界
 
@@ -36,7 +37,7 @@
 
 | 范围 | 定位 | 移除规则 |
 | --- | --- | --- |
-| Excel 协议实现 | `backend/crates/providers/openai/src/transport/excel/` | 正文/请求头、工具包装、SSE 转换、结构化输出、历史回放、图片上传和中转均属于 Excel |
+| Excel 协议实现 | `backend/crates/providers/openai/src/transport/excel/` | 正文/请求头、工具包装、SSE 转换、结构化输出、历史回放及压缩裁剪、图片工具后端、上传和中转均属于 Excel |
 | Provider 入口 | `backend/crates/providers/openai/src/provider/excel.rs` | 删除 Excel 准备和错误分类；保留 Codex 原分类 |
 | 共享文件中的 Excel 分支 | OpenAI `provider/{mod,execution,compact,observation}.rs`、`transport/{catalog,client_sse,protocol/responses}.rs`、`credential/{catalog,selector/mod,selector/capacity_wait}.rs`、`lib.rs`、`config.rs` | 只移除 Excel 字段/分支和装配，不整文件回退，不恢复 State 门槛 |
 | 账号配置 | Core `account/responses_upstream.rs` 及 `account/model.rs`；Admin/API/Store 中的 `responsesUpstream`、`excelModels` | 删除路由选择及其读写映射，保留其他账号配置、导入、重登和 CAS 规则 |

@@ -93,6 +93,23 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        // The Excel user-message schema rejects data URLs. Upload before generation,
+        // rather than interpreting an arbitrary 422 as permission to replay a request.
+        if let Some(excel) = &upstream_request.excel
+            && super::excel::images::has_user_inline(&excel.body)
+        {
+            let body = super::excel::images::upload_inline(
+                self,
+                &self.profile.snapshot(),
+                context,
+                &excel.endpoint,
+                &excel.body,
+            )
+            .await?;
+            let mut uploaded = upstream_request.clone();
+            uploaded.excel.as_mut().expect("Excel request").body = body;
+            return self.send_response_http_sse(&uploaded, context).await;
+        }
         let result = self.send_response_http_sse(upstream_request, context).await;
         if let Some(excel) = &upstream_request.excel
             && result

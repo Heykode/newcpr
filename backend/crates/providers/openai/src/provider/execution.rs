@@ -91,7 +91,7 @@ impl CodexProvider {
     pub(super) async fn execute_raw_json_endpoint(
         &self,
         context: AttemptContext,
-        request: RawJsonEndpointRequest,
+        mut request: RawJsonEndpointRequest,
     ) -> Result<ProviderStream, ProviderError> {
         let selection_started_at = Instant::now();
         let lease = match request.upstream_model.as_ref() {
@@ -145,6 +145,31 @@ impl CodexProvider {
         } else {
             None
         };
+        let excel_image =
+            if crate::transport::excel::image_generation::is_image_path(request.endpoint_path)
+                && lease.account().responses_upstream()
+                    == gateway_core::account::ResponsesUpstream::Excel
+            {
+                if !matches!(
+                    lease.authentication(),
+                    crate::credential::CodexRuntimeAuthentication::OAuth(_)
+                ) || lease.account().upstream_account_id().is_none()
+                {
+                    return Err(super::excel::request_error(
+                        crate::transport::excel::ExcelRequestError::Image,
+                    ));
+                }
+                let prepared = crate::transport::excel::image_generation::PreparedImage::parse(
+                    &request.body,
+                    request.endpoint_path,
+                )
+                .map_err(super::excel::request_error)?;
+                request.response_origin =
+                    Url::parse(&prepared.endpoint).expect("fixed Excel image endpoint");
+                Some(prepared)
+            } else {
+                None
+            };
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
@@ -200,6 +225,7 @@ impl CodexProvider {
             session_affinity_key: request.session_affinity.map(CodexSessionAffinity::into_key),
             upstream_model: request.upstream_model,
             excel,
+            excel_image,
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {
@@ -258,6 +284,7 @@ pub(super) struct ColdJsonResponse {
     pub(super) session_affinity_key: Option<ProviderSessionAffinityKey>,
     pub(super) upstream_model: Option<UpstreamModelId>,
     pub(super) excel: Option<CodexResponsesRequest>,
+    pub(super) excel_image: Option<crate::transport::excel::image_generation::PreparedImage>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -455,6 +482,16 @@ pub(super) async fn create_json_attempt(
     request_context.cookie_header = cookie_header.map(ExposeSecret::expose_secret);
     request_context.turn_metadata = request.turn_metadata.as_deref();
     request_context.account_selection = account_selection;
+    if let Some(image) = &request.excel_image {
+        request_context.cookie_header = None;
+        return tokio::select! {
+            biased;
+            _ = request.context.cancellation().cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
+            _ = tokio::time::sleep(handshake_deadline) => Err(CodexHandshakeAttemptError::Timeout),
+            response = request.client.post_excel_image(image, request_context) =>
+                response.map_err(CodexHandshakeAttemptError::Client),
+        };
+    }
     if let Some(excel) = &request.excel {
         request_context.cookie_header = None;
         return tokio::select! {
@@ -491,7 +528,11 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             allows_account_state_mutation,
         };
         let active_account = request.lease.account().clone();
-        let cookie_header = build_cookie_header(request.lease.cookies())?;
+        let cookie_header = if request.excel.is_some() || request.excel_image.is_some() {
+            None
+        } else {
+            build_cookie_header(request.lease.cookies())?
+        };
         let authorization = request
             .lease
             .authentication()
@@ -523,7 +564,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             );
         }
         let response = match response.map_err(|error| super::excel::classify_failure(
-            map_handshake_attempt_error(error), request.excel.is_some(),
+            map_handshake_attempt_error(error), request.excel.is_some() || request.excel_image.is_some(),
         )) {
             Ok(response) => response,
             Err(mut failure) => {

@@ -1,8 +1,9 @@
-//! Excel Responses adaptation derived from excel-codex-bridge v0.3.2 (Unlicense).
+//! Excel Responses adaptation derived from excel-codex-bridge v0.4.6 (Unlicense).
 //! Account selection, authorization, egress and execution remain CPR-owned.
 //! Feature: excel-upstream. Removal boundaries: docs/excel-removal.md.
 
 mod envelope;
+pub(crate) mod image_generation;
 pub(crate) mod image_relay;
 pub(crate) mod images;
 pub(crate) mod replay;

@@ -16,11 +16,20 @@ struct ToolSpec {
 #[derive(Clone, Default)]
 pub(crate) struct ClientTools {
     specs: BTreeMap<String, ToolSpec>,
+    serial: bool,
 }
 
 impl ClientTools {
     pub(crate) fn parse(source: &Map<String, Value>) -> Result<Self, ExcelRequestError> {
-        let mut tools = Self::default();
+        let serial = match source.get("parallel_tool_calls") {
+            None | Some(Value::Null | Value::Bool(true)) => false,
+            Some(Value::Bool(false)) => true,
+            _ => return Err(ExcelRequestError::Tool),
+        };
+        let mut tools = Self {
+            serial,
+            ..Self::default()
+        };
         match source.get("tool_choice") {
             Some(Value::String(choice)) if choice == "none" => return Ok(tools),
             None | Some(Value::Null) => {}
@@ -125,8 +134,25 @@ impl ClientTools {
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
             "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=cpr.custom/CATALOG_NAME and put exact raw input directly in code. \
-             For function tools, put exactly one catalog-tool JSON object in code. Never combine calls."
+             For function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}",
+            if self.serial {
+                "Return at most one client tool call per response; wait for its result before requesting another."
+            } else {
+                "Independent client tools may be called in parallel, using a separate native run_officejs call for each."
+            }
         )
+    }
+
+    pub(crate) fn validate_call_count(&self, count: usize) -> Result<(), ExcelRequestError> {
+        if self.serial && count > 1 {
+            Err(ExcelRequestError::ToolCall)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn parallel_allowed(&self) -> bool {
+        !self.serial
     }
 
     pub(crate) fn reminder(&self) -> Option<String> {

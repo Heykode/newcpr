@@ -1894,5 +1894,13 @@
     "file_sha256": "e6d5f4f96b83f872cad249d47e6a0ef3de3cf7708e515a3292a2e7982bdbfc34",
     "line_sha256": "e726975f8acce9cd62c0b1dd02916ba1d9c4237d9cd82989da984170434a390d",
     "reason": "Manually reviewed new parser rejection fixture: obvious synthetic user/pass on reserved example.com. The local validate_origin assertion rejects userinfo without making a network request."
+  },
+  {
+    "path": "backend/crates/providers/openai/src/transport/excel/image_relay.rs",
+    "rule": "authenticated-url",
+    "line": 307,
+    "file_sha256": "846a016954463ef2c2c090f6ee4af7f6d0ba8a26c5ab94b5ad99ae1db6c92aa6",
+    "line_sha256": "e726975f8acce9cd62c0b1dd02916ba1d9c4237d9cd82989da984170434a390d",
+    "reason": "Manually re-reviewed the unchanged user/pass example.com parser-rejection fixture after adding relay resource-lifetime tests. Reserved example domain, no network access; the line matches the previously reviewed content exactly."
   }
 ]

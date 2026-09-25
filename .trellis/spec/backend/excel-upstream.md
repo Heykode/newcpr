@@ -118,9 +118,30 @@ Preserve applied migrations, shared scheduling/identity/Cookie contracts and
 historical `ExcelHttpSse` usage decoding. Delete neutral replay/image/route ports
 only after checking for additional consumers.
 
-Inline image acceptance currently fails with generic upstream 422; the public
-HTTPS relay is not live-accepted. Native image generation is unsupported.
-Explicit compact success is not proof of automatic history rollover: replay still
-appends inputs/outputs without replacing old history after compaction. Long-context
-limits and pressure behavior are not live-accepted. Keep these limitations in PR
-and feature documentation; do not claim full parity with native Codex.
+Direct inline user images fail with generic upstream 422; upload-first attachment
+requests have been accepted with real image recognition. User-message data URLs
+therefore upload before the first generation attempt, not as a generic-422 retry.
+The optional public HTTPS relay is not live-accepted. Hosted image_generation is unsupported.
+Client image tools may send a second request to existing image endpoints, as in
+Bridge v0.4.6; do not confuse that with executing OfficeJS or hosted tools.
+Image endpoints select the account toggle independently of the text model list,
+freeze the route, and preserve the original lease, affinity and cancellation owner.
+No Codex Cookie/State or native fallback on Excel image failure. Image transport
+remains HTTP JSON; do not mislabel it as SSE. Raw image traces use excel_http_json.
+
+Server-generated successful compaction may prune the replay window. Retain
+system/developer instructions and additional tools; never orphan pending calls
+or references across a compaction marker. Clear unused window call mappings,
+preserve owner/conversation/TTL and do not prune incoming explicit compact output.
+Small-input rollover acceptance is not maximum-context pressure acceptance.
+
+Default/true parallel_tool_calls permits independent calls, false must validate
+at most one call before any executable event is emitted. Never silently discard
+extra calls. Count contiguous client tool-result rounds before wire reconstruction.
+Inert name(JSON) wrappers must match the exact inner name; ambiguous trailing
+objects or executable statements fail closed.
+
+Image relay admission precedes base64 decoding. Bytes owners hold memory permits
+through outstanding downloads, including after lease/entry deletion. Separate
+download permits last through the HTTP body lifecycle; text never takes permits.
+Keep acceptance limitations in feature documentation and do not claim native parity.

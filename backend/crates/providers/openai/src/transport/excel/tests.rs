@@ -107,6 +107,154 @@ fn native_fixture(code: Value) -> Value {
 }
 
 #[test]
+fn excel_image_tool_options_are_explicit_and_edits_require_real_images() {
+    use super::image_generation::PreparedImage;
+    use crate::transport::{CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH};
+    for source in [
+        json!({"prompt":"draw"}),
+        json!({"prompt":"draw","model":"gpt-image-2","n":3,"quality":"low","size":"1024x1024"}),
+    ] {
+        assert!(
+            PreparedImage::parse(source.to_string().as_bytes(), CODEX_IMAGE_GENERATIONS_PATH)
+                .is_ok()
+        );
+    }
+    for source in [
+        json!({"prompt":""}),
+        json!({"prompt":"draw","n":true}),
+        json!({"prompt":"draw","n":4}),
+        json!({"prompt":"draw","model":"other"}),
+        json!({"prompt":"draw","background":"transparent"}),
+        json!({"prompt":"draw","output_format":"jpeg"}),
+        json!({"prompt":"draw","stream":true}),
+        json!({"prompt":"draw","mask":{"image_url":"data:image/png;base64,AQID"}}),
+    ] {
+        assert!(
+            PreparedImage::parse(source.to_string().as_bytes(), CODEX_IMAGE_GENERATIONS_PATH)
+                .is_err()
+        );
+    }
+    for images in [
+        json!([]),
+        json!([{"image_url":"https://images.example.com/picture.png"}]),
+        json!([{"image_url":"data:image/png;base64,AQID"}]),
+    ] {
+        assert!(
+            PreparedImage::parse(
+                json!({"prompt":"edit","images":images})
+                    .to_string()
+                    .as_bytes(),
+                CODEX_IMAGE_EDITS_PATH
+            )
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn excel_image_tool_uses_excel_headers_json_and_multipart_without_codex_state() {
+    use super::image_generation::PreparedImage;
+    use crate::transport::{CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH};
+    let server = MockServer::start().await;
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "unwanted=fixture")
+                .insert_header("x-codex-turn-state", "unwanted")
+                .set_body_json(json!({"data":[{"b64_json":png}]})),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let client = client(&server.uri());
+    for (path, body) in [
+        (
+            CODEX_IMAGE_GENERATIONS_PATH,
+            json!({"prompt":"draw","session_id":"client-fixture"}),
+        ),
+        (
+            CODEX_IMAGE_EDITS_PATH,
+            json!({"prompt":"edit","images":[{"image_url":format!("data:image/png;base64,{png}")}]}),
+        ),
+    ] {
+        let mut image = PreparedImage::parse(body.to_string().as_bytes(), path).unwrap();
+        image.endpoint = format!("{}/images", server.uri());
+        let mut context = CodexRequestContext::auxiliary(
+            "Bearer fixture",
+            Some("workspace"),
+            "req",
+            Some("device"),
+        );
+        context.cookie_header = Some("codex=fixture");
+        let response = client.post_excel_image(&image, context).await.unwrap();
+        assert!(response.set_cookie_headers.is_empty());
+        assert!(
+            !response
+                .response_metadata
+                .client_headers
+                .iter()
+                .any(|(name, _)| name == "x-codex-turn-state")
+        );
+    }
+    let sent = server.received_requests().await.unwrap();
+    assert_eq!(
+        sent[0].body_json::<Value>().unwrap()["model"],
+        "gpt-image-2"
+    );
+    assert!(
+        sent[0]
+            .body_json::<Value>()
+            .unwrap()
+            .get("session_id")
+            .is_none()
+    );
+    assert!(
+        sent[1].headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("multipart/form-data;")
+    );
+    assert!(String::from_utf8_lossy(&sent[1].body).contains("name=\"image\""));
+    for request in &sent {
+        assert_eq!(request.headers["chatgpt-account-id"], "workspace");
+        assert_eq!(request.headers["x-openai-account-id"], "workspace");
+        assert_eq!(request.headers["accept"], "application/json");
+        assert!(!request.headers.contains_key("cookie"));
+        assert!(!request.headers.contains_key("x-codex-turn-state"));
+        assert!(!request.headers.contains_key("oai-device-id"));
+    }
+}
+
+#[tokio::test]
+async fn excel_image_tool_does_not_retry_rejection_or_accept_empty_success() {
+    use super::image_generation::PreparedImage;
+    use crate::transport::CODEX_IMAGE_GENERATIONS_PATH;
+    for (status, body) in [
+        (403, json!({"error":{"code":"workspace_not_allowed"}})),
+        (200, json!({"data":[]})),
+        (200, json!({"error":"failure"})),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut image =
+            PreparedImage::parse(br#"{"prompt":"draw"}"#, CODEX_IMAGE_GENERATIONS_PATH).unwrap();
+        image.endpoint = server.uri();
+        let result = client(&server.uri())
+            .post_excel_image(
+                &image,
+                CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+}
+
+#[test]
 fn excel_tool_formatting_aliases_and_raw_custom_preserve_values() {
     let tools = fixture_tools();
     for code in [
@@ -114,6 +262,9 @@ fn excel_tool_formatting_aliases_and_raw_custom_preserve_values() {
         json!("{\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}}"),
         json!("```json\n{\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}}\n```"),
         json!("Tool: {\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}}"),
+        json!("Tool: {\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}} Done."),
+        json!("read({\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}})"),
+        json!("functions.read({\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}});"),
         json!({"name":"run_officejs","arguments":{"code":"{\"name\":\"read\",\"arguments\":{\"path\":\"sample.txt\"}}"}}),
     ] {
         let converted = tools.convert_call(&native_fixture(code)).unwrap();
@@ -148,9 +299,52 @@ fn excel_tool_formatting_aliases_and_raw_custom_preserve_values() {
         json!({"name":"read","tool":"delete","arguments":{"path":"x"}}),
         json!({"name":"read","arguments":{"path":"x"},"args":{"path":"y"}}),
         json!("{\"name\":\"read\",\"arguments\":"),
+        json!("delete({\"name\":\"read\",\"arguments\":{\"path\":\"x\"}})"),
+        json!("read({\"name\":\"read\",\"arguments\":{\"path\":\"x\"}}); delete()"),
+        json!(
+            "Tool: {\"name\":\"read\",\"arguments\":{\"path\":\"x\"}} {\"name\":\"read\",\"arguments\":{\"path\":\"y\"}}"
+        ),
+        json!("[{\"name\":\"read\",\"arguments\":{\"path\":\"x\"}}]"),
+        json!("const x = {\"name\":\"read\",\"arguments\":{\"path\":\"x\"}};"),
     ] {
         assert!(tools.convert_call(&native_fixture(code)).is_err());
     }
+}
+
+#[tokio::test]
+async fn excel_parallel_tools_preserve_positions_and_serial_mode_fails_atomically() {
+    let mut second = native_fixture(json!({"name":"read","arguments":{"path":"second"}}));
+    second["id"] = "fc_second".into();
+    second["call_id"] = "call_second".into();
+    let output = json!([
+        {"type":"message","id":"msg_fixture","role":"assistant","content":[]},
+        native_fixture(json!({"name":"read","arguments":{"path":"first"}})),
+        second
+    ]);
+    for parallel in [Value::Null, json!(true), json!(false)] {
+        let source =
+            json!({"parallel_tool_calls":parallel,"tools":[{"type":"function","name":"read"}]});
+        let events = transformed_fixture(source, vec![
+            json!({"type":"response.completed","response":{"id":"resp_fixture","status":"completed","output":output}})
+        ]).await;
+        if parallel == false {
+            assert!(events.is_err());
+        } else {
+            let events = events.unwrap();
+            let indices: Vec<_> = events
+                .iter()
+                .filter(|event| event["type"] == "response.output_item.added")
+                .map(|event| event["output_index"].as_u64().unwrap())
+                .collect();
+            assert_eq!(indices, [1, 2]);
+            let last = events.last().unwrap();
+            assert_eq!(last["response"]["output"][1]["call_id"], "call_fixture");
+            assert_eq!(last["response"]["output"][2]["call_id"], "call_second");
+        }
+    }
+    assert!(
+        ClientTools::parse(json!({"parallel_tool_calls":"false"}).as_object().unwrap()).is_err()
+    );
 }
 
 #[test]
@@ -491,7 +685,7 @@ async fn excel_completed_tool_mapping_and_history_are_available_to_next_turn() {
 }
 
 #[tokio::test]
-async fn excel_image_fallback_uploads_once_without_changing_identity() {
+async fn excel_user_image_uploads_before_generation_without_changing_identity() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(RESPONSES_PATH))
@@ -506,7 +700,7 @@ async fn excel_image_fallback_uploads_once_without_changing_identity() {
                 completed()
             }
         })
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -532,14 +726,14 @@ async fn excel_image_fallback_uploads_once_without_changing_identity() {
         .unwrap();
     result.body.try_collect::<Vec<_>>().await.unwrap();
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.headers["authorization"], "Bearer fixture");
         assert_eq!(request.headers["chatgpt-account-id"], "workspace");
         assert!(!request.headers.contains_key("cookie"));
     }
     assert!(
-        requests[1].headers["content-type"]
+        requests[0].headers["content-type"]
             .to_str()
             .unwrap()
             .starts_with("multipart/form-data;")
@@ -567,7 +761,7 @@ async fn excel_generic_validation_errors_do_not_upload_or_replay() {
             .await;
         let request = request(
             format!("{}{RESPONSES_PATH}", server.uri()),
-            json!([{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]}]),
+            json!([{"role":"assistant","content":[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]}]),
         );
         let result = client(&server.uri())
             .create_response_stream_with_pool_account(
@@ -592,7 +786,7 @@ async fn excel_image_upload_auth_failure_is_not_hidden_or_retried_without_image(
             ResponseTemplate::new(422)
                 .set_body_json(json!({"error":{"code":"inline_image_unsupported"}})),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -617,5 +811,5 @@ async fn excel_image_upload_auth_failure_is_not_hidden_or_retried_without_image(
     assert!(
         matches!(result, Err(crate::transport::CodexClientError::Upstream {status, ..}) if status.as_u16() == 401)
     );
-    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
