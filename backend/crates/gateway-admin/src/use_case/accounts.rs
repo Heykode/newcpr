@@ -655,6 +655,7 @@ impl AccountsService for DefaultAccountsService {
                         turn_state_injection_enabled: None,
                         responses_upstream: None,
                         excel_models: None,
+                        excel_models_follow_global: None,
                         concurrency_limit: None,
                         weight: None,
                         group_ids: None,
@@ -693,6 +694,9 @@ impl AccountsService for DefaultAccountsService {
             .excel_models
             .as_ref()
             .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+            .or(command
+                .excel_models_follow_global
+                .map(|_| gateway_core::account::ResponsesUpstream::Excel))
             .or(command.responses_upstream)
             && !upstream.supports_account(
                 item.account.provider_kind.as_str(),
@@ -747,6 +751,9 @@ impl AccountsService for DefaultAccountsService {
                 .excel_models
                 .as_ref()
                 .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+                .or(command
+                    .excel_models_follow_global
+                    .map(|_| gateway_core::account::ResponsesUpstream::Excel))
                 .or(command.responses_upstream)
                 && !upstream.supports_account(
                     item.account.provider_kind.as_str(),

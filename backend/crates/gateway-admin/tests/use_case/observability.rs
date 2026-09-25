@@ -838,6 +838,7 @@ impl SettingsStore for FixtureSettingsStore {
             config_revision: Revision::new(1).expect("revision"),
             disable_fast: false,
             turn_state_injection_enabled: false,
+            excel_default_models: Default::default(),
             turn_state_models: vec![
                 gateway_core::routing::UpstreamModelId::new("gpt-6-astra".to_owned())
                     .expect("model"),

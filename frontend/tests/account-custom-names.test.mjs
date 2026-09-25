@@ -20,6 +20,7 @@ const names = load('../src/utils/account-name.ts')
 const scheduling = load('../src/views/accounts/utils/schedulingForm.ts')
 const modelAccess = load('../src/views/accounts/utils/modelAccess.ts')
 const creation = load('../src/views/accounts/components/AccountCreateModal/model.ts', {
+  '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': scheduling }),
   '../../utils/schedulingForm': scheduling,
   '../../utils/modelAccess': modelAccess,
   '@/utils/account-name': names,

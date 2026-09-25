@@ -37,6 +37,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 fn update_body() -> Value {
     json!({
+        "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
         "disableFast": false,
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
@@ -334,6 +335,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         config_revision: Revision::new(7).expect("revision"),
         disable_fast: false,
         turn_state_injection_enabled: false,
+        excel_default_models: Default::default(),
         turn_state_models: vec![
             UpstreamModelId::new("gpt-6-astra").expect("turn state model"),
             UpstreamModelId::new("gpt-5.6-sol").expect("turn state model"),
@@ -393,6 +395,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         value,
         json!({
             "disableFast": false,
+            "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
             "turnStateInjectionEnabled": false,
             "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
             "turnStateProbeProxyId": null,
@@ -465,6 +468,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         turn_state_probe_concurrency: request.turn_state_probe_concurrency.unwrap_or(3),
         disable_fast: request.disable_fast.unwrap_or(false),
         turn_state_injection_enabled: request.turn_state_injection_enabled.unwrap_or(false),
+        excel_default_models: Default::default(),
         turn_state_models: request
             .turn_state_models
             .as_deref()

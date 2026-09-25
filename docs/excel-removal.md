@@ -60,7 +60,8 @@ rg -n 'ProviderReplay|TemporaryImage|provider_route|freeze_provider_route|with_i
 ## 数据和缓存
 
 - 已应用的 `0039_account_responses_upstream.sql`、
-  `0040_account_excel_models.sql` 及 `.frozen-sha256` 必须保留，不能删改或重编号。
+  `0040_account_excel_models.sql`、`0041_excel_global_models.sql` 及
+  `.frozen-sha256` 必须保留，不能删改或重编号。
   删除运行时代码时允许数据库保留不再使用的列。
 - 若以后确实需要删除列，另加向前迁移，并单独审核备份、混合版本兼容、
   账号导入和回滚方案；不要与普通功能停用混在一起。

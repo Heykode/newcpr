@@ -1555,6 +1555,7 @@ mod response {
             turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                effective_excel_models: Default::default(),
                 model_access: Default::default(),
                 custom_name: None,
                 id: "acct_cost".to_owned(),
@@ -1576,6 +1577,7 @@ mod response {
                 enabled: true,
                 turn_state_injection_enabled: false,
                 responses_upstream: Default::default(),
+                excel_models_follow_global: Default::default(),
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: AccountWeight::DEFAULT,

@@ -1,5 +1,21 @@
 # Account Management Contracts
 
+## Excel Model Inheritance
+
+- Global `excelDefaultModels` starts with `gpt-5.6-sol` and `gpt-6-astra`.
+  Account `excelModelsFollowGlobal` selects inherited or custom lists independently
+  of its Excel enable switch. Show `effectiveExcelModels` in account details.
+- Share `ExcelModelFields` across editing, templates, import and relogin push.
+  Never submit stale custom text when following global. Single edits submit only
+  changed fields; batch edits keep independent opt-in checkboxes.
+- Legacy accounts/templates retain their stored values. New account database
+  defaults inherit; import omission preserves existing configuration.
+  Relogin `newAccountExcel` applies only to new accounts and overrides templates.
+  Existing and automatic relogin retain Excel configuration.
+- `BaseCheckbox.label` is accessibility-only unless `showLabel` is supplied.
+  Standalone opt-in controls must show their label; verify small-screen screenshots
+  and modal footer bounds after responsive layout settles.
+
 ## Account Model Access
 
 - Follow the shared contract in `../backend/account-model-access.md`.

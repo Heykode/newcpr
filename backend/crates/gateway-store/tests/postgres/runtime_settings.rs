@@ -17,6 +17,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         admin_api_key: None,
         disable_fast: None,
         turn_state_injection_enabled: None,
+        excel_default_models: Default::default(),
         turn_state_models: vec![
             "gpt-6-astra".to_owned(),
             "gpt-5.6-sol".to_owned(),
@@ -126,6 +127,27 @@ async fn legacy_probe_concurrency_persists_without_changing_runtime_capacity() {
 fn runtime_settings_keep_account_rotation_global() {
     let settings = settings_with_margin(3_600);
     assert!(settings.validate().is_ok());
+}
+
+#[tokio::test]
+async fn excel_global_models_roundtrip_and_publish_configuration_revision() {
+    let Some(database) = TestDatabase::create("excel_defaults").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        before.excel_default_models.as_slice(),
+        ["gpt-5.6-sol", "gpt-6-astra"]
+    );
+    let mut update = settings_with_margin(3_600);
+    update.excel_default_models =
+        gateway_core::account::ExcelModels::try_from(vec!["custom-model".into()]).unwrap();
+    repository.update_runtime_settings(update).await.unwrap();
+    let after = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(after.excel_default_models.as_slice(), ["custom-model"]);
+    assert_ne!(after.config_revision, before.config_revision);
+    database.close().await;
 }
 
 #[tokio::test]

@@ -8,6 +8,40 @@ use gateway_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+#[derive(Default)]
+pub struct ReloginNewAccountOptions {
+    pub template: Option<ReloginTemplateSelection>,
+    pub custom_name: Option<String>,
+    pub excel: Option<ExcelImportSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExcelImportSettings {
+    pub responses_upstream: gateway_core::account::ResponsesUpstream,
+    pub excel_models_follow_global: bool,
+    pub excel_models: Option<gateway_core::account::ExcelModels>,
+}
+
+impl ExcelImportSettings {
+    pub fn validate(&self) -> Result<(), AdminError> {
+        if !self.excel_models_follow_global && self.excel_models.is_none() {
+            return Err(AdminError::invalid("自定义模式必须提供 Excel 模型列表"));
+        }
+        Ok(())
+    }
+
+    pub fn apply(&self, settings: &mut AccountImportSettings) {
+        settings.responses_upstream = Some(self.responses_upstream);
+        settings.excel_models_follow_global = Some(self.excel_models_follow_global);
+        settings.excel_models = if self.excel_models_follow_global {
+            None
+        } else {
+            self.excel_models.clone()
+        };
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReloginTemplateConfig {
@@ -15,6 +49,12 @@ pub struct ReloginTemplateConfig {
     pub enabled: bool,
     #[serde(default)]
     pub turn_state_injection_enabled: Option<bool>,
+    #[serde(default)]
+    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    #[serde(default)]
+    pub excel_models: Option<gateway_core::account::ExcelModels>,
+    #[serde(default)]
+    pub excel_models_follow_global: Option<bool>,
     pub concurrency_limit: Option<u32>,
     pub weight: u16,
     pub group_ids: Vec<String>,
@@ -42,8 +82,9 @@ impl ReloginTemplateConfig {
             custom_name: None,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
-            responses_upstream: None,
-            excel_models: None,
+            responses_upstream: self.responses_upstream,
+            excel_models: self.excel_models.clone(),
+            excel_models_follow_global: self.excel_models_follow_global,
             concurrency_limit: self
                 .concurrency_limit
                 .map(|value| {

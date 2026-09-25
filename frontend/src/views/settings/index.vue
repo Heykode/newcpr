@@ -5,6 +5,8 @@ import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 
@@ -149,6 +151,20 @@ watch(
       />
 
       <OutboundUserAgentCard />
+
+      <section aria-label="Excel 默认配置" class="border-y border-cp-border py-5">
+        <h2 class="mb-4 mt-0 text-cp-lg font-medium">
+          Excel 默认配置
+        </h2>
+        <BaseFormItem label="全局 Excel 模型">
+          <BaseInput
+            v-model="form.excelDefaultModels"
+            aria-label="全局 Excel 模型"
+            placeholder="gpt-5.6-sol, gpt-6-astra"
+            :disabled="loading || saving"
+          />
+        </BaseFormItem>
+      </section>
 
       <ModelAliasesCard
         :mappings="mappings"

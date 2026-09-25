@@ -2187,6 +2187,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        effective_excel_models: Default::default(),
         model_access: Default::default(),
         custom_name: None,
         outbound_proxy: None,
@@ -2210,6 +2211,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         enabled: account.enabled(),
         turn_state_injection_enabled: false,
         responses_upstream: Default::default(),
+        excel_models_follow_global: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: account.concurrency_limit(),
         weight: account.weight(),

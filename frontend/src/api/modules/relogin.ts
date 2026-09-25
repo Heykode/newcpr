@@ -85,10 +85,10 @@ export function importRelogin(text: string, replaceExisting: boolean) {
 export function queueRelogin(ids: string[], workspaceMode: ReloginWorkspaceMode = 'original') {
   return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids, workspaceMode } })
 }
-export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>) {
+export function pushRelogin(rows: Pick<ReloginEntry, 'id' | 'revision'>[], template?: AccountTemplateSelection, customName?: string, selections?: Record<string, ReloginPushSelection>, newAccountExcel?: import('@/utils/excel-settings').ExcelSettings) {
   const ids = rows.map(row => row.id)
   const revisions = Object.fromEntries(rows.map(row => [row.id, row.revision]))
-  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}) }, timeout: 120000 })
+  return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/push', method: 'POST', data: { ids, revisions, ...(template ? { template } : {}), ...(customName ? { customName } : {}), ...(selections ? { selections } : {}), ...(newAccountExcel ? { newAccountExcel } : {}) }, timeout: 120000 })
 }
 export function deleteRelogin(ids: string[]) {
   return request<void>({ url: '/api/admin/relogin/delete', method: 'POST', data: { ids } })

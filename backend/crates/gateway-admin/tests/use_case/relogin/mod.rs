@@ -282,6 +282,9 @@ fn credential() -> ReloginCredential {
 
 pub(super) fn template_config() -> ReloginTemplateConfig {
     ReloginTemplateConfig {
+        responses_upstream: None,
+        excel_models: None,
+        excel_models_follow_global: None,
         name: "Team defaults".into(),
         enabled: false,
         turn_state_injection_enabled: Some(true),
@@ -478,6 +481,52 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
         .unwrap();
     assert!(result.iter().all(|result| !result.success));
     assert_eq!(h.accounts.import_settings().len(), 1);
+}
+
+#[tokio::test]
+async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_models() {
+    use gateway_admin::model::relogin_templates::ExcelImportSettings;
+    use gateway_core::account::{ExcelModels, ResponsesUpstream};
+    let h = Harness::new(Vec::new()).await;
+    let mut config = template_config();
+    config.responses_upstream = Some(ResponsesUpstream::Codex);
+    config.excel_models_follow_global = Some(false);
+    config.excel_models = Some(ExcelModels::try_from(vec!["template-model".into()]).unwrap());
+    let template = h
+        .services
+        .account_templates()
+        .save_template(None, config)
+        .await
+        .unwrap();
+    let id = h.import("test@example.invalid").await;
+    h.ready(&id).await;
+    let revision = h.row(&id).await.revision;
+    let result = h
+        .services
+        .relogin()
+        .push_with_selection(
+            std::slice::from_ref(&id),
+            &BTreeMap::from([(id.clone(), revision)]),
+            gateway_admin::model::relogin_templates::ReloginNewAccountOptions {
+                template: Some(template_selection(&template)),
+                custom_name: None,
+                excel: Some(ExcelImportSettings {
+                    responses_upstream: ResponsesUpstream::Excel,
+                    excel_models_follow_global: true,
+                    excel_models: None,
+                }),
+            },
+            &BTreeMap::new(),
+            &context("excel-new-account"),
+        )
+        .await
+        .unwrap();
+    assert!(result[0].success, "{result:?}");
+    let mut expected = template.config.settings().unwrap();
+    expected.responses_upstream = Some(ResponsesUpstream::Excel);
+    expected.excel_models_follow_global = Some(true);
+    expected.excel_models = None;
+    assert_eq!(h.accounts.import_settings(), vec![Some(expected)]);
 }
 
 #[tokio::test]

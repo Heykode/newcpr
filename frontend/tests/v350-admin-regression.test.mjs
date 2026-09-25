@@ -204,6 +204,7 @@ test('runtime save keeps custom parameters and silently rereads server state aft
     requestTuning: { maxRequestAttempts: 24, websocketHttpFallbackEnabled: false },
   }
   const settings = load('views/settings/composables/useSettingsForm.ts', {
+    '@/views/accounts/utils/schedulingForm': load('views/accounts/utils/schedulingForm.ts'),
     vue,
     '@/api': {
       getSettings: async (options) => {

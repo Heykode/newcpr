@@ -188,6 +188,7 @@ pub struct RuntimeSettings {
     pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
     pub turn_state_models: Vec<UpstreamModelId>,
+    pub excel_default_models: gateway_core::account::ExcelModels,
     pub turn_state_probe_proxy_id: Option<String>,
     pub turn_state_probe_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
@@ -212,6 +213,7 @@ pub struct ReplaceRuntimeSettings {
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
     pub turn_state_models: Option<Vec<UpstreamModelId>>,
+    pub excel_default_models: Option<gateway_core::account::ExcelModels>,
     /// Omitted preserves the route; explicit null selects the IPv6 pool.
     pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub turn_state_probe_concurrency: Option<u32>,

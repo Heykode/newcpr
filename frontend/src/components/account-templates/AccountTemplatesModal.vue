@@ -4,6 +4,7 @@ import { Pencil, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { deleteAccountTemplate, getAccountTemplates, saveAccountTemplate } from '@/api/modules/account-templates'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -132,16 +133,21 @@ onScopeDispose(() => {
       </BaseFormItem>
       <AccountSettingsFields
         v-model:enabled="form.enabled"
+        v-model:excel-enabled="form.excelEnabled"
+        v-model:excel-models="form.excelModels"
+        v-model:excel-models-follow-global="form.excelModelsFollowGlobal"
         v-model:concurrency-limit="form.concurrencyLimit"
         v-model:weight="form.weight"
         v-model:selected-group-ids="form.groupIds"
         v-model:proxy-mode="form.proxyMode"
         v-model:proxy-id="form.proxyId"
+        :excel-available="form.applyExcel"
         :groups="groups"
         :groups-loading="groupsLoading"
         :preserve-proxy="false"
         :disabled="busy"
       />
+      <BaseCheckbox v-model="form.applyExcel" label="模板包含 Excel 设置" show-label :disabled="busy" />
       <div v-for="id in missingGroups" :key="id" class="flex min-w-0 items-center gap-2 text-cp-sm text-cp-warning">
         <span class="min-w-0 flex-1 break-all">未识别分组：{{ id }}</span>
         <BaseIconButton :label="`移除未识别分组 ${id}`" :disabled="busy" @click="form.groupIds = form.groupIds.filter(value => value !== id)">

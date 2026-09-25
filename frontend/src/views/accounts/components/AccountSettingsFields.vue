@@ -5,6 +5,7 @@ import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountProxyField from './AccountProxyField.vue'
 
@@ -27,7 +28,8 @@ const customName = defineModel<string>('customName', { default: '' })
 const updateCustomName = defineModel<boolean>('updateCustomName', { default: false })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
-const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol' })
+const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol, gpt-6-astra' })
+const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -100,10 +102,9 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       <template v-if="batch" #extra>
         <BaseCheckbox v-model="updateExcelModels" label="应用 Excel 模型更改" title="应用 Excel 模型更改" :disabled="disabled" />
       </template>
-      <BaseInput
-        v-model="excelModels"
-        aria-label="Excel 模型"
-        placeholder="gpt-5.6-sol"
+      <ExcelModelFields
+        v-model:models="excelModels"
+        v-model:follow-global="excelModelsFollowGlobal"
         :disabled="disabled || (batch && !updateExcelModels)"
       />
     </BaseFormItem>
