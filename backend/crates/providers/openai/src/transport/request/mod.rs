@@ -594,8 +594,6 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
 /// Apply the same turn decision to every known mirror before account scoping and passthrough.
 pub(crate) fn clear_turn_state(request: &mut CodexResponsesRequest) {
     request.turn_state = None;
-    request.managed_turn_state_version = None;
-    request.managed_turn_state_expires_at = None;
     request.passthrough_headers.remove("x-codex-turn-state");
     request.turn_metadata = request.turn_metadata.take().map(clear_embedded_turn_state);
     clear_turn_state_fields(request.body_mut());
@@ -617,26 +615,6 @@ pub(crate) fn clear_turn_state(request: &mut CodexResponsesRequest) {
             .passthrough_headers
             .insert("x-codex-turn-metadata", value);
     }
-}
-
-/// Apply a provider-managed state after account scoping has established ownership.
-pub(crate) fn apply_managed_turn_state(
-    request: &mut CodexResponsesRequest,
-    state: String,
-    version: u64,
-    expires_at: std::time::SystemTime,
-) {
-    request.turn_state = Some(state.clone());
-    request.managed_turn_state_version = Some(version);
-    request.managed_turn_state_expires_at = Some(expires_at);
-    request.passthrough_headers.remove("x-codex-turn-state");
-    let mut metadata = request
-        .client_metadata()
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    metadata.insert("x-codex-turn-state".to_owned(), Value::String(state));
-    request.set_client_metadata(Some(Value::Object(metadata)));
 }
 
 fn clear_turn_state_fields(fields: &mut Map<String, Value>) {

@@ -582,8 +582,7 @@ impl CodexCredentialSelector {
         let accounts = accounts
             .into_iter()
             .filter(|account| self.account_in_scope(account, request))
-            .collect();
-        let accounts = self.state_ready_accounts(accounts, request).await;
+            .collect::<Vec<_>>();
         self.quota.prepare_scheduling(&accounts).await;
         for account in accounts {
             let cooldown = self

@@ -198,6 +198,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         runtime_policy,
         oauth_pending,
     )
+    .with_replay(Arc::new(redis::RedisProviderReplayRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?))
     .with_turn_states(Arc::new(postgres::PgProviderTurnStateRepository::new(
         pool.clone(),
     )))

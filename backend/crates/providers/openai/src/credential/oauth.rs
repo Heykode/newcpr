@@ -87,8 +87,8 @@ pub struct CompletedCodexOAuthAuthorization<T> {
 
 /// OAuth exchange 后唯一的 credential preparation 结果。
 pub enum CompletedCodexOAuthCredential {
-    Create(NewProviderAccount),
-    Reauthorize(PreparedCodexCredentialRotation),
+    Create(Box<NewProviderAccount>),
+    Reauthorize(Box<PreparedCodexCredentialRotation>),
 }
 
 impl fmt::Debug for CompletedCodexOAuthCredential {
@@ -575,7 +575,7 @@ impl CodexOAuthAdminService {
             if old_user != new_user {
                 return Err(CodexOAuthAdminError::PrincipalConflict);
             }
-            CompletedCodexOAuthCredential::Reauthorize(prepared)
+            CompletedCodexOAuthCredential::Reauthorize(Box::new(prepared))
         } else {
             parse_chatgpt_jwt_claims(id_token.expose_secret())
                 .map_err(|_| CodexOAuthAdminError::TokenRejected)?;
@@ -595,13 +595,15 @@ impl CodexOAuthAdminService {
                     enabled: true,
                 })
                 .map_err(map_admin_error)?;
-            CompletedCodexOAuthCredential::Create(gateway_core::account::NewProviderAccount {
-                model_access: Default::default(),
-                account: prepared
-                    .account
-                    .with_outbound_proxy(mutation.outbound_proxy().cloned()),
-                credential: prepared.credential,
-            })
+            CompletedCodexOAuthCredential::Create(Box::new(
+                gateway_core::account::NewProviderAccount {
+                    model_access: Default::default(),
+                    account: prepared
+                        .account
+                        .with_outbound_proxy(mutation.outbound_proxy().cloned()),
+                    credential: prepared.credential,
+                },
+            ))
         };
         Ok((mutation, credential))
     }

@@ -143,7 +143,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at,
@@ -668,6 +668,8 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                         concurrency_limit: Some(settings.concurrency_limit),
                         weight: Some(settings.weight),
                         turn_state_injection_enabled: settings.turn_state_injection_enabled,
+                        responses_upstream: settings.responses_upstream,
+                        excel_models: settings.excel_models.as_ref(),
                         model_access: settings.model_access.as_ref(),
                         outbound_proxy: None,
                     },
@@ -878,6 +880,8 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     concurrency_limit: command.concurrency_limit,
                     weight: command.weight,
                     turn_state_injection_enabled: command.turn_state_injection_enabled,
+                    responses_upstream: command.responses_upstream,
+                    excel_models: command.excel_models.as_ref(),
                     model_access: command.model_access.as_ref(),
                     outbound_proxy: command.outbound_proxy.as_ref(),
                 },
@@ -1224,6 +1228,8 @@ struct AccountSchedulingPatch<'a> {
     concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     weight: Option<AccountWeight>,
     turn_state_injection_enabled: Option<bool>,
+    responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    excel_models: Option<&'a gateway_core::account::ExcelModels>,
     model_access: Option<&'a gateway_core::account::AccountModelAccess>,
     outbound_proxy: Option<&'a gateway_admin::model::proxies::AccountProxySelection>,
 }
@@ -1238,10 +1244,32 @@ async fn update_provider_accounts_scheduling_in_transaction(
         concurrency_limit,
         weight,
         turn_state_injection_enabled,
+        responses_upstream,
+        excel_models,
         model_access,
         outbound_proxy,
     } = patch;
     lock_account_egress_in_transaction(transaction).await?;
+    if let Some(upstream) = excel_models
+        .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+        .or(responses_upstream)
+    {
+        let identities = sqlx::query(
+            "select provider_kind, authentication_kind from provider_accounts
+             where id = any($1::text[]) for update",
+        )
+        .bind(account_ids)
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("validate account responses upstream"))?;
+        for row in identities {
+            let provider: String = get(&row, "provider_kind")?;
+            let authentication: String = get(&row, "authentication_kind")?;
+            if !upstream.supports_account(&provider, &authentication) {
+                return Err(invalid("Excel upstream requires an OpenAI OAuth account"));
+            }
+        }
+    }
     let (proxy_id, proxy) = match outbound_proxy {
         Some(selection) => {
             super::super::proxies::resolve_proxy_selection(transaction, selection).await?
@@ -1257,7 +1285,9 @@ async fn update_provider_accounts_scheduling_in_transaction(
              updated_at = greatest(now(), updated_at),
              outbound_proxy_url = case when $7 then $8 else outbound_proxy_url end,
              outbound_proxy_id = case when $7 then $9 else outbound_proxy_id end,
-             model_access_json = coalesce($10, model_access_json)
+             model_access_json = coalesce($10, model_access_json),
+             responses_upstream = coalesce($11, responses_upstream),
+             excel_models = coalesce($12, excel_models)
          where id = any($1::text[])
          returning id",
     )
@@ -1280,6 +1310,8 @@ async fn update_provider_accounts_scheduling_in_transaction(
     )
     .bind(proxy_id)
     .bind(model_access.map(sqlx::types::Json))
+    .bind(responses_upstream.map(gateway_core::account::ResponsesUpstream::as_str))
+    .bind(excel_models.map(gateway_core::account::ExcelModels::as_slice))
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?

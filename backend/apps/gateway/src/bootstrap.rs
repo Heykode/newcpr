@@ -114,7 +114,8 @@ pub async fn run() -> Result<(), BootstrapError> {
         probes,
         host.worker_health(),
         host.connection_lifecycle(),
-    )?;
+    )?
+    .with_image_relay(openai.image_relay());
     host.report_startup_ready("API");
 
     let mut plan = store.take_worker_contributions();

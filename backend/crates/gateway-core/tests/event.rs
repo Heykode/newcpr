@@ -36,6 +36,17 @@ fn provider_response_header_should_preserve_opaque_name_and_bytes_without_debug_
 }
 
 #[test]
+fn transport_relabel_preserves_response_facts() {
+    let observation = ProviderResponseObservation::new(UpstreamTransport::new("http_sse").unwrap())
+        .with_status_code(403)
+        .with_upstream_response_model_if_valid("model-fixture")
+        .with_transport(UpstreamTransport::new("adapter_http_sse").unwrap());
+    assert_eq!(observation.transport().as_str(), "adapter_http_sse");
+    assert_eq!(observation.status_code(), Some(403));
+    assert_eq!(observation.upstream_response_model(), Some("model-fixture"));
+}
+
+#[test]
 fn invalid_observed_service_tier_should_be_ignored() {
     let observation =
         ProviderResponseObservation::new(UpstreamTransport::new("http_sse").expect("transport"))

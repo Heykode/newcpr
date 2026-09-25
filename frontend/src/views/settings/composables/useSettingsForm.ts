@@ -41,10 +41,6 @@ export function useSettingsForm() {
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
     disableFast: false,
-    turnStateInjectionEnabled: false,
-    turnStateModelsText: 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra',
-    turnStateProbeProxyId: '',
-    turnStateProbeConcurrency: 3 as number | null,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
@@ -59,7 +55,7 @@ export function useSettingsForm() {
     requestTuning: { ...requestTuningFallbacks },
   })
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'turnStateProbeConcurrency') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -77,7 +73,6 @@ export function useSettingsForm() {
   const refreshConcurrencyValue = numericModel('refreshConcurrency')
   const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
   const requestIntervalMsValue = numericModel('requestIntervalMs')
-  const turnStateProbeConcurrencyValue = numericModel('turnStateProbeConcurrency')
   const responsesMaxDecompressedBodyBytesValue = computed({
     get: () => String(form.responsesMaxDecompressedBodyBytes),
     set: (value: string) => {
@@ -96,14 +91,6 @@ export function useSettingsForm() {
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     form.disableFast = data.disableFast ?? false
-    form.turnStateInjectionEnabled = data.turnStateInjectionEnabled ?? false
-    form.turnStateProbeProxyId = data.turnStateProbeProxyId ?? ''
-    form.turnStateProbeConcurrency = data.turnStateProbeConcurrency ?? 3
-    form.turnStateModelsText = (data.turnStateModels ?? [
-      'gpt-6-astra',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-    ]).join(', ')
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
     form.refreshMarginSeconds = data.refreshMarginSeconds
@@ -191,27 +178,7 @@ export function useSettingsForm() {
       toast.warning('请修正客户端最低版本格式')
       return
     }
-    const turnStateModels = [...new Set(
-      form.turnStateModelsText
-        .split(/[\n,]/u)
-        .map(model => model.trim().toLowerCase())
-        .filter(Boolean),
-    )]
-    if (turnStateModels.length === 0 || turnStateModels.length > 64
-      || turnStateModels.some(model => model.length > 256 || [...model].some((character) => {
-        const code = character.charCodeAt(0)
-        return code < 0x20 || code === 0x7F
-      }))) {
-      toast.warning('Turn State 模型名单须包含 1–64 个有效模型名称')
-      return
-    }
     const tuning = form.requestTuning
-    const turnStateProbeConcurrency = form.turnStateProbeConcurrency
-    if (turnStateProbeConcurrency === null || !Number.isInteger(turnStateProbeConcurrency)
-      || turnStateProbeConcurrency < 1 || turnStateProbeConcurrency > 10) {
-      toast.warning('State 第四轮起探测并发须为 1–10 的整数')
-      return
-    }
     if (!Number.isInteger(form.responsesMaxDecompressedBodyBytes)
       || form.responsesMaxDecompressedBodyBytes < 1
       || form.responsesMaxDecompressedBodyBytes > 256 * 1024 * 1024) {
@@ -239,10 +206,6 @@ export function useSettingsForm() {
     await saveAction.run(async () => {
       const result = await updateSettings({
         disableFast: form.disableFast,
-        turnStateInjectionEnabled: form.turnStateInjectionEnabled,
-        turnStateModels,
-        turnStateProbeProxyId: form.turnStateProbeProxyId || null,
-        turnStateProbeConcurrency,
         responsesMaxDecompressedBodyBytes: form.responsesMaxDecompressedBodyBytes,
         modelMappings: mappingPayload(),
         refreshMarginSeconds,
@@ -285,7 +248,6 @@ export function useSettingsForm() {
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
     requestIntervalMsValue,
-    turnStateProbeConcurrencyValue,
     responsesMaxDecompressedBodyBytesValue,
     minCodexDesktopVersionError,
     minCodexCliVersionError,

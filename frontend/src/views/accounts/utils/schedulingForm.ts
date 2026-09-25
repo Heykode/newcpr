@@ -41,3 +41,10 @@ export function parseAccountSchedulingForm(
 export function concurrencyLimitInput(value: number | null) {
   return value === null ? '' : String(value)
 }
+
+export function parseExcelModels(value: string): string[] | null {
+  const models = [...new Set(value.split(/[\s,]+/u).filter(Boolean))]
+  return models.length <= 64 && models.every(model => /^[\w.-]{1,128}$/u.test(model))
+    ? models
+    : null
+}

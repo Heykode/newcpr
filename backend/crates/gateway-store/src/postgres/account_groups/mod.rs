@@ -478,7 +478,7 @@ async fn load_member_facts<'e>(
                 (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = account.outbound_proxy_id) as request_location_json,
                 account.authentication_kind, account.credential_revision, account.turn_state_binding_revision, account.outbound_proxy_url,
                 account.has_refresh_token, account.access_token_expires_at,
-                account.next_refresh_at, account.enabled, account.turn_state_injection_enabled,
+                account.next_refresh_at, account.enabled, account.turn_state_injection_enabled, account.responses_upstream, account.excel_models,
                 account.concurrency_limit,
                 account.weight, account.model_access_json, account.credential_state, account.quota_access_state,
                 account.quota_evidence, account.quota_access_observed_at,

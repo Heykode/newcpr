@@ -88,51 +88,9 @@ pub struct CodexEgressRuntime {
     state: RwLock<Option<Arc<ProviderEgressConfig>>>,
     clients: Mutex<VecDeque<CachedClient>>,
     source_health: Mutex<HashMap<Ipv6Addr, SourceHealth>>,
-    probe_cursor: Mutex<usize>,
 }
 
 impl CodexEgressRuntime {
-    /// Request-level round robin shared by every maintenance account and model.
-    pub(crate) fn next_probe_source(&self) -> Result<Ipv6Addr, CodexEgressError> {
-        let mut cursor = self.probe_cursor.lock().unwrap_or_else(|e| e.into_inner());
-        let state = self.snapshot()?;
-        let count = state.addresses.len();
-        for _ in 0..count {
-            let index = *cursor % count;
-            *cursor = (index + 1) % count;
-            let item = &state.addresses[index];
-            if item.enabled && !self.source_temporarily_blocked(item.address) {
-                return Ok(item.address);
-            }
-        }
-        Err(CodexEgressError::EmptyPool)
-    }
-
-    pub(crate) fn probe_http_client(&self, source: Ipv6Addr) -> Result<Client, CodexEgressError> {
-        let state = self.snapshot()?;
-        if !state
-            .addresses
-            .iter()
-            .any(|item| item.enabled && item.address == source)
-        {
-            return Err(CodexEgressError::SourceDisabled);
-        }
-        self.ensure_source_ready(source)?;
-        build_reqwest_native_client_with_custom_ca(
-            Client::builder()
-                .no_proxy()
-                .local_address(IpAddr::V6(source))
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_secs(15))
-                .tcp_keepalive(Duration::from_secs(30))
-                .http2_keep_alive_interval(Duration::from_secs(30))
-                .http2_keep_alive_timeout(Duration::from_secs(5))
-                .http2_keep_alive_while_idle(true)
-                .pool_max_idle_per_host(0),
-        )
-        .map_err(|_| CodexEgressError::ClientConfiguration)
-    }
-
     pub async fn load(
         store: Arc<dyn ProviderEgressStorePort>,
     ) -> Result<Arc<Self>, CodexEgressError> {
@@ -146,7 +104,6 @@ impl CodexEgressRuntime {
             state: RwLock::new(Some(state)),
             clients: Mutex::new(VecDeque::new()),
             source_health: Mutex::new(HashMap::new()),
-            probe_cursor: Mutex::new(0),
         }))
     }
 

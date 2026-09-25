@@ -678,6 +678,8 @@ pub struct ProviderAccount {
     turn_state_binding_revision: CredentialRevision,
     enabled: bool,
     turn_state_injection_enabled: bool,
+    responses_upstream: super::ResponsesUpstream,
+    excel_models: super::ExcelModels,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
     model_access: super::AccountModelAccess,
@@ -695,7 +697,7 @@ pub struct ProviderAccount {
 impl ProviderAccount {
     /// 创建账号快照。
     #[must_use]
-    pub const fn new(
+    pub fn new(
         id: ProviderAccountId,
         provider: ProviderKind,
         name: String,
@@ -717,6 +719,8 @@ impl ProviderAccount {
             turn_state_binding_revision: revision,
             enabled: true,
             turn_state_injection_enabled: false,
+            responses_upstream: super::ResponsesUpstream::Codex,
+            excel_models: super::ExcelModels::default(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),
@@ -820,6 +824,39 @@ impl ProviderAccount {
     #[must_use]
     pub const fn turn_state_injection_enabled(&self) -> bool {
         self.turn_state_injection_enabled
+    }
+
+    #[must_use]
+    pub const fn with_responses_upstream(mut self, upstream: super::ResponsesUpstream) -> Self {
+        self.responses_upstream = upstream;
+        self
+    }
+
+    #[must_use]
+    pub const fn responses_upstream(&self) -> super::ResponsesUpstream {
+        self.responses_upstream
+    }
+
+    #[must_use]
+    pub fn with_excel_models(mut self, models: super::ExcelModels) -> Self {
+        self.excel_models = models;
+        self
+    }
+
+    #[must_use]
+    pub const fn excel_models(&self) -> &super::ExcelModels {
+        &self.excel_models
+    }
+
+    #[must_use]
+    pub fn responses_upstream_for_model(&self, model: &str) -> super::ResponsesUpstream {
+        if self.responses_upstream == super::ResponsesUpstream::Excel
+            && self.excel_models.contains(model)
+        {
+            super::ResponsesUpstream::Excel
+        } else {
+            super::ResponsesUpstream::Codex
+        }
     }
 
     #[must_use]

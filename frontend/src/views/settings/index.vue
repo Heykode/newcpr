@@ -52,7 +52,6 @@ const {
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
   requestIntervalMsValue,
-  turnStateProbeConcurrencyValue,
   responsesMaxDecompressedBodyBytesValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
@@ -137,10 +136,6 @@ watch(
         v-model:request-interval-ms="requestIntervalMsValue"
         v-model:responses-max-decompressed-body-bytes="responsesMaxDecompressedBodyBytesValue"
         v-model:disable-fast="form.disableFast"
-        v-model:turn-state-injection-enabled="form.turnStateInjectionEnabled"
-        v-model:turn-state-models-text="form.turnStateModelsText"
-        v-model:turn-state-probe-proxy-id="form.turnStateProbeProxyId"
-        v-model:turn-state-probe-concurrency="turnStateProbeConcurrencyValue"
         v-model:request-tuning="form.requestTuning"
         :disabled="loading || saving"
       />

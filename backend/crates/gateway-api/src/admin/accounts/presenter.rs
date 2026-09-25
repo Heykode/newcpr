@@ -112,6 +112,8 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         error_message: projection.error_message,
         enabled: account.enabled,
         turn_state_injection_enabled: account.turn_state_injection_enabled,
+        responses_upstream: account.responses_upstream,
+        excel_models: account.excel_models,
         turn_state: turn_state.map(|status| {
             let gateway_admin::model::accounts::AccountTurnStateStatus {
                 enabled,

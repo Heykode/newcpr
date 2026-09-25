@@ -62,11 +62,6 @@ onScopeDispose(() => controller.abort())
         {{ selected.config.enabled ? '启用' : '暂停' }}
       </dd>
       <dt class="text-cp-text-secondary">
-        State 开关
-      </dt><dd class="m-0">
-        {{ selected.config.turnStateInjectionEnabled ? '开启' : '关闭' }}
-      </dd>
-      <dt class="text-cp-text-secondary">
         账号并发
       </dt><dd class="m-0">
         {{ selected.config.concurrencyLimit ?? '默认值' }}

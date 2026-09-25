@@ -80,16 +80,6 @@ impl CodexWebSocketConnection {
             connection: Self::responses(base_url, websocket_key, business_headers),
             payload_text: websocket_response_create_payload_text(request)?,
             continuation: WebSocketContinuationRequirement::from_request(request),
-            injected_turn_state: request.managed_turn_state_version.and_then(|_| {
-                request
-                    .body()
-                    .get("client_metadata")?
-                    .get("x-codex-turn-state")?
-                    .as_str()
-                    .map(|value| {
-                        gateway_core::provider_ports::OpaqueTurnState::new(value.to_owned())
-                    })
-            }),
         })
     }
 }

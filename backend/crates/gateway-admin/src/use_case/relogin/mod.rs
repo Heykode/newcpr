@@ -534,6 +534,8 @@ impl DefaultReloginService {
                         custom_name: None,
                         enabled: true,
                         turn_state_injection_enabled: None,
+                        responses_upstream: None,
+                        excel_models: None,
                         concurrency_limit: None,
                         weight: crate::model::accounts::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),

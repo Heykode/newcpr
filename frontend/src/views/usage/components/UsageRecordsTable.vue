@@ -17,7 +17,6 @@ import UsageModelCell from './UsageModelCell.vue'
 import UsageReasoningEffortCell from './UsageReasoningEffortCell.vue'
 import UsageTokenCell from './UsageTokenCell.vue'
 import UsageTransportBadge from './UsageTransportBadge.vue'
-import UsageTurnStateCell from './UsageTurnStateCell.vue'
 
 // 使用记录表只负责该领域的单元格呈现；筛选与分页由页面组合。
 withDefaults(
@@ -112,10 +111,6 @@ withDefaults(
 
     <template #tokenDetails="{ row }">
       <UsageTokenCell :record="row" />
-    </template>
-
-    <template #turnState="{ row }">
-      <UsageTurnStateCell :record="row" />
     </template>
 
     <template #billing="{ row }">

@@ -554,6 +554,12 @@ impl ProviderResponseObservation {
     }
 
     #[must_use]
+    pub fn with_transport(mut self, transport: UpstreamTransport) -> Self {
+        self.transport = transport;
+        self
+    }
+
+    #[must_use]
     pub const fn with_http_version(mut self, version: UpstreamHttpVersion) -> Self {
         self.http_version = Some(version);
         self

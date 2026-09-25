@@ -270,13 +270,13 @@ for (const mode of ['access_token', 'refresh_token']) {
     assert.deepEqual(body.items, ['synthetic-a', 'synthetic-b', 'synthetic-a'].map(value => ({
       provider: 'openai',
       data: { accounts: [{ [key]: value }] },
-      settings: { customName: 'Import batch', enabled: false, turnStateInjectionEnabled: true, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'] },
+      settings: { customName: 'Import batch', enabled: false, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'] },
       outboundProxyId: 'proxy-a',
     })))
     assert.equal(h.created.length, 1)
     assert.equal(h.state.showCreateModal.value, false)
     assert.equal(h.state.createForm.value.importTexts[mode], '')
-    assert.equal(h.state.createForm.value.turnStateInjectionEnabled, false)
+    assert.equal(Object.hasOwn(h.state.createForm.value, 'turnStateInjectionEnabled'), false)
     assert.equal(h.state.createForm.value.customName, '')
     assert.equal(h.reloads(), 0, 'creation is not proof of account persistence')
     assert.deepEqual(h.notifications.errors, [])
@@ -304,17 +304,18 @@ test('JSON documents retain metadata, multi-account boundaries and provider filt
   }
 })
 
-test('State import defaults off, applies explicitly to OpenAI, and omits other providers', async (t) => {
+test('imports omit retired State and never reset the existing Excel route', async (t) => {
   for (const enabled of [false, true]) {
     const h = mountOnboarding(t)
     h.input('batch', 'json', JSON.stringify({
       documents: ['openai', 'xai'].map(provider => ({ provider, document: { accounts: [] } })),
     }))
-    assert.equal(h.state.createForm.value.turnStateInjectionEnabled, false)
+    assert.equal(Object.hasOwn(h.state.createForm.value, 'turnStateInjectionEnabled'), false)
     h.state.createForm.value.turnStateInjectionEnabled = enabled
     await h.state.handleCreate()
     const [openai, xai] = h.submissions[0].items
-    assert.equal(openai.settings.turnStateInjectionEnabled, enabled)
+    assert.equal(Object.hasOwn(openai.settings, 'turnStateInjectionEnabled'), false)
+    assert.equal(Object.hasOwn(openai.settings, 'responsesUpstream'), false)
     assert.equal(Object.hasOwn(xai.settings, 'turnStateInjectionEnabled'), false)
   }
 })
@@ -566,7 +567,6 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
       concurrencyLimit: null,
       weight: 1,
       groupIds: [],
-      ...(provider === 'openai' ? { turnStateInjectionEnabled: true } : {}),
     })
     assert.equal(h.reloads(), 1)
 

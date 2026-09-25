@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import type { getAccounts } from '@/api'
-import { KeyRound, ShieldCheck } from '@lucide/vue'
+import { KeyRound, Table2 } from '@lucide/vue'
 import { computed } from 'vue'
 
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
-import { useUiClock } from '@/composables/useUiClock'
-import { turnStateBlockReason } from '../utils/turnState'
 import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
@@ -13,8 +11,9 @@ type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
   & Partial<Pick<AccountRow, 'customName'>>
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
-  & Partial<Pick<AccountRow, 'accountId' | 'turnStateInjectionEnabled' | 'turnState'>>
+  & Partial<Pick<AccountRow, 'accountId'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
+  & Partial<Pick<AccountRow, 'responsesUpstream'>>
 
 const props = withDefaults(
   defineProps<{
@@ -63,36 +62,7 @@ const secondaryClass = computed(() =>
 
 const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
 
-const hasTurnStateInjection = computed(() =>
-  props.account.provider === 'openai' && props.account.turnStateInjectionEnabled === true
-  && props.account.turnState?.enabled !== false,
-)
-
-const now = useUiClock()
-const readyModels = computed(() => props.account.turnState?.readyModels
-  .filter(item => Date.parse(item.expiresAt) > now.value.getTime() + 60_000)
-  .map(item => item.model) ?? [])
-const blockedReason = computed(() => turnStateBlockReason(props.account))
-const hasReadyState = computed(() => hasTurnStateInjection.value && !blockedReason.value && readyModels.value.length > 0)
-const turnStateTitle = computed(() => {
-  if (blockedReason.value)
-    return `State：${blockedReason.value}`
-  if (!props.account.turnState)
-    return '账号级 State 注入已开启；总开关关闭、账号停用或状态暂不可用'
-  if (!readyModels.value.length)
-    return 'State 待采集；维护名单中的模型暂不参与新请求调度'
-  const pending = props.account.turnState.requiredModels.filter(model => !readyModels.value.includes(model))
-  return `State 已就绪：${readyModels.value.join('、')}${pending.length ? `；待采集：${pending.join('、')}` : '；全部维护模型已就绪'}`
-})
-
 const avatarToneClass = computed(() => {
-  if (hasTurnStateInjection.value && blockedReason.value)
-    return 'bg-cp-error-container text-cp-error-text ring-2 ring-inset ring-cp-error'
-  if (hasReadyState.value)
-    return 'bg-emerald-100 text-emerald-900 ring-2 ring-inset ring-emerald-500 [html[data-theme=dark]_&]:bg-emerald-950 [html[data-theme=dark]_&]:text-emerald-200 [html[data-theme=dark]_&]:ring-emerald-400'
-  if (hasTurnStateInjection.value)
-    return 'bg-amber-100 text-amber-900 ring-2 ring-inset ring-amber-500 [html[data-theme=dark]_&]:bg-amber-950 [html[data-theme=dark]_&]:text-amber-200 [html[data-theme=dark]_&]:ring-amber-400'
-
   const identity = props.account.id || props.account.email || displayTitle.value
   return stablePresetVisualToneClass(identity)
 })
@@ -103,9 +73,6 @@ const avatarToneClass = computed(() => {
     <span class="relative inline-flex shrink-0">
       <span
         data-swipe-select-handle
-        :data-account-state-avatar="hasTurnStateInjection ? '' : undefined"
-        :data-account-state-ready="hasReadyState ? '' : undefined"
-        :title="hasTurnStateInjection ? turnStateTitle : undefined"
         class="inline-flex items-center justify-center rounded-lg"
         :class="[avatarSizeClass, avatarToneClass]"
       >
@@ -127,21 +94,17 @@ const avatarToneClass = computed(() => {
       >
         <KeyRound class="size-2.5" :stroke-width="2.5" />
       </span>
-      <span
-        v-if="hasTurnStateInjection"
-        data-account-state-mark
-        data-swipe-select-handle
-        class="absolute -bottom-1 -right-1 z-10 inline-flex size-4 items-center justify-center rounded-full border-2 border-cp-bg-container shadow-sm"
-        :class="blockedReason ? 'bg-cp-error text-cp-error-on-container' : hasReadyState ? 'bg-emerald-400 text-emerald-950' : 'bg-amber-400 text-amber-950'"
-        :title="turnStateTitle"
-        :aria-label="turnStateTitle"
-        role="img"
-      >
-        <ShieldCheck class="size-2.5" :stroke-width="2.5" />
-      </span>
     </span>
     <div class="min-w-0 flex-1" data-swipe-select-ignore>
       <div class="flex min-w-0 items-center gap-2">
+        <Table2
+          v-if="account.responsesUpstream === 'excel'"
+          class="size-3.5 shrink-0 text-cp-link"
+          aria-label="Excel 入口"
+          role="img"
+        >
+          <title>Excel 入口</title>
+        </Table2>
         <span :title="displayTitle" class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
           {{ displayTitle }}
         </span>

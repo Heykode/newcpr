@@ -46,6 +46,119 @@ impl CodexProvider {
     }
 }
 
+pub(super) async fn prepare_excel_compact(
+    body: &[u8],
+    lease: &CodexCredentialLease,
+    context: &AttemptContext,
+    replay: Arc<dyn gateway_core::provider_ports::ProviderReplayPort>,
+    image_relay: &Arc<crate::transport::excel::image_relay::ImageRelay>,
+) -> Result<CodexResponsesRequest, ProviderError> {
+    let mut body: Map<String, Value> = serde_json::from_slice(body).map_err(|_| {
+        compact_error(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+            "invalid compact body",
+        )
+    })?;
+    body.insert("tool_choice".into(), "none".into());
+    let mut request = CodexResponsesRequest::from_body(body);
+    super::excel::prepare_excel(&mut request, lease, context, replay, image_relay).await?;
+    let prepared = request.excel.as_mut().expect("prepared Excel request");
+    prepared.replay = None;
+    let input = prepared
+        .body
+        .get_mut("input")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            compact_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+                "invalid compact input",
+            )
+        })?;
+    input.push(json!({"type":"compaction_trigger"}));
+    Ok(request)
+}
+
+pub(super) async fn collect_excel_compact(
+    client: &CodexBackendClient,
+    request: &CodexResponsesRequest,
+    context: CodexRequestContext<'_>,
+) -> Result<CodexBackendJsonResponse, MappedProviderFailure> {
+    let mut response = client
+        .create_response_stream_http_sse(request, context)
+        .await
+        .map_err(map_handshake_error)?;
+    let mut decoder = CodexCanonicalDecoder::new(request.model());
+    let mut bytes = 0_usize;
+    while let Some(chunk) = response.body.next().await {
+        let chunk = chunk.map_err(map_stream_error)?;
+        bytes = bytes.saturating_add(chunk.len());
+        if bytes > 16 * 1024 * 1024 {
+            return Err(MappedProviderFailure::plain(compact_error(
+                ProviderErrorKind::Protocol,
+                UpstreamSendState::Sent,
+                "Excel compact response exceeds its size limit",
+            )));
+        }
+        validate_compact_events(decoder.push(&chunk), &response.diagnostics)
+            .map_err(|failure| *failure)?;
+    }
+    validate_compact_events(decoder.finish(), &response.diagnostics).map_err(|failure| *failure)?;
+    let mut completed = request
+        .excel
+        .as_ref()
+        .and_then(|prepared| {
+            prepared
+                .completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        })
+        .ok_or_else(|| {
+            MappedProviderFailure::plain(compact_error(
+                ProviderErrorKind::Protocol,
+                UpstreamSendState::Sent,
+                "Excel compact did not complete",
+            ))
+        })?;
+    completed["object"] = "response.compaction".into();
+    let body = serde_json::to_vec(&completed)
+        .map(Bytes::from)
+        .map_err(|_| {
+            MappedProviderFailure::plain(compact_error(
+                ProviderErrorKind::Protocol,
+                UpstreamSendState::Sent,
+                "invalid Excel compact response",
+            ))
+        })?;
+    Ok(CodexBackendJsonResponse {
+        body,
+        set_cookie_headers: Vec::new(),
+        rate_limit_headers: response.rate_limit_headers,
+        rate_limit_observed_at: response.rate_limit_observed_at,
+        diagnostics: response.diagnostics,
+        response_metadata: response.response_metadata,
+        transport_metrics: response.transport_metrics,
+    })
+}
+
+fn validate_compact_events(
+    outcome: crate::transport::canonical::CodexCanonicalOutcome,
+    diagnostics: &CodexUpstreamDiagnostics,
+) -> Result<(), Box<MappedProviderFailure>> {
+    if let crate::transport::canonical::CodexCanonicalOutcome::Failed(failure) = outcome {
+        let (_, error, semantic_output) = failure.into_parts();
+        return Err(Box::new(map_canonical_error(
+            error,
+            diagnostics,
+            &[],
+            ReplayBoundary::from_semantic_output(semantic_output),
+        )));
+    }
+    Ok(())
+}
+
 fn compact_body(compact: &CompactRequest, model: &UpstreamModelId) -> Result<Bytes, ProviderError> {
     let invalid = || {
         compact_error(

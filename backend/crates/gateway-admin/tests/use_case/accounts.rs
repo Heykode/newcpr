@@ -1809,6 +1809,8 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 turn_state_injection_enabled: Some(false),
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -1849,6 +1851,8 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
                 account_id: "acct_test".to_owned(),
                 enabled: false,
                 turn_state_injection_enabled: Some(false),
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: Vec::new(),
@@ -1894,6 +1898,8 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
                 account_ids: vec!["acct_openai".to_owned(), "acct_xai".to_owned()],
                 enabled: Some(false),
                 turn_state_injection_enabled: None,
+                responses_upstream: Default::default(),
+                excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: Some(gateway_core::account::AccountWeight::DEFAULT),
                 group_ids: Some(Vec::new()),
@@ -2425,7 +2431,7 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
 }
 
 #[tokio::test]
-async fn account_state_readiness_respects_runtime_cooldown_without_hiding_cached_metadata() {
+async fn retired_state_metadata_is_absent_from_account_list_and_detail_in_every_status() {
     use gateway_admin::model::accounts::{
         AccountStatus, AccountTurnStateModelStatus, AccountTurnStateSlotStatus,
         AccountTurnStateStatus,
@@ -2483,18 +2489,8 @@ async fn account_state_readiness_respects_runtime_cooldown_without_hiding_cached
             .quota(&ProviderAccountId::new(id.clone()).unwrap(), false)
             .await
             .unwrap();
-        for state in [
-            page.items[0].turn_state.as_ref().unwrap(),
-            detail.turn_state.as_ref().unwrap(),
-        ] {
-            assert!(state.enabled);
-            assert_eq!(state.required_models, ["model-a"]);
-            assert_eq!(
-                state.ready_models.len(),
-                usize::from(status == AccountStatus::Normal)
-            );
-            assert_eq!(state.models.as_slice(), std::slice::from_ref(&model));
-        }
+        assert!(page.items[0].turn_state.is_none());
+        assert!(detail.turn_state.is_none());
     }
 }
 
@@ -3554,6 +3550,8 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         next_refresh_at: Some(now + TimeDelta::minutes(30)),
         enabled: true,
         turn_state_injection_enabled: false,
+        responses_upstream: Default::default(),
+        excel_models: Default::default(),
         concurrency_limit: None,
         weight: gateway_core::account::AccountWeight::DEFAULT,
         credential_state: CredentialState::Ready,
@@ -3878,6 +3876,8 @@ pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImport
         custom_name: None,
         enabled: false,
         turn_state_injection_enabled: None,
+        responses_upstream: Default::default(),
+        excel_models: Default::default(),
         concurrency_limit: Some(
             gateway_core::account::AccountConcurrencyLimit::new(3).expect("concurrency"),
         ),

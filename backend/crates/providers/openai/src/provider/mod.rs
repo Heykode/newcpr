@@ -78,7 +78,7 @@ use crate::transport::protocol::responses::{
 };
 use crate::transport::protocol::websocket::WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 use crate::transport::request::{
-    CodexRequestEncodeError, RequestAccountScope, apply_managed_turn_state,
+    CodexRequestEncodeError, RequestAccountScope,
     encode_generate_request_with_location as encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
@@ -95,19 +95,18 @@ use crate::transport::{
 
 mod cache_diagnostics;
 mod compact;
+mod excel;
 mod execution;
 mod failure;
 mod observation;
-mod turn_state;
-mod turn_state_probe_response;
 mod workers;
 
+use excel::prepare_excel;
 use execution::*;
 #[doc(hidden)]
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
-pub(crate) use turn_state::{CodexTurnStateMaintenanceService, CodexTurnStateManager};
 pub(crate) use workers::worker_contributions;
 
 const PROVIDER_NAME: &str = "openai";
@@ -155,10 +154,25 @@ pub struct CodexProvider {
     session_transport_recovery: CodexSessionTransportRecovery,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
-    turn_states: Option<CodexTurnStateManager>,
+    excel_replay: Arc<dyn gateway_core::provider_ports::ProviderReplayPort>,
+    excel_image_relay: Arc<crate::transport::excel::image_relay::ImageRelay>,
 }
 
 impl CodexProvider {
+    pub(crate) fn with_excel_image_relay(
+        mut self,
+        relay: Arc<crate::transport::excel::image_relay::ImageRelay>,
+    ) -> Self {
+        self.excel_image_relay = relay;
+        self
+    }
+    pub(crate) fn with_excel_replay(
+        mut self,
+        replay: Arc<dyn gateway_core::provider_ports::ProviderReplayPort>,
+    ) -> Self {
+        self.excel_replay = replay;
+        self
+    }
     pub(super) fn client_for_request(
         &self,
         context: &AttemptContext,
@@ -188,11 +202,6 @@ impl CodexProvider {
     ) -> Self {
         self.client = self.client.with_request_tuning(request_tuning.clone());
         self.request_tuning = Some(request_tuning);
-        self
-    }
-
-    pub(crate) fn with_turn_state_manager(mut self, manager: CodexTurnStateManager) -> Self {
-        self.turn_states = Some(manager);
         self
     }
 
@@ -242,7 +251,10 @@ impl CodexProvider {
             session_transport_recovery: CodexSessionTransportRecovery::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
-            turn_states: None,
+            excel_replay: Arc::new(gateway_core::provider_ports::UnavailableProviderReplay),
+            excel_image_relay: Arc::new(crate::transport::excel::image_relay::ImageRelay::new(
+                None,
+            )),
         })
     }
 
@@ -526,6 +538,16 @@ impl Provider for CodexProvider {
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
+        let responses_upstream = lease
+            .account()
+            .responses_upstream_for_model(upstream_model.as_str());
+        let excel = responses_upstream == gateway_core::account::ResponsesUpstream::Excel;
+        if previous_session
+            .as_ref()
+            .is_some_and(|state| state.responses_upstream != responses_upstream)
+        {
+            return Err(continuation_replay_required_error("upstream_changed"));
+        }
         // 首字计时的起点：账号选择完成之后、上游建立之前。
         let output_started_at = Instant::now();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
@@ -623,35 +645,6 @@ impl Provider for CodexProvider {
         ) {
             crate::transport::request::normalize_reasoning_replay(upstream_request.body_mut());
         }
-        if context.continuation_attempt() != ContinuationAttempt::Native
-            && let Some(manager) = &self.turn_states
-            && !manager
-                .allows_new_request(lease.account(), upstream_model.as_str())
-                .await
-        {
-            return Err(provider_error(
-                ProviderErrorKind::Unavailable,
-                UpstreamSendState::NotSent,
-            ));
-        }
-        if context.continuation_attempt() == ContinuationAttempt::None
-            && !continuation_requested
-            && upstream_request.previous_response_id().is_none()
-            && upstream_request.turn_state.is_none()
-            && let Some(turn_states) = &self.turn_states
-        {
-            if let Some((state, version, expires_at)) = turn_states
-                .active(lease.account(), upstream_model, SystemTime::now())
-                .await
-            {
-                apply_managed_turn_state(&mut upstream_request, state, version, expires_at);
-            } else if turn_states.feature_enabled_for(lease.account(), upstream_model) {
-                return Err(provider_error(
-                    ProviderErrorKind::Unavailable,
-                    UpstreamSendState::NotSent,
-                ));
-            }
-        }
         // Preserve the established identity/affinity inputs above. Only the
         // selected account's outbound copy receives the effective location.
         if context.request_tuning().openai_location_override_enabled {
@@ -665,6 +658,16 @@ impl Provider for CodexProvider {
                 chrono::Utc::now(),
                 location,
             );
+        }
+        if excel {
+            prepare_excel(
+                &mut upstream_request,
+                &lease,
+                &context,
+                Arc::clone(&self.excel_replay),
+                &self.excel_image_relay,
+            )
+            .await?;
         }
         let requirement = transport_requirement(&upstream_request);
         let requested_transport = selected_transport(&upstream_request);
@@ -684,9 +687,12 @@ impl Provider for CodexProvider {
             provider_kind,
             upstream_model.clone(),
             lease.account_id().clone(),
-            UpstreamTransport::new(transport_name(transport)).map_err(|_| {
-                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-            })?,
+            UpstreamTransport::new(if excel {
+                "excel_http_sse"
+            } else {
+                transport_name(transport)
+            })
+            .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?,
         )
         .with_selection_observation(ProviderSelectionObservation::new(
             account_selection_wait_ms,
@@ -695,6 +701,7 @@ impl Provider for CodexProvider {
         let response_store = upstream_request.store();
         let session_capture =
             (!continuation_requested || previous_session.is_some()).then(|| OpenAiSessionCapture {
+                responses_upstream,
                 account_id: lease.account_id().as_str().to_owned(),
                 conversation_id: upstream_request.local_conversation_id.clone(),
                 turn_state: upstream_request.turn_state.clone(),
@@ -721,7 +728,13 @@ impl Provider for CodexProvider {
                 .map_err(|_| {
                     provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
                 })?,
-            response_origin: self.responses_url.clone(),
+            response_origin: if excel {
+                Url::parse(crate::transport::excel::RESPONSES_URL).map_err(|_| {
+                    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+                })?
+            } else {
+                self.responses_url.clone()
+            },
             request: upstream_request,
             upstream_model: upstream_model.clone(),
             transport_policy: transport,
@@ -741,7 +754,6 @@ impl Provider for CodexProvider {
                 self.stream_max_retries
             },
             session_capture,
-            turn_states: self.turn_states.clone(),
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {

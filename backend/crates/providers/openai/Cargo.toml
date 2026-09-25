@@ -22,6 +22,8 @@ gateway-core = { path = "../../gateway-core" }
 gateway-protocol = { path = "../../gateway-protocol" }
 getrandom = "0.4.3"
 hex = "0.4.3"
+jsonschema = { version = "=0.57.0", default-features = false, features = ["arbitrary-precision"] }
+imagesize = "=0.14.0"
 # TLS 依赖按官方 Core 锁文件固定，包含用于约束传递依赖的直接声明。
 # 升级前须重复采样 ClientHello，核对算法、扩展集合及排序约束、key_share 与 ALPN。
 aws-lc-rs = "=1.18.1"
@@ -33,7 +35,7 @@ openssl = { version = "=0.10.81", features = ["vendored"] }
 # HTTP 使用 native-tls + ALPN；rustls 保留给 CPR WebSocket 和代理 TLS。
 # 显式列出 features，避免引入 reqwest 默认压缩特性。
 native-tls = "=0.2.18"
-reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "cookies", "rustls-tls-native-roots", "native-tls-alpn", "http2", "socks"] }
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "stream", "multipart", "cookies", "rustls-tls-native-roots", "native-tls-alpn", "http2", "socks"] }
 roxmltree = "0.21.1"
 semver = "1.0.27"
 # 与官方 rustls 路径一致：aws-lc 支持 P-521，优先提供 X25519MLKEM768。

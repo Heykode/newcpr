@@ -9,7 +9,6 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
-import TurnStateProbeProxyField from './TurnStateProbeProxyField.vue'
 
 defineProps<{ disabled?: boolean }>()
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
@@ -18,10 +17,6 @@ const refreshConcurrency = defineModel<string>('refreshConcurrency', { required:
 const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
 const responsesMaxDecompressedBodyBytes = defineModel<string>('responsesMaxDecompressedBodyBytes', { required: true })
 const disableFast = defineModel<boolean>('disableFast', { required: true })
-const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
-const turnStateModelsText = defineModel<string>('turnStateModelsText', { required: true })
-const turnStateProbeProxyId = defineModel<string>('turnStateProbeProxyId', { required: true })
-const turnStateProbeConcurrency = defineModel<string>('turnStateProbeConcurrency', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
 const customLocation = computed({
@@ -164,49 +159,6 @@ const tuningValues = {
         </div>
         <BaseSwitch v-model="disableFast" label="全局关闭 Fast 档位" />
       </div>
-    </div>
-
-    <div class="mt-5 border-t border-(--cp-border-color) pt-4">
-      <div class="flex items-center justify-between gap-3">
-        <div>
-          <h3 class="m-0 text-sm font-medium text-cp-text-secondary">
-            OpenAI Turn State 注入
-          </h3>
-          <p class="mt-1 mb-0 text-cp-xs text-cp-text-tertiary">
-            默认关闭；账号还需单独开启才会生效
-          </p>
-        </div>
-        <BaseSwitch v-model="turnStateInjectionEnabled" label="OpenAI Turn State 注入" />
-      </div>
-      <BaseForm class="mt-4 max-w-6xl">
-        <TurnStateProbeProxyField v-model="turnStateProbeProxyId" :disabled="disabled" />
-        <BaseFormItem label="第四轮起探测并发">
-          <BaseInput
-            v-model="turnStateProbeConcurrency"
-            class="max-w-48"
-            aria-label="State 第四轮起探测并发"
-            type="number"
-            min="1"
-            max="10"
-            step="1"
-            :disabled="disabled"
-          >
-            <template #prefix>
-              <Gauge class="size-4" />
-            </template>
-          </BaseInput>
-        </BaseFormItem>
-        <BaseFormItem
-          label="维护模型名单"
-          description="使用逗号或换行分隔，按路由后的上游模型匹配"
-        >
-          <BaseInput
-            v-model="turnStateModelsText"
-            aria-label="Turn State 维护模型名单"
-            placeholder="gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra"
-          />
-        </BaseFormItem>
-      </BaseForm>
     </div>
 
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">

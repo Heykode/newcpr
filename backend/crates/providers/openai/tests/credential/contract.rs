@@ -415,6 +415,84 @@ fn selector_uses_frozen_global_account_policy_for_lease() {
 }
 
 #[test]
+fn excel_route_fence_excludes_codex_retries_and_unselected_models() {
+    use gateway_core::account::ResponsesUpstream;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "fixture-primary");
+    create_account(&store, "acct_other", "fixture-other");
+    store.set_responses_upstream("acct_primary", ResponsesUpstream::Excel);
+    let selector = selector(&store, Arc::new(TestLeaseCoordinator::default()));
+    let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let attempt = attempt(BTreeSet::new());
+    assert!(attempt.freeze_provider_route("excel"));
+    let lease = block_on(selector.select(&SelectCodexCredential {
+        upstream_model: "gpt-5.6-sol",
+        request_url: &url,
+        attempt: &attempt,
+        session_affinity_key: None,
+    }))
+    .unwrap();
+    assert_eq!(lease.account_id().as_str(), "acct_primary");
+    drop(lease);
+    assert!(!attempt.freeze_provider_route("codex"));
+    store.set_responses_upstream("acct_primary", ResponsesUpstream::Codex);
+    assert!(
+        block_on(selector.select(&SelectCodexCredential {
+            upstream_model: "gpt-5.6-sol",
+            request_url: &url,
+            attempt: &attempt,
+            session_affinity_key: None,
+        }))
+        .is_err()
+    );
+    store.set_responses_upstream("acct_primary", ResponsesUpstream::Excel);
+    assert!(
+        block_on(selector.select(&SelectCodexCredential {
+            upstream_model: "unverified-model",
+            request_url: &url,
+            attempt: &attempt,
+            session_affinity_key: None,
+        }))
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn excel_model_routes_match_with_and_without_capacity_wait() {
+    use std::sync::atomic::Ordering;
+    for waiting in [false, true] {
+        for (model, route) in [("gpt-5.4", "codex"), ("gpt-5.6-sol", "excel")] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_primary", "fixture-primary");
+            store.set_responses_upstream(
+                "acct_primary",
+                gateway_core::account::ResponsesUpstream::Excel,
+            );
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            let selector = selector(&store, leases)
+                .with_account_concurrency(capacity_handle(&["acct_primary"], 1));
+            let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+            let mut attempt = attempt(BTreeSet::new());
+            if waiting {
+                attempt = attempt.with_request_tuning(capacity_tuning());
+            }
+            let lease = selector
+                .select(&SelectCodexCredential {
+                    upstream_model: model,
+                    request_url: &url,
+                    attempt: &attempt,
+                    session_affinity_key: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(lease.account_id().as_str(), "acct_primary");
+            assert_eq!(attempt.provider_route(), Some(route), "waiting={waiting}");
+        }
+    }
+}
+
+#[test]
 fn selector_uses_the_account_concurrency_override_for_the_redis_lease() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_primary", "at-primary");

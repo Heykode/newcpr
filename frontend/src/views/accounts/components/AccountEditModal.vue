@@ -25,7 +25,8 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ required: true })
 const customName = defineModel<string>('customName', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
-const turnStateInjectionEnabled = defineModel<boolean>('turnStateInjectionEnabled', { required: true })
+const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
+const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol' })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
@@ -64,7 +65,8 @@ const egressSaving = shallowRef(false)
       <AccountSettingsFields
         v-model:custom-name="customName"
         v-model:enabled="enabled"
-        v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
+        v-model:excel-enabled="excelEnabled"
+        v-model:excel-models="excelModels"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
         v-model:model-access="modelAccess"
@@ -75,7 +77,7 @@ const egressSaving = shallowRef(false)
         model-access-available
         :groups="groups"
         :groups-loading="groupsLoading"
-        :turn-state-available="account.provider === 'openai'"
+        :excel-available="account.provider === 'openai' && account.authenticationKind === 'oauth'"
         :disabled="saving || egressSaving"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"

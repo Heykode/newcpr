@@ -387,18 +387,7 @@ impl DefaultAccountsService {
             .and_then(|(window, _)| window.local_usage.clone());
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
-            turn_state: self
-                .accounts
-                .load_turn_state_status(std::slice::from_ref(&stored.account.id))
-                .await
-                .unwrap_or_default()
-                .remove(&stored.account.id)
-                .map(|mut state| {
-                    if stored.projection.status != gateway_core::account::AccountStatus::Normal {
-                        state.ready_models.clear();
-                    }
-                    state
-                }),
+            turn_state: None,
             effective_concurrency_limit: stored
                 .account
                 .concurrency_limit
@@ -516,11 +505,6 @@ impl AccountsService for DefaultAccountsService {
         self.attach_quota_local_usage(&page.items, &mut quotas)
             .await?;
         let default_concurrency = self.default_concurrency_limit().await?;
-        let mut turn_states = self
-            .accounts
-            .load_turn_state_status(&ids)
-            .await
-            .unwrap_or_default();
         let items = page
             .items
             .into_iter()
@@ -534,12 +518,7 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
-                    turn_state: turn_states.remove(&item.account.id).map(|mut state| {
-                        if item.projection.status != gateway_core::account::AccountStatus::Normal {
-                            state.ready_models.clear();
-                        }
-                        state
-                    }),
+                    turn_state: None,
                     effective_concurrency_limit: item
                         .account
                         .concurrency_limit
@@ -674,6 +653,8 @@ impl AccountsService for DefaultAccountsService {
                         account_ids: vec![account_id.to_string()],
                         enabled: Some(true),
                         turn_state_injection_enabled: None,
+                        responses_upstream: None,
+                        excel_models: None,
                         concurrency_limit: None,
                         weight: None,
                         group_ids: None,
@@ -707,7 +688,19 @@ impl AccountsService for DefaultAccountsService {
             .transpose()?;
         let account_id = ProviderAccountId::new(command.account_id.clone())
             .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
-        let (_, provider) = self.provider_for_account(&account_id).await?;
+        let (item, provider) = self.provider_for_account(&account_id).await?;
+        if let Some(upstream) = command
+            .excel_models
+            .as_ref()
+            .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+            .or(command.responses_upstream)
+            && !upstream.supports_account(
+                item.account.provider_kind.as_str(),
+                &item.account.authentication_kind,
+            )
+        {
+            return Err(AdminError::invalid("Excel 入口仅支持 OpenAI OAuth 账号"));
+        }
         let enabled = command.enabled;
         let result = self
             .accounts
@@ -750,6 +743,18 @@ impl AccountsService for DefaultAccountsService {
         >::new();
         for account_id in &account_ids {
             let (item, provider) = self.provider_for_account(account_id).await?;
+            if let Some(upstream) = command
+                .excel_models
+                .as_ref()
+                .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+                .or(command.responses_upstream)
+                && !upstream.supports_account(
+                    item.account.provider_kind.as_str(),
+                    &item.account.authentication_kind,
+                )
+            {
+                return Err(AdminError::invalid("Excel 入口仅支持 OpenAI OAuth 账号"));
+            }
             if command.turn_state_injection_enabled == Some(true)
                 && item.account.provider_kind.as_str() != "openai"
             {

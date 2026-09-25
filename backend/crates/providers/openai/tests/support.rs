@@ -102,6 +102,18 @@ impl MemoryAccountStore {
             .with_scheduling(concurrency_limit, weight);
     }
 
+    pub(crate) fn set_responses_upstream(
+        &self,
+        id: &str,
+        upstream: gateway_core::account::ResponsesUpstream,
+    ) {
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .expect("seeded account");
+        stored.account = stored.account.clone().with_responses_upstream(upstream);
+    }
+
     pub(crate) fn quota_reads(&self) -> usize {
         self.quota_reads.load(Ordering::SeqCst)
     }

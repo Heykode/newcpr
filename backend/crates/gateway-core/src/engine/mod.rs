@@ -319,6 +319,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    provider_route: Arc<std::sync::OnceLock<String>>,
     request_profile: Option<Arc<crate::account::OpaqueProviderData>>,
     disable_fast: bool,
     request_location: Option<crate::account::RequestLocation>,
@@ -329,6 +330,11 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    pub(crate) fn with_provider_route(mut self, route: Arc<std::sync::OnceLock<String>>) -> Self {
+        self.provider_route = route;
+        self
+    }
+
     #[must_use]
     pub fn with_request_profile(
         mut self,
@@ -356,6 +362,7 @@ impl RequestAttemptContext {
     #[must_use]
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
+            provider_route: Arc::new(std::sync::OnceLock::new()),
             request_id,
             client_api_key_ref,
             disable_fast: false,
@@ -413,6 +420,17 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    /// Opaque provider-owned route, frozen across every attempt of one execution.
+    #[must_use]
+    pub fn provider_route(&self) -> Option<&str> {
+        self.request.provider_route.get().map(String::as_str)
+    }
+
+    #[must_use]
+    pub fn freeze_provider_route(&self, route: &str) -> bool {
+        self.request.provider_route.get_or_init(|| route.to_owned()) == route
+    }
+
     #[must_use]
     pub fn request_profile(&self) -> Option<&crate::account::OpaqueProviderData> {
         self.request.request_profile.as_deref()

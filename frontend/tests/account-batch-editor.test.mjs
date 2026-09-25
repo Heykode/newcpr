@@ -9,7 +9,7 @@ import ts from 'typescript'
 import * as vue from 'vue'
 
 const require = createRequire(import.meta.url)
-const updateFields = ['updateEnabled', 'updateTurnStateInjectionEnabled', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
+const updateFields = ['updateEnabled', 'updateExcelEnabled', 'updateExcelModels', 'updateConcurrencyLimit', 'updateWeight', 'updateGroups', 'updateProxy', 'updateCustomName', 'updateModelAccess']
 
 function loadModule(filename, dependencies = {}) {
   const exports = {}
@@ -32,6 +32,7 @@ function account(id, overrides = {}) {
   return {
     id,
     provider: 'openai',
+    authenticationKind: 'oauth',
     enabled: true,
     concurrencyLimit: 8,
     weight: 17,
@@ -133,6 +134,34 @@ function assertNoRequest(editor) {
   assert.equal(editor.state.saving.value, false)
 }
 
+test('Excel model lists require opt-in and can be cleared without changing the route', async (t) => {
+  const editor = mountEditor(t)
+  const { state } = editor
+  state.open()
+  state.excelModels.value = 'invalid/model'
+  state.updateWeight.value = true
+  await state.save()
+  assert.deepEqual(editor.requests[0], { accountIds: ['account-a'], weight: 17 })
+  await vue.nextTick()
+  editor.selectedIds.value = new Set(['account-a'])
+  state.open()
+  assertNoUpdates(state)
+  state.updateExcelModels.value = true
+  state.excelModels.value = 'gpt-5.6-sol, gpt-6-astra, gpt-5.6-sol'
+  await state.save()
+  assert.deepEqual(editor.requests[1], {
+    accountIds: ['account-a'],
+    excelModels: ['gpt-5.6-sol', 'gpt-6-astra'],
+  })
+  await vue.nextTick()
+  editor.selectedIds.value = new Set(['account-a'])
+  state.open()
+  state.updateExcelModels.value = true
+  state.excelModels.value = ''
+  await state.save()
+  assert.deepEqual(editor.requests[2], { accountIds: ['account-a'], excelModels: [] })
+})
+
 test('model restrictions are opt-in, validate only when checked and clear explicitly', async (t) => {
   const editor = mountEditor(t, {
     accounts: [account('account-a', { modelAccess: { mode: 'denylist', models: ['model-a'] } })],
@@ -191,29 +220,29 @@ test('custom names require opt-in, support clear, and ignore unchecked invalid t
   assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], weight: 17 }])
 })
 
-test('turn state batch update is opt-in and does not change ordinary scheduling', async (t) => {
+test('Excel batch update is opt-in and does not change ordinary scheduling', async (t) => {
   const editor = mountEditor(t)
   editor.state.open()
-  assert.equal(editor.state.turnStateAvailable.value, true)
-  assert.equal(editor.state.updateTurnStateInjectionEnabled.value, false)
-  editor.state.turnStateInjectionEnabled.value = true
+  assert.equal(editor.state.excelAvailable.value, true)
+  assert.equal(editor.state.updateExcelEnabled.value, false)
+  editor.state.excelEnabled.value = true
   assert.equal(editor.state.hasUpdates.value, false)
-  editor.state.updateTurnStateInjectionEnabled.value = true
+  editor.state.updateExcelEnabled.value = true
   await editor.state.save()
   assert.deepEqual(editor.requests, [{
     accountIds: ['account-a'],
-    turnStateInjectionEnabled: true,
+    responsesUpstream: 'excel',
   }])
 })
 
-test('mixed providers cannot apply turn state settings but retain weight editing', async (t) => {
+test('mixed providers cannot apply Excel settings but retain weight editing', async (t) => {
   const editor = mountEditor(t, {
     accounts: [account('account-a'), account('account-b', { provider: 'xai' })],
   })
   editor.state.open()
-  assert.equal(editor.state.turnStateAvailable.value, false)
-  editor.state.updateTurnStateInjectionEnabled.value = true
-  editor.state.turnStateInjectionEnabled.value = true
+  assert.equal(editor.state.excelAvailable.value, false)
+  editor.state.updateExcelEnabled.value = true
+  editor.state.excelEnabled.value = true
   assert.equal(editor.state.hasUpdates.value, false)
   editor.state.updateWeight.value = true
   editor.state.weight.value = '20'
@@ -222,6 +251,21 @@ test('mixed providers cannot apply turn state settings but retain weight editing
     accountIds: ['account-a', 'account-b'],
     weight: 20,
   }])
+})
+
+test('Excel batch changes require known OAuth authentication for every selected account', async (t) => {
+  for (const authenticationKind of ['api_key', undefined]) {
+    const editor = mountEditor(t, {
+      accounts: [account('account-a'), account('account-b', { authenticationKind })],
+    })
+    editor.state.open()
+    assert.equal(editor.state.excelAvailable.value, false)
+    editor.state.updateExcelEnabled.value = true
+    editor.state.excelEnabled.value = true
+    assert.equal(editor.state.hasUpdates.value, false)
+    await editor.state.save()
+    assert.equal(editor.requests.length, 0)
+  }
 })
 
 test('batch editor requires fresh opt-ins initially, on every open and after closing', async (t) => {
@@ -335,7 +379,8 @@ test('saving without opt-ins warns and never validates stale values or sends a r
 test('every single field and combination sends exactly the opted-in patch after other fields are unchecked', async (t) => {
   const patches = [
     { enabled: false },
-    { turnStateInjectionEnabled: false },
+    { responsesUpstream: 'codex' },
+    { excelModels: ['gpt-5.6-sol'] },
     { concurrencyLimit: 6 },
     { weight: 23 },
     { groupIds: ['group-new', 'group-other'] },

@@ -1830,5 +1830,69 @@
     "file_sha256": "599c16ccdfdcaa04e5b5e774be30acd6ccb08c4839714be551c145951c8ed1d6",
     "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
     "reason": "Re-reviewed byte-identical synthetic catalog proxy fixture; its address comes from a loopback listener. A model policy field in fixture reconstruction shifts the line by one."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 1996,
+    "file_sha256": "e3f784a3757606860da48ae514a2af3543f9bfe11b4b2f6d75da7333dd9bec59",
+    "line_sha256": "6862af24da40f1fb27238fbd12fd7003095eb431a61ab8a204c232d0967f6400",
+    "reason": "Manually re-reviewed unchanged synthetic loopback persistence fixture against HEAD and its prior line digest. Excel module and optional command fields only shift surrounding code."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/provider_accounts/mod.rs",
+    "rule": "authenticated-url",
+    "line": 2027,
+    "file_sha256": "e3f784a3757606860da48ae514a2af3543f9bfe11b4b2f6d75da7333dd9bec59",
+    "line_sha256": "2f105ffaa03b3a19eb82583eb87acb5968025d92670727409f34fa8efb0bf32d",
+    "reason": "Manually re-reviewed byte-identical normalized loopback read-back assertion. Excel configuration additions do not change the synthetic proxy or credential-preservation test."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 249,
+    "file_sha256": "4d228226179d6709ad7174ec872a301c9f3f56feda5cebd30184d710090faaad",
+    "line_sha256": "93d0ff73a9b09d07c110396f0f160d7de1157b9ce425eab28f50522ce6003836",
+    "reason": "Manually re-reviewed unchanged loopback batch-binding fixture; this file only adds default Excel fields to existing command constructors."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 360,
+    "file_sha256": "4d228226179d6709ad7174ec872a301c9f3f56feda5cebd30184d710090faaad",
+    "line_sha256": "2133a112ed95d2b03ec9117e71ce6369376db6aa6e0573e1a94bac70c0ad611c",
+    "reason": "Manually re-reviewed unchanged synthetic loopback account-removal fixture and prior line digest. No live proxy is contacted."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 839,
+    "file_sha256": "4d228226179d6709ad7174ec872a301c9f3f56feda5cebd30184d710090faaad",
+    "line_sha256": "c303b8dd7be715b4f7bf9b2bef24890b76314979515dbc4179748a306dc5f9de",
+    "reason": "Manually re-reviewed byte-identical synthetic managed-proxy persistence fixture; Excel command fields shift its position without changing test values."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1004,
+    "file_sha256": "4d228226179d6709ad7174ec872a301c9f3f56feda5cebd30184d710090faaad",
+    "line_sha256": "6a1207f57d7e65b1bb32f4e52105a6e4b5f88e10db6c6eb0dd1c452866652e7a",
+    "reason": "Manually re-reviewed unchanged legacy loopback catalog fixture used only in an isolated test schema. Content matches HEAD and the prior reviewed line."
+  },
+  {
+    "path": "backend/crates/gateway-store/tests/postgres/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 1078,
+    "file_sha256": "4d228226179d6709ad7174ec872a301c9f3f56feda5cebd30184d710090faaad",
+    "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
+    "reason": "Manually re-reviewed unchanged synthetic loopback migration SQL against HEAD. Only optional Excel command fields were added elsewhere in the file."
+  },
+  {
+    "path": "backend/crates/providers/openai/src/transport/excel/image_relay.rs",
+    "rule": "authenticated-url",
+    "line": 269,
+    "file_sha256": "e6d5f4f96b83f872cad249d47e6a0ef3de3cf7708e515a3292a2e7982bdbfc34",
+    "line_sha256": "e726975f8acce9cd62c0b1dd02916ba1d9c4237d9cd82989da984170434a390d",
+    "reason": "Manually reviewed new parser rejection fixture: obvious synthetic user/pass on reserved example.com. The local validate_origin assertion rejects userinfo without making a network request."
   }
 ]

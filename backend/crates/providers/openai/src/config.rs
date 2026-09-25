@@ -34,6 +34,8 @@ const fn default_stream_max_retries() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct OpenAiConfig {
     #[serde(default)]
+    pub excel_image_relay_public_url: Option<String>,
+    #[serde(default)]
     pub api: CodexApiConfig,
     #[serde(default)]
     pub ws_pool: CodexWebSocketPoolSettings,
@@ -59,6 +61,13 @@ impl OpenAiConfig {
         self.quota.validate()?;
         self.auth.validate()?;
         self.wire_profile.validate()?;
+        if self
+            .excel_image_relay_public_url
+            .as_deref()
+            .is_some_and(|url| !crate::transport::excel::image_relay::validate_origin(url))
+        {
+            return Err(OpenAiConfigError::InvalidExcelImageRelay);
+        }
         self.identity_secret_path = runtime_data_dir.join("identity_hmac_secret");
         Ok(())
     }
@@ -118,6 +127,7 @@ impl OpenAiConfig {
 impl Default for OpenAiConfig {
     fn default() -> Self {
         Self {
+            excel_image_relay_public_url: None,
             api: CodexApiConfig::default(),
             ws_pool: CodexWebSocketPoolSettings::default(),
             quota: CodexQuotaSettings::default(),
@@ -417,6 +427,8 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum OpenAiConfigError {
+    #[error("Excel image relay requires a public HTTPS origin")]
+    InvalidExcelImageRelay,
     #[error("OpenAI configuration field is invalid: {0}")]
     InvalidField(&'static str),
 }

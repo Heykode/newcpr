@@ -27,7 +27,7 @@ const { resolveColumns } = load(new URL('../src/components/base/BaseTable/column
 
 test('State preview uses a compact column without widening adjacent numeric columns', () => {
   const columns = resolveColumns(usageRecordColumns)
-  assert.equal(columns.find(column => column.key === 'turnState').basisWidth, 144)
+  assert.equal(columns.some(column => column.key === 'turnState'), false)
   assert.equal(columns.find(column => column.key === 'tokenDetails').basisWidth, 184)
   assert.equal(columns.find(column => column.key === 'billing').basisWidth, 144)
 })

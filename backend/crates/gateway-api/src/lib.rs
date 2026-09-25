@@ -30,6 +30,7 @@ use crate::openai::service::OpenAiService;
 
 pub mod admin;
 mod health;
+mod image_relay;
 pub mod openai;
 
 /// API-owned HTTP 与静态资源配置。
@@ -112,6 +113,15 @@ pub struct ApiBundle {
 }
 
 impl ApiBundle {
+    /// Capability URLs must not enter the normal URI access trace.
+    pub fn with_image_relay(
+        mut self,
+        source: Arc<dyn gateway_core::provider_ports::TemporaryImageSource>,
+    ) -> Self {
+        self.router = self.router.merge(image_relay::router(source));
+        self
+    }
+
     pub fn router(self) -> Router {
         self.router
     }

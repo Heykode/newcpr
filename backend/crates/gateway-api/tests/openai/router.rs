@@ -10,6 +10,74 @@ use super::models::ModelsExecution;
 const REMOVED_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 #[tokio::test]
+async fn excel_image_capability_download_is_uncached_and_missing_tokens_are_404() {
+    use gateway_core::provider_ports::{TemporaryImage, TemporaryImageSource};
+    use std::sync::Arc;
+    struct FixtureImages;
+    impl TemporaryImageSource for FixtureImages {
+        fn read(&self, token: &str) -> Option<TemporaryImage> {
+            (token == "fixture-capability").then(|| TemporaryImage {
+                content_type: "image/png",
+                bytes: bytes::Bytes::from_static(b"fixture-image"),
+            })
+        }
+    }
+    let admin = crate::admin::AdminTestFixture::new().await;
+    let router = gateway_api::initialize(
+        gateway_api::ApiConfig {
+            asset_directory: std::env::temp_dir(),
+            cors_allowed_origins: Vec::new(),
+            request_timeout_seconds: None,
+            request_id_header: "x-request-id".into(),
+        },
+        ModelsExecution::new(),
+        admin.services,
+        Vec::new(),
+        Arc::new(super::EmptyWorkerHealth),
+        Arc::new(super::TestLifecycle::default()),
+    )
+    .unwrap()
+    .with_image_relay(Arc::new(FixtureImages))
+    .router();
+    for (token, expected) in [
+        ("fixture-capability", StatusCode::OK),
+        ("missing", StatusCode::NOT_FOUND),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::get(format!("/_cpr/excel-images/{token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert!(
+            response.headers()["cache-control"]
+                .to_str()
+                .unwrap()
+                .contains("no-store")
+        );
+        if expected == StatusCode::OK {
+            assert_eq!(response.headers()["content-type"], "image/png");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            assert_eq!(
+                response.headers()["content-security-policy"],
+                "default-src 'none'"
+            );
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                b"fixture-image"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn browser_origin_controls_http_admin_sessions_without_configuration() {
     use axum::body::to_bytes;
     use serde_json::{Value, json};

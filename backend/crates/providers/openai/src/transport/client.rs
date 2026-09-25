@@ -51,8 +51,6 @@ const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 const MAX_CACHED_REQWEST_CLIENTS: usize = 256;
 type ReqwestClientCacheKey = (Option<String>, String, String);
-type ProbeProxyClientCacheKey = (Option<String>, String);
-type ProbeProxyClientCache = Mutex<Option<(ProbeProxyClientCacheKey, Client)>>;
 
 struct ReqwestClientCacheEntry {
     account_id: String,
@@ -99,40 +97,6 @@ static REQWEST_CLIENTS: OnceLock<Mutex<ReqwestClientCache>> = OnceLock::new();
 
 fn reqwest_clients() -> &'static Mutex<ReqwestClientCache> {
     REQWEST_CLIENTS.get_or_init(|| Mutex::new(ReqwestClientCache::default()))
-}
-
-fn probe_proxy_http_client(
-    proxy: &gateway_core::account::OutboundProxy,
-) -> Result<Client, CodexClientError> {
-    static CLIENT: OnceLock<ProbeProxyClientCache> = OnceLock::new();
-    let key = (
-        custom_ca_env_cache_key(),
-        egress_key("turn-state-probe", Some(proxy)),
-    );
-    let mut cached = CLIENT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((cached_key, client)) = cached.as_ref()
-        && cached_key == &key
-    {
-        return Ok(client.clone());
-    }
-    // Cache TLS/client configuration, never a live probe connection or business pool.
-    let client = build_reqwest_native_client_with_custom_ca(
-        Client::builder()
-            .no_proxy()
-            .proxy(
-                reqwest::Proxy::all(proxy.expose_url())
-                    .map_err(|_| CodexEgressError::ClientConfiguration)?,
-            )
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
-            .http1_only()
-            .pool_max_idle_per_host(0),
-    )?;
-    *cached = Some((key, client.clone()));
-    Ok(client)
 }
 
 /// 构建带缓存、自动协商 HTTP/2 的 reqwest Client。
@@ -294,8 +258,6 @@ impl fmt::Debug for CodexClientVisibleUpstreamResponse {
 /// Codex 上游 HTTP 客户端错误。
 #[derive(Error)]
 pub enum CodexClientError {
-    #[error("managed turn state is no longer ready")]
-    TurnStateUnavailable,
     /// Reqwest 传输失败。
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
@@ -377,9 +339,6 @@ pub enum CodexClientError {
 impl fmt::Debug for CodexClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TurnStateUnavailable => {
-                formatter.write_str("CodexClientError::TurnStateUnavailable")
-            }
             Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
             Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
             Self::ErrorBodyRead {
@@ -448,7 +407,6 @@ impl CodexClientError {
                 Some(*transport)
             }
             Self::CustomCa(_)
-            | Self::TurnStateUnavailable
             | Self::Egress(_)
             | Self::InvalidHeaderName(_)
             | Self::InvalidHeaderValue(_)
@@ -828,50 +786,9 @@ impl CodexBackendClient {
         Ok(client)
     }
 
-    pub(crate) fn for_probe_source(
-        &self,
-        account: &gateway_core::account::ProviderAccount,
-        source: std::net::Ipv6Addr,
-    ) -> Result<Self, CodexClientError> {
-        let runtime = self
-            .egress_runtime
-            .as_ref()
-            .ok_or(CodexEgressError::Unavailable)?;
-        let mut client = self.clone();
-        client.profile = self.profile.frozen();
-        client.client = runtime.probe_http_client(source)?;
-        client.outbound_proxy = None;
-        client.egress_key = format!("turn-state-probe:{}:{source}", account.id().as_str());
-        client.egress_runtime = None;
-        client.egress_route = None;
-        client.egress_account = None;
-        client.attempt_pinned = true;
-        client.forced_pool_key = None;
-        client.websocket_pool = None;
-        Ok(client)
-    }
-
     pub fn with_egress_runtime(mut self, runtime: Arc<CodexEgressRuntime>) -> Self {
         self.egress_runtime = Some(runtime);
         self
-    }
-
-    pub(crate) fn for_probe_proxy(
-        &self,
-        proxy: &gateway_core::account::OutboundProxy,
-    ) -> Result<Self, CodexClientError> {
-        let mut client = self.clone();
-        client.profile = self.profile.frozen();
-        client.client = probe_proxy_http_client(proxy)?;
-        client.outbound_proxy = Some(proxy.clone());
-        client.egress_key = "turn-state-probe-proxy".to_owned();
-        client.egress_runtime = None;
-        client.egress_route = None;
-        client.egress_account = None;
-        client.attempt_pinned = true;
-        client.forced_pool_key = None;
-        client.websocket_pool = None;
-        Ok(client)
     }
 
     pub fn with_request_tuning(mut self, request_tuning: RequestTuningHandle) -> Self {

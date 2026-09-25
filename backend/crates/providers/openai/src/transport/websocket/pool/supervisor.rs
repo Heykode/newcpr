@@ -174,9 +174,7 @@ impl CodexWebSocketPool {
             .iter()
             .filter_map(|(key, slot)| match slot {
                 WebSocketPoolSlot::Idle { connection, .. }
-                    if should_close_idle_connection(connection, now, self.max_age())
-                        || (key.managed_state_expired()
-                            && connection.continuation.latest_response_id().is_none()) =>
+                    if should_close_idle_connection(connection, now, self.max_age()) =>
                 {
                     Some(key.clone())
                 }
@@ -202,16 +200,12 @@ impl CodexWebSocketPool {
                     let observation = if connection.websocket.is_closed() {
                         connection.websocket.observation()
                     } else {
-                        connection.websocket.observation().with_exit_reason(
-                            if key.managed_state_expired() {
-                                "managed_turn_state_expired"
-                            } else {
-                                "max_age_expired"
-                            },
-                        )
+                        connection
+                            .websocket
+                            .observation()
+                            .with_exit_reason("max_age_expired")
                     };
                     let reason = match observation.exit_reason() {
-                        "managed_turn_state_expired" => Some("managed_turn_state_expired"),
                         "max_age_expired" => Some("max_age_expired"),
                         _ => None,
                     };

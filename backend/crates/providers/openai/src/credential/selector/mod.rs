@@ -129,7 +129,6 @@ pub struct CodexCredentialSelector {
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
     account_feedback: Arc<AccountFeedbackStats>,
     account_concurrency: AccountConcurrencyHandle,
-    turn_states: Option<crate::provider::CodexTurnStateManager>,
 }
 
 enum SessionAffinityLookup {
@@ -286,7 +285,6 @@ impl CodexCredentialSelector {
             risk_recovery: Mutex::new(HashMap::new()),
             account_feedback,
             account_concurrency: AccountConcurrencyHandle::default(),
-            turn_states: None,
         }
     }
 
@@ -297,20 +295,27 @@ impl CodexCredentialSelector {
         self
     }
 
-    pub(crate) fn with_turn_states(
-        mut self,
-        manager: crate::provider::CodexTurnStateManager,
-    ) -> Self {
-        self.turn_states = Some(manager);
-        self
-    }
-
     fn account_in_scope(
         &self,
         account: &ProviderAccount,
         request: &CredentialSelectionInput<'_>,
     ) -> bool {
+        let upstream = request
+            .upstream_model
+            .map_or(gateway_core::account::ResponsesUpstream::Codex, |model| {
+                account.responses_upstream_for_model(model)
+            });
         account.provider() == &self.provider_kind
+            && request
+                .attempt
+                .provider_route()
+                .is_none_or(|route| route == upstream.as_str())
+            && (upstream != gateway_core::account::ResponsesUpstream::Excel
+                || (request
+                    .request_url
+                    .path()
+                    .ends_with(crate::transport::endpoints::CODEX_RESPONSES_PATH)
+                    || request.request_url.path().ends_with("/responses/compact")))
             && (request.attempt.is_diagnostic_required_account()
                 || request.attempt.account_scope().is_some_and(|scope| {
                     request.upstream_model.map_or_else(
@@ -318,44 +323,6 @@ impl CodexCredentialSelector {
                         |model| scope.allows_model(account.id(), model),
                     )
                 }))
-    }
-
-    async fn state_allows(
-        &self,
-        account: &ProviderAccount,
-        request: &CredentialSelectionInput<'_>,
-    ) -> bool {
-        if request.attempt.continuation_attempt() == ContinuationAttempt::Native
-            && (request.attempt.required_account() == Some(account.id())
-                || request
-                    .attempt
-                    .continuation()
-                    .and_then(gateway_core::engine::continuation::ContinuationBinding::pinned)
-                    .is_some_and(|pin| pin.account() == account.id()))
-        {
-            return true;
-        }
-        let (Some(manager), Some(model)) = (&self.turn_states, request.upstream_model) else {
-            return true;
-        };
-        manager.allows_new_request(account, model).await
-    }
-
-    async fn state_ready_accounts(
-        &self,
-        accounts: Vec<ProviderAccount>,
-        request: &CredentialSelectionInput<'_>,
-    ) -> Vec<ProviderAccount> {
-        use futures::StreamExt as _;
-        futures::stream::iter(accounts.into_iter().map(|account| async move {
-            self.state_allows(&account, request)
-                .await
-                .then_some(account)
-        }))
-        .buffered(16)
-        .filter_map(|account| async move { account })
-        .collect()
-        .await
     }
 
     pub async fn select(
@@ -411,6 +378,27 @@ impl CodexCredentialSelector {
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        let lease = self
+            .select_unfrozen(request, cyber_policy_session_key)
+            .await?;
+        if !request.attempt.freeze_provider_route(
+            request
+                .upstream_model
+                .map_or(gateway_core::account::ResponsesUpstream::Codex, |model| {
+                    lease.account().responses_upstream_for_model(model)
+                })
+                .as_str(),
+        ) {
+            return Err(CredentialSelectionError::NoEligibleCredential);
+        }
+        Ok(lease)
+    }
+
+    async fn select_unfrozen(
+        &self,
+        request: &CredentialSelectionInput<'_>,
+        cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
+    ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
         if request.attempt.request_tuning().account_busy_wait_enabled && !diagnostic {
             return self
@@ -435,7 +423,6 @@ impl CodexCredentialSelector {
             .into_iter()
             .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
-        let accounts = self.state_ready_accounts(accounts, request).await;
         if !diagnostic {
             self.quota.prepare_scheduling(&accounts).await;
         }
@@ -603,10 +590,6 @@ impl CodexCredentialSelector {
             // disabled that account. Ordinary scheduling keeps the enabled
             // guard in case the account changes after candidate loading.
             let allows_account_state_mutation = diagnostic || account.enabled();
-            if !self.state_allows(&account, request).await {
-                excluded.insert(account.id().clone());
-                continue;
-            }
             match self
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(

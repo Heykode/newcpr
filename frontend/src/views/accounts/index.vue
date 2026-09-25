@@ -169,7 +169,6 @@ const {
   refreshingAccountIds,
   refreshingQuotaAccountIds,
   togglingAccountIds,
-  togglingTurnStateAccountIds,
   deletingAccount,
   creatingAccount,
   authorizingOAuth,
@@ -192,7 +191,8 @@ const {
   handleRefresh,
   handleRefreshQuota,
   handleToggleEnabled,
-  handleToggleTurnState,
+  handleToggleExcel,
+  togglingExcelAccountIds,
 } = useAccountMutations({
   accounts,
   selectedIds,
@@ -240,9 +240,11 @@ const {
   showBatchEditModal,
   customName: batchCustomName,
   updateCustomName: batchUpdateCustomName,
-  turnStateAvailable: batchTurnStateAvailable,
+  excelAvailable: batchExcelAvailable,
   schedulingEnabled: batchSchedulingEnabled,
-  turnStateInjectionEnabled: batchTurnStateInjectionEnabled,
+  excelEnabled: batchExcelEnabled,
+  excelModels: batchExcelModels,
+  updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
   modelAccess: batchModelAccess,
@@ -252,7 +254,7 @@ const {
   proxyId: batchProxyId,
   selectedGroupIds: batchGroupIds,
   updateEnabled: batchUpdateEnabled,
-  updateTurnStateInjectionEnabled: batchUpdateTurnStateInjectionEnabled,
+  updateExcelEnabled: batchUpdateExcelEnabled,
   updateConcurrencyLimit: batchUpdateConcurrencyLimit,
   updateWeight: batchUpdateWeight,
   updateGroups: batchUpdateGroups,
@@ -273,7 +275,8 @@ const {
   customName: editingCustomName,
   editingAccount,
   schedulingEnabled,
-  turnStateInjectionEnabled,
+  excelEnabled,
+  excelModels,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -528,7 +531,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :deleting="deletingAccount"
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
-                :toggling-turn-state="togglingTurnStateAccountIds.has(row.id)"
+                :toggling-excel="togglingExcelAccountIds.has(row.id)"
                 :testing="testingConnectionIds.has(row.id)"
                 :exporting-model-catalog="exportingModelCatalogIds.has(row.id)"
                 :relogin="reloginActions[row.id]"
@@ -540,7 +543,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 @reauthorize="openReauthorizeAccount"
                 @test="openConnectionTest"
                 @export-model-catalog="handleExportModelCatalog"
-                @toggle-turn-state="handleToggleTurnState"
+                @toggle-excel="handleToggleExcel"
                 @relogin="requestRelogin"
               />
             </template>
@@ -551,7 +554,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                   :account="row"
                   :refreshing="refreshingQuotaAccountIds.has(row.id)"
                   @account-updated="void replaceAccount($event)"
-                  @probe-queued="void loadAccounts({ silent: true })"
                   @refresh-quota="handleRefreshQuota"
                 />
                 <AccountUsagePanel
@@ -642,7 +644,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:custom-name="editingCustomName"
       v-model="showEditModal"
       v-model:enabled="schedulingEnabled"
-      v-model:turn-state-injection-enabled="turnStateInjectionEnabled"
+      v-model:excel-enabled="excelEnabled"
+      v-model:excel-models="excelModels"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -661,7 +664,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-custom-name="batchUpdateCustomName"
       v-model="showBatchEditModal"
       v-model:enabled="batchSchedulingEnabled"
-      v-model:turn-state-injection-enabled="batchTurnStateInjectionEnabled"
+      v-model:excel-enabled="batchExcelEnabled"
+      v-model:excel-models="batchExcelModels"
+      v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
       v-model:model-access="batchModelAccess"
@@ -670,14 +675,14 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:proxy-id="batchProxyId"
       v-model:selected-group-ids="batchGroupIds"
       v-model:update-enabled="batchUpdateEnabled"
-      v-model:update-turn-state-injection-enabled="batchUpdateTurnStateInjectionEnabled"
+      v-model:update-excel-enabled="batchUpdateExcelEnabled"
       v-model:update-concurrency-limit="batchUpdateConcurrencyLimit"
       v-model:update-weight="batchUpdateWeight"
       v-model:update-groups="batchUpdateGroups"
       v-model:update-proxy="batchUpdateProxy"
       :catalog-account-id="batchCatalogAccountId"
       :has-updates="batchHasUpdates"
-      :turn-state-available="batchTurnStateAvailable"
+      :excel-available="batchExcelAvailable"
       :selected-count="selectedIds.size"
       :groups="groups"
       :groups-loading="groupsLoading"

@@ -140,6 +140,8 @@ pub struct ProviderAccountSummary {
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub turn_state_injection_enabled: bool,
+    pub responses_upstream: gateway_core::account::ResponsesUpstream,
+    pub excel_models: gateway_core::account::ExcelModels,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub model_access: gateway_core::account::AccountModelAccess,
@@ -290,6 +292,16 @@ impl ImportProviderAccounts {
         let mut ids = BTreeSet::new();
         for account in &self.accounts {
             account.validate()?;
+            if let Some(upstream) = self.settings.as_ref().and_then(|s| {
+                s.excel_models
+                    .as_ref()
+                    .map(|_| gateway_core::account::ResponsesUpstream::Excel)
+                    .or(s.responses_upstream)
+            }) && !upstream
+                .supports_account(&account.provider_kind, &account.authentication_kind)
+            {
+                return Err(invalid("Excel upstream requires an OpenAI OAuth account"));
+            }
             if !self.scope.contains(account) {
                 return Err(invalid(
                     "imported account is outside the Provider admin scope",
@@ -334,6 +346,8 @@ pub struct BatchUpdateProviderAccountsAdmin {
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
+    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    pub excel_models: Option<gateway_core::account::ExcelModels>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     pub weight: Option<AccountWeight>,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
@@ -403,7 +417,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -413,7 +427,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -425,7 +439,7 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, concurrency_limit, weight, model_access_json, credential_state,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
@@ -509,6 +523,8 @@ pub(crate) fn core_account_from_summary(
         summary.last_error_message,
     )
     .with_turn_state_injection_enabled(summary.turn_state_injection_enabled)
+    .with_responses_upstream(summary.responses_upstream)
+    .with_excel_models(summary.excel_models.clone())
     .with_turn_state_binding_revision(binding_revision)
     .with_scheduling(summary.concurrency_limit, summary.weight)
     .with_model_access(summary.model_access)
@@ -604,6 +620,16 @@ pub(crate) fn account_summary_from_row(
         next_refresh_at: get(&row, "next_refresh_at")?,
         enabled: get(&row, "enabled")?,
         turn_state_injection_enabled: get(&row, "turn_state_injection_enabled")?,
+        responses_upstream: gateway_core::account::ResponsesUpstream::parse(&get::<String>(
+            &row,
+            "responses_upstream",
+        )?)
+        .ok_or_else(|| invalid("invalid responses_upstream"))?,
+        excel_models: gateway_core::account::ExcelModels::try_from(get::<Vec<String>>(
+            &row,
+            "excel_models",
+        )?)
+        .map_err(invalid)?,
         concurrency_limit,
         weight,
         model_access: get::<sqlx::types::Json<gateway_core::account::AccountModelAccess>>(

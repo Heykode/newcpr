@@ -374,6 +374,31 @@ pub fn parse_codex_model_catalog(
     Ok(CodexModelCatalogSnapshot { models, etag })
 }
 
+/// Bridge capability, not proof of a particular account's model entitlement.
+pub(crate) fn excel_bridge_model(model: &str) -> Result<CodexCatalogModel, CodexModelCatalogError> {
+    let body = serde_json::json!({
+        "models": [{
+            "slug": model,
+            "display_name": model,
+            "description": "Excel bridge; availability is checked by the upstream on each request.",
+            "source": "excel_bridge",
+            "supported_in_api": true,
+            "supported_reasoning_levels": [
+                {"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}
+            ],
+            "input_modalities": ["text", "image"],
+            "supports_search_tool": false,
+            "support_verbosity": false,
+            "supports_parallel_tool_calls": true
+        }]
+    });
+    let mut snapshot = parse_codex_model_catalog(body.to_string().as_bytes(), None)?;
+    snapshot
+        .models
+        .pop()
+        .ok_or(CodexModelCatalogError::EmptySnapshot)
+}
+
 pub(super) fn catalog_etag(headers: &HeaderMap) -> Result<Option<String>, CodexModelCatalogError> {
     headers
         .get(ETAG)

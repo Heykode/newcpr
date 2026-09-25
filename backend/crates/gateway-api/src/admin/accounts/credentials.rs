@@ -27,6 +27,9 @@ pub struct AccountImportSettingsRequest {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_state_injection_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    pub excel_models: Option<gateway_core::account::ExcelModels>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -50,6 +53,8 @@ impl AccountImportSettingsRequest {
             custom_name: parse_custom_name(self.custom_name.as_deref())?,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
+            responses_upstream: self.responses_upstream,
+            excel_models: self.excel_models,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,
@@ -233,6 +238,8 @@ pub struct UpdateAccountRequest {
     pub account_id: String,
     pub enabled: bool,
     pub turn_state_injection_enabled: Option<bool>,
+    pub responses_upstream: Option<gateway_core::account::ResponsesUpstream>,
+    pub excel_models: Option<gateway_core::account::ExcelModels>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -266,6 +273,8 @@ impl UpdateAccountRequest {
             account_id: self.account_id,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
+            responses_upstream: self.responses_upstream,
+            excel_models: self.excel_models,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,

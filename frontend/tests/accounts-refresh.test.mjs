@@ -194,7 +194,7 @@ test('initial and ordinary list loads block manual and automatic refresh until s
   assert.deepEqual(h.errors, [])
 })
 
-test('active State collection speeds up the existing list timer and stops on readiness or opt-out', async (t) => {
+test('retired State collection never accelerates the existing list timer', async (t) => {
   const h = createHarness(t)
   const result = accountResponse()
   Object.assign(result.items[0], {
@@ -207,7 +207,7 @@ test('active State collection speeds up the existing list timer and stops on rea
     assert.equal(h.timers.size, 1)
     return [...h.timers.values()][0].delay
   }
-  assert.equal(delay(), 3_000)
+  assert.equal(delay(), 30_000)
   const activeTimer = [...h.timers.values()][0]
   const refresh = activeTimer.callback()
   assert.equal(h.requests.length, 2)
@@ -703,14 +703,15 @@ function toggleHarness(harness, row) {
 }
 
 for (const enabled of [false, true]) {
-  test(`turn state switch ${enabled ? 'on' : 'off'} only patches its own field and preserves concurrent scheduling changes`, async (t) => {
+  test(`Excel switch ${enabled ? 'on' : 'off'} only patches its own field and preserves concurrent scheduling changes`, async (t) => {
     const h = createHarness(t)
     const initial = accountResponse()
     const row = {
       ...initial.items[0],
       provider: 'openai',
+      authenticationKind: 'oauth',
       enabled: true,
-      turnStateInjectionEnabled: !enabled,
+      responsesUpstream: enabled ? 'codex' : 'excel',
       concurrencyLimit: 2,
       weight: 100,
       groups: [{ id: 'grp_test' }],
@@ -718,12 +719,12 @@ for (const enabled of [false, true]) {
     initial.items = [row]
     await mountLoaded(h, initial)
     const { state, writes, selectedIds } = toggleHarness(h, row)
-    const operation = state.handleToggleTurnState(row, enabled)
-    await state.handleToggleTurnState(row, enabled)
+    const operation = state.handleToggleExcel(row, enabled)
+    await state.handleToggleExcel(row, enabled)
     assert.equal(writes.length, 1, 'duplicate state switches must share the in-flight guard')
     assert.deepEqual(structuredClone(writes[0].body), {
       accountIds: [row.id],
-      turnStateInjectionEnabled: enabled,
+      responsesUpstream: enabled ? 'excel' : 'codex',
     })
     writes[0].resolve({})
     await flushRequests()
@@ -735,15 +736,17 @@ for (const enabled of [false, true]) {
         weight: 250,
         concurrencyLimit: 7,
         groups: [{ id: 'grp_changed' }],
-        turnStateInjectionEnabled: enabled,
+        responsesUpstream: enabled ? 'excel' : 'codex',
       }],
     }
     await h.settle(updated)
     await operation
     assertResult(h.query, updated)
     assert.equal(selectedIds.value.size, 2)
-    await state.handleToggleTurnState({ ...row, provider: 'xai' }, enabled)
+    await state.handleToggleExcel({ ...row, provider: 'xai' }, enabled)
     assert.equal(writes.length, 1, 'non-OpenAI accounts must not expose this mutation')
+    await state.handleToggleExcel({ ...row, authenticationKind: 'api_key' }, enabled)
+    assert.equal(writes.length, 1, 'API Key accounts must not expose this mutation')
   })
 }
 

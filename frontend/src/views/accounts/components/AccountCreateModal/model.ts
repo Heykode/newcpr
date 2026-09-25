@@ -11,7 +11,6 @@ export interface AccountCreateForm {
   customName: string
   provider: AccountCreateProvider | ''
   enabled: boolean
-  turnStateInjectionEnabled: boolean
   concurrencyLimit: string
   weight: string
   modelAccess?: AccountModelAccess
@@ -31,7 +30,6 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     customName: '',
     provider: '',
     enabled: true,
-    turnStateInjectionEnabled: false,
     concurrencyLimit: '',
     weight: '1',
     groupIds: [],
@@ -54,7 +52,7 @@ export function accountProxyError(form: AccountCreateForm): string | undefined {
   return undefined
 }
 
-export function accountImportSettings(form: AccountCreateForm, provider = form.provider) {
+export function accountImportSettings(form: AccountCreateForm, _provider = form.provider) {
   const modelError = accountModelAccessError(form.modelAccess)
   if (modelError)
     throw new Error(modelError)
@@ -68,6 +66,5 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),
-    ...(provider === 'openai' ? { turnStateInjectionEnabled: form.turnStateInjectionEnabled } : {}),
   }
 }
