@@ -93,10 +93,18 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        // Materialize inline images in messages AND tool results before generation.
-        // Neither a generic 422 nor an expired attachment permits generation replay.
+        // User inline images need an account-scoped attachment ID. Tool images
+        // remain in their original Base64/HTTPS form because tool-result
+        // file_id is rejected by the upstream schema.
+        if let Some(excel) = &upstream_request.excel {
+            super::excel::images::validate(&excel.body).map_err(|error| {
+                CodexClientError::InvalidSse(gateway_protocol::openai::sse::SseError::ParseError(
+                    error.to_string(),
+                ))
+            })?;
+        }
         if let Some(excel) = &upstream_request.excel
-            && super::excel::images::has_inline(&excel.body)
+            && super::excel::images::has_user_inline(&excel.body)
         {
             let images = super::excel::images::upload_inline(
                 self,
@@ -113,9 +121,77 @@ impl CodexBackendClient {
             if let Err(error) = &result {
                 images.observe_error(error).await;
             }
-            return result;
+            return result.map(|response| self.with_excel_repair(response, &uploaded, context));
         }
-        self.send_response_http_sse(upstream_request, context).await
+        self.send_response_http_sse(upstream_request, context)
+            .await
+            .map(|response| self.with_excel_repair(response, upstream_request, context))
+    }
+
+    fn with_excel_repair(
+        &self,
+        mut response: CodexBackendStreamingResponse,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexBackendStreamingResponse {
+        let Some(prepared) = request.excel.as_ref() else {
+            return response;
+        };
+        if !prepared.tools.has_client_tools() || prepared.structured.is_some() {
+            response.body = super::excel::transform_stream(response.body, prepared);
+            return response;
+        }
+        let client = self.clone();
+        let request = request.clone();
+        let authorization: Arc<str> = context.authorization.into();
+        let account: Option<Arc<str>> = context.account_id.map(Into::into);
+        let request_id: Arc<str> = context.request_id.into();
+        let trace = context.trace.cloned();
+        let updates = response.rate_limit_updates.clone();
+        response.body = super::excel::transform_stream_with_repair(
+            response.body,
+            prepared,
+            Some(Box::new(move |body| {
+                let client = client.clone();
+                let mut request = request.clone();
+                request.excel.as_mut().expect("Excel request").body = body;
+                let authorization = authorization.clone();
+                let account = account.clone();
+                let request_id = request_id.clone();
+                let trace = trace.clone();
+                let updates = updates.clone();
+                Box::pin(async move {
+                    let mut context = CodexRequestContext::auxiliary(
+                        &authorization,
+                        account.as_deref(),
+                        &request_id,
+                        None,
+                    );
+                    context.trace = trace.as_ref();
+                    let mut response = client.send_response_http_sse(&request, context).await?;
+                    if let Some(updates) = &updates
+                        && let Some(observation) =
+                            super::rate_limits::CodexRateLimitObservation::from_headers(
+                                &response.rate_limit_headers,
+                                response.rate_limit_observed_at,
+                            )
+                    {
+                        updates.lock().await.push(observation);
+                    }
+                    let stream: CodexBackendSseStream = Box::pin(async_stream::try_stream! {
+                        while let Some(chunk) = response.body.next().await {
+                            if let (Some(target), Some(source)) = (&updates, &response.rate_limit_updates) {
+                                let observed = std::mem::take(&mut *source.lock().await);
+                                target.lock().await.extend(observed);
+                            }
+                            yield chunk?;
+                        }
+                    });
+                    Ok(stream)
+                })
+            })),
+        );
+        response
     }
 
     async fn send_response_http_sse(
@@ -286,10 +362,6 @@ impl CodexBackendClient {
 
         let rate_limit_updates = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let body = http_sse_stream(response, Arc::clone(&rate_limit_updates), trace);
-        let body = match excel {
-            Some(prepared) => super::excel::transform_stream(body, prepared),
-            None => body,
-        };
         Ok(CodexBackendStreamingResponse {
             body,
             transport: CodexBackendTransport::HttpSse,

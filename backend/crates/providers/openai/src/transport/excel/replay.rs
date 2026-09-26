@@ -12,11 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{
-    ClientTools, ExcelRequestError,
-    request::message,
-    tools::{canonical_history_call, rebuild_history_call},
-};
+use super::{ClientTools, ExcelRequestError, request::message, tools::canonical_history_call};
 
 const STORE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_NATIVE_CALLS: usize = 512;
@@ -44,6 +40,7 @@ pub(crate) struct RestoredInput {
     pub(crate) conversation: String,
     pub(crate) native_calls: BTreeMap<String, Value>,
     pub(crate) capture: ReplayCapture,
+    pub(crate) tools: ClientTools,
 }
 
 pub(crate) async fn restore(
@@ -51,7 +48,7 @@ pub(crate) async fn restore(
     owner: String,
     conversation: String,
     previous_response_id: Option<&str>,
-    input: &Value,
+    source: &Map<String, Value>,
 ) -> Result<RestoredInput, ExcelRequestError> {
     let mut record = if let Some(previous) = previous_response_id {
         let payload = load(store.as_ref(), &key(&owner, "response", previous))
@@ -73,13 +70,19 @@ pub(crate) async fn restore(
             client_calls: BTreeMap::new(),
         }
     };
-    let delta = match input {
+    let delta = match source.get("input").ok_or(ExcelRequestError::Input)? {
         Value::String(text) => vec![message("user", text)],
         Value::Array(items) => items.clone(),
         _ => return Err(ExcelRequestError::Input),
     };
+    let mut catalog_source = source.clone();
+    catalog_source.insert(
+        "input".into(),
+        Value::Array(record.input.iter().chain(&delta).cloned().collect()),
+    );
+    let tools = ClientTools::parse(&catalog_source)?;
     // previous_response_id explicitly means incremental input; never guess by text similarity.
-    for item in &delta {
+    for (index, item) in delta.iter().enumerate() {
         if matches!(
             item.get("type").and_then(Value::as_str),
             Some(
@@ -124,8 +127,13 @@ pub(crate) async fn restore(
                     .cloned();
                 let native = match native {
                     Some(native) => native,
-                    None if complete_call => rebuild_history_call(item)?,
-                    None => return Err(ExcelRequestError::History),
+                    None if complete_call => tools.rebuild_history_call(item)?,
+                    None => {
+                        return Err(ExcelRequestError::HistoryInput {
+                            input: record.input.len() + index,
+                            kind: "missing_complete_tool_call",
+                        });
+                    }
                 };
                 record.native_calls.insert(id.into(), native);
             }
@@ -141,6 +149,7 @@ pub(crate) async fn restore(
         conversation: record.conversation.clone(),
         native_calls: record.native_calls.clone(),
         capture: ReplayCapture { store, record },
+        tools,
     })
 }
 
@@ -199,7 +208,7 @@ impl ReplayCapture {
                             | "functions.update_plan"
                     )
                 ) {
-                    replay_item = rebuild_history_call(&converted)?;
+                    replay_item = tools.rebuild_history_call(&converted)?;
                 }
                 record
                     .native_calls
@@ -355,7 +364,114 @@ async fn write(
 #[cfg(test)]
 mod tests {
     use super::super::tests::MemoryReplay;
+    use super::super::tools::rebuild_history_call;
     use super::*;
+
+    async fn restore(
+        store: Arc<dyn ProviderReplayPort>,
+        owner: String,
+        conversation: String,
+        previous: Option<&str>,
+        input: &Value,
+    ) -> Result<RestoredInput, ExcelRequestError> {
+        super::restore(
+            store,
+            owner,
+            conversation,
+            previous,
+            json!({"input":input}).as_object().unwrap(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn excel_history_rebuild_uses_catalog_and_keeps_cached_native_calls() {
+        for custom in [false, true] {
+            let store: Arc<dyn ProviderReplayPort> = Arc::new(MemoryReplay::default());
+            let code = "  let price = '$1';\r\n\ttext(price);\n";
+            let tool = if custom {
+                json!({"type":"custom","name":"exec"})
+            } else {
+                json!({"type":"function","name":"exec","parameters":{"type":"object",
+                    "properties":{"code":{"type":"string"},"timeout":{"type":"integer"}}}})
+            };
+            let call = if custom {
+                json!({"type":"custom_tool_call","name":"exec","namespace":"client",
+                    "call_id":"call_fixture","input":code})
+            } else {
+                json!({"type":"function_call","name":"exec","namespace":"client",
+                    "call_id":"call_fixture","arguments":json!({"code":code,"timeout":123}).to_string()})
+            };
+            let source = json!({"tools":[{"type":"namespace","name":"client","tools":[tool]}],
+                "input":[call,{"type":if custom {"custom_tool_call_output"} else {"function_call_output"},
+                    "call_id":"call_fixture","output":"recorded"}]});
+            let first = super::restore(
+                store.clone(),
+                "owner".into(),
+                "thread".into(),
+                None,
+                source.as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+            let native = &first.native_calls["call_fixture"];
+            let outer = super::super::envelope::json_value(&native["arguments"]).unwrap();
+            assert_eq!(outer["code"], code);
+            assert_eq!(
+                outer["summary"],
+                if custom {
+                    "cpr.custom/client.exec"
+                } else {
+                    "codex2api.function_code/client.exec"
+                }
+            );
+            let restored_call = first.tools.convert_call(native).unwrap();
+            assert_eq!(
+                canonical_history_call(&restored_call).unwrap(),
+                canonical_history_call(&call).unwrap()
+            );
+            let mut cached = native.clone();
+            cached["provider_extension"] = "preserve".into();
+            first
+                .capture
+                .commit(
+                    &json!({"id":"resp_fixture","status":"completed","output":[cached.clone()]}),
+                    &first.tools,
+                )
+                .await
+                .unwrap();
+            let next = super::restore(
+                store,
+                "owner".into(),
+                "thread".into(),
+                None,
+                source.as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(next.native_calls["call_fixture"], cached);
+        }
+    }
+
+    #[tokio::test]
+    async fn excel_missing_call_diagnostic_contains_position_not_payload() {
+        let source = json!({"input":[message("user","continue"),{
+            "type":"function_call_output","call_id":"PRIVATE_ID","output":"PRIVATE_RESULT"}]});
+        let error = super::restore(
+            Arc::new(MemoryReplay::default()),
+            "owner".into(),
+            "thread".into(),
+            None,
+            source.as_object().unwrap(),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("input[1]"));
+        assert!(error.contains("matching complete tool call"));
+        assert!(!error.contains("PRIVATE"));
+    }
 
     #[tokio::test]
     async fn compaction_prunes_only_successful_upstream_history_and_preserves_scope() {

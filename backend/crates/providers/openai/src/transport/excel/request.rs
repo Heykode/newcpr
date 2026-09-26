@@ -16,6 +16,10 @@ pub(crate) enum ExcelRequestError {
     Warmup,
     #[error("Excel previous response history is unavailable; resend complete input")]
     History,
+    #[error(
+        "Excel tool history is incomplete (path=input[{input}]; type={kind}); resend the matching complete tool call with its result"
+    )]
+    HistoryInput { input: usize, kind: &'static str },
     #[error("unsupported or malformed Excel request input")]
     Input,
     #[error("unsupported Excel content (path=input[{input}].{field}[{part}]; type={kind})")]
@@ -25,6 +29,14 @@ pub(crate) enum ExcelRequestError {
         part: usize,
         kind: &'static str,
     },
+    #[error(
+        "Excel cannot forward encrypted message parts (path=input[{input}].{field}[{part}]; type=encrypted_content); resend plaintext from its source or start a new conversation"
+    )]
+    EncryptedContent {
+        input: usize,
+        field: &'static str,
+        part: usize,
+    },
     #[error("unsupported client tool or tool choice for Excel")]
     Tool,
     #[error("Excel returned an undeclared or malformed client tool call")]
@@ -33,6 +45,8 @@ pub(crate) enum ExcelRequestError {
     Format,
     #[error("Excel image relay is unavailable or full")]
     ImageRelay,
+    #[error("Excel image input: {0}")]
+    ImageInput(&'static str),
     #[error(
         "unsupported Excel image-tool request; use PNG, gpt-image-2 and supported image options"
     )]
@@ -293,6 +307,9 @@ fn validate_content(
             Some("tool_result") => "tool_result",
             Some("thinking") => "thinking",
             Some("redacted_thinking") => "redacted_thinking",
+            Some("encrypted_content") => {
+                return Err(ExcelRequestError::EncryptedContent { input, field, part });
+            }
             Some(_) => "unknown",
             None if !value.is_object() => "non_object",
             None if value.get("type").is_none() => "missing",
@@ -325,7 +342,7 @@ fn stable_hash(value: &Value) -> String {
     hex::encode(Sha256::digest(ordered(value).to_string().as_bytes()))
 }
 
-fn function_item_id(call_id: &str) -> String {
+pub(super) fn function_item_id(call_id: &str) -> String {
     let candidate = format!("fc_{call_id}");
     if candidate.chars().count() <= 64 {
         candidate
@@ -471,5 +488,20 @@ mod tests {
             3
         );
         assert_eq!(turn_identity(&[result, user]).1, 1);
+    }
+    #[test]
+    fn encrypted_message_content_has_specific_safe_diagnostic() {
+        let error = validate_content(
+            Some(&json!([{
+                "type":"encrypted_content","encrypted_content":"PRIVATE_CIPHERTEXT"
+            }])),
+            3,
+            "content",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("input[3].content[0]"));
+        assert!(error.contains("type=encrypted_content"));
+        assert!(!error.contains("PRIVATE_CIPHERTEXT"));
     }
 }

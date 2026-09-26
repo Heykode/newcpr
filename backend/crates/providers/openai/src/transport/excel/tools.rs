@@ -40,6 +40,14 @@ pub(crate) struct ClientTools {
 }
 
 impl ClientTools {
+    pub(super) fn contains(&self, name: &str) -> bool {
+        self.specs.contains_key(name)
+    }
+
+    pub(crate) fn has_client_tools(&self) -> bool {
+        !self.specs.is_empty()
+    }
+
     pub(crate) fn parse(source: &Map<String, Value>) -> Result<Self, ExcelRequestError> {
         let serial = match source.get("parallel_tool_calls") {
             None | Some(Value::Null | Value::Bool(true)) => false,
@@ -269,6 +277,54 @@ impl ClientTools {
                         .and_then(Value::as_str)
                         == Some("string")
             })
+    }
+
+    pub(super) fn rebuild_history_call(&self, item: &Value) -> Result<Value, ExcelRequestError> {
+        let mut native = rebuild_history_call(item)?;
+        let call = canonical_history_call(item)?;
+        let namespace = call["namespace"].as_str().unwrap_or_default();
+        let name = call["name"].as_str().ok_or(ExcelRequestError::History)?;
+        let name = if namespace.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{namespace}.{name}")
+        };
+        let Some(spec) = self.specs.get(&name) else {
+            return Ok(native);
+        };
+        let mut outer = envelope::json_value(&native["arguments"])?;
+        if spec.kind == "custom" && call["type"] == "custom_tool_call" {
+            outer["summary"] = format!("cpr.custom/{name}").into();
+            outer["code"] = call["input"].clone();
+        } else if call["type"] == "function_call"
+            && self.supports_function_code(&name)
+            && let Some(code) = call["arguments"]
+                .get("code")
+                .filter(|value| value.is_string())
+        {
+            let mut metadata = call["arguments"].clone();
+            metadata
+                .as_object_mut()
+                .ok_or(ExcelRequestError::History)?
+                .remove("code");
+            outer["summary"] = format!("{}{name}", envelope::FUNCTION_CODE_PREFIX).into();
+            outer["code"] = code.clone();
+            outer["extended_summary"] = metadata.to_string().into();
+        } else {
+            return Ok(native);
+        }
+        native["arguments"] = outer.to_string().into();
+        // Historical calls need not satisfy today's schema, but transport sizes still apply.
+        envelope::native_envelope(
+            &native,
+            &|name| {
+                self.specs
+                    .get(name)
+                    .map(|spec| (name.into(), spec.kind == "custom"))
+            },
+            &|name| self.supports_function_code(name),
+        )?;
+        Ok(native)
     }
 
     fn function_code_instructions(&self) -> String {

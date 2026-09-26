@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::transport::excel::{
-    ClientTools, ExcelPreparedRequest, ExcelRequestError, StructuredOutput, prepare_request,
+    ExcelPreparedRequest, ExcelRequestError, StructuredOutput, prepare_request,
 };
 
 pub(super) async fn prepare_excel(
@@ -64,9 +64,7 @@ pub(super) async fn prepare_excel(
         owner.clone(),
         cache_anchor,
         request.previous_response_id(),
-        source
-            .get("input")
-            .ok_or_else(|| request_error(ExcelRequestError::Input))?,
+        &source,
     )
     .await
     .map_err(request_error)?;
@@ -81,7 +79,7 @@ pub(super) async fn prepare_excel(
         ))
         .into(),
     );
-    let tools = ClientTools::parse(&source).map_err(request_error)?;
+    let tools = restored.tools;
     let structured = StructuredOutput::parse(&source).map_err(request_error)?;
     let mut body = prepare_request(&source, &tools, &restored.native_calls, structured.as_ref())
         .map_err(request_error)?;
@@ -98,7 +96,9 @@ pub(super) async fn prepare_excel(
             }),
         );
     }
+    crate::transport::excel::images::validate_references(&body).map_err(request_error)?;
     let image_lease = image_relay.stage(&mut body).map_err(request_error)?;
+    crate::transport::excel::images::validate(&body).map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
     request.force_http_sse = true;
     request.use_websocket = false;
@@ -118,13 +118,56 @@ pub(super) async fn prepare_excel(
 }
 
 pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
+    if let ExcelRequestError::ImageInput(message) = error {
+        return provider_error(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+        )
+        .with_status(400)
+        .with_upstream_code(OpaqueUpstreamValue::new("excel_image_input_invalid"))
+        .with_client_visible_upstream_error(gateway_core::error::ClientVisibleUpstreamError::new(
+            message,
+            Some("excel_image_input_invalid".into()),
+            Some("invalid_request_error".into()),
+        ))
+        .with_diagnostic(ProviderDiagnostic::new(error.to_string()));
+    }
     if error == ExcelRequestError::ImageRelay {
         return provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
             .with_status(503)
             .with_upstream_code(OpaqueUpstreamValue::new("excel_image_relay_unavailable"));
     }
-    if error == ExcelRequestError::History {
-        return continuation_replay_required_error("excel_history_unavailable");
+    if matches!(
+        error,
+        ExcelRequestError::History | ExcelRequestError::HistoryInput { .. }
+    ) {
+        let mut failure = continuation_replay_required_error("excel_history_unavailable");
+        if matches!(error, ExcelRequestError::HistoryInput { .. }) {
+            failure = failure
+                .with_diagnostic(ProviderDiagnostic::new(error.to_string()))
+                .with_client_visible_upstream_error(
+                    gateway_core::error::ClientVisibleUpstreamError::new(
+                        error.to_string(),
+                        Some("previous_response_not_found".into()),
+                        Some("invalid_request_error".into()),
+                    ),
+                );
+        }
+        return failure;
+    }
+    if matches!(error, ExcelRequestError::EncryptedContent { .. }) {
+        return provider_error(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+        )
+        .with_status(400)
+        .with_upstream_code(OpaqueUpstreamValue::new("excel_unsupported_content"))
+        .with_client_visible_upstream_error(gateway_core::error::ClientVisibleUpstreamError::new(
+            error.to_string(),
+            Some("excel_unsupported_content".into()),
+            Some("invalid_request_error".into()),
+        ))
+        .with_diagnostic(ProviderDiagnostic::new(error.to_string()));
     }
     provider_error(
         ProviderErrorKind::InvalidRequest,
@@ -133,6 +176,55 @@ pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
     .with_status(400)
     .with_upstream_code(OpaqueUpstreamValue::new("excel_unsupported_request"))
     .with_diagnostic(ProviderDiagnostic::new(error.to_string()))
+}
+
+pub(super) fn map_repair_failure(error: CodexClientError) -> MappedProviderFailure {
+    let status = match &error {
+        CodexClientError::Upstream { status, .. } => Some(status.as_u16()),
+        _ => None,
+    };
+    let mut failure = if let Some(upstream) = error.upstream_failure() {
+        map_upstream_failure(upstream, None, ReplayBoundary::AfterSemanticOutput)
+    } else {
+        map_client_error(error, UpstreamSendState::Sent, false)
+    };
+    failure.http_rejection_status = status;
+    classify_failure(failure, true)
+}
+
+pub(super) fn failed_repair_metering(request: &CodexResponsesRequest) -> Vec<ProviderEvent> {
+    use crate::transport::usage::{OpenAiBillingUsage, openai_billing_breakdown};
+    use gateway_protocol::openai::events::{billable_usage_is_complete, extract_usage};
+    let Some(response) = request
+        .excel
+        .as_ref()
+        .and_then(|prepared| prepared.usage.take_failed_repair_usage())
+    else {
+        return Vec::new();
+    };
+    let Some(raw) = extract_usage(&response) else {
+        return Vec::new();
+    };
+    let mut usage = gateway_core::metering::Usage::new();
+    usage.input_tokens = Some(raw.input_tokens);
+    usage.output_tokens = Some(raw.output_tokens);
+    usage.cached_tokens = Some(raw.cached_tokens);
+    usage.cache_write_tokens = Some(raw.cache_write_tokens);
+    usage.reasoning_tokens = Some(raw.reasoning_tokens);
+    usage.total_tokens = Some(raw.total_tokens);
+    let mut events = vec![ProviderEvent::canonical(GatewayEvent::Usage(usage))];
+    if billable_usage_is_complete(&response, raw)
+        && let Some(cost) = openai_billing_breakdown(
+            request.model(),
+            OpenAiBillingUsage::from(raw),
+            request.service_tier(),
+        )
+    {
+        events.push(ProviderEvent::canonical(GatewayEvent::CalculatedCost(
+            cost.calculated_cost(),
+        )));
+    }
+    events
 }
 
 fn should_disable_on_403(account: &ProviderAccount, failure: &MappedProviderFailure) -> bool {
@@ -296,6 +388,24 @@ pub(super) fn classify_failure(
 mod tests {
     use super::*;
     use gateway_core::error::{ClientVisibleUpstreamError, ClientVisibleUpstreamResponse};
+
+    #[test]
+    fn excel_tool_file_id_error_is_actionable_and_not_retried() {
+        let error = request_error(ExcelRequestError::ImageInput(
+            "tool image file_id is unsupported; return the original image as Base64 or HTTPS image_url",
+        ));
+        assert_eq!(error.upstream_status(), Some(400));
+        assert!(
+            error
+                .client_visible_upstream_error()
+                .unwrap()
+                .message()
+                .contains("tool image file_id")
+        );
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(error.pre_delivery_retry().is_none());
+        assert!(!error.replay_is_safe());
+    }
 
     #[test]
     fn excel_auto_disable_requires_opt_in_and_actual_http_403() {

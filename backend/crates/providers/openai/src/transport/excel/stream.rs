@@ -14,10 +14,19 @@ use crate::transport::{CodexBackendSseStream, CodexClientError};
 const MAX_TOOL_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) fn transform_stream(
-    mut source: CodexBackendSseStream,
+    source: CodexBackendSseStream,
     prepared: &ExcelPreparedRequest,
 ) -> CodexBackendSseStream {
+    transform_stream_with_repair(source, prepared, None)
+}
+
+pub(crate) fn transform_stream_with_repair(
+    source: CodexBackendSseStream,
+    prepared: &ExcelPreparedRequest,
+    mut sender: Option<super::repair::Sender>,
+) -> CodexBackendSseStream {
     let replay = prepared.replay.clone();
+    let request_body = sender.as_ref().map(|_| prepared.body.clone());
     let mut transform = Relay {
         tools: prepared.tools.clone(),
         structured: prepared.structured.clone(),
@@ -30,20 +39,51 @@ pub(crate) fn transform_stream(
         effort: prepared.body.get("reasoning_effort").cloned(),
     };
     Box::pin(async_stream::try_stream! {
+        let mut source = Some(source);
         let mut decoder = SseEventDecoder::default();
         let mut recorded = false;
-        while let Some(chunk) = source.next().await {
-            for event in decoder.push(&chunk?)? {
+        loop {
+            let chunk = match &mut source {
+                Some(source) => source.next().await.transpose()?,
+                None => None,
+            };
+            let finished = chunk.is_none();
+            let events = match chunk {
+                Some(chunk) => decoder.push(&chunk)?,
+                None => decoder.finish()?,
+            };
+            for mut event in events {
+                if let Some(sender) = sender.as_mut()
+                    && let Some(original) = transform.repair_candidate(&event)
+                {
+                    // The old response must not occupy a socket while its correction starts.
+                    drop(source.take());
+                    let mut correction = super::repair::correct(
+                        &original, &transform.tools, request_body.clone().expect("repair sender body"), sender, &transform.usage,
+                    );
+                    while let Some(step) = correction.next().await {
+                        match step? {
+                            Some(corrected) => event.data = corrected.to_string(),
+                            // Internal checkpoint only; the provider consumes its usage snapshot.
+                            None => yield Bytes::new(),
+                        }
+                    }
+                    drop(correction);
+                    // IDs belong to the rejected model turn; only the corrected batch is emitted.
+                    transform.pending_tools.clear();
+                }
                 let events = transform.event(event)?;
                 persist_completion(&transform, replay.as_ref(), &mut recorded).await?;
-                for bytes in events { yield bytes; }
+                let last = events.len().saturating_sub(1);
+                for (index, bytes) in events.into_iter().enumerate() {
+                    if transform.terminal && index == last && transform.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some() {
+                        transform.usage.clear_repair_usage();
+                    }
+                    yield bytes;
+                }
                 if transform.terminal { return; }
             }
-        }
-        for event in decoder.finish()? {
-            let events = transform.event(event)?;
-            persist_completion(&transform, replay.as_ref(), &mut recorded).await?;
-            for bytes in events { yield bytes; }
+            if finished { break; }
         }
         // No synthetic completion: the canonical decoder owns truncated-stream errors.
     })
@@ -85,6 +125,28 @@ struct Relay {
 }
 
 impl Relay {
+    fn repair_candidate(&self, event: &SseEvent) -> Option<Value> {
+        if self.structured.is_some() {
+            return None;
+        }
+        let data: Value = serde_json::from_str(&event.data).ok()?;
+        if data["type"].as_str().or(event.event.as_deref()) != Some("response.completed") {
+            return None;
+        }
+        let response = &data["response"];
+        let output = response["output"].as_array()?;
+        if !self.pending_tools.iter().all(|(id, call)| {
+            output.iter().any(|item| {
+                item["id"].as_str() == Some(id) && item["call_id"].as_str() == Some(call)
+            })
+        }) || super::repair::validate(&self.tools, response).is_ok()
+            || !super::repair::eligible(&self.tools, response)
+        {
+            return None;
+        }
+        Some(response.clone())
+    }
+
     fn event(&mut self, event: SseEvent) -> Result<Vec<Bytes>, CodexClientError> {
         if event.data == "[DONE]" {
             return Ok(vec![Bytes::from_static(b"data: [DONE]\n\n")]);

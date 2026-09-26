@@ -919,6 +919,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let mut quota_success = false;
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {
+                for event in super::excel::failed_repair_metering(&request) {
+                    yield event;
+                }
                 if allows_account_state_mutation {
                     synchronize_passive_quota(
                         &quota,
@@ -954,7 +957,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             ),
                             &error,
                         );
-                        Err(map_stream_error(error))
+                        Err(if request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()) {
+                            super::excel::map_repair_failure(error)
+                        } else {
+                            map_stream_error(error)
+                        })
                     }
                     None => Ok(PreCommitPoll::Upstream(None)),
                 },
@@ -968,6 +975,13 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     continue;
                 }
                 Err(mut failure) => {
+                    for event in super::excel::failed_repair_metering(&request) {
+                        yield event;
+                    }
+                    super::excel::observe_http_rejection(
+                        &selector, &active_account, &mut failure,
+                        request.excel.is_some(), allows_account_state_mutation,
+                    ).await;
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     let rate_limits_changed = if updates.is_empty() {
                         false
@@ -1037,6 +1051,12 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 }
             };
             let Some(chunk) = next else { break; };
+            if chunk.is_empty() && request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()) {
+                for event in super::excel::failed_repair_metering(&request) {
+                    yield event;
+                }
+                continue;
+            }
             let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
             let rate_limits_changed = if updates.is_empty() {
                 false
@@ -1084,7 +1104,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &failure_diagnostics,
                         &failure_set_cookie_headers,
                         ReplayBoundary::from_semantic_output(
-                            semantic_output_seen || pre_commit_events.is_committed(),
+                            semantic_output_seen || pre_commit_events.is_committed()
+                                || request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()),
                         ),
                     ), request.excel.is_some()),
                     atomic_upstream_failure,
@@ -1158,6 +1179,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 yield ProviderEvent::observation(observation);
             }
             if let Some((mut failure, atomic_upstream_failure)) = terminal_failure {
+                for event in super::excel::failed_repair_metering(&request) {
+                    yield event;
+                }
                 let failure_after_commit =
                     timing_signals.semantic_output || pre_commit_events.is_committed();
                 if failure_after_commit {

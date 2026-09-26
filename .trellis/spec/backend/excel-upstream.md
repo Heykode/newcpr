@@ -55,7 +55,7 @@ Cookie/relogin identity protections are not the retired collector.
 | Missing completed event | Failure/incomplete, never synthetic success |
 | Undeclared tool | Protocol failure, no client tool execution |
 | Unsupported effort/tool choice/warmup | Explicit request error |
-| Image upload authentication failure | Preserve rejection, never drop image |
+| HTTPS image request authentication failure | Preserve rejection, never drop image |
 | Old State enabled but empty | No State scheduling gate |
 | Existing account upgrades with legacy State enabled | New Excel route remains `codex`; identity unchanged |
 
@@ -106,9 +106,16 @@ a genuine encrypted compaction result.
 `tool_choice: none` is consumed by the local tool adapter. Do not add it back to
 the prepared Excel wire body, including explicit compact; the upstream rejects
 that extra field. Keep `compaction_trigger` as the final input item.
-Inline images in messages and tool results upload before generation. Generic 400/422
-validation failures never permit generation replay, content removal or history reset.
-Explicit attachment rejection may conditionally evict only mappings used by that request.
+Validate image position, carrier, encoded size and detail=auto/low/high/original before
+staging; MIME, Base64 and dimensions before upload/generation. Relay byte admission
+must still precede decoding. HTTPS references pass unchanged. User inline pictures
+use the existing account-scoped attachment upload, or the optional HTTPS relay
+when explicitly configured. User file_id passes with upstream authorization;
+syntactic validity is not proof of ownership. Tool inline pictures pass unchanged,
+including when the same request uploads user pictures. Tool file_id is rejected
+locally with an actionable 400, never moved into a user message or silently removed.
+Do not recursively treat tool arguments or arbitrary metadata as image content.
+Generic 400/422 never permits generation replay, content removal or history reset.
 
 The optional image relay belongs to the provider; Core exposes only a neutral download
 capability and API serves bytes. Default off, HTTPS origin only, no filesystem paths,
@@ -130,12 +137,14 @@ Preserve applied migrations, shared scheduling/identity/Cookie contracts and
 historical `ExcelHttpSse` usage decoding. Delete neutral replay/image/route ports
 only after checking for additional consumers.
 
-Direct inline user images fail with generic upstream 422; upload-first attachment
-requests have been accepted with real image recognition. User-message data URLs
-therefore upload before the first generation attempt, not as a generic-422 retry.
-Tool-result inline images use the same preflight. Image-bearing Excel requests carry
-the vision marker; attachment uploads add purpose=vision and accept bounded, validated
-openai_file_id/file_id/id aliases. Native routes and pure text remain unchanged.
+Reference: ranxi2001/sub2api production f671a8d30c34706d8526accadf6a6ad5f40f855e.
+Its image schema rejects file_id, accepts only HTTPS image_url, and relays inline input.
+Our authorized live matrix found a broader position-dependent upstream contract:
+user file_id and tool Base64 succeeded, while user Base64 and tool file_id failed.
+Use that evidence for our adapter; do not label the reference policy an upstream limit.
+Do not extrapolate success from user to tool images or from permissive mocks to upstream.
+Image-bearing requests retain the vision marker. Native routes and pure text are unchanged.
+An unconfigured public relay does not prevent user attachment upload or tool Base64.
 The optional public HTTPS relay is not live-accepted. Hosted image_generation is unsupported.
 Client image tools may send a second request to existing image endpoints, as in
 Bridge v0.4.6; do not confuse that with executing OfficeJS or hosted tools.
@@ -144,19 +153,13 @@ freeze the route, and preserve the original lease, affinity and cancellation own
 No Codex Cookie/State or native fallback on Excel image failure. Image transport
 remains HTTP JSON; do not mislabel it as SSE. Raw image traces use excel_http_json.
 
-Attachment references reuse the trusted replay owner plus endpoint, media and decoded
-content digest, never credentials. Asset operations are optional neutral port methods;
-Redis stores them separately from immutable history (512 entries, 2 KiB each, fixed
-24-hour entry lifetime). Reads and duplicate writes do not extend entry lifetime.
-That lifetime is a cache policy, not a guarantee of upstream file validity. No raw image
-or token is persisted. Application restart can reuse retained Redis records, not recover
-lost Redis data. Existing Redis durability configuration is not changed.
-Bound process-local per-key upload locks; never hold a global mutex across await.
-Cross-worker insert returns the existing winner and invalidation compares the rejected
-payload, preserving a newer mapping. Cache timeouts fail open to a real upload result,
-not fabricated success; pure text does not touch assets. Explicit pre-stream attachment
-HTTP errors may evict used mappings without replay. Unknown 422 and post-200 stream
-failures do not invalidate based on guesses. Client file IDs and relay URLs are excluded.
+Responses retains user attachment uploads and the scoped file-ID cache, including
+bounded cache calls, same-key upload deduplication and conditional invalidation.
+Only exact attachment rejection codes invalidate used receipts; generic 422 does not.
+No current generation request is replayed. No data migration or new image store is needed.
+Replay stores original inputs, never substituted short-lived relay URLs. Each continuation
+uploads/reuses user attachments or restages user relay pictures under its own lease,
+preserving scoped replay ownership and original tool-image carriers.
 When existing request tracing is enabled, emit excel.request.structure from the parsed
 wire body with fixed labels and counts only. Bound input/content scanning and mark
 truncation; never copy tool names, call IDs, URLs, text or encrypted payloads into facts.
@@ -247,3 +250,42 @@ strings; executable/multi-argument rejection; safe error paths for messages and
 tool outputs; auto declarations versus forced choices; projected effective effort.
 Good: a max request sends xhigh and reports xhigh. Base: native Codex unchanged.
 Bad: deleting genuine encrypted history or pretending filtered hosted tools ran.
+
+## 11. History And Bounded Tool Correction
+
+Scope: Excel protocol only. `replay::restore` accepts the complete source map
+and returns the effective `ClientTools` with restored input. Rebuild uncached
+CUSTOM/FUNCTION_CODE history from that catalog; preserve matching native cache
+records and raw source bytes. A missing call reports only its input position.
+
+`transform_stream_with_repair` accepts an optional account-bound HTTP sender.
+Only a completed, wholly unexecuted native tool batch can request correction:
+two attempts maximum, original model/lease/egress, no extra scheduler selection.
+Keep valid operations and raw code plus metadata, original output slots and
+response identity. Validate the whole batch before exposing executable events.
+Structured output and undeclared tools never enter correction.
+
+| Condition | Outcome |
+| --- | --- |
+| Corrected envelope passes and preserves operations | Deliver once; cache actual delivered source |
+| Added/reordered/changed operation or second invalid correction | Fail without executing tools or publishing a parent |
+| HTTP rejection | Preserve HTTP provenance and account error policy, never replay |
+| SSE failure | Preserve SSE error/code, not an HTTP auto-disable signal |
+| Incomplete terminal, truncation, timeout or cancellation | Stop; retain observed usage, no success cache |
+
+Normalize usage aliases before summing measured counters. Each correction
+checkpoint yields an internal empty chunk which the provider consumes into
+cumulative Usage/CalculatedCost facts before another network await. Core merges
+these snapshots; they are not deltas, client wire events or first-token signals.
+This preserves known usage when Core's cancellation boundary wins before the
+provider can report its own cancellation. Clear the recorder on aggregated
+completion; error/deadline paths take any unreported snapshot once. Cancellation
+drops the sender future rather than spawning background generation. Ordinary
+text stays incremental.
+
+Good: repair a missing CUSTOM marker without changing raw source. Base: valid
+tools, image position rules and the native route retain existing behavior.
+Bad: repair parameter values, retry a 422 without images, or erase encrypted
+history. Required regressions cover metadata preservation, duplicate identity,
+batch atomicity, aliases, cancellation, incomplete/SSE/HTTP errors, replay
+success/failure, structured bypass and original image detail.
