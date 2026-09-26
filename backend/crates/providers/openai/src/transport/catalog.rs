@@ -382,6 +382,8 @@ pub(crate) fn excel_bridge_model(model: &str) -> Result<CodexCatalogModel, Codex
             "display_name": model,
             "description": "Excel bridge; availability is checked by the upstream on each request.",
             "source": "excel_bridge",
+            "multi_agent_version": null,
+            "multi_agent_reasoning_effort": null,
             "supported_in_api": true,
             "supported_reasoning_levels": [
                 {"effort": "low"}, {"effort": "medium"}, {"effort": "high"}, {"effort": "xhigh"}

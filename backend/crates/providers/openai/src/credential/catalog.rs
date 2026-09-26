@@ -187,6 +187,8 @@ struct CatalogCacheState {
 struct ClientCatalogKey {
     account_id: ProviderAccountId,
     revision: CredentialRevision,
+    responses_upstream: gateway_core::account::ResponsesUpstream,
+    excel_models: gateway_core::account::ExcelModels,
     plan: Option<String>,
     upstream_user_id: Option<String>,
     upstream_account_id: Option<String>,
@@ -308,6 +310,24 @@ impl CodexCredentialCatalogService {
     ) -> ClientCatalogResult {
         let now = SystemTime::now();
         let mut accounts = self.repository.list_for_provider().await?;
+        // Discovery may use a native account while inference can use Excel.
+        // Derive capability restrictions from the authorized pool, not transient
+        // token/quota failures, and apply them after the raw catalog cache.
+        let excel_models: BTreeSet<String> = accounts
+            .iter()
+            .filter(|account| {
+                account.enabled()
+                    && account.authentication_kind() == "oauth"
+                    && account.responses_upstream()
+                        == gateway_core::account::ResponsesUpstream::Excel
+            })
+            .flat_map(|account| {
+                account.excel_models().as_slice().iter().filter(|model| {
+                    scope.allows_model(account.id(), model) && account.model_access().allows(model)
+                })
+            })
+            .cloned()
+            .collect();
         accounts
             .retain(|account| scope.allows(account.id()) && eligible_catalog_account(account, now));
         accounts.sort_by(|left, right| left.id().cmp(right.id()));
@@ -332,6 +352,8 @@ impl CodexCredentialCatalogService {
             let key = ClientCatalogKey {
                 account_id: account.id().clone(),
                 revision: account.revision(),
+                responses_upstream: account.responses_upstream(),
+                excel_models: account.excel_models().clone(),
                 plan: account.plan_type().map(str::to_owned),
                 upstream_user_id: account.upstream_user_id().map(str::to_owned),
                 upstream_account_id: account.upstream_account_id().map(str::to_owned),
@@ -406,7 +428,9 @@ impl CodexCredentialCatalogService {
                 })
                 .await;
             match &result.result {
-                Ok(models) => return Ok(models.clone()),
+                Ok(models) => {
+                    return excel_catalog_capabilities(models, &excel_models);
+                }
                 Err(error) => last_error = error.clone(),
             }
         }
@@ -1029,4 +1053,33 @@ fn eligible_catalog_account(account: &ProviderAccount, now: SystemTime) -> bool 
             account.credential_state(),
             CredentialState::Unknown | CredentialState::Ready
         )
+}
+
+fn excel_catalog_capabilities(
+    models: &[ProviderModelDescriptor],
+    excel_models: &BTreeSet<String>,
+) -> ClientCatalogResult {
+    let mut models = models.to_vec();
+    for model in &mut models {
+        if !excel_models.contains(model.model.as_str()) {
+            continue;
+        }
+        let mut document: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_slice(model.payload.body())
+                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?;
+        document.insert("multi_agent_version".into(), serde_json::Value::Null);
+        document.insert(
+            "multi_agent_reasoning_effort".into(),
+            serde_json::Value::Null,
+        );
+        model.payload = gateway_core::operation::RawJsonPayload::new(
+            model.payload.protocol(),
+            serde_json::to_vec(&document)
+                .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
+                .into(),
+        )
+        .map_err(|_| CodexCredentialCatalogError::InvalidCredentialData)?
+        .with_context(model.payload.context().clone());
+    }
+    Ok(models)
 }

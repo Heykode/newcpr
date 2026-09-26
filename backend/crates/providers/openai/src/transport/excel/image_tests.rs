@@ -132,6 +132,58 @@ async fn run(server: &MockServer, request: &CodexResponsesRequest) -> Result<(),
     Ok(())
 }
 
+#[tokio::test]
+async fn excel_encrypted_recovery_reuses_uploaded_attachments_without_reupload() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let server = MockServer::start().await;
+    uploader(&server, "id", 1).await;
+    let attempts = AtomicUsize::new(0);
+    Mock::given(path(RESPONSES_PATH))
+        .respond_with(move |_: &wiremock::Request| {
+            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(400).set_body_json(json!({
+                    "error":{"code":"invalid_encrypted_content"}
+                }))
+            } else {
+                completed()
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let original = json!([
+        {"role":"user","content":[image()]},
+        {"type":"reasoning","encrypted_content":"short-reference"}
+    ]);
+    let req = request(format!("{}{RESPONSES_PATH}", server.uri()), original);
+    let prepared = req.excel.as_ref().unwrap().body.clone();
+    run(&server, &req).await.unwrap();
+    assert_eq!(req.excel.as_ref().unwrap().body, prepared);
+    let requests = server.received_requests().await.unwrap();
+    let generations: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == RESPONSES_PATH)
+        .map(|request| request.body_json::<Value>().unwrap())
+        .collect();
+    assert_eq!(generations.len(), 2);
+    let mut expected = generations[0].clone();
+    expected["input"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["type"] != "reasoning");
+    assert_eq!(generations[1], expected);
+    let image_message = generations[1]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["role"] == "user")
+        .unwrap();
+    assert_eq!(image_message["content"][0]["file_id"], "file_fixture");
+    assert_eq!(generations[0]["input"].as_array().unwrap().len(), 3);
+    assert_eq!(generations[1]["input"].as_array().unwrap().len(), 2);
+}
+
 #[test]
 fn excel_image_validation_checks_carrier_detail_and_private_errors() {
     let mut authenticated = url::Url::parse("https://images.example.com/a").unwrap();

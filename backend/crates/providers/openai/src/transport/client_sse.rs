@@ -133,15 +133,52 @@ impl CodexBackendClient {
             );
             let mut uploaded = upstream_request.clone();
             uploaded.excel.as_mut().expect("Excel request").body = images.body.clone();
-            let result = self.send_response_http_sse(&uploaded, context).await;
+            let result = self
+                .create_prepared_response_stream(&uploaded, context)
+                .await;
             if let Err(error) = &result {
                 images.observe_error(error).await;
             }
-            return result.map(|response| self.with_excel_repair(response, &uploaded, context));
+            return result;
         }
-        self.send_response_http_sse(upstream_request, context)
+        self.create_prepared_response_stream(upstream_request, context)
             .await
-            .map(|response| self.with_excel_repair(response, upstream_request, context))
+    }
+
+    async fn create_prepared_response_stream(
+        &self,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        match self.send_response_http_sse(request, context).await {
+            Ok(response) => Ok(self.with_excel_repair(response, request, context)),
+            Err(error) => {
+                let body = match (&request.excel, &error) {
+                    (Some(excel), CodexClientError::Upstream { status, body, .. })
+                        if *status == reqwest::StatusCode::BAD_REQUEST =>
+                    {
+                        super::excel::encrypted::retry_body(&excel.body, body)
+                    }
+                    _ => None,
+                };
+                let Some(body) = body else {
+                    return Err(error);
+                };
+                // The failed HTTP body has been consumed and dropped. Reuse this
+                // pinned attempt, uploaded attachments and identity, not Core selection.
+                context.trace.cloned().unwrap_or_default().record(
+                    "excel.encrypted_recovery",
+                    serde_json::json!({"reason":"invalid_encrypted_content", "attempt":2}),
+                );
+                let mut recovered = request.clone();
+                recovered.excel.as_mut().expect("Excel request").body = body;
+                // Yield before the second send so a cancelled owner can drop us.
+                tokio::task::yield_now().await;
+                self.send_response_http_sse(&recovered, context)
+                    .await
+                    .map(|response| self.with_excel_repair(response, &recovered, context))
+            }
+        }
     }
 
     fn with_excel_repair(
