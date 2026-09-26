@@ -23,9 +23,28 @@ use crate::transport::{
     response_meta,
 };
 
-const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024;
-const MAX_IMAGES: usize = 16;
+#[derive(Clone, Copy)]
+pub(crate) struct ImageLimits {
+    pub(crate) single: usize,
+    pub(crate) total: usize,
+    pub(crate) count: usize,
+}
+
+impl Default for ImageLimits {
+    fn default() -> Self {
+        Self::from(gateway_core::routing::RequestTuning::default())
+    }
+}
+
+impl From<gateway_core::routing::RequestTuning> for ImageLimits {
+    fn from(value: gateway_core::routing::RequestTuning) -> Self {
+        Self {
+            single: value.excel_image_max_bytes.clamp(1, 20 * 1024 * 1024) as usize,
+            total: value.excel_image_total_bytes.clamp(1, 32 * 1024 * 1024) as usize,
+            count: value.excel_image_max_count.clamp(1, 4096) as usize,
+        }
+    }
+}
 
 fn is_inline(url: &str) -> bool {
     url.get(..5)
@@ -84,26 +103,33 @@ fn image_contents(input: &Value) -> impl Iterator<Item = &Value> {
 }
 
 /// Validate the source before any upload or relay. Never echo image contents or IDs.
+#[cfg(test)]
 pub(crate) fn validate(body: &Map<String, Value>) -> Result<(), ExcelRequestError> {
-    validate_inner(body, true)
+    validate_with_limits(body, true, ImageLimits::default())
 }
 
 /// The relay reserves its global memory budget before decoding image bytes.
+#[cfg(test)]
 pub(crate) fn validate_references(body: &Map<String, Value>) -> Result<(), ExcelRequestError> {
-    validate_inner(body, false)
+    validate_with_limits(body, false, ImageLimits::default())
 }
 
-fn validate_inner(body: &Map<String, Value>, decode: bool) -> Result<(), ExcelRequestError> {
+pub(crate) fn validate_with_limits(
+    body: &Map<String, Value>,
+    decode: bool,
+    limits: ImageLimits,
+) -> Result<(), ExcelRequestError> {
     fn visit(
         value: &Value,
         tool_output: bool,
         user: bool,
         decode: bool,
+        limits: ImageLimits,
     ) -> Result<(), ExcelRequestError> {
         match value {
             Value::Array(items) => {
                 for item in items {
-                    visit(item, tool_output, user, decode)?;
+                    visit(item, tool_output, user, decode, limits)?;
                 }
             }
             Value::Object(fields)
@@ -158,7 +184,7 @@ fn validate_inner(body: &Map<String, Value>, decode: bool) -> Result<(), ExcelRe
                     ExcelRequestError::ImageInput("provide file_id or an image_url"),
                 )?;
                 if is_inline(raw) {
-                    validate_data_url(raw, decode)?;
+                    validate_data_url(raw, decode, limits)?;
                     return Ok(());
                 }
                 let valid = raw.trim() == raw
@@ -184,8 +210,11 @@ fn validate_inner(body: &Map<String, Value>, decode: bool) -> Result<(), ExcelRe
         }
         Ok(())
     }
-    decoded_budget(image_contents(body.get("input").unwrap_or(&Value::Null)))
-        .map_err(|_| ExcelRequestError::ImageInput("inline image input is invalid"))?;
+    decoded_budget(
+        image_contents(body.get("input").unwrap_or(&Value::Null)),
+        limits,
+    )
+    .map_err(|_| ExcelRequestError::ImageInput("inline image input is invalid"))?;
     for item in body
         .get("input")
         .and_then(Value::as_array)
@@ -202,6 +231,7 @@ fn validate_inner(body: &Map<String, Value>, decode: bool) -> Result<(), ExcelRe
             tool,
             is_user_message(item),
             decode,
+            limits,
         )?;
     }
     Ok(())
@@ -215,15 +245,29 @@ pub(super) struct Picture {
 }
 
 /// Upper bound without decoding or copying data URLs, for global relay admission.
-fn decoded_budget<'a>(values: impl Iterator<Item = &'a Value>) -> Result<usize, CodexClientError> {
-    fn visit<'a>(value: &'a Value, urls: &mut BTreeSet<&'a str>) -> Result<(), CodexClientError> {
+fn decoded_budget<'a>(
+    values: impl Iterator<Item = &'a Value>,
+    limits: ImageLimits,
+) -> Result<usize, CodexClientError> {
+    fn visit<'a>(
+        value: &'a Value,
+        urls: &mut BTreeSet<&'a str>,
+        count: &mut usize,
+        limits: ImageLimits,
+    ) -> Result<(), CodexClientError> {
         match value {
             Value::Array(items) => {
                 for item in items {
-                    visit(item, urls)?;
+                    visit(item, urls, count, limits)?;
                 }
             }
             Value::Object(fields) => {
+                if fields.get("type").and_then(Value::as_str) == Some("input_image") {
+                    *count += 1;
+                    if *count > limits.count {
+                        return Err(invalid("Excel image count limit exceeded"));
+                    }
+                }
                 if fields.get("type").and_then(Value::as_str) == Some("input_image")
                     && let Some(url) = fields
                         .get("image_url")
@@ -231,7 +275,7 @@ fn decoded_budget<'a>(values: impl Iterator<Item = &'a Value>) -> Result<usize, 
                         .filter(|url| is_inline(url))
                 {
                     urls.insert(url);
-                    if urls.len() > MAX_IMAGES || url.len() > MAX_IMAGE_BYTES * 4 / 3 + 128 {
+                    if url.len() > limits.single * 4 / 3 + 128 {
                         return Err(invalid("Excel inline image input limit exceeded"));
                     }
                 }
@@ -241,37 +285,61 @@ fn decoded_budget<'a>(values: impl Iterator<Item = &'a Value>) -> Result<usize, 
         Ok(())
     }
     let mut urls = BTreeSet::new();
+    let mut count = 0;
     for value in values {
-        visit(value, &mut urls)?;
+        visit(value, &mut urls, &mut count, limits)?;
     }
     let mut total = 0usize;
     for url in urls {
         let (_, data) = url
             .split_once(',')
             .ok_or_else(|| invalid("Malformed image data URL"))?;
-        let size = data.len().div_ceil(4) * 3;
-        if size == 0 || size > MAX_IMAGE_BYTES + 2 {
+        let size = data.len().div_ceil(4) * 3
+            - data
+                .bytes()
+                .rev()
+                .take(2)
+                .take_while(|byte| *byte == b'=')
+                .count();
+        if size == 0 || size > limits.single {
             return Err(invalid("Excel inline image input limit exceeded"));
         }
         total += size;
     }
-    if total > MAX_TOTAL_BYTES + MAX_IMAGES * 2 {
+    if total > limits.total {
         return Err(invalid("Excel inline image input limit exceeded"));
     }
     Ok(total)
 }
 
+#[cfg(test)]
 pub(super) fn decoded_budget_user(value: &Value) -> Result<usize, CodexClientError> {
-    decoded_budget(user_contents(value))
+    decoded_budget_user_with_limits(value, ImageLimits::default())
 }
 
+pub(super) fn decoded_budget_user_with_limits(
+    value: &Value,
+    limits: ImageLimits,
+) -> Result<usize, CodexClientError> {
+    decoded_budget(user_contents(value), limits)
+}
+
+#[cfg(test)]
 pub(super) fn collect_user(
     value: &Value,
     pictures: &mut Vec<Picture>,
 ) -> Result<(), CodexClientError> {
+    collect_user_with_limits(value, pictures, ImageLimits::default())
+}
+
+pub(super) fn collect_user_with_limits(
+    value: &Value,
+    pictures: &mut Vec<Picture>,
+    limits: ImageLimits,
+) -> Result<(), CodexClientError> {
     let mut total = 0;
     for content in user_contents(value) {
-        collect(content, pictures, &mut total)?;
+        collect_with_limits(content, pictures, &mut total, limits)?;
     }
     Ok(())
 }
@@ -281,10 +349,19 @@ pub(super) fn collect(
     pictures: &mut Vec<Picture>,
     total: &mut usize,
 ) -> Result<(), CodexClientError> {
+    collect_with_limits(value, pictures, total, ImageLimits::default())
+}
+
+fn collect_with_limits(
+    value: &Value,
+    pictures: &mut Vec<Picture>,
+    total: &mut usize,
+    limits: ImageLimits,
+) -> Result<(), CodexClientError> {
     match value {
         Value::Array(items) => {
             for item in items {
-                collect(item, pictures, total)?;
+                collect_with_limits(item, pictures, total, limits)?;
             }
         }
         Value::Object(object) => {
@@ -297,7 +374,7 @@ pub(super) fn collect(
                 if pictures.iter().any(|picture| picture.url == url) {
                     return Ok(());
                 }
-                if pictures.len() >= MAX_IMAGES || url.len() > MAX_IMAGE_BYTES * 4 / 3 + 128 {
+                if pictures.len() >= limits.count || url.len() > limits.single * 4 / 3 + 128 {
                     return Err(invalid("Excel inline image input limit exceeded"));
                 }
                 let (metadata, data) = url
@@ -318,7 +395,7 @@ pub(super) fn collect(
                     .decode(data)
                     .map_err(|_| invalid("Malformed image base64"))?;
                 *total = total.saturating_add(bytes.len());
-                if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES || *total > MAX_TOTAL_BYTES {
+                if bytes.is_empty() || bytes.len() > limits.single || *total > limits.total {
                     return Err(invalid("Excel inline image input limit exceeded"));
                 }
                 pictures.push(Picture {
@@ -372,17 +449,46 @@ fn rejected_attachment(error: &CodexClientError) -> bool {
     )
 }
 
-pub(crate) async fn upload_inline(
+pub(crate) async fn upload_inline_with_limits(
     client: &CodexBackendClient,
     profile: &CodexWireProfile,
     context: CodexRequestContext<'_>,
     endpoint: &str,
     body: &Map<String, Value>,
     replay: Option<&ReplayCapture>,
+    limits: ImageLimits,
+) -> Result<UploadedImages, CodexClientError> {
+    static UPLOADS: std::sync::LazyLock<tokio::sync::Semaphore> =
+        std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(32));
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        let _permit = UPLOADS
+            .acquire()
+            .await
+            .map_err(|_| invalid("Excel attachment admission unavailable"))?;
+        validate_with_limits(body, true, limits)
+            .map_err(|_| invalid("Excel image input is invalid"))?;
+        upload_admitted(client, profile, context, endpoint, body, replay, limits).await
+    })
+    .await
+    .map_err(|_| invalid("Excel attachment upload timed out"))?
+}
+
+async fn upload_admitted(
+    client: &CodexBackendClient,
+    profile: &CodexWireProfile,
+    context: CodexRequestContext<'_>,
+    endpoint: &str,
+    body: &Map<String, Value>,
+    replay: Option<&ReplayCapture>,
+    limits: ImageLimits,
 ) -> Result<UploadedImages, CodexClientError> {
     let mut value = Value::Object(body.clone());
     let mut pictures = Vec::new();
-    collect_user(value.get("input").unwrap_or(&Value::Null), &mut pictures)?;
+    collect_user_with_limits(
+        value.get("input").unwrap_or(&Value::Null),
+        &mut pictures,
+        limits,
+    )?;
     let upload_url = format!(
         "{}/attachments",
         endpoint
@@ -531,7 +637,11 @@ fn rewrite_user_images(value: &mut Value, replacements: &BTreeMap<String, String
     }
 }
 
-fn validate_data_url(raw: &str, decode: bool) -> Result<(), ExcelRequestError> {
+fn validate_data_url(
+    raw: &str,
+    decode: bool,
+    limits: ImageLimits,
+) -> Result<(), ExcelRequestError> {
     let (metadata, encoded) = raw
         .split_once(',')
         .ok_or(ExcelRequestError::ImageInput("malformed image data URL"))?;
@@ -553,7 +663,7 @@ fn validate_data_url(raw: &str, decode: bool) -> Result<(), ExcelRequestError> {
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|_| ExcelRequestError::ImageInput("malformed image base64"))?;
-    if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+    if bytes.is_empty() || bytes.len() > limits.single {
         return Err(ExcelRequestError::ImageInput(
             "inline image size is invalid",
         ));

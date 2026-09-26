@@ -28,6 +28,37 @@ pub(super) const VERIFIED_MODEL: &str = "gpt-5.6-sol";
 pub(super) struct MemoryReplay(Mutex<BTreeMap<String, OpaqueProviderData>>);
 
 impl ProviderReplayPort for MemoryReplay {
+    fn read_catalog<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async move {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .get(&format!("catalog:{key}"))
+                .cloned())
+        })
+    }
+
+    fn compare_exchange_catalog<'a>(
+        &'a self,
+        key: &'a str,
+        expected: Option<&'a OpaqueProviderData>,
+        payload: &'a OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut values = self.0.lock().unwrap();
+            let key = format!("catalog:{key}");
+            if values.get(&key) != expected {
+                return Ok(false);
+            }
+            values.insert(key, payload.clone());
+            Ok(true)
+        })
+    }
+
     fn read<'a>(
         &'a self,
         key: &'a str,
@@ -71,6 +102,7 @@ pub(super) fn request(endpoint: String, input: Value) -> CodexResponsesRequest {
         tools,
         structured: None,
         _image_lease: None,
+        image_limits: Default::default(),
         completed: Default::default(),
         usage: Default::default(),
         replay: None,
@@ -114,6 +146,93 @@ fn function_code_source() -> Value {
                 "permission":{"type":"string"},"id":{"type":"integer"}},
             "required":["code"],"additionalProperties":false}}
     ]}]})
+}
+
+#[test]
+fn excel_function_cmd_transport_preserves_shell_and_validates_schema() {
+    let source = json!({"tools":[{"type":"namespace","name":"terminal","tools":[
+        {"type":"function","name":"exec_command","parameters":{"type":"object",
+            "properties":{"cmd":{"type":"string"},"timeout":{"type":"integer"}},
+            "required":["cmd"],"additionalProperties":false}}
+    ]}]});
+    let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+    let cmd = "printf '%s\\n' \"$HOME\"\r\n  echo '中文'\n";
+    let native = |name: &str, metadata: Value| {
+        let mut call = native_fixture(Value::Null);
+        call["arguments"] = json!({"summary":format!("codex2api.function_cmd/{name}"),
+            "code":cmd,"extended_summary":metadata.to_string()})
+        .to_string()
+        .into();
+        call
+    };
+    for metadata in [json!({"timeout":20}), json!({"timeout":20,"cmd":cmd})] {
+        let converted = tools
+            .convert_call(&native("terminal.exec_command", metadata))
+            .unwrap();
+        assert_eq!(converted["namespace"], "terminal");
+        let args: Value = serde_json::from_str(converted["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args, json!({"cmd":cmd,"timeout":20}));
+        let replay = tools.rebuild_history_call(&converted).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(replay["arguments"].as_str().unwrap()).unwrap()["code"],
+            cmd
+        );
+    }
+    for metadata in [
+        json!({"cmd":"different"}),
+        json!({"cmd":123}),
+        json!({"timeout":"wrong"}),
+        json!({"extra":true}),
+        json!([]),
+    ] {
+        assert!(
+            tools
+                .convert_call(&native("terminal.exec_command", metadata))
+                .is_err()
+        );
+    }
+    assert!(
+        tools
+            .convert_call(&native("undeclared", json!({})))
+            .is_err()
+    );
+    assert!(tools.instructions().contains("codex2api.function_cmd/"));
+    assert!(
+        tools
+            .reminder()
+            .unwrap()
+            .contains("codex2api.function_cmd/")
+    );
+    let wrong = ClientTools::parse(
+        json!({"tools":[{"type":"function","name":"exec_command",
+        "parameters":{"type":"object","properties":{"cmd":{"type":"number"}}}}]})
+        .as_object()
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(!wrong.instructions().contains("codex2api.function_cmd/"));
+}
+
+#[test]
+fn excel_compaction_default_does_not_override_explicit_client_policy() {
+    let mut source = json!({"model":VERIFIED_MODEL,"input":"hello"})
+        .as_object()
+        .unwrap()
+        .clone();
+    let prepare = |source: &serde_json::Map<String, Value>| {
+        prepare_request(source, &ClientTools::default(), &BTreeMap::new(), None).unwrap()
+    };
+    assert_eq!(
+        prepare(&source)["context_management"][0]["compact_threshold"],
+        920000
+    );
+    for policy in [
+        json!([]),
+        json!([{"type":"compaction","compact_threshold":123456}]),
+    ] {
+        source.insert("context_management".into(), policy.clone());
+        assert_eq!(prepare(&source)["context_management"], policy);
+    }
 }
 
 fn function_code_native(name: &str, code: &str, metadata: Value) -> Value {
@@ -508,6 +627,7 @@ async fn excel_stream_projects_effective_effort_and_plaintext_metadata_on_all_to
         tools,
         structured: None,
         _image_lease: None,
+        image_limits: Default::default(),
         completed: Default::default(),
         usage: Default::default(),
         replay: None,
@@ -863,6 +983,7 @@ async fn transformed_fixture(
         tools,
         structured,
         _image_lease: None,
+        image_limits: Default::default(),
         completed: Default::default(),
         usage: Default::default(),
         replay: None,

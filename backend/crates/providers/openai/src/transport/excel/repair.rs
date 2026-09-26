@@ -64,6 +64,7 @@ fn marked_target(args: &Value) -> Option<&str> {
         "cpr.custom/",
         "codex2api.custom/",
         envelope::FUNCTION_CODE_PREFIX,
+        envelope::FUNCTION_CMD_PREFIX,
     ]
     .into_iter()
     .find_map(|prefix| summary.strip_prefix(prefix))
@@ -127,6 +128,42 @@ pub(super) fn eligible(tools: &ClientTools, response: &Value) -> bool {
     })
 }
 
+pub(super) fn has_tool_history(body: &Map<String, Value>) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                matches!(
+                    item["type"].as_str(),
+                    Some(
+                        "function_call"
+                            | "custom_tool_call"
+                            | "function_call_output"
+                            | "custom_tool_call_output"
+                    )
+                )
+            })
+        })
+}
+
+pub(super) fn unknown_eligible(tools: &ClientTools, response: &Value) -> bool {
+    if !tools.has_client_tools() {
+        return false;
+    }
+    let Some(items) = batch(response) else {
+        return false;
+    };
+    items.len() == 1
+        && tools.validate_call_count(1).is_ok()
+        && response["output"]
+            .as_array()
+            .and_then(|output| output.last())
+            == items.first()
+        && arguments(&items[0])
+            .and_then(|args| explicit_target(&args))
+            .is_some_and(|name| !tools.contains(&name))
+}
+
 pub(super) fn correct<'a>(
     original: &'a Value,
     tools: &'a ClientTools,
@@ -137,6 +174,7 @@ pub(super) fn correct<'a>(
     Box::pin(async_stream::try_stream! {
     let original_calls = batch(original)
         .ok_or_else(|| invalid("Excel tool batch is not eligible for correction"))?;
+    let unknown = !has_tool_history(&body) && unknown_eligible(tools,original);
     let mut result = original.clone();
     let mut failed = original.clone();
     let mut usage = json!({});
@@ -144,8 +182,19 @@ pub(super) fn correct<'a>(
     usage_policy.record_repair_usage(original, &usage);
     // Let the existing Core metering owner observe known usage before any new await.
     yield None;
-    for _ in 0..MAX_REPAIRS {
-        extend_request(&mut body, &failed, original_calls.len())?;
+    for _ in 0..if unknown { 1 } else { MAX_REPAIRS } {
+        if unknown {
+            let input = body.get_mut("input").and_then(Value::as_array_mut)
+                .ok_or_else(|| invalid("Excel correction requires complete history"))?;
+            let index = input.len().saturating_sub(usize::from(input.last().is_some_and(|item| item["type"] == "compaction_trigger")));
+            input.insert(index,super::request::message("developer", &format!(
+                "Your response requested an undeclared client tool. No client tool was executed. Return exactly one call using only the declared catalog and its schema. Do not invent a native tool or execute Office code. {}",tools.reminder().unwrap_or_default())));
+            if serde_json::to_vec(&body).map_err(CodexClientError::RequestBodyEncode)?.len() > MAX_RESPONSE_BYTES {
+                Err(invalid("Excel correction exceeds its request size limit"))?;
+            }
+        } else {
+            extend_request(&mut body, &failed, original_calls.len())?;
+        }
         let mut stream = sender(body.clone()).await?;
         let mut event = read_response(&mut stream).await?;
         drop(stream);
@@ -172,8 +221,8 @@ pub(super) fn correct<'a>(
                 invalid("Excel tool correction changed the batch or did not complete")
             })?;
         if validate(tools, corrected).is_ok() {
-            bind_original_code(tools, &original_calls, &mut calls)?;
-            if !preserves_operations(tools, &original_calls, &calls) {
+            if !unknown { bind_original_code(tools, &original_calls, &mut calls)?; }
+            if !unknown && !preserves_operations(tools, &original_calls, &calls) {
                 Err(invalid(
                     "Excel tool correction changed an operation; no tool was executed",
                 ))?;
@@ -189,6 +238,7 @@ pub(super) fn correct<'a>(
             yield Some(json!({"type":"response.completed","response":result}));
             return;
         }
+        if unknown { Err(invalid("Excel unknown-tool correction failed; no tool was executed"))?; }
         if !eligible(tools, corrected) {
             Err(invalid(
                 "Excel corrected tool is outside the permitted batch",
@@ -242,6 +292,11 @@ fn operation(call: &Value) -> Option<Value> {
 
 fn preserves_operations(tools: &ClientTools, original: &[Value], corrected: &[Value]) -> bool {
     original.iter().zip(corrected).all(|(before, after)| {
+        let raw_cmd = arguments(after).is_some_and(|args| {
+            args["summary"]
+                .as_str()
+                .is_some_and(|summary| summary.starts_with(envelope::FUNCTION_CMD_PREFIX))
+        });
         let Ok(after) = tools.convert_call(after) else {
             return false;
         };
@@ -284,13 +339,14 @@ fn preserves_operations(tools: &ClientTools, original: &[Value], corrected: &[Va
             let Some(mut actual) = envelope::json_value(&after["arguments"]).ok() else {
                 return false;
             };
-            if actual["code"].as_str() != Some(code) {
+            let raw_field = if raw_cmd { "cmd" } else { "code" };
+            if actual[raw_field].as_str() != Some(code) {
                 return false;
             }
             let Some(actual) = actual.as_object_mut() else {
                 return false;
             };
-            actual.remove("code");
+            actual.remove(raw_field);
             let expected = args
                 .get("extended_summary")
                 .map(envelope::json_value)
@@ -313,6 +369,10 @@ fn extend_request(
         .get_mut("input")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid("Excel correction requires complete history"))?;
+    let trigger = input
+        .last()
+        .is_some_and(|item| item["type"] == "compaction_trigger")
+        .then(|| input.pop().unwrap());
     input.extend(
         failed["output"]
             .as_array()
@@ -331,10 +391,15 @@ fn extend_request(
          Return exactly {count} run_officejs calls in the same order, correcting transport only. \
          Preserve operations and exact source text. CUSTOM requires summary=cpr.custom/CATALOG_NAME \
          and raw input in code; FUNCTION_CODE requires summary=codex2api.function_code/CATALOG_NAME, \
-         raw code and remaining arguments as JSON in extended_summary. Ordinary FUNCTION uses \
+         raw code and remaining arguments as JSON in extended_summary. FUNCTION_CMD requires \
+         summary=codex2api.function_cmd/CATALOG_NAME, raw command in code and other arguments \
+         as JSON in extended_summary. Ordinary FUNCTION uses \
          one JSON envelope with name and object arguments in code. Use the existing catalog only. \
          Do not add operations, execute Office code, or repeat commentary."
     )));
+    if let Some(trigger) = trigger {
+        input.push(trigger);
+    }
     let iteration = body
         .get_mut("metadata")
         .and_then(|value| value.get_mut("agent_iteration"))

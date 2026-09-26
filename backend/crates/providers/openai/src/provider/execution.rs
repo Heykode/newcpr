@@ -571,6 +571,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 super::excel::observe_http_rejection(
                     &request.selector, &active_account, &mut failure,
                     request.excel.is_some(), allows_account_state_mutation,
+                    failure_context.is_diagnostic,
                 ).await;
                 if let Some(observation) = failure.observation.take() {
                     yield ProviderEvent::observation(response_route_observation(observation, request.excel.is_some()));
@@ -800,6 +801,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 super::excel::observe_http_rejection(
                     &selector, &active_account, &mut failure,
                     request.excel.is_some(), allows_account_state_mutation,
+                    failure_context.is_diagnostic,
                 ).await;
                 if let Some(policy) = websocket_failure_policy {
                     apply_websocket_recovery_policy(
@@ -975,13 +977,14 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     continue;
                 }
                 Err(mut failure) => {
-                    for event in super::excel::failed_repair_metering(&request) {
-                        yield event;
-                    }
                     super::excel::observe_http_rejection(
                         &selector, &active_account, &mut failure,
                         request.excel.is_some(), allows_account_state_mutation,
+                        failure_context.is_diagnostic,
                     ).await;
+                    for event in super::excel::failed_repair_metering(&request) {
+                        yield event;
+                    }
                     let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
                     let rate_limits_changed = if updates.is_empty() {
                         false

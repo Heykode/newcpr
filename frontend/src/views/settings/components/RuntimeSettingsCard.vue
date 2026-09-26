@@ -56,6 +56,9 @@ const tuningValues = {
   websocketFailureOpenDurationMs: tuningNumber('websocketFailureOpenDurationMs'),
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
   excelImageRelayBytes: tuningNumber('excelImageRelayBytes'),
+  excelImageMaxBytes: tuningNumber('excelImageMaxBytes'),
+  excelImageTotalBytes: tuningNumber('excelImageTotalBytes'),
+  excelImageMaxCount: tuningNumber('excelImageMaxCount'),
   excelImageRelayRequests: tuningNumber('excelImageRelayRequests'),
   excelImageRelayDownloads: tuningNumber('excelImageRelayDownloads'),
   excelImageRelayEntries: tuningNumber('excelImageRelayEntries'),
@@ -259,6 +262,15 @@ const tuningValues = {
       </button>
 
       <BaseForm v-if="advancedOpen" class="mt-4 max-w-6xl sm:grid-cols-2">
+        <BaseFormItem label="Excel 单张图片上限（字节）">
+          <BaseInput v-model="tuningValues.excelImageMaxBytes.value" aria-label="Excel 单张图片上限" type="number" min="1" max="20971520" step="1" />
+        </BaseFormItem>
+        <BaseFormItem label="Excel 请求图片总量上限（字节）" description="内联图片去重后的字节预算；仍受请求正文和会话回放上限约束。">
+          <BaseInput v-model="tuningValues.excelImageTotalBytes.value" aria-label="Excel 请求图片总量上限" type="number" min="1" max="33554432" step="1" />
+        </BaseFormItem>
+        <BaseFormItem label="Excel 单请求图片数量上限">
+          <BaseInput v-model="tuningValues.excelImageMaxCount.value" aria-label="Excel 单请求图片数量上限" type="number" min="1" max="4096" step="1" />
+        </BaseFormItem>
         <BaseFormItem label="Excel 图片中转字节预算">
           <BaseInput v-model="tuningValues.excelImageRelayBytes.value" aria-label="Excel 图片中转字节预算" type="number" min="1048576" max="2147483648" step="1048576" />
         </BaseFormItem>

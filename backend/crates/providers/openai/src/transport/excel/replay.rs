@@ -27,6 +27,8 @@ struct ReplayRecord {
     native_calls: BTreeMap<String, Value>,
     #[serde(default)]
     client_calls: BTreeMap<String, Value>,
+    #[serde(default)]
+    tools: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -43,12 +45,32 @@ pub(crate) struct RestoredInput {
     pub(crate) tools: ClientTools,
 }
 
+#[cfg(test)]
 pub(crate) async fn restore(
     store: Arc<dyn ProviderReplayPort>,
     owner: String,
     conversation: String,
     previous_response_id: Option<&str>,
     source: &Map<String, Value>,
+) -> Result<RestoredInput, ExcelRequestError> {
+    restore_scoped(
+        store,
+        owner,
+        conversation,
+        previous_response_id,
+        source,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn restore_scoped(
+    store: Arc<dyn ProviderReplayPort>,
+    owner: String,
+    conversation: String,
+    previous_response_id: Option<&str>,
+    source: &Map<String, Value>,
+    session: Option<&str>,
 ) -> Result<RestoredInput, ExcelRequestError> {
     let mut record = if let Some(previous) = previous_response_id {
         let payload = load(store.as_ref(), &key(&owner, "response", previous))
@@ -68,6 +90,7 @@ pub(crate) async fn restore(
             input: Vec::new(),
             native_calls: BTreeMap::new(),
             client_calls: BTreeMap::new(),
+            tools: None,
         }
     };
     let delta = match source.get("input").ok_or(ExcelRequestError::Input)? {
@@ -75,12 +98,20 @@ pub(crate) async fn restore(
         Value::Array(items) => items.clone(),
         _ => return Err(ExcelRequestError::Input),
     };
-    let mut catalog_source = source.clone();
-    catalog_source.insert(
-        "input".into(),
-        Value::Array(record.input.iter().chain(&delta).cloned().collect()),
-    );
-    let tools = ClientTools::parse(&catalog_source)?;
+    let legacy_catalog = if record.tools.is_none() && previous_response_id.is_some() {
+        Some(ClientTools::parse(json!({"input":record.input}).as_object().unwrap())?.catalog())
+    } else {
+        None
+    };
+    let (tools, catalog) = super::catalog::resolve(
+        store.as_ref(),
+        &record.owner,
+        session,
+        record.tools.as_ref().or(legacy_catalog.as_ref()),
+        source,
+    )
+    .await?;
+    record.tools = Some(catalog);
     // previous_response_id explicitly means incremental input; never guess by text similarity.
     for (index, item) in delta.iter().enumerate() {
         if matches!(
@@ -550,6 +581,7 @@ mod tests {
             input: vec![message("user", "keep"), compact.clone()],
             native_calls: BTreeMap::new(),
             client_calls: BTreeMap::new(),
+            tools: None,
         };
         prune_compacted_history(&mut record, 2);
         assert_eq!(record.input.len(), 2);

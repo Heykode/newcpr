@@ -13,7 +13,7 @@ function load(path, dependencies = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
   const exports = {}
-  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? require(name) })
+  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
   return exports
 }
 const { templateForm, templateConfig } = load('../src/components/account-templates/template-form.ts', {
@@ -30,6 +30,7 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
   form.groupIds.push('group-b')
   assert.deepEqual(config.groupIds, ['group-a'])
   const blank = templateForm()
+  assert.equal(blank.excelModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
   blank.name = '  Defaults  '
   assert.equal(JSON.stringify(templateConfig(blank)), JSON.stringify({
     name: 'Defaults',

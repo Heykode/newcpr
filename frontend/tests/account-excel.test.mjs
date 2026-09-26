@@ -13,7 +13,7 @@ function load(path, dependencies = {}) {
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
-  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? require(name) })
+  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
   return exports
 }
 
@@ -55,6 +55,7 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   }))
   state.open(accounts.value[0])
   assert.equal(state.excelEnabled.value, true)
+  assert.equal(state.excelModels.value, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
   await state.save()
   assert.equal(Object.hasOwn(updates[0], 'responsesUpstream'), false)
   state.open(accounts.value[0])
@@ -132,6 +133,7 @@ test('Excel import defaults preserve, explicit global follows, mixed providers s
   const form = creation.emptyAccountCreateForm()
   form.provider = 'openai'
   assert.equal(form.excelModelsFollowGlobal, true)
+  assert.equal(form.excelModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
   assert.equal('responsesUpstream' in creation.accountImportSettings(form), false)
   form.applyExcel = true
   form.excelEnabled = true

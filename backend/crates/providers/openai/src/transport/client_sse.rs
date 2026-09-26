@@ -96,24 +96,41 @@ impl CodexBackendClient {
         // User images need account-scoped attachments; tool-result images must
         // retain Base64/HTTPS because that position rejects file_id.
         if let Some(excel) = &upstream_request.excel {
-            super::excel::images::validate(&excel.body).map_err(|error| {
-                CodexClientError::InvalidSse(gateway_protocol::openai::sse::SseError::ParseError(
-                    error.to_string(),
-                ))
-            })?;
+            super::excel::images::validate_with_limits(&excel.body, true, excel.image_limits)
+                .map_err(|error| {
+                    CodexClientError::InvalidSse(
+                        gateway_protocol::openai::sse::SseError::ParseError(error.to_string()),
+                    )
+                })?;
         }
         if let Some(excel) = &upstream_request.excel
             && super::excel::images::has_user_inline(&excel.body)
         {
-            let images = super::excel::images::upload_inline(
+            let trace = context.trace.cloned().unwrap_or_default();
+            trace.record(
+                "excel.transport",
+                serde_json::json!({"phase":"attachment_upload_started"}),
+            );
+            let images = super::excel::images::upload_inline_with_limits(
                 self,
                 &self.profile.snapshot(),
                 context,
                 &excel.endpoint,
                 &excel.body,
                 excel.replay.as_ref(),
+                excel.image_limits,
             )
-            .await?;
+            .await
+            .inspect_err(|error| {
+                trace.record(
+                    "excel.transport.failed",
+                    super::excel::diagnostics::transport_failure(error),
+                );
+            })?;
+            trace.record(
+                "excel.transport",
+                serde_json::json!({"phase":"attachment_upload_completed"}),
+            );
             let mut uploaded = upstream_request.clone();
             uploaded.excel.as_mut().expect("Excel request").body = images.body.clone();
             let result = self.send_response_http_sse(&uploaded, context).await;
@@ -264,6 +281,12 @@ impl CodexBackendClient {
         } else {
             body
         };
+        if excel.is_some() {
+            trace.record(
+                "excel.transport",
+                serde_json::json!({"phase":"exchange_started"}),
+            );
+        }
         let response = self
             .send_profiled(&profile, false, |client| {
                 let builder = client.post(endpoint).headers(headers).body(body);
@@ -273,10 +296,24 @@ impl CodexBackendClient {
                     builder
                 }
             })
-            .await?;
+            .await
+            .inspect_err(|error| {
+                if excel.is_some() {
+                    trace.record(
+                        "excel.transport.failed",
+                        super::excel::diagnostics::transport_failure(error),
+                    );
+                }
+            })?;
         let upstream_headers_ms = elapsed_duration_millis(headers_started_at.elapsed());
         let http_version = http_version_name(response.version()).to_string();
         let status = response.status();
+        if excel.is_some() {
+            trace.record(
+                "excel.transport",
+                serde_json::json!({"phase":"response_headers","status":status.as_u16()}),
+            );
+        }
         trace.headers(
             "upstream.response.headers",
             serde_json::json!({

@@ -59,12 +59,18 @@ pub(super) async fn prepare_excel(
         request.model()
     ]);
     let owner = hex::encode(Sha256::digest(scope.to_string().as_bytes()));
-    let restored = crate::transport::excel::replay::restore(
+    let trusted_session = request
+        .local_conversation_id
+        .as_deref()
+        .or_else(|| source.get("prompt_cache_key").and_then(Value::as_str))
+        .or_else(|| source.get("session_id").and_then(Value::as_str));
+    let restored = crate::transport::excel::replay::restore_scoped(
         replay,
         owner.clone(),
         cache_anchor,
         request.previous_response_id(),
         &source,
+        trusted_session,
     )
     .await
     .map_err(request_error)?;
@@ -96,9 +102,15 @@ pub(super) async fn prepare_excel(
             }),
         );
     }
-    crate::transport::excel::images::validate_references(&body).map_err(request_error)?;
-    let image_lease = image_relay.stage(&mut body).map_err(request_error)?;
-    crate::transport::excel::images::validate(&body).map_err(request_error)?;
+    let image_tuning = image_relay.request_tuning();
+    let image_limits = image_tuning.into();
+    crate::transport::excel::images::validate_with_limits(&body, false, image_limits)
+        .map_err(request_error)?;
+    let image_lease = image_relay
+        .stage_with_tuning(&mut body, image_tuning)
+        .map_err(request_error)?;
+    crate::transport::excel::images::validate_with_limits(&body, true, image_limits)
+        .map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
     request.force_http_sse = true;
     request.use_websocket = false;
@@ -107,6 +119,7 @@ pub(super) async fn prepare_excel(
         tools,
         structured,
         _image_lease: image_lease,
+        image_limits,
         completed: Default::default(),
         usage: crate::transport::excel::usage::ExcelUsagePolicy::new(
             lease.account().excel_cache_creation_as_input(),
@@ -254,8 +267,18 @@ pub(super) async fn observe_http_rejection(
     failure: &mut MappedProviderFailure,
     excel: bool,
     allows_mutation: bool,
+    diagnostic: bool,
 ) {
-    if !excel || !allows_mutation || !should_disable_on_403(account, failure) {
+    if !excel || !allows_mutation {
+        return;
+    }
+    if let Some(revoked) = isolate_http_authentication_failure(failure) {
+        selector
+            .record_excel_authentication_failure(account, revoked, diagnostic)
+            .await;
+        return;
+    }
+    if !should_disable_on_403(account, failure) {
         return;
     }
     suppress_rejection_recovery(failure);
@@ -271,9 +294,31 @@ pub(super) async fn observe_http_rejection(
     }).await;
 }
 
+fn isolate_http_authentication_failure(failure: &mut MappedProviderFailure) -> Option<bool> {
+    if failure.http_rejection_status != Some(401) {
+        return None;
+    }
+    let revoked = failure.account_failure == Some(CodexAccountFailure::CredentialRevoked);
+    // Preserve downstream evidence; do not replay or persist arbitrary upstream text.
+    suppress_recovery_with_kind(failure, ProviderErrorKind::Unauthorized);
+    failure.rate_limit_headers.clear();
+    failure.error_message = Some("Excel upstream authentication failed".to_owned());
+    Some(revoked)
+}
+
 fn suppress_rejection_recovery(failure: &mut MappedProviderFailure) {
+    suppress_recovery_with_kind(failure, ProviderErrorKind::PermissionDenied);
+    failure.rate_limit_headers.clear();
+}
+
+fn suppress_recovery_with_kind(failure: &mut MappedProviderFailure, kind: ProviderErrorKind) {
     let old = &failure.error;
-    let mut error = provider_error(ProviderErrorKind::PermissionDenied, old.send_state());
+    let mut error = provider_error(kind, old.send_state());
+    if kind == ProviderErrorKind::RateLimited
+        && let Some(delay) = old.retry_after()
+    {
+        error = error.with_retry_after(delay);
+    }
     if let Some(status) = old.upstream_status() {
         error = error.with_status(status);
     }
@@ -304,7 +349,6 @@ fn suppress_rejection_recovery(failure: &mut MappedProviderFailure) {
     failure.websocket_transport_retryable = false;
     failure.cyber_policy_failure = false;
     failure.capture_response_cookies = false;
-    failure.rate_limit_headers.clear();
 }
 
 pub(super) fn classify_failure(
@@ -315,6 +359,7 @@ pub(super) fn classify_failure(
         return failure;
     }
     let Some(detail) = failure.error.client_visible_upstream_error() else {
+        isolate_endpoint_rate_limit(&mut failure);
         return failure;
     };
     let classified = [detail.code(), detail.error_type()]
@@ -346,6 +391,7 @@ pub(super) fn classify_failure(
             _ => None,
         });
     let Some((code, kind, account_failure)) = classified else {
+        isolate_endpoint_rate_limit(&mut failure);
         return failure;
     };
     // Preserve the upstream evidence, but not Codex's status-only retry/cooldown policy.
@@ -384,10 +430,83 @@ pub(super) fn classify_failure(
     failure
 }
 
+fn isolate_endpoint_rate_limit(failure: &mut MappedProviderFailure) {
+    if failure.error.kind() == ProviderErrorKind::RateLimited
+        && matches!(
+            failure.account_failure,
+            None | Some(CodexAccountFailure::RateLimited { .. })
+        )
+    {
+        suppress_recovery_with_kind(failure, ProviderErrorKind::RateLimited);
+        failure.error = failure.error.clone().with_diagnostic(
+            ProviderDiagnostic::new("Excel endpoint rate limited this request")
+                .with_classification("upstream", "excel_rate_limited"),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gateway_core::error::{ClientVisibleUpstreamError, ClientVisibleUpstreamResponse};
+
+    #[test]
+    fn excel_http_401_preserves_evidence_without_replay_or_sensitive_state_reason() {
+        for (code, revoked) in [
+            ("access_token_expired", false),
+            ("token_revoked", true),
+            ("token_invalidated", true),
+            ("unknown", false),
+        ] {
+            let mut failure = classify_failure(rejection(code), true);
+            failure.http_rejection_status = Some(401);
+            failure.error = failure
+                .error
+                .with_status(401)
+                .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                    401,
+                    Some(b"application/json".to_vec()),
+                    bytes::Bytes::from_static(b"test body"),
+                ))
+                .with_replay_safe()
+                .with_same_account_retry();
+            failure.error_message = Some("Bearer private-fixture; request text".into());
+            let raw = failure
+                .error
+                .client_visible_upstream_response()
+                .unwrap()
+                .body()
+                .clone();
+            assert_eq!(
+                isolate_http_authentication_failure(&mut failure),
+                Some(revoked)
+            );
+            assert_eq!(failure.error.kind(), ProviderErrorKind::Unauthorized);
+            assert_eq!(failure.error.upstream_status(), Some(401));
+            assert_eq!(
+                failure
+                    .error
+                    .client_visible_upstream_response()
+                    .unwrap()
+                    .body(),
+                &raw
+            );
+            assert_eq!(
+                failure.error_message.as_deref(),
+                Some("Excel upstream authentication failed")
+            );
+            assert!(failure.account_failure.is_none());
+            assert!(!failure.error.replay_is_safe());
+            assert!(failure.error.pre_delivery_retry().is_none());
+        }
+        for status in [None, Some(200), Some(403), Some(429), Some(500)] {
+            let mut failure = rejection("forbidden");
+            failure.http_rejection_status = status;
+            failure.error_message = Some("fixture".into());
+            assert_eq!(isolate_http_authentication_failure(&mut failure), None);
+            assert_eq!(failure.error_message.as_deref(), Some("fixture"));
+        }
+    }
 
     #[test]
     fn excel_tool_file_id_error_is_actionable_and_not_retried() {
@@ -526,6 +645,7 @@ mod tests {
                 tools: ClientTools::default(),
                 structured: None,
                 _image_lease: None,
+                image_limits: Default::default(),
                 completed: Default::default(),
                 usage: Default::default(),
                 replay: None,
@@ -552,6 +672,11 @@ mod tests {
             assert_eq!(
                 failure.http_rejection_status,
                 (status != 200).then_some(status)
+            );
+            let mut failure = failure;
+            assert_eq!(
+                isolate_http_authentication_failure(&mut failure).is_some(),
+                status == 401
             );
         }
     }
@@ -600,6 +725,7 @@ mod tests {
                 tools: ClientTools::default(),
                 structured: None,
                 _image_lease: None,
+                image_limits: Default::default(),
                 completed: Default::default(),
                 usage: Default::default(),
                 replay: None,
@@ -719,5 +845,29 @@ mod tests {
                 )
             ));
         }
+    }
+
+    #[test]
+    fn excel_rate_limit_isolated_but_shared_quota_and_native_route_unchanged() {
+        let mut rate = rejection("rate_limit_exceeded");
+        rate.account_failure = Some(CodexAccountFailure::RateLimited {
+            retry_after: Some(Duration::from_secs(60)),
+        });
+        let excel = classify_failure(rate, true);
+        assert!(excel.account_failure.is_none());
+        assert!(excel.error.pre_delivery_retry().is_none());
+        assert_eq!(excel.error.upstream_status(), Some(429));
+        assert!(
+            classify_failure(rejection("rate_limit_exceeded"), false)
+                .error
+                .pre_delivery_retry()
+                .is_some()
+        );
+        let mut quota = rejection("usage_limit_reached");
+        quota.account_failure = Some(CodexAccountFailure::QuotaExhausted);
+        assert!(matches!(
+            classify_failure(quota, true).account_failure,
+            Some(CodexAccountFailure::QuotaExhausted)
+        ));
     }
 }

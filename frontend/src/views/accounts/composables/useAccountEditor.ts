@@ -6,6 +6,7 @@ import { updateAccount } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
+import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
@@ -23,7 +24,7 @@ export function useAccountEditor(options: {
   const schedulingEnabled = shallowRef(true)
   const excelEnabled = shallowRef(false)
   let initialExcelEnabled = false
-  const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
+  const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
   const excelAutoDisableOn403 = shallowRef(false)
@@ -56,7 +57,7 @@ export function useAccountEditor(options: {
     schedulingEnabled.value = account.enabled
     excelEnabled.value = account.responsesUpstream === 'excel'
     initialExcelEnabled = excelEnabled.value
-    excelModels.value = (account.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
+    excelModels.value = (account.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
     excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
     excelAutoDisableOn403.value = account.excelAutoDisableOn403 ?? false
@@ -145,7 +146,7 @@ export function useAccountEditor(options: {
     schedulingEnabled.value = true
     excelEnabled.value = false
     initialExcelEnabled = false
-    excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
+    excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
     excelModelsFollowGlobal.value = true
     excelCacheCreationAsInput.value = false
     excelAutoDisableOn403.value = false

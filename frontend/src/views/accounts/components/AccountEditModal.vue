@@ -6,6 +6,7 @@ import { shallowRef } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import AccountEgressControl from './AccountEgressControl.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
@@ -26,7 +27,7 @@ const open = defineModel<boolean>({ required: true })
 const customName = defineModel<string>('customName', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
-const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol, gpt-6-astra' })
+const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
 const excelAutoDisableOn403 = defineModel<boolean>('excelAutoDisableOn403', { default: false })

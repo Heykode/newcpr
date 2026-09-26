@@ -202,6 +202,28 @@ impl TraceContext {
             .and_then(|v| v.get("type"))
             .and_then(Value::as_str)
             .or(name);
+        if stage == "upstream.event" {
+            let terminal = match event_type {
+                Some("response.failed" | "error") => Some("failed"),
+                Some("response.incomplete") => Some("incomplete"),
+                Some("response.completed") => Some(
+                    match parsed
+                        .as_ref()
+                        .and_then(|value| value.pointer("/response/status"))
+                        .and_then(Value::as_str)
+                    {
+                        Some("completed") => "completed",
+                        Some("failed") => "failed",
+                        Some("incomplete") => "incomplete",
+                        _ => "unverified",
+                    },
+                ),
+                _ => None,
+            };
+            if let Some(outcome) = terminal {
+                self.record("upstream.business_result", json!({"outcome":outcome}));
+            }
+        }
         // 后缀只用于观测合并，不授予明文权限；未知事件用摘要区分，避免合并成同一类。
         let delta = event_type.is_some_and(|kind| kind.ends_with(".delta"));
         let data = json!({

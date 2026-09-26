@@ -24,6 +24,27 @@ use gateway_core::routing::{
     ClientRoutingScope, FrozenAccountScope, ProviderKind, RuntimeAccount, RuntimeAccountDirectory,
 };
 
+#[test]
+fn excel_model_defaults_do_not_replace_explicit_or_empty_lists() {
+    use gateway_core::account::ExcelModels;
+    assert_eq!(
+        ExcelModels::default().as_slice(),
+        ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"]
+    );
+    assert_eq!(
+        ExcelModels::try_from(vec!["custom-model".to_owned()])
+            .unwrap()
+            .as_slice(),
+        ["custom-model"]
+    );
+    assert!(
+        ExcelModels::try_from(Vec::new())
+            .unwrap()
+            .as_slice()
+            .is_empty()
+    );
+}
+
 fn account(id: &str) -> ProviderAccount {
     ProviderAccount::new(
         ProviderAccountId::new(id).expect("valid account"),

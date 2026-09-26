@@ -153,6 +153,15 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         return false;
     }
     match (member, relative.to_str(), item) {
+        ("crates/providers/openai", Some("transport/excel/images.rs"), Item::Fn(function)) => {
+            matches!(
+                function.sig.ident.to_string().as_str(),
+                "validate" | "validate_references" | "decoded_budget_user" | "collect_user"
+            )
+        }
+        ("crates/providers/openai", Some("transport/excel/replay.rs"), Item::Fn(function)) => {
+            function.sig.ident == "restore"
+        }
         // These tests inspect private queue ownership and monotonic deadlines without
         // exposing test-only hooks in the production admission API.
         (

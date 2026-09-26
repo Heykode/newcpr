@@ -114,6 +114,20 @@ async fn request_capture_only_errors_redacts_four_stages_and_preserves_retry_sco
     request.capture("client.request.body", br#"{"input":"fixture text","access_token":"never-persist","image_url":"data:image/png;base64,private-media","url":"https://user:$pass@example.invalid/a?key=private-query"}"#);
     let first = request.attempt(1);
     select(&first, "capture-owner");
+    first.record(
+        "excel.transport.failed",
+        json!({
+            "phase":"connect","cause":"connection_refused","status":200,
+            "error":"private-transport-message","url":"private-transport-url"
+        }),
+    );
+    first.record("upstream.business_result", json!({"outcome":"failed"}));
+    first.record(
+        "excel.transport.failed",
+        json!({
+            "phase":"private-phase","cause":"private-cause","status":9999
+        }),
+    );
     first.capture(
         "upstream.request.body",
         br#"{"input":"upstream fixture","headers":{"authorization":"never-header"}}"#,
@@ -157,6 +171,10 @@ async fn request_capture_only_errors_redacts_four_stages_and_preserves_retry_sco
         "user:$pass",
         "foreign-body",
         "normal must not persist",
+        "private-transport-message",
+        "private-transport-url",
+        "private-phase",
+        "private-cause",
     ] {
         assert!(!page.text.contains(forbidden), "{forbidden}");
     }
@@ -166,6 +184,8 @@ async fn request_capture_only_errors_redacts_four_stages_and_preserves_retry_sco
         "upstream.chunk",
         "downstream.event",
         "fixture output",
+        "connection_refused",
+        "upstream.business_result",
     ] {
         assert!(page.text.contains(expected), "{expected}");
     }

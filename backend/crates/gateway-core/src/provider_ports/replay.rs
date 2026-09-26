@@ -8,6 +8,25 @@ pub const MAX_PROVIDER_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 pub const PROVIDER_REPLAY_TTL_SECONDS: u64 = 3600;
 
 pub trait ProviderReplayPort: Send + Sync {
+    /// Optional mutable tool catalogs, separate from immutable response history.
+    fn read_catalog<'a>(
+        &'a self,
+        _key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Atomically replace only the snapshot observed by this request. A false return
+    /// leaves a concurrent winner intact; unsupported adapters disable inheritance.
+    fn compare_exchange_catalog<'a>(
+        &'a self,
+        _key: &'a str,
+        _expected: Option<&'a OpaqueProviderData>,
+        _payload: &'a OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
     fn read<'a>(
         &'a self,
         key: &'a str,

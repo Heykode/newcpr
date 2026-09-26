@@ -710,3 +710,31 @@ async fn excel_user_upload_accepts_id_aliases_and_preserves_multipart_contract()
         );
     }
 }
+#[test]
+fn configured_image_limits_cover_references_and_inline_content() {
+    let limits = images::ImageLimits {
+        single: 10,
+        total: 20,
+        count: 1,
+    };
+    let urls = serde_json::json!({"input":[{"role":"user","content":[
+        {"type":"input_image","image_url":"https://example.com/image.png"},
+        {"type":"input_image","file_id":"file_fixture"}]}]});
+    assert!(images::validate_with_limits(urls.as_object().unwrap(), false, limits).is_err());
+    let inline = serde_json::json!({"input":[{"role":"user","content":[
+        {"type":"input_image","image_url":"data:image/png;base64,AQIDBAUGBwgJCgsM"}]}]});
+    assert!(images::validate_with_limits(inline.as_object().unwrap(), false, limits).is_err());
+    let larger = images::ImageLimits {
+        single: 12,
+        total: 12,
+        count: 1,
+    };
+    assert!(images::validate_with_limits(inline.as_object().unwrap(), false, larger).is_ok());
+    let tiny_total = images::ImageLimits {
+        total: 11,
+        ..larger
+    };
+    assert!(images::validate_with_limits(inline.as_object().unwrap(), false, tiny_total).is_err());
+    // Raising byte limits does not skip validation of actual image content.
+    assert!(images::validate_with_limits(inline.as_object().unwrap(), true, larger).is_err());
+}

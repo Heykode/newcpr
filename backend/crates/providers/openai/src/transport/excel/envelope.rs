@@ -7,14 +7,49 @@ use super::ExcelRequestError;
 const MAX_BYTES: usize = 1024 * 1024;
 const INVALID: ExcelRequestError = ExcelRequestError::ToolCall;
 pub(super) const FUNCTION_CODE_PREFIX: &str = "codex2api.function_code/";
+pub(super) const FUNCTION_CMD_PREFIX: &str = "codex2api.function_cmd/";
 
 pub(super) fn native_envelope(
     native: &Value,
     resolve: &impl Fn(&str) -> Option<(String, bool)>,
     supports_code: &impl Fn(&str) -> bool,
+    supports_cmd: &impl Fn(&str) -> bool,
 ) -> Result<(Value, bool), ExcelRequestError> {
     let arguments = json_value(native.get("arguments").ok_or(INVALID)?)?;
     let arguments = arguments.as_object().ok_or(INVALID)?;
+    if let Some(name) = arguments
+        .get("summary")
+        .and_then(Value::as_str)
+        .and_then(|summary| summary.strip_prefix(FUNCTION_CMD_PREFIX))
+    {
+        if !supports_cmd(name) {
+            return Err(INVALID);
+        }
+        let cmd = arguments
+            .get("code")
+            .and_then(Value::as_str)
+            .ok_or(INVALID)?;
+        let metadata = arguments
+            .get("extended_summary")
+            .and_then(Value::as_str)
+            .ok_or(INVALID)?;
+        if cmd.len() > MAX_BYTES || metadata.len() > MAX_BYTES - cmd.len() {
+            return Err(INVALID);
+        }
+        let mut args: Value = serde_json::from_str(metadata).map_err(|_| INVALID)?;
+        let object = args.as_object_mut().ok_or(INVALID)?;
+        if object
+            .get("cmd")
+            .is_some_and(|value| value.as_str() != Some(cmd))
+        {
+            return Err(INVALID);
+        }
+        object.insert("cmd".into(), cmd.into());
+        if args.to_string().len() > MAX_BYTES {
+            return Err(INVALID);
+        }
+        return Ok((json!({"name":name,"arguments":args}), false));
+    }
     if let Some(name) = arguments
         .get("summary")
         .and_then(Value::as_str)
