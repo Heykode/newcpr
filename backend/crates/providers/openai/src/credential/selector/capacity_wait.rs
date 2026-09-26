@@ -177,6 +177,7 @@ impl CodexCredentialSelector {
                     .map_err(Into::into)
             })
             .await?;
+        self.retain_excel_auth_blocks(&accounts);
         let ids = accounts
             .iter()
             .map(|account| account.id().clone())
@@ -958,6 +959,10 @@ impl CodexCredentialSelector {
                 .clone()
                 .unwrap_or_else(|| id.clone())
         };
+        if self.excel_auth_block(&candidate.account).is_some() {
+            drop(guard);
+            return Ok(None);
+        }
         let cookies = runtime
             .cookies
             .into_iter()
@@ -1016,6 +1021,10 @@ impl CodexCredentialSelector {
             && let Some(key) = request.session_affinity_key
         {
             self.update_session_affinity(key, id, id).await;
+        }
+        if self.excel_auth_block(&candidate.account).is_some() {
+            drop(guard);
+            return Ok(None);
         }
         Ok(Some(CodexCredentialLease {
             installation_id: runtime.installation_id,

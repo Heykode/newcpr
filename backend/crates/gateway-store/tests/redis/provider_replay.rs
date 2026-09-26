@@ -3,6 +3,61 @@ use gateway_store::redis::RedisProviderReplayRepository;
 use serde_json::json;
 
 #[tokio::test]
+async fn excel_catalog_compare_exchange_preserves_concurrent_winner_and_clear() {
+    let Some(url) = crate::support::test_env("CPR_TEST_REDIS_URL") else {
+        return;
+    };
+    let mut connection = redis::Client::open(url)
+        .unwrap()
+        .get_connection_manager()
+        .await
+        .unwrap();
+    let namespace = format!("test-catalog-{}", uuid::Uuid::new_v4());
+    let store = RedisProviderReplayRepository::new(connection.clone(), &namespace).unwrap();
+    let key = format!("{:064x}", 1);
+    let payload = |version, tools| {
+        OpaqueProviderData::new(
+            json!({"version":version,"tools":tools})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+    };
+    let first = payload(1, json!([{"type":"function","name":"read"}]));
+    let clear = payload(2, json!([]));
+    assert!(
+        store
+            .compare_exchange_catalog(&key, None, &first)
+            .await
+            .unwrap()
+    );
+    let cold = RedisProviderReplayRepository::new(connection.clone(), &namespace).unwrap();
+    assert_eq!(cold.read_catalog(&key).await.unwrap(), Some(first.clone()));
+    let (left, right) = tokio::join!(
+        store.compare_exchange_catalog(&key, Some(&first), &clear),
+        cold.compare_exchange_catalog(&key, Some(&first), &clear)
+    );
+    assert_ne!(left.unwrap(), right.unwrap());
+    assert!(
+        !store
+            .compare_exchange_catalog(&key, Some(&first), &first)
+            .await
+            .unwrap()
+    );
+    assert_eq!(store.read_catalog(&key).await.unwrap(), Some(clear));
+    assert!(store.read(&key).await.unwrap().is_none());
+    for suffix in ["data", "expiry", "sizes"] {
+        redis::cmd("DEL")
+            .arg(format!(
+                "{namespace}:{{provider-replay-v1}}:catalog:{suffix}"
+            ))
+            .query_async::<()>(&mut connection)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn excel_assets_are_isolated_persistent_bounded_and_conditionally_invalidated() {
     let Some(url) = crate::support::test_env("CPR_TEST_REDIS_URL") else {
         return;

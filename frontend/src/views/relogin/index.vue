@@ -36,6 +36,7 @@ import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
+import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelSettings } from '@/utils/excel-settings'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
@@ -306,7 +307,7 @@ const excelEnabled = shallowRef(false)
 const excelCacheCreationAsInput = shallowRef(false)
 const excelAutoDisableOn403 = shallowRef(false)
 const excelModelsFollowGlobal = shallowRef(true)
-const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
+const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
 const confirmMode = shallowRef<'push' | 'delete'>('push')
 const pendingRows = shallowRef<ReloginEntry[]>([])
 const pushAccounts = ref<Record<string, string>>({})
@@ -319,7 +320,7 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   excelCacheCreationAsInput.value = false
   excelAutoDisableOn403.value = false
   excelModelsFollowGlobal.value = true
-  excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
+  excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
   confirmMode.value = mode
   pendingRows.value = entries.value.filter(row => ids.includes(row.id)).map(row => ({ ...row }))
   pushAccounts.value = Object.fromEntries(pendingRows.value.map((row) => {

@@ -49,6 +49,24 @@ async fn http_repair(
     Option<Value>,
     Vec<wiremock::Request>,
 ) {
+    let source = json!({"model":super::tests::VERIFIED_MODEL,"input":"run","reasoning":{"effort":"high"},
+        "tools":[if function_code {
+            json!({"type":"function","name":"exec","parameters":{"type":"object",
+                "properties":{"code":{"type":"string"},"timeout":{"type":"integer"}}}})
+        } else { json!({"type":"custom","name":"exec"}) },function(json!({"type":"object"}))]});
+    http_repair_source(responses, source).await
+}
+
+async fn http_repair_source(
+    responses: Vec<wiremock::ResponseTemplate>,
+    source: Value,
+) -> (
+    String,
+    Option<crate::transport::CodexClientError>,
+    super::usage::ExcelUsagePolicy,
+    Option<Value>,
+    Vec<wiremock::Request>,
+) {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -69,17 +87,29 @@ async fn http_repair(
         format!("{}{}", server.uri(), super::RESPONSES_PATH),
         json!("run"),
     );
-    let source = json!({"model":super::tests::VERIFIED_MODEL,"input":"run","reasoning":{"effort":"high"},
-        "tools":[if function_code {
-            json!({"type":"function","name":"exec","parameters":{"type":"object",
-                "properties":{"code":{"type":"string"},"timeout":{"type":"integer"}}}})
-        } else { json!({"type":"custom","name":"exec"}) },function(json!({"type":"object"}))]});
     let prepared = request.excel.as_mut().unwrap();
     prepared.tools = parse(source.clone()).unwrap();
+    let native_calls = source["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            matches!(
+                item["type"].as_str(),
+                Some("function_call" | "custom_tool_call")
+            )
+        })
+        .map(|item| {
+            (
+                item["call_id"].as_str().unwrap().to_owned(),
+                prepared.tools.rebuild_history_call(item).unwrap(),
+            )
+        })
+        .collect();
     prepared.body = super::prepare_request(
         source.as_object().unwrap(),
         &prepared.tools,
-        &Default::default(),
+        &native_calls,
         None,
     )
     .unwrap();
@@ -571,6 +601,16 @@ fn excel_unknown_repair_rejects_history_bad_shape_and_known_schema_errors() {
     let unknown = native("absent", json!({}));
     let valid = repair_response("original", vec![unknown.clone()]);
     assert!(super::repair::unknown_eligible(&tools, &valid));
+    for marker in [
+        "codex2api.function_code/absent",
+        "codex2api.function_cmd/absent",
+        "cpr.custom/absent",
+    ] {
+        assert!(super::repair::unknown_eligible(
+            &tools,
+            &repair_response("original", vec![repair_call("unknown", marker, "text(1)")])
+        ));
+    }
     for items in [
         vec![unknown.clone(), json!({"type":"message","content":[]})],
         vec![unknown.clone(), unknown.clone()],
@@ -734,6 +774,245 @@ async fn excel_unknown_regeneration_blocks_expanded_tool_history_and_keeps_compa
         assert_eq!(result.is_ok(), !history);
         assert_eq!(count.load(Ordering::SeqCst), usize::from(!history));
     }
+}
+
+#[tokio::test]
+async fn excel_unknown_correction_stops_after_one_attempt() {
+    use wiremock::ResponseTemplate;
+    let (_, error, usage, completed, requests) = http_repair(
+        vec![
+            ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response(
+                    "resp_first",
+                    vec![native("absent", json!({}))],
+                )),
+                "text/event-stream",
+            );
+            2
+        ],
+        false,
+    )
+    .await;
+    assert!(error.is_some());
+    assert_eq!(requests.len(), 2);
+    assert!(completed.is_none());
+    assert!(usage.repair_started());
+}
+
+#[tokio::test]
+async fn excel_unknown_correction_uses_declared_tool_and_preserves_usage() {
+    use wiremock::ResponseTemplate;
+    let (text, error, _, completed, requests) = http_repair(
+        vec![
+            ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response(
+                    "resp_first",
+                    vec![native("absent", json!({}))],
+                )),
+                "text/event-stream",
+            ),
+            ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response("resp_fix", vec![native("read", json!({}))])),
+                "text/event-stream",
+            ),
+        ],
+        false,
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(requests.len(), 2);
+    assert!(text.contains("response.completed"));
+    let response = completed.unwrap();
+    assert_eq!(response["id"], "resp_first");
+    assert_eq!(response["usage"]["total_tokens"], 24);
+    let repair: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert!(super::repair::no_tool_history(repair.as_object().unwrap()));
+    assert!(!super::repair::no_tool_history(
+        json!({"input":[{"type":"function_call_output"}]})
+            .as_object()
+            .unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn excel_unknown_tool_after_history_never_starts_correction() {
+    let source = json!({"model":super::tests::VERIFIED_MODEL,
+    "tools":[function(json!({"type":"object"}))],"input":[
+        {"type":"function_call","name":"read","call_id":"call_old","arguments":"{}"},
+        {"type":"function_call_output","call_id":"call_old","output":"done"}
+    ]});
+    let (_, error, usage, completed, requests) = http_repair_source(
+        vec![wiremock::ResponseTemplate::new(200).set_body_raw(
+            repair_wire(repair_response(
+                "resp_unknown",
+                vec![native("absent", json!({}))],
+            )),
+            "text/event-stream",
+        )],
+        source,
+    )
+    .await;
+    assert!(error.is_some());
+    assert_eq!(requests.len(), 1);
+    assert!(!usage.repair_started());
+    assert!(completed.is_none());
+}
+
+#[tokio::test]
+async fn excel_cmd_format_correction_retains_exact_command_and_parameters() {
+    let command = "printf '%s\\n' 'a\\b'\nprintf '%s' '$HOME'";
+    let source = json!({"model":super::tests::VERIFIED_MODEL,"input":"run",
+        "tools":[{"type":"function","name":"exec_command","parameters":{
+            "type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer"}},
+            "required":["cmd"],"additionalProperties":false}}]});
+    let original = repair_call("bad", "Run shell", command);
+    let corrected = repair_call("fixed", "codex2api.function_cmd/exec_command", command);
+    let (_, error, _, completed, requests) = http_repair_source(
+        vec![
+            wiremock::ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response("resp_first", vec![original])),
+                "text/event-stream",
+            ),
+            wiremock::ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response("resp_fixed", vec![corrected])),
+                "text/event-stream",
+            ),
+        ],
+        source,
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(requests.len(), 2);
+    let result = completed.unwrap();
+    let tools = parse(
+        json!({"tools":[{"type":"function","name":"exec_command","parameters":{
+        "type":"object","properties":{"cmd":{"type":"string"},"timeout":{"type":"integer"}}}}]}),
+    )
+    .unwrap();
+    let call = tools.convert_call(&result["output"][0]).unwrap();
+    let args = super::envelope::json_value(&call["arguments"]).unwrap();
+    assert_eq!(args["cmd"], command);
+    assert_eq!(args["timeout"], 123);
+}
+
+#[tokio::test]
+async fn excel_catalog_is_scoped_cleared_and_frozen_per_request() {
+    let store = super::tests::MemoryReplay::default();
+    let input = json!({"tools":[{"type":"namespace","name":"files","tools":[function(json!({"type":"object"}))]}],"input":"hello"});
+    async fn resolve(
+        store: &super::tests::MemoryReplay,
+        owner: &str,
+        session: Option<&str>,
+        source: &serde_json::Map<String, Value>,
+    ) -> Result<(ClientTools, Value), ExcelRequestError> {
+        super::catalog::resolve(store, owner, session, None, source).await
+    }
+    let (first, snapshot) = resolve(&store, "owner", Some("thread"), input.as_object().unwrap())
+        .await
+        .unwrap();
+    assert!(first.contains("files.read"));
+    let omitted = json!({"input":"continue"});
+    assert!(
+        resolve(
+            &store,
+            "owner",
+            Some("thread"),
+            omitted.as_object().unwrap()
+        )
+        .await
+        .unwrap()
+        .0
+        .contains("files.read")
+    );
+    for (owner, session) in [
+        ("other", Some("thread")),
+        ("owner", Some("different")),
+        ("owner", None),
+    ] {
+        assert!(
+            !resolve(&store, owner, session, omitted.as_object().unwrap())
+                .await
+                .unwrap()
+                .0
+                .has_client_tools()
+        );
+    }
+    let cleared = json!({"tools":[],"input":"continue"});
+    assert!(
+        !resolve(
+            &store,
+            "owner",
+            Some("thread"),
+            cleared.as_object().unwrap()
+        )
+        .await
+        .unwrap()
+        .0
+        .has_client_tools()
+    );
+    assert!(
+        !resolve(
+            &store,
+            "owner",
+            Some("thread"),
+            omitted.as_object().unwrap()
+        )
+        .await
+        .unwrap()
+        .0
+        .has_client_tools()
+    );
+    assert!(first.contains("files.read"));
+    // Explicit response ancestry uses its own immutable catalog, not a newer session hint.
+    assert!(
+        super::catalog::resolve(
+            &store,
+            "owner",
+            Some("thread"),
+            Some(&snapshot),
+            omitted.as_object().unwrap()
+        )
+        .await
+        .unwrap()
+        .0
+        .contains("files.read")
+    );
+    let disabled = json!({"tools":[function(json!({}))],"tool_choice":"none","input":"hello"});
+    assert!(
+        !resolve(
+            &store,
+            "owner",
+            Some("thread"),
+            disabled.as_object().unwrap()
+        )
+        .await
+        .unwrap()
+        .0
+        .has_client_tools()
+    );
+    assert!(
+        resolve(
+            &store,
+            "owner",
+            Some("thread"),
+            omitted.as_object().unwrap()
+        )
+        .await
+        .unwrap()
+        .0
+        .contains("read")
+    );
+    let additional =
+        json!({"input":[{"type":"additional_tools","tools":[{"type":"custom","name":"patch"}]}]});
+    let (merged, _) = resolve(
+        &store,
+        "owner",
+        Some("thread"),
+        additional.as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(merged.contains("read") && merged.contains("patch"));
 }
 
 #[tokio::test]
@@ -1052,6 +1331,7 @@ async fn relay(tools: ClientTools, output: Value) -> (String, bool) {
         tools,
         structured: None,
         _image_lease: None,
+        image_limits: Default::default(),
         completed: Default::default(),
         usage: Default::default(),
         replay: None,

@@ -147,15 +147,21 @@ impl ImageRelay {
         self
     }
 
-    pub(crate) fn stage(
+    pub(crate) fn request_tuning(&self) -> gateway_core::routing::RequestTuning {
+        self.tuning.load()
+    }
+
+    pub(crate) fn stage_with_tuning(
         self: &Arc<Self>,
         body: &mut Map<String, Value>,
+        limits: gateway_core::routing::RequestTuning,
     ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
         let Some(origin) = &self.origin else {
             return Ok(None);
         };
         let input = body.get("input").unwrap_or(&Value::Null);
-        let budget = images::decoded_budget_user(input).map_err(|_| ExcelRequestError::Input)?;
+        let budget = images::decoded_budget_user_with_limits(input, limits.into())
+            .map_err(|_| ExcelRequestError::Input)?;
         if budget == 0 {
             return Ok(None);
         }
@@ -163,7 +169,6 @@ impl ImageRelay {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|_, entry| entry.expires > Instant::now());
-        let limits = self.tuning.load();
         let request = CapacityPermit::acquire(
             &self.requests,
             1,
@@ -177,7 +182,8 @@ impl ImageRelay {
         )
         .ok_or(ExcelRequestError::ImageRelay)?;
         let mut pictures = Vec::new();
-        images::collect_user(input, &mut pictures).map_err(|_| ExcelRequestError::Input)?;
+        images::collect_user_with_limits(input, &mut pictures, limits.into())
+            .map_err(|_| ExcelRequestError::Input)?;
         if pictures.is_empty() {
             return Ok(None);
         }
@@ -320,6 +326,15 @@ mod tests {
     const MAX_REQUESTS: usize = 128;
     use super::*;
     use serde_json::json;
+
+    impl ImageRelay {
+        pub(crate) fn stage(
+            self: &Arc<Self>,
+            body: &mut Map<String, Value>,
+        ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
+            self.stage_with_tuning(body, self.tuning.load())
+        }
+    }
 
     fn input() -> Map<String, Value> {
         json!({"input":[{"role":"user","content":[{"type":"input_image",

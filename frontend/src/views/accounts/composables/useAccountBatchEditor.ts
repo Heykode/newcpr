@@ -7,6 +7,7 @@ import { batchUpdateAccounts } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
+import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
@@ -25,7 +26,7 @@ export function useAccountBatchEditor(options: {
   const excelAvailable = shallowRef(false)
   const schedulingEnabled = shallowRef(true)
   const excelEnabled = shallowRef(false)
-  const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
+  const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
   const excelAutoDisableOn403 = shallowRef(false)
@@ -86,7 +87,7 @@ export function useAccountBatchEditor(options: {
     schedulingEnabled.value = accounts.every(account => account.enabled)
     excelAvailable.value = accounts.every(account => account.provider === 'openai' && account.authenticationKind === 'oauth')
     excelEnabled.value = accounts.every(account => account.responsesUpstream === 'excel')
-    excelModels.value = (accounts[0]?.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
+    excelModels.value = (accounts[0]?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
     excelCacheCreationAsInput.value = accounts.every(account => account.excelCacheCreationAsInput ?? false)
     excelAutoDisableOn403.value = accounts.every(account => account.excelAutoDisableOn403 ?? false)

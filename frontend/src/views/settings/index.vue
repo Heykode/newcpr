@@ -9,6 +9,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
+import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import AdminPasswordCard from './components/AdminPasswordCard.vue'
@@ -160,7 +161,7 @@ watch(
           <BaseInput
             v-model="form.excelDefaultModels"
             aria-label="全局 Excel 模型"
-            placeholder="gpt-5.6-sol, gpt-6-astra"
+            :placeholder="DEFAULT_EXCEL_MODELS_INPUT"
             :disabled="loading || saving"
           />
         </BaseFormItem>

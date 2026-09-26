@@ -67,6 +67,7 @@ fn marked_target(args: &Value) -> Option<&str> {
         "cpr.custom/",
         "codex2api.custom/",
         envelope::FUNCTION_CODE_PREFIX,
+        envelope::FUNCTION_CMD_PREFIX,
     ]
     .into_iter()
     .find_map(|prefix| summary.strip_prefix(prefix))
@@ -149,6 +150,7 @@ pub(super) fn unknown_eligible(tools: &ClientTools, response: &Value) -> bool {
         return false;
     };
     tools.has_client_tools()
+        && tools.validate_call_count(1).is_ok()
         && response["output"].as_array().and_then(|items| items.last()) == calls.first()
         && calls[0]["id"].as_str().is_some_and(|id| !id.is_empty())
         && matches!(
@@ -349,6 +351,11 @@ fn operation(call: &Value) -> Option<Value> {
 
 fn preserves_operations(tools: &ClientTools, original: &[Value], corrected: &[Value]) -> bool {
     original.iter().zip(corrected).all(|(before, after)| {
+        let raw_cmd = arguments(after).is_some_and(|args| {
+            args["summary"]
+                .as_str()
+                .is_some_and(|summary| summary.starts_with(envelope::FUNCTION_CMD_PREFIX))
+        });
         let Ok(after) = tools.convert_call(after) else {
             return false;
         };
@@ -391,13 +398,14 @@ fn preserves_operations(tools: &ClientTools, original: &[Value], corrected: &[Va
             let Some(mut actual) = envelope::json_value(&after["arguments"]).ok() else {
                 return false;
             };
-            if actual["code"].as_str() != Some(code) {
+            let raw_field = if raw_cmd { "cmd" } else { "code" };
+            if actual[raw_field].as_str() != Some(code) {
                 return false;
             }
             let Some(actual) = actual.as_object_mut() else {
                 return false;
             };
-            actual.remove("code");
+            actual.remove(raw_field);
             let expected = args
                 .get("extended_summary")
                 .map(envelope::json_value)
@@ -420,6 +428,10 @@ fn extend_request(
         .get_mut("input")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid("Excel correction requires complete history"))?;
+    let trigger = input
+        .last()
+        .is_some_and(|item| item["type"] == "compaction_trigger")
+        .then(|| input.pop().unwrap());
     input.extend(
         failed["output"]
             .as_array()
@@ -438,10 +450,15 @@ fn extend_request(
          Return exactly {count} run_officejs calls in the same order, correcting transport only. \
          Preserve operations and exact source text. CUSTOM requires summary=cpr.custom/CATALOG_NAME \
          and raw input in code; FUNCTION_CODE requires summary=codex2api.function_code/CATALOG_NAME, \
-         raw code and remaining arguments as JSON in extended_summary. Ordinary FUNCTION uses \
+         raw code and remaining arguments as JSON in extended_summary. FUNCTION_CMD requires \
+         summary=codex2api.function_cmd/CATALOG_NAME, raw command in code and other arguments \
+         as JSON in extended_summary. Ordinary FUNCTION uses \
          one JSON envelope with name and object arguments in code. Use the existing catalog only. \
          Do not add operations, execute Office code, or repeat commentary."
     )));
+    if let Some(trigger) = trigger {
+        input.push(trigger);
+    }
     let iteration = body
         .get_mut("metadata")
         .and_then(|value| value.get_mut("agent_iteration"))

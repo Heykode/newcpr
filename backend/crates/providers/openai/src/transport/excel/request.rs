@@ -137,7 +137,7 @@ pub(crate) fn prepare_request(
         "input": input,
         "reasoning_effort": effort,
         "context_management": source.get("context_management").filter(|value| value.is_array())
-            .cloned().unwrap_or_else(|| json!([{"type": "compaction", "compact_threshold": 200000}])),
+            .cloned().unwrap_or_else(|| json!([{"type": "compaction", "compact_threshold": 920000}])),
         "metadata": metadata,
     }).as_object().expect("object literal").clone();
     if source.contains_key("prompt_cache_key") {

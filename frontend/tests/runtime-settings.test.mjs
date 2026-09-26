@@ -16,13 +16,32 @@ function loadModule(filename, dependencies = {}) {
   const exports = {}
   runInNewContext(outputText, {
     exports,
-    require: name => dependencies[name] ?? require(name),
+    require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
   return exports
 }
 
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
+
+test('Excel global defaults fill omission without replacing saved or explicitly empty models', async () => {
+  for (const models of [undefined, [], ['custom-model'], ['gpt-5.6-sol', 'gpt-6-astra']]) {
+    const initial = settings()
+    if (models !== undefined)
+      initial.excelDefaultModels = models
+    const query = mountSettings(initial)
+    try {
+      await query.state.loadSettings()
+      const expected = models ?? ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra']
+      assert.equal(query.state.form.excelDefaultModels, expected.join(', '))
+      await query.state.saveSettings()
+      assert.deepEqual(query.requests[0].excelDefaultModels, expected)
+    }
+    finally {
+      query.stop()
+    }
+  }
+})
 
 function mountSettings(initial, onWarning = assert.fail) {
   let saved = structuredClone(initial)
@@ -79,7 +98,7 @@ test('global Excel defaults roundtrip exact models including explicit empty and 
   const query = mountSettings(settings(), message => warnings.push(message))
   try {
     await query.state.loadSettings()
-    assert.equal(query.state.form.excelDefaultModels, 'gpt-5.6-sol, gpt-6-astra')
+    assert.equal(query.state.form.excelDefaultModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
     query.state.form.excelDefaultModels = 'gpt-6-astra, gpt-6-astra'
     await query.state.saveSettings()
     assert.deepEqual(query.requests.at(-1).excelDefaultModels, ['gpt-6-astra'])
@@ -260,6 +279,9 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       excelImageRelayRequests: 128,
       excelImageRelayDownloads: 32,
       excelImageRelayEntries: 512,
+      excelImageMaxBytes: 4 * 1024 * 1024,
+      excelImageTotalBytes: 6 * 1024 * 1024,
+      excelImageMaxCount: 16,
       openaiLocationOverrideEnabled: false,
       openaiRequestLocation: null,
       maxWaitingPerKey: 0,
@@ -286,6 +308,9 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
       ['excelImageRelayRequests', 8],
       ['excelImageRelayDownloads', 4],
       ['excelImageRelayEntries', 16],
+      ['excelImageMaxBytes', 8 * 1024 * 1024],
+      ['excelImageTotalBytes', 16 * 1024 * 1024],
+      ['excelImageMaxCount', 32],
     ]) {
       query.state.form.requestTuning[field] = value
     }
@@ -295,6 +320,9 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     assert.equal(query.state.form.requestTuning.excelImageRelayDownloads, 4)
     assert.equal(query.state.form.requestTuning.excelImageRelayRequests, 8)
     assert.equal(query.state.form.requestTuning.excelImageRelayEntries, 16)
+    assert.equal(query.state.form.requestTuning.excelImageMaxBytes, 8 * 1024 * 1024)
+    assert.equal(query.state.form.requestTuning.excelImageTotalBytes, 16 * 1024 * 1024)
+    assert.equal(query.state.form.requestTuning.excelImageMaxCount, 32)
     assert.equal(query.requests[0].requestTuning.rateLimitCooldownSeconds, 60)
     assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
     for (const [field, invalid] of [
@@ -306,6 +334,12 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
       ['excelImageRelayRequests', 513],
       ['excelImageRelayEntries', 0],
       ['excelImageRelayEntries', 4097],
+      ['excelImageMaxBytes', 0],
+      ['excelImageMaxBytes', 20 * 1024 * 1024 + 1],
+      ['excelImageTotalBytes', 0],
+      ['excelImageTotalBytes', 32 * 1024 * 1024 + 1],
+      ['excelImageMaxCount', 0],
+      ['excelImageMaxCount', 4097],
     ]) {
       const before = query.state.form.requestTuning[field]
       query.state.form.requestTuning[field] = invalid
@@ -313,7 +347,7 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
       assert.equal(query.requests.length, 1)
       query.state.form.requestTuning[field] = before
     }
-    assert.equal(warnings.length, 8)
+    assert.equal(warnings.length, 14)
   }
   finally {
     query.stop()

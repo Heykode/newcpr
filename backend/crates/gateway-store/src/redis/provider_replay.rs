@@ -56,7 +56,10 @@ end
 for _, key in ipairs(redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', clock)) do remove(key) end
 if ARGV[1] == 'read' then return redis.call('HGET', KEYS[1], ARGV[2]) end
 local previous = redis.call('HGET', KEYS[1], ARGV[2])
-if previous then
+if ARGV[1] == 'cas' then
+  if (previous or '') ~= ARGV[7] then return -1 end
+  if previous then remove(ARGV[2]) end
+elseif previous then
   if previous == ARGV[3] then return 1 else return -1 end
 end
 local bytes = string.len(ARGV[3])
@@ -135,6 +138,74 @@ impl RedisProviderReplayRepository {
 }
 
 impl ProviderReplayPort for RedisProviderReplayRepository {
+    fn read_catalog<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            Self::validate_key(key)?;
+            let data: Option<Vec<u8>> = Script::new(SCRIPT)
+                .key(format!("{}:catalog:data", self.prefix))
+                .key(format!("{}:catalog:expiry", self.prefix))
+                .key(format!("{}:catalog:sizes", self.prefix))
+                .arg("read")
+                .arg(key)
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;
+            data.map(|data| {
+                if data.len() > 1024 * 1024 {
+                    return Err(error(ProviderStoreErrorKind::InvalidData));
+                }
+                serde_json::from_slice(&data)
+                    .map(OpaqueProviderData::new)
+                    .map_err(|_| error(ProviderStoreErrorKind::InvalidData))
+            })
+            .transpose()
+        })
+    }
+
+    fn compare_exchange_catalog<'a>(
+        &'a self,
+        key: &'a str,
+        expected: Option<&'a OpaqueProviderData>,
+        payload: &'a OpaqueProviderData,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            Self::validate_key(key)?;
+            let bytes = serde_json::to_vec(payload.expose_to_provider())
+                .map_err(|_| error(ProviderStoreErrorKind::InvalidData))?;
+            if bytes.len() > 1024 * 1024 {
+                return Err(error(ProviderStoreErrorKind::InvalidData));
+            }
+            let expected = expected
+                .map(|value| serde_json::to_vec(value.expose_to_provider()))
+                .transpose()
+                .map_err(|_| error(ProviderStoreErrorKind::InvalidData))?
+                .unwrap_or_default();
+            let result: i64 = Script::new(SCRIPT)
+                .key(format!("{}:catalog:data", self.prefix))
+                .key(format!("{}:catalog:expiry", self.prefix))
+                .key(format!("{}:catalog:sizes", self.prefix))
+                .arg("cas")
+                .arg(key)
+                .arg(bytes)
+                .arg(PROVIDER_REPLAY_TTL_SECONDS)
+                .arg(512)
+                .arg(16 * 1024 * 1024)
+                .arg(expected)
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;
+            match result {
+                1 => Ok(true),
+                -1 => Ok(false),
+                _ => Err(error(ProviderStoreErrorKind::InvalidData)),
+            }
+        })
+    }
+
     fn read_asset<'a>(
         &'a self,
         key: &'a str,

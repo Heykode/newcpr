@@ -11,7 +11,7 @@ fn sse_capture_reassembles_every_chunk_boundary_and_preserves_unknown_events() {
         capture.finish();
         let snapshot = trace.snapshot().unwrap();
         let events = snapshot["events"].as_array().unwrap();
-        assert_eq!(events.len(), 3, "boundary {boundary}");
+        assert_eq!(events.len(), 4, "boundary {boundary}");
         // 未知 SSE 名称和伪装成头部的 JSON 仍有摘要，但不能获得协议字段的明文权限。
         assert_eq!(
             events[0]["data"]["eventType"],
@@ -19,8 +19,10 @@ fn sse_capture_reassembles_every_chunk_boundary_and_preserves_unknown_events() {
         );
         assert!(!snapshot.to_string().contains("up-1"));
         assert!(!snapshot.to_string().contains("中文"));
-        assert_eq!(events[1]["data"]["eventType"], "response.completed");
-        assert_eq!(events[2]["data"]["partialFrame"], false);
+        assert_eq!(events[1]["stage"], "upstream.business_result");
+        assert_eq!(events[1]["data"]["outcome"], "unverified");
+        assert_eq!(events[2]["data"]["eventType"], "response.completed");
+        assert_eq!(events[3]["data"]["partialFrame"], false);
     }
 }
 
@@ -35,7 +37,8 @@ fn oversize_frames_report_a_gap_and_resume_at_the_next_frame() {
     let snapshot = trace.snapshot().unwrap();
     let events = snapshot["events"].as_array().unwrap();
     assert_eq!(events[0]["stage"], "capture.gap");
-    assert_eq!(events[1]["data"]["eventType"], "response.completed");
+    assert_eq!(events[1]["stage"], "upstream.business_result");
+    assert_eq!(events[2]["data"]["eventType"], "response.completed");
 }
 
 #[test]

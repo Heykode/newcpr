@@ -2,10 +2,11 @@
 import { computed } from 'vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 
 defineProps<{ disabled?: boolean }>()
 const followGlobal = defineModel<boolean>('followGlobal', { default: true })
-const models = defineModel<string>('models', { default: 'gpt-5.6-sol, gpt-6-astra' })
+const models = defineModel<string>('models', { default: DEFAULT_EXCEL_MODELS_INPUT })
 const mode = computed({
   get: () => followGlobal.value ? 'global' : 'custom',
   set: (value: string) => { followGlobal.value = value === 'global' },
@@ -24,7 +25,7 @@ const mode = computed({
       v-if="!followGlobal"
       v-model="models"
       aria-label="Excel 模型"
-      placeholder="gpt-5.6-sol, gpt-6-astra"
+      :placeholder="DEFAULT_EXCEL_MODELS_INPUT"
       :disabled="disabled"
     />
   </div>

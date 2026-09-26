@@ -50,6 +50,10 @@ pub(crate) struct MemoryAccountStore {
     pub(crate) before_provider_list: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
     pub(crate) pause_account_read: AtomicBool,
     pub(crate) account_reads: AtomicUsize,
+    pub(crate) fail_state_write: AtomicBool,
+    pub(crate) pause_state_write: AtomicBool,
+    pub(crate) state_write_started: tokio::sync::Notify,
+    pub(crate) state_write_gate: tokio::sync::Notify,
 }
 
 impl MemoryAccountStore {
@@ -433,6 +437,13 @@ impl ProviderAccountStore for MemoryAccountStore {
     }
 
     async fn apply_state_change(&self, change: AccountStateChange) -> Result<(), StoreError> {
+        if self.pause_state_write.load(Ordering::SeqCst) {
+            self.state_write_started.notify_one();
+            self.state_write_gate.notified().await;
+        }
+        if self.fail_state_write.load(Ordering::SeqCst) {
+            return Err(store_error(StoreErrorKind::Unavailable));
+        }
         let mut accounts = self.accounts.lock().expect("account store lock");
         let stored = accounts
             .get_mut(&change.account_id)

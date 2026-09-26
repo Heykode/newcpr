@@ -85,6 +85,9 @@ fn update_body() -> Value {
     body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
     body["requestTuning"]["excelImageRelayDownloads"] = Value::Null;
     body["requestTuning"]["excelImageRelayEntries"] = Value::Null;
+    body["requestTuning"]["excelImageMaxBytes"] = Value::Null;
+    body["requestTuning"]["excelImageTotalBytes"] = Value::Null;
+    body["requestTuning"]["excelImageMaxCount"] = Value::Null;
     body
 }
 
@@ -381,6 +384,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             websocket_failure_open_duration_ms: Some(45_000),
             rate_limit_cooldown_seconds: Some(60),
             excel_image_relay_bytes: Some(64 * 1024 * 1024),
+            excel_image_max_bytes: Some(8 * 1024 * 1024),
+            excel_image_total_bytes: Some(16 * 1024 * 1024),
+            excel_image_max_count: Some(32),
             excel_image_relay_requests: Some(128),
             excel_image_relay_downloads: Some(32),
             excel_image_relay_entries: Some(128),
@@ -402,7 +408,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     let value = serde_json::to_value(RuntimeSettingsView::from(settings)).expect("serialize view");
     let mut expected = json!({
         "disableFast": false,
-        "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
+        "excelDefaultModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateProbeProxyId": null,
@@ -450,6 +456,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["requestTuning"]["excelImageRelayRequests"] = json!(128);
     expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
     expected["requestTuning"]["excelImageRelayEntries"] = json!(128);
+    expected["requestTuning"]["excelImageMaxBytes"] = json!(8388608);
+    expected["requestTuning"]["excelImageTotalBytes"] = json!(16777216);
+    expected["requestTuning"]["excelImageMaxCount"] = json!(32);
     assert_eq!(value, expected);
 }
 
