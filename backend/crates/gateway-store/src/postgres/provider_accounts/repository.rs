@@ -143,7 +143,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_auto_disable_on_403,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
@@ -673,6 +673,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                         excel_models: settings.excel_models.as_ref(),
                         excel_models_follow_global: settings.excel_models_follow_global,
                         excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
+                        excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
                         model_access: settings.model_access.as_ref(),
                         outbound_proxy: None,
                     },
@@ -887,6 +888,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     excel_models: command.excel_models.as_ref(),
                     excel_models_follow_global: command.excel_models_follow_global,
                     excel_cache_creation_as_input: command.excel_cache_creation_as_input,
+                    excel_auto_disable_on_403: command.excel_auto_disable_on_403,
                     model_access: command.model_access.as_ref(),
                     outbound_proxy: command.outbound_proxy.as_ref(),
                 },
@@ -1237,6 +1239,7 @@ struct AccountSchedulingPatch<'a> {
     excel_models: Option<&'a gateway_core::account::ExcelModels>,
     excel_models_follow_global: Option<bool>,
     excel_cache_creation_as_input: Option<bool>,
+    excel_auto_disable_on_403: Option<bool>,
     model_access: Option<&'a gateway_core::account::AccountModelAccess>,
     outbound_proxy: Option<&'a gateway_admin::model::proxies::AccountProxySelection>,
 }
@@ -1255,6 +1258,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
         excel_models,
         excel_models_follow_global,
         excel_cache_creation_as_input,
+        excel_auto_disable_on_403,
         model_access,
         outbound_proxy,
     } = patch;
@@ -1263,6 +1267,9 @@ async fn update_provider_accounts_scheduling_in_transaction(
         .map(|_| gateway_core::account::ResponsesUpstream::Excel)
         .or(excel_models_follow_global.map(|_| gateway_core::account::ResponsesUpstream::Excel))
         .or(excel_cache_creation_as_input
+            .filter(|enabled| *enabled)
+            .map(|_| gateway_core::account::ResponsesUpstream::Excel))
+        .or(excel_auto_disable_on_403
             .filter(|enabled| *enabled)
             .map(|_| gateway_core::account::ResponsesUpstream::Excel))
         .or(responses_upstream)
@@ -1303,7 +1310,9 @@ async fn update_provider_accounts_scheduling_in_transaction(
              excel_models = case when $13 is true then excel_models else coalesce($12, excel_models) end,
              excel_models_follow_global = coalesce($13, case when $12::text[] is not null then false else excel_models_follow_global end),
              excel_cache_creation_as_input = case when coalesce($11, responses_upstream) = 'codex'
-                then false else coalesce($14, excel_cache_creation_as_input) end
+                then false else coalesce($14, excel_cache_creation_as_input) end,
+             excel_auto_disable_on_403 = case when $11 = 'codex' then false
+                else coalesce($15, excel_auto_disable_on_403) end
          where id = any($1::text[])
          returning id",
     )
@@ -1330,6 +1339,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
     .bind(excel_models.map(gateway_core::account::ExcelModels::as_slice))
     .bind(excel_models_follow_global)
     .bind(excel_cache_creation_as_input)
+    .bind(excel_auto_disable_on_403)
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?

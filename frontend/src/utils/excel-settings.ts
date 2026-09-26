@@ -4,10 +4,11 @@ export interface ExcelSettings {
   responsesUpstream: 'codex' | 'excel'
   excelModelsFollowGlobal: boolean
   excelCacheCreationAsInput?: boolean
+  excelAutoDisableOn403?: boolean
   excelModels?: string[]
 }
 
-export function excelSettings(enabled: boolean, followGlobal: boolean, input: string, cacheCreationAsInput?: boolean): ExcelSettings {
+export function excelSettings(enabled: boolean, followGlobal: boolean, input: string, cacheCreationAsInput?: boolean, autoDisableOn403?: boolean): ExcelSettings {
   const models = followGlobal ? undefined : parseExcelModels(input)
   if (models === null)
     throw new Error('Excel 模型最多 64 个，每个名称最多 128 个字母、数字、点、下划线或连字符')
@@ -15,6 +16,7 @@ export function excelSettings(enabled: boolean, followGlobal: boolean, input: st
     responsesUpstream: enabled ? 'excel' : 'codex',
     excelModelsFollowGlobal: followGlobal,
     ...(cacheCreationAsInput !== undefined ? { excelCacheCreationAsInput: enabled && cacheCreationAsInput } : {}),
+    ...(autoDisableOn403 !== undefined ? { excelAutoDisableOn403: enabled && autoDisableOn403 } : {}),
     ...(models !== undefined ? { excelModels: models } : {}),
   }
 }

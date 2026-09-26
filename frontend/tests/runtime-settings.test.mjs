@@ -256,9 +256,10 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       websocketFailureWindowMs: 30_000,
       websocketFailureOpenDurationMs: 30_000,
       rateLimitCooldownSeconds: 60,
-      excelImageRelayBytes: 64 * 1024 * 1024,
+      excelImageRelayBytes: 1024 * 1024 * 1024,
+      excelImageRelayRequests: 128,
       excelImageRelayDownloads: 32,
-      excelImageRelayEntries: 128,
+      excelImageRelayEntries: 512,
       openaiLocationOverrideEnabled: false,
       openaiRequestLocation: null,
       maxWaitingPerKey: 0,
@@ -282,6 +283,7 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     await query.state.loadSettings()
     for (const [field, value] of [
       ['excelImageRelayBytes', 2 * 1024 * 1024],
+      ['excelImageRelayRequests', 8],
       ['excelImageRelayDownloads', 4],
       ['excelImageRelayEntries', 16],
     ]) {
@@ -291,6 +293,7 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     await query.state.loadSettings()
     assert.equal(query.state.form.requestTuning.excelImageRelayBytes, 2 * 1024 * 1024)
     assert.equal(query.state.form.requestTuning.excelImageRelayDownloads, 4)
+    assert.equal(query.state.form.requestTuning.excelImageRelayRequests, 8)
     assert.equal(query.state.form.requestTuning.excelImageRelayEntries, 16)
     assert.equal(query.requests[0].requestTuning.rateLimitCooldownSeconds, 60)
     assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
@@ -299,6 +302,8 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
       ['excelImageRelayBytes', 2048 * 1024 * 1024 + 1],
       ['excelImageRelayDownloads', 0],
       ['excelImageRelayDownloads', 129],
+      ['excelImageRelayRequests', 0],
+      ['excelImageRelayRequests', 513],
       ['excelImageRelayEntries', 0],
       ['excelImageRelayEntries', 4097],
     ]) {
@@ -308,7 +313,7 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
       assert.equal(query.requests.length, 1)
       query.state.form.requestTuning[field] = before
     }
-    assert.equal(warnings.length, 6)
+    assert.equal(warnings.length, 8)
   }
   finally {
     query.stop()

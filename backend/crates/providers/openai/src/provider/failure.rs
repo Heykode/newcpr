@@ -48,6 +48,7 @@ pub fn openai_failure_affects_account_score(error: &ProviderError) -> bool {
 
 pub(super) struct MappedProviderFailure {
     pub(super) error: ProviderError,
+    pub(super) http_rejection_status: Option<u16>,
     pub(super) websocket_transport_retryable: bool,
     pub(super) account_failure: Option<CodexAccountFailure>,
     /// 原始上游错误描述，仅在凭据错误状态下持久化。
@@ -64,6 +65,7 @@ impl MappedProviderFailure {
     pub(super) fn plain(error: ProviderError) -> Self {
         Self {
             error,
+            http_rejection_status: None,
             websocket_transport_retryable: false,
             account_failure: None,
             error_message: None,
@@ -478,7 +480,17 @@ pub(super) fn schedule_authoritative_quota_refresh_after_failure(
 }
 
 pub(super) fn map_handshake_error(error: CodexClientError) -> MappedProviderFailure {
-    map_client_error(error, UpstreamSendState::Ambiguous, true)
+    let http_rejection_status = match &error {
+        CodexClientError::Upstream {
+            status,
+            transport: CodexBackendTransport::HttpJson | CodexBackendTransport::HttpSse,
+            ..
+        } => Some(status.as_u16()),
+        _ => None,
+    };
+    let mut failure = map_client_error(error, UpstreamSendState::Ambiguous, true);
+    failure.http_rejection_status = http_rejection_status;
+    failure
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1415,6 +1427,7 @@ pub(super) fn map_upstream_failure(
     );
     MappedProviderFailure {
         error,
+        http_rejection_status: None,
         websocket_transport_retryable: false,
         account_failure: account_failure(
             category,

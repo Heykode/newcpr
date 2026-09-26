@@ -21,6 +21,7 @@ pub(crate) struct ImageRelay {
     entries: Mutex<BTreeMap<String, Entry>>,
     byte_budget: Arc<AtomicUsize>,
     downloads: Arc<AtomicUsize>,
+    requests: Arc<AtomicUsize>,
     tuning: gateway_core::runtime::RequestTuningHandle,
 }
 
@@ -91,6 +92,7 @@ struct Entry {
 pub(crate) struct ImageLease {
     relay: Weak<ImageRelay>,
     tokens: Vec<String>,
+    _request: CapacityPermit,
 }
 
 impl Drop for ImageLease {
@@ -132,6 +134,7 @@ impl ImageRelay {
             entries: Mutex::new(BTreeMap::new()),
             byte_budget: Arc::new(AtomicUsize::new(0)),
             downloads: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(AtomicUsize::new(0)),
             tuning: Default::default(),
         }
     }
@@ -161,6 +164,12 @@ impl ImageRelay {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|_, entry| entry.expires > Instant::now());
         let limits = self.tuning.load();
+        let request = CapacityPermit::acquire(
+            &self.requests,
+            1,
+            limits.excel_image_relay_requests as usize,
+        )
+        .ok_or(ExcelRequestError::ImageRelay)?;
         let mut reserved = CapacityPermit::acquire(
             &self.byte_budget,
             budget,
@@ -234,6 +243,7 @@ impl ImageRelay {
         Ok(Some(Arc::new(ImageLease {
             relay: Arc::downgrade(self),
             tokens,
+            _request: request,
         })))
     }
 }
@@ -297,8 +307,8 @@ fn rewrite_urls(value: &mut Value, replacements: &BTreeMap<String, String>) {
 
 #[cfg(test)]
 mod tests {
-    const MAX_BYTES: usize = 64 * 1024 * 1024;
-    const MAX_ENTRIES: usize = 128;
+    const MAX_BYTES: usize = 1024 * 1024 * 1024;
+    const MAX_REQUESTS: usize = 128;
     use super::*;
     use serde_json::json;
 
@@ -321,7 +331,7 @@ mod tests {
         assert_eq!(original, body);
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
         let mut leases = Vec::new();
-        for _ in 0..MAX_ENTRIES {
+        for _ in 0..MAX_REQUESTS {
             leases.push(relay.stage(&mut input()).unwrap().unwrap());
         }
         assert!(relay.stage(&mut input()).is_err());
@@ -333,6 +343,43 @@ mod tests {
         drop(leases);
         assert!(relay.read(&token).is_none());
         assert!(relay.stage(&mut input()).is_ok());
+    }
+
+    #[test]
+    fn excel_image_request_slots_survive_clones_and_release_on_error_or_drop() {
+        let tuning =
+            gateway_core::runtime::RequestTuningHandle::new(gateway_core::routing::RequestTuning {
+                excel_image_relay_requests: 1,
+                ..Default::default()
+            });
+        let relay = Arc::new(
+            ImageRelay::new(Some("https://images.example.com".into()))
+                .with_request_tuning(tuning.clone()),
+        );
+        let first = relay.stage(&mut input()).unwrap().unwrap();
+        let clone = first.clone();
+        assert!(relay.stage(&mut input()).is_err());
+        assert!(
+            relay
+                .stage(json!({"input":"text"}).as_object_mut().unwrap())
+                .unwrap()
+                .is_none()
+        );
+        drop(first);
+        assert_eq!(relay.requests.load(Ordering::Acquire), 1);
+        tuning.publish(gateway_core::routing::RequestTuning {
+            excel_image_relay_requests: 2,
+            ..Default::default()
+        });
+        let second = relay.stage(&mut input()).unwrap().unwrap();
+        assert_eq!(relay.requests.load(Ordering::Acquire), 2);
+        drop((clone, second));
+        assert_eq!(relay.requests.load(Ordering::Acquire), 0);
+        let mut wrong = input();
+        wrong["input"][0]["content"][0]["image_url"] = "data:image/png;base64,AQID".into();
+        assert!(relay.stage(&mut wrong).is_err());
+        assert_eq!(relay.requests.load(Ordering::Acquire), 0);
+        assert_eq!(relay.byte_budget.load(Ordering::Acquire), 0);
     }
 
     #[test]

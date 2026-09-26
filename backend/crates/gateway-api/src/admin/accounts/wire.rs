@@ -80,6 +80,7 @@ pub struct BatchUpdateAccountsRequest {
     pub excel_models: Option<gateway_core::account::ExcelModels>,
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
+    pub excel_auto_disable_on_403: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub concurrency_limit: Option<Option<u64>>,
     pub weight: Option<u64>,
@@ -152,6 +153,7 @@ impl BatchUpdateAccountsRequest {
             && self.excel_models.is_none()
             && self.excel_models_follow_global.is_none()
             && self.excel_cache_creation_as_input.is_none()
+            && self.excel_auto_disable_on_403.is_none()
             && self.concurrency_limit.is_none()
             && self.weight.is_none()
             && self.model_access.is_none()
@@ -179,6 +181,7 @@ impl BatchUpdateAccountsRequest {
             excel_models: self.excel_models,
             excel_models_follow_global: self.excel_models_follow_global,
             excel_cache_creation_as_input: self.excel_cache_creation_as_input,
+            excel_auto_disable_on_403: self.excel_auto_disable_on_403,
             concurrency_limit: self
                 .concurrency_limit
                 .map(parse_concurrency_limit)
@@ -349,6 +352,7 @@ pub struct AccountView {
     pub excel_models: gateway_core::account::ExcelModels,
     pub excel_models_follow_global: bool,
     pub excel_cache_creation_as_input: bool,
+    pub excel_auto_disable_on_403: bool,
     pub effective_excel_models: gateway_core::account::ExcelModels,
     pub turn_state: Option<AccountTurnStateView>,
     pub in_flight: Option<u64>,

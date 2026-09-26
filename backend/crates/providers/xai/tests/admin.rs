@@ -743,6 +743,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Default::default(),
+        excel_auto_disable_on_403: Default::default(),
         excel_models: Default::default(),
         concurrency_limit: account.concurrency_limit(),
         weight: account.weight(),

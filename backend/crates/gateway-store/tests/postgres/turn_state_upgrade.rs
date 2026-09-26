@@ -87,6 +87,13 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
             .remove("excel_cache_creation_as_input"),
         Some(serde_json::json!(false))
     );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("excel_auto_disable_on_403"),
+        Some(serde_json::json!(false))
+    );
     assert_eq!(before, after);
     database.close().await;
 }

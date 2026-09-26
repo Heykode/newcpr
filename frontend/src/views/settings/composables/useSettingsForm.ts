@@ -23,9 +23,10 @@ const requestTuningFallbacks: RequestTuning = {
   websocketFailureWindowMs: 30_000,
   websocketFailureOpenDurationMs: 30_000,
   rateLimitCooldownSeconds: 60,
-  excelImageRelayBytes: 64 * 1024 * 1024,
+  excelImageRelayBytes: 1024 * 1024 * 1024,
+  excelImageRelayRequests: 128,
   excelImageRelayDownloads: 32,
-  excelImageRelayEntries: 128,
+  excelImageRelayEntries: 512,
   openaiLocationOverrideEnabled: false,
   openaiRequestLocation: null,
   maxWaitingPerKey: 0,
@@ -191,6 +192,7 @@ export function useSettingsForm() {
     }
     const tuning = form.requestTuning
     if (!Number.isInteger(tuning.excelImageRelayBytes) || tuning.excelImageRelayBytes < 1024 * 1024 || tuning.excelImageRelayBytes > 2048 * 1024 * 1024
+      || !Number.isInteger(tuning.excelImageRelayRequests) || tuning.excelImageRelayRequests < 1 || tuning.excelImageRelayRequests > 512
       || !Number.isInteger(tuning.excelImageRelayDownloads) || tuning.excelImageRelayDownloads < 1 || tuning.excelImageRelayDownloads > 128
       || !Number.isInteger(tuning.excelImageRelayEntries) || tuning.excelImageRelayEntries < 1 || tuning.excelImageRelayEntries > 4096) {
       toast.warning('图片预算须为 1–2048 MiB，下载并发须为 1–128，图片条目须为 1–4096')

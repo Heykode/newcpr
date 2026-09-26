@@ -181,6 +181,30 @@ through outstanding downloads, including after lease/entry deletion. Separate
 download permits last through the HTTP body lifecycle; text never takes permits.
 Keep acceptance limitations in feature documentation and do not claim native parity.
 
+`excelImageRelayRequests` is a separate per-instance admission counter, default
+128 (1–512). Only image-bearing relay leases consume it. Lease clones retain a
+single permit until the last clone drops; decode errors release admission.
+Downloads remain 32 by default, independent of request slots. The decoded-byte
+budget defaults to 1024 MiB and cache entries to 512; these are limits, not eager
+allocations. Saved runtime overrides win. Do not silently extend single-image,
+per-request, pixel or TTL limits to match an upstream disk-backed architecture.
+
+## Optional HTTP 403 Auto-disable
+
+`excelAutoDisableOn403` defaults off and is OpenAI OAuth/account scoped.
+Only the real HTTP handshake rejection can trigger it, including compact's
+HTTP stage; a 403 encoded in an HTTP200 SSE payload cannot. Exclude
+`basispoints_model_access_changed`. Clear retry/account-failure intents only
+on this opted-in path, preserve the current response evidence, and never
+replay the current request through another protocol.
+Store locks config then account and conditionally updates only the Excel route
+for the current credential revision/type/flags; config revision increments in
+that transaction exactly once. Preserve credentials, quotas, scheduling,
+other options and the opt-in flag. Manual Excel-off clears the subordinate
+flag, while automatic-off preserves it. The two-second bounded write outlives
+client cancellation; failures must not replace the original upstream error.
+No per-account polling or credential guardian is introduced.
+
 ## 10. Excel Compatibility Diagnostics
 
 Scope: only Excel request/stream conversion. `reasoning_effort` returns the

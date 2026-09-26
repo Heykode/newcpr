@@ -122,6 +122,8 @@ pub struct RequestTuning {
     pub rate_limit_cooldown_seconds: u64,
     #[serde(default = "default_excel_image_relay_bytes")]
     pub excel_image_relay_bytes: u64,
+    #[serde(default = "default_excel_image_relay_requests")]
+    pub excel_image_relay_requests: u32,
     #[serde(default = "default_excel_image_relay_downloads")]
     pub excel_image_relay_downloads: u32,
     #[serde(default = "default_excel_image_relay_entries")]
@@ -149,15 +151,19 @@ const fn default_websocket_large_request_threshold_bytes() -> u64 {
 }
 
 const fn default_excel_image_relay_bytes() -> u64 {
-    64 * 1024 * 1024
+    1024 * 1024 * 1024
 }
 
 const fn default_excel_image_relay_downloads() -> u32 {
     32
 }
 
-const fn default_excel_image_relay_entries() -> u32 {
+const fn default_excel_image_relay_requests() -> u32 {
     128
+}
+
+const fn default_excel_image_relay_entries() -> u32 {
+    512
 }
 
 const fn default_sticky_max_waiting() -> u32 {
@@ -199,6 +205,7 @@ impl RequestTuning {
             websocket_failure_open_duration_ms: 30_000,
             rate_limit_cooldown_seconds: 60,
             excel_image_relay_bytes: default_excel_image_relay_bytes(),
+            excel_image_relay_requests: default_excel_image_relay_requests(),
             excel_image_relay_downloads: default_excel_image_relay_downloads(),
             excel_image_relay_entries: default_excel_image_relay_entries(),
             openai_location_override_enabled: false,
