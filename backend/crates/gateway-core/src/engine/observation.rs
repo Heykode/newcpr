@@ -2,6 +2,7 @@
 
 use super::ModelRequestTimings;
 use crate::event::GatewayEvent;
+use crate::event::ProviderMeteringCheckpoint;
 use crate::event::ProviderResponseObservation;
 use crate::metering::{CostEstimate, CostSource, Usage};
 use std::time::Instant;
@@ -48,6 +49,15 @@ impl ResponseObservation {
         }
         if let GatewayEvent::ProviderCost(observed) = event {
             self.cost = observed.into_estimate();
+        }
+    }
+
+    pub(super) fn observe_metering(&mut self, checkpoint: &ProviderMeteringCheckpoint) {
+        self.usage.merge(checkpoint.usage());
+        if let Some(cost) = checkpoint.calculated_cost()
+            && self.cost.source() != CostSource::ProviderReported
+        {
+            self.cost = cost.clone().into_estimate();
         }
     }
 

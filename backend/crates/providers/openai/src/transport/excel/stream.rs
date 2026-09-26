@@ -37,7 +37,8 @@ pub(crate) fn transform_stream_with_repair(
         terminal: false,
         sequence: 0,
         effort: prepared.body.get("reasoning_effort").cloned(),
-        first_interaction: !super::repair::has_tool_history(&prepared.body),
+        allow_unknown_repair: super::repair::no_tool_history(&prepared.body),
+        regenerated_from: None,
     };
     Box::pin(async_stream::try_stream! {
         let mut source = Some(source);
@@ -55,13 +56,18 @@ pub(crate) fn transform_stream_with_repair(
             };
             for mut event in events {
                 if let Some(sender) = sender.as_mut()
-                    && let Some(original) = transform.repair_candidate(&event)
+                    && let Some((original, unknown)) = transform.repair_candidate(&event)
                 {
                     // The old response must not occupy a socket while its correction starts.
                     drop(source.take());
-                    let mut correction = super::repair::correct(
+                    let mut correction = if unknown {
+                        transform.regenerated_from = Some(original["output"].as_array().expect("validated output").len() - 1);
+                        super::repair::correct_unknown(
+                            &original, &transform.tools, request_body.clone().expect("repair sender body"), sender, &transform.usage,
+                        )
+                    } else { super::repair::correct(
                         &original, &transform.tools, request_body.clone().expect("repair sender body"), sender, &transform.usage,
-                    );
+                    ) };
                     while let Some(step) = correction.next().await {
                         match step? {
                             Some(corrected) => event.data = corrected.to_string(),
@@ -123,14 +129,12 @@ struct Relay {
     terminal: bool,
     sequence: u64,
     effort: Option<Value>,
-    first_interaction: bool,
+    allow_unknown_repair: bool,
+    regenerated_from: Option<usize>,
 }
 
 impl Relay {
-    fn repair_candidate(&self, event: &SseEvent) -> Option<Value> {
-        if self.structured.is_some() {
-            return None;
-        }
+    fn repair_candidate(&self, event: &SseEvent) -> Option<(Value, bool)> {
         let data: Value = serde_json::from_str(&event.data).ok()?;
         if data["type"].as_str().or(event.event.as_deref()) != Some("response.completed") {
             return None;
@@ -142,12 +146,13 @@ impl Relay {
                 item["id"].as_str() == Some(id) && item["call_id"].as_str() == Some(call)
             })
         }) || super::repair::validate(&self.tools, response).is_ok()
-            || !(super::repair::eligible(&self.tools, response)
-                || self.first_interaction && super::repair::unknown_eligible(&self.tools, response))
         {
             return None;
         }
-        Some(response.clone())
+        let unknown =
+            self.allow_unknown_repair && super::repair::unknown_eligible(&self.tools, response);
+        (unknown || self.structured.is_none() && super::repair::eligible(&self.tools, response))
+            .then(|| (response.clone(), unknown))
     }
 
     fn event(&mut self, event: SseEvent) -> Result<Vec<Bytes>, CodexClientError> {
@@ -265,7 +270,8 @@ impl Relay {
                     })?;
                     result.extend(tool_events(&converted, index));
                     *item = converted;
-                } else if self.structured.is_some()
+                } else if (self.structured.is_some()
+                    || self.regenerated_from.is_some_and(|start| index >= start))
                     && item.get("type").and_then(Value::as_str) == Some("message")
                 {
                     result.extend(structured::message_events(item, index));
