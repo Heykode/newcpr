@@ -10,6 +10,7 @@ pub(crate) mod image_relay;
 #[cfg(test)]
 mod image_tests;
 pub(crate) mod images;
+mod repair;
 pub(crate) mod replay;
 mod request;
 mod stream;
@@ -23,6 +24,7 @@ pub(crate) mod usage;
 
 pub(crate) use request::{ExcelRequestError, prepare_request, reasoning_effort};
 pub(crate) use stream::transform_stream;
+pub(crate) use stream::transform_stream_with_repair;
 pub(crate) use structured::StructuredOutput;
 pub(crate) use tools::ClientTools;
 

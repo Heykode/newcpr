@@ -956,7 +956,7 @@ async fn excel_complete_history_recovers_without_cache_but_output_alone_does_not
         "owner".into(),
         "thread".into(),
         None,
-        &json!([call, result]),
+        json!({"input":[call, result]}).as_object().unwrap(),
     )
     .await
     .unwrap();
@@ -967,7 +967,7 @@ async fn excel_complete_history_recovers_without_cache_but_output_alone_does_not
             "owner".into(),
             "thread".into(),
             None,
-            &json!([result])
+            json!({"input":[result]}).as_object().unwrap()
         )
         .await
         .is_err()
@@ -1088,7 +1088,7 @@ async fn excel_completed_tool_mapping_and_history_are_available_to_next_turn() {
         "owner".into(),
         "thread".into(),
         None,
-        &json!("read"),
+        json!({"input":"read"}).as_object().unwrap(),
     )
     .await
     .unwrap();
@@ -1119,7 +1119,9 @@ async fn excel_completed_tool_mapping_and_history_are_available_to_next_turn() {
         "owner".into(),
         "thread".into(),
         Some("resp_tool"),
-        &json!([{"type":"function_call_output","call_id":"call_fixture","output":"ok"}]),
+        json!({"input":[{"type":"function_call_output","call_id":"call_fixture","output":"ok"}]})
+            .as_object()
+            .unwrap(),
     )
     .await
     .unwrap();

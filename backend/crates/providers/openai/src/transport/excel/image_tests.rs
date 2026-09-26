@@ -96,10 +96,16 @@ async fn scoped(
     let input = json!([{"role":"user","content":[image()]}]);
     let mut req = request(format!("{}{RESPONSES_PATH}", server.uri()), input.clone());
     req.excel.as_mut().unwrap().replay = Some(
-        replay::restore(store, owner.into(), "conversation".into(), None, &input)
-            .await
-            .unwrap()
-            .capture,
+        replay::restore(
+            store,
+            owner.into(),
+            "conversation".into(),
+            None,
+            &body(input),
+        )
+        .await
+        .unwrap()
+        .capture,
     );
     req
 }
@@ -162,13 +168,46 @@ fn excel_image_validation_checks_carrier_detail_and_private_errors() {
             assert!(!error.contains("SECRET"));
         }
     }
-    for detail in [Value::Null, json!("auto"), json!("low"), json!("high")] {
+    for detail in [
+        Value::Null,
+        json!("auto"),
+        json!("low"),
+        json!("high"),
+        json!("original"),
+    ] {
         let source = body(json!([{"role":"user","content":[{"type":"input_image",
             "image_url":"https://images.example.com/a?signature=unchanged%2Fvalue&expires=123","detail":detail}]}]));
         let before = source.clone();
         images::validate(&source).unwrap();
         assert_eq!(source, before);
     }
+}
+
+#[test]
+fn excel_original_detail_preserves_position_specific_image_carriers() {
+    for image in [
+        json!({"type":"input_image","image_url":PNG,"detail":"original"}),
+        json!({"type":"input_image","image_url":"https://images.example.com/a","detail":"original"}),
+    ] {
+        for item in [
+            json!({"role":"user","content":[image.clone()]}),
+            json!({"type":"function_call_output","call_id":"fixture","output":[image.clone()]}),
+        ] {
+            let source = body(json!([item]));
+            let before = source.clone();
+            images::validate_references(&source).unwrap();
+            images::validate(&source).unwrap();
+            assert_eq!(source, before);
+        }
+    }
+    images::validate(&body(json!([{"role":"user","content":[{
+        "type":"input_image","file_id":"file_fixture","detail":"original"}]}])))
+    .unwrap();
+    assert!(
+        images::validate(&body(json!([{"type":"function_call_output","output":[{
+        "type":"input_image","file_id":"file_fixture","detail":"original"}]}])))
+        .is_err()
+    );
 }
 
 #[test]
@@ -277,7 +316,7 @@ async fn excel_mixed_tool_and_user_images_relay_without_mutating_history_or_iden
         "owner".into(),
         "conversation".into(),
         None,
-        &source["input"],
+        source.as_object().unwrap(),
     )
     .await
     .unwrap();
@@ -334,7 +373,7 @@ async fn excel_mixed_tool_and_user_images_relay_without_mutating_history_or_iden
         "owner".into(),
         "conversation".into(),
         Some("resp_images"),
-        &json!([]),
+        &body(json!([])),
     )
     .await
     .unwrap();
@@ -375,7 +414,7 @@ async fn excel_user_attachment_preserves_mixed_tool_images_and_original_history(
         "owner".into(),
         "conversation".into(),
         None,
-        &source["input"],
+        source.as_object().unwrap(),
     )
     .await
     .unwrap();
@@ -422,7 +461,7 @@ async fn excel_user_attachment_preserves_mixed_tool_images_and_original_history(
         "owner".into(),
         "conversation".into(),
         Some("resp_fixture"),
-        &json!([]),
+        &body(json!([])),
     )
     .await
     .unwrap();

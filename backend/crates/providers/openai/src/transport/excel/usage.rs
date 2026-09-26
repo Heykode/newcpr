@@ -1,6 +1,9 @@
 //! Account-selected billing classification; upstream totals are never increased.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use serde_json::{Value, json};
 
@@ -31,9 +34,47 @@ const OTHER_PATHS: &[&str] = &[
 pub(crate) struct ExcelUsagePolicy {
     as_input: bool,
     original: Arc<Mutex<Option<Value>>>,
+    repair_failure: Arc<Mutex<Option<Value>>>,
+    repairing: Arc<AtomicBool>,
 }
 
 impl ExcelUsagePolicy {
+    pub(super) fn clear_repair_usage(&self) {
+        self.repairing.store(false, Ordering::Relaxed);
+        self.repair_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
+    pub(super) fn record_repair_usage(&self, response: &Value, usage: &Value) {
+        self.repairing.store(true, Ordering::Relaxed);
+        let mut record = json!({"usage":usage});
+        for field in ["id", "model", "service_tier"] {
+            if let Some(value) = response.get(field) {
+                record[field] = value.clone();
+            }
+        }
+        *self
+            .repair_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record);
+    }
+
+    pub(crate) fn repair_started(&self) -> bool {
+        self.repairing.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn take_failed_repair_usage(&self) -> Option<Value> {
+        let mut record = self
+            .repair_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        self.normalize(&mut record);
+        Some(record)
+    }
+
     pub(crate) fn new(as_input: bool) -> Self {
         Self {
             as_input,

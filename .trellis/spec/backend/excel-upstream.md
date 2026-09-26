@@ -106,7 +106,7 @@ a genuine encrypted compaction result.
 `tool_choice: none` is consumed by the local tool adapter. Do not add it back to
 the prepared Excel wire body, including explicit compact; the upstream rejects
 that extra field. Keep `compaction_trigger` as the final input item.
-Validate image position, carrier, encoded size and detail=auto/low/high before
+Validate image position, carrier, encoded size and detail=auto/low/high/original before
 staging; MIME, Base64 and dimensions before upload/generation. Relay byte admission
 must still precede decoding. HTTPS references pass unchanged. User inline pictures
 use the existing account-scoped attachment upload, or the optional HTTPS relay
@@ -250,3 +250,42 @@ strings; executable/multi-argument rejection; safe error paths for messages and
 tool outputs; auto declarations versus forced choices; projected effective effort.
 Good: a max request sends xhigh and reports xhigh. Base: native Codex unchanged.
 Bad: deleting genuine encrypted history or pretending filtered hosted tools ran.
+
+## 11. History And Bounded Tool Correction
+
+Scope: Excel protocol only. `replay::restore` accepts the complete source map
+and returns the effective `ClientTools` with restored input. Rebuild uncached
+CUSTOM/FUNCTION_CODE history from that catalog; preserve matching native cache
+records and raw source bytes. A missing call reports only its input position.
+
+`transform_stream_with_repair` accepts an optional account-bound HTTP sender.
+Only a completed, wholly unexecuted native tool batch can request correction:
+two attempts maximum, original model/lease/egress, no extra scheduler selection.
+Keep valid operations and raw code plus metadata, original output slots and
+response identity. Validate the whole batch before exposing executable events.
+Structured output and undeclared tools never enter correction.
+
+| Condition | Outcome |
+| --- | --- |
+| Corrected envelope passes and preserves operations | Deliver once; cache actual delivered source |
+| Added/reordered/changed operation or second invalid correction | Fail without executing tools or publishing a parent |
+| HTTP rejection | Preserve HTTP provenance and account error policy, never replay |
+| SSE failure | Preserve SSE error/code, not an HTTP auto-disable signal |
+| Incomplete terminal, truncation, timeout or cancellation | Stop; retain observed usage, no success cache |
+
+Normalize usage aliases before summing measured counters. Each correction
+checkpoint yields an internal empty chunk which the provider consumes into
+cumulative Usage/CalculatedCost facts before another network await. Core merges
+these snapshots; they are not deltas, client wire events or first-token signals.
+This preserves known usage when Core's cancellation boundary wins before the
+provider can report its own cancellation. Clear the recorder on aggregated
+completion; error/deadline paths take any unreported snapshot once. Cancellation
+drops the sender future rather than spawning background generation. Ordinary
+text stays incremental.
+
+Good: repair a missing CUSTOM marker without changing raw source. Base: valid
+tools, image position rules and the native route retain existing behavior.
+Bad: repair parameter values, retry a 422 without images, or erase encrypted
+history. Required regressions cover metadata preservation, duplicate identity,
+batch atomicity, aliases, cancellation, incomplete/SSE/HTTP errors, replay
+success/failure, structured bypass and original image detail.

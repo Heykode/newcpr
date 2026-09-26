@@ -115,10 +115,11 @@ fn validate_inner(body: &Map<String, Value>, decode: bool) -> Result<(), ExcelRe
                     ));
                 }
                 if fields.get("detail").is_some_and(|detail| {
-                    !detail.is_null() && !matches!(detail.as_str(), Some("auto" | "low" | "high"))
+                    !detail.is_null()
+                        && !matches!(detail.as_str(), Some("auto" | "low" | "high" | "original"))
                 }) {
                     return Err(ExcelRequestError::ImageInput(
-                        "detail must be auto, low or high",
+                        "detail must be auto, low, high or original",
                     ));
                 }
                 if fields.get("file_id").is_some_and(|id| !id.is_null())
