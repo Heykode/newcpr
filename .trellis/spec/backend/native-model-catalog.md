@@ -28,7 +28,13 @@
 - 账号上下文使用自己的 installation ID；是否上网发送由该端点已有协议决定，
   不能为了“对齐”向模型目录臆造 installation 头。
 - 缓存键包括账号、credential revision、上游用户/账号、套餐、代理、
-  egress revision、client version、effective profile。
+  egress revision、client version、effective profile，以及 Excel 模式/模型列表。
+  后两项仅隔离模型目录缓存，不改变推理缓存键或会话编号。
+- Excel 多代理密文能力例外按 Sub2API #118：当前冻结授权范围内，持久启用的 OAuth
+  Excel 账号对其配置且模型政策允许的型号，将 `multi_agent_version` 与
+  `multi_agent_reasoning_effort` 显式限制为 null。限制在原始目录缓存之后施加，
+  不因临时凭据/额度失败恢复 v2；其他原始字段、范围外和纯原生型号不变。
+  别名仍由 Core 选择目标对象，不修改选号或请求路径。
 - 最多 32 项，单次 15 秒，成功 TTL 五分钟，失败从完成时起 TTL 五秒。
   同键初始化合并；失效仍保留在途所有权，取消后可回收无持有者的初始化槽。
 - 账号停用/删除或出口快照不可用时，不得返回旧缓存成功。

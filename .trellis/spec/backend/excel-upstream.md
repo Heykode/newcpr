@@ -133,6 +133,29 @@ locally with an actionable 400, never moved into a user message or silently remo
 Do not recursively treat tool arguments or arbitrary metadata as image content.
 Generic 400/422 never permits generation replay, content removal or history reset.
 
+The only encrypted-history exception follows Sub2API #118 at 3bfce058:
+an initial Excel HTTP 400 with explicit invalid_encrypted_content (or its strict
+uncoded verification/decryption diagnostic) may retry once before streaming.
+First sends preserve ciphertext. Only remove nonempty encrypted reasoning items
+from the prepared request copy, never canonical/replay history. Reject recovery
+if other encrypted carriers remain or no user/assistant/tool history survives.
+Keep compaction, messages, images, tools, metadata, cache key, model and effort.
+Reuse the pinned account/egress and uploaded attachments, honoring cancellation;
+never reselect accounts, retry native routes or handle a 200 SSE failure this way.
+Do not nest this recovery into tool-format correction sends. Second failures retain
+normal error/401/403 handling. Diagnostics contain no ciphertext. Excel-only model
+descriptors explicitly null both multi-agent encrypted capability fields; native
+catalog capabilities remain unchanged.
+For mixed pools apply the restriction after raw catalog caching using the frozen
+client scope plus enabled OAuth Excel model policy, not the sampled metadata
+account alone. Temporary credential/quota failures must not re-enable v2. Include
+Excel mode/model selection in catalog-only cache keys so switching off recovers
+the native document; do not change inference cache keys or account selection.
+
+Sub2API #117 normalization belongs in the native final HTTP/WS body preparation:
+remove only top-level external_web_access from web_search* tool entries. Never
+recurse into function schemas, change identity/fingerprints or apply it to Excel.
+
 The optional image relay belongs to the provider; Core exposes only a neutral download
 capability and API serves bytes. Default off, HTTPS origin only, no filesystem paths,
 random per-request tokens, bounded image/aggregate capacity, five-minute maximum TTL,

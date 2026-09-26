@@ -4,6 +4,7 @@
 
 mod catalog;
 pub(crate) mod diagnostics;
+pub(super) mod encrypted;
 mod envelope;
 mod image_cache;
 pub(crate) mod image_generation;

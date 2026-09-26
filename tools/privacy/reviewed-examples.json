@@ -1958,5 +1958,13 @@
     "file_sha256": "58d7ad22d7fed652da97732358036c027d1832607e6143f65257e7b617e39e7a",
     "line_sha256": "0c07a8358142ce34def5485ea2f29bc75728128f237bc06ceff18ec42e846801",
     "reason": "Manually re-reviewed unchanged loopback migration fixture in an isolated test schema; Excel inheritance constructor additions do not alter this SQL."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/native_catalog_local.rs",
+    "rule": "authenticated-url",
+    "line": 523,
+    "file_sha256": "eefe02551b0d0b9bfb67f611ca87d1a03d55a046c0c2b0139481c9f58677d2eb",
+    "line_sha256": "df037a1268a2fe553e47104c6feee56ef05f531030847103b46d3a4582695472",
+    "reason": "Re-reviewed byte-identical synthetic catalog proxy credentials against the prior revision; the destination remains an ephemeral loopback listener. Excel catalog capability regression tests only shift this fixture's line."
   }
 ]

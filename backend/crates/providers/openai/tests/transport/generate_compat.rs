@@ -47,7 +47,13 @@ fn cases() -> Vec<(Value, Value)> {
             "parallel_tool_calls": false,
             "include": ["reasoning.encrypted_content", "future.include"],
             "truncation": "auto",
-            "tools": [{"type":"web_search"}, {"type":"image_generation","quality":"low"}],
+            "tools": [
+                {"type":"web_search","external_web_access":true},
+                {"type":"image_generation","quality":"low"},
+                {"type":"web_search_preview","external_web_access":false},
+                {"type":"function","name":"keep_me","external_web_access":true,
+                    "parameters":{"type":"object","properties":{"external_web_access":{"type":"boolean"}}}}
+            ],
             "future_field": {"keep": ["all", "values"]}
         });
         if let Some(store) = store {
@@ -77,6 +83,9 @@ fn cases() -> Vec<(Value, Value)> {
             "city": "Piketon",
             "timezone": "America/New_York"
         });
+        expected["tools"][2]["user_location"] = expected["tools"][0]["user_location"].clone();
+        expected["tools"][0].as_object_mut().unwrap().remove("external_web_access");
+        expected["tools"][2].as_object_mut().unwrap().remove("external_web_access");
         if index != 1 {
             expected["input"] = json!([{
                 "type":"message","role":"user",

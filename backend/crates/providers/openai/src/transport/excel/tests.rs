@@ -24,6 +24,276 @@ use wiremock::{
 
 pub(super) const VERIFIED_MODEL: &str = "gpt-5.6-sol";
 
+const CIPHER_REJECTION: &str =
+    r#"{"error":{"code":"invalid_encrypted_content","param":"input[12].encrypted_content"}}"#;
+const CIPHER_DIAGNOSTIC: &str = r#"{"error":{"message":"The encrypted content fixture could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}"#;
+
+#[test]
+fn excel_encrypted_recovery_requires_explicit_rejection_not_ciphertext_length() {
+    for raw in [CIPHER_REJECTION, CIPHER_DIAGNOSTIC] {
+        assert!(encrypted::is_rejection(raw));
+    }
+    for raw in [
+        r#"{"error":{"code":"invalid_value","message":"The encrypted content could not be verified and could not be decrypted or parsed"}}"#,
+        r#"{"error":{"message":"Invalid input. User said: the encrypted content could not be verified and could not be decrypted or parsed"}}"#,
+        r#"{"error":{"message":"Unsupported parameter: encrypted_content"}}"#,
+        r#"{"error":{"code":"invalid_encrypted_content"}"#,
+    ] {
+        assert!(!encrypted::is_rejection(raw));
+    }
+    assert!(!encrypted::is_rejection(&format!(
+        "{}{}",
+        " ".repeat(512 * 1024),
+        CIPHER_REJECTION
+    )));
+}
+
+fn encrypted_history() -> Value {
+    json!({
+        "model":VERIFIED_MODEL,"stream":true,"reasoning_effort":"xhigh",
+        "metadata":{"task_id":"task_fixture","turn_id":"turn_fixture","agent_iteration":"2"},
+        "prompt_cache_key":"cache_fixture",
+        "context_management":[{"type":"compaction","compact_threshold":920000}],
+        "input":[
+            {"role":"user","content":"Keep the complete task"},
+            {"type":"reasoning","encrypted_content":"short-reference","summary":[]},
+            {"type":"function_call","call_id":"call_fixture","name":"run_officejs","arguments":"{\"value\":9007199254740993}"},
+            {"type":"function_call_output","call_id":"call_fixture","output":"Keep tool result"},
+            {"type":"reasoning","encrypted_content":"another-opaque-value","summary":[]},
+            {"type":"reasoning","summary":[{"type":"summary_text","text":"visible summary"}]},
+            {"role":"user","content":[{"type":"input_image","file_id":"file_fixture","detail":"original"}]},
+            {"type":"compaction_trigger"}
+        ],
+        "opaque":{"number":9007199254740993u64}
+    })
+}
+
+#[test]
+fn excel_encrypted_recovery_only_removes_opaque_reasoning_from_a_copy() {
+    let body = encrypted_history();
+    let original = body.clone();
+    let repaired = encrypted::retry_body(body.as_object().unwrap(), CIPHER_REJECTION).unwrap();
+    let mut expected = original.clone();
+    expected["input"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| !(item["type"] == "reasoning" && item.get("encrypted_content").is_some()));
+    assert_eq!(Value::Object(repaired), expected);
+    assert_eq!(body, original);
+    assert!(
+        encrypted::retry_body(
+            body.as_object().unwrap(),
+            r#"{"error":{"code":"invalid_value"}}"#
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn excel_encrypted_recovery_refuses_required_encrypted_context() {
+    for protected in [
+        json!({"type":"compaction","encrypted_content":"only-copy"}),
+        json!({"type":"compaction_summary","encrypted_content":"only-copy"}),
+        json!({"role":"user","content":[{"type":"encrypted_content","encrypted_content":"private"}]}),
+        json!({"type":"function_call_output","output":[{"type":"encrypted_content","encrypted_content":"private"}]}),
+        json!({"type":"function_call","encrypted_function_args":["message"],"arguments":"{}"}),
+        json!({"type":"agent_message","encrypted_content":null}),
+    ] {
+        let mut body = encrypted_history();
+        body["input"].as_array_mut().unwrap().insert(0, protected);
+        assert!(encrypted::retry_body(body.as_object().unwrap(), CIPHER_REJECTION).is_none());
+    }
+    for input in [
+        json!("hello"),
+        json!([{"type":"reasoning","encrypted_content":"only"}]),
+        json!([{"role":"developer","content":"protocol"},{"type":"reasoning","encrypted_content":"only"},{"type":"compaction_trigger"}]),
+        json!([{"role":"user","content":"no reasoning"}]),
+    ] {
+        assert!(
+            encrypted::retry_body(
+                json!({"input":input}).as_object().unwrap(),
+                CIPHER_REJECTION
+            )
+            .is_none()
+        );
+    }
+}
+
+async fn encrypted_run(
+    server: &MockServer,
+    input: Value,
+) -> Result<(), crate::transport::CodexClientError> {
+    let mut request = request(
+        format!("{}{RESPONSES_PATH}", server.uri()),
+        json!("fixture"),
+    );
+    request.excel.as_mut().unwrap().body = input.as_object().unwrap().clone();
+    client(&server.uri())
+        .create_response_stream_with_pool_account(
+            &request,
+            CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+            Some("account"),
+        )
+        .await?
+        .body
+        .try_collect::<Vec<_>>()
+        .await?;
+    assert_eq!(
+        request.excel.as_ref().unwrap().body,
+        *input.as_object().unwrap()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn excel_encrypted_recovery_reuses_wire_identity_and_preserves_normal_ciphertexts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for rejection in [None, Some(CIPHER_REJECTION), Some(CIPHER_DIAGNOSTIC)] {
+        let server = MockServer::start().await;
+        let attempts = AtomicUsize::new(0);
+        Mock::given(path(RESPONSES_PATH))
+            .respond_with(move |_: &wiremock::Request| {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0
+                    && let Some(raw) = rejection
+                {
+                    ResponseTemplate::new(400).set_body_string(raw)
+                } else {
+                    completed()
+                }
+            })
+            .mount(&server)
+            .await;
+        let original = encrypted_history();
+        encrypted_run(&server, original.clone()).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), if rejection.is_some() { 2 } else { 1 });
+        assert_eq!(requests[0].body_json::<Value>().unwrap(), original);
+        if rejection.is_some() {
+            let expected =
+                encrypted::retry_body(original.as_object().unwrap(), CIPHER_REJECTION).unwrap();
+            assert_eq!(
+                requests[1].body_json::<Value>().unwrap(),
+                Value::Object(expected)
+            );
+            for name in [
+                "authorization",
+                "chatgpt-account-id",
+                "x-openai-account-id",
+                "user-agent",
+                "copilot-vision-request",
+            ] {
+                assert!(requests[0].headers.get(name).is_some());
+                assert_eq!(requests[0].headers.get(name), requests[1].headers.get(name));
+            }
+            assert_eq!(requests[0].url, requests[1].url);
+        }
+    }
+}
+
+#[tokio::test]
+async fn excel_encrypted_recovery_stops_after_second_rejection() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for final_status in [400, 401, 403, 429, 500] {
+        let server = MockServer::start().await;
+        let attempts = AtomicUsize::new(0);
+        Mock::given(path(RESPONSES_PATH))
+            .respond_with(move |_: &wiremock::Request| {
+                let status = if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    400
+                } else {
+                    final_status
+                };
+                ResponseTemplate::new(status).set_body_string(CIPHER_REJECTION)
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let result = encrypted_run(&server, encrypted_history()).await;
+        assert!(
+            matches!(result, Err(crate::transport::CodexClientError::Upstream {status,..}) if status.as_u16()==final_status)
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn excel_encrypted_recovery_does_not_retry_other_failures_or_successful_sse_errors() {
+    for (status, raw) in [
+        (400, r#"{"error":{"code":"invalid_value"}}"#),
+        (422, CIPHER_REJECTION),
+        (401, CIPHER_REJECTION),
+        (403, CIPHER_REJECTION),
+        (429, CIPHER_REJECTION),
+        (500, CIPHER_REJECTION),
+        (
+            200,
+            "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"r\",\"status\":\"failed\",\"error\":{\"code\":\"invalid_encrypted_content\"}}}\n\n",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(path(RESPONSES_PATH))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(raw),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let _ = encrypted_run(&server, encrypted_history()).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn excel_encrypted_recovery_cancellation_stops_pending_http_rejection() {
+    use std::time::Duration;
+    let server = MockServer::start().await;
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let notify = arrived.clone();
+    Mock::given(path(RESPONSES_PATH))
+        .respond_with(move |_: &wiremock::Request| {
+            notify.notify_one();
+            ResponseTemplate::new(400)
+                .set_body_string(CIPHER_REJECTION)
+                .set_delay(Duration::from_millis(200))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut future = Box::pin(encrypted_run(&server, encrypted_history()));
+    tokio::select! {
+        result = &mut future => panic!("unexpected early completion: {result:?}"),
+        () = arrived.notified() => {},
+        () = tokio::time::sleep(Duration::from_secs(5)) => panic!("request did not arrive"),
+    }
+    drop(future);
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[test]
+fn excel_catalog_explicitly_overrides_encrypted_multi_agent_capabilities_only() {
+    let model = crate::transport::catalog::excel_bridge_model(VERIFIED_MODEL).unwrap();
+    let descriptor: Value = serde_json::from_slice(model.document().body()).unwrap();
+    assert_eq!(descriptor.get("multi_agent_version"), Some(&Value::Null));
+    assert_eq!(
+        descriptor.get("multi_agent_reasoning_effort"),
+        Some(&Value::Null)
+    );
+    assert_eq!(descriptor["supports_parallel_tool_calls"], true);
+    let mut native_descriptor = descriptor;
+    native_descriptor["multi_agent_version"] = json!("v2");
+    native_descriptor["multi_agent_reasoning_effort"] = json!("xhigh");
+    let native = json!({"models":[native_descriptor]});
+    let snapshot =
+        crate::transport::catalog::parse_codex_model_catalog(native.to_string().as_bytes(), None)
+            .unwrap();
+    let descriptor: Value = serde_json::from_slice(snapshot.models()[0].document().body()).unwrap();
+    assert_eq!(descriptor["multi_agent_version"], "v2");
+    assert_eq!(descriptor["multi_agent_reasoning_effort"], "xhigh");
+}
+
 #[derive(Default)]
 pub(super) struct MemoryReplay(Mutex<BTreeMap<String, OpaqueProviderData>>);
 

@@ -318,6 +318,20 @@ fn align_web_search_location(tool: &mut Value, location: &CodexRequestLocation) 
 
 /// Normalize only the outbound copy, after account and session identity selection.
 pub(crate) fn normalize_generate_upstream_body(body: &mut Map<String, Value>) {
+    // Sub2API #117: native Codex rejects this tool-level option. Do not
+    // recursively strip client function schemas, arguments or metadata.
+    if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
+        for tool in tools {
+            if let Some(tool) = tool.as_object_mut()
+                && tool
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind.trim().to_ascii_lowercase().starts_with("web_search"))
+            {
+                tool.remove("external_web_access");
+            }
+        }
+    }
     if let Some(Value::String(tier)) = body.get_mut("service_tier") {
         let upstream_tier = generate_upstream_service_tier(tier);
         if upstream_tier != tier.as_str() {
