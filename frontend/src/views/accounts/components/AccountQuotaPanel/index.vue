@@ -4,6 +4,7 @@ import { RefreshCw, UserRound } from '@lucide/vue'
 
 import { computed, shallowRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountProfileModal from '../AccountProfileModal/index.vue'
@@ -107,7 +108,7 @@ const profileOpen = shallowRef(false)
       </dt>
       <dd class="m-0 break-all text-right font-mono text-cp-text">
         {{ account.excelModelsFollowGlobal ? '跟随全局' : '自定义' }} ·
-        {{ (account.effectiveExcelModels ?? account.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ') || '无' }}
+        {{ (account.effectiveExcelModels ?? account.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ') || '无' }}
       </dd>
       <dt class="text-cp-text-tertiary">
         缓存写入计费

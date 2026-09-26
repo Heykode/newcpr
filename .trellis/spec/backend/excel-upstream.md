@@ -12,7 +12,7 @@ HTTP/SSE, downstream WS, tools, images, route fences and replay persistence.
 - `AttemptContext::{provider_route, freeze_provider_route}` is execution-local.
 - `ProviderReplayPort` stores opaque bounded records; Redis namespace is separate.
 - `transport/excel` owns protocol translation, not account selection.
-- `ExcelModels` is a validated exact list (initial sol/astra, maximum 64).
+- `ExcelModels` is a validated exact list (fallback astra/sol/terra, maximum 64).
   Migration 0040 adds it without rewriting 0039. Omission preserves; empty clears.
   Freeze the model-resolved route, not just the account toggle.
 - Migration 0041 adds global `excelDefaultModels` and account `excelModelsFollowGlobal`.
@@ -24,6 +24,9 @@ HTTP/SSE, downstream WS, tools, images, route fences and replay persistence.
 - Templates carry optional Excel fields. Old templates omit them; import remains
   opt-in. Relogin `newAccountExcel` overrides templates only for new accounts.
   Existing and automatic relogin preserve Excel settings and credential CAS fences.
+- Share the three-model frontend fallback across settings/edit/batch/template/import/
+  relogin. Stored values, including empty and migration-seeded lists, always win.
+  Never rewrite applied migrations merely to replace a presentation fallback.
 
 ## 3. Contracts
 
@@ -43,6 +46,19 @@ merged, including pre-stream rejection. Record client transport separately.
 Managed State workers, eligibility gates and WS version/expiry constraints are
 retired. Historical storage remains compatible; native protocol state and shared
 Cookie/relogin identity protections are not the retired collector.
+
+Confirmed Excel HTTP 401 enters the existing expiry/revocation policy before any
+failure event is yielded, including attachment staging and either tool-repair path.
+Persist only a fixed authentication reason in a detached two-second-bounded task;
+preserve downstream evidence without enabling replay. Install an account/revision
+runtime block synchronously before awaiting persistence. Check both selectors,
+including after affinity awaits; a late old-revision failure cannot block new tokens.
+Refreshable ordinary-401 fallback blocks last at most ten minutes; revoked/no-refresh
+blocks require new credentials or successful diagnostics. Expiry of a runtime block
+does not clear persisted credential state. Normal late successes cannot clear an
+active block; diagnostics compare the observed block before clearing. This local
+fallback is not a distributed replacement for the existing state store.
+Keep 403 auto-disable unchanged; do not add #105 group migration.
 
 ## 4. Validation Matrix
 

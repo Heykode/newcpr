@@ -218,6 +218,241 @@ fn persist_quota_exhaustion(
     .expect("persist quota exhaustion");
 }
 
+#[tokio::test]
+async fn excel_authentication_failure_preserves_existing_refresh_policy_and_fixed_reason() {
+    for (refreshable, revoked) in [(true, false), (false, false), (true, true)] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let mut credential = secret("fixture-access-token");
+        if !refreshable {
+            credential.refresh_token = None;
+        }
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: "acct_primary".into(),
+                name: "test".into(),
+                secret: credential,
+                verified_account: profile("workspace"),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .await;
+        let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
+        let account = store.account("acct_primary").unwrap();
+        selector
+            .record_excel_authentication_failure(&account, revoked, false)
+            .await;
+        let updated = store.account("acct_primary").unwrap();
+        assert_eq!(updated.credential_state(), CredentialState::Expired);
+        assert_eq!(
+            updated.last_error_reason(),
+            Some(if refreshable && !revoked {
+                AccountErrorReason::AccessTokenExpired
+            } else {
+                AccountErrorReason::CredentialExpired
+            })
+        );
+        assert_eq!(
+            updated.last_error_message(),
+            Some("Excel upstream authentication failed")
+        );
+        assert_eq!(updated.revision(), account.revision());
+        assert_eq!(updated.responses_upstream(), account.responses_upstream());
+        assert_eq!(updated.weight(), account.weight());
+        selector.record_success(&account, None, account.id()).await;
+        assert_eq!(
+            store.account("acct_primary").unwrap().credential_state(),
+            CredentialState::Expired
+        );
+    }
+}
+
+#[tokio::test]
+async fn excel_authentication_state_write_survives_cancelled_request() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "fixture");
+    store.pause_state_write.store(true, Ordering::SeqCst);
+    let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
+    let account = store.account("acct_primary").unwrap();
+    let waiter = tokio::spawn(async move {
+        selector
+            .record_excel_authentication_failure(&account, false, false)
+            .await;
+    });
+    tokio::time::timeout(Duration::from_secs(1), store.state_write_started.notified())
+        .await
+        .unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    store.state_write_gate.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while store.account("acct_primary").unwrap().credential_state() != CredentialState::Expired
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn excel_authentication_failed_write_blocks_both_selectors_and_new_credentials_recover() {
+    use std::sync::atomic::Ordering;
+    for waiting in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "old-fixture");
+        store.fail_state_write.store(true, Ordering::SeqCst);
+        let selector = Arc::new(
+            selector(&store, Arc::new(TestLeaseCoordinator::default()))
+                .with_account_concurrency(capacity_handle(&["acct_primary"], 2)),
+        );
+        let old = store.account("acct_primary").unwrap();
+        selector
+            .record_excel_authentication_failure(&old, false, false)
+            .await;
+        assert_eq!(
+            store.account("acct_primary").unwrap().credential_state(),
+            CredentialState::Ready
+        );
+        let context = || {
+            let attempt = attempt(BTreeSet::new());
+            if waiting {
+                attempt.with_request_tuning(capacity_tuning())
+            } else {
+                attempt
+            }
+        };
+        let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+        let result = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &url,
+                attempt: &context(),
+                session_affinity_key: None,
+            })
+            .await;
+        assert!(
+            result.is_err(),
+            "rejected credentials were scheduled, waiting={waiting}"
+        );
+        store
+            .repository()
+            .rotate_refreshed_oauth_secret(
+                &old,
+                secret("new-fixture"),
+                Some(SystemTime::now() + Duration::from_secs(3600)),
+                None,
+            )
+            .await
+            .unwrap();
+        // A late error for the old request must not block the new credential revision.
+        selector
+            .record_excel_authentication_failure(&old, false, false)
+            .await;
+        let lease = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &url,
+                attempt: &context(),
+                session_affinity_key: None,
+            })
+            .await
+            .unwrap();
+        assert!(lease.account().revision() > old.revision());
+        assert_eq!(lease.account_id(), old.id());
+    }
+}
+
+#[tokio::test]
+async fn excel_authentication_slow_write_is_bounded_and_diagnostic_can_recover() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "fixture");
+    store.pause_state_write.store(true, Ordering::SeqCst);
+    let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
+    let account = store.account("acct_primary").unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        selector.record_excel_authentication_failure(&account, false, false),
+    )
+    .await
+    .unwrap();
+    store.pause_state_write.store(false, Ordering::SeqCst);
+    selector.record_diagnostic_success(&account).await;
+    let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &url,
+            attempt: &attempt(BTreeSet::new()),
+            session_affinity_key: None,
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn excel_authentication_failed_persistence_has_bounded_refreshable_runtime_block() {
+    use std::sync::atomic::Ordering;
+    for revoked in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "fixture");
+        store.fail_state_write.store(true, Ordering::SeqCst);
+        let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
+        selector
+            .record_excel_authentication_failure(
+                &store.account("acct_primary").unwrap(),
+                revoked,
+                false,
+            )
+            .await;
+        tokio::time::advance(Duration::from_secs(601)).await;
+        let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+        let result = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &url,
+                attempt: &attempt(BTreeSet::new()),
+                session_affinity_key: None,
+            })
+            .await;
+        assert_eq!(result.is_ok(), !revoked);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn excel_authentication_later_generic_401_does_not_downgrade_revocation() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "fixture");
+    let selector = Arc::new(selector(&store, Arc::new(TestLeaseCoordinator::default())));
+    let account = store.account("acct_primary").unwrap();
+    selector
+        .record_excel_authentication_failure(&account, true, false)
+        .await;
+    selector
+        .record_excel_authentication_failure(&account, false, false)
+        .await;
+    assert_eq!(
+        store.account("acct_primary").unwrap().last_error_reason(),
+        Some(AccountErrorReason::CredentialExpired)
+    );
+    // Keep only the runtime fence to verify it cannot turn into a timed block.
+    persist_credential_state(&store, &account, CredentialState::Ready);
+    store.fail_state_write.store(true, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(601)).await;
+    let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let result = selector
+        .select(&SelectCodexCredential {
+            upstream_model: "gpt-5.4",
+            request_url: &url,
+            attempt: &attempt(BTreeSet::new()),
+            session_affinity_key: None,
+        })
+        .await;
+    assert!(result.is_err());
+}
+
 #[test]
 fn codec_persists_tokens_as_plaintext_provider_json() {
     let encoded = CodexCredentialCodec::encode_new(

@@ -21,7 +21,7 @@ function loadText(text, dependencies = {}, globals = {}) {
   })
   runInNewContext(outputText, {
     exports,
-    require: name => dependencies[name] ?? require(name),
+    require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
     AbortController,
     ...globals,
   })

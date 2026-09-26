@@ -1,5 +1,6 @@
 import type { AccountModelAccess } from '@/api'
 import { normalizeAccountName } from '@/utils/account-name'
+import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelSettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
@@ -42,7 +43,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     excelModelsFollowGlobal: true,
     excelCacheCreationAsInput: false,
     excelAutoDisableOn403: false,
-    excelModels: 'gpt-5.6-sol, gpt-6-astra',
+    excelModels: DEFAULT_EXCEL_MODELS_INPUT,
     concurrencyLimit: '',
     weight: '1',
     groupIds: [],

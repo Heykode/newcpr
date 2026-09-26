@@ -7,6 +7,7 @@ import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { errorMessage } from '@/utils/async'
+import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 
 type RotationStrategy = (typeof rotationOptions)[number]['value']
@@ -48,7 +49,7 @@ export function useSettingsForm() {
   const error = shallowRef('')
   const mappings = ref<Array<{ requestedModel: string, upstreamModel: string }>>([])
   const form = reactive({
-    excelDefaultModels: 'gpt-5.6-sol, gpt-6-astra',
+    excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     disableFast: false,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
     refreshMarginSeconds: null as number | null,
@@ -99,7 +100,7 @@ export function useSettingsForm() {
   }
 
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
-    form.excelDefaultModels = (data.excelDefaultModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
+    form.excelDefaultModels = (data.excelDefaultModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     form.disableFast = data.disableFast ?? false
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024

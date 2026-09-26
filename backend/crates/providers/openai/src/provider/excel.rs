@@ -267,8 +267,18 @@ pub(super) async fn observe_http_rejection(
     failure: &mut MappedProviderFailure,
     excel: bool,
     allows_mutation: bool,
+    diagnostic: bool,
 ) {
-    if !excel || !allows_mutation || !should_disable_on_403(account, failure) {
+    if !excel || !allows_mutation {
+        return;
+    }
+    if let Some(revoked) = isolate_http_authentication_failure(failure) {
+        selector
+            .record_excel_authentication_failure(account, revoked, diagnostic)
+            .await;
+        return;
+    }
+    if !should_disable_on_403(account, failure) {
         return;
     }
     suppress_rejection_recovery(failure);
@@ -282,6 +292,18 @@ pub(super) async fn observe_http_rejection(
             _ => tracing::warn!(account_id = %account.id(), "Excel HTTP 403 auto-disable did not complete"),
         }
     }).await;
+}
+
+fn isolate_http_authentication_failure(failure: &mut MappedProviderFailure) -> Option<bool> {
+    if failure.http_rejection_status != Some(401) {
+        return None;
+    }
+    let revoked = failure.account_failure == Some(CodexAccountFailure::CredentialRevoked);
+    // Preserve downstream evidence; do not replay or persist arbitrary upstream text.
+    suppress_recovery_with_kind(failure, ProviderErrorKind::Unauthorized);
+    failure.rate_limit_headers.clear();
+    failure.error_message = Some("Excel upstream authentication failed".to_owned());
+    Some(revoked)
 }
 
 fn suppress_rejection_recovery(failure: &mut MappedProviderFailure) {
@@ -427,6 +449,64 @@ fn isolate_endpoint_rate_limit(failure: &mut MappedProviderFailure) {
 mod tests {
     use super::*;
     use gateway_core::error::{ClientVisibleUpstreamError, ClientVisibleUpstreamResponse};
+
+    #[test]
+    fn excel_http_401_preserves_evidence_without_replay_or_sensitive_state_reason() {
+        for (code, revoked) in [
+            ("access_token_expired", false),
+            ("token_revoked", true),
+            ("token_invalidated", true),
+            ("unknown", false),
+        ] {
+            let mut failure = classify_failure(rejection(code), true);
+            failure.http_rejection_status = Some(401);
+            failure.error = failure
+                .error
+                .with_status(401)
+                .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+                    401,
+                    Some(b"application/json".to_vec()),
+                    bytes::Bytes::from_static(b"test body"),
+                ))
+                .with_replay_safe()
+                .with_same_account_retry();
+            failure.error_message = Some("Bearer private-fixture; request text".into());
+            let raw = failure
+                .error
+                .client_visible_upstream_response()
+                .unwrap()
+                .body()
+                .clone();
+            assert_eq!(
+                isolate_http_authentication_failure(&mut failure),
+                Some(revoked)
+            );
+            assert_eq!(failure.error.kind(), ProviderErrorKind::Unauthorized);
+            assert_eq!(failure.error.upstream_status(), Some(401));
+            assert_eq!(
+                failure
+                    .error
+                    .client_visible_upstream_response()
+                    .unwrap()
+                    .body(),
+                &raw
+            );
+            assert_eq!(
+                failure.error_message.as_deref(),
+                Some("Excel upstream authentication failed")
+            );
+            assert!(failure.account_failure.is_none());
+            assert!(!failure.error.replay_is_safe());
+            assert!(failure.error.pre_delivery_retry().is_none());
+        }
+        for status in [None, Some(200), Some(403), Some(429), Some(500)] {
+            let mut failure = rejection("forbidden");
+            failure.http_rejection_status = status;
+            failure.error_message = Some("fixture".into());
+            assert_eq!(isolate_http_authentication_failure(&mut failure), None);
+            assert_eq!(failure.error_message.as_deref(), Some("fixture"));
+        }
+    }
 
     #[test]
     fn excel_tool_file_id_error_is_actionable_and_not_retried() {
@@ -592,6 +672,11 @@ mod tests {
             assert_eq!(
                 failure.http_rejection_status,
                 (status != 200).then_some(status)
+            );
+            let mut failure = failure;
+            assert_eq!(
+                isolate_http_authentication_failure(&mut failure).is_some(),
+                status == 401
             );
         }
     }

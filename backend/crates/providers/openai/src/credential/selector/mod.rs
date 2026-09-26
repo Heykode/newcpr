@@ -33,6 +33,7 @@ use super::types::{
 };
 
 mod capacity_wait;
+mod excel_auth;
 
 pub use capacity_wait::AccountWaitFailure;
 
@@ -127,6 +128,7 @@ pub struct CodexCredentialSelector {
     quota: Arc<CodexCredentialQuotaService>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
+    excel_auth_blocks: Mutex<HashMap<ProviderAccountId, excel_auth::ExcelAuthBlock>>,
     account_feedback: Arc<AccountFeedbackStats>,
     account_concurrency: AccountConcurrencyHandle,
 }
@@ -283,6 +285,7 @@ impl CodexCredentialSelector {
             quota,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
+            excel_auth_blocks: Mutex::new(HashMap::new()),
             account_feedback,
             account_concurrency: AccountConcurrencyHandle::default(),
         }
@@ -302,6 +305,8 @@ impl CodexCredentialSelector {
     ) -> bool {
         let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
+            && (request.attempt.is_diagnostic_required_account()
+                || self.excel_auth_block(account).is_none())
             && request
                 .attempt
                 .provider_route()
@@ -416,6 +421,7 @@ impl CodexCredentialSelector {
                 .await;
         }
         let mut accounts = self.repository.list_for_provider().await?;
+        self.retain_excel_auth_blocks(&accounts);
         // Normal scheduling excludes disabled rows; only the pinned diagnostic may restore one.
         if diagnostic
             && let Some(required) = request.attempt.required_account()
@@ -600,6 +606,10 @@ impl CodexCredentialSelector {
             // disabled that account. Ordinary scheduling keeps the enabled
             // guard in case the account changes after candidate loading.
             let allows_account_state_mutation = diagnostic || account.enabled();
+            if !diagnostic && self.excel_auth_block(&account).is_some() {
+                excluded.insert(account.id().clone());
+                continue;
+            }
             match self
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -720,6 +730,11 @@ impl CodexCredentialSelector {
                         // CAS 防止并行请求把已经迁移的绑定改回旧账号。
                         self.update_session_affinity(key, account.id(), account.id())
                             .await;
+                    }
+                    if !diagnostic && self.excel_auth_block(&account).is_some() {
+                        drop(guard);
+                        excluded.insert(account.id().clone());
+                        continue;
                     }
                     return Ok(CodexCredentialLease {
                         installation_id: runtime.installation_id,
@@ -1100,7 +1115,9 @@ impl CodexCredentialSelector {
         session_affinity_key: Option<&ProviderSessionAffinityKey>,
         expected_affinity_account_id: &ProviderAccountId,
     ) {
-        self.restore_recoverable_account_state(account, false).await;
+        if self.excel_auth_block(account).is_none() {
+            self.restore_recoverable_account_state(account, false).await;
+        }
         self.risk_recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1113,7 +1130,15 @@ impl CodexCredentialSelector {
     }
 
     pub async fn record_diagnostic_success(&self, account: &ProviderAccount) {
+        let block = self.excel_auth_block(account);
         self.restore_recoverable_account_state(account, true).await;
+        if let Some(block) = block
+            && let Ok(current) = self.current_account(account.id()).await
+            && current.revision() == account.revision()
+            && current.credential_state() == CredentialState::Ready
+        {
+            self.clear_excel_auth_block(account, block);
+        }
         self.risk_recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1174,6 +1199,7 @@ impl CodexCredentialSelector {
         if current.provider() != &self.provider_kind
             || current.revision() != account.revision()
             || (!allow_disabled && !current.enabled())
+            || (!allow_disabled && self.excel_auth_block(&current).is_some())
         {
             return;
         }

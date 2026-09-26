@@ -18,7 +18,7 @@ function loadModule(filename, dependencies = {}) {
   })
   runInNewContext(outputText, {
     exports,
-    require: name => dependencies[name] ?? require(name),
+    require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
     TextEncoder,
   }, { filename: String(filename) })
   return exports
@@ -105,6 +105,29 @@ function assertNoUpdates(state) {
   assert.equal(state.updateExcelCacheCreationAsInput.value, false)
   assert.equal(state.updateExcelAutoDisableOn403.value, false)
 }
+
+test('Excel batch defaults preserve saved and empty lists and reset every opt-in on reopen', async (t) => {
+  const { state, accounts, requests } = mountEditor(t, { accounts: [account('account-a', { excelModels: undefined, responsesUpstream: 'excel' })] })
+  state.open()
+  assert.equal(state.excelModels.value, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
+  state.excelAutoDisableOn403.value = true
+  state.updateExcelAutoDisableOn403.value = true
+  state.updateExcelModels.value = true
+  state.showBatchEditModal.value = false
+  await vue.nextTick()
+  state.open()
+  assertNoUpdates(state)
+  assert.equal(state.excelAutoDisableOn403.value, false)
+  accounts.value[0].excelModels = ['custom-model']
+  state.open()
+  assert.equal(state.excelModels.value, 'custom-model')
+  accounts.value[0].excelModels = []
+  state.open()
+  assert.equal(state.excelModels.value, '')
+  state.updateExcelModels.value = true
+  await state.save()
+  assert.deepEqual(requests[0], { accountIds: ['account-a'], excelModelsFollowGlobal: false, excelModels: [] })
+})
 
 test('Excel 403 setting saves on its own only after explicit batch opt-in', async (t) => {
   const { state, requests } = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })

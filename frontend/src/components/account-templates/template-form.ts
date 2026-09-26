@@ -1,4 +1,5 @@
 import type { AccountTemplateConfig } from '@/api/modules/account-templates'
+import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { excelSettings } from '@/utils/excel-settings'
 import { parseAccountSchedulingForm } from '@/views/accounts/utils/schedulingForm'
 
@@ -11,7 +12,7 @@ export function templateForm(config?: AccountTemplateConfig) {
     excelCacheCreationAsInput: config?.excelCacheCreationAsInput ?? false,
     excelAutoDisableOn403: config?.excelAutoDisableOn403 ?? false,
     excelModelsFollowGlobal: config?.excelModelsFollowGlobal ?? config?.excelModels == null,
-    excelModels: (config?.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', '),
+    excelModels: (config?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', '),
     concurrencyLimit: config?.concurrencyLimit == null ? '' : String(config.concurrencyLimit),
     weight: String(config?.weight ?? 1),
     groupIds: [...(config?.groupIds ?? [])],

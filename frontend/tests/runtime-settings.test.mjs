@@ -16,13 +16,32 @@ function loadModule(filename, dependencies = {}) {
   const exports = {}
   runInNewContext(outputText, {
     exports,
-    require: name => dependencies[name] ?? require(name),
+    require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
   return exports
 }
 
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
+
+test('Excel global defaults fill omission without replacing saved or explicitly empty models', async () => {
+  for (const models of [undefined, [], ['custom-model'], ['gpt-5.6-sol', 'gpt-6-astra']]) {
+    const initial = settings()
+    if (models !== undefined)
+      initial.excelDefaultModels = models
+    const query = mountSettings(initial)
+    try {
+      await query.state.loadSettings()
+      const expected = models ?? ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra']
+      assert.equal(query.state.form.excelDefaultModels, expected.join(', '))
+      await query.state.saveSettings()
+      assert.deepEqual(query.requests[0].excelDefaultModels, expected)
+    }
+    finally {
+      query.stop()
+    }
+  }
+})
 
 function mountSettings(initial, onWarning = assert.fail) {
   let saved = structuredClone(initial)
@@ -79,7 +98,7 @@ test('global Excel defaults roundtrip exact models including explicit empty and 
   const query = mountSettings(settings(), message => warnings.push(message))
   try {
     await query.state.loadSettings()
-    assert.equal(query.state.form.excelDefaultModels, 'gpt-5.6-sol, gpt-6-astra')
+    assert.equal(query.state.form.excelDefaultModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
     query.state.form.excelDefaultModels = 'gpt-6-astra, gpt-6-astra'
     await query.state.saveSettings()
     assert.deepEqual(query.requests.at(-1).excelDefaultModels, ['gpt-6-astra'])

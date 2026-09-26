@@ -6,6 +6,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
+import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountProxyField from './AccountProxyField.vue'
 
@@ -28,7 +29,7 @@ const customName = defineModel<string>('customName', { default: '' })
 const updateCustomName = defineModel<boolean>('updateCustomName', { default: false })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
-const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol, gpt-6-astra' })
+const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
 const excelAutoDisableOn403 = defineModel<boolean>('excelAutoDisableOn403', { default: false })
