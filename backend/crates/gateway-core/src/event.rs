@@ -730,6 +730,33 @@ pub enum GatewayEvent {
     Completed(ResponseMeta),
 }
 
+/// 同 attempt 的累计计量快照；不属于客户端事件或生命周期。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderMeteringCheckpoint {
+    usage: Usage,
+    calculated_cost: Option<CalculatedCost>,
+}
+
+impl ProviderMeteringCheckpoint {
+    #[must_use]
+    pub const fn new(usage: Usage, calculated_cost: Option<CalculatedCost>) -> Self {
+        Self {
+            usage,
+            calculated_cost,
+        }
+    }
+
+    #[must_use]
+    pub const fn usage(&self) -> &Usage {
+        &self.usage
+    }
+
+    #[must_use]
+    pub const fn calculated_cost(&self) -> Option<&CalculatedCost> {
+        self.calculated_cost.as_ref()
+    }
+}
+
 /// Provider 单个上游事件产生的事实与可选协议原生表达。
 ///
 /// 一个值至少包含一个 canonical fact 或一条 wire event。把同一 wire event
@@ -740,6 +767,7 @@ pub struct ProviderEvent {
     wire: Option<Box<ProtocolWireEvent>>,
     observation: Option<Box<ProviderResponseObservation>>,
     session_update: Option<Box<ProviderSessionState>>,
+    metering: Option<Box<ProviderMeteringCheckpoint>>,
 }
 
 impl ProviderEvent {
@@ -751,6 +779,7 @@ impl ProviderEvent {
             wire: None,
             observation: None,
             session_update: None,
+            metering: None,
         }
     }
 
@@ -762,6 +791,7 @@ impl ProviderEvent {
             wire: Some(Box::new(wire)),
             observation: None,
             session_update: None,
+            metering: None,
         }
     }
 
@@ -773,6 +803,7 @@ impl ProviderEvent {
             wire: Some(Box::new(wire)),
             observation: None,
             session_update: None,
+            metering: None,
         }
     }
 
@@ -784,7 +815,25 @@ impl ProviderEvent {
             wire: None,
             observation: Some(Box::new(observation)),
             session_update: None,
+            metering: None,
         }
+    }
+
+    /// 创建内部累计计量快照；不能提交下游、推进顺序或触发首字计时。
+    #[must_use]
+    pub fn metering(checkpoint: ProviderMeteringCheckpoint) -> Self {
+        Self {
+            canonical: Vec::new(),
+            wire: None,
+            observation: None,
+            session_update: None,
+            metering: Some(Box::new(checkpoint)),
+        }
+    }
+
+    #[must_use]
+    pub fn take_metering(&mut self) -> Option<ProviderMeteringCheckpoint> {
+        self.metering.take().map(|value| *value)
     }
 
     /// 附加 Provider 私有状态检查点；Core 可将其用于同请求恢复，协议连接可在

@@ -20,6 +20,16 @@ fn provider_event_keeps_large_wire_and_observation_payloads_behind_one_indirecti
     ));
     assert!(wire.has_client_event());
     assert!(!observation.has_client_event());
+    let mut metering =
+        ProviderEvent::metering(gateway_core::event::ProviderMeteringCheckpoint::new(
+            gateway_core::metering::Usage::new(),
+            None,
+        ));
+    assert!(!metering.has_client_event());
+    assert!(!metering.has_canonical_facts());
+    assert!(metering.wire_event().is_none());
+    assert!(metering.take_metering().is_some());
+    assert!(metering.take_metering().is_none());
 }
 
 #[test]

@@ -225,19 +225,19 @@ pub(super) fn failed_repair_metering(request: &CodexResponsesRequest) -> Vec<Pro
     usage.cache_write_tokens = Some(raw.cache_write_tokens);
     usage.reasoning_tokens = Some(raw.reasoning_tokens);
     usage.total_tokens = Some(raw.total_tokens);
-    let mut events = vec![ProviderEvent::canonical(GatewayEvent::Usage(usage))];
-    if billable_usage_is_complete(&response, raw)
-        && let Some(cost) = openai_billing_breakdown(
-            request.model(),
-            OpenAiBillingUsage::from(raw),
-            request.service_tier(),
-        )
-    {
-        events.push(ProviderEvent::canonical(GatewayEvent::CalculatedCost(
-            cost.calculated_cost(),
-        )));
-    }
-    events
+    let cost = billable_usage_is_complete(&response, raw)
+        .then(|| {
+            openai_billing_breakdown(
+                request.model(),
+                OpenAiBillingUsage::from(raw),
+                request.service_tier(),
+            )
+        })
+        .flatten()
+        .map(|cost| cost.calculated_cost());
+    vec![ProviderEvent::metering(
+        gateway_core::event::ProviderMeteringCheckpoint::new(usage, cost),
+    )]
 }
 
 fn should_disable_on_403(account: &ProviderAccount, failure: &MappedProviderFailure) -> bool {
@@ -449,6 +449,118 @@ fn isolate_endpoint_rate_limit(failure: &mut MappedProviderFailure) {
 mod tests {
     use super::*;
     use gateway_core::error::{ClientVisibleUpstreamError, ClientVisibleUpstreamResponse};
+
+    #[tokio::test]
+    async fn excel_repair_checkpoint_reaches_second_http_request_through_core_stream() {
+        use crate::transport::excel::ClientTools;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+        for unknown in [false, true] {
+            let server = MockServer::start().await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let recorded = calls.clone();
+            Mock::given(path("/fixture"))
+                .respond_with(move |_: &wiremock::Request| {
+                    let attempt = recorded.fetch_add(1, Ordering::SeqCst);
+                    let id = if attempt == 0 { "resp_original" } else { "resp_corrected" };
+                    let arguments = if attempt > 0 {
+                        json!({"summary":"cpr.custom/exec","code":"text(1)"})
+                    } else if unknown {
+                        json!({"code":json!({"name":"absent","arguments":{}}).to_string()})
+                    } else {
+                        json!({"summary":"Run","code":"text(1)"})
+                    };
+                    let created = json!({"type":"response.created","response":{"id":id,"model":"gpt-5.6-sol","status":"in_progress","output":[]}});
+                    let completed = json!({"type":"response.completed","response":{"id":id,"model":"gpt-5.6-sol","status":"completed",
+                        "output":[{"type":"function_call","id":format!("fc_{attempt}"),"call_id":format!("call_{attempt}"),"name":"run_officejs","arguments":arguments.to_string()}],
+                        "usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12,"input_tokens_details":{"cached_tokens":0}}}});
+                    ResponseTemplate::new(200).set_body_raw(format!("data: {created}\n\ndata: {completed}\n\n"), "text/event-stream")
+                }).mount(&server).await;
+            let mut request = CodexResponsesRequest::from_body(
+                json!({"model":"gpt-5.6-sol","input":"run",
+                "tools":[{"type":"custom","name":"exec"}]})
+                .as_object()
+                .unwrap()
+                .clone(),
+            );
+            let tools = ClientTools::parse(request.body()).unwrap();
+            request.excel = Some(ExcelPreparedRequest {
+                body: prepare_request(request.body(), &tools, &Default::default(), None).unwrap(),
+                tools,
+                structured: None,
+                _image_lease: None,
+                image_limits: Default::default(),
+                completed: Default::default(),
+                usage: Default::default(),
+                replay: None,
+                endpoint: format!("{}/fixture", server.uri()),
+            });
+            let client = CodexBackendClient::new(
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                server.uri(),
+                crate::config::OpenAiConfig::default().wire_profile_state(),
+            );
+            let mut body = client
+                .create_response_stream_http_sse(
+                    &request,
+                    CodexRequestContext::auxiliary(
+                        "Bearer fixture",
+                        Some("workspace"),
+                        "request",
+                        None,
+                    ),
+                )
+                .await
+                .unwrap()
+                .body;
+            let events: EventStream = Box::pin(async_stream::stream! {
+                let mut decoder = CodexCanonicalDecoder::new("gpt-5.6-sol").with_raw_sse_passthrough();
+                while let Some(chunk) = body.next().await {
+                    let chunk = chunk.expect("successful repair transport");
+                    if chunk.is_empty() {
+                        for event in failed_repair_metering(&request) { yield Ok(event); }
+                        continue;
+                    }
+                    match decoder.push(&chunk) {
+                        CodexCanonicalOutcome::Events(events) => for event in events { yield Ok(event); },
+                        CodexCanonicalOutcome::Failed(failure) => panic!("unexpected decode failure: {failure:?}"),
+                    }
+                }
+                assert!(matches!(decoder.finish(), CodexCanonicalOutcome::Events(_)));
+            });
+            let metadata = ProviderCallMetadata::new(
+                ProviderKind::new("openai").unwrap(),
+                UpstreamModelId::new("gpt-5.6-sol").unwrap(),
+                gateway_core::account::ProviderAccountId::new("acct_fixture").unwrap(),
+                UpstreamTransport::new("excel_http_sse").unwrap(),
+            );
+            let mut stream = ProviderStream::new(metadata, events, ());
+            let mut checkpoints = Vec::new();
+            let mut final_usage = None;
+            let mut completed = false;
+            while let Some(event) = stream.next().await {
+                let mut event = event.expect("internal metering must not trigger MissingStarted");
+                if let Some(checkpoint) = event.take_metering() {
+                    assert!(!event.has_client_event());
+                    checkpoints.push(checkpoint.usage().total_tokens.unwrap());
+                }
+                for fact in event.canonical_facts() {
+                    if let GatewayEvent::Usage(usage) = fact {
+                        final_usage = usage.total_tokens;
+                    }
+                    if let GatewayEvent::Completed(meta) = fact {
+                        assert_eq!(meta.response_id(), "resp_original");
+                        completed = true;
+                    }
+                }
+            }
+            assert!(completed);
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            assert_eq!(checkpoints.first(), Some(&12));
+            assert_eq!(checkpoints.last(), Some(&24));
+            assert_eq!(final_usage, Some(24));
+        }
+    }
 
     #[test]
     fn excel_http_401_preserves_evidence_without_replay_or_sensitive_state_reason() {

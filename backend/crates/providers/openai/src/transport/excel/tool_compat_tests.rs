@@ -300,32 +300,38 @@ async fn excel_correction_rejects_changed_valid_operation_and_extra_calls() {
 #[tokio::test]
 async fn excel_correction_stops_on_http_rejection_without_losing_known_usage() {
     use wiremock::ResponseTemplate;
-    for status in [401, 403, 429, 500] {
-        let (_, error, usage, completed, requests) = http_repair(
-            vec![
-                ResponseTemplate::new(200).set_body_raw(
-                    repair_wire(repair_response(
-                        "resp_first",
-                        vec![repair_call("bad", "Run", "text(1)")],
-                    )),
-                    "text/event-stream",
-                ),
-                ResponseTemplate::new(status).set_body_json(
-                    json!({"error":{"code":"rate_limit_exceeded","message":"fixture"}}),
-                ),
-            ],
-            false,
-        )
-        .await;
-        assert!(
-            matches!(error, Some(crate::transport::CodexClientError::Upstream {status: value,..}) if value.as_u16()==status)
-        );
-        assert_eq!(requests.len(), 2);
-        assert!(completed.is_none());
-        assert_eq!(
-            usage.take_failed_repair_usage().unwrap()["usage"]["total_tokens"],
-            12
-        );
+    for unknown in [false, true] {
+        for status in [401, 403, 429, 500] {
+            let (_, error, usage, completed, requests) = http_repair(
+                vec![
+                    ResponseTemplate::new(200).set_body_raw(
+                        repair_wire(repair_response(
+                            "resp_first",
+                            vec![if unknown {
+                                native("absent", json!({}))
+                            } else {
+                                repair_call("bad", "Run", "text(1)")
+                            }],
+                        )),
+                        "text/event-stream",
+                    ),
+                    ResponseTemplate::new(status).set_body_json(
+                        json!({"error":{"code":"rate_limit_exceeded","message":"fixture"}}),
+                    ),
+                ],
+                false,
+            )
+            .await;
+            assert!(
+                matches!(error, Some(crate::transport::CodexClientError::Upstream {status: value,..}) if value.as_u16()==status)
+            );
+            assert_eq!(requests.len(), 2);
+            assert!(completed.is_none());
+            assert_eq!(
+                usage.take_failed_repair_usage().unwrap()["usage"]["total_tokens"],
+                12
+            );
+        }
     }
 }
 
@@ -341,78 +347,86 @@ async fn excel_correction_releases_old_stream_and_cancels_without_background_wor
             self.0.store(true, Ordering::SeqCst);
         }
     }
-    let old_released = Arc::new(AtomicBool::new(false));
-    let guard = Dropped(old_released.clone());
-    let source: crate::transport::CodexBackendSseStream = Box::pin(async_stream::try_stream! {
-        let _guard = guard;
-        yield Bytes::from(repair_wire(repair_response("resp_first",vec![repair_call("bad","Run","text(1)")])));
-        futures::future::pending::<()>().await;
-    });
-    let mut prepared = super::tests::request("https://example.invalid".into(), json!("run"))
-        .excel
-        .unwrap();
-    prepared.tools = parse(json!({"tools":[{"type":"custom","name":"exec"}]})).unwrap();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let flag = cancelled.clone();
-    let sender: super::repair::Sender = Box::new(move |_| {
-        assert!(old_released.load(Ordering::SeqCst));
-        let guard = Dropped(flag.clone());
-        Box::pin(async move {
+    for unknown in [false, true] {
+        let old_released = Arc::new(AtomicBool::new(false));
+        let guard = Dropped(old_released.clone());
+        let source: crate::transport::CodexBackendSseStream = Box::pin(async_stream::try_stream! {
             let _guard = guard;
-            futures::future::pending().await
-        })
-    });
-    let mut stream = super::transform_stream_with_repair(source, &prepared, Some(sender));
-    assert!(stream.next().await.unwrap().is_ok());
-    assert!(stream.next().await.unwrap().unwrap().is_empty());
-    let known_usage = prepared.usage.take_failed_repair_usage().unwrap();
-    assert!(prepared.usage.repair_started());
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(20), stream.next())
-            .await
-            .is_err()
-    );
-    drop(stream);
-    assert!(cancelled.load(Ordering::SeqCst));
-    assert_eq!(known_usage["usage"]["total_tokens"], 12);
-    assert!(prepared.usage.take_failed_repair_usage().is_none());
+            yield Bytes::from(repair_wire(repair_response("resp_first",vec![if unknown { native("absent", json!({})) } else { repair_call("bad","Run","text(1)") }])));
+            futures::future::pending::<()>().await;
+        });
+        let mut prepared = super::tests::request("https://example.invalid".into(), json!("run"))
+            .excel
+            .unwrap();
+        prepared.tools = parse(json!({"tools":[{"type":"custom","name":"exec"}]})).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let sender: super::repair::Sender = Box::new(move |_| {
+            assert!(old_released.load(Ordering::SeqCst));
+            let guard = Dropped(flag.clone());
+            Box::pin(async move {
+                let _guard = guard;
+                futures::future::pending().await
+            })
+        });
+        let mut stream = super::transform_stream_with_repair(source, &prepared, Some(sender));
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().await.unwrap().unwrap().is_empty());
+        let known_usage = prepared.usage.take_failed_repair_usage().unwrap();
+        assert!(prepared.usage.repair_started());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), stream.next())
+                .await
+                .is_err()
+        );
+        drop(stream);
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert_eq!(known_usage["usage"]["total_tokens"], 12);
+        assert!(prepared.usage.take_failed_repair_usage().is_none());
+    }
 }
 
 #[tokio::test]
 async fn excel_correction_preserves_sse_error_without_retry_or_completion() {
     use wiremock::ResponseTemplate;
-    for kind in ["response.failed", "error"] {
-        let failure = json!({"type":kind,"error":{"code":"token_expired","message":"fixture","status":401},
+    for unknown in [false, true] {
+        for kind in ["response.failed", "error"] {
+            let failure = json!({"type":kind,"error":{"code":"token_expired","message":"fixture","status":401},
             "response":{"id":"resp_hidden","status":"failed","output":[],
                 "error":{"code":"token_expired","message":"fixture"},
                 "usage":{"input_tokens":3,"output_tokens":0,"total_tokens":3}}});
-        let (text, error, usage, completed, requests) = http_repair(
-            vec![
-                ResponseTemplate::new(200).set_body_raw(
-                    repair_wire(repair_response(
-                        "resp_first",
-                        vec![repair_call("bad", "Run", "text(1)")],
-                    )),
-                    "text/event-stream",
-                ),
-                ResponseTemplate::new(200)
-                    .set_body_raw(format!("data: {failure}\n\n"), "text/event-stream"),
-            ],
-            false,
-        )
-        .await;
-        assert!(error.is_none());
-        assert_eq!(requests.len(), 2);
-        assert!(completed.is_none());
-        assert!(text.contains("token_expired"));
-        assert!(!text.contains("resp_hidden"));
-        assert!(!text.contains("response.completed"));
-        assert!(!text.contains("response.output_item.done"));
-        assert_eq!(
-            usage.take_failed_repair_usage().unwrap()["usage"]["total_tokens"],
-            15
-        );
-        assert!(usage.take_failed_repair_usage().is_none());
+            let (text, error, usage, completed, requests) = http_repair(
+                vec![
+                    ResponseTemplate::new(200).set_body_raw(
+                        repair_wire(repair_response(
+                            "resp_first",
+                            vec![if unknown {
+                                native("absent", json!({}))
+                            } else {
+                                repair_call("bad", "Run", "text(1)")
+                            }],
+                        )),
+                        "text/event-stream",
+                    ),
+                    ResponseTemplate::new(200)
+                        .set_body_raw(format!("data: {failure}\n\n"), "text/event-stream"),
+                ],
+                false,
+            )
+            .await;
+            assert!(error.is_none());
+            assert_eq!(requests.len(), 2);
+            assert!(completed.is_none());
+            assert!(text.contains("token_expired"));
+            assert!(!text.contains("resp_hidden"));
+            assert!(!text.contains("response.completed"));
+            assert!(!text.contains("response.output_item.done"));
+            assert_eq!(
+                usage.take_failed_repair_usage().unwrap()["usage"]["total_tokens"],
+                15
+            );
+            assert!(usage.take_failed_repair_usage().is_none());
+        }
     }
 }
 
@@ -490,6 +504,279 @@ async fn excel_correction_never_changes_function_metadata_or_invalid_arguments()
 }
 
 #[tokio::test]
+async fn excel_unknown_first_tool_regenerates_once_without_fabricating_history() {
+    use wiremock::ResponseTemplate;
+    let (text, error, usage, completed, requests) = http_repair(
+        vec![
+            ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response(
+                    "resp_first",
+                    vec![native("absent", json!({}))],
+                )),
+                "text/event-stream",
+            ),
+            ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response(
+                    "resp_hidden",
+                    vec![native("read", json!({}))],
+                )),
+                "text/event-stream",
+            ),
+        ],
+        false,
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(requests.len(), 2);
+    let completed = completed.unwrap();
+    assert_eq!(completed["id"], "resp_first");
+    assert_eq!(completed["usage"]["total_tokens"], 24);
+    assert!(!text.contains("resp_hidden"));
+    assert!(!text.contains("absent"));
+    assert!(!usage.repair_started());
+    let mut first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let mut second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let original_input = first.as_object_mut().unwrap().remove("input").unwrap();
+    let mut corrected_input = second.as_object_mut().unwrap().remove("input").unwrap();
+    let reminder = corrected_input.as_array_mut().unwrap().pop().unwrap();
+    assert_eq!(reminder["role"], "developer");
+    assert_eq!(
+        original_input, corrected_input,
+        "do not append fake calls or results"
+    );
+    assert_eq!(
+        first, second,
+        "keep account-scoped metadata, model and tools"
+    );
+    for name in [
+        "authorization",
+        "chatgpt-account-id",
+        "x-openai-account-id",
+        "x-basispoints-auth-mode",
+    ] {
+        assert_eq!(requests[0].headers.get(name), requests[1].headers.get(name));
+    }
+    assert_eq!(requests[0].url, requests[1].url);
+}
+
+#[tokio::test]
+async fn excel_unknown_tool_second_failure_never_loops_or_releases_tools() {
+    use wiremock::ResponseTemplate;
+    for corrected in [
+        native("absent", json!({})),
+        native("read", json!([])),
+        repair_call("bad", "Run", "raw_code()"),
+    ] {
+        let (text, error, usage, completed, requests) = http_repair(
+            vec![
+                ResponseTemplate::new(200).set_body_raw(
+                    repair_wire(repair_response(
+                        "resp_first",
+                        vec![native("absent", json!({}))],
+                    )),
+                    "text/event-stream",
+                ),
+                ResponseTemplate::new(200).set_body_raw(
+                    repair_wire(repair_response("resp_second", vec![corrected])),
+                    "text/event-stream",
+                ),
+            ],
+            false,
+        )
+        .await;
+        assert!(error.is_some());
+        assert_eq!(requests.len(), 2);
+        assert!(completed.is_none());
+        assert!(!text.contains("response.output_item.done"));
+        assert_eq!(
+            usage.take_failed_repair_usage().unwrap()["usage"]["total_tokens"],
+            24
+        );
+    }
+}
+
+#[test]
+fn excel_unknown_repair_rejects_history_bad_shape_and_known_schema_errors() {
+    let tools = parse(json!({"tools":[function(json!({"type":"object"}))]})).unwrap();
+    let unknown = native("absent", json!({}));
+    let valid = repair_response("original", vec![unknown.clone()]);
+    assert!(super::repair::unknown_eligible(&tools, &valid));
+    for marker in [
+        "codex2api.function_code/absent",
+        "codex2api.function_cmd/absent",
+        "cpr.custom/absent",
+    ] {
+        assert!(super::repair::unknown_eligible(
+            &tools,
+            &repair_response("original", vec![repair_call("unknown", marker, "text(1)")])
+        ));
+    }
+    for items in [
+        vec![unknown.clone(), json!({"type":"message","content":[]})],
+        vec![unknown.clone(), unknown],
+        vec![native("read", json!([]))],
+        vec![
+            json!({"type":"function_call","id":"fc","call_id":"call","name":"absent","arguments":"{}"}),
+        ],
+    ] {
+        assert!(!super::repair::unknown_eligible(
+            &tools,
+            &repair_response("original", items)
+        ));
+    }
+    let mut incomplete = valid.clone();
+    incomplete["status"] = "incomplete".into();
+    assert!(!super::repair::unknown_eligible(&tools, &incomplete));
+    assert!(!super::repair::unknown_eligible(
+        &ClientTools::default(),
+        &valid
+    ));
+    for kind in [
+        "function_call",
+        "function_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+    ] {
+        assert!(!super::repair::no_tool_history(
+            json!({"input":[{"type":kind}]}).as_object().unwrap()
+        ));
+    }
+    assert!(super::repair::no_tool_history(
+        json!({"input":[{"role":"user","content":"run"}]})
+            .as_object()
+            .unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn excel_unknown_regeneration_streams_new_message_once() {
+    use wiremock::ResponseTemplate;
+    let message = |id: &str, text: &str| {
+        json!({"type":"message","id":id,"role":"assistant","status":"completed",
+        "content":[{"type":"output_text","text":text,"annotations":[]}]})
+    };
+    let original_message = message("msg_first", "Existing commentary");
+    let original = repair_response(
+        "original",
+        vec![original_message.clone(), native("absent", json!({}))],
+    );
+    let wire = format!(
+        "data: {}\n\n{}",
+        json!({"type":"response.output_text.delta","item_id":"msg_first","output_index":0,"content_index":0,"delta":"Existing commentary"}),
+        repair_wire(original)
+    );
+    let (text, error, _, completed, requests) = http_repair(
+        vec![
+            ResponseTemplate::new(200).set_body_raw(wire, "text/event-stream"),
+            ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response(
+                    "hidden",
+                    vec![
+                        message("msg_new", "New commentary"),
+                        native("read", json!({})),
+                    ],
+                )),
+                "text/event-stream",
+            ),
+        ],
+        false,
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(completed.unwrap()["output"][0], original_message);
+    let deltas: Vec<Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|value| value["type"] == "response.output_text.delta")
+        .collect();
+    assert_eq!(deltas.len(), 2);
+    assert_eq!(deltas[0]["delta"], "Existing commentary");
+    assert_eq!(deltas[1]["delta"], "New commentary");
+    assert_eq!(deltas[1]["output_index"], 1);
+}
+
+#[tokio::test]
+async fn excel_correction_retains_progressive_usage_on_disconnect_without_counting_snapshots_twice()
+{
+    use wiremock::ResponseTemplate;
+    let wire = [3, 7, 5].into_iter().map(|output| format!("data: {}\n\n", json!({"type":"response.in_progress","response":{"id":"hidden","usage":{"input_tokens":20,"output_tokens":output,"total_tokens":20+output}}}))).collect::<String>();
+    let (_, error, usage, completed, requests) = http_repair(
+        vec![
+            ResponseTemplate::new(200).set_body_raw(
+                repair_wire(repair_response(
+                    "original",
+                    vec![native("absent", json!({}))],
+                )),
+                "text/event-stream",
+            ),
+            ResponseTemplate::new(200).set_body_raw(wire, "text/event-stream"),
+        ],
+        false,
+    )
+    .await;
+    assert!(error.is_some());
+    assert!(completed.is_none());
+    assert_eq!(requests.len(), 2);
+    let usage = usage.take_failed_repair_usage().unwrap();
+    assert_eq!(usage["usage"]["input_tokens"], 30);
+    assert_eq!(usage["usage"]["output_tokens"], 9);
+    assert_eq!(usage["usage"]["total_tokens"], 39);
+}
+
+#[tokio::test]
+async fn excel_unknown_regeneration_blocks_expanded_tool_history_and_keeps_compaction_last() {
+    use futures::TryStreamExt;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for history in [false, true] {
+        let mut prepared = super::tests::request("https://example.invalid".into(), json!("run"))
+            .excel
+            .unwrap();
+        prepared.tools = parse(json!({"tools":[function(json!({"type":"object"}))]})).unwrap();
+        let input = prepared
+            .body
+            .get_mut("input")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        if history {
+            input.push(native("read", json!({})));
+            input.push(
+                json!({"type":"function_call_output","call_id":"call_fixture","output":"done"}),
+            );
+        }
+        input.push(json!({"type":"compaction_trigger"}));
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let sender: super::repair::Sender = Box::new(move |body| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            let input = body["input"].as_array().unwrap();
+            assert_eq!(input.last().unwrap()["type"], "compaction_trigger");
+            assert_eq!(input[input.len() - 2]["role"], "developer");
+            Box::pin(async move {
+                let stream: crate::transport::CodexBackendSseStream =
+                    Box::pin(futures::stream::iter([Ok(Bytes::from(repair_wire(
+                        repair_response("corrected", vec![native("read", json!({}))]),
+                    )))]));
+                Ok(stream)
+            })
+        });
+        let source = Box::pin(futures::stream::iter([Ok(Bytes::from(repair_wire(
+            repair_response("original", vec![native("absent", json!({}))]),
+        )))]));
+        let result = super::transform_stream_with_repair(source, &prepared, Some(sender))
+            .try_collect::<Vec<_>>()
+            .await;
+        assert_eq!(result.is_ok(), !history);
+        assert_eq!(count.load(Ordering::SeqCst), usize::from(!history));
+    }
+}
+
+#[tokio::test]
 async fn excel_unknown_correction_stops_after_one_attempt() {
     use wiremock::ResponseTemplate;
     let (_, error, usage, completed, requests) = http_repair(
@@ -539,10 +826,8 @@ async fn excel_unknown_correction_uses_declared_tool_and_preserves_usage() {
     assert_eq!(response["id"], "resp_first");
     assert_eq!(response["usage"]["total_tokens"], 24);
     let repair: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    assert!(!super::repair::has_tool_history(
-        repair.as_object().unwrap()
-    ));
-    assert!(super::repair::has_tool_history(
+    assert!(super::repair::no_tool_history(repair.as_object().unwrap()));
+    assert!(!super::repair::no_tool_history(
         json!({"input":[{"type":"function_call_output"}]})
             .as_object()
             .unwrap()

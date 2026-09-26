@@ -749,6 +749,9 @@ where
                     return Err(EngineError::Deadline);
                 }
                 PollBoundary::Item(Some(Ok(mut event))) => {
+                    if let Some(checkpoint) = event.take_metering() {
+                        self.observation.observe_metering(&checkpoint);
+                    }
                     if let Some(wire) = event.wire_event() {
                         self.trace
                             .attempt(self.attempts)
@@ -1485,6 +1488,9 @@ where
 
     fn observe_atomic_terminal_events(&mut self, events: &mut [ProviderEvent]) {
         for event in events {
+            if let Some(checkpoint) = event.take_metering() {
+                self.observation.observe_metering(&checkpoint);
+            }
             if let Some(observation) = event.take_observation() {
                 self.observe_response(observation);
             }
