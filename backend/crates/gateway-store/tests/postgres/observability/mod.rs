@@ -1565,7 +1565,7 @@ async fn average_output_tps_uses_total_latency_and_does_not_require_first_token(
     let repository = observability_repository(&database.pool);
     let range =
         ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
-    for first in [Some(1999_i64), Some(2000), Some(3000), None] {
+    for first in [Some(0_i64), Some(1000), Some(1999), Some(2000), None] {
         sqlx::query("update model_requests set output_tokens = 100, latency_ms = 2000, first_token_ms = $1 where outcome = 'succeeded'")
             .bind(first).execute(&database.pool).await.unwrap();
         let summary = repository
@@ -1587,6 +1587,17 @@ async fn average_output_tps_uses_total_latency_and_does_not_require_first_token(
                 .is_none_or(|value| value == 50)
         }));
     }
+    let invalid_latency =
+        sqlx::query("update model_requests set first_token_ms = 3000 where outcome = 'succeeded'")
+            .execute(&database.pool)
+            .await
+            .expect_err("first token latency cannot exceed total latency");
+    assert_eq!(
+        invalid_latency
+            .as_database_error()
+            .and_then(|error| error.constraint()),
+        Some("model_requests_latency_ck")
+    );
     sqlx::query("update model_requests set latency_ms = 0 where outcome = 'succeeded'")
         .execute(&database.pool)
         .await
