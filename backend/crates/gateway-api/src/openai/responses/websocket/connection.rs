@@ -209,6 +209,7 @@ impl ConnectionStats {
 
 /// 协调层持有的单 owner WebSocket 连接句柄。
 pub struct ResponsesWebSocketConnection {
+    request_trace: gateway_core::diagnostics::TraceContext,
     connection_id: Arc<str>,
     opened_at: Instant,
     expired: Arc<AtomicBool>,
@@ -222,6 +223,9 @@ pub struct ResponsesWebSocketConnection {
 }
 
 impl ResponsesWebSocketConnection {
+    pub(super) fn set_request_trace(&mut self, trace: gateway_core::diagnostics::TraceContext) {
+        self.request_trace = trace;
+    }
     pub(super) fn new(
         socket: WebSocket,
         connection_id: String,
@@ -291,7 +295,21 @@ impl ResponsesWebSocketConnection {
         payload: String,
         context: WriteContext,
     ) -> Result<(), ConnectionWriteError> {
-        self.send(Message::Text(payload.into()), context).await
+        if context.request_id.is_some() {
+            self.request_trace
+                .dump("downstream.event", payload.as_bytes());
+        }
+        let result = self.send(Message::Text(payload.into()), context).await;
+        if self.request_trace.captures_bodies()
+            && matches!(
+                result,
+                Err(ConnectionWriteError::Timeout { .. } | ConnectionWriteError::Transport { .. })
+            )
+        {
+            self.request_trace
+                .record("downstream.write.failed", serde_json::json!({}));
+        }
+        result
     }
 
     pub(super) async fn close_policy(
@@ -489,6 +507,7 @@ where
         config,
     ));
     ResponsesWebSocketConnection {
+        request_trace: Default::default(),
         connection_id,
         opened_at,
         expired,

@@ -51,6 +51,11 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/usage/index.vue'),
       },
       {
+        path: 'request-captures',
+        name: 'request-captures',
+        component: () => import('@/views/request-captures/index.vue'),
+      },
+      {
         path: 'theme',
         name: 'theme',
         component: () => import('@/views/theme/index.vue'),

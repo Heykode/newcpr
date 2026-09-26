@@ -313,6 +313,18 @@ impl DefaultExecutionService {
         self
     }
 
+    #[must_use]
+    pub fn with_captures(
+        mut self,
+        captures: Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>,
+    ) -> Self {
+        self.coordinator = Arc::new(AttemptCoordinator::new(
+            GatewayEngine::new(self.observations.clone(), self.providers.clone())
+                .with_captures(captures),
+        ));
+        self
+    }
+
     async fn start_inner(&self, request: StartExecution) -> Result<StartedExecution, GatewayError> {
         let StartExecution {
             client,

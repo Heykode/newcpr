@@ -22,7 +22,7 @@ pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
 ];
 
 #[test]
-fn retired_excel_operations_have_no_runtime_or_frontend_hooks() {
+fn retired_credential_guard_has_no_runtime_or_frontend_hooks() {
     let root = backend_root();
     for file in [
         "crates/gateway-admin/src/workers/mod.rs",
@@ -38,12 +38,7 @@ fn retired_excel_operations_have_no_runtime_or_frontend_hooks() {
         "../frontend/src/layout/components/AppSidebar.vue",
     ] {
         let source = fs::read_to_string(root.join(file)).expect("read shared runtime source");
-        for marker in [
-            "token_guard",
-            "token-guard",
-            "request_capture",
-            "request-capture",
-        ] {
+        for marker in ["token_guard", "token-guard"] {
             assert!(
                 !source.contains(marker),
                 "{file} must not reintroduce {marker}"
@@ -53,9 +48,7 @@ fn retired_excel_operations_have_no_runtime_or_frontend_hooks() {
     // Applied migrations and historical tables deliberately remain compatible.
     for path in [
         "crates/gateway-admin/src/workers/token_guard.rs",
-        "crates/gateway-store/src/request_capture",
         "../frontend/src/views/token-guard",
-        "../frontend/src/views/request-captures",
     ] {
         assert!(
             !root.join(path).exists(),
@@ -231,7 +224,10 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
             "workers",
         ],
     ),
-    ("crates/gateway-store", &["backup", "postgres", "redis"]),
+    (
+        "crates/gateway-store",
+        &["backup", "postgres", "redis", "request_capture"],
+    ),
     (
         "crates/providers/openai",
         &["config", "credential", "transport"],

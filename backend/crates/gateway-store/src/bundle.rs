@@ -100,7 +100,19 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         REDIS_NAMESPACE,
     )?);
 
-    let admin_ports = AdminStorePorts::new(
+    let capture = request_capture::CaptureManager::open(
+        pool.clone(),
+        config
+            .backup_staging_dir()
+            .with_file_name("request-captures"),
+    )
+    .await
+    .map_err(|_| {
+        tracing::warn!("request capture unavailable; ordinary gateway remains enabled");
+    })
+    .ok();
+
+    let mut admin_ports = AdminStorePorts::new(
         AdminAccountStorePorts::new(
             Arc::new(postgres::PgAdminAccountStore::with_repository(
                 pool.clone(),
@@ -137,6 +149,9 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     .with_egress(Arc::new(postgres::PgProviderEgressRepository::new(
         pool.clone(),
     )));
+    if let Some((captures, _)) = &capture {
+        admin_ports = admin_ports.with_request_capture(captures.clone());
+    }
 
     let execution_repository = Arc::new(postgres::PgExecutionStore::new(pool.clone()));
     let (execution, execution_writer) =
@@ -162,7 +177,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let (admissions, admission_release_writer) =
         redis::BufferedClientAdmissionPort::new(admissions);
     let (circuits, circuit_feedback_writer) = redis::BufferedProviderCircuitPort::new(circuits);
-    let core_ports = CoreStorePorts::new(
+    let mut core_ports = CoreStorePorts::new(
         execution,
         (
             Arc::new(admissions),
@@ -182,6 +197,9 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         Arc::new(client_key_usage),
     )
     .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())));
+    if let Some((captures, _)) = &capture {
+        core_ports = core_ports.with_captures(captures.clone());
+    }
 
     let provider_ports = ProviderStorePorts::new(
         account_store,
@@ -220,7 +238,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             connection: redis_connection,
         }),
     ];
-    let worker_contributions = store_worker_contributions(
+    let mut worker_contributions = store_worker_contributions(
         execution_repository,
         execution_writer,
         client_key_usage_writer,
@@ -229,6 +247,23 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         capacity_wait_cleanup_writer,
         retention,
     )?;
+    if let Some((_, capture_writer)) = capture {
+        worker_contributions.push(WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                WorkerId::try_new(WorkerKind::OpsFlush, "request_capture")
+                    .map_err(worker_definition_error)?,
+                WorkerRunnable::Daemon {
+                    restart: DaemonRestartPolicy::try_new(
+                        Duration::from_secs(1),
+                        Duration::from_secs(60),
+                    )
+                    .map_err(worker_definition_error)?,
+                    task: Box::new(capture_writer),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ));
+    }
     Ok(StoreBundle {
         admin_ports,
         core_ports,

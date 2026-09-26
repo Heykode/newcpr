@@ -22,6 +22,7 @@ pub mod outbound_user_agent;
 pub mod presenter;
 pub mod proxies;
 pub mod relogin;
+pub mod request_capture;
 pub mod settings;
 pub mod system;
 pub mod wire;
@@ -43,6 +44,7 @@ where
         .merge(group_monitor::router::<S>())
         .merge(proxies::router::<S>())
         .merge(relogin::router::<S>())
+        .merge(request_capture::router::<S>())
         .merge(egress::router::<S>())
         .merge(accounts::router::<S>())
         .merge(auth::router::<S>())
