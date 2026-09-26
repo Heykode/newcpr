@@ -1,8 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
+use jsonschema::Validator;
 use serde_json::{Map, Value, json};
 
-use super::{CLIENT_TOOL_INSTRUCTIONS, EXTERNAL_CLIENT_INSTRUCTIONS, ExcelRequestError, envelope};
+use super::{
+    CLIENT_TOOL_INSTRUCTIONS, EXTERNAL_CLIENT_INSTRUCTIONS, ExcelRequestError, envelope,
+    structured::NoExternalSchemas,
+};
+
+const MAX_SCHEMA_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
 struct ToolSpec {
@@ -10,7 +19,16 @@ struct ToolSpec {
     namespace: Option<String>,
     kind: String,
     schema: Value,
+    validator: Option<Arc<Validator>>,
     catalog: Value,
+}
+
+#[derive(Clone, Default)]
+enum ToolChoice {
+    #[default]
+    Auto,
+    Required,
+    Named(String),
 }
 
 #[derive(Clone, Default)]
@@ -18,6 +36,7 @@ pub(crate) struct ClientTools {
     specs: BTreeMap<String, ToolSpec>,
     serial: bool,
     unavailable: BTreeSet<String>,
+    choice: ToolChoice,
 }
 
 impl ClientTools {
@@ -31,11 +50,8 @@ impl ClientTools {
             serial,
             ..Self::default()
         };
-        match source.get("tool_choice") {
-            Some(Value::String(choice)) if choice == "none" => return Ok(tools),
-            None | Some(Value::Null) => {}
-            Some(Value::String(choice)) if choice == "auto" => {}
-            _ => return Err(ExcelRequestError::Tool),
+        if source.get("tool_choice").and_then(Value::as_str) == Some("none") {
+            return Ok(tools);
         }
         if let Some(values) = source.get("tools") {
             tools.add(values, None, 0)?;
@@ -47,7 +63,42 @@ impl ClientTools {
                 }
             }
         }
+        tools.choice = tools.parse_choice(source.get("tool_choice"))?;
         Ok(tools)
+    }
+
+    fn parse_choice(&self, choice: Option<&Value>) -> Result<ToolChoice, ExcelRequestError> {
+        let invalid = ExcelRequestError::Tool;
+        let Some(choice) = choice.filter(|value| !value.is_null()) else {
+            return Ok(ToolChoice::Auto);
+        };
+        match choice.as_str() {
+            Some("auto") => return Ok(ToolChoice::Auto),
+            Some("required") if !self.specs.is_empty() => return Ok(ToolChoice::Required),
+            Some(_) => return Err(invalid),
+            None => {}
+        }
+        let fields = choice.as_object().ok_or(invalid)?;
+        if fields
+            .keys()
+            .any(|key| !matches!(key.as_str(), "type" | "name" | "namespace"))
+        {
+            return Err(invalid);
+        }
+        let kind = fields.get("type").and_then(Value::as_str).ok_or(invalid)?;
+        let name = fields.get("name").and_then(Value::as_str).ok_or(invalid)?;
+        let name = match fields.get("namespace") {
+            None => name.to_owned(),
+            Some(Value::String(namespace)) if !namespace.is_empty() => {
+                format!("{namespace}.{name}")
+            }
+            _ => return Err(invalid),
+        };
+        let spec = self.specs.get(&name).ok_or(invalid)?;
+        if spec.kind != kind {
+            return Err(invalid);
+        }
+        Ok(ToolChoice::Named(name))
     }
 
     fn add(
@@ -125,6 +176,24 @@ impl ClientTools {
                 }
                 continue;
             }
+            let validator = if kind == "function" {
+                if serde_json::to_vec(&schema)
+                    .map_err(|_| ExcelRequestError::Tool)?
+                    .len()
+                    > MAX_SCHEMA_BYTES
+                {
+                    return Err(ExcelRequestError::Tool);
+                }
+                Some(Arc::new(
+                    jsonschema::draft202012::options()
+                        .with_retriever(NoExternalSchemas)
+                        .should_validate_formats(true)
+                        .build(&schema)
+                        .map_err(|_| ExcelRequestError::Tool)?,
+                ))
+            } else {
+                None
+            };
             if self
                 .specs
                 .insert(
@@ -134,6 +203,7 @@ impl ClientTools {
                         namespace: namespace.map(str::to_owned),
                         kind: kind.into(),
                         schema,
+                        validator,
                         catalog,
                     },
                 )
@@ -166,14 +236,23 @@ impl ClientTools {
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
             "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=cpr.custom/CATALOG_NAME and put exact raw input directly in code. \
-             For other function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{}{warning}",
+             For other function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{}{}{warning}",
             if self.serial {
                 "Return at most one client tool call per response; wait for its result before requesting another."
             } else {
                 "Independent client tools may be called in parallel, using a separate native run_officejs call for each."
             },
-            self.function_code_instructions()
+            self.function_code_instructions(),
+            self.choice_instructions()
         )
+    }
+
+    fn choice_instructions(&self) -> String {
+        match &self.choice {
+            ToolChoice::Auto => String::new(),
+            ToolChoice::Required => "\nThe client requires at least one declared client tool call in this response, unless you explicitly refuse the request.".into(),
+            ToolChoice::Named(name) => format!("\nThe client requires exactly one call to catalog tool {name}; do not substitute another tool. An explicit refusal is allowed."),
+        }
     }
 
     fn supports_function_code(&self, name: &str) -> bool {
@@ -214,22 +293,73 @@ impl ClientTools {
     }
 
     pub(crate) fn validate_call_count(&self, count: usize) -> Result<(), ExcelRequestError> {
-        if self.serial && count > 1 {
+        if (self.serial && count > 1)
+            || matches!(self.choice, ToolChoice::Required) && count == 0
+            || matches!(self.choice, ToolChoice::Named(_)) && count != 1
+        {
             Err(ExcelRequestError::ToolCall)
         } else {
             Ok(())
         }
     }
 
+    pub(crate) fn validate_completion(&self, output: &[Value]) -> Result<(), ExcelRequestError> {
+        let count = output
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some("function_call" | "custom_tool_call")
+                )
+            })
+            .count();
+        let refusal = output.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            part.get("type").and_then(Value::as_str) == Some("refusal")
+                                && part
+                                    .get("refusal")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|text| !text.is_empty())
+                        })
+                    })
+        });
+        if count == 0 && refusal {
+            return Ok(());
+        }
+        self.validate_call_count(count)
+    }
+
     pub(crate) fn parallel_allowed(&self) -> bool {
         !self.serial
     }
 
+    pub(crate) fn project_choice(&self, response: &mut Value) {
+        match &self.choice {
+            ToolChoice::Auto => {}
+            ToolChoice::Required => response["tool_choice"] = "required".into(),
+            ToolChoice::Named(key) => {
+                if let Some(spec) = self.specs.get(key) {
+                    let mut choice = json!({"type":spec.kind,"name":spec.name});
+                    if let Some(namespace) = &spec.namespace {
+                        choice["namespace"] = namespace.clone().into();
+                    }
+                    response["tool_choice"] = choice;
+                }
+            }
+        }
+    }
+
     pub(crate) fn reminder(&self) -> Option<String> {
         (!self.specs.is_empty()).then(|| format!(
-            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope unless the raw-code contract below applies. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.{}",
+            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope unless the raw-code contract below applies. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.{}{}",
             self.specs.keys().cloned().collect::<Vec<_>>().join(", "),
-            self.function_code_instructions()
+            self.function_code_instructions(),
+            self.choice_instructions()
         ))
     }
 
@@ -253,24 +383,31 @@ impl ClientTools {
             (native.clone(), false)
         };
         let declared = envelope::name(&envelope)?;
-        let qualified = native
-            .get("namespace")
+        // Only a direct client call owns its namespace. The transport wrapper does not.
+        let qualified = (!transport)
+            .then(|| native.get("namespace"))
+            .flatten()
             .and_then(Value::as_str)
             .filter(|ns| !ns.is_empty())
             .map(|ns| format!("{ns}.{declared}"));
-        let spec = self
+        let (key, spec) = self
             .specs
-            .get(qualified.as_deref().unwrap_or(declared))
+            .get_key_value(qualified.as_deref().unwrap_or(declared))
             .or_else(|| {
-                (!transport)
+                (!transport && qualified.is_none())
                     .then(|| {
                         declared
                             .strip_prefix("functions.")
-                            .and_then(|name| self.specs.get(name))
+                            .and_then(|name| self.specs.get_key_value(name))
                     })
                     .flatten()
             })
             .ok_or(invalid)?;
+        if let ToolChoice::Named(required) = &self.choice
+            && key != required
+        {
+            return Err(invalid);
+        }
         if (marked && spec.kind != "custom")
             || (!transport
                 && native.get("type").and_then(Value::as_str)
@@ -327,7 +464,12 @@ impl ClientTools {
                 preserve_encryption = normalized == args;
                 args = normalized;
             }
-            if !args.is_object() || !matches_schema(&args, &spec.schema, 0) {
+            if !args.is_object()
+                || !spec
+                    .validator
+                    .as_ref()
+                    .is_some_and(|validator| validator.is_valid(&args))
+            {
                 return Err(invalid);
             }
             result["arguments"] = args.to_string().into();
@@ -443,72 +585,6 @@ fn normalize_plan(args: Value) -> Result<Value, ExcelRequestError> {
         result["explanation"] = explanation.clone();
     }
     Ok(result)
-}
-
-fn matches_schema(value: &Value, schema: &Value, depth: usize) -> bool {
-    if depth > 32 {
-        return false;
-    }
-    let Some(schema) = schema.as_object() else {
-        return true;
-    };
-    if let Some(types) = schema.get("type").and_then(Value::as_array) {
-        return types.iter().any(|kind| {
-            let mut alternative = schema.clone();
-            alternative.insert("type".into(), kind.clone());
-            matches_schema(value, &alternative.into(), depth + 1)
-        });
-    }
-    let valid_type = match schema.get("type").and_then(Value::as_str) {
-        Some("object") => value.is_object(),
-        Some("array") => value.is_array(),
-        Some("string") => value.is_string(),
-        Some("integer") => value.is_i64() || value.is_u64(),
-        Some("number") => value.is_number(),
-        Some("boolean") => value.is_boolean(),
-        Some("null") => value.is_null(),
-        _ => true,
-    };
-    if !valid_type
-        || schema
-            .get("enum")
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.contains(value))
-    {
-        return false;
-    }
-    if let Some(object) = value.as_object() {
-        if schema
-            .get("required")
-            .and_then(Value::as_array)
-            .is_some_and(|keys| {
-                keys.iter()
-                    .filter_map(Value::as_str)
-                    .any(|key| !object.contains_key(key))
-            })
-        {
-            return false;
-        }
-        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-            for (key, value) in object {
-                match properties.get(key) {
-                    Some(nested) if !matches_schema(value, nested, depth + 1) => return false,
-                    None if schema.get("additionalProperties") == Some(&Value::Bool(false)) => {
-                        return false;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    if let (Some(items), Some(item_schema)) = (value.as_array(), schema.get("items"))
-        && !items
-            .iter()
-            .all(|item| matches_schema(item, item_schema, depth + 1))
-    {
-        return false;
-    }
-    true
 }
 
 #[cfg(test)]

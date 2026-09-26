@@ -173,8 +173,21 @@ only on direct same-client-tool calls; never copy outer transport encryption
 to the inner client arguments. Existing contaminated sessions are not repaired.
 
 Auto-mode known hosted declarations are omitted with a developer capability
-warning. Forced choices, undeclared tools and unknown declarations still fail.
-This does not implement hosted search/image/connector tools.
+warning. Forced hosted choices, undeclared tools and unknown declarations still
+fail. Client `required` choices need at least one call; named function/custom
+choices need exactly one matching catalog call. Explicit refusals remain valid.
+Enforce choices at completion before releasing tool events, project the effective
+choice, and never silently substitute tools or retry through a different route.
+These are prompt constraints with local validation, not upstream constrained
+decoding. This does not implement hosted search/image/connector tools.
+
+Compile function schemas once per catalog using the existing JSON Schema 2020-12
+validator and network/file-denying retriever (1 MiB schema limit). Validate the
+complete argument object before client delivery; do not replace full validation
+with a subset of keywords. Custom grammar is still opaque. A transport wrapper's
+namespace must not qualify the decoded catalog target; direct calls retain their
+own namespace checks. Test internal refs, composition, bounds, boolean schemas,
+extra properties, external-ref denial, forced-call identity/count and refusals.
 
 Content errors contain only input index, fixed content/output field, part index
 and whitelisted type labels. Unknown strings become unknown; missing/non-string/

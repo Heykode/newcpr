@@ -12,6 +12,8 @@ mod stream;
 mod structured;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tool_compat_tests;
 mod tools;
 pub(crate) mod usage;
 
