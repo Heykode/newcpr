@@ -613,7 +613,7 @@ fn excel_unknown_repair_rejects_history_bad_shape_and_known_schema_errors() {
     }
     for items in [
         vec![unknown.clone(), json!({"type":"message","content":[]})],
-        vec![unknown.clone(), unknown.clone()],
+        vec![unknown.clone(), unknown],
         vec![native("read", json!([]))],
         vec![
             json!({"type":"function_call","id":"fc","call_id":"call","name":"absent","arguments":"{}"}),
