@@ -263,7 +263,10 @@ Only a completed, wholly unexecuted native tool batch can request correction:
 two attempts maximum, original model/lease/egress, no extra scheduler selection.
 Keep valid operations and raw code plus metadata, original output slots and
 response identity. Validate the whole batch before exposing executable events.
-Structured output and undeclared tools never enter correction.
+Structured output never enters correction. One unknown native call may enter a
+separate single correction only before any tool interaction and with a nonempty
+frozen catalog. It must be the last output item; never fabricate a tool result or
+chain this correction into the two-attempt format repair loop.
 
 | Condition | Outcome |
 | --- | --- |
@@ -289,3 +292,36 @@ Bad: repair parameter values, retry a 422 without images, or erase encrypted
 history. Required regressions cover metadata preservation, duplicate identity,
 batch atomicity, aliases, cancellation, incomplete/SSE/HTTP errors, replay
 success/failure, structured bypass and original image detail.
+
+## 12. Catalog And Resource Hardening
+
+`restore_scoped` freezes the effective catalog per request. Explicit tools replace,
+including an empty array; omission inherits an immutable parent snapshot first,
+otherwise a trusted session hint. Additional declarations use only the current
+delta, so old history cannot resurrect an explicitly cleared catalog. `none`
+suppresses the current turn without erasing reusable declarations.
+Hints share the response owner isolation and add the trusted session identifier.
+Do not key them by anonymous fallback text. Redis CAS uses a random version nonce,
+one-hour non-sliding read TTL, 1 MiB per item, 512 items and 16 MiB aggregate.
+Timeouts are bounded; an explicit request remains usable if persistence fails.
+
+Raw `exec_command.cmd` uses FUNCTION_CMD while raw `code` support takes precedence.
+Do not transform command bytes, relax schema validation, or execute them in CPR.
+Corrections preserve both raw bytes and the other parameter fields.
+
+Image limits extend existing RequestTuning and override storage: 4 MiB per image,
+6 MiB deduplicated inline bytes, 16 references by default. Saved overrides win;
+validate both admin writes and the provider snapshot. Reference count includes
+HTTPS/file IDs; byte checks do not fetch external resources. Replay/request bounds
+remain independent. Upload admission is 32 requests and 60 seconds including wait;
+text takes no permit. This is not a total process decoding-memory guarantee.
+
+Excel fallback context_management uses 920000 only when omitted. Preserve every
+explicit client value, including an empty array. This is not a proven model limit.
+Ordinary Excel endpoint 429 preserves wire evidence and Retry-After but cannot
+cool down or rotate native Codex accounts. Genuine quota/auth categories retain
+their recovery policy. Off/native routing is unchanged.
+
+Capture transport facts as fixed labels only. Terminal business outcomes are
+independent of HTTP status; an unverified completed event is not proof of success.
+Do not copy error strings or URLs into the fixed-label capture facts.

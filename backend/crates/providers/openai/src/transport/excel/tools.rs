@@ -40,8 +40,39 @@ pub(crate) struct ClientTools {
 }
 
 impl ClientTools {
+    pub(super) fn catalog(&self) -> Value {
+        let mut values: Vec<Value> = self
+            .specs
+            .values()
+            .map(|spec| {
+                let mut value = spec.catalog.clone();
+                value["name"] = spec.name.clone().into();
+                let fields = value.as_object_mut().expect("catalog object");
+                fields.remove("namespace");
+                fields.remove("tool");
+                match &spec.namespace {
+                    Some(namespace) => json!({"type":"namespace","name":namespace,"tools":[value]}),
+                    None => value,
+                }
+            })
+            .collect();
+        values.extend(self.unavailable.iter().map(|kind| json!({"type":kind})));
+        Value::Array(values)
+    }
+
     pub(super) fn contains(&self, name: &str) -> bool {
         self.specs.contains_key(name)
+    }
+
+    pub(super) fn with_choice(mut self, choice: Option<&Value>) -> Result<Self, ExcelRequestError> {
+        if choice.and_then(Value::as_str) == Some("none") {
+            self.specs.clear();
+            self.unavailable.clear();
+            self.choice = ToolChoice::Auto;
+        } else {
+            self.choice = self.parse_choice(choice)?;
+        }
+        Ok(self)
     }
 
     pub(crate) fn has_client_tools(&self) -> bool {
@@ -244,13 +275,14 @@ impl ClientTools {
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
             "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=cpr.custom/CATALOG_NAME and put exact raw input directly in code. \
-             For other function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{}{}{warning}",
+             For other function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{}{}{}{warning}",
             if self.serial {
                 "Return at most one client tool call per response; wait for its result before requesting another."
             } else {
                 "Independent client tools may be called in parallel, using a separate native run_officejs call for each."
             },
             self.function_code_instructions(),
+            self.function_cmd_instructions(),
             self.choice_instructions()
         )
     }
@@ -274,6 +306,23 @@ impl ClientTools {
                     && spec
                         .schema
                         .pointer("/properties/code/type")
+                        .and_then(Value::as_str)
+                        == Some("string")
+            })
+    }
+
+    fn supports_function_cmd(&self, name: &str) -> bool {
+        (name == "exec_command" || name.ends_with(".exec_command"))
+            && !self.supports_function_code(name)
+            && !name
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '/' | '\\'))
+            && self.specs.get(name).is_some_and(|spec| {
+                spec.kind == "function"
+                    && spec.schema.get("type").and_then(Value::as_str) == Some("object")
+                    && spec
+                        .schema
+                        .pointer("/properties/cmd/type")
                         .and_then(Value::as_str)
                         == Some("string")
             })
@@ -310,6 +359,20 @@ impl ClientTools {
             outer["summary"] = format!("{}{name}", envelope::FUNCTION_CODE_PREFIX).into();
             outer["code"] = code.clone();
             outer["extended_summary"] = metadata.to_string().into();
+        } else if call["type"] == "function_call"
+            && self.supports_function_cmd(&name)
+            && let Some(cmd) = call["arguments"]
+                .get("cmd")
+                .filter(|value| value.is_string())
+        {
+            let mut metadata = call["arguments"].clone();
+            metadata
+                .as_object_mut()
+                .ok_or(ExcelRequestError::History)?
+                .remove("cmd");
+            outer["summary"] = format!("{}{name}", envelope::FUNCTION_CMD_PREFIX).into();
+            outer["code"] = cmd.clone();
+            outer["extended_summary"] = metadata.to_string().into();
         } else {
             return Ok(native);
         }
@@ -323,6 +386,7 @@ impl ClientTools {
                     .map(|spec| (name.into(), spec.kind == "custom"))
             },
             &|name| self.supports_function_code(name),
+            &|name| self.supports_function_cmd(name),
         )?;
         Ok(native)
     }
@@ -341,6 +405,23 @@ impl ClientTools {
             "\nFor catalog functions [{}], prefer summary={}EXACT_CATALOG_NAME, put the exact raw source text in code, and put one JSON object containing all remaining arguments in extended_summary (use {{}} when empty). Do not include code in that object. Do not wrap, escape again, repair or execute the source text here.",
             names.join(", "),
             envelope::FUNCTION_CODE_PREFIX
+        )
+    }
+
+    fn function_cmd_instructions(&self) -> String {
+        let names = self
+            .specs
+            .keys()
+            .filter(|name| self.supports_function_cmd(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\nFor catalog functions [{}], prefer summary={}EXACT_CATALOG_NAME, put the exact raw shell command in code and one JSON object with all remaining arguments in extended_summary ({{}} when empty). Do not include cmd in that object. Do not wrap, escape again, repair or execute the command here.",
+            names.join(", "),
+            envelope::FUNCTION_CMD_PREFIX
         )
     }
 
@@ -412,9 +493,10 @@ impl ClientTools {
 
     pub(crate) fn reminder(&self) -> Option<String> {
         (!self.specs.is_empty()).then(|| format!(
-            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope unless the raw-code contract below applies. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.{}{}",
+            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope unless the raw-code contract below applies. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.{}{}{}",
             self.specs.keys().cloned().collect::<Vec<_>>().join(", "),
             self.function_code_instructions(),
+            self.function_cmd_instructions(),
             self.choice_instructions()
         ))
     }
@@ -434,6 +516,7 @@ impl ClientTools {
                     Some((key.clone(), spec.kind == "custom"))
                 },
                 &|name| self.supports_function_code(name),
+                &|name| self.supports_function_cmd(name),
             )?
         } else {
             (native.clone(), false)

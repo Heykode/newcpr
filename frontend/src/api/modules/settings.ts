@@ -17,6 +17,9 @@ export interface RequestTuning {
   websocketFailureOpenDurationMs: number
   rateLimitCooldownSeconds: number
   excelImageRelayBytes: number
+  excelImageMaxBytes: number
+  excelImageTotalBytes: number
+  excelImageMaxCount: number
   excelImageRelayRequests: number
   excelImageRelayDownloads: number
   excelImageRelayEntries: number

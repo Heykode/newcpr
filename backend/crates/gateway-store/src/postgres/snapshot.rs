@@ -274,6 +274,15 @@ fn to_core_request_tuning(
         excel_image_relay_bytes: overrides
             .excel_image_relay_bytes
             .unwrap_or(defaults.excel_image_relay_bytes),
+        excel_image_max_bytes: overrides
+            .excel_image_max_bytes
+            .unwrap_or(defaults.excel_image_max_bytes),
+        excel_image_total_bytes: overrides
+            .excel_image_total_bytes
+            .unwrap_or(defaults.excel_image_total_bytes),
+        excel_image_max_count: overrides
+            .excel_image_max_count
+            .unwrap_or(defaults.excel_image_max_count),
         excel_image_relay_downloads: overrides
             .excel_image_relay_downloads
             .unwrap_or(defaults.excel_image_relay_downloads),

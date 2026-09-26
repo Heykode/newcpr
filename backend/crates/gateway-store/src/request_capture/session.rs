@@ -208,6 +208,58 @@ impl RequestCaptureObserver for Session {
     }
 
     fn fact(&self, stage: &'static str, attempt: u32, data: &Value) {
+        if matches!(
+            stage,
+            "excel.transport" | "excel.transport.failed" | "upstream.business_result"
+        ) {
+            // Fixed-label diagnostic facts only. Never copy arbitrary error text.
+            let mut summary = json!({"stage":stage,"attempt":attempt});
+            for key in ["phase", "cause", "outcome"] {
+                if let Some(value) = data.get(key).and_then(Value::as_str).filter(|value| {
+                    matches!(
+                        *value,
+                        "prepare"
+                            | "connect"
+                            | "exchange"
+                            | "receive"
+                            | "decode"
+                            | "response_headers"
+                            | "attachment_upload_started"
+                            | "attachment_upload_completed"
+                            | "exchange_started"
+                            | "request_build_failed"
+                            | "connect_timeout"
+                            | "connect_failed"
+                            | "timeout"
+                            | "body_read_failed"
+                            | "decode_failed"
+                            | "transport_failed"
+                            | "upstream_rejected"
+                            | "invalid_stream"
+                            | "connection_refused"
+                            | "connection_reset"
+                            | "unexpected_eof"
+                            | "broken_pipe"
+                            | "completed"
+                            | "failed"
+                            | "incomplete"
+                            | "unverified"
+                    )
+                }) {
+                    summary[key] = value.into();
+                }
+            }
+            if let Some(status) = data["status"]
+                .as_u64()
+                .filter(|status| (100..=599).contains(status))
+            {
+                summary["status"] = status.into();
+            }
+            if let Ok(bytes) = serde_json::to_vec(&summary) {
+                self.body("downstream.event", attempt, None, &bytes);
+            }
+            return;
+        }
         let Ok(mut state) = self.state.try_lock() else {
             self.incomplete.store(true, Ordering::Release);
             return;

@@ -22,7 +22,12 @@ fn terminal_cache_counts_survive_metadata_truncation_and_keep_unknown_distinct()
         }
         trace.capture_event("upstream.event", &serde_json::to_vec(&value).unwrap());
         let snapshot = trace.snapshot().unwrap();
-        let data = &snapshot["events"][0]["data"];
+        let data = &snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["stage"] == "upstream.event")
+            .unwrap()["data"];
         assert_eq!(data["truncated"], true, "exercise the event-size fallback");
         assert_eq!(
             data["cacheUsage"]["cachedTokens"],
@@ -37,6 +42,38 @@ use tracing::{
     field::{Field, Visit},
     span::{Attributes, Id, Record},
 };
+
+#[test]
+fn terminal_business_outcomes_do_not_infer_success_from_http_or_event_name() {
+    for (event, outcome) in [
+        (json!({"type":"response.failed"}), "failed"),
+        (json!({"type":"response.incomplete"}), "incomplete"),
+        (
+            json!({"type":"response.completed","response":{"status":"failed"}}),
+            "failed",
+        ),
+        (
+            json!({"type":"response.completed","response":{"status":"completed"}}),
+            "completed",
+        ),
+        (json!({"type":"response.completed"}), "unverified"),
+    ] {
+        let trace = TraceContext::new("req_business_result");
+        trace.record(
+            "excel.transport",
+            json!({"phase":"response_headers","status":200}),
+        );
+        trace.capture_event("upstream.event", &serde_json::to_vec(&event).unwrap());
+        let snapshot = trace.snapshot().unwrap();
+        let result = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["stage"] == "upstream.business_result")
+            .unwrap();
+        assert_eq!(result["data"]["outcome"], outcome);
+    }
+}
 
 #[test]
 fn bounded_history_preserves_start_failure_and_final_result() {
@@ -205,7 +242,12 @@ fn only_top_level_headers_in_controlled_upstream_frames_keep_correlation_values(
         .unwrap();
         trace.capture("upstream.event", &body);
         let snapshot = trace.snapshot().unwrap();
-        let metadata = &snapshot["events"][0]["data"]["metadata"];
+        let metadata = &snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["stage"] == "upstream.event")
+            .unwrap()["data"]["metadata"];
         assert_eq!(metadata["headers"]["x-request-id"], "upstream-controlled");
         assert_eq!(
             metadata["headers"]["x-oai-request-id"]["sample"],

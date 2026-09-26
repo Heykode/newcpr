@@ -37,6 +37,7 @@ pub(crate) fn transform_stream_with_repair(
         terminal: false,
         sequence: 0,
         effort: prepared.body.get("reasoning_effort").cloned(),
+        first_interaction: !super::repair::has_tool_history(&prepared.body),
     };
     Box::pin(async_stream::try_stream! {
         let mut source = Some(source);
@@ -122,6 +123,7 @@ struct Relay {
     terminal: bool,
     sequence: u64,
     effort: Option<Value>,
+    first_interaction: bool,
 }
 
 impl Relay {
@@ -140,7 +142,8 @@ impl Relay {
                 item["id"].as_str() == Some(id) && item["call_id"].as_str() == Some(call)
             })
         }) || super::repair::validate(&self.tools, response).is_ok()
-            || !super::repair::eligible(&self.tools, response)
+            || !(super::repair::eligible(&self.tools, response)
+                || self.first_interaction && super::repair::unknown_eligible(&self.tools, response))
         {
             return None;
         }
@@ -355,6 +358,7 @@ mod tests {
                 tools: ClientTools::default(),
                 structured: None,
                 _image_lease: None,
+                image_limits: Default::default(),
                 completed: Default::default(),
                 usage: super::super::usage::ExcelUsagePolicy::new(enabled),
                 replay: None,
@@ -407,6 +411,7 @@ mod tests {
             tools: ClientTools::default(),
             structured: None,
             _image_lease: None,
+            image_limits: Default::default(),
             completed: Default::default(),
             usage: Default::default(),
             replay: None,
@@ -444,6 +449,7 @@ mod tests {
             tools: ClientTools::parse(source_body.as_object().unwrap()).unwrap(),
             structured: None,
             _image_lease: None,
+            image_limits: Default::default(),
             completed: Default::default(),
             usage: Default::default(),
             replay: None,

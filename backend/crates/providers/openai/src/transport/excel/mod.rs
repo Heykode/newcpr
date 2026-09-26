@@ -2,6 +2,7 @@
 //! Account selection, authorization, egress and execution remain CPR-owned.
 //! Feature: excel-upstream. Removal boundaries: docs/excel-removal.md.
 
+mod catalog;
 pub(crate) mod diagnostics;
 mod envelope;
 mod image_cache;
@@ -34,6 +35,7 @@ pub(crate) struct ExcelPreparedRequest {
     pub(crate) tools: ClientTools,
     pub(crate) structured: Option<StructuredOutput>,
     pub(crate) _image_lease: Option<std::sync::Arc<image_relay::ImageLease>>,
+    pub(crate) image_limits: images::ImageLimits,
     pub(crate) completed: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
     pub(crate) usage: usage::ExcelUsagePolicy,
     pub(crate) replay: Option<replay::ReplayCapture>,

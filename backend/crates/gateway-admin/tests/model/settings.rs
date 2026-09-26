@@ -18,6 +18,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         websocket_failure_open_duration_ms: Some(45_000),
         rate_limit_cooldown_seconds: Some(60),
         excel_image_relay_bytes: Some(64 * 1024 * 1024),
+        excel_image_max_bytes: Some(8 * 1024 * 1024),
+        excel_image_total_bytes: Some(16 * 1024 * 1024),
+        excel_image_max_count: Some(32),
         excel_image_relay_requests: Some(128),
         excel_image_relay_downloads: Some(32),
         excel_image_relay_entries: Some(128),
@@ -47,6 +50,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "websocketFailureOpenDurationMs": 45000,
             "rateLimitCooldownSeconds": 60,
             "excelImageRelayBytes": 67108864,
+            "excelImageMaxBytes": 8388608,
+            "excelImageTotalBytes": 16777216,
+            "excelImageMaxCount": 32,
             "excelImageRelayRequests": 128,
             "excelImageRelayDownloads": 32,
             "excelImageRelayEntries": 128,
@@ -77,6 +83,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     assert_eq!(defaults["excelImageRelayRequests"], 128);
     assert_eq!(defaults["excelImageRelayDownloads"], 32);
     assert_eq!(defaults["excelImageRelayEntries"], 512);
+    assert_eq!(defaults["excelImageMaxBytes"], 4 * 1024 * 1024);
+    assert_eq!(defaults["excelImageTotalBytes"], 6 * 1024 * 1024);
+    assert_eq!(defaults["excelImageMaxCount"], 16);
     assert_eq!(defaults["accountBusyWaitEnabled"], false);
     assert_eq!(defaults["accountBusyWaitStickyMaxWaiting"], 3);
     assert_eq!(defaults["accountBusyWaitStickyTimeoutSeconds"], 120);
@@ -90,6 +99,9 @@ fn excel_image_limits_validate_inheritance_bounds_and_integer_types() {
         ("excelImageRelayRequests", 512),
         ("excelImageRelayDownloads", 128),
         ("excelImageRelayEntries", 4096),
+        ("excelImageMaxBytes", 20 * 1024 * 1024),
+        ("excelImageTotalBytes", 32 * 1024 * 1024),
+        ("excelImageMaxCount", 4096),
     ] {
         for value in [json!(null), json!(1), json!(maximum)] {
             let overrides: RequestTuningOverrides =
@@ -108,6 +120,26 @@ fn excel_image_limits_validate_inheritance_bounds_and_integer_types() {
             );
         }
     }
+}
+
+#[test]
+fn excel_input_limits_are_backward_compatible_with_old_runtime_snapshots() {
+    let mut legacy = serde_json::to_value(RequestTuning::default()).unwrap();
+    for field in [
+        "excelImageMaxBytes",
+        "excelImageTotalBytes",
+        "excelImageMaxCount",
+    ] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(
+        serde_json::from_value::<RequestTuning>(legacy).unwrap(),
+        RequestTuning::default()
+    );
+    assert_eq!(
+        serde_json::from_value::<RequestTuningOverrides>(json!({})).unwrap(),
+        RequestTuningOverrides::default()
+    );
 }
 
 #[test]

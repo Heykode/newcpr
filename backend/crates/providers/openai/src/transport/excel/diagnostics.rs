@@ -7,6 +7,48 @@ use serde_json::{Map, Value, json};
 const MAX_ITEMS: usize = 512;
 const MAX_PARTS: usize = 4096;
 
+pub(crate) fn transport_failure(error: &crate::transport::CodexClientError) -> Value {
+    use crate::transport::CodexClientError;
+    let (stage, mut cause) = match error {
+        CodexClientError::Http(error) | CodexClientError::HttpJson(error) => {
+            if error.is_builder() {
+                ("prepare", "request_build_failed")
+            } else if error.is_connect() && error.is_timeout() {
+                ("connect", "connect_timeout")
+            } else if error.is_connect() {
+                ("connect", "connect_failed")
+            } else if error.is_timeout() {
+                ("exchange", "timeout")
+            } else if error.is_body() {
+                ("receive", "body_read_failed")
+            } else if error.is_decode() {
+                ("decode", "decode_failed")
+            } else {
+                ("exchange", "transport_failed")
+            }
+        }
+        CodexClientError::Upstream { .. } => ("response_headers", "upstream_rejected"),
+        CodexClientError::StreamIdleTimeout { .. } => ("receive", "timeout"),
+        CodexClientError::InvalidSse(_) => ("decode", "invalid_stream"),
+        _ => ("exchange", "transport_failed"),
+    };
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(error) = source {
+        if let Some(io) = error.downcast_ref::<std::io::Error>() {
+            cause = match io.kind() {
+                std::io::ErrorKind::ConnectionRefused => "connection_refused",
+                std::io::ErrorKind::ConnectionReset => "connection_reset",
+                std::io::ErrorKind::UnexpectedEof => "unexpected_eof",
+                std::io::ErrorKind::BrokenPipe => "broken_pipe",
+                std::io::ErrorKind::TimedOut => "timeout",
+                _ => cause,
+            };
+        }
+        source = error.source();
+    }
+    json!({"phase":stage,"cause":cause})
+}
+
 pub(crate) fn request_summary(body: &Map<String, Value>, bytes: usize) -> Value {
     let input = body.get("input").and_then(Value::as_array);
     let mut kinds = BTreeMap::<&str, usize>::new();
