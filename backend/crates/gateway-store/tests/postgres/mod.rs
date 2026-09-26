@@ -32,6 +32,7 @@ mod proxy_test_locks;
 mod query_budget;
 mod quota_learning;
 mod relogin;
+mod request_capture;
 mod retention;
 mod runtime_settings;
 mod schema_integrity;

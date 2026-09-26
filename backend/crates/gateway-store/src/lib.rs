@@ -38,6 +38,7 @@ mod workers;
 pub mod backup;
 pub mod postgres;
 pub mod redis;
+pub mod request_capture;
 
 pub(crate) use admin_adapter::*;
 pub use bundle::*;

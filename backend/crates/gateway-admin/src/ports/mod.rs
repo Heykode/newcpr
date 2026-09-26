@@ -6,5 +6,6 @@ pub mod notification;
 pub mod provider;
 pub mod proxy;
 pub mod relogin;
+pub mod request_capture;
 pub mod store;
 pub mod system;

@@ -15,6 +15,7 @@ pub mod observability;
 pub mod openai;
 pub mod proxies;
 pub mod relogin;
+pub mod request_capture;
 pub mod settings;
 pub mod system;
 pub mod user_agent;

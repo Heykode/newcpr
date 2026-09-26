@@ -21,6 +21,7 @@ pub mod quota_forecast_sampling;
 pub mod quota_learning;
 pub mod relogin;
 pub mod relogin_templates;
+pub mod request_capture;
 pub mod settings;
 pub mod system;
 pub mod user_agent;
