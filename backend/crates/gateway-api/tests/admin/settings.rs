@@ -408,7 +408,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     let value = serde_json::to_value(RuntimeSettingsView::from(settings)).expect("serialize view");
     let mut expected = json!({
         "disableFast": false,
-        "excelDefaultModels": ["gpt-5.6-sol", "gpt-6-astra"],
+        "excelDefaultModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateInjectionEnabled": false,
         "turnStateModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         "turnStateProbeProxyId": null,
