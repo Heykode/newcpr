@@ -93,9 +93,8 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        // User inline images need an account-scoped attachment ID. Tool images
-        // remain in their original Base64/HTTPS form because tool-result
-        // file_id is rejected by the upstream schema.
+        // User images need account-scoped attachments; tool-result images must
+        // retain Base64/HTTPS because that position rejects file_id.
         if let Some(excel) = &upstream_request.excel {
             super::excel::images::validate(&excel.body).map_err(|error| {
                 CodexClientError::InvalidSse(gateway_protocol::openai::sse::SseError::ParseError(

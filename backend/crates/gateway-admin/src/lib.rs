@@ -27,6 +27,7 @@ pub use use_case::group_monitor::GroupMonitorService;
 pub use use_case::import_tasks::ImportTasksService;
 pub use use_case::notifications::NotificationsService;
 pub use use_case::relogin::{ReloginBatchResult, ReloginList, ReloginService, ReloginView};
+pub use use_case::request_capture::RequestCaptureService;
 pub use use_case::user_agent::OutboundUserAgentService;
 pub use use_case::{
     account_groups::AccountGroupService, accounts::AccountsService, auth::AuthService,
@@ -161,6 +162,7 @@ pub struct AdminServices {
     account_templates: Arc<dyn AccountTemplatesService>,
     group_monitor: Arc<dyn GroupMonitorService>,
     relogin: Arc<dyn ReloginService>,
+    request_capture: Arc<dyn RequestCaptureService>,
     outbound_user_agent: Arc<dyn OutboundUserAgentService>,
     proxies: Arc<dyn ProxiesService>,
     egress: Arc<dyn ProviderEgressService>,
@@ -180,6 +182,11 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn request_capture(&self) -> &dyn RequestCaptureService {
+        self.request_capture.as_ref()
+    }
+
     #[must_use]
     pub fn account_templates(&self) -> &dyn AccountTemplatesService {
         self.account_templates.as_ref()
@@ -407,6 +414,9 @@ pub async fn initialize(
         account_templates,
         group_monitor: group_monitor.clone(),
         relogin: relogin.clone(),
+        request_capture: Arc::new(use_case::request_capture::DefaultRequestCaptureService(
+            store.request_capture(),
+        )),
         outbound_user_agent: outbound_user_agent.clone(),
         egress: Arc::new(DefaultProviderEgressService::new(
             store.egress(),

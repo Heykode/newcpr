@@ -886,12 +886,26 @@ pub enum EngineError {
 pub struct GatewayEngine<S: ?Sized> {
     store: Arc<S>,
     providers: provider::ProviderRegistry,
+    captures: Option<Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>>,
 }
 
 impl<S: ?Sized> GatewayEngine<S> {
     #[must_use]
     pub const fn new(store: Arc<S>, providers: provider::ProviderRegistry) -> Self {
-        Self { store, providers }
+        Self {
+            store,
+            providers,
+            captures: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_captures(
+        mut self,
+        captures: Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>,
+    ) -> Self {
+        self.captures = Some(captures);
+        self
     }
 
     #[must_use]
