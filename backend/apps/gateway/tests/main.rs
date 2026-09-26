@@ -181,6 +181,8 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 | "transport/excel/replay.rs"
                 | "transport/excel/tools.rs"
                 | "transport/excel/images.rs"
+                | "transport/excel/image_cache.rs"
+                | "transport/excel/diagnostics.rs"
                 | "transport/excel/image_relay.rs"
                 | "transport/excel/usage.rs"
                 | "transport/excel/stream.rs",
@@ -192,8 +194,10 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
         ("crates/providers/openai", Some("transport/excel/mod.rs"), Item::Mod(module)) => {
-            module.ident == "tests"
-                && module.content.is_none()
+            matches!(
+                module.ident.to_string().as_str(),
+                "tests" | "tool_compat_tests" | "image_tests"
+            ) && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
         (
@@ -467,12 +471,32 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
 #[test]
 fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     let owner = "crates/providers/openai";
+    for name in ["tool_compat_tests", "image_tests"] {
+        let file = Path::new("transport/excel/mod.rs");
+        let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name};")).unwrap();
+        assert!(is_audited_private_test(owner, file, &item));
+        assert!(!is_audited_private_test(
+            owner,
+            Path::new("transport/excel/tools.rs"),
+            &item
+        ));
+        for source in [
+            format!("#[cfg(test)] pub mod {name};"),
+            format!("#[cfg(test)] mod {name} {{}}"),
+            format!("mod {name};"),
+        ] {
+            let item: Item = syn::parse_str(&source).unwrap();
+            assert!(!is_audited_private_test(owner, file, &item));
+        }
+    }
     for relative in [
         "provider/excel.rs",
         "transport/excel/request.rs",
         "transport/excel/replay.rs",
         "transport/excel/tools.rs",
         "transport/excel/images.rs",
+        "transport/excel/image_cache.rs",
+        "transport/excel/diagnostics.rs",
         "transport/excel/image_relay.rs",
         "transport/excel/usage.rs",
         "transport/excel/stream.rs",

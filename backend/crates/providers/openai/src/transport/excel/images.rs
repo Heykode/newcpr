@@ -1,4 +1,4 @@
-//! Reference attachment fallback with bounded input and no silent picture removal.
+//! Bounded attachment preflight for messages and tool results; no silent picture removal.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,6 +8,11 @@ use gateway_protocol::openai::sse::SseError;
 use reqwest::{header, multipart};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+
+use super::{
+    image_cache::{AssetReceipt, cached_file_id, valid_file_id},
+    replay::ReplayCapture,
+};
 
 use crate::transport::{
     CodexBackendClient, CodexBackendTransport, CodexClientError, CodexRequestContext,
@@ -22,11 +27,11 @@ const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 6 * 1024 * 1024;
 const MAX_IMAGES: usize = 16;
 
-pub(crate) fn needs_attachment(error: &CodexClientError) -> bool {
+fn rejected_attachment(error: &CodexClientError) -> bool {
     let CodexClientError::Upstream { status, body, .. } = error else {
         return false;
     };
-    if !matches!(status.as_u16(), 400 | 422) {
+    if !matches!(status.as_u16(), 400 | 404 | 422) {
         return false;
     }
     let Ok(value) = serde_json::from_str::<Value>(body) else {
@@ -34,7 +39,13 @@ pub(crate) fn needs_attachment(error: &CodexClientError) -> bool {
     };
     matches!(
         value.pointer("/error/code").and_then(Value::as_str),
-        Some("invalid_image_url" | "unsupported_image_url" | "inline_image_unsupported")
+        Some(
+            "invalid_file_id"
+                | "file_not_found"
+                | "file_expired"
+                | "attachment_not_found"
+                | "attachment_expired"
+        )
     )
 }
 
@@ -42,15 +53,33 @@ pub(crate) fn has_inline(body: &Map<String, Value>) -> bool {
     body.get("input").is_some_and(contains_inline)
 }
 
-pub(crate) fn has_user_inline(body: &Map<String, Value>) -> bool {
-    body.get("input")
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items.iter().any(|item| {
-                item.get("role").and_then(Value::as_str) == Some("user")
-                    && item.get("content").is_some_and(contains_inline)
-            })
-        })
+pub(crate) fn has_images(body: &Map<String, Value>) -> bool {
+    fn visit(value: &Value) -> bool {
+        match value {
+            Value::Array(items) => items.iter().any(visit),
+            Value::Object(fields) => {
+                fields.get("type").and_then(Value::as_str) == Some("input_image")
+                    || fields.values().any(visit)
+            }
+            _ => false,
+        }
+    }
+    body.get("input").is_some_and(visit)
+}
+
+pub(crate) struct UploadedImages {
+    pub(crate) body: Map<String, Value>,
+    receipts: Vec<AssetReceipt>,
+}
+
+impl UploadedImages {
+    pub(crate) async fn observe_error(&self, error: &CodexClientError) {
+        if rejected_attachment(error) {
+            for receipt in &self.receipts {
+                receipt.invalidate().await;
+            }
+        }
+    }
 }
 
 fn contains_inline(value: &Value) -> bool {
@@ -192,7 +221,8 @@ pub(crate) async fn upload_inline(
     context: CodexRequestContext<'_>,
     endpoint: &str,
     body: &Map<String, Value>,
-) -> Result<Map<String, Value>, CodexClientError> {
+    replay: Option<&ReplayCapture>,
+) -> Result<UploadedImages, CodexClientError> {
     let mut value = Value::Object(body.clone());
     let mut pictures = Vec::new();
     collect(
@@ -208,19 +238,40 @@ pub(crate) async fn upload_inline(
             .0
     );
     let mut replacements = BTreeMap::new();
+    let mut receipts = Vec::new();
     for picture in pictures {
+        let cache = replay.map(|replay| replay.image_cache(endpoint, &picture));
+        let _guard = match &cache {
+            Some(cache) => cache.lock().await,
+            None => None,
+        };
+        let hit = match &cache {
+            Some(cache) => cache.read().await,
+            None => None,
+        };
+        if let Some(payload) = hit {
+            replacements.insert(picture.url, cached_file_id(&payload).unwrap().to_owned());
+            receipts.push(cache.expect("cache hit has an owner").receipt(payload));
+            continue;
+        }
         let mut headers = super::request_headers(context, &profile.user_agent())?;
         headers.remove(header::CONTENT_TYPE);
         headers.insert(
             header::ACCEPT,
             header::HeaderValue::from_static("application/json"),
         );
+        headers.insert(
+            "copilot-vision-request",
+            header::HeaderValue::from_static("true"),
+        );
         let digest = hex::encode(Sha256::digest(&picture.bytes));
         let part = multipart::Part::bytes(picture.bytes)
             .file_name(format!("picture-{}.{}", &digest[..12], picture.extension))
             .mime_str(picture.media)
             .map_err(CodexClientError::HttpJson)?;
-        let form = multipart::Form::new().part("file", part);
+        let form = multipart::Form::new()
+            .text("purpose", "vision")
+            .part("file", part);
         let response = client
             .send_profiled(profile, false, |http| {
                 http.post(&upload_url).headers(headers).multipart(form)
@@ -269,18 +320,27 @@ pub(crate) async fn upload_inline(
         }
         let data: Value = serde_json::from_slice(&bytes)
             .map_err(|_| invalid("Excel attachment response is not JSON"))?;
-        let id = data
-            .get("openai_file_id")
-            .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty() && id.len() <= 512)
+        let id = ["openai_file_id", "file_id", "id"]
+            .into_iter()
+            .filter_map(|field| data.get(field).and_then(Value::as_str))
+            .find(|id| valid_file_id(id))
             .ok_or_else(|| invalid("Excel attachment response has no file ID"))?;
-        replacements.insert(picture.url, id.to_owned());
+        let id = if let Some(cache) = cache {
+            let payload = cache.store(id).await;
+            let id = cached_file_id(&payload).unwrap().to_owned();
+            receipts.push(cache.receipt(payload));
+            id
+        } else {
+            id.to_owned()
+        };
+        replacements.insert(picture.url, id);
     }
     rewrite(&mut value, &replacements);
-    value
+    let body = value
         .as_object()
         .cloned()
-        .ok_or_else(|| invalid("Invalid Excel body"))
+        .ok_or_else(|| invalid("Invalid Excel body"))?;
+    Ok(UploadedImages { body, receipts })
 }
 
 fn rewrite(value: &mut Value, replacements: &BTreeMap<String, String>) {

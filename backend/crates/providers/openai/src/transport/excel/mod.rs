@@ -2,9 +2,13 @@
 //! Account selection, authorization, egress and execution remain CPR-owned.
 //! Feature: excel-upstream. Removal boundaries: docs/excel-removal.md.
 
+pub(crate) mod diagnostics;
 mod envelope;
+mod image_cache;
 pub(crate) mod image_generation;
 pub(crate) mod image_relay;
+#[cfg(test)]
+mod image_tests;
 pub(crate) mod images;
 pub(crate) mod replay;
 mod request;

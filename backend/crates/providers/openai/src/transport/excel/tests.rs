@@ -56,7 +56,7 @@ impl ProviderReplayPort for MemoryReplay {
     }
 }
 
-fn request(endpoint: String, input: Value) -> CodexResponsesRequest {
+pub(super) fn request(endpoint: String, input: Value) -> CodexResponsesRequest {
     let mut request = CodexResponsesRequest::from_body(
         json!({"model":VERIFIED_MODEL,"input":input,"stream":false})
             .as_object()
@@ -79,7 +79,7 @@ fn request(endpoint: String, input: Value) -> CodexResponsesRequest {
     request
 }
 
-fn client(base: &str) -> CodexBackendClient {
+pub(super) fn client(base: &str) -> CodexBackendClient {
     CodexBackendClient::new(
         reqwest::Client::builder().no_proxy().build().unwrap(),
         base,
@@ -87,7 +87,7 @@ fn client(base: &str) -> CodexBackendClient {
     )
 }
 
-fn completed() -> ResponseTemplate {
+pub(super) fn completed() -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .insert_header("set-cookie", "excel_secret=fixture; Path=/")
@@ -1204,7 +1204,7 @@ async fn excel_generic_validation_errors_do_not_upload_or_replay() {
             .await;
         let request = request(
             format!("{}{RESPONSES_PATH}", server.uri()),
-            json!([{"role":"assistant","content":[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]}]),
+            json!([{"role":"user","content":[{"type":"input_image","image_url":"https://images.example.com/image.png"}]}]),
         );
         let result = client(&server.uri())
             .create_response_stream_with_pool_account(

@@ -93,45 +93,29 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        // The Excel user-message schema rejects data URLs. Upload before generation,
-        // rather than interpreting an arbitrary 422 as permission to replay a request.
+        // Materialize inline images in messages AND tool results before generation.
+        // Neither a generic 422 nor an expired attachment permits generation replay.
         if let Some(excel) = &upstream_request.excel
-            && super::excel::images::has_user_inline(&excel.body)
+            && super::excel::images::has_inline(&excel.body)
         {
-            let body = super::excel::images::upload_inline(
+            let images = super::excel::images::upload_inline(
                 self,
                 &self.profile.snapshot(),
                 context,
                 &excel.endpoint,
                 &excel.body,
+                excel.replay.as_ref(),
             )
             .await?;
             let mut uploaded = upstream_request.clone();
-            uploaded.excel.as_mut().expect("Excel request").body = body;
-            return self.send_response_http_sse(&uploaded, context).await;
-        }
-        let result = self.send_response_http_sse(upstream_request, context).await;
-        if let Some(excel) = &upstream_request.excel
-            && result
-                .as_ref()
-                .is_err_and(super::excel::images::needs_attachment)
-            && super::excel::images::has_inline(&excel.body)
-        {
-            let body = super::excel::images::upload_inline(
-                self,
-                &self.profile.snapshot(),
-                context,
-                &excel.endpoint,
-                &excel.body,
-            )
-            .await?;
-            let mut retry = upstream_request.clone();
-            if let Some(prepared) = retry.excel.as_mut() {
-                prepared.body = body;
+            uploaded.excel.as_mut().expect("Excel request").body = images.body.clone();
+            let result = self.send_response_http_sse(&uploaded, context).await;
+            if let Err(error) = &result {
+                images.observe_error(error).await;
             }
-            return self.send_response_http_sse(&retry, context).await;
+            return result;
         }
-        result
+        self.send_response_http_sse(upstream_request, context).await
     }
 
     async fn send_response_http_sse(
@@ -141,11 +125,14 @@ impl CodexBackendClient {
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let profile = self.profile.snapshot();
         let excel = upstream_request.excel.as_ref();
-        let headers = if excel.is_some() {
+        let mut headers = if excel.is_some() {
             super::excel::request_headers(context, &profile.user_agent())?
         } else {
             self.request_headers_for_http_response(upstream_request, context)?
         };
+        if excel.is_some_and(|prepared| super::excel::images::has_images(&prepared.body)) {
+            headers.insert("copilot-vision-request", HeaderValue::from_static("true"));
+        }
         let headers_started_at = Instant::now();
         // 身份投影先完成，再按最终 JSON 大小决定是否使用 zstd。
         // Codex 上游只交付 SSE；即使下游请求 `stream: false`，也要上游流式执行，
@@ -178,6 +165,12 @@ impl CodexBackendClient {
             } else {
                 "http_sse"
             });
+        if excel.is_some() && trace.is_enabled() {
+            trace.record(
+                "excel.request.structure",
+                super::excel::diagnostics::request_summary(&upstream_body, body.len()),
+            );
+        }
         trace.headers(
             "upstream.request.headers",
             serde_json::json!({
