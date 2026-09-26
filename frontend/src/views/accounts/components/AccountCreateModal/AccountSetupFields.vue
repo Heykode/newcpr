@@ -36,6 +36,7 @@ const form = defineModel<AccountCreateForm>({ required: true })
       v-model:excel-models="form.excelModels"
       v-model:excel-models-follow-global="form.excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
+      v-model:excel-auto-disable-on-403="form.excelAutoDisableOn403"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
       v-model:model-access="form.modelAccess"

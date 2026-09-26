@@ -57,10 +57,8 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/admin/presenter.rs",
         "src/admin/proxies.rs",
         "src/admin/relogin.rs",
-        "src/admin/request_capture.rs",
         "src/admin/settings.rs",
         "src/admin/system.rs",
-        "src/admin/token_guard.rs",
         "src/admin/wire.rs",
         "src/health.rs",
         "src/image_relay.rs",
@@ -116,7 +114,6 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/admin/observability/mod.rs",
         "tests/admin/observability/query.rs",
         "tests/admin/observability/response.rs",
-        "tests/admin/operations.rs",
         "tests/admin/outbound_user_agent.rs",
         "tests/admin/proxies.rs",
         "tests/admin/relogin.rs",
@@ -141,7 +138,6 @@ fn test_tree_should_match_frozen_rust_mirror() {
         "tests/openai/responses/mod.rs",
         "tests/openai/responses/request.rs",
         "tests/openai/responses/scheduling.rs",
-        "tests/openai/responses/websocket/capture.rs",
         "tests/openai/responses/websocket/connection.rs",
         "tests/openai/responses/websocket/forward.rs",
         "tests/openai/responses/websocket/mod.rs",
@@ -155,36 +151,22 @@ fn test_tree_should_match_frozen_rust_mirror() {
 }
 
 #[test]
-fn admin_routes_should_keep_static_paths_except_explicit_capture_endpoints() {
+fn admin_routes_should_use_only_get_post_and_static_paths() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/admin");
+    let mut combined = String::new();
     for path in all_files(&root) {
         if path.extension().and_then(|value| value.to_str()) == Some("rs") {
-            let mut source = fs::read_to_string(&path).expect("read admin source");
-            // Only these authenticated capture endpoints extend the fixed-route contract.
-            if path.file_name().and_then(|value| value.to_str()) == Some("request_capture.rs") {
-                for endpoint in [
-                    "\"/api/admin/request-captures/{id}/stop\"",
-                    "\"/api/admin/request-captures/{id}/export\"",
-                    "\"/api/admin/request-captures/{id}\"",
-                    "\"/api/admin/request-captures/records/{id}\"",
-                    "\"/api/admin/request-captures/records/{id}/export\"",
-                    "axum::routing::delete(delete::<S>)",
-                ] {
-                    assert_eq!(source.matches(endpoint).count(), 1, "{endpoint}");
-                    source = source.replace(endpoint, "");
-                }
-            }
-            assert!(
-                !source.contains("routing::put")
-                    && !source.contains("routing::patch")
-                    && !source.contains("routing::delete")
-                    && !source.contains("/:id")
-                    && !source.contains("/{id}"),
-                "admin route contract violated by {}",
-                path.display()
-            );
+            combined.push_str(&fs::read_to_string(path).expect("read admin source"));
         }
     }
+
+    assert!(
+        !combined.contains("routing::put")
+            && !combined.contains("routing::patch")
+            && !combined.contains("routing::delete")
+            && !combined.contains("/:id")
+            && !combined.contains("/{id}")
+    );
 }
 
 fn rust_files(root: &Path) -> Vec<String> {

@@ -21,10 +21,8 @@ pub mod quota_forecast_sampling;
 pub mod quota_learning;
 pub mod relogin;
 pub mod relogin_templates;
-pub mod request_capture;
 pub mod settings;
 pub mod system;
-pub mod token_guard;
 pub mod user_agent;
 
 /// 管理用例对外返回的稳定错误分类。

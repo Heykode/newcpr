@@ -107,6 +107,146 @@ fn native_fixture(code: Value) -> Value {
         "arguments":json!({"code":code}).to_string()})
 }
 
+fn function_code_source() -> Value {
+    json!({"tools":[{"type":"namespace","name":"runner","tools":[
+        {"type":"function","name":"execute","parameters":{"type":"object",
+            "properties":{"code":{"type":"string"},"timeout_ms":{"type":"integer"},
+                "permission":{"type":"string"},"id":{"type":"integer"}},
+            "required":["code"],"additionalProperties":false}}
+    ]}]})
+}
+
+fn function_code_native(name: &str, code: &str, metadata: Value) -> Value {
+    let mut native = native_fixture(Value::Null);
+    native["arguments"] = json!({"summary":format!("codex2api.function_code/{name}"),
+        "code":code,"extended_summary":metadata})
+    .to_string()
+    .into();
+    native["encrypted_function_args"] = json!(["outer_encryption_must_not_leak"]);
+    native
+}
+
+#[test]
+fn excel_function_code_transport_preserves_source_metadata_and_namespace() {
+    let source = function_code_source();
+    let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+    for code in [
+        "",
+        "print(\"quoted\")\nC:\\temp\\not-an-envelope\r\t\u{0}中文",
+    ] {
+        let native = function_code_native(
+            "runner.execute",
+            code,
+            json!("{\"timeout_ms\":30000,\"permission\":\"restricted\",\"id\":9007199254740993}"),
+        );
+        let converted = tools.convert_call(&native).unwrap();
+        let args: Value = serde_json::from_str(converted["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["code"], code);
+        assert_eq!(args["timeout_ms"], 30000);
+        assert_eq!(args["permission"], "restricted");
+        assert_eq!(args["id"].as_u64(), Some(9_007_199_254_740_993));
+        assert_eq!(converted["namespace"], "runner");
+        assert_eq!(converted["name"], "execute");
+        assert_eq!(converted["encrypted_function_args"], json!([]));
+    }
+    assert!(tools.instructions().contains("codex2api.function_code/"));
+    assert!(tools.reminder().unwrap().contains("runner.execute"));
+    let old = tools::rebuild_history_call(&json!({"type":"function_call","name":"execute",
+        "namespace":"runner","call_id":"old_call","arguments":"{\"code\":\"legacy\"}"}))
+    .unwrap();
+    assert_eq!(
+        tools.convert_call(&old).unwrap()["arguments"],
+        "{\"code\":\"legacy\"}"
+    );
+}
+
+#[test]
+fn excel_function_code_transport_rejects_wrong_catalog_and_malformed_metadata() {
+    let source = function_code_source();
+    let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+    for name in [
+        "execute",
+        "functions.runner.execute",
+        "runner.missing",
+        "runner.execute/",
+        " runner.execute",
+    ] {
+        assert!(
+            tools
+                .convert_call(&function_code_native(name, "code", json!("{}")))
+                .is_err()
+        );
+    }
+    for metadata in [
+        json!("{\"code\":\"duplicate\"}"),
+        json!("null"),
+        json!("[]"),
+        json!("{} {}"),
+        json!("{\"timeout_ms\":\"wrong\"}"),
+        json!({}),
+        json!("{\"unknown\":1}"),
+    ] {
+        assert!(
+            tools
+                .convert_call(&function_code_native("runner.execute", "code", metadata))
+                .is_err()
+        );
+    }
+    for tool in [
+        json!({"type":"function","name":"execute"}),
+        json!({"type":"function","name":"execute","parameters":{"type":"object","properties":{"code":{"type":"number"}}}}),
+        json!({"type":"custom","name":"execute","parameters":{"type":"object","properties":{"code":{"type":"string"}}}}),
+    ] {
+        let source = json!({"tools":[tool]});
+        let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+        assert!(!tools.instructions().contains("codex2api.function_code/"));
+        assert!(
+            tools
+                .convert_call(&function_code_native("execute", "code", json!("{}")))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn excel_function_code_transport_bounds_decoded_and_encoded_sizes() {
+    let source = function_code_source();
+    let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+    let mut native = function_code_native("runner.execute", "", json!("{}"));
+    let mut args: Value = serde_json::from_str(native["arguments"].as_str().unwrap()).unwrap();
+    for code in ["x".repeat(1024 * 1024 + 1), "\u{0}".repeat(200_000)] {
+        args["code"] = code.into();
+        native["arguments"] = args.clone();
+        assert!(tools.convert_call(&native).is_err());
+    }
+    args["code"] = "x".into();
+    args["extended_summary"] = format!("{{}}{}", " ".repeat(1024 * 1024)).into();
+    native["arguments"] = args;
+    assert!(tools.convert_call(&native).is_err());
+}
+
+#[tokio::test]
+async fn excel_function_code_stream_converts_only_validated_completed_arguments() {
+    let source = function_code_source();
+    let native = function_code_native("runner.execute", "print(\"x\")\n", json!("{}"));
+    let events = transformed_fixture(source, vec![
+        json!({"type":"response.output_item.added","output_index":0,"item":native}),
+        json!({"type":"response.function_call_arguments.delta","delta":"not client code"}),
+        json!({"type":"response.completed","response":{"id":"resp_fixture","status":"completed","output":[native]}})
+    ]).await.unwrap();
+    let deltas: Vec<_> = events
+        .iter()
+        .filter(|event| event["type"] == "response.function_call_arguments.delta")
+        .collect();
+    assert_eq!(deltas.len(), 1);
+    let args: Value = serde_json::from_str(deltas[0]["delta"].as_str().unwrap()).unwrap();
+    assert_eq!(args["code"], "print(\"x\")\n");
+    assert_eq!(
+        events.last().unwrap()["response"]["output"][0]["name"],
+        "execute"
+    );
+}
+
 #[test]
 fn excel_plaintext_tool_arguments_are_explicitly_not_encrypted() {
     let tools = ClientTools::parse(

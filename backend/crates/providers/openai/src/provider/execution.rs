@@ -568,6 +568,10 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
         )) {
             Ok(response) => response,
             Err(mut failure) => {
+                super::excel::observe_http_rejection(
+                    &request.selector, &active_account, &mut failure,
+                    request.excel.is_some(), allows_account_state_mutation,
+                ).await;
                 if let Some(observation) = failure.observation.take() {
                     yield ProviderEvent::observation(response_route_observation(observation, request.excel.is_some()));
                 }
@@ -793,6 +797,10 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {
+                super::excel::observe_http_rejection(
+                    &selector, &active_account, &mut failure,
+                    request.excel.is_some(), allows_account_state_mutation,
+                ).await;
                 if let Some(policy) = websocket_failure_policy {
                     apply_websocket_recovery_policy(
                         &mut failure,

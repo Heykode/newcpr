@@ -54,17 +54,6 @@ pub(super) async fn forward_execution(
     started: StartedExecution,
     replay: &mut ConnectionReplaySnapshot,
 ) -> ForwardOutcome {
-    connection.set_request_trace(started.session.trace());
-    let result = forward_execution_inner(connection, started, replay).await;
-    connection.set_request_trace(Default::default());
-    result
-}
-
-async fn forward_execution_inner(
-    connection: &mut ResponsesWebSocketConnection,
-    started: StartedExecution,
-    replay: &mut ConnectionReplaySnapshot,
-) -> ForwardOutcome {
     let request_id = Arc::<str>::from(started.request_id.to_string());
     let streaming = started.stream;
     let mut execution = PendingExecution::new(started.session);

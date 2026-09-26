@@ -9,6 +9,7 @@ export function templateForm(config?: AccountTemplateConfig) {
     applyExcel: config === undefined || config.responsesUpstream != null || config.excelModelsFollowGlobal != null || config.excelModels != null,
     excelEnabled: config?.responsesUpstream === 'excel',
     excelCacheCreationAsInput: config?.excelCacheCreationAsInput ?? false,
+    excelAutoDisableOn403: config?.excelAutoDisableOn403 ?? false,
     excelModelsFollowGlobal: config?.excelModelsFollowGlobal ?? config?.excelModels == null,
     excelModels: (config?.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', '),
     concurrencyLimit: config?.concurrencyLimit == null ? '' : String(config.concurrencyLimit),
@@ -31,7 +32,7 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
   return {
     name,
     enabled: form.enabled,
-    ...(form.applyExcel ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput) : {}),
+    ...(form.applyExcel ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excelAutoDisableOn403) : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     outboundProxyId: form.proxyMode === 'proxy' ? form.proxyId : null,

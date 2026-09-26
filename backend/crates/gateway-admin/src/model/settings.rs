@@ -33,6 +33,7 @@ pub struct RequestTuningOverrides {
     pub websocket_failure_open_duration_ms: Option<u64>,
     pub rate_limit_cooldown_seconds: Option<u64>,
     pub excel_image_relay_bytes: Option<u64>,
+    pub excel_image_relay_requests: Option<u32>,
     pub excel_image_relay_downloads: Option<u32>,
     pub excel_image_relay_entries: Option<u32>,
     pub openai_location_override_enabled: Option<bool>,
@@ -69,6 +70,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_open_duration_ms: Option<u64>,
             rate_limit_cooldown_seconds: Option<u64>,
             excel_image_relay_bytes: Option<u64>,
+            excel_image_relay_requests: Option<u32>,
             excel_image_relay_downloads: Option<u32>,
             excel_image_relay_entries: Option<u32>,
             openai_location_override_enabled: Option<bool>,
@@ -96,6 +98,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_failure_open_duration_ms: wire.websocket_failure_open_duration_ms,
             rate_limit_cooldown_seconds: wire.rate_limit_cooldown_seconds,
             excel_image_relay_bytes: wire.excel_image_relay_bytes,
+            excel_image_relay_requests: wire.excel_image_relay_requests,
             excel_image_relay_downloads: wire.excel_image_relay_downloads,
             excel_image_relay_entries: wire.excel_image_relay_entries,
             openai_location_override_enabled: wire.openai_location_override_enabled,
@@ -129,6 +132,9 @@ impl RequestTuningOverrides {
     pub fn validate(&self) -> bool {
         self.excel_image_relay_bytes
             .is_none_or(|value| (1024 * 1024..=2048 * 1024 * 1024).contains(&value))
+            && self
+                .excel_image_relay_requests
+                .is_none_or(|value| (1..=512).contains(&value))
             && self
                 .excel_image_relay_downloads
                 .is_none_or(|value| (1..=128).contains(&value))

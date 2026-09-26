@@ -99,17 +99,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         redis_connection.clone(),
         REDIS_NAMESPACE,
     )?);
-    let (captures, capture_writer) = request_capture::CaptureManager::open(
-        pool.clone(),
-        config
-            .backup_staging_dir()
-            .with_file_name("request-captures"),
-    )
-    .await
-    .map_err(|_| StoreError::InvalidData {
-        entity: "request capture",
-        message: "capture storage could not be initialized".into(),
-    })?;
 
     let admin_ports = AdminStorePorts::new(
         AdminAccountStorePorts::new(
@@ -145,8 +134,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         backup_ports(pool.clone(), &config)?,
     )
     .with_relogin(Arc::new(postgres::PgReloginStore::new(pool.clone())))
-    .with_token_guard(Arc::new(postgres::PgTokenGuardStore::new(pool.clone())))
-    .with_request_capture(captures.clone())
     .with_egress(Arc::new(postgres::PgProviderEgressRepository::new(
         pool.clone(),
     )));
@@ -194,8 +181,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         ),
         Arc::new(client_key_usage),
     )
-    .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())))
-    .with_captures(captures);
+    .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())));
 
     let provider_ports = ProviderStorePorts::new(
         account_store,
@@ -234,7 +220,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
             connection: redis_connection,
         }),
     ];
-    let mut worker_contributions = store_worker_contributions(
+    let worker_contributions = store_worker_contributions(
         execution_repository,
         execution_writer,
         client_key_usage_writer,
@@ -243,21 +229,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         capacity_wait_cleanup_writer,
         retention,
     )?;
-    worker_contributions.push(WorkerContribution::Registration(
-        WorkerRegistration::try_new(
-            WorkerId::try_new(WorkerKind::OpsFlush, "request_capture")
-                .map_err(worker_definition_error)?,
-            WorkerRunnable::Daemon {
-                restart: DaemonRestartPolicy::try_new(
-                    Duration::from_secs(1),
-                    Duration::from_secs(60),
-                )
-                .map_err(worker_definition_error)?,
-                task: Box::new(capture_writer),
-            },
-        )
-        .map_err(worker_definition_error)?,
-    ));
     Ok(StoreBundle {
         admin_ports,
         core_ports,

@@ -154,6 +154,8 @@ async function main() {
     await dialog.getByRole('button', { name: '新建模板', exact: true }).click()
     await dialog.getByRole('textbox', { name: '模板名称', exact: true }).fill('Excel template')
     await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
+    const autoDisable = dialog.getByRole('switch', { name: 'Excel 遇到 HTTP 403 自动关闭', exact: true })
+    await autoDisable.locator('..').click()
     await dialog.getByRole('combobox', { name: 'Excel 模型来源' }).click()
     await page.getByRole('option', { name: '自定义', exact: true }).click()
     await models.fill('gpt-6-astra')
@@ -165,6 +167,7 @@ async function main() {
     await dialog.getByRole('button', { name: '保存模板', exact: true }).click()
     await dialog.getByText('Excel template', { exact: true }).waitFor()
     assert.equal(templates[0].config.responsesUpstream, 'excel')
+    assert.equal(templates[0].config.excelAutoDisableOn403, true)
     assert.equal(templates[0].config.excelModelsFollowGlobal, false)
     assert.deepEqual(templates[0].config.excelModels, ['gpt-6-astra'])
     await dialog.getByRole('button', { name: '关闭', exact: true }).last().click()
@@ -200,7 +203,7 @@ async function main() {
     }
     await confirm.getByRole('button', { name: '确认', exact: true }).click()
     await confirm.waitFor({ state: 'detached' })
-    assert.deepEqual(pushes[0].newAccountExcel, { responsesUpstream: 'excel', excelModelsFollowGlobal: true })
+    assert.deepEqual(pushes[0].newAccountExcel, { responsesUpstream: 'excel', excelModelsFollowGlobal: true, excelCacheCreationAsInput: false, excelAutoDisableOn403: false })
     let settings = {
       excelDefaultModels: ['gpt-5.6-sol', 'gpt-6-astra'],
       modelMappings: {},

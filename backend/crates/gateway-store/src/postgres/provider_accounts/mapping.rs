@@ -36,6 +36,7 @@ pub(crate) fn admin_account_record(
         excel_models: summary.excel_models,
         excel_models_follow_global: summary.excel_models_follow_global,
         excel_cache_creation_as_input: summary.excel_cache_creation_as_input,
+        excel_auto_disable_on_403: summary.excel_auto_disable_on_403,
         effective_excel_models: summary.effective_excel_models,
         concurrency_limit: summary.concurrency_limit,
         weight: summary.weight,

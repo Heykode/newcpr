@@ -377,6 +377,7 @@ async fn push(h: &Harness, id: &str, target: &AccountRecord, switch_workspace: b
                         responses_upstream: gateway_core::account::ResponsesUpstream::Excel,
                         excel_models_follow_global: true,
                         excel_cache_creation_as_input: Default::default(),
+                        excel_auto_disable_on_403: Default::default(),
                         excel_models: None,
                     },
                 ),

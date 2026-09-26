@@ -697,8 +697,6 @@ pub struct AdminStorePorts {
     backup: BackupStorePorts,
     egress: Option<Arc<dyn ProviderEgressStore>>,
     relogin: Option<Arc<dyn super::relogin::ReloginStore>>,
-    token_guard: Option<Arc<dyn super::token_guard::TokenGuardStore>>,
-    request_capture: Option<Arc<dyn super::request_capture::RequestCaptureStore>>,
 }
 
 impl AdminStorePorts {
@@ -720,8 +718,6 @@ impl AdminStorePorts {
             backup,
             egress: None,
             relogin: None,
-            token_guard: None,
-            request_capture: None,
         }
     }
 
@@ -790,30 +786,5 @@ impl AdminStorePorts {
     #[must_use]
     pub fn relogin(&self) -> Option<Arc<dyn super::relogin::ReloginStore>> {
         self.relogin.clone()
-    }
-
-    #[must_use]
-    pub fn with_token_guard(mut self, store: Arc<dyn super::token_guard::TokenGuardStore>) -> Self {
-        self.token_guard = Some(store);
-        self
-    }
-
-    #[must_use]
-    pub fn token_guard(&self) -> Option<Arc<dyn super::token_guard::TokenGuardStore>> {
-        self.token_guard.clone()
-    }
-
-    #[must_use]
-    pub fn with_request_capture(
-        mut self,
-        store: Arc<dyn super::request_capture::RequestCaptureStore>,
-    ) -> Self {
-        self.request_capture = Some(store);
-        self
-    }
-
-    #[must_use]
-    pub fn request_capture(&self) -> Option<Arc<dyn super::request_capture::RequestCaptureStore>> {
-        self.request_capture.clone()
     }
 }

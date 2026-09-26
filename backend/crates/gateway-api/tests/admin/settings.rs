@@ -82,6 +82,7 @@ fn update_body() -> Value {
         }
     });
     body["requestTuning"]["excelImageRelayBytes"] = Value::Null;
+    body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
     body["requestTuning"]["excelImageRelayDownloads"] = Value::Null;
     body["requestTuning"]["excelImageRelayEntries"] = Value::Null;
     body
@@ -380,6 +381,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             websocket_failure_open_duration_ms: Some(45_000),
             rate_limit_cooldown_seconds: Some(60),
             excel_image_relay_bytes: Some(64 * 1024 * 1024),
+            excel_image_relay_requests: Some(128),
             excel_image_relay_downloads: Some(32),
             excel_image_relay_entries: Some(128),
             openai_location_override_enabled: Some(true),
@@ -445,6 +447,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         "updatedAt": "2026-08-02T10:30:00Z"
     });
     expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
+    expected["requestTuning"]["excelImageRelayRequests"] = json!(128);
     expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
     expected["requestTuning"]["excelImageRelayEntries"] = json!(128);
     assert_eq!(value, expected);

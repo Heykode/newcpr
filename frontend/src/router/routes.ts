@@ -26,16 +26,6 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/relogin/index.vue'),
       },
       {
-        path: 'token-guard',
-        name: 'token-guard',
-        component: () => import('@/views/token-guard/index.vue'),
-      },
-      {
-        path: 'request-captures',
-        name: 'request-captures',
-        component: () => import('@/views/request-captures/index.vue'),
-      },
-      {
         path: 'proxies',
         name: 'proxies',
         component: () => import('@/views/proxies/index.vue'),

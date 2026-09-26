@@ -1,5 +1,81 @@
+use std::sync::Arc;
+
 use super::*;
 use gateway_core::account::ResponsesUpstream;
+
+#[tokio::test]
+async fn excel_auto_disable_403_is_atomic_fenced_and_preserves_other_account_fields() {
+    let Some(database) = TestDatabase::create("excel_disable_403").await else {
+        return;
+    };
+    let repository = Arc::new(PgProviderAccountRepository::new(database.pool.clone()));
+    repository
+        .insert_provider_account(account("acct_excel_403", "fixture"))
+        .await
+        .unwrap();
+    let id = ProviderAccountId::new("acct_excel_403").unwrap();
+    let initial = repository.get_account(&id).await.unwrap().unwrap();
+    assert!(!initial.excel_auto_disable_on_403());
+    assert!(!repository.disable_excel_on_403(&initial).await.unwrap());
+    sqlx::query("update provider_accounts set responses_upstream='excel', excel_auto_disable_on_403=true, excel_cache_creation_as_input=true where id=$1")
+        .bind(id.as_str()).execute(&database.pool).await.unwrap();
+    let frozen = repository.get_account(&id).await.unwrap().unwrap();
+    let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['responses_upstream','updated_at'] from provider_accounts a where id=$1")
+        .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    let revision: i64 =
+        sqlx::query_scalar("select config_revision from runtime_settings where id=1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let repository = repository.clone();
+        let frozen = frozen.clone();
+        tasks.spawn(async move { repository.disable_excel_on_403(&frozen).await.unwrap() });
+    }
+    let mut changes = 0;
+    while let Some(result) = tasks.join_next().await {
+        changes += usize::from(result.unwrap());
+    }
+    assert_eq!(changes, 1);
+    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['responses_upstream','updated_at'] from provider_accounts a where id=$1")
+        .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(before, after);
+    let next_revision: i64 =
+        sqlx::query_scalar("select config_revision from runtime_settings where id=1")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(next_revision, revision + 1);
+    let updated = repository.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(updated.responses_upstream(), ResponsesUpstream::Codex);
+    assert!(updated.excel_auto_disable_on_403());
+    assert!(updated.excel_cache_creation_as_input());
+    sqlx::query("update provider_accounts set responses_upstream='excel', credential_revision=credential_revision+1 where id=$1")
+        .bind(id.as_str()).execute(&database.pool).await.unwrap();
+    assert!(!repository.disable_excel_on_403(&frozen).await.unwrap());
+    let current = repository.get_account(&id).await.unwrap().unwrap();
+    sqlx::query("update provider_accounts set excel_auto_disable_on_403=false where id=$1")
+        .bind(id.as_str())
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(!repository.disable_excel_on_403(&current).await.unwrap());
+    sqlx::query("update provider_accounts set excel_auto_disable_on_403=true where id=$1")
+        .bind(id.as_str())
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    assert!(repository.disable_excel_on_403(&current).await.unwrap());
+    sqlx::query("update provider_accounts set enabled=false where id=$1")
+        .bind(id.as_str())
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    repository.delete_account(&id).await.unwrap();
+    assert!(!repository.disable_excel_on_403(&current).await.unwrap());
+    database.close().await;
+}
 
 #[tokio::test]
 async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lists() {
@@ -38,6 +114,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: None,
         excel_cache_creation_as_input: Some(true),
+        excel_auto_disable_on_403: Some(true),
         excel_models: None,
         model_access: None,
         custom_name: None,
@@ -109,6 +186,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(true),
                 excel_cache_creation_as_input: Default::default(),
+                excel_auto_disable_on_403: Default::default(),
                 excel_models: Some(
                     gateway_core::account::ExcelModels::try_from(vec!["ignored-model".into()])
                         .unwrap(),
@@ -161,6 +239,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         .unwrap();
     assert!(reimported.summary.excel_models_follow_global);
     assert!(reimported.summary.excel_cache_creation_as_input);
+    assert!(reimported.summary.excel_auto_disable_on_403);
     assert_eq!(
         reimported.summary.responses_upstream,
         ResponsesUpstream::Excel
@@ -176,6 +255,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(false),
                 excel_cache_creation_as_input: Default::default(),
+                excel_auto_disable_on_403: Default::default(),
                 excel_models: Some(
                     gateway_core::account::ExcelModels::try_from(Vec::new()).unwrap(),
                 ),
@@ -210,7 +290,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let before: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
@@ -218,6 +298,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Some(true),
+        excel_auto_disable_on_403: Some(true),
         excel_models: Some(
             gateway_core::account::ExcelModels::try_from(vec![
                 "gpt-5.6-sol".into(),
@@ -243,7 +324,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     assert_eq!(before, after);
     let loaded = repository
@@ -264,6 +345,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 responses_upstream: None,
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_auto_disable_on_403: Default::default(),
                 excel_models: Default::default(),
                 weight: Some(gateway_core::account::AccountWeight::new(2).unwrap()),
                 ..command.clone()
@@ -287,6 +369,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap()
         .unwrap();
     assert!(configured.excel_cache_creation_as_input());
+    assert!(configured.excel_auto_disable_on_403());
     assert_eq!(
         configured.responses_upstream_for_model("gpt-6-astra"),
         ResponsesUpstream::Excel
@@ -301,6 +384,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 responses_upstream: Some(ResponsesUpstream::Codex),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_auto_disable_on_403: Default::default(),
                 excel_models: Default::default(),
                 ..command
             },
@@ -326,6 +410,15 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             .unwrap()
             .summary
             .excel_cache_creation_as_input
+    );
+    assert!(
+        !repository
+            .load_provider_account("acct_excel")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .excel_auto_disable_on_403
     );
     database.close().await;
 }

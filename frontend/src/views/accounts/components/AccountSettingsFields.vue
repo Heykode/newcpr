@@ -31,7 +31,9 @@ const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
 const excelModels = defineModel<string>('excelModels', { default: 'gpt-5.6-sol, gpt-6-astra' })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
+const excelAutoDisableOn403 = defineModel<boolean>('excelAutoDisableOn403', { default: false })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
+const updateExcelAutoDisableOn403 = defineModel<boolean>('updateExcelAutoDisableOn403', { default: false })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -123,6 +125,22 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         v-model="excelCacheCreationAsInput"
         label="缓存写入按普通输入计费"
         :disabled="disabled || (batch ? !updateExcelCacheCreationAsInput : !excelEnabled)"
+      />
+    </BaseFormItem>
+
+    <BaseFormItem v-if="excelAvailable" label="Excel 遇到 HTTP 403 自动关闭">
+      <template v-if="batch" #extra>
+        <BaseCheckbox
+          v-model="updateExcelAutoDisableOn403"
+          label="应用 Excel 403 自动关闭更改"
+          :disabled="disabled"
+        />
+      </template>
+      <BaseSwitch
+        v-model="excelAutoDisableOn403"
+        label="Excel 遇到 HTTP 403 自动关闭"
+        title="仅上游 HTTP 403 触发，模型权限变更除外；不重发当前请求"
+        :disabled="disabled || (batch ? !updateExcelAutoDisableOn403 : !excelEnabled)"
       />
     </BaseFormItem>
 

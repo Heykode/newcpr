@@ -166,12 +166,46 @@ impl ClientTools {
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
             "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=cpr.custom/CATALOG_NAME and put exact raw input directly in code. \
-             For function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{warning}",
+             For other function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{}{warning}",
             if self.serial {
                 "Return at most one client tool call per response; wait for its result before requesting another."
             } else {
                 "Independent client tools may be called in parallel, using a separate native run_officejs call for each."
-            }
+            },
+            self.function_code_instructions()
+        )
+    }
+
+    fn supports_function_code(&self, name: &str) -> bool {
+        !name.is_empty()
+            && !name
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '/' | '\\'))
+            && self.specs.get(name).is_some_and(|spec| {
+                spec.kind == "function"
+                    && spec.schema.get("type").and_then(Value::as_str) == Some("object")
+                    && spec
+                        .schema
+                        .pointer("/properties/code/type")
+                        .and_then(Value::as_str)
+                        == Some("string")
+            })
+    }
+
+    fn function_code_instructions(&self) -> String {
+        let names = self
+            .specs
+            .keys()
+            .filter(|name| self.supports_function_code(name))
+            .cloned()
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\nFor catalog functions [{}], prefer summary={}EXACT_CATALOG_NAME, put the exact raw source text in code, and put one JSON object containing all remaining arguments in extended_summary (use {{}} when empty). Do not include code in that object. Do not wrap, escape again, repair or execute the source text here.",
+            names.join(", "),
+            envelope::FUNCTION_CODE_PREFIX
         )
     }
 
@@ -193,8 +227,9 @@ impl ClientTools {
 
     pub(crate) fn reminder(&self) -> Option<String> {
         (!self.specs.is_empty()).then(|| format!(
-            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.",
-            self.specs.keys().cloned().collect::<Vec<_>>().join(", ")
+            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope unless the raw-code contract below applies. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.{}",
+            self.specs.keys().cloned().collect::<Vec<_>>().join(", "),
+            self.function_code_instructions()
         ))
     }
 
@@ -203,13 +238,17 @@ impl ClientTools {
         let name = native.get("name").and_then(Value::as_str).ok_or(invalid)?;
         let transport = matches!(name, "run_officejs" | "functions.run_officejs");
         let (envelope, marked) = if transport {
-            envelope::native_envelope(native, &|name| {
-                let (key, spec) = self
-                    .specs
-                    .get_key_value(name)
-                    .or_else(|| self.specs.get_key_value(name.strip_prefix("functions.")?))?;
-                Some((key.clone(), spec.kind == "custom"))
-            })?
+            envelope::native_envelope(
+                native,
+                &|name| {
+                    let (key, spec) = self
+                        .specs
+                        .get_key_value(name)
+                        .or_else(|| self.specs.get_key_value(name.strip_prefix("functions.")?))?;
+                    Some((key.clone(), spec.kind == "custom"))
+                },
+                &|name| self.supports_function_code(name),
+            )?
         } else {
             (native.clone(), false)
         };

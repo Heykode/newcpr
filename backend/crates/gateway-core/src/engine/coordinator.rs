@@ -148,19 +148,7 @@ where
                     .position(|candidate| candidate.provider() == pin.provider())
                     .ok_or(EngineError::ContinuationPinMismatch)
             })?;
-        let capture = self.engine.captures.as_ref().and_then(|factory| {
-            factory.start(
-                request_id.as_str(),
-                client_api_key_ref.as_str(),
-                &request
-                    .routing
-                    .groups_snapshot()
-                    .iter()
-                    .map(|group| group.id().as_str())
-                    .collect::<Vec<_>>(),
-            )
-        });
-        let trace = TraceContext::new(request_id.as_str()).with_capture(capture);
+        let trace = TraceContext::new(request_id.as_str());
         trace.record(
             "request.routed",
             json!({
@@ -762,13 +750,6 @@ where
                     }
                     for fact in event.canonical_facts() {
                         self.observation.observe_identity(fact);
-                        if self.trace.captures_bodies()
-                            && matches!(fact, GatewayEvent::Completed(_))
-                        {
-                            self.trace
-                                .attempt(self.attempts)
-                                .record("upstream.completed", json!({}));
-                        }
                     }
                     for fact in event.canonical_facts() {
                         self.observe_event(fact).await;

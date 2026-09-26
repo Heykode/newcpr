@@ -103,7 +103,19 @@ function assertNoUpdates(state) {
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
   assert.equal(state.updateExcelCacheCreationAsInput.value, false)
+  assert.equal(state.updateExcelAutoDisableOn403.value, false)
 }
+
+test('Excel 403 setting saves on its own only after explicit batch opt-in', async (t) => {
+  const { state, requests } = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })
+  state.open()
+  state.excelAutoDisableOn403.value = true
+  assert.equal(state.hasUpdates.value, false)
+  state.updateExcelAutoDisableOn403.value = true
+  assert.equal(state.hasUpdates.value, true)
+  await state.save()
+  assert.deepEqual(requests[0], { accountIds: ['account-a'], excelAutoDisableOn403: true })
+})
 
 test('Excel cache billing is separately opted in and does not implicitly switch routes', async (t) => {
   const editor = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })

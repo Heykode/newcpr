@@ -135,6 +135,86 @@ pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
     .with_diagnostic(ProviderDiagnostic::new(error.to_string()))
 }
 
+fn should_disable_on_403(account: &ProviderAccount, failure: &MappedProviderFailure) -> bool {
+    let error = &failure.error;
+    account.excel_auto_disable_on_403()
+        && account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
+        && failure.http_rejection_status == Some(403)
+        && !error.upstream_code().is_some_and(|code| {
+            code.as_str()
+                .trim()
+                .eq_ignore_ascii_case("basispoints_model_access_changed")
+        })
+        && !error.client_visible_upstream_error().is_some_and(|detail| {
+            [detail.code(), detail.error_type()]
+                .into_iter()
+                .flatten()
+                .any(|code| {
+                    code.trim()
+                        .eq_ignore_ascii_case("basispoints_model_access_changed")
+                })
+        })
+}
+
+pub(super) async fn observe_http_rejection(
+    selector: &Arc<CodexCredentialSelector>,
+    account: &ProviderAccount,
+    failure: &mut MappedProviderFailure,
+    excel: bool,
+    allows_mutation: bool,
+) {
+    if !excel || !allows_mutation || !should_disable_on_403(account, failure) {
+        return;
+    }
+    suppress_rejection_recovery(failure);
+    let selector = selector.clone();
+    let account = account.clone();
+    // Cancellation may drop the waiter, but the already-confirmed write stays bounded.
+    let _ = tokio::spawn(async move {
+        match tokio::time::timeout(Duration::from_secs(2), selector.disable_excel_on_403(&account)).await {
+            Ok(Ok(true)) => tracing::info!(account_id = %account.id(), "Excel disabled after upstream HTTP 403; request not replayed"),
+            Ok(Ok(false)) => {},
+            _ => tracing::warn!(account_id = %account.id(), "Excel HTTP 403 auto-disable did not complete"),
+        }
+    }).await;
+}
+
+fn suppress_rejection_recovery(failure: &mut MappedProviderFailure) {
+    let old = &failure.error;
+    let mut error = provider_error(ProviderErrorKind::PermissionDenied, old.send_state());
+    if let Some(status) = old.upstream_status() {
+        error = error.with_status(status);
+    }
+    if let Some(code) = old.upstream_code() {
+        error = error.with_upstream_code(code.clone());
+    }
+    if let Some(detail) = old.client_visible_upstream_error() {
+        error = error.with_client_visible_upstream_error(detail.clone());
+    }
+    if let Some(raw) = old.raw_upstream_error() {
+        error = error.with_raw_upstream_error(raw.clone());
+    }
+    if let Some(response) = old.client_visible_upstream_response() {
+        error = error.with_client_visible_upstream_response(
+            gateway_core::error::ClientVisibleUpstreamResponse::new(
+                response.status(),
+                response.content_type().map(<[u8]>::to_vec),
+                response.body().clone(),
+            )
+            .with_headers(response.headers().to_vec()),
+        );
+    }
+    if let Some(id) = old.upstream_request_id() {
+        error = error.with_upstream_request_id(id.clone());
+    }
+    failure.error = error;
+    failure.account_failure = None;
+    failure.websocket_transport_retryable = false;
+    failure.cyber_policy_failure = false;
+    failure.capture_response_cookies = false;
+    failure.rate_limit_headers.clear();
+}
+
 pub(super) fn classify_failure(
     mut failure: MappedProviderFailure,
     excel: bool,
@@ -216,6 +296,155 @@ pub(super) fn classify_failure(
 mod tests {
     use super::*;
     use gateway_core::error::{ClientVisibleUpstreamError, ClientVisibleUpstreamResponse};
+
+    #[test]
+    fn excel_auto_disable_requires_opt_in_and_actual_http_403() {
+        let account = ProviderAccount::new(
+            gateway_core::account::ProviderAccountId::new("acct_excel403").unwrap(),
+            gateway_core::identity::ProviderKind::new("openai").unwrap(),
+            "fixture".into(),
+            None,
+            "oauth".into(),
+            gateway_core::account::CredentialRevision::new(1).unwrap(),
+            None,
+        )
+        .with_responses_upstream(gateway_core::account::ResponsesUpstream::Excel);
+        let mut failure = rejection("forbidden");
+        failure.error = failure.error.with_status(403);
+        failure.http_rejection_status = Some(403);
+        assert!(!should_disable_on_403(&account, &failure));
+        let account = account.with_excel_auto_disable_on_403(true);
+        assert!(should_disable_on_403(&account, &failure));
+        for status in [None, Some(200), Some(401), Some(429), Some(500)] {
+            failure.http_rejection_status = status;
+            assert!(!should_disable_on_403(&account, &failure));
+        }
+        failure.http_rejection_status = Some(403);
+        let codex = account
+            .clone()
+            .with_responses_upstream(gateway_core::account::ResponsesUpstream::Codex);
+        assert!(!should_disable_on_403(&codex, &failure));
+        for code in [
+            "basispoints_model_access_changed",
+            " BASISPOINTS_MODEL_ACCESS_CHANGED ",
+        ] {
+            let mut excluded = rejection(code);
+            excluded.http_rejection_status = Some(403);
+            assert!(!should_disable_on_403(&account, &excluded));
+        }
+        failure.error = failure
+            .error
+            .with_upstream_code(OpaqueUpstreamValue::new("basispoints_model_access_changed"));
+        assert!(!should_disable_on_403(&account, &failure));
+    }
+
+    #[test]
+    fn excel_auto_disable_keeps_error_evidence_without_retry_or_account_mutation() {
+        let mut failure = rejection("forbidden");
+        failure.error = failure
+            .error
+            .with_status(403)
+            .with_replay_safe()
+            .with_same_account_retry()
+            .with_upstream_code(OpaqueUpstreamValue::new("forbidden"))
+            .with_upstream_request_id(OpaqueUpstreamValue::new("fixture-request"));
+        failure.account_failure = Some(CodexAccountFailure::CredentialRevoked);
+        failure.cyber_policy_failure = true;
+        failure.capture_response_cookies = true;
+        failure.websocket_transport_retryable = true;
+        suppress_rejection_recovery(&mut failure);
+        assert_eq!(failure.error.upstream_status(), Some(403));
+        assert_eq!(failure.error.upstream_code().unwrap().as_str(), "forbidden");
+        assert_eq!(
+            failure.error.upstream_request_id().unwrap().as_str(),
+            "fixture-request"
+        );
+        assert_eq!(
+            failure
+                .error
+                .client_visible_upstream_response()
+                .unwrap()
+                .body()
+                .as_ref(),
+            b"test body"
+        );
+        assert!(failure.error.retry_after().is_none());
+        assert!(failure.error.pre_delivery_retry().is_none());
+        assert!(!failure.error.replay_is_safe());
+        assert!(failure.account_failure.is_none());
+        assert!(!failure.cyber_policy_failure);
+        assert!(!failure.capture_response_cookies);
+        assert!(!failure.websocket_transport_retryable);
+    }
+
+    #[tokio::test]
+    async fn excel_auto_disable_http_provenance_does_not_trust_sse_error_status() {
+        use crate::transport::excel::{ClientTools, ExcelPreparedRequest};
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        for status in [403, 401, 429, 500, 200] {
+            server.reset().await;
+            let body = if status == 200 {
+                "data: {\"type\":\"error\",\"status\":403,\"error\":{\"code\":\"forbidden\",\"message\":\"fixture\"}}\n\n"
+            } else {
+                "{\"error\":{\"code\":\"forbidden\",\"message\":\"fixture\"}}"
+            };
+            Mock::given(method("POST"))
+                .and(path("/fixture"))
+                .respond_with(ResponseTemplate::new(status).set_body_raw(
+                    body,
+                    if status == 200 {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                ))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut request = CodexResponsesRequest::from_body(
+                json!({"model":"gpt-5.6-sol","input":[]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            request.excel = Some(ExcelPreparedRequest {
+                body: request.body().clone(),
+                tools: ClientTools::default(),
+                structured: None,
+                _image_lease: None,
+                completed: Default::default(),
+                usage: Default::default(),
+                replay: None,
+                endpoint: format!("{}/fixture", server.uri()),
+            });
+            let client = CodexBackendClient::new(
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                server.uri(),
+                crate::config::OpenAiConfig::default().wire_profile_state(),
+            );
+            let failure = super::super::compact::collect_excel_compact(
+                &client,
+                &request,
+                CodexRequestContext::auxiliary(
+                    "Bearer fixture",
+                    Some("workspace"),
+                    "request",
+                    None,
+                ),
+            )
+            .await
+            .err()
+            .expect("fixture rejects");
+            assert_eq!(
+                failure.http_rejection_status,
+                (status != 200).then_some(status)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn excel_compact_requires_real_completion_and_encrypted_output() {

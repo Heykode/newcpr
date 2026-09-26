@@ -22,10 +22,8 @@ pub mod outbound_user_agent;
 pub mod presenter;
 pub mod proxies;
 pub mod relogin;
-pub mod request_capture;
 pub mod settings;
 pub mod system;
-pub mod token_guard;
 pub mod wire;
 
 pub use auth::{AdminAuth, AdminSessionState};
@@ -51,8 +49,6 @@ where
         .merge(backups::router::<S>())
         .merge(client_keys::router::<S>())
         .merge(observability::router::<S>())
-        .merge(token_guard::router::<S>())
-        .merge(request_capture::router::<S>())
         .merge(notifications::router::<S>())
         .merge(settings::router::<S>())
         .merge(outbound_user_agent::router::<S>())

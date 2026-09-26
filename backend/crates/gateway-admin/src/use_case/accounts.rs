@@ -657,6 +657,7 @@ impl AccountsService for DefaultAccountsService {
                         excel_models: None,
                         excel_models_follow_global: None,
                         excel_cache_creation_as_input: Default::default(),
+                        excel_auto_disable_on_403: Default::default(),
                         concurrency_limit: None,
                         weight: None,
                         group_ids: None,
@@ -700,6 +701,10 @@ impl AccountsService for DefaultAccountsService {
                 .map(|_| gateway_core::account::ResponsesUpstream::Excel))
             .or(command
                 .excel_cache_creation_as_input
+                .filter(|enabled| *enabled)
+                .map(|_| gateway_core::account::ResponsesUpstream::Excel))
+            .or(command
+                .excel_auto_disable_on_403
                 .filter(|enabled| *enabled)
                 .map(|_| gateway_core::account::ResponsesUpstream::Excel))
             .or(command.responses_upstream)
@@ -761,6 +766,10 @@ impl AccountsService for DefaultAccountsService {
                     .map(|_| gateway_core::account::ResponsesUpstream::Excel))
                 .or(command
                     .excel_cache_creation_as_input
+                    .filter(|enabled| *enabled)
+                    .map(|_| gateway_core::account::ResponsesUpstream::Excel))
+                .or(command
+                    .excel_auto_disable_on_403
                     .filter(|enabled| *enabled)
                     .map(|_| gateway_core::account::ResponsesUpstream::Excel))
                 .or(command.responses_upstream)

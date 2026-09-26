@@ -1,4 +1,3 @@
-mod capture;
 mod connection;
 mod forward;
 mod protocol;

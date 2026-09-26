@@ -530,25 +530,6 @@ impl PendingExecution {
             let _ = session
                 .record_client_status(response.status().as_u16())
                 .await;
-            let trace = session.trace();
-            if trace.captures_bodies()
-                && (response.status().is_client_error() || response.status().is_server_error())
-            {
-                trace.record(
-                    "downstream.status",
-                    serde_json::json!({"status":response.status().as_u16()}),
-                );
-                let (parts, body) = response.into_parts();
-                // This boundary serves locally constructed JSON error bodies.
-                // Tap their existing delivery stream instead of eagerly draining it.
-                let body = Body::from_stream(body.into_data_stream().map(move |chunk| {
-                    if let Ok(bytes) = &chunk {
-                        trace.dump("downstream.body", bytes);
-                    }
-                    chunk
-                }));
-                return Response::from_parts(parts, body);
-            }
         }
         response
     }

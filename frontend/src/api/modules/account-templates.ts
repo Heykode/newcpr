@@ -7,6 +7,7 @@ export interface AccountTemplateConfig {
   responsesUpstream?: 'codex' | 'excel' | null
   excelModelsFollowGlobal?: boolean | null
   excelCacheCreationAsInput?: boolean | null
+  excelAutoDisableOn403?: boolean | null
   excelModels?: string[] | null
   turnStateInjectionEnabled?: boolean | null
   concurrencyLimit: number | null
