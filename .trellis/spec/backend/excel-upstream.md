@@ -53,7 +53,7 @@ Cookie/relogin identity protections are not the retired collector.
 | Cross-Key/account/workspace/model history | Reject, never borrow another record |
 | Unknown/expired parent or switched route | Explicit continuation failure |
 | Missing completed event | Failure/incomplete, never synthetic success |
-| Undeclared tool | Protocol failure, no client tool execution |
+| Undeclared tool | One regeneration only for eligible first unknown tool; otherwise protocol failure, no client tool execution |
 | Unsupported effort/tool choice/warmup | Explicit request error |
 | HTTPS image request authentication failure | Preserve rejection, never drop image |
 | Old State enabled but empty | No State scheduling gate |
@@ -263,7 +263,16 @@ Only a completed, wholly unexecuted native tool batch can request correction:
 two attempts maximum, original model/lease/egress, no extra scheduler selection.
 Keep valid operations and raw code plus metadata, original output slots and
 response identity. Validate the whole batch before exposing executable events.
-Structured output and undeclared tools never enter correction.
+Structured output and undeclared tools never enter this envelope-only correction.
+Separately, align unknown-first-tool regeneration with Sub2API production
+`dafc174f1cfa7d600f0385f1829f04be4daaad4f`: require a nonempty catalog, expanded
+history without calls/results, a typed unknown-tool error, completed output, and
+exactly one run_officejs call in the last slot. Regenerate once from the prepared
+body with a developer reminder before any final compaction trigger. Never append
+a fake call/result, guess a tool name, or fall into envelope correction again.
+Preserve the original response identity and emitted prefix; replay new message
+events from the replaced slot once. Validate all corrected tools, schema, call IDs,
+choice/parallel limits and any structured output before exposing executable events.
 
 | Condition | Outcome |
 | --- | --- |
@@ -275,8 +284,13 @@ Structured output and undeclared tools never enter correction.
 
 Normalize usage aliases before summing measured counters. Each correction
 checkpoint yields an internal empty chunk which the provider consumes into
-cumulative Usage/CalculatedCost facts before another network await. Core merges
-these snapshots; they are not deltas, client wire events or first-token signals.
+cumulative `ProviderMeteringCheckpoint` before another network await. Core consumes
+it through the existing observation/metering owner, not canonical sequence checks,
+commit barriers, timing or client adapters. Never relax the global validator or
+fabricate Started/Completed. Core merges snapshots, not deltas; provider-reported
+cost keeps its precedence. Progressive reports within one correction use per-field
+maxima as the fallback when terminal usage is absent, not a sum of snapshots.
+Only separate upstream calls are added together.
 This preserves known usage when Core's cancellation boundary wins before the
 provider can report its own cancellation. Clear the recorder on aggregated
 completion; error/deadline paths take any unreported snapshot once. Cancellation

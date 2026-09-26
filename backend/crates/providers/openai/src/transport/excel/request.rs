@@ -41,6 +41,8 @@ pub(crate) enum ExcelRequestError {
     Tool,
     #[error("Excel returned an undeclared or malformed client tool call")]
     ToolCall,
+    #[error("Excel returned a tool outside the client's catalog")]
+    UnknownTool,
     #[error("unsupported or invalid Excel structured output format")]
     Format,
     #[error("Excel image relay is unavailable or full")]

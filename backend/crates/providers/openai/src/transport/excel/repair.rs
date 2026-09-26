@@ -6,7 +6,10 @@ use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
 use gateway_protocol::openai::sse::{SseError, SseEventDecoder};
 use serde_json::{Map, Value, json};
 
-use super::{ClientTools, envelope, tools::canonical_history_call, usage::ExcelUsagePolicy};
+use super::{
+    ClientTools, ExcelRequestError, envelope, tools::canonical_history_call,
+    usage::ExcelUsagePolicy,
+};
 use crate::transport::{CodexBackendSseStream, CodexClientError};
 
 pub(super) type Sender = Box<
@@ -127,6 +130,101 @@ pub(super) fn eligible(tools: &ClientTools, response: &Value) -> bool {
     })
 }
 
+pub(super) fn no_tool_history(body: &Map<String, Value>) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|input| {
+            !input.iter().any(|item| {
+                is_tool(item)
+                    || matches!(
+                        item["type"].as_str(),
+                        Some("function_call_output" | "custom_tool_call_output")
+                    )
+            })
+        })
+}
+
+pub(super) fn unknown_eligible(tools: &ClientTools, response: &Value) -> bool {
+    let Some(calls) = batch(response).filter(|calls| calls.len() == 1) else {
+        return false;
+    };
+    tools.has_client_tools()
+        && response["output"].as_array().and_then(|items| items.last()) == calls.first()
+        && calls[0]["id"].as_str().is_some_and(|id| !id.is_empty())
+        && matches!(
+            tools.convert_call(&calls[0]),
+            Err(ExcelRequestError::UnknownTool)
+        )
+}
+
+pub(super) fn correct_unknown<'a>(
+    original: &'a Value,
+    tools: &'a ClientTools,
+    mut body: Map<String, Value>,
+    sender: &'a mut Sender,
+    usage_policy: &'a ExcelUsagePolicy,
+) -> BoxStream<'a, Result<Option<Value>, CodexClientError>> {
+    Box::pin(async_stream::try_stream! {
+        if !no_tool_history(&body) || !unknown_eligible(tools, original) {
+            Err(invalid("Excel unknown tool is not eligible for regeneration"))?;
+        }
+        let mut usage = json!({});
+        add_usage(&mut usage, &original["usage"])?;
+        usage_policy.record_repair_usage(original, &usage);
+        yield None;
+        let input = body.get_mut("input").and_then(Value::as_array_mut)
+            .ok_or_else(|| invalid("Excel correction requires complete history"))?;
+        let index = input.len() - usize::from(input.last().is_some_and(|item| item["type"] == "compaction_trigger"));
+        input.insert(index, super::request::message("developer",
+            "The previous response selected a tool absent from the current client catalog. \
+             No client tool from that response was executed. Correct this once using exactly \
+             one tool declared in the client catalog and its documented run_officejs transport. \
+             Do not call executor-internal helpers as standalone tools. Preserve the original \
+             task and use only the declared argument schema."));
+        if serde_json::to_vec(&body).map_err(CodexClientError::RequestBodyEncode)?.len() > MAX_RESPONSE_BYTES {
+            Err(invalid("Excel correction exceeds its request size limit"))?;
+        }
+        let mut stream = sender(body).await?;
+        let mut reader = read_response(&mut stream, original, &usage, usage_policy);
+        let mut event = None;
+        while let Some(step) = reader.next().await {
+            match step? {
+                Some(terminal) => event = Some(terminal),
+                None => yield None,
+            }
+        }
+        drop(reader);
+        drop(stream);
+        let mut event = event.ok_or_else(|| invalid("Excel correction has no terminal response"))?;
+        let corrected = &event["response"];
+        add_usage(&mut usage, &corrected["usage"])?;
+        usage_policy.record_repair_usage(original, &usage);
+        yield None;
+        if matches!(event["type"].as_str(), Some("response.failed" | "error")) {
+            if event["response"].is_object() {
+                event["response"]["id"] = original["id"].clone();
+                event["response"]["output"] = json!([]);
+                event["response"]["usage"] = usage;
+            }
+            yield Some(event);
+            return;
+        }
+        if event["type"] != "response.completed" || corrected["status"] != "completed" {
+            Err(invalid("Excel unknown tool regeneration did not complete"))?;
+        }
+        validate(tools, corrected)?;
+        let replacement = corrected["output"].as_array().filter(|items| !items.is_empty())
+            .ok_or_else(|| invalid("Excel unknown tool regeneration returned no output"))?;
+        let mut result = original.clone();
+        let output = result["output"].as_array_mut().expect("validated original output");
+        output.pop();
+        output.extend(replacement.iter().cloned());
+        result["usage"] = usage;
+        validate(tools, &result)?;
+        yield Some(json!({"type":"response.completed","response":result}));
+    })
+}
+
 pub(super) fn correct<'a>(
     original: &'a Value,
     tools: &'a ClientTools,
@@ -147,8 +245,17 @@ pub(super) fn correct<'a>(
     for _ in 0..MAX_REPAIRS {
         extend_request(&mut body, &failed, original_calls.len())?;
         let mut stream = sender(body.clone()).await?;
-        let mut event = read_response(&mut stream).await?;
+        let mut reader = read_response(&mut stream, original, &usage, usage_policy);
+        let mut event = None;
+        while let Some(step) = reader.next().await {
+            match step? {
+                Some(terminal) => event = Some(terminal),
+                None => yield None,
+            }
+        }
+        drop(reader);
         drop(stream);
+        let mut event = event.ok_or_else(|| invalid("Excel correction has no terminal response"))?;
         let corrected = &event["response"];
         add_usage(&mut usage, &corrected["usage"])?;
         usage_policy.record_repair_usage(original, &usage);
@@ -355,17 +462,24 @@ fn extend_request(
     Ok(())
 }
 
-async fn read_response(stream: &mut CodexBackendSseStream) -> Result<Value, CodexClientError> {
+fn read_response<'a>(
+    stream: &'a mut CodexBackendSseStream,
+    original: &'a Value,
+    previous_usage: &'a Value,
+    usage_policy: &'a ExcelUsagePolicy,
+) -> BoxStream<'a, Result<Option<Value>, CodexClientError>> {
+    Box::pin(async_stream::try_stream! {
     let mut decoder = SseEventDecoder::default();
     let mut bytes = 0usize;
     let mut pending = BTreeSet::new();
+    let mut observed_usage = json!({});
     loop {
         let chunk = stream.next().await.transpose()?;
         let finished = chunk.is_none();
         let events = if let Some(chunk) = chunk {
             bytes = bytes.saturating_add(chunk.len());
             if bytes > MAX_RESPONSE_BYTES {
-                return Err(invalid("Excel correction exceeded its response size limit"));
+                Err(invalid("Excel correction exceeded its response size limit"))?;
             }
             decoder.push(&chunk)?
         } else {
@@ -378,7 +492,22 @@ async fn read_response(stream: &mut CodexBackendSseStream) -> Result<Value, Code
             let mut value: Value = serde_json::from_str(&event.data)
                 .map_err(|_| invalid("Excel correction returned invalid JSON"))?;
             if !value.is_object() {
-                return Err(invalid("Excel correction returned a non-object event"));
+                Err(invalid("Excel correction returned a non-object event"))?;
+            }
+            let mut reported = false;
+            for usage in [value.pointer("/response/usage"), value.get("usage")].into_iter().flatten() {
+                let mut canonical = json!({});
+                add_usage(&mut canonical, usage)?;
+                if canonical.as_object().is_some_and(|usage| !usage.is_empty()) {
+                    max_usage(&mut observed_usage, &canonical);
+                    reported = true;
+                }
+            }
+            if reported {
+                let mut cumulative = previous_usage.clone();
+                add_usage(&mut cumulative, &observed_usage)?;
+                usage_policy.record_repair_usage(original, &cumulative);
+                yield None;
             }
             let kind = value["type"]
                 .as_str()
@@ -395,7 +524,7 @@ async fn read_response(stream: &mut CodexBackendSseStream) -> Result<Value, Code
                     value["item"]["call_id"].clone().to_string(),
                 ));
                 if pending.len() > 512 {
-                    return Err(invalid("Excel correction returned too many tools"));
+                    Err(invalid("Excel correction returned too many tools"))?;
                 }
             }
             if matches!(
@@ -403,13 +532,21 @@ async fn read_response(stream: &mut CodexBackendSseStream) -> Result<Value, Code
                 "response.completed" | "response.failed" | "response.incomplete" | "error"
             ) {
                 value["type"] = kind.clone().into();
+                if !value["response"]["usage"].is_object() && observed_usage != json!({}) {
+                    if !value["response"].is_object() {
+                        value["response"] = json!({});
+                    }
+                    value["response"]["usage"] = observed_usage.clone();
+                }
                 if kind != "response.completed" {
-                    return Ok(value);
+                    yield Some(value);
+                    return;
                 }
                 let response = &mut value["response"];
                 let Some(output) = response["output"].as_array() else {
                     response["status"] = "failed".into();
-                    return Ok(value);
+                    yield Some(value);
+                    return;
                 };
                 for item in output.iter().filter(|item| is_tool(item)) {
                     pending.remove(&(
@@ -420,13 +557,28 @@ async fn read_response(stream: &mut CodexBackendSseStream) -> Result<Value, Code
                 if !pending.is_empty() {
                     response["status"] = "failed".into();
                 }
-                return Ok(value);
+                yield Some(value);
+                return;
             }
         }
         if finished {
-            return Err(invalid(
+            Err(invalid(
                 "Excel correction ended without a terminal response",
-            ));
+            ))?;
+        }
+    }
+    })
+}
+
+fn max_usage(total: &mut Value, snapshot: &Value) {
+    for (key, value) in snapshot.as_object().expect("canonical usage") {
+        if value.is_object() {
+            if !total[key].is_object() {
+                total[key] = json!({});
+            }
+            max_usage(&mut total[key], value);
+        } else if let Some(count) = value.as_u64() {
+            total[key] = count.max(total[key].as_u64().unwrap_or(0)).into();
         }
     }
 }

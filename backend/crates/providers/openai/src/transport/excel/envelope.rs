@@ -20,6 +20,9 @@ pub(super) fn native_envelope(
         .and_then(Value::as_str)
         .and_then(|summary| summary.strip_prefix(FUNCTION_CODE_PREFIX))
     {
+        if resolve(name).is_none() {
+            return Err(ExcelRequestError::UnknownTool);
+        }
         if !supports_code(name) {
             return Err(INVALID);
         }

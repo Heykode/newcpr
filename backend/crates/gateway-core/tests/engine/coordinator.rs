@@ -2718,6 +2718,153 @@ fn cost_with_saved_breakdown(ticks: u128) -> CalculatedCost {
 }
 
 #[test]
+fn internal_metering_survives_wire_success_failure_and_cancellation_without_double_charging() {
+    use gateway_core::event::ProviderMeteringCheckpoint;
+    for ending in ["success", "failure", "cancel"] {
+        let checkpoint = |total| {
+            ProviderEvent::metering(ProviderMeteringCheckpoint::new(
+                Usage {
+                    total_tokens: Some(total),
+                    ..Usage::new()
+                },
+                Some(CalculatedCost::from_usd_ticks(u128::from(total)).unwrap()),
+            ))
+        };
+        let wire = |kind: &str, facts| {
+            ProviderEvent::canonical_with_wire(
+                facts,
+                ProtocolWireEvent::json("openai", Some(kind.into()), json!({"type":kind})).unwrap(),
+            )
+        };
+        let mut items = vec![
+            Ok(checkpoint(12)),
+            Ok(wire(
+                "response.created",
+                vec![GatewayEvent::Started(ResponseMeta::new("repair", "gpt-5"))],
+            )),
+            Ok(checkpoint(24)),
+            Ok(checkpoint(24)),
+            Ok(wire(
+                "response.output_text.delta",
+                vec![GatewayEvent::TextDelta(gateway_core::event::TextDelta {
+                    content_index: 0,
+                    text: "corrected".into(),
+                })],
+            )),
+        ];
+        if ending == "failure" {
+            items.push(Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::Sent,
+            )));
+        } else {
+            items.push(Ok(wire(
+                "response.completed",
+                vec![
+                    GatewayEvent::Usage(Usage {
+                        total_tokens: Some(24),
+                        ..Usage::new()
+                    }),
+                    GatewayEvent::Completed(ResponseMeta::new("repair", "gpt-5")),
+                ],
+            )));
+        }
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let (coordinator, store, provider) = coordinator(vec![Script::ObservedStream {
+            account_id: "acct_one",
+            items,
+        }]);
+        let cancellation = CancellationToken::new();
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            cancellation.clone(),
+        ))
+        .unwrap();
+        for expected in ["response.created", "response.output_text.delta"] {
+            let delivered = block_on(session.next_event())
+                .unwrap()
+                .unwrap()
+                .into_provider_events();
+            assert_eq!(delivered.len(), 1, "checkpoint must not reach the client");
+            assert_eq!(
+                delivered[0].wire_event().unwrap().event_type(),
+                Some(expected)
+            );
+            if expected == "response.created" {
+                block_on(session.commit_downstream(Some(200))).unwrap();
+            }
+        }
+        match ending {
+            "success" => {
+                assert!(block_on(session.next_event()).unwrap().is_some());
+                assert!(block_on(session.next_event()).unwrap().is_none());
+            }
+            "cancel" => {
+                cancellation.cancel();
+                assert!(matches!(
+                    block_on(session.next_event()),
+                    Err(EngineError::Cancelled)
+                ));
+            }
+            _ => assert!(matches!(
+                block_on(session.next_event()),
+                Err(EngineError::Provider(_))
+            )),
+        }
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        assert_eq!(session.budget_charge().amount_usd.scaled(), 24);
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.finalizations.len(), 1);
+        assert_eq!(state.finalizations[0].total_tokens, Some(24));
+        assert_eq!(state.finalizations[0].cost_ticks, Some(24));
+    }
+}
+
+#[test]
+fn internal_metering_does_not_start_client_timing_or_commit_on_failure() {
+    use gateway_core::event::ProviderMeteringCheckpoint;
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, _) = coordinator(vec![Script::ObservedStream {
+        account_id: "acct_one",
+        items: vec![
+            Ok(ProviderEvent::metering(ProviderMeteringCheckpoint::new(
+                Usage {
+                    total_tokens: Some(12),
+                    ..Usage::new()
+                },
+                Some(CalculatedCost::from_usd_ticks(12).unwrap()),
+            ))),
+            Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::Sent,
+            )),
+        ],
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        Some(ProviderAccountId::new("acct_one").unwrap()),
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    assert!(block_on(session.collect_uncommitted()).is_err());
+    let state = store.state.lock().unwrap();
+    let finalization = &state.finalizations[0];
+    assert_eq!(finalization.total_tokens, Some(12));
+    assert_eq!(finalization.first_event_ms, None);
+    assert_eq!(finalization.first_token_ms, None);
+    assert!(!finalization.committed);
+}
+
+#[test]
 fn provider_reported_cost_should_not_be_replaced_by_calculated_cost() {
     let operation = generate_operation();
     let route_plan = plan(&operation);

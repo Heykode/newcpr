@@ -458,7 +458,7 @@ impl ClientTools {
                     })
                     .flatten()
             })
-            .ok_or(invalid)?;
+            .ok_or(ExcelRequestError::UnknownTool)?;
         if let ToolChoice::Named(required) = &self.choice
             && key != required
         {
@@ -675,7 +675,11 @@ mod tests {
             let native = json!({"type":"function_call","id":"fc_fixture","call_id":"call_fixture","name":name,"arguments":args.to_string()});
             assert_eq!(
                 tools.convert_call(&native),
-                Err(ExcelRequestError::ToolCall)
+                Err(if name == "delete" {
+                    ExcelRequestError::UnknownTool
+                } else {
+                    ExcelRequestError::ToolCall
+                })
             );
         }
     }
