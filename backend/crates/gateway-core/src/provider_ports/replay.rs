@@ -18,6 +18,33 @@ pub trait ProviderReplayPort: Send + Sync {
         key: &'a str,
         payload: &'a OpaqueProviderData,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
+
+    /// Disposable upstream asset references, isolated from immutable conversation records.
+    /// Adapters without asset persistence may safely leave this optimization disabled.
+    fn read_asset<'a>(
+        &'a self,
+        _key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Return the existing winner on a concurrent insert; reads/writes never extend its life.
+    fn store_asset<'a>(
+        &'a self,
+        _key: &'a str,
+        payload: &'a OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<OpaqueProviderData, ProviderStoreError>> {
+        Box::pin(async move { Ok(payload.clone()) })
+    }
+
+    /// Remove only the reference actually rejected, not a concurrently refreshed asset.
+    fn invalidate_asset<'a>(
+        &'a self,
+        _key: &'a str,
+        _expected: &'a OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 pub struct UnavailableProviderReplay;

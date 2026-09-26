@@ -16,7 +16,7 @@ pub(crate) struct StructuredOutput {
     validator: Option<Arc<Validator>>,
 }
 
-struct NoExternalSchemas;
+pub(super) struct NoExternalSchemas;
 
 impl Retrieve for NoExternalSchemas {
     fn retrieve(&self, _: &Uri<String>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {

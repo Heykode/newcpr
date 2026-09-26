@@ -145,6 +145,19 @@ pub(crate) async fn restore(
 }
 
 impl ReplayCapture {
+    pub(super) fn image_cache(
+        &self,
+        endpoint: &str,
+        picture: &super::images::Picture,
+    ) -> super::image_cache::AssetCache {
+        super::image_cache::AssetCache::new(
+            Arc::clone(&self.store),
+            &self.record.owner,
+            endpoint,
+            picture,
+        )
+    }
+
     pub(crate) async fn commit(
         &self,
         response: &Value,

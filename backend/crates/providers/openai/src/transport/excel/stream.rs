@@ -146,6 +146,7 @@ impl Relay {
         }
         let mut result = Vec::new();
         if let Some(response) = data.get_mut("response").filter(|value| value.is_object()) {
+            self.tools.project_choice(response);
             response["parallel_tool_calls"] = self.tools.parallel_allowed().into();
             if let Some(effort) = &self.effort {
                 response["reasoning"] = json!({"effort":effort});
@@ -176,21 +177,9 @@ impl Relay {
                 .pointer_mut("/response/output")
                 .and_then(Value::as_array_mut)
                 .ok_or_else(|| protocol("Excel completion has no output"))?;
-            self.tools
-                .validate_call_count(
-                    items
-                        .iter()
-                        .filter(|item| {
-                            matches!(
-                                item.get("type").and_then(Value::as_str),
-                                Some("function_call" | "custom_tool_call")
-                            )
-                        })
-                        .count(),
-                )
-                .map_err(|_| {
-                    protocol("Excel returned parallel tools when the client disabled them")
-                })?;
+            self.tools.validate_completion(items).map_err(|_| {
+                protocol("Excel output violated the requested tool choice or parallel-call limit")
+            })?;
             let mut completed_tools = BTreeSet::new();
             for (index, item) in items.iter_mut().enumerate() {
                 if matches!(

@@ -106,8 +106,9 @@ a genuine encrypted compaction result.
 `tool_choice: none` is consumed by the local tool adapter. Do not add it back to
 the prepared Excel wire body, including explicit compact; the upstream rejects
 that extra field. Keep `compaction_trigger` as the final input item.
-Generic 400/422 validation failures are not evidence of an image-URL rejection;
-only explicit image error codes permit the bounded attachment fallback.
+Inline images in messages and tool results upload before generation. Generic 400/422
+validation failures never permit generation replay, content removal or history reset.
+Explicit attachment rejection may conditionally evict only mappings used by that request.
 
 The optional image relay belongs to the provider; Core exposes only a neutral download
 capability and API serves bytes. Default off, HTTPS origin only, no filesystem paths,
@@ -132,6 +133,9 @@ only after checking for additional consumers.
 Direct inline user images fail with generic upstream 422; upload-first attachment
 requests have been accepted with real image recognition. User-message data URLs
 therefore upload before the first generation attempt, not as a generic-422 retry.
+Tool-result inline images use the same preflight. Image-bearing Excel requests carry
+the vision marker; attachment uploads add purpose=vision and accept bounded, validated
+openai_file_id/file_id/id aliases. Native routes and pure text remain unchanged.
 The optional public HTTPS relay is not live-accepted. Hosted image_generation is unsupported.
 Client image tools may send a second request to existing image endpoints, as in
 Bridge v0.4.6; do not confuse that with executing OfficeJS or hosted tools.
@@ -139,6 +143,24 @@ Image endpoints select the account toggle independently of the text model list,
 freeze the route, and preserve the original lease, affinity and cancellation owner.
 No Codex Cookie/State or native fallback on Excel image failure. Image transport
 remains HTTP JSON; do not mislabel it as SSE. Raw image traces use excel_http_json.
+
+Attachment references reuse the trusted replay owner plus endpoint, media and decoded
+content digest, never credentials. Asset operations are optional neutral port methods;
+Redis stores them separately from immutable history (512 entries, 2 KiB each, fixed
+24-hour entry lifetime). Reads and duplicate writes do not extend entry lifetime.
+That lifetime is a cache policy, not a guarantee of upstream file validity. No raw image
+or token is persisted. Application restart can reuse retained Redis records, not recover
+lost Redis data. Existing Redis durability configuration is not changed.
+Bound process-local per-key upload locks; never hold a global mutex across await.
+Cross-worker insert returns the existing winner and invalidation compares the rejected
+payload, preserving a newer mapping. Cache timeouts fail open to a real upload result,
+not fabricated success; pure text does not touch assets. Explicit pre-stream attachment
+HTTP errors may evict used mappings without replay. Unknown 422 and post-200 stream
+failures do not invalidate based on guesses. Client file IDs and relay URLs are excluded.
+When existing request tracing is enabled, emit excel.request.structure from the parsed
+wire body with fixed labels and counts only. Bound input/content scanning and mark
+truncation; never copy tool names, call IDs, URLs, text or encrypted payloads into facts.
+This diagnostic does not validate history or prove the cause of a generic 422.
 
 Server-generated successful compaction may prune the replay window. Retain
 system/developer instructions and additional tools; never orphan pending calls
@@ -197,8 +219,21 @@ only on direct same-client-tool calls; never copy outer transport encryption
 to the inner client arguments. Existing contaminated sessions are not repaired.
 
 Auto-mode known hosted declarations are omitted with a developer capability
-warning. Forced choices, undeclared tools and unknown declarations still fail.
-This does not implement hosted search/image/connector tools.
+warning. Forced hosted choices, undeclared tools and unknown declarations still
+fail. Client `required` choices need at least one call; named function/custom
+choices need exactly one matching catalog call. Explicit refusals remain valid.
+Enforce choices at completion before releasing tool events, project the effective
+choice, and never silently substitute tools or retry through a different route.
+These are prompt constraints with local validation, not upstream constrained
+decoding. This does not implement hosted search/image/connector tools.
+
+Compile function schemas once per catalog using the existing JSON Schema 2020-12
+validator and network/file-denying retriever (1 MiB schema limit). Validate the
+complete argument object before client delivery; do not replace full validation
+with a subset of keywords. Custom grammar is still opaque. A transport wrapper's
+namespace must not qualify the decoded catalog target; direct calls retain their
+own namespace checks. Test internal refs, composition, bounds, boolean schemas,
+extra properties, external-ref denial, forced-call identity/count and refusals.
 
 Content errors contain only input index, fixed content/output field, part index
 and whitelisted type labels. Unknown strings become unknown; missing/non-string/
