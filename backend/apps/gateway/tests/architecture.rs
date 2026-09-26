@@ -22,6 +22,49 @@ pub(super) const WORKSPACE_MEMBERS: &[&str] = &[
 ];
 
 #[test]
+fn retired_excel_operations_have_no_runtime_or_frontend_hooks() {
+    let root = backend_root();
+    for file in [
+        "crates/gateway-admin/src/workers/mod.rs",
+        "crates/gateway-admin/src/use_case/mod.rs",
+        "crates/gateway-admin/src/ports/store.rs",
+        "crates/gateway-api/src/admin/mod.rs",
+        "crates/gateway-api/src/openai/responses/http.rs",
+        "crates/gateway-api/src/openai/responses/websocket/forward.rs",
+        "crates/gateway-core/src/engine/coordinator.rs",
+        "crates/gateway-store/src/bundle.rs",
+        "crates/gateway-store/src/postgres/mod.rs",
+        "../frontend/src/router/routes.ts",
+        "../frontend/src/layout/components/AppSidebar.vue",
+    ] {
+        let source = fs::read_to_string(root.join(file)).expect("read shared runtime source");
+        for marker in [
+            "token_guard",
+            "token-guard",
+            "request_capture",
+            "request-capture",
+        ] {
+            assert!(
+                !source.contains(marker),
+                "{file} must not reintroduce {marker}"
+            );
+        }
+    }
+    // Applied migrations and historical tables deliberately remain compatible.
+    for path in [
+        "crates/gateway-admin/src/workers/token_guard.rs",
+        "crates/gateway-store/src/request_capture",
+        "../frontend/src/views/token-guard",
+        "../frontend/src/views/request-captures",
+    ] {
+        assert!(
+            !root.join(path).exists(),
+            "retired module still exists: {path}"
+        );
+    }
+}
+
+#[test]
 fn workspace_member_list_matches_the_frozen_dag_scope() {
     let manifest =
         fs::read_to_string(backend_root().join("Cargo.toml")).expect("read workspace manifest");
@@ -188,10 +231,7 @@ const ADAPTER_PUBLIC_MODULES: &[(&str, &[&str])] = &[
             "workers",
         ],
     ),
-    (
-        "crates/gateway-store",
-        &["backup", "postgres", "redis", "request_capture"],
-    ),
+    ("crates/gateway-store", &["backup", "postgres", "redis"]),
     (
         "crates/providers/openai",
         &["config", "credential", "transport"],

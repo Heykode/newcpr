@@ -6,13 +6,46 @@ use super::ExcelRequestError;
 
 const MAX_BYTES: usize = 1024 * 1024;
 const INVALID: ExcelRequestError = ExcelRequestError::ToolCall;
+pub(super) const FUNCTION_CODE_PREFIX: &str = "codex2api.function_code/";
 
 pub(super) fn native_envelope(
     native: &Value,
     resolve: &impl Fn(&str) -> Option<(String, bool)>,
+    supports_code: &impl Fn(&str) -> bool,
 ) -> Result<(Value, bool), ExcelRequestError> {
     let arguments = json_value(native.get("arguments").ok_or(INVALID)?)?;
     let arguments = arguments.as_object().ok_or(INVALID)?;
+    if let Some(name) = arguments
+        .get("summary")
+        .and_then(Value::as_str)
+        .and_then(|summary| summary.strip_prefix(FUNCTION_CODE_PREFIX))
+    {
+        if !supports_code(name) {
+            return Err(INVALID);
+        }
+        let code = arguments
+            .get("code")
+            .and_then(Value::as_str)
+            .ok_or(INVALID)?;
+        let metadata = arguments
+            .get("extended_summary")
+            .and_then(Value::as_str)
+            .ok_or(INVALID)?;
+        if code.len() > MAX_BYTES || metadata.len() > MAX_BYTES - code.len() {
+            return Err(INVALID);
+        }
+        // Code is opaque source text, never parsed, repaired or evaluated.
+        let mut args: Value = serde_json::from_str(metadata).map_err(|_| INVALID)?;
+        let object = args.as_object_mut().ok_or(INVALID)?;
+        if object.contains_key("code") {
+            return Err(INVALID);
+        }
+        object.insert("code".into(), code.into());
+        if args.to_string().len() > MAX_BYTES {
+            return Err(INVALID);
+        }
+        return Ok((json!({"name":name,"arguments":args}), false));
+    }
     if let Some(summary) = arguments.get("summary").and_then(Value::as_str)
         && let Some(name) = summary
             .strip_prefix("cpr.custom/")

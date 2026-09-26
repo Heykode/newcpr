@@ -32,13 +32,11 @@ mod proxy_test_locks;
 mod query_budget;
 mod quota_learning;
 mod relogin;
-mod request_capture;
 mod retention;
 mod runtime_settings;
 mod schema_integrity;
 mod snapshot;
 mod snapshots;
-mod token_guard;
 mod turn_state_upgrade;
 mod turn_states;
 
