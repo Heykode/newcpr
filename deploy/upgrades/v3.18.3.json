@@ -1,0 +1,10 @@
+{
+  "from_version": "3.18.2",
+  "to_version": "3.18.3",
+  "from_migrations_tree": "1699c6fae43c75cb26af34f245c2c0440b42e632",
+  "to_migrations_tree": "a2b35e96416d690567f289db58c421d9877f5024",
+  "added": [
+    "0045_excel_auto_disable_on_403.sql"
+  ],
+  "recovery": "manual"
+}
