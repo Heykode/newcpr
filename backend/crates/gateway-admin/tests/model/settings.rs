@@ -18,6 +18,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         websocket_failure_open_duration_ms: Some(45_000),
         rate_limit_cooldown_seconds: Some(60),
         excel_image_relay_bytes: Some(64 * 1024 * 1024),
+        excel_image_relay_requests: Some(128),
         excel_image_relay_downloads: Some(32),
         excel_image_relay_entries: Some(128),
         openai_location_override_enabled: Some(true),
@@ -46,6 +47,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "websocketFailureOpenDurationMs": 45000,
             "rateLimitCooldownSeconds": 60,
             "excelImageRelayBytes": 67108864,
+            "excelImageRelayRequests": 128,
             "excelImageRelayDownloads": 32,
             "excelImageRelayEntries": 128,
             "openaiLocationOverrideEnabled": true,
@@ -71,11 +73,41 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         15 * 1024 * 1024
     );
     assert_eq!(defaults["openaiLocationOverrideEnabled"], false);
+    assert_eq!(defaults["excelImageRelayBytes"], 1024 * 1024 * 1024);
+    assert_eq!(defaults["excelImageRelayRequests"], 128);
+    assert_eq!(defaults["excelImageRelayDownloads"], 32);
+    assert_eq!(defaults["excelImageRelayEntries"], 512);
     assert_eq!(defaults["accountBusyWaitEnabled"], false);
     assert_eq!(defaults["accountBusyWaitStickyMaxWaiting"], 3);
     assert_eq!(defaults["accountBusyWaitStickyTimeoutSeconds"], 120);
     assert_eq!(defaults["accountBusyWaitFallbackMaxWaiting"], 100);
     assert_eq!(defaults["accountBusyWaitFallbackTimeoutSeconds"], 30);
+}
+
+#[test]
+fn excel_image_limits_validate_inheritance_bounds_and_integer_types() {
+    for (field, maximum) in [
+        ("excelImageRelayRequests", 512),
+        ("excelImageRelayDownloads", 128),
+        ("excelImageRelayEntries", 4096),
+    ] {
+        for value in [json!(null), json!(1), json!(maximum)] {
+            let overrides: RequestTuningOverrides =
+                serde_json::from_value(json!({field: value})).unwrap();
+            assert!(overrides.validate(), "{field}");
+        }
+        for value in [0, maximum + 1] {
+            let overrides: RequestTuningOverrides =
+                serde_json::from_value(json!({field: value})).unwrap();
+            assert!(!overrides.validate(), "{field}={value}");
+        }
+        for value in [json!(-1), json!(1.5), json!("1")] {
+            assert!(
+                serde_json::from_value::<RequestTuningOverrides>(json!({field: value})).is_err(),
+                "{field}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -501,6 +501,51 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         require_core_update(updated)
     }
 
+    async fn disable_excel_on_403(
+        &self,
+        account: &CoreProviderAccount,
+    ) -> Result<bool, CoreStoreError> {
+        if !account.excel_auto_disable_on_403()
+            || account.responses_upstream() != gateway_core::account::ResponsesUpstream::Excel
+        {
+            return Ok(false);
+        }
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        // Match the admin lock order: configuration row, then account row.
+        sqlx::query("select config_revision from runtime_settings where id = 1 for update")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        let changed = sqlx::query(
+            "update provider_accounts
+             set responses_upstream = 'codex', updated_at = greatest(now(), updated_at)
+             where id = $1 and credential_revision = $2
+               and provider_kind = 'openai' and authentication_kind = 'oauth'
+               and responses_upstream = 'excel' and excel_auto_disable_on_403",
+        )
+        .bind(account.id().as_str())
+        .bind(to_i64(account.revision().get()).map_err(core_store_error)?)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?
+        .rows_affected()
+            > 0;
+        if changed {
+            bump_config_revision_in_transaction(&mut transaction)
+                .await
+                .map_err(core_store_error)?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        Ok(changed)
+    }
+
     async fn delete_account(&self, account: &CoreProviderAccountId) -> Result<(), CoreStoreError> {
         let deleted = self
             .delete_provider_account(account.as_str())

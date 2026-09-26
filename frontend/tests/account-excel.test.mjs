@@ -106,6 +106,19 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   await state.save()
   assert.equal(updates[9].excelCacheCreationAsInput, true)
   assert.equal(updates[9].responsesUpstream, 'excel')
+  state.open(accounts.value[0])
+  assert.equal(state.excelAutoDisableOn403.value, false)
+  state.excelEnabled.value = true
+  state.excelAutoDisableOn403.value = true
+  await state.save()
+  assert.equal(updates[10].excelAutoDisableOn403, true)
+  accounts.value[0].responsesUpstream = 'excel'
+  accounts.value[0].excelAutoDisableOn403 = true
+  state.open(accounts.value[0])
+  state.excelEnabled.value = false
+  await state.save()
+  assert.equal(updates[11].responsesUpstream, 'codex')
+  assert.equal(updates[11].excelAutoDisableOn403, false)
 })
 
 test('Excel import defaults preserve, explicit global follows, mixed providers stay isolated', () => {
@@ -127,6 +140,9 @@ test('Excel import defaults preserve, explicit global follows, mixed providers s
   assert.equal(settings.responsesUpstream, 'excel')
   assert.equal('excelModels' in settings, false)
   assert.equal(settings.excelCacheCreationAsInput, false)
+  assert.equal(settings.excelAutoDisableOn403, false)
+  form.excelAutoDisableOn403 = true
+  assert.equal(creation.accountImportSettings(form).excelAutoDisableOn403, true)
   form.excelCacheCreationAsInput = true
   assert.equal(creation.accountImportSettings(form).excelCacheCreationAsInput, true)
   assert.equal('responsesUpstream' in creation.accountImportSettings(form, 'xai'), false)

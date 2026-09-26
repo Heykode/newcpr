@@ -286,6 +286,7 @@ pub(super) fn template_config() -> ReloginTemplateConfig {
         excel_models: None,
         excel_models_follow_global: None,
         excel_cache_creation_as_input: Default::default(),
+        excel_auto_disable_on_403: Default::default(),
         name: "Team defaults".into(),
         enabled: false,
         turn_state_injection_enabled: Some(true),
@@ -515,6 +516,7 @@ async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_m
                     responses_upstream: ResponsesUpstream::Excel,
                     excel_models_follow_global: true,
                     excel_cache_creation_as_input: true,
+                    excel_auto_disable_on_403: Default::default(),
                     excel_models: None,
                 }),
             },
@@ -528,6 +530,7 @@ async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_m
     expected.responses_upstream = Some(ResponsesUpstream::Excel);
     expected.excel_models_follow_global = Some(true);
     expected.excel_cache_creation_as_input = Some(true);
+    expected.excel_auto_disable_on_403 = Some(false);
     expected.excel_models = None;
     assert_eq!(h.accounts.import_settings(), vec![Some(expected)]);
 }

@@ -22,6 +22,8 @@ pub struct ExcelImportSettings {
     pub excel_models_follow_global: bool,
     #[serde(default)]
     pub excel_cache_creation_as_input: bool,
+    #[serde(default)]
+    pub excel_auto_disable_on_403: bool,
     pub excel_models: Option<gateway_core::account::ExcelModels>,
 }
 
@@ -36,6 +38,7 @@ impl ExcelImportSettings {
     pub fn apply(&self, settings: &mut AccountImportSettings) {
         settings.responses_upstream = Some(self.responses_upstream);
         settings.excel_cache_creation_as_input = Some(self.excel_cache_creation_as_input);
+        settings.excel_auto_disable_on_403 = Some(self.excel_auto_disable_on_403);
         settings.excel_models_follow_global = Some(self.excel_models_follow_global);
         settings.excel_models = if self.excel_models_follow_global {
             None
@@ -60,6 +63,8 @@ pub struct ReloginTemplateConfig {
     pub excel_models_follow_global: Option<bool>,
     #[serde(default)]
     pub excel_cache_creation_as_input: Option<bool>,
+    #[serde(default)]
+    pub excel_auto_disable_on_403: Option<bool>,
     pub concurrency_limit: Option<u32>,
     pub weight: u16,
     pub group_ids: Vec<String>,
@@ -91,6 +96,7 @@ impl ReloginTemplateConfig {
             excel_models: self.excel_models.clone(),
             excel_models_follow_global: self.excel_models_follow_global,
             excel_cache_creation_as_input: self.excel_cache_creation_as_input,
+            excel_auto_disable_on_403: self.excel_auto_disable_on_403,
             concurrency_limit: self
                 .concurrency_limit
                 .map(|value| {

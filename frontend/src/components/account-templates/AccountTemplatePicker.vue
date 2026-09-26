@@ -56,6 +56,10 @@ onScopeDispose(() => controller.abort())
       {{ error }}
     </p>
     <dl v-if="selected" class="mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-cp-sm">
+      <template v-if="selected.config.excelAutoDisableOn403 != null">
+        <dt>Excel 403 自动关闭</dt>
+        <dd>{{ selected.config.excelAutoDisableOn403 ? '开启' : '关闭' }}</dd>
+      </template>
       <dt class="text-cp-text-secondary">
         调度
       </dt><dd class="m-0">

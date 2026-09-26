@@ -304,6 +304,7 @@ const batchCustomName = shallowRef('')
 const applyExcel = shallowRef(false)
 const excelEnabled = shallowRef(false)
 const excelCacheCreationAsInput = shallowRef(false)
+const excelAutoDisableOn403 = shallowRef(false)
 const excelModelsFollowGlobal = shallowRef(true)
 const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
 const confirmMode = shallowRef<'push' | 'delete'>('push')
@@ -316,6 +317,7 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   applyExcel.value = false
   excelEnabled.value = false
   excelCacheCreationAsInput.value = false
+  excelAutoDisableOn403.value = false
   excelModelsFollowGlobal.value = true
   excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
   confirmMode.value = mode
@@ -362,7 +364,7 @@ function executeConfirmed() {
           selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
       }
       const newAccountExcel = newPushCount.value > 0 && applyExcel.value
-        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value)
+        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value, excelAutoDisableOn403.value)
         : undefined
       batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, newAccountExcel))
     }
@@ -679,6 +681,9 @@ onBeforeUnmount(() => {
           </BaseFormItem>
           <BaseFormItem label="缓存写入按普通输入计费">
             <BaseSwitch v-model="excelCacheCreationAsInput" label="新账号缓存写入按普通输入计费" :disabled="busy || !excelEnabled" />
+          </BaseFormItem>
+          <BaseFormItem label="Excel 遇到 HTTP 403 自动关闭">
+            <BaseSwitch v-model="excelAutoDisableOn403" label="新账号 Excel 遇到 HTTP 403 自动关闭" :disabled="busy || !excelEnabled" />
           </BaseFormItem>
         </template>
       </div>

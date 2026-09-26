@@ -681,6 +681,7 @@ pub struct ProviderAccount {
     responses_upstream: super::ResponsesUpstream,
     excel_models: super::ExcelModels,
     excel_cache_creation_as_input: bool,
+    excel_auto_disable_on_403: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
     model_access: super::AccountModelAccess,
@@ -723,6 +724,7 @@ impl ProviderAccount {
             responses_upstream: super::ResponsesUpstream::Codex,
             excel_models: super::ExcelModels::default(),
             excel_cache_creation_as_input: false,
+            excel_auto_disable_on_403: Default::default(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),
@@ -859,6 +861,17 @@ impl ProviderAccount {
     #[must_use]
     pub const fn excel_cache_creation_as_input(&self) -> bool {
         self.excel_cache_creation_as_input
+    }
+
+    #[must_use]
+    pub const fn with_excel_auto_disable_on_403(mut self, enabled: bool) -> Self {
+        self.excel_auto_disable_on_403 = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn excel_auto_disable_on_403(&self) -> bool {
+        self.excel_auto_disable_on_403
     }
 
     #[must_use]

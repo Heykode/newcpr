@@ -246,7 +246,9 @@ const {
   excelModels: batchExcelModels,
   excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
   excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
+  excelAutoDisableOn403: batchExcelAutoDisableOn403,
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
+  updateExcelAutoDisableOn403: batchUpdateExcelAutoDisableOn403,
   updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
@@ -282,6 +284,7 @@ const {
   excelModels,
   excelModelsFollowGlobal,
   excelCacheCreationAsInput,
+  excelAutoDisableOn403,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -653,6 +656,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-models="excelModels"
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
+      v-model:excel-auto-disable-on-403="excelAutoDisableOn403"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -675,7 +679,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-models="batchExcelModels"
       v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
+      v-model:excel-auto-disable-on-403="batchExcelAutoDisableOn403"
       v-model:update-excel-cache-creation-as-input="batchUpdateExcelCacheCreationAsInput"
+      v-model:update-excel-auto-disable-on-403="batchUpdateExcelAutoDisableOn403"
       v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"

@@ -277,6 +277,9 @@ fn to_core_request_tuning(
         excel_image_relay_downloads: overrides
             .excel_image_relay_downloads
             .unwrap_or(defaults.excel_image_relay_downloads),
+        excel_image_relay_requests: overrides
+            .excel_image_relay_requests
+            .unwrap_or(defaults.excel_image_relay_requests),
         excel_image_relay_entries: overrides
             .excel_image_relay_entries
             .unwrap_or(defaults.excel_image_relay_entries),

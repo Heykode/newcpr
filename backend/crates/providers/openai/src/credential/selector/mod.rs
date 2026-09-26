@@ -1226,6 +1226,17 @@ impl CodexCredentialSelector {
             .ok_or(CredentialSelectionError::InvalidCredential)
     }
 
+    pub(crate) async fn disable_excel_on_403(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<bool, CredentialSelectionError> {
+        self.repository
+            .store()
+            .disable_excel_on_403(account)
+            .await
+            .map_err(|_| CredentialSelectionError::Store)
+    }
+
     pub async fn capture_response_cookies(
         &self,
         account: &ProviderAccount,

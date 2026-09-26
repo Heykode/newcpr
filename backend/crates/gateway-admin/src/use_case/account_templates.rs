@@ -172,6 +172,7 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
                     excel_models: settings.excel_models,
                     excel_models_follow_global: settings.excel_models_follow_global,
                     excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
+                    excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
                     concurrency_limit: Some(settings.concurrency_limit),
                     weight: Some(settings.weight),
                     group_ids: Some(settings.group_ids),

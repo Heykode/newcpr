@@ -26,7 +26,9 @@ export function useAccountEditor(options: {
   const excelModels = shallowRef('gpt-5.6-sol, gpt-6-astra')
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
+  const excelAutoDisableOn403 = shallowRef(false)
   let initialExcelCacheCreationAsInput = false
+  let initialExcelAutoDisableOn403 = false
   let initialExcelModelsFollowGlobal = true
   let initialExcelModels = ''
   const concurrencyLimit = shallowRef('')
@@ -57,7 +59,9 @@ export function useAccountEditor(options: {
     excelModels.value = (account.excelModels ?? ['gpt-5.6-sol', 'gpt-6-astra']).join(', ')
     excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
     excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
+    excelAutoDisableOn403.value = account.excelAutoDisableOn403 ?? false
     initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
+    initialExcelAutoDisableOn403 = excelAutoDisableOn403.value
     initialExcelModelsFollowGlobal = excelModelsFollowGlobal.value
     initialExcelModels = excelModels.value
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
@@ -121,6 +125,8 @@ export function useAccountEditor(options: {
       }
       if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
         payload.excelCacheCreationAsInput = excelEnabled.value && excelCacheCreationAsInput.value
+      if (excelAvailable && (excelAutoDisableOn403.value !== initialExcelAutoDisableOn403 || (initialExcelEnabled && !excelEnabled.value)))
+        payload.excelAutoDisableOn403 = excelEnabled.value && excelAutoDisableOn403.value
       await updateAccount(payload)
       showEditModal.value = false
       toast.success('账号已更新')
@@ -142,7 +148,9 @@ export function useAccountEditor(options: {
     excelModels.value = 'gpt-5.6-sol, gpt-6-astra'
     excelModelsFollowGlobal.value = true
     excelCacheCreationAsInput.value = false
+    excelAutoDisableOn403.value = false
     initialExcelCacheCreationAsInput = false
+    initialExcelAutoDisableOn403 = false
     initialExcelModelsFollowGlobal = true
     initialExcelModels = ''
     concurrencyLimit.value = ''
@@ -161,6 +169,7 @@ export function useAccountEditor(options: {
     excelModels,
     excelModelsFollowGlobal,
     excelCacheCreationAsInput,
+    excelAutoDisableOn403,
     concurrencyLimit,
     weight,
     modelAccess,

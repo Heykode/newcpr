@@ -163,6 +163,7 @@ export interface Account {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelAutoDisableOn403?: boolean
   effectiveExcelModels?: string[]
   turnState?: {
     enabled?: boolean
@@ -443,6 +444,7 @@ interface AccountUpdateParam {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelAutoDisableOn403?: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
@@ -460,6 +462,7 @@ interface AccountBatchUpdateParam {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelAutoDisableOn403?: boolean
   concurrencyLimit?: number | null
   weight?: number
   modelAccess?: AccountModelAccess
@@ -479,6 +482,7 @@ interface AccountImportSettings {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelAutoDisableOn403?: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess

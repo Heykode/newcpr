@@ -56,6 +56,7 @@ const tuningValues = {
   websocketFailureOpenDurationMs: tuningNumber('websocketFailureOpenDurationMs'),
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
   excelImageRelayBytes: tuningNumber('excelImageRelayBytes'),
+  excelImageRelayRequests: tuningNumber('excelImageRelayRequests'),
   excelImageRelayDownloads: tuningNumber('excelImageRelayDownloads'),
   excelImageRelayEntries: tuningNumber('excelImageRelayEntries'),
   accountBusyWaitStickyMaxWaiting: tuningNumber('accountBusyWaitStickyMaxWaiting'),
@@ -263,6 +264,9 @@ const tuningValues = {
         </BaseFormItem>
         <BaseFormItem label="Excel 图片中转下载并发">
           <BaseInput v-model="tuningValues.excelImageRelayDownloads.value" aria-label="Excel 图片中转下载并发" type="number" min="1" max="128" step="1" />
+        </BaseFormItem>
+        <BaseFormItem label="Excel 图片在途请求上限">
+          <BaseInput v-model="tuningValues.excelImageRelayRequests.value" aria-label="Excel 图片在途请求上限" type="number" min="1" max="512" step="1" />
         </BaseFormItem>
         <BaseFormItem label="Excel 图片中转条目上限">
           <BaseInput v-model="tuningValues.excelImageRelayEntries.value" aria-label="Excel 图片中转条目上限" type="number" min="1" max="4096" step="1" />
