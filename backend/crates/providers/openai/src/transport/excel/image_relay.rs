@@ -155,7 +155,7 @@ impl ImageRelay {
             return Ok(None);
         };
         let input = body.get("input").unwrap_or(&Value::Null);
-        let budget = images::decoded_budget(input).map_err(|_| ExcelRequestError::Input)?;
+        let budget = images::decoded_budget_user(input).map_err(|_| ExcelRequestError::Input)?;
         if budget == 0 {
             return Ok(None);
         }
@@ -177,7 +177,7 @@ impl ImageRelay {
         )
         .ok_or(ExcelRequestError::ImageRelay)?;
         let mut pictures = Vec::new();
-        images::collect(input, &mut pictures, &mut 0).map_err(|_| ExcelRequestError::Input)?;
+        images::collect_user(input, &mut pictures).map_err(|_| ExcelRequestError::Input)?;
         if pictures.is_empty() {
             return Ok(None);
         }
@@ -237,8 +237,15 @@ impl ImageRelay {
             );
             tokens.push(token);
         }
-        if let Some(input) = body.get_mut("input") {
-            rewrite_urls(input, &replacements);
+        if let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) {
+            for item in items
+                .iter_mut()
+                .filter(|item| images::is_user_message(item))
+            {
+                if let Some(content) = item.get_mut("content") {
+                    rewrite_user_urls(content, &replacements);
+                }
+            }
         }
         Ok(Some(Arc::new(ImageLease {
             relay: Arc::downgrade(self),
@@ -280,14 +287,20 @@ impl TemporaryImageSource for ImageRelay {
     }
 }
 
-fn rewrite_urls(value: &mut Value, replacements: &BTreeMap<String, String>) {
+fn rewrite_user_urls(value: &mut Value, replacements: &BTreeMap<String, String>) {
     match value {
         Value::Array(values) => {
             for value in values {
-                rewrite_urls(value, replacements);
+                rewrite_user_urls(value, replacements);
             }
         }
         Value::Object(fields) => {
+            if matches!(
+                fields.get("type").and_then(Value::as_str),
+                Some("function_call_output" | "custom_tool_call_output")
+            ) {
+                return;
+            }
             if fields.get("type").and_then(Value::as_str) == Some("input_image")
                 && let Some(url) = fields
                     .get("image_url")
@@ -295,10 +308,6 @@ fn rewrite_urls(value: &mut Value, replacements: &BTreeMap<String, String>) {
                     .and_then(|url| replacements.get(url))
             {
                 fields.insert("image_url".into(), url.clone().into());
-            } else {
-                for value in fields.values_mut() {
-                    rewrite_urls(value, replacements);
-                }
             }
         }
         _ => {}

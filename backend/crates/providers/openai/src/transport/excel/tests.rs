@@ -1128,20 +1128,21 @@ async fn excel_completed_tool_mapping_and_history_are_available_to_next_turn() {
 }
 
 #[tokio::test]
-async fn excel_user_image_uploads_before_generation_without_changing_identity() {
+async fn excel_user_image_relays_before_generation_without_changing_identity() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(RESPONSES_PATH))
         .respond_with(|request: &wiremock::Request| {
             let body: Value = request.body_json().unwrap();
             let image = &body["input"].as_array().unwrap().last().unwrap()["content"][0];
-            if image.get("image_url").is_some() {
-                ResponseTemplate::new(422)
-                    .set_body_json(json!({"error":{"code":"inline_image_unsupported"}}))
-            } else {
-                assert_eq!(image["file_id"], "file_fixture");
-                completed()
-            }
+            assert!(
+                image["image_url"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("https://images.example.com/_cpr/excel-images/")
+            );
+            assert!(image.get("file_id").is_none());
+            completed()
         })
         .expect(1)
         .mount(&server)
@@ -1151,14 +1152,19 @@ async fn excel_user_image_uploads_before_generation_without_changing_identity() 
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({"openai_file_id":"file_fixture"})),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
-    let image = json!({"type":"input_image","image_url":"data:image/png;base64,AQID"});
-    let request = request(
+    let image = json!({"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="});
+    let mut request = request(
         format!("{}{RESPONSES_PATH}", server.uri()),
         json!([{"role":"user","content":[image.clone(), image]}]),
     );
+    let relay = Arc::new(image_relay::ImageRelay::new(Some(
+        "https://images.example.com".into(),
+    )));
+    let excel = request.excel.as_mut().unwrap();
+    excel._image_lease = relay.stage(&mut excel.body).unwrap();
     let result = client(&server.uri())
         .create_response_stream_with_pool_account(
             &request,
@@ -1169,7 +1175,7 @@ async fn excel_user_image_uploads_before_generation_without_changing_identity() 
         .unwrap();
     result.body.try_collect::<Vec<_>>().await.unwrap();
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 1);
     for request in &requests {
         assert_eq!(request.headers["authorization"], "Bearer fixture");
         assert_eq!(request.headers["chatgpt-account-id"], "workspace");
@@ -1179,7 +1185,7 @@ async fn excel_user_image_uploads_before_generation_without_changing_identity() 
         requests[0].headers["content-type"]
             .to_str()
             .unwrap()
-            .starts_with("multipart/form-data;")
+            .starts_with("application/json")
     );
 }
 
@@ -1221,15 +1227,14 @@ async fn excel_generic_validation_errors_do_not_upload_or_replay() {
 }
 
 #[tokio::test]
-async fn excel_image_upload_auth_failure_is_not_hidden_or_retried_without_image() {
+async fn excel_https_image_auth_failure_is_not_hidden_or_retried_without_image() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(RESPONSES_PATH))
         .respond_with(
-            ResponseTemplate::new(422)
-                .set_body_json(json!({"error":{"code":"inline_image_unsupported"}})),
+            ResponseTemplate::new(401).set_body_json(json!({"error":{"code":"token_revoked"}})),
         )
-        .expect(0)
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -1237,12 +1242,12 @@ async fn excel_image_upload_auth_failure_is_not_hidden_or_retried_without_image(
         .respond_with(
             ResponseTemplate::new(401).set_body_json(json!({"error":{"code":"token_revoked"}})),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     let request = request(
         format!("{}{RESPONSES_PATH}", server.uri()),
-        json!([{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]}]),
+        json!([{"role":"user","content":[{"type":"input_image","image_url":"https://images.example.com/picture.png"}]}]),
     );
     let result = client(&server.uri())
         .create_response_stream_with_pool_account(

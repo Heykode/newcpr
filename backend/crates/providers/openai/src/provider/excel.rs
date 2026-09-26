@@ -98,7 +98,9 @@ pub(super) async fn prepare_excel(
             }),
         );
     }
+    crate::transport::excel::images::validate_references(&body).map_err(request_error)?;
     let image_lease = image_relay.stage(&mut body).map_err(request_error)?;
+    crate::transport::excel::images::validate(&body).map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
     request.force_http_sse = true;
     request.use_websocket = false;
@@ -118,6 +120,20 @@ pub(super) async fn prepare_excel(
 }
 
 pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
+    if let ExcelRequestError::ImageInput(message) = error {
+        return provider_error(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+        )
+        .with_status(400)
+        .with_upstream_code(OpaqueUpstreamValue::new("excel_image_input_invalid"))
+        .with_client_visible_upstream_error(gateway_core::error::ClientVisibleUpstreamError::new(
+            message,
+            Some("excel_image_input_invalid".into()),
+            Some("invalid_request_error".into()),
+        ))
+        .with_diagnostic(ProviderDiagnostic::new(error.to_string()));
+    }
     if error == ExcelRequestError::ImageRelay {
         return provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
             .with_status(503)
@@ -296,6 +312,24 @@ pub(super) fn classify_failure(
 mod tests {
     use super::*;
     use gateway_core::error::{ClientVisibleUpstreamError, ClientVisibleUpstreamResponse};
+
+    #[test]
+    fn excel_tool_file_id_error_is_actionable_and_not_retried() {
+        let error = request_error(ExcelRequestError::ImageInput(
+            "tool image file_id is unsupported; return the original image as Base64 or HTTPS image_url",
+        ));
+        assert_eq!(error.upstream_status(), Some(400));
+        assert!(
+            error
+                .client_visible_upstream_error()
+                .unwrap()
+                .message()
+                .contains("tool image file_id")
+        );
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(error.pre_delivery_retry().is_none());
+        assert!(!error.replay_is_safe());
+    }
 
     #[test]
     fn excel_auto_disable_requires_opt_in_and_actual_http_403() {

@@ -93,10 +93,17 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        // Materialize inline images in messages AND tool results before generation.
-        // Neither a generic 422 nor an expired attachment permits generation replay.
+        // User images need account-scoped attachments; tool-result images must
+        // retain Base64/HTTPS because that position rejects file_id.
+        if let Some(excel) = &upstream_request.excel {
+            super::excel::images::validate(&excel.body).map_err(|error| {
+                CodexClientError::InvalidSse(gateway_protocol::openai::sse::SseError::ParseError(
+                    error.to_string(),
+                ))
+            })?;
+        }
         if let Some(excel) = &upstream_request.excel
-            && super::excel::images::has_inline(&excel.body)
+            && super::excel::images::has_user_inline(&excel.body)
         {
             let images = super::excel::images::upload_inline(
                 self,

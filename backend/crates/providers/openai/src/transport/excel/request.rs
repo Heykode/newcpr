@@ -33,6 +33,8 @@ pub(crate) enum ExcelRequestError {
     Format,
     #[error("Excel image relay is unavailable or full")]
     ImageRelay,
+    #[error("Excel image input: {0}")]
+    ImageInput(&'static str),
     #[error(
         "unsupported Excel image-tool request; use PNG, gpt-image-2 and supported image options"
     )]
