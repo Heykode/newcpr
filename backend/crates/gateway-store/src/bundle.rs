@@ -145,6 +145,9 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         }),
         backup_ports(pool.clone(), &config)?,
     )
+    .with_quality_ops(Arc::new(postgres::quality_ops::PgQualityOpsStore::new(
+        pool.clone(),
+    )))
     .with_relogin(Arc::new(postgres::PgReloginStore::new(pool.clone())))
     .with_egress(Arc::new(postgres::PgProviderEgressRepository::new(
         pool.clone(),

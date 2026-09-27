@@ -159,6 +159,7 @@ pub enum AdminConfigError {
 /// 字段全部私有；调用方经 accessor 直接调用能力，不需要命名内部 `use_case` 模块。
 #[derive(Clone)]
 pub struct AdminServices {
+    quality_ops: Arc<use_case::quality_ops::QualityOpsService>,
     account_templates: Arc<dyn AccountTemplatesService>,
     group_monitor: Arc<dyn GroupMonitorService>,
     relogin: Arc<dyn ReloginService>,
@@ -182,6 +183,10 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn quality_ops(&self) -> &use_case::quality_ops::QualityOpsService {
+        self.quality_ops.as_ref()
+    }
     #[must_use]
     pub fn request_capture(&self) -> &dyn RequestCaptureService {
         self.request_capture.as_ref()
@@ -410,7 +415,15 @@ pub async fn initialize(
         xai_service.clone(),
     );
     let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
+    let quality_ops = Arc::new(use_case::quality_ops::QualityOpsService::new(
+        store.quality_ops(),
+        store.accounts(),
+        store.account_groups(),
+        registry.clone(),
+        probe,
+    ));
     let services = AdminServices {
+        quality_ops: quality_ops.clone(),
         account_templates,
         group_monitor: group_monitor.clone(),
         relogin: relogin.clone(),
@@ -480,6 +493,7 @@ pub async fn initialize(
         provider_kinds,
     )?);
     worker_contributions.push(workers::group_monitor::contribution(group_monitor)?);
+    worker_contributions.push(workers::quality_ops::contribution(quality_ops)?);
     worker_contributions.push(workers::notifications::contribution(notifications)?);
     Ok(AdminBundle {
         services,

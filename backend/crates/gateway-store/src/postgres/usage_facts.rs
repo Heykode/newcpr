@@ -18,12 +18,22 @@ pub(crate) fn completed_usage_fact_predicate(alias: &str) -> String {
     format!(
         "{alias}.outcome = 'succeeded'
          and {alias}.downstream_committed_at is not null
+         and {alias}.request_kind is distinct from 'account_quality_check'
          and ({alias}.provider_kind is distinct from 'openai'
               or {alias}.request_kind is distinct from 'prewarm')
          and (({alias}.client_transport = 'websocket' and {alias}.client_status_code is null)
               or {alias}.client_status_code between 200 and 399)
          and ({evidence})"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn quality_checks_are_not_client_usage_facts() {
+        let predicate = super::completed_usage_fact_predicate("mr");
+        assert!(predicate.contains("mr.request_kind is distinct from 'account_quality_check'"));
+    }
 }
 
 fn usage_evidence_predicate(alias: &str) -> String {

@@ -15,6 +15,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Excel Upstream](./excel-upstream.md) | Account-level route, scoped replay, downstream WS and State retirement | Integration verification in progress |
+| [Quality Operations](./quality-operations.md) | Fixed-account scheduled tests, judgment and leased jobs | Isolated OVH verification |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
 | [Admin Security And Budget](./admin-security-and-budget.md) | 管理密码撤销、原子审计与预算重置 | 当前分支局部适配 |
