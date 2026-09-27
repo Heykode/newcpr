@@ -1215,6 +1215,119 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
 }
 
 #[test]
+fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges() {
+    struct QualityProvider {
+        complete: bool,
+    }
+    #[async_trait]
+    impl Provider for QualityProvider {
+        fn name(&self) -> &'static str {
+            "openai"
+        }
+        fn catalog_generation(&self) -> ProviderCatalogGeneration {
+            ProviderCatalogGeneration::default()
+        }
+        async fn query_model_capabilities(
+            &self,
+        ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+            Ok(Vec::new())
+        }
+        async fn execute(
+            &self,
+            request: ProviderRequest,
+            context: AttemptContext,
+        ) -> Result<ProviderStream, ProviderError> {
+            assert!(!context.is_diagnostic_required_account());
+            assert_eq!(context.required_account().unwrap().as_str(), "acct_start");
+            let model = request.candidate().upstream_model().unwrap().clone();
+            let metadata = ProviderCallMetadata::new(
+                request.candidate().provider().clone(),
+                model.clone(),
+                ProviderAccountId::new("acct_start").unwrap(),
+                UpstreamTransport::new("http_sse").unwrap(),
+            );
+            let response = ResponseMeta::new("quality-response", model.as_str());
+            let terminal = response.clone().with_finish_reason(if self.complete {
+                gateway_core::event::FinishReason::Stop
+            } else {
+                gateway_core::event::FinishReason::Length
+            });
+            let events: Vec<Result<ProviderEvent, ProviderError>> = vec![
+                Ok(GatewayEvent::Started(response).into()),
+                Ok(
+                    GatewayEvent::ContentAdded(gateway_core::event::ContentItem::new(
+                        0,
+                        gateway_core::event::ContentKind::Text,
+                    ))
+                    .into(),
+                ),
+                Ok(GatewayEvent::TextDelta(gateway_core::event::TextDelta {
+                    content_index: 0,
+                    text: "fixture ".into(),
+                })
+                .into()),
+                Ok(GatewayEvent::TextDelta(gateway_core::event::TextDelta {
+                    content_index: 0,
+                    text: "answer".into(),
+                })
+                .into()),
+                Ok(GatewayEvent::Completed(terminal).into()),
+            ];
+            Ok(ProviderStream::new(
+                metadata,
+                futures::stream::iter(events),
+                (),
+            ))
+        }
+    }
+    for complete in [true, false] {
+        let store = Arc::new(TrackingExecutionStore::default());
+        let providers =
+            ProviderRegistry::new([Arc::new(QualityProvider { complete }) as Arc<dyn Provider>])
+                .unwrap();
+        let service = DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(start_snapshot().with_account_directory(Arc::new(
+                RuntimeAccountDirectory::new(BTreeMap::from([(
+                    ProviderAccountId::new("acct_start").unwrap(),
+                    RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
+                )])),
+            ))),
+            store.clone(),
+            providers,
+            Arc::new(UnusedAdmissions),
+            Arc::new(UnusedCircuits),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let result = block_on(service.quality_check(
+            AccountProbeRequest {
+                account_id: ProviderAccountId::new("acct_start").unwrap(),
+                provider_kind: ProviderKind::new("openai").unwrap(),
+                upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
+                operation: start_operation(),
+            },
+            gateway_core::lifecycle::CancellationToken::new(),
+        ));
+        if complete {
+            assert_eq!(result.unwrap().text.concat(), "fixture answer");
+        } else {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                GatewayErrorKind::UpstreamUnavailable
+            );
+        }
+        let requests = store.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].client_api_key_id.is_none());
+        assert_eq!(
+            requests[0].request_kind.as_deref(),
+            Some("account_quality_check")
+        );
+        assert_eq!(store.finalizations.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn probe_failures_should_be_observable_without_a_model_request_row() {
     let store = Arc::new(TrackingExecutionStore::default());
     let providers = ProviderRegistry::new([Arc::new(FailingProvider) as Arc<dyn Provider>])

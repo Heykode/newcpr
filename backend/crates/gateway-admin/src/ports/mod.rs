@@ -5,6 +5,7 @@ pub mod client_distribution;
 pub mod notification;
 pub mod provider;
 pub mod proxy;
+pub mod quality_ops;
 pub mod relogin;
 pub mod request_capture;
 pub mod store;
