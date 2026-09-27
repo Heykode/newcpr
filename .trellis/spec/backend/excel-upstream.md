@@ -490,6 +490,18 @@ records cannot reconstruct omitted constraints; explicit full catalogs remain
 authoritative. Hosted-tool omission is the existing fixed-Excel policy, not an
 authorization to add native fallback or change sticky account selection.
 
+The 256-tool admission limit counts unique catalog identities, not declarations.
+Compare an existing key before applying that limit to a new key; preserve all
+execution-conflict checks, explicit/inherited precedence and stable catalog order.
+The boundary must survive historical additional_tools and cache round trips.
+Native Codex HTTP/WS requests do not use this Excel catalog admission policy.
+
+Before releasing a completed tool batch, check both call_id and converted item id
+for uniqueness, including structured-output requests without a repair sender.
+Use converted identities: custom calls intentionally receive their scoped derived
+item ids. Reject the whole malformed batch before any executable event, preserving
+the existing bounded repair and terminal rules. Native stream processing is unchanged.
+
 Scope: Excel image storage/settings, the existing opt-in 403 diagnostic, and
 fresh quota reset recovery. Do not change selection scores, route fences,
 fingerprints, credentials or configured egress.
