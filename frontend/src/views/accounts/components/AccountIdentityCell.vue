@@ -130,6 +130,13 @@ const avatarToneClass = computed(() => {
         {{ secondaryText }}
       </div>
       <div
+        v-if="account.enabled === false && account.responsesUpstream === 'excel' && account.excelAutoDisabledAt"
+        class="mt-0.5 text-cp-xs text-cp-text-secondary"
+        :title="`Excel 上游返回 HTTP 403，已于 ${formatDateTime(account.excelAutoDisabledAt)} 暂停此账号调度；保留 Excel 设置，处理后手动启用账号调度`"
+      >
+        Excel 403 自动暂停调度
+      </div>
+      <div
         v-if="account.responsesUpstream !== 'excel' && account.excelAutoDisabledAt"
         class="mt-0.5 text-cp-xs text-cp-text-secondary"
         :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelAutoDisabledAt)}`"

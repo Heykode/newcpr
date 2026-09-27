@@ -91,6 +91,9 @@ const profileOpen = shallowRef(false)
       </p>
     </div>
 
+    <p v-if="!account.enabled && account.responsesUpstream === 'excel' && account.excelAutoDisabledAt" class="m-0 break-words border-t border-cp-border-secondary pt-3 text-cp-sm text-cp-text-secondary">
+      Excel 上游 HTTP 403，已自动暂停此账号调度：{{ formatDateTime(account.excelAutoDisabledAt) }}。Excel 设置保持不变，处理后请手动启用账号调度。
+    </p>
     <p v-if="account.responsesUpstream !== 'excel' && account.excelAutoDisabledAt" class="m-0 break-words border-t border-cp-border-secondary pt-3 text-cp-sm text-cp-text-secondary">
       Excel 因上游 HTTP 403 自动关闭：{{ formatDateTime(account.excelAutoDisabledAt) }}
     </p>

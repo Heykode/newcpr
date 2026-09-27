@@ -279,7 +279,7 @@ pub(super) fn failed_repair_metering(request: &CodexResponsesRequest) -> Vec<Pro
     )]
 }
 
-fn should_disable_on_403(account: &ProviderAccount, failure: &MappedProviderFailure) -> bool {
+fn should_pause_on_403(account: &ProviderAccount, failure: &MappedProviderFailure) -> bool {
     let error = &failure.error;
     account.excel_auto_disable_on_403()
         && account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
@@ -317,7 +317,7 @@ pub(super) async fn observe_http_rejection(
             .await;
         return;
     }
-    if !should_disable_on_403(account, failure) {
+    if !should_pause_on_403(account, failure) {
         return;
     }
     suppress_rejection_recovery(failure);
@@ -325,10 +325,10 @@ pub(super) async fn observe_http_rejection(
     let account = account.clone();
     // Cancellation may drop the waiter, but the already-confirmed write stays bounded.
     let _ = tokio::spawn(async move {
-        match tokio::time::timeout(Duration::from_secs(2), selector.disable_excel_on_403(&account)).await {
-            Ok(Ok(true)) => tracing::info!(account_id = %account.id(), "Excel disabled after upstream HTTP 403; request not replayed"),
+        match tokio::time::timeout(Duration::from_secs(2), selector.pause_account_on_excel_403(&account)).await {
+            Ok(Ok(true)) => tracing::info!(account_id = %account.id(), "Account scheduling paused after Excel upstream HTTP 403; Excel route preserved; request not replayed"),
             Ok(Ok(false)) => {},
-            _ => tracing::warn!(account_id = %account.id(), "Excel HTTP 403 auto-disable did not complete"),
+            _ => tracing::warn!(account_id = %account.id(), "Excel HTTP 403 account scheduling pause did not complete"),
         }
     }).await;
 }
@@ -724,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn excel_auto_disable_requires_opt_in_and_actual_http_403() {
+    fn excel_auto_pause_requires_opt_in_and_actual_http_403() {
         let account = ProviderAccount::new(
             gateway_core::account::ProviderAccountId::new("acct_excel403").unwrap(),
             gateway_core::identity::ProviderKind::new("openai").unwrap(),
@@ -738,34 +738,34 @@ mod tests {
         let mut failure = rejection("forbidden");
         failure.error = failure.error.with_status(403);
         failure.http_rejection_status = Some(403);
-        assert!(!should_disable_on_403(&account, &failure));
+        assert!(!should_pause_on_403(&account, &failure));
         let account = account.with_excel_auto_disable_on_403(true);
-        assert!(should_disable_on_403(&account, &failure));
+        assert!(should_pause_on_403(&account, &failure));
         for status in [None, Some(200), Some(401), Some(429), Some(500)] {
             failure.http_rejection_status = status;
-            assert!(!should_disable_on_403(&account, &failure));
+            assert!(!should_pause_on_403(&account, &failure));
         }
         failure.http_rejection_status = Some(403);
         let codex = account
             .clone()
             .with_responses_upstream(gateway_core::account::ResponsesUpstream::Codex);
-        assert!(!should_disable_on_403(&codex, &failure));
+        assert!(!should_pause_on_403(&codex, &failure));
         for code in [
             "basispoints_model_access_changed",
             " BASISPOINTS_MODEL_ACCESS_CHANGED ",
         ] {
             let mut excluded = rejection(code);
             excluded.http_rejection_status = Some(403);
-            assert!(!should_disable_on_403(&account, &excluded));
+            assert!(!should_pause_on_403(&account, &excluded));
         }
         failure.error = failure
             .error
             .with_upstream_code(OpaqueUpstreamValue::new("basispoints_model_access_changed"));
-        assert!(!should_disable_on_403(&account, &failure));
+        assert!(!should_pause_on_403(&account, &failure));
     }
 
     #[test]
-    fn excel_auto_disable_keeps_error_evidence_without_retry_or_account_mutation() {
+    fn excel_auto_pause_keeps_error_evidence_without_retry_or_account_mutation() {
         let mut failure = rejection("forbidden");
         failure.error = failure
             .error
@@ -804,7 +804,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn excel_auto_disable_http_provenance_does_not_trust_sse_error_status() {
+    async fn excel_auto_pause_http_provenance_does_not_trust_sse_error_status() {
         use crate::transport::excel::{ClientTools, ExcelPreparedRequest};
         use wiremock::{
             Mock, MockServer, ResponseTemplate,

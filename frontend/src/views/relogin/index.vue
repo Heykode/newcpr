@@ -683,8 +683,8 @@ onBeforeUnmount(() => {
           <BaseFormItem label="缓存写入按普通输入计费">
             <BaseSwitch v-model="excelCacheCreationAsInput" label="新账号缓存写入按普通输入计费" :disabled="busy || !excelEnabled" />
           </BaseFormItem>
-          <BaseFormItem label="Excel 遇到 HTTP 403 自动关闭">
-            <BaseSwitch v-model="excelAutoDisableOn403" label="新账号 Excel 遇到 HTTP 403 自动关闭" :disabled="busy || !excelEnabled" />
+          <BaseFormItem label="Excel 遇到 HTTP 403 自动暂停此账号调度">
+            <BaseSwitch v-model="excelAutoDisableOn403" label="新账号 Excel 遇到 HTTP 403 自动暂停此账号调度" :disabled="busy || !excelEnabled" />
           </BaseFormItem>
         </template>
       </div>

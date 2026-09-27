@@ -269,7 +269,7 @@ budget defaults to 1024 MiB and cache entries to 512; these are limits, not eage
 allocations. Saved runtime overrides win. The separate transient decode/download
 memory budget remains 1024 MiB even when disk capacity increases.
 
-## Optional HTTP 403 Auto-disable
+## Optional HTTP 403 Account Scheduling Pause
 
 `excelAutoDisableOn403` defaults off and is OpenAI OAuth/account scoped.
 Only the real HTTP handshake rejection can trigger it, including compact's
@@ -277,11 +277,18 @@ HTTP stage; a 403 encoded in an HTTP200 SSE payload cannot. Exclude
 `basispoints_model_access_changed`. Clear retry/account-failure intents only
 on this opted-in path, preserve the current response evidence, and never
 replay the current request through another protocol.
-Store locks config then account and conditionally updates only the Excel route
-for the current credential revision/type/flags; config revision increments in
-that transaction exactly once. Preserve credentials, quotas, scheduling,
-other options and the opt-in flag. Manual Excel-off clears the subordinate
-flag, while automatic-off preserves it. The two-second bounded write outlives
+Store locks config then account and conditionally changes `enabled` to false
+for the current credential revision/type/flags and enabled row; config revision
+increments in that transaction exactly once. Preserve the Excel route, credentials,
+quotas, model list, other options and opt-in flag. No Codex fallback or in-flight
+cancellation. Resume uses the existing manual scheduling control, not a timer.
+Keep legacy `excelAutoDisableOn403` and `excelAutoDisabledAt` wire/storage names
+for compatibility; do not rewrite historical Codex auto-disable records as pauses.
+Mainline adds the diagnostic timestamp in migration 0047; retain 0046 quality
+operations unchanged. Unpublished Excel branch migration numbers are not reusable.
+Clear the timestamp on explicit scheduling resume/admin recovery or an actual route
+change, not on re-saving the same Excel route. Manual Excel-off clears the subordinate
+flag, while automatic pause preserves it. The two-second bounded write outlives
 client cancellation; failures must not replace the original upstream error.
 No per-account polling or credential guardian is introduced.
 
