@@ -304,6 +304,8 @@ fn response_create_should_reject_non_boolean_stream_without_disclosing_body_valu
 
 #[derive(Default)]
 struct AtomicFailureTrace {
+    control: Option<gateway_core::engine::response_control::ResponseControl>,
+    interrupt_owner: Mutex<Option<gateway_core::engine::response_control::ActiveResponseInterrupt>>,
     starts: AtomicUsize,
     next_calls: AtomicUsize,
     committed: AtomicBool,
@@ -320,6 +322,10 @@ struct AtomicFailureSession {
 }
 
 impl ExecutionSession for AtomicFailureSession {
+    fn response_control(&self) -> Option<gateway_core::engine::response_control::ResponseControl> {
+        self.trace.control.clone()
+    }
+
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
         Box::pin(async move {
             let next_call = self.trace.next_calls.fetch_add(1, Ordering::AcqRel);
@@ -343,13 +349,39 @@ impl ExecutionSession for AtomicFailureSession {
                         .unwrap_or_else(atomic_failure_batch),
                 )),
                 1 => {
+                    let active = self.trace.interrupt_owner.lock().unwrap().take();
+                    if let Some(active) = active {
+                        active.requested().await;
+                        drop(active);
+                        let event = ProviderEvent::wire(
+                            ProtocolWireEvent::json(
+                                "openai",
+                                Some("response.incomplete".into()),
+                                json!({"type":"response.incomplete","response":{
+                                    "id":"resp_active_interrupt", "status":"incomplete","output":[],
+                                    "incomplete_details":{"reason":"interrupted"}
+                                }}),
+                            )
+                            .unwrap(),
+                        );
+                        return Ok(Some(
+                            CoordinatedEvent::try_batch(
+                                vec![event],
+                                CommitRequirement::AlreadyCommitted,
+                            )
+                            .unwrap(),
+                        ));
+                    }
                     self.trace.finalized.store(true, Ordering::Release);
                     Err(EngineError::Provider(ProviderError::new(
                         ProviderErrorKind::RateLimited,
                         UpstreamSendState::Sent,
                     )))
                 }
-                _ => Ok(None),
+                _ => {
+                    self.trace.finalized.store(true, Ordering::Release);
+                    Ok(None)
+                }
             }
         })
     }

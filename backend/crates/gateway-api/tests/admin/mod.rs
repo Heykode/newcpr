@@ -88,6 +88,7 @@ mod notifications;
 mod observability;
 mod outbound_user_agent;
 mod proxies;
+mod quality_ops;
 mod relogin;
 mod request_capture;
 mod settings;

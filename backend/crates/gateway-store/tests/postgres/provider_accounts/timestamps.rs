@@ -186,8 +186,13 @@ async fn core_credential_cas_preserves_other_observation_clocks_and_disabled_sta
             "credential_revision",
             "turn_state_binding_revision",
         ];
-        if enabled && with_state {
+        if with_state {
             changed.push("credential_observed_at");
+            assert_eq!(
+                DateTime::parse_from_rfc3339(after["credential_observed_at"].as_str().unwrap())
+                    .unwrap(),
+                base + TimeDelta::milliseconds(1500)
+            );
         }
         unchanged_except(before, after.clone(), &changed);
         assert!(matches!(

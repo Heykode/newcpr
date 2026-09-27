@@ -157,6 +157,9 @@ pub struct StartedExecution {
 }
 
 pub trait ExecutionSession: Send {
+    fn response_control(&self) -> Option<super::response_control::ResponseControl> {
+        None
+    }
     fn trace(&self) -> crate::diagnostics::TraceContext {
         crate::diagnostics::TraceContext::default()
     }
@@ -755,6 +758,139 @@ impl DefaultExecutionService {
         })
     }
 
+    async fn quality_check_inner(
+        &self,
+        request: AccountProbeRequest,
+        cancellation: CancellationToken,
+    ) -> Result<AccountProbeResult, AccountProbeError> {
+        let snapshot = self.snapshots.acquire().map_err(|_| {
+            GatewayError::new(
+                GatewayErrorKind::Internal,
+                "runtime snapshot is unavailable",
+            )
+        })?;
+        let public_model = PublicModelId::new(request.upstream_model.as_str().to_owned())
+            .map_err(|_| GatewayError::new(GatewayErrorKind::Unsupported, "invalid model"))?;
+        let plan = snapshot
+            .plan(
+                &public_model,
+                &request.operation,
+                snapshot.all_account_scope(),
+                &RoutingContext {
+                    required_provider: Some(request.provider_kind),
+                    ..RoutingContext::default()
+                },
+            )
+            .map_err(map_routing_error)?;
+        let started_at = SystemTime::now();
+        let deadline_at = started_at + std::time::Duration::from_secs(120);
+        let actor = ClientApiKeyId::new("admin_quality_check")
+            .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "invalid actor"))?;
+        let new_request = NewModelRequest {
+            id: new_request_id()?,
+            client_api_key_id: None,
+            client_api_key_ref: actor,
+            config_revision: plan.config_revision(),
+            routing: crate::routing::AccountRoutingSnapshot::all(),
+            protocol: "admin_quality_check".to_owned(),
+            operation: request.operation.kind(),
+            endpoint: "/api/admin/quality-ops".to_owned(),
+            client_transport: ClientTransport::InternalProbe.as_str().to_owned(),
+            requested_model: Some(public_model),
+            client_ip: None,
+            user_agent: None,
+            reasoning_effort: None,
+            reasoning_preset: None,
+            request_kind: Some("account_quality_check".to_owned()),
+            subagent_kind: None,
+            compact: false,
+            continuation: Default::default(),
+            image_generation_requested: false,
+            admission_decision_ms: None,
+            started_at,
+            deadline_at,
+        };
+        // The real coordinator owns account leases, observations and usage settlement.
+        let mut session = self
+            .coordinator
+            .start(
+                new_request,
+                request.operation,
+                plan,
+                Some(request.account_id),
+                None,
+                cancellation,
+            )
+            .await
+            .map_err(|error| AccountProbeError::from(gateway_error_from_engine(&error)))?;
+        let result = {
+            let collect = async {
+                let mut text = Vec::new();
+                let mut bytes = 0_usize;
+                let mut complete = false;
+                while let Some(event) = session.next_event().await? {
+                    let commit = event.commit_requirement()
+                        == super::CommitRequirement::CommitBeforeDelivery;
+                    for event in event.into_provider_events() {
+                        for fact in event.into_parts().0 {
+                            match fact {
+                                GatewayEvent::TextDelta(delta) => {
+                                    bytes = bytes.saturating_add(delta.text.len());
+                                    if bytes > 64_000 {
+                                        return Err(EngineError::InvalidDeliveryState);
+                                    }
+                                    text.push(delta.text);
+                                }
+                                GatewayEvent::Completed(meta) => {
+                                    complete = matches!(
+                                        meta.finish_reason(),
+                                        None | Some(crate::event::FinishReason::Stop)
+                                    )
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if commit {
+                        session.commit_downstream(Some(200)).await?;
+                    }
+                }
+                Ok((text, complete))
+            }
+            .fuse();
+            let timeout = Delay::new(std::time::Duration::from_secs(120)).fuse();
+            pin_mut!(collect, timeout);
+            futures::select! {
+                result = collect => Some(result),
+                () = timeout => None,
+            }
+        };
+        let result = match result {
+            Some(Ok((text, true))) => Ok(AccountProbeResult {
+                text,
+                upstream_response_model: session.upstream_response_model().map(str::to_owned),
+            }),
+            Some(Ok((_, false))) => Err(GatewayError::new(
+                GatewayErrorKind::UpstreamUnavailable,
+                "quality response did not complete normally",
+            )
+            .into()),
+            Some(Err(error)) => Err(AccountProbeError::from(gateway_error_from_engine(&error))),
+            None => {
+                Err(GatewayError::new(GatewayErrorKind::Timeout, "quality check timed out").into())
+            }
+        };
+        if result.is_err() {
+            let _ = session.cancel_and_finalize().await;
+        }
+        publish_provider_attempt_outcomes(
+            self.circuits.as_ref(),
+            session.provider_attempt_outcomes(),
+        )
+        .await;
+        result
+    }
+
     async fn probe_inner(
         &self,
         request: AccountProbeRequest,
@@ -1043,9 +1179,10 @@ impl ExecutionService for DefaultExecutionService {
                     .await?
                 else {
                     for profile in client.snapshot.public_model_profiles_for_provider(kind) {
-                        if !scope.allows_provider_model(
+                        if !client.snapshot.catalog_model_allowed_for_scope(
                             kind,
-                            &client.snapshot.mapped_model(profile.model().as_str()),
+                            profile.model(),
+                            scope,
                         ) {
                             continue;
                         }
@@ -1133,6 +1270,14 @@ impl ExecutionService for DefaultExecutionService {
 }
 
 impl AccountProbe for DefaultExecutionService {
+    fn quality_check(
+        &self,
+        request: AccountProbeRequest,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async move { self.quality_check_inner(request, cancellation).await })
+    }
+
     fn probe(
         &self,
         request: AccountProbeRequest,
@@ -1268,6 +1413,10 @@ impl Drop for DefaultExecutionSession {
 }
 
 impl ExecutionSession for DefaultExecutionSession {
+    fn response_control(&self) -> Option<super::response_control::ResponseControl> {
+        Some(self.core.response_control())
+    }
+
     fn trace(&self) -> crate::diagnostics::TraceContext {
         self.core.trace()
     }

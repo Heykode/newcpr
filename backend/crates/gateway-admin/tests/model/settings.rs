@@ -53,6 +53,7 @@ fn excel_image_transport_validates_explicit_modes_and_origin() {
 fn request_tuning_overrides_round_trip_all_live_fields() {
     let overrides = RequestTuningOverrides {
         excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Native {}),
+        smart_scheduling: Some(Default::default()),
         openai_request_location: None,
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
@@ -88,6 +89,11 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         value,
         json!({
             "excelImageTransport": {"mode": "native"},
+            "smartScheduling": {
+                "loadWeight": 1.0, "quotaWeight": 0.8, "healthWeight": 1.0,
+                "latencyWeight": 0.5, "resetWeight": 0.0, "queueWeight": 0.0,
+                "preferHigherWeight": false
+            },
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,

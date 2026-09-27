@@ -509,7 +509,7 @@ async fn refresh_candidates_should_filter_order_and_bound_in_one_query() {
             .iter()
             .map(|candidate| candidate.account.id().as_str())
             .collect::<Vec<_>>(),
-        vec!["acct_refresh_forced", "acct_refresh_due"]
+        vec!["acct_refresh_forced", "acct_refresh_disabled"]
     );
     assert!(candidates.iter().all(|candidate| {
         candidate.credential.expose_to_provider()["access_token"] == "initial-secret"
@@ -927,14 +927,14 @@ async fn diagnostic_state_preserves_disabled_flag_and_fences_revision_and_observ
     repository
         .apply_state_change(change(CredentialState::Invalid, newer, revision))
         .await
-        .expect("ordinary disabled observation is a no-op");
+        .expect("credential observation is independent of scheduling");
     let unchanged = repository
         .get_account(&account_id)
         .await
         .expect("load disabled account")
         .expect("disabled account");
     assert!(!unchanged.enabled());
-    assert_eq!(unchanged.credential_state(), CredentialState::Ready);
+    assert_eq!(unchanged.credential_state(), CredentialState::Invalid);
 
     repository
         .apply_diagnostic_state_change(change(CredentialState::Invalid, newer, revision))
@@ -3438,7 +3438,7 @@ async fn disabled_account_preserves_user_state_during_refresh_writes() {
             error_reason: None,
         })
         .await
-        .expect("disabled state write is a no-op");
+        .expect("disabled account health can be refreshed");
     repository
         .rotate_provider_account(RotateProviderAccount {
             relogin_operation_id: None,

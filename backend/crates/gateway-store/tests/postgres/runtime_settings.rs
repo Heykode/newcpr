@@ -342,6 +342,13 @@ async fn request_tuning_overrides_should_round_trip() {
         excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Relay {
             public_url: "https://images.example.com".into(),
         }),
+        smart_scheduling: Some(
+            gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
+                [2.5, 0.4, 1.0, 0.2, 0.5, 0.7],
+                true,
+            )
+            .unwrap(),
+        ),
         openai_request_location: Some(gateway_core::account::RequestLocation::default()),
         openai_location_override_enabled: Some(true),
         max_waiting_per_key: Some(8),

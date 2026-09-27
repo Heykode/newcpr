@@ -18,6 +18,7 @@ pub(crate) fn completed_usage_fact_predicate(alias: &str) -> String {
     format!(
         "{alias}.outcome = 'succeeded'
          and {alias}.downstream_committed_at is not null
+         and {alias}.request_kind is distinct from 'account_quality_check'
          and ({alias}.provider_kind is distinct from 'openai'
               or {alias}.request_kind is distinct from 'prewarm')
          and (({alias}.client_transport = 'websocket' and {alias}.client_status_code is null)
@@ -52,4 +53,13 @@ pub(crate) fn push_completed_usage_fact_filter(query: &mut QueryBuilder<Postgres
 /// 原始请求审计仍保留该行；默认业务指标只把最终成功链视为一次结果。
 pub(crate) fn push_unrecovered_request_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
     query.push(format!(" and {alias}.recovered_at is null"));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn quality_checks_are_not_client_usage_facts() {
+        let predicate = super::completed_usage_fact_predicate("mr");
+        assert!(predicate.contains("mr.request_kind is distinct from 'account_quality_check'"));
+    }
 }

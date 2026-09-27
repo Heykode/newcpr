@@ -86,6 +86,9 @@ function mountSettings(initial, onWarning = assert.fail) {
     '@/utils/async': asyncUtils,
   })
   const dependencies = {
+    '@/api/modules/settings': loadModule(new URL('../src/api/modules/settings.ts', import.meta.url), {
+      '../request': () => { throw new Error('unexpected real API request') },
+    }),
     '@/views/accounts/utils/schedulingForm': loadModule(new URL('../src/views/accounts/utils/schedulingForm.ts', import.meta.url)),
     vue,
     '@/api': {
@@ -124,6 +127,38 @@ function settings() {
     updatedAt: '2026-09-12T00:00:00Z',
   }
 }
+
+test('smart defaults and drafts are isolated; validation and save reload preserve configured values', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  const other = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    const expected = { loadWeight: 1, quotaWeight: 0.8, healthWeight: 1, latencyWeight: 0.5, resetWeight: 0, queueWeight: 0, preferHigherWeight: false }
+    assert.deepEqual(JSON.parse(JSON.stringify(query.state.form.requestTuning.smartScheduling)), expected)
+    query.state.form.requestTuning.smartScheduling.loadWeight = 2.5
+    query.state.form.requestTuning.smartScheduling.preferHigherWeight = true
+    await query.state.saveSettings()
+    await query.state.loadSettings()
+    assert.equal(query.state.form.requestTuning.smartScheduling.loadWeight, 2.5)
+    assert.equal(query.requests.at(-1).requestTuning.smartScheduling.preferHigherWeight, true)
+    await other.state.loadSettings()
+    assert.equal(other.state.form.requestTuning.smartScheduling.loadWeight, 1)
+    for (const invalid of [-1, 10.1, 0.01, Number.NaN]) {
+      query.state.form.requestTuning.smartScheduling.loadWeight = invalid
+      await query.state.saveSettings()
+    }
+    for (const key of Object.keys(expected).filter(key => key !== 'preferHigherWeight'))
+      query.state.form.requestTuning.smartScheduling[key] = 0
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+    assert.equal(warnings.length, 5)
+  }
+  finally {
+    query.stop()
+    other.stop()
+  }
+})
 
 test('global Excel defaults roundtrip exact models including explicit empty and reject invalid IDs', async () => {
   const warnings = []
@@ -296,6 +331,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
     await query.state.saveSettings()
     assert.equal(query.requests.length, 1)
     assert.deepEqual(query.requests[0].requestTuning, {
+      smartScheduling: { loadWeight: 1, quotaWeight: 0.8, healthWeight: 1, latencyWeight: 0.5, resetWeight: 0, queueWeight: 0, preferHigherWeight: false },
       maxAccountSwitches: 31,
       maxRequestAttempts: 32,
       websocketMaxRetries: 5,

@@ -167,4 +167,19 @@ pub trait AccountProbe: Send + Sync {
         &self,
         request: AccountProbeRequest,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>>;
+
+    /// Scheduled quality checks use ordinary eligibility, never diagnostic bypasses.
+    fn quality_check(
+        &self,
+        _request: AccountProbeRequest,
+        _cancellation: crate::lifecycle::CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async {
+            Err(GatewayError::new(
+                GatewayErrorKind::Unsupported,
+                "quality checks are unavailable",
+            )
+            .into())
+        })
+    }
 }

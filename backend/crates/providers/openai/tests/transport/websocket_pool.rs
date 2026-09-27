@@ -1425,17 +1425,20 @@ async fn websocket_pool_should_replace_idle_connection_after_pong_deadline() {
     tokio::time::pause();
     tokio::time::advance(PING_INTERVAL).await;
     tokio::task::yield_now().await;
+    // Real TCP reads must not race the paused clock's automatic timeout advance.
+    tokio::time::resume();
     ping_seen_rx
         .await
         .expect("server should report the keepalive ping");
+    tokio::time::pause();
     tokio::time::advance(PONG_TIMEOUT + Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
     tokio::task::yield_now().await;
+    tokio::time::resume();
     inspect_close_tx.send(()).unwrap();
     pong_timeout_closed_rx
         .await
         .expect("server should report the Pong-timeout close");
-    tokio::time::resume();
     let mut continuation = request.clone();
     continuation.set_previous_response_id(Some("resp_no_pong_first".to_owned()));
     continuation.previous_response_scope = Some(PreviousResponseScope::ConnectionLocal);

@@ -1,0 +1,377 @@
+//! Leased quality jobs. No credentials or opaque upstream headers are persisted here.
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use gateway_admin::{
+    model::{MutationContext, quality_ops::*},
+    ports::{
+        quality_ops::QualityOpsStore,
+        store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
+    },
+};
+use sqlx::{PgPool, Row as _};
+
+use crate::{
+    mutation_audit,
+    postgres::{append_admin_audit_event_in_transaction, bump_config_revision_in_transaction},
+};
+
+pub struct PgQualityOpsStore {
+    pool: PgPool,
+}
+
+impl PgQualityOpsStore {
+    #[must_use]
+    pub const fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+fn unavailable(_: impl std::fmt::Display) -> AdminStoreError {
+    AdminStoreError::new(
+        AdminStoreErrorKind::Unavailable,
+        "quality operations",
+        "storage unavailable",
+    )
+}
+
+fn conflict() -> AdminStoreError {
+    AdminStoreError::new(
+        AdminStoreErrorKind::Conflict,
+        "quality rule",
+        "规则已变化、正在执行或账号已有规则，请刷新",
+    )
+}
+
+fn rule(row: &sqlx::postgres::PgRow) -> AdminStoreResult<QualityRule> {
+    let value: serde_json::Value = row.try_get("config").map_err(unavailable)?;
+    Ok(QualityRule {
+        id: row.try_get("id").map_err(unavailable)?,
+        revision: row.try_get("revision").map_err(unavailable)?,
+        config: serde_json::from_value(value).map_err(unavailable)?,
+        next_run_at: row.try_get("next_run_at").map_err(unavailable)?,
+        running: row
+            .try_get::<Option<DateTime<Utc>>, _>("lease_until")
+            .map_err(unavailable)?
+            .is_some_and(|until| until > Utc::now()),
+        pending: row.try_get("pending").map_err(unavailable)?,
+        last_status: row.try_get("last_status").map_err(unavailable)?,
+        last_run_at: row.try_get("last_run_at").map_err(unavailable)?,
+    })
+}
+
+fn run(row: &sqlx::postgres::PgRow, detail: bool) -> AdminStoreResult<QualityRun> {
+    Ok(QualityRun {
+        config: if detail {
+            Some(
+                serde_json::from_value(row.try_get("config").map_err(unavailable)?)
+                    .map_err(unavailable)?,
+            )
+        } else {
+            None
+        },
+        id: row.try_get("id").map_err(unavailable)?,
+        rule_id: row.try_get("rule_id").map_err(unavailable)?,
+        account_id: row.try_get("account_id").map_err(unavailable)?,
+        model: row.try_get("model").map_err(unavailable)?,
+        status: row.try_get("status").map_err(unavailable)?,
+        started_at: row.try_get("started_at").map_err(unavailable)?,
+        finished_at: row.try_get("finished_at").map_err(unavailable)?,
+        correct: u32::try_from(row.try_get::<i32, _>("correct").map_err(unavailable)?)
+            .map_err(unavailable)?,
+        incorrect: u32::try_from(row.try_get::<i32, _>("incorrect").map_err(unavailable)?)
+            .map_err(unavailable)?,
+        unknown: u32::try_from(row.try_get::<i32, _>("unknown").map_err(unavailable)?)
+            .map_err(unavailable)?,
+        request_errors: u32::try_from(
+            row.try_get::<i32, _>("request_errors")
+                .map_err(unavailable)?,
+        )
+        .map_err(unavailable)?,
+        answers: if detail {
+            serde_json::from_value(row.try_get("answers").map_err(unavailable)?)
+                .map_err(unavailable)?
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+async fn audit(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &MutationContext,
+    action: &'static str,
+    id: &str,
+) -> AdminStoreResult<()> {
+    let revision = bump_config_revision_in_transaction(tx)
+        .await
+        .map_err(unavailable)?;
+    append_admin_audit_event_in_transaction(
+        tx,
+        mutation_audit(
+            context,
+            action,
+            "quality_rule",
+            id,
+            vec!["quality_rule".to_owned()],
+        ),
+        revision,
+    )
+    .await
+    .map_err(unavailable)
+}
+
+#[async_trait]
+impl QualityOpsStore for PgQualityOpsStore {
+    async fn rules(&self) -> AdminStoreResult<Vec<QualityRule>> {
+        sqlx::query("select * from quality_rules order by updated_at desc limit 1000")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(unavailable)?
+            .iter()
+            .map(rule)
+            .collect()
+    }
+
+    async fn save(
+        &self,
+        id: Option<&str>,
+        revision: Option<i64>,
+        config: QualityRuleConfig,
+        next: DateTime<Utc>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRule> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let value = serde_json::to_value(&config).map_err(unavailable)?;
+        let row = if let Some(id) = id {
+            let row = sqlx::query(
+                "update quality_rules set config=$3,enabled=$4,next_run_at=$5,
+                 revision=revision+1,pending=false,lease_token=null,lease_until=null,updated_at=now()
+                 where id=$1 and revision=$2 and account_id=$6 returning *")
+                .bind(id).bind(revision).bind(value).bind(config.enabled).bind(next)
+                .bind(&config.account_id).fetch_optional(&mut *tx).await.map_err(unavailable)?
+                .ok_or_else(conflict)?;
+            sqlx::query(
+                "update quality_runs set status='cancelled',finished_at=now()
+                where rule_id=$1 and status='running'",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+            row
+        } else {
+            sqlx::query(
+                "insert into quality_rules(id,account_id,config,enabled,next_run_at)
+                 values($1,$2,$3,$4,$5) on conflict(account_id) do nothing returning *",
+            )
+            .bind(uuid::Uuid::now_v7().to_string())
+            .bind(&config.account_id)
+            .bind(value)
+            .bind(config.enabled)
+            .bind(next)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(unavailable)?
+            .ok_or_else(conflict)?
+        };
+        let result = rule(&row)?;
+        audit(&mut tx, context, "quality_rule.save", &result.id).await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(result)
+    }
+
+    async fn delete(
+        &self,
+        id: &str,
+        revision: i64,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let result = sqlx::query("delete from quality_rules where id=$1 and revision=$2")
+            .bind(id)
+            .bind(revision)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        if result.rows_affected() != 1 {
+            return Err(conflict());
+        }
+        audit(&mut tx, context, "quality_rule.delete", id).await?;
+        tx.commit().await.map_err(unavailable)
+    }
+
+    async fn enqueue(
+        &self,
+        id: &str,
+        revision: i64,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let result = sqlx::query(
+            "update quality_rules set pending=true where id=$1 and revision=$2
+             and not pending and (lease_until is null or lease_until<now())",
+        )
+        .bind(id)
+        .bind(revision)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if result.rows_affected() != 1 {
+            return Err(conflict());
+        }
+        audit(&mut tx, context, "quality_rule.enqueue", id).await?;
+        tx.commit().await.map_err(unavailable)
+    }
+
+    async fn claim(&self) -> AdminStoreResult<Option<QualityClaim>> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        // Serialize only the short admission transaction, not model requests.
+        sqlx::query("select pg_advisory_xact_lock(71632046)")
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        sqlx::query(
+            "update quality_runs r set status='interrupted',finished_at=now()
+            where r.status='running' and exists(select 1 from quality_rules q
+              where q.id=r.rule_id and (q.lease_until is null or q.lease_until<now()))",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let active: i64 =
+            sqlx::query_scalar("select count(*) from quality_rules where lease_until>now()")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        if active >= 2 {
+            return Ok(None);
+        }
+        let row = sqlx::query(
+            "select * from quality_rules where (pending or (enabled and next_run_at<=now()))
+             and (lease_until is null or lease_until<now())
+             order by pending desc,next_run_at,id limit 1 for update skip locked",
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let rule = rule(&row)?;
+        sqlx::query(
+            "update quality_runs set status='interrupted',finished_at=now()
+            where rule_id=$1 and status='running'",
+        )
+        .bind(&rule.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let lease_token = uuid::Uuid::now_v7().to_string();
+        let run_id = uuid::Uuid::now_v7().to_string();
+        sqlx::query("update quality_rules set pending=false,lease_token=$2,lease_until=now()+interval '5 minutes'
+            where id=$1")
+            .bind(&rule.id).bind(&lease_token).execute(&mut *tx).await.map_err(unavailable)?;
+        sqlx::query("insert into quality_runs(id,rule_id,rule_revision,account_id,model,config) values($1,$2,$3,$4,$5,$6)")
+            .bind(&run_id).bind(&rule.id).bind(rule.revision).bind(&rule.config.account_id)
+            .bind(&rule.config.model)
+            .bind(serde_json::to_value(&rule.config).map_err(unavailable)?)
+            .execute(&mut *tx).await.map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(Some(QualityClaim {
+            rule,
+            run_id,
+            lease_token,
+        }))
+    }
+
+    async fn current(&self, claim: &QualityClaim) -> AdminStoreResult<bool> {
+        let result = sqlx::query(
+            "update quality_rules set lease_until=now()+interval '5 minutes'
+            where id=$1 and revision=$2 and lease_token=$3 and lease_until>now()",
+        )
+        .bind(&claim.rule.id)
+        .bind(claim.rule.revision)
+        .bind(&claim.lease_token)
+        .execute(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn finish(
+        &self,
+        claim: &QualityClaim,
+        next: DateTime<Utc>,
+        answers: Vec<QualityAnswer>,
+    ) -> AdminStoreResult<()> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let mut counts = [0_i32; 4];
+        for answer in &answers {
+            counts[match answer.verdict {
+                QualityVerdict::Correct => 0,
+                QualityVerdict::Incorrect => 1,
+                QualityVerdict::Unknown => 2,
+                QualityVerdict::RequestError => 3,
+            }] += 1;
+        }
+        let status = if counts[3] > 0 {
+            "request_error"
+        } else if counts[2] > 0 || answers.is_empty() {
+            "unknown"
+        } else if counts[1] > 0 {
+            "incorrect"
+        } else {
+            "correct"
+        };
+        let affected = sqlx::query(
+            "update quality_rules set lease_token=null,lease_until=null,next_run_at=$4,last_status=$5,last_run_at=now()
+             where id=$1 and revision=$2 and lease_token=$3 and lease_until>now()")
+            .bind(&claim.rule.id).bind(claim.rule.revision).bind(&claim.lease_token).bind(next).bind(status)
+            .execute(&mut *tx).await.map_err(unavailable)?;
+        if affected.rows_affected() == 1 {
+            sqlx::query(
+                "update quality_runs set status=$2,finished_at=now(),correct=$3,incorrect=$4,
+                unknown=$5,request_errors=$6,answers=$7 where id=$1 and status='running'",
+            )
+            .bind(&claim.run_id)
+            .bind(status)
+            .bind(counts[0])
+            .bind(counts[1])
+            .bind(counts[2])
+            .bind(counts[3])
+            .bind(serde_json::to_value(answers).map_err(unavailable)?)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        }
+        tx.commit().await.map_err(unavailable)
+    }
+
+    async fn runs(&self, rule_id: &str) -> AdminStoreResult<Vec<QualityRun>> {
+        sqlx::query("select id,rule_id,account_id,model,status,started_at,finished_at,correct,incorrect,
+            unknown,request_errors from quality_runs where rule_id=$1 order by started_at desc limit 100")
+            .bind(rule_id).fetch_all(&self.pool).await.map_err(unavailable)?
+            .iter().map(|row| run(row, false)).collect()
+    }
+
+    async fn detail(&self, run_id: &str) -> AdminStoreResult<Option<QualityRun>> {
+        sqlx::query("select * from quality_runs where id=$1")
+            .bind(run_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(unavailable)?
+            .as_ref()
+            .map(|row| run(row, true))
+            .transpose()
+    }
+
+    async fn cleanup(&self) -> AdminStoreResult<()> {
+        sqlx::query("delete from quality_runs where status<>'running' and
+            (started_at<now()-interval '7 days' or id in
+             (select id from (select id,row_number() over(partition by rule_id order by started_at desc) n
+              from quality_runs) ranked where n>200))")
+            .execute(&self.pool).await.map_err(unavailable)?;
+        Ok(())
+    }
+}

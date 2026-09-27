@@ -94,6 +94,7 @@ async fn old_weekly_quota_should_outweigh_one_in_flight_title_request() {
         .collect::<Vec<_>>();
     for cursor in 0..20 {
         let context = AccountSelectionContext {
+            waiting_counts: Default::default(),
             policy: AccountSelectionPolicy::new(
                 RotationStrategy::Smart,
                 NonZeroU32::new(3).expect("default concurrency"),

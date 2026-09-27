@@ -696,6 +696,36 @@ fn successful_core_finalization(id: &str) -> CoreModelRequestFinalization {
 }
 
 #[tokio::test]
+async fn finalization_clamps_rolled_back_clock_without_reopening_request() {
+    let Some(database) = TestDatabase::create("execution_clock_rollback").await else {
+        return;
+    };
+    seed_running_request(&database.pool, "req_clock_rollback")
+        .await
+        .unwrap();
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut finalization = successful_core_finalization("req_clock_rollback");
+    finalization.completed_at =
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
+    ExecutionStore::finalize_model_request(&store, finalization)
+        .await
+        .unwrap();
+    let valid: bool = sqlx::query_scalar(
+        "select completed_at = started_at and outcome = 'succeeded' from model_requests where id = 'req_clock_rollback'"
+    ).fetch_one(&database.pool).await.unwrap();
+    assert!(valid);
+    assert!(
+        ExecutionStore::finalize_model_request(
+            &store,
+            successful_core_finalization("req_clock_rollback")
+        )
+        .await
+        .is_err()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn core_adapter_persists_opaque_response_ids_as_bytes() {
     let Some(database) = TestDatabase::create("execution_opaque_response_id").await else {
         return;

@@ -82,6 +82,7 @@ fn update_body() -> Value {
         }
     });
     body["requestTuning"]["excelImageRelayBytes"] = Value::Null;
+    body["requestTuning"]["smartScheduling"] = Value::Null;
     body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
     body["requestTuning"]["excelImageRelayDownloads"] = Value::Null;
     body["requestTuning"]["excelImageRelayEntries"] = Value::Null;
@@ -373,6 +374,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         audit_retention_days: 91,
         request_tuning: RequestTuningOverrides {
             excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Native {}),
+            smart_scheduling: None,
             openai_request_location: None,
             max_account_switches: Some(7),
             max_request_attempts: Some(8),
@@ -457,6 +459,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     });
     expected["requestTuning"]["excelImageTransport"] = json!({"mode":"native"});
     expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
+    expected["requestTuning"]["smartScheduling"] = Value::Null;
     expected["requestTuning"]["excelImageRelayRequests"] = json!(128);
     expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
     expected["requestTuning"]["excelImageRelayEntries"] = json!(128);

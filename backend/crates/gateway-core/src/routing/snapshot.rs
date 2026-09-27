@@ -398,9 +398,13 @@ async fn compile_runtime_snapshot(
 
     // Discovery catalogs cannot prove that a new upstream model is unavailable.
     let mut provider_models = Vec::new();
+    let mut catalog_accounts = BTreeMap::new();
     let mut exhaustive_provider_catalogs = BTreeSet::new();
     for provider in &provider_kinds {
         if let Some(previous) = previous {
+            if let Some(accounts) = previous.model_catalog_accounts.get(provider) {
+                catalog_accounts.insert(provider.clone(), accounts.clone());
+            }
             if previous.exhaustive_provider_catalogs.contains(provider) {
                 exhaustive_provider_catalogs.insert(provider.clone());
             }
@@ -427,6 +431,12 @@ async fn compile_runtime_snapshot(
             exhaustive_provider_catalogs.insert(provider.clone());
         }
         provider_models.extend(models.into_iter().map(|model| {
+            if let Some(accounts) = model.catalog_accounts() {
+                catalog_accounts
+                    .entry(provider.clone())
+                    .or_default()
+                    .insert(model.upstream_model().as_str().to_owned(), accounts.clone());
+            }
             let compiled = ProviderModel::new(
                 provider.clone(),
                 model.upstream_model().clone(),
@@ -564,7 +574,8 @@ async fn compile_runtime_snapshot(
         rotation_strategy,
         default_concurrency,
         Duration::from_millis(facts.settings.request_interval_ms),
-    );
+    )
+    .with_smart_scheduling(request_tuning.smart_scheduling);
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
         let mut disable_fast = false;
@@ -626,6 +637,7 @@ async fn compile_runtime_snapshot(
             .with_model_mappings(model_mappings)
             .with_account_directory(account_directory)
             .with_exhaustive_provider_catalogs(exhaustive_provider_catalogs)
+            .with_model_catalog_accounts(catalog_accounts)
             .with_min_codex_client_versions(min_client_versions)
             .with_request_tuning(request_tuning)
             .with_excel_image_transport(facts.settings.excel_image_transport)
@@ -634,6 +646,8 @@ async fn compile_runtime_snapshot(
             .with_account_concurrency_limits(account_limits)
     })
 }
+
+type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<ProviderAccountId>>>;
 
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
@@ -651,6 +665,7 @@ pub struct RuntimeSnapshot {
     model_mappings: Arc<BTreeMap<String, String>>,
     provider_catalog_generations: Arc<BTreeMap<ProviderKind, ProviderCatalogGeneration>>,
     exhaustive_provider_catalogs: Arc<BTreeSet<ProviderKind>>,
+    model_catalog_accounts: Arc<ModelCatalogAccounts>,
     account_directory: Arc<RuntimeAccountDirectory>,
     client_policies: Arc<BTreeMap<ClientApiKeyId, ClientPolicy>>,
     min_codex_client_versions: CodexClientMinVersions,
@@ -791,6 +806,7 @@ impl RuntimeSnapshot {
             model_mappings: Arc::new(BTreeMap::new()),
             provider_catalog_generations: Arc::new(BTreeMap::new()),
             exhaustive_provider_catalogs: Arc::new(exhaustive_provider_catalogs),
+            model_catalog_accounts: Arc::default(),
             account_directory: Arc::new(RuntimeAccountDirectory::default()),
             client_policies: Arc::new(client_policy_map),
             min_codex_client_versions: CodexClientMinVersions::default(),
@@ -809,6 +825,11 @@ impl RuntimeSnapshot {
         self
     }
 
+    fn with_model_catalog_accounts(mut self, accounts: ModelCatalogAccounts) -> Self {
+        self.model_catalog_accounts = Arc::new(accounts);
+        self
+    }
+
     #[must_use]
     pub fn with_account_directory(mut self, directory: Arc<RuntimeAccountDirectory>) -> Self {
         self.account_directory = directory;
@@ -824,6 +845,9 @@ impl RuntimeSnapshot {
     #[must_use]
     pub const fn with_request_tuning(mut self, request_tuning: super::RequestTuning) -> Self {
         self.request_tuning = request_tuning;
+        self.account_selection_policy = self
+            .account_selection_policy
+            .with_smart_scheduling(request_tuning.smart_scheduling);
         self
     }
 
@@ -959,9 +983,7 @@ impl RuntimeSnapshot {
             .flat_map(|provider| {
                 self.public_models_for_provider(provider)
                     .into_iter()
-                    .filter(|model| {
-                        scope.allows_provider_model(provider, &self.mapped_model(model.as_str()))
-                    })
+                    .filter(|model| self.catalog_model_allowed_for_scope(provider, model, scope))
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -977,9 +999,7 @@ impl RuntimeSnapshot {
         let mut profiles = BTreeMap::new();
         for provider in scope.provider_kinds() {
             for profile in self.public_model_profiles_for_provider(provider) {
-                if !scope
-                    .allows_provider_model(provider, &self.mapped_model(profile.model().as_str()))
-                {
+                if !self.catalog_model_allowed_for_scope(provider, profile.model(), scope) {
                     continue;
                 }
                 profiles
@@ -1021,8 +1041,31 @@ impl RuntimeSnapshot {
     ) -> bool {
         scope.provider_kinds().iter().any(|provider| {
             self.contains_public_model_for_provider(public_model, provider)
-                && scope.allows_provider_model(provider, &self.mapped_model(public_model.as_str()))
+                && self.catalog_model_allowed_for_scope(provider, public_model, scope)
         })
+    }
+
+    pub(crate) fn catalog_model_allowed_for_scope(
+        &self,
+        provider: &ProviderKind,
+        public_model: &PublicModelId,
+        scope: &FrozenAccountScope,
+    ) -> bool {
+        let upstream = self.mapped_model(public_model.as_str());
+        match self
+            .model_catalog_accounts
+            .get(provider)
+            .and_then(|models| models.get(&upstream))
+        {
+            Some(accounts) => accounts.iter().any(|account| {
+                scope
+                    .directory()
+                    .account(account)
+                    .is_some_and(|entry| entry.provider_kind() == provider)
+                    && scope.allows_model(account, &upstream)
+            }),
+            None => scope.allows_provider_model(provider, &upstream),
+        }
     }
 
     #[must_use]

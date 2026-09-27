@@ -21,6 +21,7 @@ pub const MAX_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES: u64 =
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestTuningOverrides {
+    pub smart_scheduling: Option<gateway_core::account::smart_scheduling::SmartSchedulingConfig>,
     pub max_account_switches: Option<u32>,
     pub max_request_attempts: Option<u32>,
     pub websocket_max_retries: Option<u32>,
@@ -61,6 +62,8 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Wire {
+            smart_scheduling:
+                Option<gateway_core::account::smart_scheduling::SmartSchedulingConfig>,
             max_account_switches: Option<u32>,
             max_request_attempts: Option<u32>,
             websocket_max_retries: Option<u32>,
@@ -97,6 +100,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
 
         let wire = Wire::deserialize(deserializer)?;
         Ok(Self {
+            smart_scheduling: wire.smart_scheduling,
             max_account_switches: wire.max_account_switches,
             max_request_attempts: wire.max_request_attempts,
             websocket_max_retries: wire.websocket_max_retries,

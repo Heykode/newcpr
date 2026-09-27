@@ -10,6 +10,7 @@ mod key_wait;
 mod observation;
 pub mod probe;
 pub mod provider;
+pub mod response_control;
 
 pub use capacity_wait::{
     AccountWaitBudget, AccountWaitBudgetError, AccountWaitDeadline, AccountWaitMode,
@@ -319,6 +320,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    response_control: Option<response_control::ResponseControl>,
     provider_route: Arc<std::sync::OnceLock<String>>,
     request_profile: Option<Arc<crate::account::OpaqueProviderData>>,
     disable_fast: bool,
@@ -330,6 +332,15 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_response_control(
+        mut self,
+        control: Option<response_control::ResponseControl>,
+    ) -> Self {
+        self.response_control = control;
+        self
+    }
+
     pub(crate) fn with_provider_route(mut self, route: Arc<std::sync::OnceLock<String>>) -> Self {
         self.provider_route = route;
         self
@@ -363,6 +374,7 @@ impl RequestAttemptContext {
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
             provider_route: Arc::new(std::sync::OnceLock::new()),
+            response_control: None,
             request_id,
             client_api_key_ref,
             disable_fast: false,
@@ -420,6 +432,11 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn response_control(&self) -> Option<&response_control::ResponseControl> {
+        self.request.response_control.as_ref()
+    }
+
     /// Opaque provider-owned route, frozen across every attempt of one execution.
     #[must_use]
     pub fn provider_route(&self) -> Option<&str> {
@@ -502,6 +519,9 @@ impl AttemptContext {
     #[must_use]
     pub fn with_request_tuning(mut self, request_tuning: RequestTuning) -> Self {
         self.request_tuning = request_tuning;
+        self.account_selection_policy = self
+            .account_selection_policy
+            .with_smart_scheduling(request_tuning.smart_scheduling);
         if request_tuning.account_busy_wait_enabled && self.account_wait_budget.is_none() {
             self.account_wait_budget = Some(Arc::new(AccountWaitBudget::new(
                 self.deadline,

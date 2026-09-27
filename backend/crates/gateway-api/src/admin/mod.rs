@@ -21,6 +21,7 @@ pub mod observability;
 pub mod outbound_user_agent;
 pub mod presenter;
 pub mod proxies;
+pub mod quality_ops;
 pub mod relogin;
 pub mod request_capture;
 pub mod settings;
@@ -45,6 +46,7 @@ where
         .merge(proxies::router::<S>())
         .merge(relogin::router::<S>())
         .merge(request_capture::router::<S>())
+        .merge(quality_ops::router::<S>())
         .merge(egress::router::<S>())
         .merge(accounts::router::<S>())
         .merge(auth::router::<S>())

@@ -698,6 +698,7 @@ pub struct AdminStorePorts {
     egress: Option<Arc<dyn ProviderEgressStore>>,
     relogin: Option<Arc<dyn super::relogin::ReloginStore>>,
     request_capture: Option<Arc<dyn super::request_capture::RequestCaptureStore>>,
+    quality_ops: Option<Arc<dyn super::quality_ops::QualityOpsStore>>,
 }
 
 impl AdminStorePorts {
@@ -720,6 +721,7 @@ impl AdminStorePorts {
             egress: None,
             relogin: None,
             request_capture: None,
+            quality_ops: None,
         }
     }
 
@@ -802,5 +804,16 @@ impl AdminStorePorts {
     #[must_use]
     pub fn request_capture(&self) -> Option<Arc<dyn super::request_capture::RequestCaptureStore>> {
         self.request_capture.clone()
+    }
+
+    #[must_use]
+    pub fn with_quality_ops(mut self, store: Arc<dyn super::quality_ops::QualityOpsStore>) -> Self {
+        self.quality_ops = Some(store);
+        self
+    }
+
+    #[must_use]
+    pub fn quality_ops(&self) -> Option<Arc<dyn super::quality_ops::QualityOpsStore>> {
+        self.quality_ops.clone()
     }
 }

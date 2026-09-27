@@ -16,6 +16,7 @@ pub mod notifications;
 pub mod observability;
 pub mod provider_credentials;
 pub mod proxies;
+pub mod quality_ops;
 pub mod quota_forecast;
 pub mod quota_forecast_sampling;
 pub mod quota_learning;

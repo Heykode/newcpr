@@ -195,6 +195,19 @@ pub enum ProviderLeaseRequest {
 }
 
 pub trait ProviderLeasePort: Send + Sync {
+    /// Active waiting ownership only; expired entries must not inflate pressure.
+    fn load_waiting_counts<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _accounts: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, u32>, ProviderStoreError>> {
+        Box::pin(async {
+            Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::Unavailable,
+                "load account queue pressure",
+            ))
+        })
+    }
     /// Acquire execution capacity directly for opt-in scheduling, without joining
     /// or checking the waiting queue. Unsupported stores must fail closed.
     ///

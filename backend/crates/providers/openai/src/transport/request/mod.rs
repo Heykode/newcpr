@@ -752,6 +752,7 @@ pub(crate) fn scope_request_to_account(
                 {
                     metadata.remove(*key);
                 }
+                metadata.remove("parent_response_id");
             }
             metadata.insert(
                 "x-codex-installation-id".to_owned(),
@@ -1006,6 +1007,8 @@ fn provider_managed_header(name: &str) -> bool {
                 | "chatgpt-project-id"
                 | "openai-organization"
                 | "openai-project"
+                | "x-openai-account-routing-override"
+                | "x-openai-fedramp"
                 | "x-codex-installation-id"
                 | "origin"
                 | "referer"
