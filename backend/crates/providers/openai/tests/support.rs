@@ -34,6 +34,10 @@ use provider_openai::credential::{
 };
 use secrecy::SecretString;
 
+// Serialize full-size fixtures so their allocations do not consume each other's I/O deadlines.
+pub(crate) static LARGE_PAYLOAD_TEST_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 #[derive(Clone)]
 struct StoredAccount {
     account: ProviderAccount,
@@ -48,6 +52,9 @@ pub(crate) struct MemoryAccountStore {
     quota_reads: AtomicUsize,
     fail_provider_listing: AtomicBool,
     pub(crate) before_provider_list: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
+    pub(crate) before_credential_load: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
+    pub(crate) credential_conflicts: AtomicUsize,
+    pub(crate) credential_loads: AtomicUsize,
     pub(crate) pause_account_read: AtomicBool,
     pub(crate) account_reads: AtomicUsize,
     pub(crate) fail_state_write: AtomicBool,
@@ -246,6 +253,20 @@ impl ProviderAccountStore for MemoryAccountStore {
         account: &ProviderAccountId,
         expected_revision: CredentialRevision,
     ) -> Result<LoadedCredential, StoreError> {
+        self.credential_loads.fetch_add(1, Ordering::SeqCst);
+        let hook = self.before_credential_load.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        if self
+            .credential_conflicts
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(store_error(StoreErrorKind::Conflict));
+        }
         let loaded = self.load_current_credential(account).await?;
         if loaded.account.revision() != expected_revision {
             return Err(store_error(StoreErrorKind::Conflict));

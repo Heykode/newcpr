@@ -466,7 +466,6 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             credential_observed_at, quota_observed_at, created_at, updated_at, relogin_count, last_relogin_at
      from provider_accounts
      where provider_kind = $1
-       and enabled
        and has_refresh_token
        and (
          (

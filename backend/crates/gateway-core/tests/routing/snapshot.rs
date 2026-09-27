@@ -128,6 +128,92 @@ impl ProviderCatalogPort for PublishingCatalog {
 }
 
 #[test]
+fn discovered_models_require_an_authorized_discovering_account() {
+    use gateway_core::routing::{
+        ClientRoutingScope, FrozenAccountScope, RuntimeAccount, RuntimeAccountDirectory,
+    };
+    struct ScopedCatalog;
+    impl ProviderCatalogPort for ScopedCatalog {
+        fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+            catalog_generations(1)
+        }
+        fn model_catalog_is_exhaustive(&self, _: &ProviderKind) -> bool {
+            false
+        }
+        fn query_model_capabilities(
+            &self,
+            _: &ProviderKind,
+        ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>>
+        {
+            Box::pin(async {
+                Ok(vec![
+                    ProviderModelCapabilities::new(
+                        UpstreamModelId::new("private-model").unwrap(),
+                        ModelCapabilities::new([OperationKind::Generate].into(), None),
+                    )
+                    .with_presentation(ModelPresentation::new(Some("Private model".into()), None))
+                    .with_catalog_accounts([ProviderAccountId::new("acct_source").unwrap()].into()),
+                ])
+            })
+        }
+    }
+    let facts = SnapshotFacts::new(
+        revision(1),
+        revision(1),
+        SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None),
+        vec![],
+        vec![],
+        vec![
+            SnapshotProviderAccountFacts::new(
+                ProviderAccountId::new("acct_source").unwrap(),
+                "alpha",
+            ),
+            SnapshotProviderAccountFacts::new(
+                ProviderAccountId::new("acct_other").unwrap(),
+                "alpha",
+            ),
+        ],
+        vec![],
+    );
+    let snapshot = block_on(
+        RuntimeSnapshotCompiler::new(
+            Arc::new(TestSnapshotStore::new(Ok(facts))),
+            Arc::new(ScopedCatalog),
+        )
+        .compile(),
+    )
+    .unwrap();
+    for (id, visible) in [("acct_source", true), ("acct_other", false)] {
+        let scope = Arc::new(FrozenAccountScope::new(
+            Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
+                ProviderAccountId::new(id).unwrap(),
+                RuntimeAccount::new(ProviderKind::new("alpha").unwrap(), Default::default()),
+            )]))),
+            ClientRoutingScope::all_accounts(),
+        ));
+        let model = PublicModelId::new("private-model").unwrap();
+        assert_eq!(
+            snapshot.public_models_for_scope(&scope).contains(&model),
+            visible
+        );
+        assert_eq!(
+            snapshot.contains_public_model_for_scope(&model, &scope),
+            visible
+        );
+        assert_eq!(
+            !snapshot.public_model_profiles_for_scope(&scope).is_empty(),
+            visible
+        );
+        assert!(
+            snapshot
+                .plan(&model, &super::operation(), scope, &Default::default())
+                .is_ok(),
+            "discovery must not become an inference allowlist"
+        );
+    }
+}
+
+#[test]
 fn state_probe_concurrency_defaults_and_snapshot_bounds_are_enforced() {
     assert_eq!(
         gateway_core::routing::OpenAiTurnStatePolicy::default().probe_concurrency(),
@@ -203,6 +289,49 @@ fn compiler_keeps_model_policy_when_applying_group_membership() {
     assert!(scope.allows(&account));
     assert!(scope.allows_model(&account, "model-a"));
     assert!(!scope.allows_model(&account, "model-b"));
+}
+
+#[test]
+fn smart_settings_are_frozen_in_existing_plans() {
+    use gateway_core::account::smart_scheduling::SmartSchedulingConfig;
+    use gateway_core::routing::RequestTuning;
+    let make = |number, config| {
+        SnapshotFacts::new(
+            revision(number),
+            revision(number),
+            SnapshotSettingsFacts::new(3, 0, "sticky", BTreeMap::new(), None, None)
+                .with_request_tuning(RequestTuning {
+                    smart_scheduling: config,
+                    ..Default::default()
+                }),
+            vec![],
+            vec![],
+            vec![SnapshotProviderAccountFacts::new(
+                ProviderAccountId::new("acct_frozen").unwrap(),
+                "alpha",
+            )],
+            vec![],
+        )
+    };
+    let original = SmartSchedulingConfig::default();
+    let updated = SmartSchedulingConfig::new([0.0, 2.0, 0.0, 0.0, 0.0, 1.0], true).unwrap();
+    let store = Arc::new(TestSnapshotStore::new(Ok(make(1, original))));
+    let compiler = RuntimeSnapshotCompiler::new(store.clone(), Arc::new(TestCatalog::Unavailable));
+    let first = block_on(compiler.compile()).unwrap();
+    let plan = first
+        .plan(
+            &PublicModelId::new("new-model").unwrap(),
+            &super::operation(),
+            first.all_account_scope(),
+            &Default::default(),
+        )
+        .unwrap();
+    *store.facts.lock().unwrap() = Ok(make(2, updated));
+    *store.current_revision.lock().unwrap() = Ok(revision(2));
+    let second = block_on(compiler.compile()).unwrap();
+    assert_eq!(second.request_tuning().smart_scheduling, updated);
+    assert_eq!(plan.account_selection_policy().smart_scheduling(), original);
+    assert_eq!(plan.request_tuning().smart_scheduling, original);
 }
 
 #[test]

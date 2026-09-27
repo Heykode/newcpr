@@ -4,7 +4,30 @@ import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
+export interface SmartSchedulingConfig {
+  loadWeight: number
+  quotaWeight: number
+  healthWeight: number
+  latencyWeight: number
+  resetWeight: number
+  queueWeight: number
+  preferHigherWeight: boolean
+}
+
+export function defaultSmartScheduling(): SmartSchedulingConfig {
+  return {
+    loadWeight: 1,
+    quotaWeight: 0.8,
+    healthWeight: 1,
+    latencyWeight: 0.5,
+    resetWeight: 0,
+    queueWeight: 0,
+    preferHigherWeight: false,
+  }
+}
+
 export interface RequestTuning {
+  smartScheduling: SmartSchedulingConfig
   maxAccountSwitches: number
   maxRequestAttempts: number
   websocketMaxRetries: number

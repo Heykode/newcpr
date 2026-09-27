@@ -145,6 +145,59 @@ fn upstream_failure(
 }
 
 #[tokio::test]
+async fn active_interrupt_preserves_queued_frames_and_the_pending_execution_future() {
+    use gateway_core::engine::response_control::ResponseControl;
+    let control = ResponseControl::default();
+    let active = control.activate("resp_active_interrupt".into()).unwrap();
+    let trace = Arc::new(AtomicFailureTrace {
+        control: Some(control.clone()),
+        interrupt_owner: Mutex::new(Some(active)),
+        first_batch: Mutex::new(Some(CoordinatedEvent::try_batch(vec![wire_event(
+            Some("response.created"),
+            json!({"type":"response.created","response":{"id":"resp_active_interrupt","status":"in_progress"}}),
+        )], CommitRequirement::CommitBeforeDelivery).unwrap())),
+        ..Default::default()
+    });
+    let (mut socket, _server) = connect(trace.clone(), vec![]).await;
+    send_request(&mut socket).await;
+    assert_eq!(next_event(&mut socket).await["type"], "response.metadata");
+    assert_eq!(next_event(&mut socket).await["type"], "response.created");
+    socket
+        .send(Message::Text(
+            json!({"type":"response.create","input":"queued_without_model"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    for invalid in [
+        json!({"type":"response.interrupt","response_id":"wrong","mode":"discard_partial_items"}),
+        json!({"type":"response.interrupt","response_id":"resp_active_interrupt","mode":"invalid"}),
+    ] {
+        socket
+            .send(Message::Text(invalid.to_string().into()))
+            .await
+            .unwrap();
+        assert_eq!(next_event(&mut socket).await["status"], 400);
+    }
+    assert_eq!(
+        trace.next_calls.load(Ordering::Acquire),
+        2,
+        "pending next_event must not be recreated for controls"
+    );
+    socket.send(Message::Text(json!({"type":"response.interrupt","response_id":"resp_active_interrupt","mode":"discard_partial_items"}).to_string().into())).await.unwrap();
+    assert_eq!(next_event(&mut socket).await["type"], "response.incomplete");
+    assert_eq!(
+        next_event(&mut socket).await["status"],
+        400,
+        "queued create is decoded after terminal"
+    );
+    assert!(control.interrupt("resp_active_interrupt").is_err());
+    assert!(trace.finalized.load(Ordering::Acquire));
+    socket.close(None).await.unwrap();
+}
+
+#[tokio::test]
 async fn initial_capacity_error_projects_status_and_preserves_current_request_headers() {
     for code in ["server_is_overloaded", "slow_down"] {
         let provider = upstream_failure(

@@ -137,6 +137,35 @@ struct CleanupLifecycle {
 }
 
 impl RedisCapacityWait {
+    pub(super) async fn waiting_counts(
+        &self,
+        accounts: &[ProviderAccountId],
+    ) -> Result<std::collections::BTreeMap<ProviderAccountId, u32>, ProviderStoreError> {
+        let mut counts = std::collections::BTreeMap::new();
+        let mut connection = self.connection.clone();
+        let script = Script::new(
+            "local t = redis.call('TIME'); local now = tonumber(t[1])*1000 + math.floor(tonumber(t[2])/1000); return redis.call('ZCOUNT', KEYS[1], '('..now, '+inf')",
+        );
+        for account in accounts {
+            let keys = self
+                .repository
+                .keys(&CredentialLeaseRequest {
+                    scope: CredentialLeaseScope::ProviderAccount,
+                    resource_id: account.as_str().to_owned(),
+                    owner_id: "queue-pressure".to_owned(),
+                    ttl: Duration::from_secs(1),
+                })
+                .map_err(|_| invalid("queue pressure keys"))?;
+            let count: u32 = script
+                .key(format!("{}:waiting", keys[0]))
+                .invoke_async(&mut connection)
+                .await
+                .map_err(|_| unavailable("read account queue pressure"))?;
+            counts.insert(account.clone(), count);
+        }
+        Ok(counts)
+    }
+
     pub(super) fn new(
         connection: ConnectionManager,
         repository: RedisCredentialLeaseRepository,

@@ -2263,7 +2263,7 @@ async fn corrupt_credential(store: &MemoryAccountStore, id: &str) {
 }
 
 #[tokio::test]
-async fn corrupt_unpinned_candidate_releases_lease_without_claiming_or_renewing_affinity() {
+async fn corrupt_unpinned_candidate_never_claims_or_renews_affinity() {
     use std::sync::atomic::Ordering;
 
     for waiting in [false, true] {
@@ -2311,9 +2311,18 @@ async fn corrupt_unpinned_candidate_releases_lease_without_claiming_or_renewing_
                 assert!(lease.account_switch());
                 assert!(!lease.affinity_hit());
             }
-            assert_eq!(leases.requests.lock().unwrap().len(), 2);
             assert_eq!(
-                leases.capacity.signals.lock().unwrap()[original.id()].in_flight,
+                leases.requests.lock().unwrap().len(),
+                if waiting { 2 } else { 1 }
+            );
+            assert_eq!(
+                leases
+                    .capacity
+                    .signals
+                    .lock()
+                    .unwrap()
+                    .get(original.id())
+                    .map_or(0, |signals| signals.in_flight),
                 0
             );
             assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
@@ -2405,8 +2414,10 @@ async fn corrupt_required_native_and_replay_owner_candidates_never_switch_accoun
             assert_eq!(store.account("acct_original"), Some(original));
             assert_eq!(affinity.binding_count(), 0);
             let requests = leases.requests.lock().unwrap();
-            assert_eq!(requests.len(), 1);
-            assert_eq!(requests[0].account_id().as_str(), "acct_original");
+            assert_eq!(requests.len(), usize::from(waiting));
+            if waiting {
+                assert_eq!(requests[0].account_id().as_str(), "acct_original");
+            }
             assert!(
                 leases
                     .capacity
@@ -2462,7 +2473,10 @@ async fn corrupt_candidates_do_not_exhaust_the_snapshot_rescan_budget() {
         }
         let lease = capacity_select(&selector, &attempt, None).await.unwrap();
         assert_eq!(lease.account_id().as_str(), "acct_other");
-        assert_eq!(leases.requests.lock().unwrap().len(), 5);
+        assert_eq!(
+            leases.requests.lock().unwrap().len(),
+            if waiting { 5 } else { 1 }
+        );
         assert_eq!(leases.capacity.state_reads.load(Ordering::SeqCst), 1);
         drop(lease);
         assert!(
@@ -2474,6 +2488,154 @@ async fn corrupt_candidates_do_not_exhaust_the_snapshot_rescan_budget() {
                 .values()
                 .all(|signal| signal.in_flight == 0)
         );
+    }
+}
+
+#[tokio::test]
+async fn immediate_snapshot_conflict_reloads_facts_before_reserving_capacity() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_original", "fixture");
+    let changed = Arc::clone(&store);
+    *store.before_credential_load.lock().unwrap() = Some(Box::new(move || {
+        changed.set_scheduling(
+            "acct_original",
+            Some(AccountConcurrencyLimit::new(1).unwrap()),
+            AccountWeight::new(75).unwrap(),
+        );
+    }));
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector(&store, Arc::clone(&leases));
+    let attempt = attempt(BTreeSet::new());
+    let lease = capacity_select(&selector, &attempt, None).await.unwrap();
+    assert_eq!(lease.account().weight(), AccountWeight::new(75).unwrap());
+    assert_eq!(store.credential_loads.load(Ordering::SeqCst), 2);
+    assert_eq!(leases.requests.lock().unwrap().len(), 1);
+    assert_eq!(leases.requests.lock().unwrap()[0].max_concurrent().get(), 1);
+}
+
+#[tokio::test]
+async fn immediate_snapshot_conflict_is_bounded_without_consuming_a_lease() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_original", "fixture");
+    store.credential_conflicts.store(10, Ordering::SeqCst);
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let selector = selector(&store, Arc::clone(&leases));
+    let error = capacity_select(&selector, &attempt(BTreeSet::new()), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CredentialSelectionError::AccountSnapshotChanged
+    ));
+    assert_eq!(store.credential_loads.load(Ordering::SeqCst), 4);
+    assert!(leases.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn immediate_selection_rechecks_disable_during_lease_acquisition() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_original", "fixture");
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.enabled.store(true, Ordering::SeqCst);
+    let changed = Arc::clone(&store);
+    *leases.capacity.after_acquire.lock().unwrap() = Some(Box::new(move || {
+        block_on(changed.set_enabled(&ProviderAccountId::new("acct_original").unwrap(), false))
+            .unwrap();
+    }));
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let selector = selector_with_affinity(&store, Arc::clone(&leases), Arc::clone(&affinity));
+    let key = ProviderSessionAffinityKey::try_new("disable-during-acquire").unwrap();
+    let result = capacity_select(&selector, &attempt(BTreeSet::new()), Some(&key)).await;
+    assert!(matches!(
+        result,
+        Err(CredentialSelectionError::NoEligibleCredential)
+    ));
+    assert_eq!(leases.requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        leases.capacity.signals.lock().unwrap()[&ProviderAccountId::new("acct_original").unwrap()]
+            .in_flight,
+        0
+    );
+    assert_eq!(affinity.binding_count(), 0);
+}
+
+#[tokio::test]
+async fn immediate_saturation_and_lease_race_without_hint_remain_capacity_errors() {
+    use std::sync::atomic::Ordering;
+    for race in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "fixture");
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        leases
+            .capacity
+            .set_load("acct_original", if race { 0 } else { 2 });
+        leases.capacity.race_busy.store(race, Ordering::SeqCst);
+        let selector = selector(&store, Arc::clone(&leases));
+        let error = capacity_select(&selector, &attempt(BTreeSet::new()), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CredentialSelectionError::CapacityUnavailable { retry_after: None }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn smart_switchback_setting_preserves_default_and_required_owners_on_both_paths() {
+    use gateway_core::account::smart_scheduling::SmartSchedulingConfig;
+    for waiting in [false, true] {
+        for (switchback, required, expected) in [
+            (false, false, "acct_original"),
+            (true, false, "acct_other"),
+            (true, true, "acct_original"),
+        ] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_original", "original-fixture");
+            create_account(&store, "acct_other", "other-fixture");
+            store.set_scheduling("acct_original", None, AccountWeight::new(1).unwrap());
+            store.set_scheduling("acct_other", None, AccountWeight::new(90).unwrap());
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            let affinity = Arc::new(MemorySessionAffinity::default());
+            let key = ProviderSessionAffinityKey::try_new("smart-switchback").unwrap();
+            affinity
+                .bind(
+                    &ProviderKind::new("openai").unwrap(),
+                    &key,
+                    &ProviderAccountId::new("acct_original").unwrap(),
+                    Duration::from_secs(60),
+                )
+                .await
+                .unwrap();
+            let selector = selector_with_affinity(&store, leases, affinity)
+                .with_account_concurrency(capacity_handle(&["acct_original", "acct_other"], 2));
+            let tuning = gateway_core::routing::RequestTuning {
+                account_busy_wait_enabled: waiting,
+                smart_scheduling: SmartSchedulingConfig::new(
+                    [1.0, 0.8, 1.0, 0.5, 0.0, 0.0],
+                    switchback,
+                )
+                .unwrap(),
+                ..Default::default()
+            };
+            let attempt = attempt_with_required(
+                BTreeSet::new(),
+                required.then(|| ProviderAccountId::new("acct_original").unwrap()),
+            )
+            .with_request_tuning(tuning);
+            let lease = capacity_select(&selector, &attempt, Some(&key))
+                .await
+                .unwrap();
+            assert_eq!(
+                lease.account_id().as_str(),
+                expected,
+                "waiting={waiting}, switchback={switchback}, required={required}"
+            );
+        }
     }
 }
 
@@ -2708,8 +2870,10 @@ async fn corrupt_candidate_skip_never_admits_disabled_or_out_of_scope_accounts()
             Err(CredentialSelectionError::NoEligibleCredential)
         ));
         let requests = leases.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].account_id().as_str(), "acct_original");
+        assert_eq!(requests.len(), usize::from(waiting));
+        if waiting {
+            assert_eq!(requests[0].account_id().as_str(), "acct_original");
+        }
         assert!(!store.account("acct_other").unwrap().enabled());
     }
 }
@@ -2743,8 +2907,10 @@ async fn disabled_corrupt_diagnostic_does_not_fall_back_or_enable_the_account() 
     ));
     assert_eq!(store.account("acct_primary"), Some(original));
     let requests = leases.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].account_id().as_str(), "acct_primary");
+    assert!(
+        requests.is_empty(),
+        "invalid credential must not reserve diagnostic capacity"
+    );
 }
 
 #[tokio::test]

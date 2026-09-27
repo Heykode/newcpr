@@ -3,6 +3,7 @@ import type { RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
 
 import { getSettings, updateSettings } from '@/api'
+import { defaultSmartScheduling } from '@/api/modules/settings'
 import { ApiError } from '@/api/request'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
@@ -13,6 +14,7 @@ import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
 type RotationStrategy = (typeof rotationOptions)[number]['value']
 
 const requestTuningFallbacks: RequestTuning = {
+  smartScheduling: defaultSmartScheduling(),
   maxAccountSwitches: 31,
   maxRequestAttempts: 32,
   websocketMaxRetries: 5,
@@ -62,7 +64,7 @@ export function useSettingsForm() {
     usageRetentionDays: 31,
     opsEventRetentionDays: 30,
     auditRetentionDays: 90,
-    requestTuning: { ...requestTuningFallbacks },
+    requestTuning: { ...requestTuningFallbacks, smartScheduling: defaultSmartScheduling() },
   })
 
   function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs') {
@@ -125,6 +127,7 @@ export function useSettingsForm() {
         ]),
       ),
     )
+    form.requestTuning.smartScheduling = { ...form.requestTuning.smartScheduling }
     mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
       requestedModel,
       upstreamModel: String(upstreamModel),
@@ -195,6 +198,19 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
+    const smartWeights = [
+      tuning.smartScheduling.loadWeight,
+      tuning.smartScheduling.quotaWeight,
+      tuning.smartScheduling.healthWeight,
+      tuning.smartScheduling.latencyWeight,
+      tuning.smartScheduling.resetWeight,
+      tuning.smartScheduling.queueWeight,
+    ]
+    if (!smartWeights.every(value => Number.isFinite(value) && value >= 0 && value <= 10 && Math.round(value * 10) / 10 === value)
+      || !smartWeights.some(value => value > 0)) {
+      toast.warning('智能调度权重须为 0–10，最多一位小数，且不能全部为 0')
+      return
+    }
     if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 20 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 32 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageMaxCount) || tuning.excelImageMaxCount < 1 || tuning.excelImageMaxCount > 4096) {
@@ -250,6 +266,7 @@ export function useSettingsForm() {
         auditRetentionDays: form.auditRetentionDays,
         requestTuning: {
           ...form.requestTuning,
+          smartScheduling: { ...form.requestTuning.smartScheduling },
           openaiRequestLocation: form.requestTuning.openaiRequestLocation
             ? { ...form.requestTuning.openaiRequestLocation }
             : null,

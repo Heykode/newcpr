@@ -35,8 +35,6 @@ jobs:
       CARGO_TERM_COLOR: always
       # Rust 1.97 编译 AWS SDK 调试信息需要更大的 codegen 线程栈。
       RUST_MIN_STACK: 16777216
-      CPR_TEST_DATABASE_URL: postgres://codex_proxy:codex_proxy@127.0.0.1:5432/codex_proxy
-      CPR_TEST_REDIS_URL: redis://127.0.0.1:6379
     services:
       postgres:
         image: postgres:18-bookworm@sha256:d9c83446333daec3f0588cc709adb80c26090b7f9f0f7ec8d43c243385d79818
@@ -126,8 +124,8 @@ jobs:
           set -euo pipefail
           postgres_password="$(openssl rand -hex 24)"
           redis_password="$(openssl rand -hex 24)"
-          echo "::add-mask::$postgres_password"
-          echo "::add-mask::$redis_password"
+          printf '::%s::%s\n' add-mask "$postgres_password"
+          printf '::%s::%s\n' add-mask "$redis_password"
           docker exec --env PGPASSWORD=codex_proxy "${{ job.services.postgres.id }}" psql \
             --username=codex_proxy --dbname=codex_proxy \
             --set=ON_ERROR_STOP=1 \
@@ -145,6 +143,22 @@ jobs:
       - name: Rust tests
         working-directory: backend
         run: cargo test --workspace --lib --test main --locked
+
+      - name: Redis named-user ACL regression
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          acl_password="$(openssl rand -hex 24)"
+          printf '::%s::%s\n' add-mask "$acl_password"
+          redis_password="${CPR_TEST_REDIS_URL#redis://:}"
+          redis_password="${redis_password%@*}"
+          docker exec "${{ job.services.redis.id }}" redis-cli --no-auth-warning \
+            -a "$redis_password" ACL SETUSER cpr_acl on ">${acl_password}" '~*' '&*' '+@all'
+          docker exec "${{ job.services.redis.id }}" redis-cli --no-auth-warning \
+            -a "$redis_password" ACL SETUSER default off
+          CPR_TEST_REDIS_URL="redis://cpr_acl:${acl_password}@127.0.0.1:6379" \
+            cargo test -p gateway-store --lib --test main --locked
 
   frontend:
     if: inputs.run_frontend

@@ -231,6 +231,7 @@ async fn normalization_not_incoming_body_size_controls_the_threshold() {
 
 #[tokio::test]
 async fn default_threshold_selects_http_even_for_highly_compressible_payload() {
+    let _guard = crate::support::LARGE_PAYLOAD_TEST_LOCK.lock().await;
     let request = request(json!("x".repeat(15 * 1024 * 1024)));
     let (response, _) = exchange(
         &request,
@@ -245,15 +246,24 @@ async fn default_threshold_selects_http_even_for_highly_compressible_payload() {
 }
 
 #[tokio::test]
-async fn native_websocket_warmup_and_previous_response_scopes_are_not_size_fallback_candidates() {
+async fn native_new_chain_can_use_http_but_warmup_and_persisted_scopes_stay_websocket() {
     let mut native = request(json!("native"));
     native.downstream_websocket_connection_id = Some("downstream-connection".to_owned());
+    exchange(
+        &native,
+        RequestTuning {
+            websocket_large_request_threshold_bytes: 1,
+            ..RequestTuning::default()
+        },
+        CodexBackendTransport::HttpSse,
+    )
+    .await;
     let mut warmup_body = native.body().clone();
     warmup_body.insert("generate".to_owned(), json!(false));
     let mut warmup = CodexResponsesRequest::from_body(warmup_body);
     warmup.use_websocket = true;
     warmup.local_conversation_id = Some("warmup-conversation".to_owned());
-    let mut cases = vec![native, warmup];
+    let mut cases = vec![warmup];
     for scope in [
         PreviousResponseScope::Persisted,
         PreviousResponseScope::ExternalUnknown,
@@ -304,7 +314,11 @@ async fn exact_continuation_cannot_escape_missing_connection_through_size_fallba
     .await
     .unwrap()
     .unwrap_err();
-    assert!(matches!(error, CodexClientError::WebSocket(_)), "{error:?}");
+    assert!(matches!(error, CodexClientError::WebSocket(
+        CodexWebSocketExchangeError::ContinuationUnavailable {
+            reason: provider_openai::transport::websocket::PreviousResponseUnavailableReason::TransportPayloadTooLarge
+        }
+    )), "{error:?}");
     assert!(
         timeout(Duration::from_millis(50), listener.accept())
             .await

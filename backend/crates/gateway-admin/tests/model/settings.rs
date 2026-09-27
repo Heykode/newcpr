@@ -5,6 +5,7 @@ use serde_json::json;
 #[test]
 fn request_tuning_overrides_round_trip_all_live_fields() {
     let overrides = RequestTuningOverrides {
+        smart_scheduling: Some(Default::default()),
         openai_request_location: None,
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
@@ -38,6 +39,11 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     assert_eq!(
         value,
         json!({
+            "smartScheduling": {
+                "loadWeight": 1.0, "quotaWeight": 0.8, "healthWeight": 1.0,
+                "latencyWeight": 0.5, "resetWeight": 0.0, "queueWeight": 0.0,
+                "preferHigherWeight": false
+            },
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,

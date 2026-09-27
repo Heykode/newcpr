@@ -206,6 +206,7 @@ impl GrokAccountSessionSelector {
                 .map(|candidate| candidate.account.id().clone())
         });
         let context = AccountSelectionContext {
+            waiting_counts: Default::default(),
             policy: request.account_selection_policy(),
             now: SystemTime::now(),
             excluded_accounts: request.excluded_accounts().clone(),

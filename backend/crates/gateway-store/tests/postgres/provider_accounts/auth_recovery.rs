@@ -202,11 +202,11 @@ async fn rejected_oauth_refresh_candidates_match_core_policy() {
         .map(|row| row.account.id().as_str())
         .collect::<Vec<_>>();
     ids.sort_unstable();
-    assert_eq!(ids, ["acct_auth_0", "acct_auth_1"]);
+    assert_eq!(ids, ["acct_auth_0", "acct_auth_1", "acct_auth_2"]);
     for index in 0..6 {
         let id = ProviderAccountId::new(format!("acct_auth_{index}")).unwrap();
         let row = repository.load_current_credential(&id).await.unwrap();
-        assert_eq!(query.contains(&row.account), index < 2);
+        assert_eq!(query.contains(&row.account), index < 3);
         assert_ne!(
             row.account
                 .status_projection(SystemTime::now(), None)

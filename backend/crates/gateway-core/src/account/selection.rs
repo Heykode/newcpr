@@ -1,6 +1,6 @@
 //! 请求级账号资格投影、反馈统计与选择算法。
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -45,6 +45,7 @@ impl RotationStrategy {
 /// 从 `runtime_settings` 冻结到一次请求计划的账号调度策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSelectionPolicy {
+    smart_scheduling: super::smart_scheduling::SmartSchedulingConfig,
     strategy: RotationStrategy,
     max_concurrent_per_account: NonZeroU32,
     request_interval: Duration,
@@ -58,6 +59,7 @@ impl AccountSelectionPolicy {
         request_interval: Duration,
     ) -> Self {
         Self {
+            smart_scheduling: super::smart_scheduling::SmartSchedulingConfig::defaults(),
             strategy,
             max_concurrent_per_account,
             request_interval,
@@ -67,6 +69,25 @@ impl AccountSelectionPolicy {
     #[must_use]
     pub const fn strategy(self) -> RotationStrategy {
         self.strategy
+    }
+
+    pub const fn with_smart_scheduling(
+        mut self,
+        config: super::smart_scheduling::SmartSchedulingConfig,
+    ) -> Self {
+        self.smart_scheduling = config;
+        self
+    }
+
+    pub const fn smart_scheduling(self) -> super::smart_scheduling::SmartSchedulingConfig {
+        self.smart_scheduling
+    }
+
+    pub const fn preferred_account_overrides_weight(self) -> bool {
+        !matches!(
+            self.strategy,
+            RotationStrategy::Smart | RotationStrategy::Sticky
+        ) || !self.smart_scheduling.prefer_higher_weight()
     }
 
     #[must_use]
@@ -383,6 +404,8 @@ impl AccountCapacitySnapshot {
 /// 一次账号选择使用的全局策略快照。
 #[derive(Debug, Clone)]
 pub struct AccountSelectionContext {
+    /// Only populated for fallback queue admission, never immediate selection.
+    pub waiting_counts: BTreeMap<ProviderAccountId, u32>,
     pub policy: AccountSelectionPolicy,
     pub now: SystemTime,
     pub excluded_accounts: BTreeSet<ProviderAccountId>,
@@ -476,6 +499,23 @@ impl<T: AccountConcurrencyLimits + ?Sized> AccountConcurrencyLimits for Arc<T> {
 }
 
 impl AccountSelector {
+    #[must_use]
+    pub fn has_busy_candidate(
+        &self,
+        candidates: &[AccountCandidate],
+        context: &AccountSelectionContext,
+    ) -> bool {
+        candidates.iter().any(|candidate| {
+            self.non_capacity_blocker(candidate, context).is_none()
+                && !request_interval_blocked(candidate, context)
+                && candidate.signals.in_flight
+                    >= candidate
+                        .account
+                        .effective_concurrency(context.policy.max_concurrent_per_account())
+                        .get()
+        })
+    }
+
     #[must_use]
     pub fn availability(
         &self,
@@ -716,13 +756,11 @@ impl AccountSelector {
                 let index = context.round_robin_cursor as usize % eligible.len();
                 eligible.get(index).copied()?
             }
-            RotationStrategy::Smart => {
-                select_smart_candidate(&eligible, limit, context.round_robin_cursor)?
-            }
+            RotationStrategy::Smart => select_smart_candidate(&eligible, limit, context)?,
             RotationStrategy::Sticky => {
                 // 粘性账号已在 preferred 分支优先处理；新会话或粘性失效后，
                 // 复用 Smart 评分，避免所有新会话都命中最近使用的同一个账号。
-                select_smart_candidate(&eligible, limit, context.round_robin_cursor)?
+                select_smart_candidate(&eligible, limit, context)?
             }
         };
         Some(AccountSelection {
@@ -796,12 +834,6 @@ fn request_interval_blocked(
         })
 }
 
-const SMART_LOAD_WEIGHT: f64 = 1.0;
-const SMART_QUOTA_WEIGHT: f64 = 0.8;
-const SMART_FAILURE_WEIGHT: f64 = 1.0;
-const SMART_LATENCY_WEIGHT: f64 = 0.5;
-// 容忍 5 个百分点的单项负载/失败率差异，避免微小信号波动独占新会话。
-pub(crate) const SMART_SCORE_TOLERANCE: f64 = 0.05;
 // 首输出 10 秒时延迟得分减半；固定尺度不随其他候选账号变化。
 const SMART_LATENCY_HALF_SCORE_MS: f64 = 10_000.0;
 
@@ -812,14 +844,24 @@ fn utilization_at_limit(candidate: &AccountCandidate, limit: NonZeroU32) -> f64 
 fn select_smart_candidate<'a>(
     candidates: &[&'a AccountCandidate],
     limit: impl Fn(&AccountCandidate) -> NonZeroU32,
-    cursor: u64,
+    context: &AccountSelectionContext,
 ) -> Option<&'a AccountCandidate> {
     let mut ranked = candidates
         .iter()
         .map(|candidate| {
             (
                 *candidate,
-                smart_score_at_limit(candidate, limit(candidate)),
+                configured_smart_score(
+                    candidate,
+                    limit(candidate),
+                    context.now,
+                    context.policy.smart_scheduling(),
+                    context
+                        .waiting_counts
+                        .get(candidate.account.id())
+                        .copied()
+                        .unwrap_or_default(),
+                ),
             )
         })
         .collect::<Vec<_>>();
@@ -827,21 +869,38 @@ fn select_smart_candidate<'a>(
         .iter()
         .map(|(_, score)| *score)
         .max_by(f64::total_cmp)?;
-    ranked.retain(|(_, score)| best_score - score <= SMART_SCORE_TOLERANCE);
+    ranked.retain(|(_, score)| {
+        best_score - score <= context.policy.smart_scheduling().score_tolerance()
+    });
     // 轮换顺序保持稳定，避免分数轻微交错与 cursor 同步后仍反复命中同一账号。
     ranked.sort_unstable_by(|(left, _), (right, _)| left.account.id().cmp(right.account.id()));
-    let index = (cursor % ranked.len() as u64) as usize;
+    let index = (context.round_robin_cursor % ranked.len() as u64) as usize;
     Some(ranked[index].0)
 }
 
-pub(crate) fn smart_score(candidate: &AccountCandidate, default_concurrency: NonZeroU32) -> f64 {
-    smart_score_at_limit(
+pub(crate) fn smart_score(candidate: &AccountCandidate, context: &AccountSelectionContext) -> f64 {
+    configured_smart_score(
         candidate,
-        candidate.account.effective_concurrency(default_concurrency),
+        candidate
+            .account
+            .effective_concurrency(context.policy.max_concurrent_per_account()),
+        context.now,
+        context.policy.smart_scheduling(),
+        context
+            .waiting_counts
+            .get(candidate.account.id())
+            .copied()
+            .unwrap_or_default(),
     )
 }
 
-fn smart_score_at_limit(candidate: &AccountCandidate, limit: NonZeroU32) -> f64 {
+fn configured_smart_score(
+    candidate: &AccountCandidate,
+    limit: NonZeroU32,
+    now: SystemTime,
+    config: super::smart_scheduling::SmartSchedulingConfig,
+    waiting_count: u32,
+) -> f64 {
     let load = 1.0 - utilization_at_limit(candidate, limit).clamp(0.0, 1.0);
     let quota = candidate
         .signals
@@ -863,8 +922,24 @@ fn smart_score_at_limit(candidate: &AccountCandidate, limit: NonZeroU32) -> f64 
             SMART_LATENCY_HALF_SCORE_MS / (SMART_LATENCY_HALF_SCORE_MS + latency as f64)
         });
 
-    SMART_LOAD_WEIGHT * load
-        + SMART_QUOTA_WEIGHT * quota
-        + SMART_FAILURE_WEIGHT * failure
-        + SMART_LATENCY_WEIGHT * latency
+    let reset = candidate
+        .signals
+        .quota_reset_at
+        .and_then(|at| at.duration_since(now).ok())
+        .filter(|remaining| !remaining.is_zero())
+        .map_or(0.0, |remaining| 3600.0 / (3600.0 + remaining.as_secs_f64()));
+    let [
+        load_weight,
+        quota_weight,
+        health_weight,
+        latency_weight,
+        reset_weight,
+        queue_weight,
+    ] = config.weights();
+    load_weight * load
+        + quota_weight * quota
+        + health_weight * failure
+        + latency_weight * latency
+        + reset_weight * reset
+        + queue_weight / (1.0 + f64::from(waiting_count))
 }

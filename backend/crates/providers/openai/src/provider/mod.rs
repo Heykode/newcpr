@@ -376,10 +376,17 @@ impl Provider for CodexProvider {
         let snapshot = self.catalog.synchronize().await.map_err(|_| {
             provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
         })?;
+        let mut accounts = snapshot.model_catalog_accounts();
         Ok(snapshot
             .models()
             .iter()
-            .map(compile_model_capabilities)
+            .map(|model| {
+                compile_model_capabilities(model).with_catalog_accounts(
+                    accounts
+                        .remove(model.request_model().as_str())
+                        .unwrap_or_default(),
+                )
+            })
             .collect())
     }
 
@@ -634,6 +641,18 @@ impl Provider for CodexProvider {
         {
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
+        if !excel
+            && upstream_request
+                .downstream_websocket_connection_id
+                .is_some()
+            && upstream_request.previous_response_id().is_some()
+            && upstream_request.generate()
+            && previous_session.as_ref().is_some_and(|state| {
+                state.continuation_scope == OpenAiContinuationScope::ReplayRequired
+            })
+        {
+            return Err(continuation_replay_required_error("scope_unavailable"));
+        }
         scope_request_to_account(
             &mut upstream_request,
             lease.installation_id(),
@@ -724,6 +743,7 @@ impl Provider for CodexProvider {
         let events = cold_response_stream(ColdResponse {
             client: self
                 .client_for_request(&context)?
+                .with_response_control(context.response_control().cloned())
                 .for_account(lease.account())
                 .map_err(|_| {
                     provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)

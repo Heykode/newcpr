@@ -895,6 +895,7 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
             UpstreamSendState::NotSent,
         ),
         CredentialSelectionError::InvalidCredential
+        | CredentialSelectionError::AccountSnapshotChanged
         | CredentialSelectionError::Store
         | CredentialSelectionError::Coordinator
         | CredentialSelectionError::CookiePolicy => provider_error(
