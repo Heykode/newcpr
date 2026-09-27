@@ -12,7 +12,6 @@ use std::{
 use bytes::Bytes;
 use gateway_core::provider_ports::{TemporaryImage, TemporaryImageSource};
 use serde_json::{Map, Value};
-use url::Url;
 
 use super::{ExcelRequestError, images};
 
@@ -32,7 +31,7 @@ pub(crate) struct ImageRelay {
     requests: Arc<AtomicUsize>,
     tuning: gateway_core::runtime::RequestTuningHandle,
     secret: Option<[u8; 32]>,
-    directory: Option<RelayDirectory>,
+    directory: Mutex<Option<Arc<RelayDirectory>>>,
 }
 
 struct RelayDirectory {
@@ -193,30 +192,13 @@ pub(crate) struct ImageLease {
 }
 
 pub(crate) fn validate_origin(value: &str) -> bool {
-    Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none()
-            && url.path() == "/"
-            && url.host_str().is_some_and(|host| {
-                matches!(url.host(), Some(url::Host::Domain(_)))
-                    && host.contains('.')
-                    && host != "localhost"
-                    && !host.ends_with(".localhost")
-                    && !host.ends_with(".local")
-            })
-    })
+    gateway_core::routing::ExcelImageTransport::valid_public_url(value)
 }
 
 impl ImageRelay {
     pub(crate) fn new(origin: Option<String>) -> Self {
         let mut secret = [0u8; 32];
         let secret = getrandom::fill(&mut secret).ok().map(|()| secret);
-        let directory = origin.as_ref().and_then(|_| {
-            RelayDirectory::create(&std::env::temp_dir().join("cpr-excel-images")).ok()
-        });
         Self {
             origin,
             entries: Mutex::new(BTreeMap::new()),
@@ -227,14 +209,11 @@ impl ImageRelay {
             requests: Arc::new(AtomicUsize::new(0)),
             tuning: Default::default(),
             secret,
-            directory,
+            directory: Mutex::new(None),
         }
     }
 
     pub(crate) fn start_cleanup(self: &Arc<Self>) {
-        if self.origin.is_none() {
-            return;
-        }
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
@@ -242,7 +221,12 @@ impl ImageRelay {
                 let Some(relay) = weak.upgrade() else { return };
                 let _ = tokio::task::spawn_blocking(move || {
                     relay.cleanup();
-                    if let Some(directory) = &relay.directory {
+                    if let Some(directory) = relay
+                        .directory
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_ref()
+                    {
                         directory.cleanup_orphans();
                     }
                 })
@@ -270,19 +254,39 @@ impl ImageRelay {
         self.tuning.load()
     }
 
-    pub(crate) fn enabled(&self) -> bool {
-        self.origin.is_some()
+    pub(crate) fn relay_origin(&self) -> Option<String> {
+        match self.tuning.excel_image_transport() {
+            Some(gateway_core::routing::ExcelImageTransport::Native {}) => None,
+            Some(gateway_core::routing::ExcelImageTransport::Relay { public_url }) => {
+                Some(public_url)
+            }
+            None => self.origin.clone(),
+        }
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_with_tuning(
         self: &Arc<Self>,
         body: &mut Map<String, Value>,
         limits: gateway_core::routing::RequestTuning,
         scope: &str,
     ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
-        let Some(origin) = &self.origin else {
+        let Some(origin) = self.relay_origin() else {
             return Ok(None);
         };
+        self.stage_with_origin(body, limits, scope, &origin)
+    }
+
+    pub(crate) fn stage_with_origin(
+        self: &Arc<Self>,
+        body: &mut Map<String, Value>,
+        limits: gateway_core::routing::RequestTuning,
+        scope: &str,
+        origin: &str,
+    ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
+        if !validate_origin(origin) {
+            return Err(ExcelRequestError::ImageRelay);
+        }
         let input = body.get("input").unwrap_or(&Value::Null);
         let budget = images::decoded_budget_user_with_limits(input, limits.into())
             .map_err(|_| ExcelRequestError::Input)?;
@@ -290,10 +294,19 @@ impl ImageRelay {
             return Ok(None);
         }
         self.cleanup();
-        let directory = self
-            .directory
-            .as_ref()
-            .ok_or(ExcelRequestError::ImageRelay)?;
+        let directory = {
+            let mut directory = self
+                .directory
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if directory.is_none() {
+                *directory = Some(Arc::new(
+                    RelayDirectory::create(&std::env::temp_dir().join("cpr-excel-images"))
+                        .map_err(|_| ExcelRequestError::ImageRelay)?,
+                ));
+            }
+            Arc::clone(directory.as_ref().ok_or(ExcelRequestError::ImageRelay)?)
+        };
         let request = CapacityPermit::acquire(
             &self.requests,
             1,
@@ -553,6 +566,79 @@ mod tests {
         json!({"input":[{"role":"user","content":[{"type":"input_image",
             "image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="}]}]})
             .as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn excel_image_mode_switch_keeps_old_links_and_freezes_request_origin() {
+        use gateway_core::routing::ExcelImageTransport;
+        let tuning = gateway_core::runtime::RequestTuningHandle::default();
+        let relay = Arc::new(ImageRelay::new(None).with_request_tuning(tuning.clone()));
+        let original = input();
+        let mut native = original.clone();
+        assert!(relay.stage(&mut native).unwrap().is_none());
+        assert_eq!(native, original);
+        assert!(relay.directory.lock().unwrap().is_none());
+
+        tuning.publish_excel_image_transport(Some(ExcelImageTransport::Relay {
+            public_url: "https://images.example.com".into(),
+        }));
+        let frozen = relay.relay_origin().unwrap();
+        let mut first = original.clone();
+        let lease = relay
+            .stage_with_origin(&mut first, tuning.load(), "same-owner", &frozen)
+            .unwrap()
+            .unwrap();
+        let token = lease.tokens[0].clone();
+        assert!(relay.read(&token).is_some());
+        tuning.publish_excel_image_transport(Some(ExcelImageTransport::Native {}));
+        let mut next = original.clone();
+        assert!(relay.stage(&mut next).unwrap().is_none());
+        assert_eq!(next, original);
+        drop(lease);
+        assert!(relay.read(&token).is_some());
+
+        tuning.publish_excel_image_transport(Some(ExcelImageTransport::Relay {
+            public_url: "https://other.example.com".into(),
+        }));
+        let mut in_flight = original.clone();
+        relay
+            .stage_with_origin(&mut in_flight, tuning.load(), "same-owner", &frozen)
+            .unwrap();
+        assert!(
+            in_flight["input"][0]["content"][0]["image_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://images.example.com/")
+        );
+        let mut latest = original;
+        relay.stage(&mut latest).unwrap();
+        assert!(
+            latest["input"][0]["content"][0]["image_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://other.example.com/")
+        );
+        assert!(relay.read(&token).is_some());
+    }
+
+    #[test]
+    fn excel_image_native_override_beats_legacy_relay_and_null_restores_it() {
+        let tuning = gateway_core::runtime::RequestTuningHandle::default();
+        let relay = ImageRelay::new(Some("https://images.example.com".into()))
+            .with_request_tuning(tuning.clone());
+        assert_eq!(
+            relay.relay_origin().as_deref(),
+            Some("https://images.example.com")
+        );
+        tuning.publish_excel_image_transport(Some(
+            gateway_core::routing::ExcelImageTransport::Native {},
+        ));
+        assert_eq!(relay.relay_origin(), None);
+        tuning.publish_excel_image_transport(None);
+        assert_eq!(
+            relay.relay_origin().as_deref(),
+            Some("https://images.example.com")
+        );
     }
 
     #[test]

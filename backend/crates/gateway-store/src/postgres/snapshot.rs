@@ -160,6 +160,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.responses_max_decompressed_body_bytes,
             )
             .with_request_location(data.settings.request_tuning.openai_request_location.clone())
+            .with_excel_image_transport(data.settings.request_tuning.excel_image_transport.clone())
             .with_request_tuning(to_core_request_tuning(data.settings.request_tuning));
             let client_policies = data
                 .client_api_keys

@@ -1,7 +1,10 @@
 //! Provider、模型目录、精确模型映射与请求级候选计划。
 
 mod catalog;
+mod excel_images;
 pub mod snapshot;
+
+pub use excel_images::ExcelImageTransport;
 
 pub use crate::account::scope::{
     AccountGroupId, AccountRoutingScopeKind, AccountRoutingSnapshot, ClientRoutingScope,

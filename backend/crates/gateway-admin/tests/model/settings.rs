@@ -3,8 +3,56 @@ use gateway_core::routing::RequestTuning;
 use serde_json::json;
 
 #[test]
+fn excel_image_transport_validates_explicit_modes_and_origin() {
+    for value in [
+        json!({}),
+        json!({"excelImageTransport": null}),
+        json!({"excelImageTransport": {"mode":"native"}}),
+        json!({"excelImageTransport":{"mode":"relay","publicUrl":"https://images.example.com"}}),
+    ] {
+        let settings: RequestTuningOverrides = serde_json::from_value(value).unwrap();
+        assert!(settings.validate());
+        assert_eq!(
+            serde_json::from_value::<RequestTuningOverrides>(
+                serde_json::to_value(&settings).unwrap()
+            )
+            .unwrap(),
+            settings
+        );
+    }
+    for origin in [
+        "",
+        "http://images.example.com",
+        "https://user@example.com",
+        "https://images.example.com/path",
+        "https://images.example.com?x=1",
+        "https://images.example.com#part",
+        "https://127.0.0.1",
+        "https://host.local",
+    ] {
+        let settings: RequestTuningOverrides = serde_json::from_value(
+            json!({"excelImageTransport":{"mode":"relay","publicUrl":origin}}),
+        )
+        .unwrap();
+        assert!(!settings.validate());
+    }
+    for value in [
+        json!({"mode":"auto"}),
+        json!({"mode":"relay"}),
+        json!({"mode":"native","publicUrl":"https://images.example.com"}),
+    ] {
+        assert!(
+            serde_json::from_value::<RequestTuningOverrides>(json!({"excelImageTransport":value}))
+                .is_err(),
+            "unexpected image transport accepted: {value}"
+        );
+    }
+}
+
+#[test]
 fn request_tuning_overrides_round_trip_all_live_fields() {
     let overrides = RequestTuningOverrides {
+        excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Native {}),
         openai_request_location: None,
         max_account_switches: Some(7),
         max_request_attempts: Some(8),
@@ -39,6 +87,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     assert_eq!(
         value,
         json!({
+            "excelImageTransport": {"mode": "native"},
             "maxAccountSwitches": 7,
             "maxRequestAttempts": 8,
             "websocketMaxRetries": 9,

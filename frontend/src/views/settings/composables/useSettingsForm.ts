@@ -32,6 +32,7 @@ const requestTuningFallbacks: RequestTuning = {
   excelImageRelayDownloads: 32,
   excelImageRelayEntries: 512,
   excelImageRelayTtlMinutes: 30,
+  excelImageTransport: null,
   openaiLocationOverrideEnabled: false,
   openaiRequestLocation: null,
   maxWaitingPerKey: 0,
@@ -196,6 +197,26 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
+    const imageTransport = tuning.excelImageTransport
+    if (imageTransport?.mode === 'relay') {
+      const origin = imageTransport.publicUrl.trim()
+      let valid = false
+      try {
+        const parsed = new URL(origin)
+        const invalidCharacter = [...origin].some(character => character === '\\' || character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)
+        valid = origin.length <= 2048 && !invalidCharacter
+          && parsed.protocol === 'https:' && !parsed.username && !parsed.password
+          && !origin.includes('?') && !origin.includes('#') && parsed.pathname === '/'
+          && parsed.hostname.includes('.') && !/^[\d.]+$/u.test(parsed.hostname)
+          && !parsed.hostname.endsWith('.localhost') && !parsed.hostname.endsWith('.local')
+      }
+      catch { /* Invalid origins are rejected before saving. */ }
+      if (!valid) {
+        toast.warning('HTTPS 中转需要有效的公网域名，不得包含路径、账号密码、查询参数或片段')
+        return
+      }
+      tuning.excelImageTransport = { mode: 'relay', publicUrl: origin }
+    }
     if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 128 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 128 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageMaxCount) || tuning.excelImageMaxCount < 1 || tuning.excelImageMaxCount > 4096) {
@@ -258,6 +279,9 @@ export function useSettingsForm() {
         auditRetentionDays: form.auditRetentionDays,
         requestTuning: {
           ...form.requestTuning,
+          excelImageTransport: form.requestTuning.excelImageTransport
+            ? { ...form.requestTuning.excelImageTransport }
+            : null,
           openaiRequestLocation: form.requestTuning.openaiRequestLocation
             ? { ...form.requestTuning.openaiRequestLocation }
             : null,

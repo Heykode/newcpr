@@ -155,15 +155,6 @@ pub(crate) fn validate_with_limits(
                         "provide only one of file_id or image_url",
                     ));
                 }
-                if tool_output
-                    && fields
-                        .get("file_id")
-                        .is_some_and(|id| id.as_str().is_some_and(|value| !value.trim().is_empty()))
-                {
-                    return Err(ExcelRequestError::ImageInput(
-                        "tool image file_id is unsupported; return the original image as Base64 or HTTPS image_url",
-                    ));
-                }
                 if fields.get("file_id").is_some_and(|id| {
                     !id.is_null() && id.as_str().is_none_or(|value| value.trim().is_empty())
                 }) {

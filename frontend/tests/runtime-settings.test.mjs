@@ -15,6 +15,7 @@ function loadModule(filename, dependencies = {}) {
   })
   const exports = {}
   runInNewContext(outputText, {
+    URL,
     exports,
     require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
@@ -23,6 +24,37 @@ function loadModule(filename, dependencies = {}) {
 
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
+
+test('Excel image transport preserves explicit modes and inherited startup settings', async () => {
+  for (const transport of [null, { mode: 'native' }, { mode: 'relay', publicUrl: 'https://images.example.com' }]) {
+    const initial = settings()
+    initial.requestTuning = { excelImageTransport: transport }
+    const query = mountSettings(initial)
+    try {
+      await query.state.loadSettings()
+      assert.deepEqual(JSON.parse(JSON.stringify(query.state.form.requestTuning.excelImageTransport)), transport)
+      await query.state.saveSettings()
+      assert.deepEqual(query.requests[0].requestTuning.excelImageTransport, transport)
+      assert.equal(query.requests[0].rotationStrategy, initial.rotationStrategy)
+    }
+    finally { query.stop() }
+  }
+})
+
+test('Excel relay requires a public HTTPS origin before settings can be saved', async () => {
+  for (const publicUrl of ['', 'http://images.example.com', 'https://images.example.com/path', 'https://user@example.com', 'https://images.example.com?x=1', 'https://images.example.com#part', 'https://127.0.0.1', 'https://host.local']) {
+    const warnings = []
+    const query = mountSettings(settings(), message => warnings.push(message))
+    try {
+      await query.state.loadSettings()
+      query.state.form.requestTuning.excelImageTransport = { mode: 'relay', publicUrl }
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 0, publicUrl)
+      assert.equal(warnings.length, 1, publicUrl)
+    }
+    finally { query.stop() }
+  }
+})
 
 test('Excel global defaults fill omission without replacing saved or explicitly empty models', async () => {
   for (const models of [undefined, [], ['custom-model'], ['gpt-5.6-sol', 'gpt-6-astra']]) {
@@ -283,6 +315,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       excelImageTotalBytes: 32 * 1024 * 1024,
       excelImageMaxCount: 20,
       excelImageRelayTtlMinutes: 30,
+      excelImageTransport: null,
       openaiLocationOverrideEnabled: false,
       openaiRequestLocation: null,
       maxWaitingPerKey: 0,

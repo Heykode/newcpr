@@ -339,6 +339,9 @@ async fn request_tuning_overrides_should_round_trip() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let mut update = settings_with_margin(3_600);
     update.request_tuning = RequestTuningOverrides {
+        excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Relay {
+            public_url: "https://images.example.com".into(),
+        }),
         openai_request_location: Some(gateway_core::account::RequestLocation::default()),
         openai_location_override_enabled: Some(true),
         max_waiting_per_key: Some(8),

@@ -40,6 +40,8 @@ pub struct RequestTuningOverrides {
     pub excel_image_relay_downloads: Option<u32>,
     pub excel_image_relay_entries: Option<u32>,
     pub excel_image_relay_ttl_minutes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excel_image_transport: Option<gateway_core::routing::ExcelImageTransport>,
     pub openai_location_override_enabled: Option<bool>,
     pub openai_request_location: Option<gateway_core::account::RequestLocation>,
     pub max_waiting_per_key: Option<u32>,
@@ -81,6 +83,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             excel_image_relay_downloads: Option<u32>,
             excel_image_relay_entries: Option<u32>,
             excel_image_relay_ttl_minutes: Option<u32>,
+            excel_image_transport: Option<gateway_core::routing::ExcelImageTransport>,
             openai_location_override_enabled: Option<bool>,
             openai_request_location: Option<gateway_core::account::RequestLocation>,
             max_waiting_per_key: Option<u32>,
@@ -113,6 +116,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             excel_image_relay_downloads: wire.excel_image_relay_downloads,
             excel_image_relay_entries: wire.excel_image_relay_entries,
             excel_image_relay_ttl_minutes: wire.excel_image_relay_ttl_minutes,
+            excel_image_transport: wire.excel_image_transport,
             openai_location_override_enabled: wire.openai_location_override_enabled,
             openai_request_location: wire.openai_request_location,
             max_waiting_per_key: wire.max_waiting_per_key,
@@ -158,8 +162,12 @@ impl RequestTuningOverrides {
         let image_entries = self
             .excel_image_relay_entries
             .unwrap_or(defaults.excel_image_relay_entries);
-        self.excel_image_max_bytes
-            .is_none_or(|value| (1..=128 * 1024 * 1024).contains(&value))
+        self.excel_image_transport
+            .as_ref()
+            .is_none_or(|value| value.validate())
+            && self
+                .excel_image_max_bytes
+                .is_none_or(|value| (1..=128 * 1024 * 1024).contains(&value))
             && self
                 .excel_image_total_bytes
                 .is_none_or(|value| (1..=128 * 1024 * 1024).contains(&value))

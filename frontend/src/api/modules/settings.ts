@@ -4,6 +4,8 @@ import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
+export type ExcelImageTransport = { mode: 'native' } | { mode: 'relay', publicUrl: string }
+
 export interface RequestTuning {
   maxAccountSwitches: number
   maxRequestAttempts: number
@@ -24,6 +26,7 @@ export interface RequestTuning {
   excelImageRelayDownloads: number
   excelImageRelayEntries: number
   excelImageRelayTtlMinutes: number
+  excelImageTransport: ExcelImageTransport | null
   openaiLocationOverrideEnabled: boolean
   openaiRequestLocation: RequestLocation | null
   maxWaitingPerKey: number

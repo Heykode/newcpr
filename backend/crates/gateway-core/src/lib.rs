@@ -173,6 +173,7 @@ pub async fn initialize_with_request_tuning(
         return Err(CoreError::SnapshotUnavailable);
     }
     request_tuning.publish(initial.request_tuning());
+    request_tuning.publish_excel_image_transport(initial.excel_image_transport().cloned());
     request_tuning.publish_openai_turn_state_policy(initial.openai_turn_state_policy().clone());
     let snapshots = RuntimeSnapshotHandle::new(initial);
     let publisher = Arc::new(RuntimeSnapshotPublisher::new_with_request_tuning(

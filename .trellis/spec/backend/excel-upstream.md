@@ -130,8 +130,13 @@ must still precede decoding. HTTPS references pass unchanged. User inline pictur
 use the existing account-scoped attachment upload, or the optional HTTPS relay
 when explicitly configured. User file_id passes with upstream authorization;
 syntactic validity is not proof of ownership. Tool inline pictures pass unchanged,
-including when the same request uploads user pictures. Tool file_id is rejected
-locally with an actionable 400, never moved into a user message or silently removed.
+including when the same request uploads user pictures. Tool file_id and HTTPS
+references follow Sub2API #139: validate the original carriers before preparation,
+then move them into an immediately following user message explicitly labelled as
+preceding tool output, not a new user instruction. Keep matching call-ID/image-index
+markers in the original result, preserving text order, detail and signed URLs.
+Inline screenshots stay in the tool result and never trigger uploads. Do not
+silently remove images.
 Do not recursively treat tool arguments or arbitrary metadata as image content.
 Generic 400/422 never permits generation replay, content removal or history reset.
 
@@ -170,6 +175,15 @@ Live tests must respect the configured account request interval, including after
 locally rejected requests that acquired a lease. A `RequestInterval` selection
 blocker is not a route-switch or credential failure. Usage recording is asynchronous:
 match the exact response ID after bounded polling, not the first list row.
+
+Runtime image transport is an optional tagged setting in request_tuning_json:
+native, or relay with a validated publicUrl. Omission/null inherits the legacy
+startup origin; never reinterpret inheritance as automatic failure fallback.
+Snapshot publication carries the mode and origin as one value. Provider freezes
+the origin before staging, retains one signing key/store across mode changes,
+and initializes temporary storage lazily. Old links remain valid until expiry.
+Explicit native overrides even a configured startup relay. This setting does not
+participate in account selection, fingerprinting, affinity, or native Codex.
 
 ## 9. Removal and Acceptance Boundaries
 
@@ -424,6 +438,16 @@ mark live image/concurrency acceptance as passed based only on provider mocks
 or a previously valid test credential.
 
 ## 14. Disk Images, Diagnostics And Recovery
+
+Sub2API #139 duplicate comparison ignores only top-level description/defer_loading,
+normalizes non-null function schema aliases in parameters/inputSchema/input_schema
+order, and compares all remaining fields plus namespace/name identity. Persist the
+original declaration separately from the model-facing catalog so cache round trips
+retain strict and unknown execution constraints. Current/inherited annotations win
+over history additions; rejected conflicts never publish a new catalog. Old lossy
+records cannot reconstruct omitted constraints; explicit full catalogs remain
+authoritative. Hosted-tool omission is the existing fixed-Excel policy, not an
+authorization to add native fallback or change sticky account selection.
 
 Scope: Excel image storage/settings, the existing opt-in 403 diagnostic, and
 fresh quota reset recovery. Do not change selection scores, route fences,

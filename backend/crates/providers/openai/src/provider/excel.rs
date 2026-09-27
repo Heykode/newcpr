@@ -87,6 +87,11 @@ pub(super) async fn prepare_excel(
     );
     let tools = restored.tools;
     let structured = StructuredOutput::parse(&source).map_err(request_error)?;
+    let image_tuning = image_relay.request_tuning();
+    let image_limits = image_tuning.into();
+    // Validate carriers in their original positions before #139 moves tool references.
+    crate::transport::excel::images::validate_with_limits(&source, false, image_limits)
+        .map_err(request_error)?;
     let mut body = prepare_request(&source, &tools, &restored.native_calls, structured.as_ref())
         .map_err(request_error)?;
     let trace = context.trace();
@@ -102,26 +107,24 @@ pub(super) async fn prepare_excel(
             }),
         );
     }
-    let image_tuning = image_relay.request_tuning();
-    let image_limits = image_tuning.into();
-    crate::transport::excel::images::validate_with_limits(&body, false, image_limits)
+    let relay_origin = image_relay.relay_origin();
+    let image_lease = if let Some(origin) =
+        relay_origin.filter(|_| crate::transport::excel::images::has_user_inline(&body))
+    {
+        let relay = Arc::clone(image_relay);
+        let image_scope = format!("{owner}/{}", restored.conversation);
+        let (staged_body, lease) = tokio::task::spawn_blocking(move || {
+            let lease = relay.stage_with_origin(&mut body, image_tuning, &image_scope, &origin)?;
+            Ok::<_, ExcelRequestError>((body, lease))
+        })
+        .await
+        .map_err(|_| request_error(ExcelRequestError::ImageRelay))?
         .map_err(request_error)?;
-    let image_lease =
-        if image_relay.enabled() && crate::transport::excel::images::has_user_inline(&body) {
-            let relay = Arc::clone(image_relay);
-            let image_scope = format!("{owner}/{}", restored.conversation);
-            let (staged_body, lease) = tokio::task::spawn_blocking(move || {
-                let lease = relay.stage_with_tuning(&mut body, image_tuning, &image_scope)?;
-                Ok::<_, ExcelRequestError>((body, lease))
-            })
-            .await
-            .map_err(|_| request_error(ExcelRequestError::ImageRelay))?
-            .map_err(request_error)?;
-            body = staged_body;
-            lease
-        } else {
-            None
-        };
+        body = staged_body;
+        lease
+    } else {
+        None
+    };
     crate::transport::excel::images::validate_with_limits(&body, true, image_limits)
         .map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);

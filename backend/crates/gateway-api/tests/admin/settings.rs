@@ -85,6 +85,7 @@ fn update_body() -> Value {
     body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
     body["requestTuning"]["excelImageRelayDownloads"] = Value::Null;
     body["requestTuning"]["excelImageRelayEntries"] = Value::Null;
+    body["requestTuning"]["excelImageRelayTtlMinutes"] = Value::Null;
     body["requestTuning"]["excelImageMaxBytes"] = Value::Null;
     body["requestTuning"]["excelImageTotalBytes"] = Value::Null;
     body["requestTuning"]["excelImageMaxCount"] = Value::Null;
@@ -371,6 +372,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         ops_event_retention_days: 31,
         audit_retention_days: 91,
         request_tuning: RequestTuningOverrides {
+            excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Native {}),
             openai_request_location: None,
             max_account_switches: Some(7),
             max_request_attempts: Some(8),
@@ -453,10 +455,12 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         },
         "updatedAt": "2026-08-02T10:30:00Z"
     });
+    expected["requestTuning"]["excelImageTransport"] = json!({"mode":"native"});
     expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
     expected["requestTuning"]["excelImageRelayRequests"] = json!(128);
     expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
     expected["requestTuning"]["excelImageRelayEntries"] = json!(128);
+    expected["requestTuning"]["excelImageRelayTtlMinutes"] = json!(45);
     expected["requestTuning"]["excelImageMaxBytes"] = json!(8388608);
     expected["requestTuning"]["excelImageTotalBytes"] = json!(16777216);
     expected["requestTuning"]["excelImageMaxCount"] = json!(32);
@@ -624,6 +628,66 @@ async fn settings_post_and_reload_should_omit_legacy_global_opening_limit() {
         let data = response_json(response).await["data"].clone();
         assert_eq!(data["requestTuning"], expected_tuning);
     }
+}
+
+#[tokio::test]
+async fn excel_image_settings_round_trip_and_reject_invalid_origin_without_mutation() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for policy in [
+        json!({"mode":"relay","publicUrl":"https://images.example.com"}),
+        json!({"mode":"native"}),
+        Value::Null,
+    ] {
+        let mut body = update_body();
+        body["requestTuning"]["excelImageTransport"] = policy.clone();
+        let response = app(fixture.state())
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app(fixture.state())
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        let data = response_json(response).await["data"].clone();
+        assert_eq!(data["requestTuning"]["excelImageTransport"], policy);
+        assert_eq!(data["rotationStrategy"], body["rotationStrategy"]);
+        assert_eq!(data["requestIntervalMs"], body["requestIntervalMs"]);
+    }
+    let before = response_json(
+        app(fixture.state())
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap(),
+    )
+    .await["data"]
+        .clone();
+    let mut body = update_body();
+    body["requestTuning"]["excelImageTransport"] =
+        json!({"mode":"relay","publicUrl":"http://images.example.com"});
+    let response = app(fixture.state())
+        .oneshot(request(
+            Method::POST,
+            "/api/admin/settings/update",
+            Some(body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let after = response_json(
+        app(fixture.state())
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap(),
+    )
+    .await["data"]
+        .clone();
+    assert_eq!(before, after);
 }
 
 #[tokio::test]
