@@ -26,7 +26,7 @@ async function main() {
       catch {}
       await new Promise(resolve => setTimeout(resolve, 100))
     }
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || undefined })
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' })
     const errors = []
     async function dismissNotices() {
@@ -127,6 +127,22 @@ async function main() {
       }
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: 900 })
+        const badgeStyle = await pausedBadge.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return {
+            warningBackground: element.classList.contains('bg-cp-warning-container'),
+            background: style.backgroundColor,
+            border: style.borderTopStyle,
+            padding: Number.parseFloat(style.paddingInlineStart),
+            fits: element.getBoundingClientRect().width <= element.parentElement.getBoundingClientRect().width,
+          }
+        })
+        assert.equal(badgeStyle.warningBackground, true)
+        assert.notEqual(badgeStyle.background, 'rgba(0, 0, 0, 0)')
+        assert.equal(badgeStyle.border, 'solid')
+        assert.ok(badgeStyle.padding > 0)
+        assert.ok(badgeStyle.fits)
+        await pausedBadge.screenshot({ path: `${output}/excel-403-badge-${theme}-${width}.png` })
         await panel.scrollIntoViewIfNeeded()
         assert.ok(await panel.evaluate(element => element.scrollWidth <= element.clientWidth))
         if (width < 640)
