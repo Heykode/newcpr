@@ -467,12 +467,6 @@ fn excel_function_cmd_transport_preserves_shell_and_validates_schema() {
             .is_err()
     );
     assert!(tools.instructions().contains("codex2api.function_cmd/"));
-    assert!(
-        tools
-            .reminder()
-            .unwrap()
-            .contains("codex2api.function_cmd/")
-    );
     let wrong = ClientTools::parse(
         json!({"tools":[{"type":"function","name":"exec_command",
         "parameters":{"type":"object","properties":{"cmd":{"type":"number"}}}}]})
@@ -539,7 +533,7 @@ fn excel_function_code_transport_preserves_source_metadata_and_namespace() {
         assert_eq!(converted["encrypted_function_args"], json!([]));
     }
     assert!(tools.instructions().contains("codex2api.function_code/"));
-    assert!(tools.reminder().unwrap().contains("runner.execute"));
+    assert!(tools.instructions().contains("runner.execute"));
     let old = tools::rebuild_history_call(&json!({"type":"function_call","name":"execute",
         "namespace":"runner","call_id":"old_call","arguments":"{\"code\":\"legacy\"}"}))
     .unwrap();

@@ -92,6 +92,7 @@ impl Trace {
 pub(super) enum NextStep {
     Event(CoordinatedEvent),
     DelayedEvent(Duration, CoordinatedEvent),
+    DelayedError(Duration, EngineError),
     Error(EngineError),
     FinalizeCancelled,
     FinalizeSuccess,
@@ -303,6 +304,13 @@ impl ExecutionSession for FakeSession {
                     Ok(Some(event))
                 }
                 NextStep::Error(error) => {
+                    self.trace.push("next_error");
+                    self.finalized = true;
+                    Err(error)
+                }
+                NextStep::DelayedError(delay, error) => {
+                    self.trace.push("wait_error");
+                    tokio::time::sleep(delay).await;
                     self.trace.push("next_error");
                     self.finalized = true;
                     Err(error)
@@ -1571,6 +1579,45 @@ async fn streaming_error_should_emit_client_visible_upstream_details() {
     assert!(body.contains("Your Codex quota is exhausted"));
     assert!(body.contains("\"code\":\"quota_exhausted\""));
     assert!(body.contains("\"type\":\"rate_limit_error\""));
+    assert!(body.ends_with("data: [DONE]\n\n"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn streaming_content_error_param_survives_keepalive_before_failure() {
+    let trace = Arc::new(Trace::default());
+    let error = ProviderError::new(
+        ProviderErrorKind::InvalidRequest,
+        UpstreamSendState::NotSent,
+    )
+    .with_status(400)
+    .with_client_visible_upstream_error(
+        ClientVisibleUpstreamError::new(
+            "unsupported history content",
+            Some("excel_unsupported_content".into()),
+            Some("invalid_request_error".into()),
+        )
+        .with_param("input[103].content[0]"),
+    );
+    let session = FakeSession::streaming(
+        trace,
+        vec![
+            NextStep::Event(delivery(started(), CommitRequirement::CommitBeforeDelivery)),
+            NextStep::DelayedError(Duration::from_secs(31), EngineError::Provider(error)),
+        ],
+    );
+    let response = stream_execution_response(Box::new(session), None).await;
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains(": keep-alive\n\n"));
+    let frames = parse_sse_events(&body).unwrap();
+    let failure = frames
+        .iter()
+        .find(|frame| frame.event.as_deref() == Some("response.failed"))
+        .unwrap();
+    let data: Value = serde_json::from_str(&failure.data).unwrap();
+    assert_eq!(data["error"]["param"], "input[103].content[0]");
+    assert_eq!(data["response"]["error"]["param"], "input[103].content[0]");
+    assert_eq!(data["error"]["code"], "excel_unsupported_content");
     assert!(body.ends_with("data: [DONE]\n\n"));
 }
 

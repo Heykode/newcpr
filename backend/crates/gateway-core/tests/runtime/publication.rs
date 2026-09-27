@@ -162,6 +162,12 @@ fn rejected_publication_should_expire_without_downgrading_or_extending_grace() {
                 .expect("published"),
         ));
         assert_eq!(runtime.tuning.load().rate_limit_cooldown_seconds, 8);
+        assert_eq!(
+            runtime.tuning.excel_image_transport(),
+            Some(gateway_core::routing::ExcelImageTransport::Relay {
+                public_url: "https://revision-8.example.com".into()
+            })
+        );
         (runtime, frozen, capacity)
     });
     let catalog_cases = [Err(SnapshotStoreError::unavailable()), Ok(facts(8, 20))].map(|next| {
@@ -391,12 +397,14 @@ fn facts(config_revision: u64, limit: u32) -> SnapshotFacts {
     SnapshotFacts::new(
         revision(config_revision),
         revision(config_revision),
-        SnapshotSettingsFacts::new(5, 0, "smart", BTreeMap::new(), None, None).with_request_tuning(
-            RequestTuning {
+        SnapshotSettingsFacts::new(5, 0, "smart", BTreeMap::new(), None, None)
+            .with_excel_image_transport(Some(gateway_core::routing::ExcelImageTransport::Relay {
+                public_url: format!("https://revision-{config_revision}.example.com"),
+            }))
+            .with_request_tuning(RequestTuning {
                 rate_limit_cooldown_seconds: config_revision,
                 ..RequestTuning::default()
-            },
-        ),
+            }),
         Vec::new(),
         Vec::new(),
         vec![

@@ -22,8 +22,8 @@ mod replay;
 pub use image_relay::{TemporaryImage, TemporaryImageSource};
 mod user_agent;
 pub use replay::{
-    MAX_PROVIDER_REPLAY_BYTES, PROVIDER_REPLAY_TTL_SECONDS, ProviderReplayPort,
-    UnavailableProviderReplay,
+    MAX_PROVIDER_REPLAY_BYTES, PROVIDER_REPLAY_TTL_SECONDS, PROVIDER_TOOL_REPLAY_IDLE_SECONDS,
+    ProviderReplayPort, UnavailableProviderReplay,
 };
 pub use user_agent::ProviderUserAgentOverride;
 
@@ -688,6 +688,7 @@ pub struct ProviderCooldown {
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
     until: SystemTime,
+    observation_token: Option<String>,
 }
 
 impl ProviderCooldown {
@@ -701,7 +702,20 @@ impl ProviderCooldown {
             account_id,
             credential_revision,
             until,
+            observation_token: None,
         }
+    }
+
+    /// Store-owned generation; not part of scheduling or account identity.
+    #[must_use]
+    pub fn with_observation_token(mut self, token: Option<String>) -> Self {
+        self.observation_token = token;
+        self
+    }
+
+    #[must_use]
+    pub fn observation_token(&self) -> Option<&str> {
+        self.observation_token.as_deref()
     }
 
     #[must_use]
@@ -795,6 +809,14 @@ impl ProviderScopedCooldown {
 }
 
 pub trait ProviderCooldownPort: Send + Sync {
+    /// Clear only the exact cooldown observed before a recovery request.
+    fn clear_if_observed<'a>(
+        &'a self,
+        _observed: &'a ProviderCooldown,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
     fn put_if_later(
         &self,
         cooldown: ProviderCooldown,

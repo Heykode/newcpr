@@ -162,6 +162,12 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         ("crates/providers/openai", Some("transport/excel/replay.rs"), Item::Fn(function)) => {
             function.sig.ident == "restore"
         }
+        // Fresh quota reset evidence stays private to its recovery owner.
+        ("crates/providers/openai", Some("credential/quota/recovery.rs"), Item::Mod(module)) => {
+            module.ident == "reset_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // Judge parsing/Cron calculation and SQL usage predicates stay private;
         // only their owner-local regression modules may access these details.
         ("crates/gateway-admin", Some("use_case/quality_ops.rs"), Item::Mod(module))
@@ -194,6 +200,9 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
             "crates/providers/openai",
             Some(
                 "provider/excel.rs"
+                | "transport/excel/catalog.rs"
+                | "transport/excel/history_messages.rs"
+                | "transport/excel/repair.rs"
                 | "transport/excel/request.rs"
                 | "transport/excel/replay.rs"
                 | "transport/excel/tools.rs"
@@ -213,7 +222,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         ("crates/providers/openai", Some("transport/excel/mod.rs"), Item::Mod(module)) => {
             matches!(
                 module.ident.to_string().as_str(),
-                "tests" | "tool_compat_tests" | "image_tests"
+                "tests" | "tool_compat_tests" | "image_tests" | "history_tests"
             ) && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
@@ -438,6 +447,34 @@ fn quality_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
 }
 
 #[test]
+fn quota_reset_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
+    let owner = "crates/providers/openai";
+    let path = Path::new("credential/quota/recovery.rs");
+    let item: Item = syn::parse_str("#[cfg(test)] mod reset_tests {}").unwrap();
+    assert!(is_audited_private_test(owner, path, &item));
+    assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+    assert!(!is_audited_private_test(
+        owner,
+        Path::new("credential/quota/mod.rs"),
+        &item
+    ));
+    for source in [
+        "mod reset_tests {}",
+        "#[cfg(test)] mod reset_tests;",
+        "#[cfg(test)] pub(crate) mod reset_tests {}",
+        "#[cfg(test)] pub mod reset_tests {}",
+        "#[cfg(test)] mod other {}",
+        "#[cfg(test)] pub fn reset_tests() {}",
+        "#[cfg(any(test, feature = \"production\"))] mod reset_tests {}",
+        "#[cfg(test)] #[path = \"fixture.rs\"] mod reset_tests {}",
+        "#[cfg_attr(test, path = \"fixture.rs\")] mod reset_tests;",
+    ] {
+        let item: Item = syn::parse_str(source).unwrap();
+        assert!(!is_audited_private_test(owner, path, &item), "{source}");
+    }
+}
+
+#[test]
 fn affinity_behavior_tests_do_not_gain_private_state_exceptions() {
     let member = "crates/providers/openai";
     for relative in [
@@ -523,7 +560,7 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
 #[test]
 fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     let owner = "crates/providers/openai";
-    for name in ["tool_compat_tests", "image_tests"] {
+    for name in ["tool_compat_tests", "image_tests", "history_tests"] {
         let file = Path::new("transport/excel/mod.rs");
         let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name};")).unwrap();
         assert!(is_audited_private_test(owner, file, &item));
@@ -543,6 +580,9 @@ fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     }
     for relative in [
         "provider/excel.rs",
+        "transport/excel/catalog.rs",
+        "transport/excel/history_messages.rs",
+        "transport/excel/repair.rs",
         "transport/excel/request.rs",
         "transport/excel/replay.rs",
         "transport/excel/tools.rs",

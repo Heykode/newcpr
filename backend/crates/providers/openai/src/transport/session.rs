@@ -99,7 +99,7 @@ fn read_secret(path: &Path) -> Result<Option<[u8; 32]>, CodexSessionIdentityErro
         .map_err(|_| CodexSessionIdentityError::InvalidSecret)
 }
 
-fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
+pub(super) fn hmac_sha256(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
     const BLOCK_BYTES: usize = 64;
 
     let mut key_block = [0_u8; BLOCK_BYTES];

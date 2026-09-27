@@ -776,11 +776,24 @@ impl CodexCredentialQuotaService {
         let client = self.backend_client();
         for account in accounts {
             let observed_at = SystemTime::now();
+            let cooldown = if account.responses_upstream()
+                == gateway_core::account::ResponsesUpstream::Excel
+            {
+                self.cooldowns.read(account.id()).await.ok().flatten()
+            } else {
+                None
+            };
             match self.fetch_usage(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
                     // 单账号解析或落库失败只影响该账号；其余账号继续同步。
                     if let Err(error) = self
-                        .apply_fetched_quota(&account, &value, observed_at, &mut summary)
+                        .apply_fetched_quota(
+                            &account,
+                            &value,
+                            observed_at,
+                            &mut summary,
+                            cooldown.as_ref(),
+                        )
                         .await
                     {
                         summary.transient += 1;
@@ -853,6 +866,7 @@ impl CodexCredentialQuotaService {
         value: &Value,
         observed_at: SystemTime,
         summary: &mut CodexQuotaSyncSummary,
+        cooldown: Option<&ProviderCooldown>,
     ) -> Result<(), CodexCredentialQuotaError> {
         let mut object = normalize_quota_window_placeholders(
             value
@@ -895,12 +909,41 @@ impl CodexCredentialQuotaService {
             return Ok(());
         }
         self.scheduling.observe(&snapshot);
+        self.recover_observed_cooldown(account, value, observed_at, state, cooldown)
+            .await;
         if snapshot.quota().is_exhausted() {
             summary.exhausted += 1;
         } else {
             summary.updated += 1;
         }
         Ok(())
+    }
+
+    async fn recover_observed_cooldown(
+        &self,
+        account: &ProviderAccount,
+        value: &Value,
+        observed_at: SystemTime,
+        state: QuotaState,
+        cooldown: Option<&ProviderCooldown>,
+    ) {
+        let Some(cooldown) = cooldown.filter(|cooldown| {
+            cooldown.credential_revision() == account.revision() && cooldown.until() > observed_at
+        }) else {
+            return;
+        };
+        if account.responses_upstream() != gateway_core::account::ResponsesUpstream::Excel
+            || state.is_exhausted()
+            || !recovery::confirms_zero_usage(value)
+            || SystemTime::now()
+                .duration_since(observed_at)
+                .map_or(true, |age| age > Duration::from_secs(60))
+        {
+            return;
+        }
+        if self.cooldowns.clear_if_observed(cooldown).await.is_err() {
+            tracing::warn!(account_id = %account.id(), "OpenAI observed cooldown recovery failed");
+        }
     }
 
     /// 把正常推理响应携带的限流事实合并进 Provider 原始 quota JSON。
@@ -1178,6 +1221,13 @@ impl CodexCredentialQuotaService {
             return Err(CodexCredentialQuotaError::CredentialRefreshRequired);
         }
         let client = self.backend_client();
+        let cooldown = if matches!(authority, QuotaRefreshAuthority::ObserveAccess)
+            && account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
+        {
+            self.cooldowns.read(account.id()).await.ok().flatten()
+        } else {
+            None
+        };
         let FetchedCodexQuota { account, value } = match self.fetch_usage(&client, &account).await {
             Ok(fetched) => fetched,
             Err(CodexQuotaFetchError::InvalidCredential) => {
@@ -1270,6 +1320,8 @@ impl CodexCredentialQuotaService {
             return Err(CodexCredentialQuotaError::RevisionConflict);
         }
         self.scheduling.observe(&snapshot);
+        self.recover_observed_cooldown(&account, &value, observed_at, state, cooldown.as_ref())
+            .await;
         Ok(snapshot)
     }
 

@@ -30,7 +30,7 @@ pub(super) async fn resolve(
         .get("input")
         .and_then(Value::as_array)
         .is_some_and(|items| items.iter().any(|item| item["type"] == "additional_tools"));
-    for attempt in 0..4 {
+    for _ in 0..8 {
         let previous = match key
             .as_ref()
             .filter(|_| explicit || additional || inherited.is_none())
@@ -82,9 +82,186 @@ pub(super) async fn resolve(
         .await;
         // Explicit requests keep their own catalog even when a newer writer wins.
         // Only a delta-only update retries against a fresh snapshot.
-        if explicit || inherited.is_some() || attempt == 3 || !matches!(written, Ok(Ok(false))) {
+        if explicit || inherited.is_some() || !matches!(written, Ok(Ok(false))) {
             return Ok((tools, catalog));
         }
     }
-    unreachable!("bounded catalog loop always returns")
+    Err(ExcelRequestError::CatalogConflict)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::future::BoxFuture;
+    use gateway_core::provider_ports::ProviderStoreError;
+
+    #[tokio::test]
+    async fn duplicate_annotations_preserve_current_and_inherited_catalogs() {
+        use super::super::tests::MemoryReplay;
+        for inherited in [false, true] {
+            let store = MemoryReplay::default();
+            let current = json!({"type":"namespace","name":"workspace","tools":[{
+                "type":"custom","name":"patch","description":"Current contract",
+                "format":{"type":"text"},"encrypted":false,"strict":true
+            }]});
+            let initial = json!({"tools":[current.clone()],"input":"begin"});
+            let (_, expected) = resolve(
+                &store,
+                "owner",
+                Some("session"),
+                None,
+                initial.as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+            let mut historical = current.clone();
+            historical["tools"][0]["description"] = "Historical description".into();
+            historical["tools"][0]["defer_loading"] = true.into();
+            let mut source = json!({"input":[{"type":"additional_tools","tools":[historical]},{"role":"user","content":"continue"}]});
+            if !inherited {
+                source["tools"] = json!([current]);
+            }
+            let original = source.clone();
+            let (tools, catalog) = resolve(
+                &store,
+                "owner",
+                Some("session"),
+                None,
+                source.as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(source, original);
+            assert_eq!(catalog, expected);
+            assert!(tools.instructions().contains("Current contract"));
+            assert!(!tools.instructions().contains("Historical description"));
+            let (_, stored) = resolve(
+                &store,
+                "owner",
+                Some("session"),
+                None,
+                json!({"input":"next"}).as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(stored, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn conflicting_historical_contract_never_mutates_cached_catalog() {
+        use super::super::tests::MemoryReplay;
+        let store = MemoryReplay::default();
+        let declaration = json!({"type":"custom","name":"patch","format":{"type":"text"},"strict":true,"encrypted":false});
+        let initial = json!({"tools":[declaration.clone()],"input":"begin"});
+        let (_, expected) = resolve(
+            &store,
+            "owner",
+            Some("session"),
+            None,
+            initial.as_object().unwrap(),
+        )
+        .await
+        .unwrap();
+        for (field, changed) in [
+            ("type", json!("function")),
+            ("format", json!({"type":"grammar"})),
+            ("strict", json!(false)),
+            ("parameters", json!({"type":"object"})),
+            ("encrypted", json!(true)),
+            ("new_constraint", json!(true)),
+        ] {
+            let mut conflicting = declaration.clone();
+            conflicting[field] = changed;
+            let source = json!({"input":[{"type":"additional_tools","tools":[conflicting]}]});
+            assert!(
+                matches!(
+                    resolve(
+                        &store,
+                        "owner",
+                        Some("session"),
+                        None,
+                        source.as_object().unwrap()
+                    )
+                    .await,
+                    Err(ExcelRequestError::Tool)
+                ),
+                "{field}"
+            );
+            let (_, stored) = resolve(
+                &store,
+                "owner",
+                Some("session"),
+                None,
+                json!({"input":"next"}).as_object().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(stored, expected, "{field}");
+        }
+    }
+
+    struct Contended;
+    impl ProviderReplayPort for Contended {
+        fn read<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn write<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a OpaqueProviderData,
+        ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn compare_exchange_catalog<'a>(
+            &'a self,
+            _: &'a str,
+            _: Option<&'a OpaqueProviderData>,
+            _: &'a OpaqueProviderData,
+        ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+            Box::pin(async { Ok(false) })
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_conflict_is_not_a_successful_delta_merge() {
+        let delta = json!({"input":[{"type":"additional_tools","tools":[{"type":"function","name":"read"}]}]});
+        assert!(matches!(
+            resolve(
+                &Contended,
+                "owner",
+                Some("thread"),
+                None,
+                delta.as_object().unwrap()
+            )
+            .await,
+            Err(ExcelRequestError::CatalogConflict)
+        ));
+        let explicit = json!({"tools":[{"type":"function","name":"read"}],"input":"hello"});
+        assert!(
+            resolve(
+                &Contended,
+                "owner",
+                Some("thread"),
+                None,
+                explicit.as_object().unwrap()
+            )
+            .await
+            .is_ok()
+        );
+        assert!(
+            resolve(
+                &gateway_core::provider_ports::UnavailableProviderReplay,
+                "owner",
+                Some("thread"),
+                None,
+                delta.as_object().unwrap()
+            )
+            .await
+            .is_ok()
+        );
+    }
 }

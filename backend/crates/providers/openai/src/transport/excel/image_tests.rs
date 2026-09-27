@@ -255,11 +255,9 @@ fn excel_original_detail_preserves_position_specific_image_carriers() {
     images::validate(&body(json!([{"role":"user","content":[{
         "type":"input_image","file_id":"file_fixture","detail":"original"}]}])))
     .unwrap();
-    assert!(
-        images::validate(&body(json!([{"type":"function_call_output","output":[{
+    images::validate(&body(json!([{"type":"function_call_output","output":[{
         "type":"input_image","file_id":"file_fixture","detail":"original"}]}])))
-        .is_err()
-    );
+    .unwrap();
 }
 
 #[test]
@@ -271,7 +269,7 @@ fn excel_image_validation_bounds_inline_bytes_and_ignores_metadata() {
         PNG.replace("image/png", "image/jpeg"),
         format!(
             "data:image/png;base64,{}",
-            "A".repeat(4 * 1024 * 1024 * 4 / 3 + 128)
+            "A".repeat(20 * 1024 * 1024 * 4 / 3 + 128)
         ),
     ] {
         for (kind, field) in [("message", "content"), ("function_call_output", "output")] {
@@ -301,7 +299,7 @@ fn excel_tool_only_images_do_not_use_relay_and_reference_checks_precede_staging(
     assert_eq!(source, original);
     let rejected = body(json!([
         {"role":"user","content":[image()]},
-        {"type":"function_call_output","output":[{"type":"input_image","file_id":"file_fixture"}]}
+        {"type":"function_call_output","output":[{"type":"input_image","file_id":"invalid/fixture"}]}
     ]));
     assert!(images::validate_references(&rejected).is_err());
     for role in ["system", "developer", "assistant"] {
@@ -327,7 +325,7 @@ fn excel_repeated_user_images_share_budget_across_messages() {
 }
 
 #[tokio::test]
-async fn excel_tool_file_id_rejected_before_upload_or_generation() {
+async fn excel_invalid_tool_file_id_rejected_before_upload_or_generation() {
     let server = MockServer::start().await;
     for kind in ["function_call_output", "custom_tool_call_output"] {
         let mut req = request(
@@ -336,7 +334,7 @@ async fn excel_tool_file_id_rejected_before_upload_or_generation() {
         );
         req.excel.as_mut().unwrap().body = body(json!([
             {"role":"user","content":[image()]},
-            {"type":kind,"call_id":"fixture","output":[{"type":"input_image","file_id":"file_fixture"}]}
+            {"type":kind,"call_id":"fixture","output":[{"type":"input_image","file_id":"invalid/fixture"}]}
         ]));
         assert!(run(&server, &req).await.is_err());
     }
@@ -419,7 +417,7 @@ async fn excel_mixed_tool_and_user_images_relay_without_mutating_history_or_iden
         .await
         .unwrap();
     drop(req);
-    assert!(relay.read(token).is_none());
+    assert!(relay.read(token).is_some());
     let next = replay::restore(
         store,
         "owner".into(),
@@ -456,7 +454,8 @@ async fn excel_user_attachment_preserves_mixed_tool_images_and_original_history(
         {"role":"user","content":[image(), image()]},
         {"type":"function_call","name":"screenshot","arguments":"{}","call_id":"call_fixture"},
         {"type":"function_call_output","call_id":"call_fixture","output":[image(),
-            {"type":"input_image","image_url":"https://images.example.com/other.png?signature=unchanged"}]}
+            {"type":"input_image","image_url":"https://images.example.com/other.png?signature=unchanged"},
+            {"type":"input_image","file_id":"file-existing","detail":"original"}]}
     ]);
     let source = json!({"model":VERIFIED_MODEL,"input":input,
         "tools":[{"type":"function","name":"screenshot","parameters":{"type":"object"}}]});
@@ -500,7 +499,17 @@ async fn excel_user_attachment_preserves_mixed_tool_images_and_original_history(
         .iter()
         .find(|item| item["type"] == "function_call_output")
         .unwrap();
-    assert_eq!(output["output"], input[2]["output"]);
+    assert_eq!(output["output"][0], input[2]["output"][0]);
+    assert!(
+        output["output"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("call_fixture")
+    );
+    let reference_message = items.last().unwrap();
+    assert_eq!(reference_message["role"], "user");
+    assert_eq!(reference_message["content"][2], input[2]["output"][1]);
+    assert_eq!(reference_message["content"][4], input[2]["output"][2]);
     for call in &calls {
         assert_eq!(call.headers["authorization"], "Bearer fixture");
         assert_eq!(call.headers["chatgpt-account-id"], "workspace");

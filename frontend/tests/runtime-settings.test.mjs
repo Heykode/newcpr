@@ -15,6 +15,7 @@ function loadModule(filename, dependencies = {}) {
   })
   const exports = {}
   runInNewContext(outputText, {
+    URL,
     exports,
     require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? loadModule(new URL('../src/utils/excel-defaults.ts', import.meta.url)) : require(name)),
   }, { filename: String(filename) })
@@ -23,6 +24,37 @@ function loadModule(filename, dependencies = {}) {
 
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
+
+test('Excel image transport preserves explicit modes and inherited startup settings', async () => {
+  for (const transport of [null, { mode: 'native' }, { mode: 'relay', publicUrl: 'https://images.example.com' }]) {
+    const initial = settings()
+    initial.requestTuning = { excelImageTransport: transport }
+    const query = mountSettings(initial)
+    try {
+      await query.state.loadSettings()
+      assert.deepEqual(JSON.parse(JSON.stringify(query.state.form.requestTuning.excelImageTransport)), transport)
+      await query.state.saveSettings()
+      assert.deepEqual(query.requests[0].requestTuning.excelImageTransport, transport)
+      assert.equal(query.requests[0].rotationStrategy, initial.rotationStrategy)
+    }
+    finally { query.stop() }
+  }
+})
+
+test('Excel relay requires a public HTTPS origin before settings can be saved', async () => {
+  for (const publicUrl of ['', 'http://images.example.com', 'https://images.example.com/path', 'https://user@example.com', 'https://images.example.com?x=1', 'https://images.example.com#part', 'https://127.0.0.1', 'https://host.local']) {
+    const warnings = []
+    const query = mountSettings(settings(), message => warnings.push(message))
+    try {
+      await query.state.loadSettings()
+      query.state.form.requestTuning.excelImageTransport = { mode: 'relay', publicUrl }
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 0, publicUrl)
+      assert.equal(warnings.length, 1, publicUrl)
+    }
+    finally { query.stop() }
+  }
+})
 
 test('Excel global defaults fill omission without replacing saved or explicitly empty models', async () => {
   for (const models of [undefined, [], ['custom-model'], ['gpt-5.6-sol', 'gpt-6-astra']]) {
@@ -315,9 +347,11 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       excelImageRelayRequests: 128,
       excelImageRelayDownloads: 32,
       excelImageRelayEntries: 512,
-      excelImageMaxBytes: 4 * 1024 * 1024,
-      excelImageTotalBytes: 6 * 1024 * 1024,
-      excelImageMaxCount: 16,
+      excelImageMaxBytes: 20 * 1024 * 1024,
+      excelImageTotalBytes: 32 * 1024 * 1024,
+      excelImageMaxCount: 20,
+      excelImageRelayTtlMinutes: 30,
+      excelImageTransport: null,
       openaiLocationOverrideEnabled: false,
       openaiRequestLocation: null,
       maxWaitingPerKey: 0,
@@ -340,10 +374,11 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
   try {
     await query.state.loadSettings()
     for (const [field, value] of [
-      ['excelImageRelayBytes', 2 * 1024 * 1024],
+      ['excelImageRelayBytes', 64 * 1024 * 1024],
       ['excelImageRelayRequests', 8],
       ['excelImageRelayDownloads', 4],
-      ['excelImageRelayEntries', 16],
+      ['excelImageRelayEntries', 64],
+      ['excelImageRelayTtlMinutes', 90],
       ['excelImageMaxBytes', 8 * 1024 * 1024],
       ['excelImageTotalBytes', 16 * 1024 * 1024],
       ['excelImageMaxCount', 32],
@@ -352,10 +387,11 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     }
     await query.state.saveSettings()
     await query.state.loadSettings()
-    assert.equal(query.state.form.requestTuning.excelImageRelayBytes, 2 * 1024 * 1024)
+    assert.equal(query.state.form.requestTuning.excelImageRelayBytes, 64 * 1024 * 1024)
     assert.equal(query.state.form.requestTuning.excelImageRelayDownloads, 4)
     assert.equal(query.state.form.requestTuning.excelImageRelayRequests, 8)
-    assert.equal(query.state.form.requestTuning.excelImageRelayEntries, 16)
+    assert.equal(query.state.form.requestTuning.excelImageRelayEntries, 64)
+    assert.equal(query.state.form.requestTuning.excelImageRelayTtlMinutes, 90)
     assert.equal(query.state.form.requestTuning.excelImageMaxBytes, 8 * 1024 * 1024)
     assert.equal(query.state.form.requestTuning.excelImageTotalBytes, 16 * 1024 * 1024)
     assert.equal(query.state.form.requestTuning.excelImageMaxCount, 32)
@@ -363,17 +399,19 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
     for (const [field, invalid] of [
       ['excelImageRelayBytes', 1024],
-      ['excelImageRelayBytes', 2048 * 1024 * 1024 + 1],
+      ['excelImageRelayBytes', 16384 * 1024 * 1024 + 1],
       ['excelImageRelayDownloads', 0],
       ['excelImageRelayDownloads', 129],
       ['excelImageRelayRequests', 0],
       ['excelImageRelayRequests', 513],
       ['excelImageRelayEntries', 0],
-      ['excelImageRelayEntries', 4097],
+      ['excelImageRelayEntries', 65537],
+      ['excelImageRelayTtlMinutes', 0],
+      ['excelImageRelayTtlMinutes', 1441],
       ['excelImageMaxBytes', 0],
-      ['excelImageMaxBytes', 20 * 1024 * 1024 + 1],
+      ['excelImageMaxBytes', 128 * 1024 * 1024 + 1],
       ['excelImageTotalBytes', 0],
-      ['excelImageTotalBytes', 32 * 1024 * 1024 + 1],
+      ['excelImageTotalBytes', 128 * 1024 * 1024 + 1],
       ['excelImageMaxCount', 0],
       ['excelImageMaxCount', 4097],
     ]) {
@@ -383,7 +421,19 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
       assert.equal(query.requests.length, 1)
       query.state.form.requestTuning[field] = before
     }
-    assert.equal(warnings.length, 14)
+    assert.equal(warnings.length, 16)
+    for (const [field, invalid] of [
+      ['excelImageRelayBytes', 1024 * 1024],
+      ['excelImageRelayEntries', 16],
+      ['excelImageTotalBytes', 4 * 1024 * 1024],
+    ]) {
+      const before = query.state.form.requestTuning[field]
+      query.state.form.requestTuning[field] = invalid
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 1)
+      query.state.form.requestTuning[field] = before
+    }
+    assert.equal(warnings.length, 19)
   }
   finally {
     query.stop()

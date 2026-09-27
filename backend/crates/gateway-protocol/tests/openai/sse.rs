@@ -12,6 +12,37 @@ fn sse_body_has_done(body: &str) -> bool {
 }
 
 #[test]
+fn response_failed_content_param_is_preserved_in_both_error_envelopes() {
+    use gateway_protocol::openai::sse::response_failed_sse_event_with_id_and_param;
+    for param in [None, Some("input[103].content[0]")] {
+        let event = response_failed_sse_event_with_id_and_param(
+            Some("resp_existing"),
+            "invalid_request_error",
+            "excel_unsupported_content",
+            "unsupported history content",
+            param,
+        );
+        let frames = parse_sse_events(&event).unwrap();
+        let data: serde_json::Value = serde_json::from_str(&frames[0].data).unwrap();
+        assert_eq!(data["error"]["param"].as_str(), param);
+        assert_eq!(data["response"]["error"]["param"].as_str(), param);
+        assert_eq!(data["response"]["id"], "resp_existing");
+        assert_eq!(data["response"]["status"], "failed");
+        if param.is_none() {
+            assert_eq!(
+                event,
+                response_failed_sse_event_with_id(
+                    Some("resp_existing"),
+                    "invalid_request_error",
+                    "excel_unsupported_content",
+                    "unsupported history content",
+                )
+            );
+        }
+    }
+}
+
+#[test]
 fn parser_should_preserve_multiline_data_id_and_retry() {
     let input = concat!(
         ": keep-alive\n",

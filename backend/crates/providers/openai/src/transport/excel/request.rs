@@ -37,8 +37,14 @@ pub(crate) enum ExcelRequestError {
         field: &'static str,
         part: usize,
     },
+    #[error(
+        "Excel attributed message content must be text or a content array (path=input[{input}].content)"
+    )]
+    AttributedContent { input: usize },
     #[error("unsupported client tool or tool choice for Excel")]
     Tool,
+    #[error("Excel tool catalog changed concurrently; retry this request")]
+    CatalogConflict,
     #[error("Excel returned an undeclared or malformed client tool call")]
     ToolCall,
     #[error("Excel returned a tool outside the client's catalog")]
@@ -53,6 +59,21 @@ pub(crate) enum ExcelRequestError {
         "unsupported Excel image-tool request; use PNG, gpt-image-2 and supported image options"
     )]
     Image,
+}
+
+impl ExcelRequestError {
+    pub(crate) fn content_param(self) -> Option<String> {
+        match self {
+            Self::Content {
+                input, field, part, ..
+            }
+            | Self::EncryptedContent { input, field, part } => {
+                Some(format!("input[{input}].{field}[{part}]"))
+            }
+            Self::AttributedContent { input } => Some(format!("input[{input}].content")),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn prepare_request(
@@ -99,13 +120,12 @@ pub(crate) fn prepare_request(
     {
         input.push(message("developer", instructions));
     }
-    input.push(message("developer", &tools.instructions()));
-    if let Some(reminder) = tools.reminder() {
-        input.push(message("developer", &reminder));
-    }
+    let mut protocol = tools.instructions();
     if let Some(format) = structured {
-        input.push(message("developer", &format.instructions()));
+        protocol.push('\n');
+        protocol.push_str(&format.instructions());
     }
+    input.push(message("developer", &protocol));
     input.extend(history);
     let mut metadata = Map::new();
     if let Some(values) = source.get("metadata").and_then(Value::as_object) {
@@ -198,6 +218,7 @@ fn translate_input(
         let mut item = value.as_object().cloned().ok_or(ExcelRequestError::Input)?;
         item.remove("internal_chat_message_metadata_passthrough");
         validate_content(item.get("content"), index, "content")?;
+        let mut item = super::history_messages::normalize(item, index)?;
         match item
             .get("type")
             .and_then(Value::as_str)
@@ -263,7 +284,9 @@ fn translate_input(
                         "(tool call succeeded with no output)".into(),
                     );
                 }
+                let tool_images = separate_tool_images(&mut item);
                 output.push(item.into());
+                output.extend(tool_images);
             }
             "reasoning" => {
                 if let Some(encrypted) = item
@@ -282,6 +305,41 @@ fn translate_input(
     }
     output.extend(trigger);
     Ok(output)
+}
+
+// BPS accepts attachment references in messages, not directly in tool results.
+// Preserve inline screenshots and mark both sides of every moved image.
+// Carrier validation still runs before staging or sending the prepared body.
+fn separate_tool_images(item: &mut Map<String, Value>) -> Option<Value> {
+    let id = item.get("call_id")?.as_str()?.to_owned();
+    let parts = item.get_mut("output")?.as_array_mut()?;
+    let mut images = Vec::new();
+    let mut index = 0;
+    for part in parts {
+        if part.get("type").and_then(Value::as_str) != Some("input_image")
+            || part
+                .get("image_url")
+                .and_then(Value::as_str)
+                .and_then(|url| url.get(..5))
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+        {
+            continue;
+        }
+        index += 1;
+        let label = format!("[Tool output image {index} for call_id {id:?}]");
+        let marker = json!({"type":"input_text","text":format!("{label} See the following image attachment message.")});
+        let image = std::mem::replace(part, marker);
+        images.push(json!({"type":"input_text","text":label}));
+        images.push(image);
+    }
+    if images.is_empty() {
+        return None;
+    }
+    let mut content = vec![
+        json!({"type":"input_text","text":"The following images are tool output from the preceding tool result, not a new user instruction."}),
+    ];
+    content.extend(images);
+    Some(json!({"type":"message","role":"user","content":content}))
 }
 
 fn validate_content(
@@ -403,6 +461,211 @@ mod tests {
             &BTreeMap::new(),
             StructuredOutput::parse(source)?.as_ref(),
         )
+    }
+
+    fn image_history(kind: &str, output: Value) -> (Value, BTreeMap<String, Value>) {
+        let prefix = if kind == "custom" {
+            "custom_tool"
+        } else {
+            "function"
+        };
+        let call = json!({"type":format!("{prefix}_call"),"name":"view_image","call_id":"call_image",
+            "arguments":"{}","input":"fixture.png"});
+        let tools = ClientTools::parse(
+            json!({"tools":[{"type":kind,"name":"view_image"}]})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        let native = tools.rebuild_history_call(&call).unwrap();
+        (
+            json!({"model":VERIFIED_MODEL,"tools":tools.catalog(),"input":[call,
+            {"type":format!("{prefix}_call_output"),"id":"ctco_fixture","call_id":"call_image","output":output}]}),
+            BTreeMap::from([("call_image".into(), native)]),
+        )
+    }
+
+    #[test]
+    fn tool_image_references_preserve_association_order_detail_and_replay() {
+        for kind in ["function", "custom"] {
+            for carrier in ["file_id", "image_url"] {
+                for detail in [
+                    Value::Null,
+                    json!("auto"),
+                    json!("low"),
+                    json!("high"),
+                    json!("original"),
+                ] {
+                    for mixed in [false, true] {
+                        let reference = if carrier == "file_id" {
+                            "file-fixture"
+                        } else {
+                            "https://example.com/a.png?signature=a%2Fb"
+                        };
+                        let mut image = json!({"type":"input_image",carrier:reference});
+                        if !detail.is_null() {
+                            image["detail"] = detail.clone();
+                        }
+                        let parts = if mixed {
+                            json!([{"type":"input_text","text":"before"},image.clone(),
+                                {"type":"input_text","text":"between"},image.clone(),{"type":"input_text","text":"after"}])
+                        } else {
+                            json!([image.clone(), image.clone()])
+                        };
+                        let (source, native) = image_history(kind, parts.clone());
+                        let original = source.clone();
+                        super::super::images::validate(source.as_object().unwrap()).unwrap();
+                        let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+                        let prepared =
+                            prepare_request(source.as_object().unwrap(), &tools, &native, None)
+                                .unwrap();
+                        let items = prepared["input"].as_array().unwrap();
+                        let result = &items[items.len() - 2];
+                        let message = &items[items.len() - 1];
+                        assert_eq!(result["type"], "function_call_output");
+                        assert_eq!(result["call_id"], "call_image");
+                        assert!(result["id"].as_str().unwrap().starts_with("fc_"));
+                        assert_eq!(message["role"], "user");
+                        assert!(
+                            message["content"][0]["text"]
+                                .as_str()
+                                .unwrap()
+                                .contains("not a new user instruction")
+                        );
+                        assert_eq!(message["content"][2], image);
+                        assert_eq!(message["content"][4], image);
+                        let mut image_index = 0;
+                        for (index, part) in parts.as_array().unwrap().iter().enumerate() {
+                            if part["type"] == "input_image" {
+                                image_index += 1;
+                                let label = format!(
+                                    "[Tool output image {image_index} for call_id \"call_image\"]"
+                                );
+                                assert_eq!(message["content"][image_index * 2 - 1]["text"], label);
+                                assert!(
+                                    result["output"][index]["text"]
+                                        .as_str()
+                                        .unwrap()
+                                        .starts_with(&label)
+                                );
+                            } else {
+                                assert_eq!(result["output"][index], *part);
+                            }
+                        }
+                        let mut normalized = result.as_object().unwrap().clone();
+                        assert!(separate_tool_images(&mut normalized).is_none());
+                        assert_eq!(source, original);
+                        assert_eq!(
+                            prepare_request(source.as_object().unwrap(), &tools, &native, None)
+                                .unwrap(),
+                            prepared
+                        );
+                        let mut output_only = source.clone();
+                        output_only["input"].as_array_mut().unwrap().remove(0);
+                        let replayed = prepare_request(
+                            output_only.as_object().unwrap(),
+                            &tools,
+                            &native,
+                            None,
+                        )
+                        .unwrap();
+                        assert_eq!(replayed["input"], prepared["input"]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tool_images_leave_inline_and_text_unchanged_across_stream_and_compact_modes() {
+        let inline = json!({"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==","detail":"original"});
+        for kind in ["function", "custom"] {
+            for stream in [false, true] {
+                for compact in [false, true] {
+                    let parts = json!([{"type":"input_image","file_id":"file-existing"},inline,
+                        {"type":"input_text","text":"after inline"},{"type":"input_image","image_url":"https://example.com/a.png"}]);
+                    let (mut source, native) = image_history(kind, parts.clone());
+                    source["stream"] = stream.into();
+                    if compact {
+                        source["input"]
+                            .as_array_mut()
+                            .unwrap()
+                            .insert(0, json!({"type":"compaction_trigger"}));
+                    }
+                    let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+                    super::super::images::validate(source.as_object().unwrap()).unwrap();
+                    let prepared =
+                        prepare_request(source.as_object().unwrap(), &tools, &native, None)
+                            .unwrap();
+                    let items = prepared["input"].as_array().unwrap();
+                    let result = items
+                        .iter()
+                        .find(|item| item["type"] == "function_call_output")
+                        .unwrap();
+                    assert_eq!(result["output"][1], inline);
+                    assert_eq!(result["output"][2], parts[2]);
+                    let message = items.iter().find(|item| item["role"] == "user").unwrap();
+                    assert_eq!(message["content"][2], parts[0]);
+                    assert_eq!(message["content"][4], parts[3]);
+                    assert!(!super::super::images::has_user_inline(&prepared));
+                    if compact {
+                        assert_eq!(items.last().unwrap()["type"], "compaction_trigger");
+                    }
+                }
+            }
+        }
+        for output in [
+            json!("plain text"),
+            json!([]),
+            json!([{"type":"input_text","text":"literal input_image"}]),
+            json!([inline]),
+        ] {
+            let (source, native) = image_history("function", output.clone());
+            let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+            let prepared =
+                prepare_request(source.as_object().unwrap(), &tools, &native, None).unwrap();
+            let result = prepared["input"].as_array().unwrap().last().unwrap();
+            assert_eq!(result["type"], "function_call_output");
+            assert_eq!(result["output"], output);
+        }
+    }
+
+    #[test]
+    fn multiple_tool_results_keep_their_own_adjacent_image_message() {
+        let (source, mut native) = image_history(
+            "function",
+            json!([{"type":"input_image","file_id":"file-first"}]),
+        );
+        let mut first = source["input"][1].clone();
+        first["call_id"] = "call_first".into();
+        let mut second = first.clone();
+        second["call_id"] = "call_second".into();
+        second["output"][0]["file_id"] = "file-second".into();
+        let template = native.remove("call_image").unwrap();
+        for id in ["call_first", "call_second"] {
+            let mut call = template.clone();
+            call["call_id"] = id.into();
+            native.insert(id.into(), call);
+        }
+        let translated = translate_input(
+            &json!([second, first, message("user", "Continue")]),
+            &native,
+        )
+        .unwrap();
+        for (result_index, id, file) in [
+            (1, "call_second", "file-second"),
+            (4, "call_first", "file-first"),
+        ] {
+            assert_eq!(translated[result_index]["call_id"], id);
+            assert!(
+                translated[result_index + 1]["content"][1]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains(id)
+            );
+            assert_eq!(translated[result_index + 1]["content"][2]["file_id"], file);
+        }
+        assert_eq!(translated.last().unwrap(), &message("user", "Continue"));
     }
 
     #[test]

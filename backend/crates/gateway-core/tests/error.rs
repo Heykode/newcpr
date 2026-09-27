@@ -8,6 +8,32 @@ use gateway_core::upstream::UpstreamSendState;
 use serde_json::json;
 
 #[test]
+fn client_error_param_survives_clone_without_entering_safe_diagnostics() {
+    assert!(std::mem::size_of::<GatewayError>() < 128);
+    let details = ClientVisibleUpstreamError::new(
+        "unsupported history content",
+        Some("excel_unsupported_content".into()),
+        Some("invalid_request_error".into()),
+    );
+    assert_eq!(details.param(), None);
+    let details = details.with_param("input[103].content[0]");
+    assert!(!format!("{details:?}").contains("input[103]"));
+    let error = ProviderError::new(
+        ProviderErrorKind::InvalidRequest,
+        UpstreamSendState::NotSent,
+    )
+    .with_client_visible_upstream_error(details);
+    let cloned = error.clone().with_status(400);
+    assert_eq!(error.upstream_status(), None);
+    assert_eq!(cloned.upstream_status(), Some(400));
+    let gateway = GatewayError::from_provider(&cloned);
+    assert_eq!(gateway.client_error_param(), Some("input[103].content[0]"));
+    assert!(!gateway.safe_message().contains("input[103]"));
+    assert!(!format!("{gateway:?}").contains("input[103]"));
+    assert!(!format!("{error:?}").contains("input[103]"));
+}
+
+#[test]
 fn provider_error_debug_should_not_expose_sensitive_context() {
     let secret = "sk-do-not-log-this";
     let error = ProviderError::new(ProviderErrorKind::Unauthorized, UpstreamSendState::Sent)

@@ -28,6 +28,7 @@ const MAXIMUM_CATALOG_STABILITY_ATTEMPTS: usize = 4;
 /// Store 在一个一致性读取中提供的调度设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSettingsFacts {
+    excel_image_transport: Option<super::ExcelImageTransport>,
     disable_fast: bool,
     responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
@@ -45,6 +46,15 @@ pub struct SnapshotSettingsFacts {
 }
 
 impl SnapshotSettingsFacts {
+    #[must_use]
+    pub fn with_excel_image_transport(
+        mut self,
+        policy: Option<super::ExcelImageTransport>,
+    ) -> Self {
+        self.excel_image_transport = policy;
+        self
+    }
+
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
         self.disable_fast = disable_fast;
@@ -77,6 +87,7 @@ impl SnapshotSettingsFacts {
     ) -> Self {
         Self {
             disable_fast: false,
+            excel_image_transport: None,
             responses_max_decompressed_body_bytes:
                 super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES,
             max_concurrent_per_account,
@@ -513,6 +524,14 @@ async fn compile_runtime_snapshot(
 
     let model_mappings = facts.settings.model_mappings;
     let request_tuning = facts.settings.request_tuning;
+    if facts
+        .settings
+        .excel_image_transport
+        .as_ref()
+        .is_some_and(|policy| !policy.validate())
+    {
+        return Err(RuntimeSnapshotCompileError::InvalidData);
+    }
     let min_client_versions = CodexClientMinVersions::new(
         facts
             .settings
@@ -621,6 +640,7 @@ async fn compile_runtime_snapshot(
             .with_model_catalog_accounts(catalog_accounts)
             .with_min_codex_client_versions(min_client_versions)
             .with_request_tuning(request_tuning)
+            .with_excel_image_transport(facts.settings.excel_image_transport)
             .with_openai_turn_state_policy(turn_state_policy)
             .with_request_location(facts.settings.request_location)
             .with_account_concurrency_limits(account_limits)
@@ -632,6 +652,7 @@ type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<Pro
 /// 数据面使用的不可变配置快照。
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    excel_image_transport: Option<super::ExcelImageTransport>,
     disable_fast: bool,
     responses_max_decompressed_body_bytes: std::num::NonZeroUsize,
     request_location: Option<crate::account::RequestLocation>,
@@ -654,6 +675,20 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[must_use]
+    pub fn excel_image_transport(&self) -> Option<&super::ExcelImageTransport> {
+        self.excel_image_transport.as_ref()
+    }
+
+    #[must_use]
+    pub fn with_excel_image_transport(
+        mut self,
+        policy: Option<super::ExcelImageTransport>,
+    ) -> Self {
+        self.excel_image_transport = policy;
+        self
+    }
+
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
         self.disable_fast = disable_fast;
@@ -757,6 +792,7 @@ impl RuntimeSnapshot {
 
         Ok(Self {
             disable_fast: false,
+            excel_image_transport: None,
             responses_max_decompressed_body_bytes: std::num::NonZeroUsize::new(
                 super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES as usize,
             )

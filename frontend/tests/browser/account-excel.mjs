@@ -254,16 +254,59 @@ async function main() {
     const globalModels = page.getByRole('textbox', { name: '全局 Excel 模型', exact: true })
     await globalModels.waitFor()
     assert.equal(await globalModels.inputValue(), 'gpt-5.6-sol, gpt-6-astra')
+    await page.getByRole('button', { name: '请求与连接高级参数', exact: true }).click()
+    for (const [name, value, maximum] of [
+      ['Excel 单张图片上限', '20971520', '134217728'],
+      ['Excel 请求图片总量上限', '33554432', '134217728'],
+      ['Excel 单请求图片数量上限', '20', '4096'],
+      ['Excel 图片中转字节预算', '1073741824', '17179869184'],
+      ['Excel 图片中转条目上限', '512', '65536'],
+      ['Excel 图片有效期', '30', '1440'],
+    ]) {
+      const field = page.getByRole('spinbutton', { name, exact: true })
+      assert.equal(await field.inputValue(), value)
+      assert.equal(await field.getAttribute('max'), maximum)
+    }
+    const imageTtl = page.getByRole('spinbutton', { name: 'Excel 图片有效期', exact: true })
+    await imageTtl.fill('60')
+    const imageMode = page.getByLabel('Excel 图片处理方式', { exact: true })
+    await imageMode.click()
+    await page.getByRole('option', { name: /^HTTPS 中转/ }).click()
+    const imageOrigin = page.getByRole('textbox', { name: 'Excel 图片中转地址', exact: true })
+    await imageOrigin.fill('https://images.example.com')
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
       await globalModels.scrollIntoViewIfNeeded()
       assert.ok(await globalModels.evaluate(element => element.getBoundingClientRect().right <= window.innerWidth))
       await page.screenshot({ path: `${output}/excel-global-settings-${width}.png` })
+      await imageTtl.scrollIntoViewIfNeeded()
+      assert.ok(await imageTtl.evaluate(element => element.getBoundingClientRect().right <= window.innerWidth))
+      await page.screenshot({ path: `${output}/excel-image-settings-${width}.png` })
+      await imageOrigin.scrollIntoViewIfNeeded()
+      assert.ok(await imageOrigin.evaluate(element => element.getBoundingClientRect().right <= window.innerWidth))
+      await page.screenshot({ path: `${output}/excel-image-mode-${width}.png` })
     }
     await globalModels.fill('gpt-6-astra')
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await page.getByText('设置已保存', { exact: true }).waitFor()
     assert.deepEqual(settings.excelDefaultModels, ['gpt-6-astra'])
+    assert.equal(settings.requestTuning.excelImageRelayTtlMinutes, 60)
+    assert.deepEqual(settings.requestTuning.excelImageTransport, { mode: 'relay', publicUrl: 'https://images.example.com' })
+    await dismissNotices()
+    await imageMode.click()
+    await page.getByRole('option', { name: /^原生附件/ }).click()
+    assert.equal(await imageOrigin.count(), 0)
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByText('设置已保存', { exact: true }).waitFor()
+    assert.deepEqual(settings.requestTuning.excelImageTransport, { mode: 'native' })
+    await dismissNotices()
+    await imageMode.click()
+    await page.getByRole('option', { name: /^继承启动配置/ }).click()
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByText('设置已保存', { exact: true }).waitFor()
+    assert.equal(settings.requestTuning.excelImageTransport, null)
+    assert.equal(settings.rotationStrategy, 'smart')
+    assert.equal(settings.requestIntervalMs, 25)
     assert.equal(await page.getByText('Local fixture: unsupported operation', { exact: true }).count(), 0)
     assert.deepEqual(errors, [])
     process.stdout.write('Excel menu, inheritance, templates, import, relogin push and responsive layouts passed.\n')

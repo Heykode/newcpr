@@ -13,6 +13,26 @@ use super::{
 
 const MAX_SCHEMA_BYTES: usize = 1024 * 1024;
 
+// Match Sub2API #139: annotations can change, execution constraints cannot.
+// Keep the first (explicit/inherited) declaration ahead of historical additions.
+fn tool_definition(value: &Value) -> Value {
+    let mut definition = value.as_object().expect("validated tool object").clone();
+    definition.remove("description");
+    definition.remove("defer_loading");
+    if value.get("type").and_then(Value::as_str) == Some("function") {
+        for key in ["parameters", "inputSchema", "input_schema"] {
+            definition.remove(key);
+        }
+        if let Some(schema) = ["parameters", "inputSchema", "input_schema"]
+            .into_iter()
+            .find_map(|key| value.get(key).filter(|value| !value.is_null()))
+        {
+            definition.insert("parameters".into(), schema.clone());
+        }
+    }
+    Value::Object(definition)
+}
+
 #[derive(Clone)]
 struct ToolSpec {
     name: String,
@@ -21,6 +41,7 @@ struct ToolSpec {
     schema: Value,
     validator: Option<Arc<Validator>>,
     catalog: Value,
+    declaration: Value,
 }
 
 #[derive(Clone, Default)]
@@ -45,11 +66,9 @@ impl ClientTools {
             .specs
             .values()
             .map(|spec| {
-                let mut value = spec.catalog.clone();
-                value["name"] = spec.name.clone().into();
-                let fields = value.as_object_mut().expect("catalog object");
-                fields.remove("namespace");
-                fields.remove("tool");
+                // Persist the declaration, not the lossy model-facing catalog: later
+                // duplicates must still compare strictness and unknown constraints.
+                let value = spec.declaration.clone();
                 match &spec.namespace {
                     Some(namespace) => json!({"type":"namespace","name":namespace,"tools":[value]}),
                     None => value,
@@ -192,8 +211,9 @@ impl ClientTools {
             let key = namespace.map_or_else(|| name.to_owned(), |ns| format!("{ns}.{name}"));
             let schema = value
                 .get("parameters")
-                .or_else(|| value.get("inputSchema"))
-                .or_else(|| value.get("input_schema"))
+                .filter(|value| !value.is_null())
+                .or_else(|| value.get("inputSchema").filter(|value| !value.is_null()))
+                .or_else(|| value.get("input_schema").filter(|value| !value.is_null()))
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             let mut catalog = json!({"type":kind,"name":key});
@@ -210,7 +230,10 @@ impl ClientTools {
                 catalog["format"] = format.clone();
             }
             if let Some(previous) = self.specs.get(&key) {
-                if previous.catalog != catalog {
+                if previous.name != name
+                    || previous.namespace.as_deref() != namespace
+                    || tool_definition(&previous.declaration) != tool_definition(value)
+                {
                     return Err(ExcelRequestError::Tool);
                 }
                 continue;
@@ -244,6 +267,7 @@ impl ClientTools {
                         schema,
                         validator,
                         catalog,
+                        declaration: value.clone(),
                     },
                 )
                 .is_some()
@@ -274,7 +298,7 @@ impl ClientTools {
         }
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
-            "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=cpr.custom/CATALOG_NAME and put exact raw input directly in code. \
+            "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=codex2api.custom/CATALOG_NAME and put exact raw input directly in code. \
              For other function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{}{}{}{warning}",
             if self.serial {
                 "Return at most one client tool call per response; wait for its result before requesting another."
@@ -343,7 +367,7 @@ impl ClientTools {
         };
         let mut outer = envelope::json_value(&native["arguments"])?;
         if spec.kind == "custom" && call["type"] == "custom_tool_call" {
-            outer["summary"] = format!("cpr.custom/{name}").into();
+            outer["summary"] = format!("codex2api.custom/{name}").into();
             outer["code"] = call["input"].clone();
         } else if call["type"] == "function_call"
             && self.supports_function_code(&name)
@@ -489,16 +513,6 @@ impl ClientTools {
                 }
             }
         }
-    }
-
-    pub(crate) fn reminder(&self) -> Option<String> {
-        (!self.specs.is_empty()).then(|| format!(
-            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope unless the raw-code contract below applies. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.{}{}{}",
-            self.specs.keys().cloned().collect::<Vec<_>>().join(", "),
-            self.function_code_instructions(),
-            self.function_cmd_instructions(),
-            self.choice_instructions()
-        ))
     }
 
     pub(crate) fn convert_call(&self, native: &Value) -> Result<Value, ExcelRequestError> {
@@ -729,6 +743,120 @@ fn normalize_plan(args: Value) -> Result<Value, ExcelRequestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_function_tools_normalize_aliases_without_relaxing_arguments() {
+        let schema = json!({"type":"object","properties":{"path":{"type":"string"}},
+            "required":["path"],"additionalProperties":false});
+        for alias in ["parameters", "inputSchema", "input_schema"] {
+            let current = json!({"type":"function","name":"read","description":"Current",
+                "parameters":schema,"strict":true,"encrypted":false});
+            let historical = json!({"type":"function","name":"read","description":"Older",
+                alias:schema,"strict":true,"encrypted":false,"defer_loading":true});
+            let source = json!({"tools":[current.clone(),historical]});
+            let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+            assert_eq!(tools.catalog(), json!([current]));
+            assert!(!tools.instructions().contains("Older"));
+            let native = json!({"type":"function_call","name":"read","call_id":"call_fixture",
+                "arguments":"{\"path\":12}"});
+            assert_eq!(
+                tools.convert_call(&native),
+                Err(ExcelRequestError::ToolCall)
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_tool_definitions_keep_unknown_constraints_and_namespace_identity() {
+        let current = json!({"type":"custom","name":"patch","description":"Current",
+            "format":{"type":"grammar","syntax":"lark","definition":"start: /.+/"}});
+        for (field, value) in [
+            ("type", json!("function")),
+            ("format", json!({"type":"text"})),
+            ("strict", json!(true)),
+            ("parameters", json!({"type":"object"})),
+            ("encrypted", json!(true)),
+            ("future_execution_constraint", json!({"allowed":false})),
+        ] {
+            let mut conflicting = current.clone();
+            conflicting[field] = value;
+            let source = json!({"tools":[current.clone(),conflicting]});
+            assert!(
+                matches!(
+                    ClientTools::parse(source.as_object().unwrap()),
+                    Err(ExcelRequestError::Tool)
+                ),
+                "{field}"
+            );
+        }
+        let collision = json!({"tools":[
+            {"type":"custom","name":"workspace.patch"},
+            {"type":"namespace","name":"workspace","tools":[{"type":"custom","name":"patch"}]}
+        ]});
+        assert!(ClientTools::parse(collision.as_object().unwrap()).is_err());
+    }
+
+    #[test]
+    fn function_schema_alias_precedence_matches_reference_null_handling() {
+        let schema = json!({"type":"object","properties":{"value":{"type":"integer"}}});
+        let source = json!({"tools":[
+            {"type":"function","name":"read","parameters":null,"inputSchema":schema},
+            {"type":"function","name":"read","input_schema":schema}
+        ]});
+        let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+        assert_eq!(tools.specs["read"].schema, schema);
+        assert_ne!(
+            tool_definition(&json!({"type":"function","name":"read"})),
+            tool_definition(&json!({"type":"function","name":"read","parameters":{}}))
+        );
+        assert_eq!(
+            tool_definition(
+                &json!({"type":"function","name":"read","parameters":schema,"inputSchema":{"unused":true}})
+            ),
+            tool_definition(&json!({"type":"function","name":"read","parameters":schema}))
+        );
+    }
+
+    #[test]
+    fn hosted_omit_policy_distinguishes_none_forced_and_client_named_tools() {
+        for kind in [
+            "web_search",
+            "web_search_preview",
+            "web_search_preview_2025_03_11",
+            "web_search_2025_08_26",
+            "image_generation",
+        ] {
+            for external in [Value::Null, json!(true), json!(false)] {
+                let mut hosted = json!({"type":kind});
+                if !external.is_null() {
+                    hosted["external_web_access"] = external;
+                }
+                for choice in [json!("auto"), json!("none"), json!({"type":kind})] {
+                    let source = json!({"tools":[hosted.clone(),{"type":"function","name":"web_search_client"}],"tool_choice":choice});
+                    let parsed = ClientTools::parse(source.as_object().unwrap());
+                    if choice.is_object() {
+                        assert!(matches!(parsed, Err(ExcelRequestError::Tool)));
+                    } else {
+                        let tools = parsed.unwrap();
+                        assert_eq!(
+                            tools.instructions().contains("unavailable on this route"),
+                            choice != "none"
+                        );
+                        assert_eq!(tools.has_client_tools(), choice != "none");
+                    }
+                }
+            }
+        }
+        for (kind, name) in [
+            ("function", "web_search_client"),
+            ("custom", "image_generation_client"),
+        ] {
+            let source = json!({"tools":[{"type":kind,"name":name}],"tool_choice":{"type":kind,"name":name}});
+            let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
+            assert!(tools.has_client_tools());
+            assert!(!tools.instructions().contains("unavailable on this route"));
+        }
+    }
 
     #[test]
     fn declared_namespaced_tool_is_restored_without_executing_it() {

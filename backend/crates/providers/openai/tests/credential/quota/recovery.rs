@@ -3,6 +3,93 @@
 use super::*;
 
 #[tokio::test]
+async fn excel_zero_usage_refresh_clears_only_the_cooldown_observed_before_fetch() {
+    use gateway_core::provider_ports::{ProviderCooldown, ProviderCooldownPort};
+    use std::time::Duration;
+
+    for worker in [false, true] {
+        for (excel_enabled, newer_failure_seconds) in [
+            (true, None),
+            (true, Some(180)),
+            (true, Some(120)),
+            (true, Some(60)),
+            (false, None),
+        ] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_reset_cooldown").await;
+            if excel_enabled {
+                store.set_responses_upstream(
+                    "acct_reset_cooldown",
+                    gateway_core::account::ResponsesUpstream::Excel,
+                );
+            }
+            let account = store.account("acct_reset_cooldown").unwrap();
+            let cooldowns = Arc::new(crate::support::MemoryCooldownPort::new());
+            let now = SystemTime::now();
+            let observed_until = now + Duration::from_secs(120);
+            let observed =
+                ProviderCooldown::new(account.id().clone(), account.revision(), observed_until);
+            let newer = ProviderCooldown::new(
+                account.id().clone(),
+                account.revision(),
+                now + Duration::from_secs(newer_failure_seconds.unwrap_or(120)),
+            );
+            cooldowns.put_if_later(observed).await.unwrap();
+            let server = MockServer::start().await;
+            let wire_cooldowns = Arc::clone(&cooldowns);
+            let wire_newer = newer.clone();
+            Mock::given(method("GET"))
+                .and(path("/api/codex/usage"))
+                .respond_with(move |_: &wiremock::Request| {
+                    if newer_failure_seconds.is_some() {
+                        wire_cooldowns.record(wire_newer.clone());
+                    }
+                    ResponseTemplate::new(200).set_body_json(json!({
+                        "rate_limit": {
+                            "allowed": true, "limit_reached": false,
+                            "primary_window": {
+                                "used_percent": 0, "limit_window_seconds": 18000,
+                                "reset_at": 1900000000
+                            },
+                            "secondary_window": {
+                                "used_percent": 0, "limit_window_seconds": 604800,
+                                "reset_at": 1900600000
+                            }
+                        }
+                    }))
+                })
+                .expect(1)
+                .mount(&server)
+                .await;
+            let service = CodexCredentialQuotaService::new(
+                store.repository(),
+                wire_profile(),
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                server.uri(),
+                cooldowns.clone(),
+            );
+            if worker {
+                assert_eq!(service.synchronize().await.unwrap().updated, 1);
+            } else {
+                service.refresh_account(account.id()).await.unwrap();
+            }
+            let remaining = cooldowns.read(account.id()).await.unwrap();
+            assert_eq!(
+                remaining.is_some(),
+                !excel_enabled || newer_failure_seconds.is_some()
+            );
+            if let Some(remaining) = remaining {
+                assert_eq!(remaining.until(), newer.until().max(observed_until));
+            }
+            let after = store.account("acct_reset_cooldown").unwrap();
+            assert_eq!(after.revision(), account.revision());
+            assert_eq!(after.credential_state(), account.credential_state());
+            server.verify().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn quota_refresh_updates_access_fact_without_recovering_credential_error() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_independent_quota_and_credential";

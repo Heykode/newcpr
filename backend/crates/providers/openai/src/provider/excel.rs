@@ -87,6 +87,11 @@ pub(super) async fn prepare_excel(
     );
     let tools = restored.tools;
     let structured = StructuredOutput::parse(&source).map_err(request_error)?;
+    let image_tuning = image_relay.request_tuning();
+    let image_limits = image_tuning.into();
+    // Validate carriers in their original positions before #139 moves tool references.
+    crate::transport::excel::images::validate_with_limits(&source, false, image_limits)
+        .map_err(request_error)?;
     let mut body = prepare_request(&source, &tools, &restored.native_calls, structured.as_ref())
         .map_err(request_error)?;
     let trace = context.trace();
@@ -102,13 +107,24 @@ pub(super) async fn prepare_excel(
             }),
         );
     }
-    let image_tuning = image_relay.request_tuning();
-    let image_limits = image_tuning.into();
-    crate::transport::excel::images::validate_with_limits(&body, false, image_limits)
+    let relay_origin = image_relay.relay_origin();
+    let image_lease = if let Some(origin) =
+        relay_origin.filter(|_| crate::transport::excel::images::has_user_inline(&body))
+    {
+        let relay = Arc::clone(image_relay);
+        let image_scope = format!("{owner}/{}", restored.conversation);
+        let (staged_body, lease) = tokio::task::spawn_blocking(move || {
+            let lease = relay.stage_with_origin(&mut body, image_tuning, &image_scope, &origin)?;
+            Ok::<_, ExcelRequestError>((body, lease))
+        })
+        .await
+        .map_err(|_| request_error(ExcelRequestError::ImageRelay))?
         .map_err(request_error)?;
-    let image_lease = image_relay
-        .stage_with_tuning(&mut body, image_tuning)
-        .map_err(request_error)?;
+        body = staged_body;
+        lease
+    } else {
+        None
+    };
     crate::transport::excel::images::validate_with_limits(&body, true, image_limits)
         .map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
@@ -131,6 +147,21 @@ pub(super) async fn prepare_excel(
 }
 
 pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
+    if error == ExcelRequestError::CatalogConflict {
+        return provider_error(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+        )
+        .with_status(409)
+        .with_upstream_code(OpaqueUpstreamValue::new("excel_tool_catalog_conflict"))
+        .with_client_visible_upstream_error(
+            gateway_core::error::ClientVisibleUpstreamError::new(
+                error.to_string(),
+                Some("excel_tool_catalog_conflict".into()),
+                Some("invalid_request_error".into()),
+            ),
+        );
+    }
     if let ExcelRequestError::ImageInput(message) = error {
         return provider_error(
             ProviderErrorKind::InvalidRequest,
@@ -168,18 +199,26 @@ pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
         }
         return failure;
     }
-    if matches!(error, ExcelRequestError::EncryptedContent { .. }) {
+    if let Some(param) = error.content_param() {
+        let code = if matches!(error, ExcelRequestError::EncryptedContent { .. }) {
+            "excel_unsupported_content"
+        } else {
+            "excel_unsupported_request"
+        };
         return provider_error(
             ProviderErrorKind::InvalidRequest,
             UpstreamSendState::NotSent,
         )
         .with_status(400)
-        .with_upstream_code(OpaqueUpstreamValue::new("excel_unsupported_content"))
-        .with_client_visible_upstream_error(gateway_core::error::ClientVisibleUpstreamError::new(
-            error.to_string(),
-            Some("excel_unsupported_content".into()),
-            Some("invalid_request_error".into()),
-        ))
+        .with_upstream_code(OpaqueUpstreamValue::new(code))
+        .with_client_visible_upstream_error(
+            gateway_core::error::ClientVisibleUpstreamError::new(
+                error.to_string(),
+                Some(code.into()),
+                Some("invalid_request_error".into()),
+            )
+            .with_param(param),
+        )
         .with_diagnostic(ProviderDiagnostic::new(error.to_string()));
     }
     provider_error(
@@ -618,6 +657,52 @@ mod tests {
             assert_eq!(isolate_http_authentication_failure(&mut failure), None);
             assert_eq!(failure.error_message.as_deref(), Some("fixture"));
         }
+    }
+
+    #[test]
+    fn excel_content_errors_keep_safe_positions_without_retrying_or_changing_status() {
+        for (source, param, code) in [
+            (
+                ExcelRequestError::EncryptedContent {
+                    input: 103,
+                    field: "content",
+                    part: 0,
+                },
+                "input[103].content[0]",
+                "excel_unsupported_content",
+            ),
+            (
+                ExcelRequestError::Content {
+                    input: 26,
+                    field: "output",
+                    part: 2,
+                    kind: "input_file",
+                },
+                "input[26].output[2]",
+                "excel_unsupported_request",
+            ),
+            (
+                ExcelRequestError::AttributedContent { input: 26 },
+                "input[26].content",
+                "excel_unsupported_request",
+            ),
+        ] {
+            let error = request_error(source);
+            assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+            assert_eq!(error.upstream_status(), Some(400));
+            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            assert!(error.pre_delivery_retry().is_none());
+            assert!(!error.replay_is_safe());
+            let details = error.client_visible_upstream_error().unwrap();
+            assert_eq!(details.param(), Some(param));
+            assert_eq!(details.code(), Some(code));
+            assert!(details.message().contains(param));
+        }
+        assert!(
+            request_error(ExcelRequestError::Tool)
+                .client_visible_upstream_error()
+                .is_none()
+        );
     }
 
     #[test]

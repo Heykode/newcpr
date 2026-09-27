@@ -3,8 +3,8 @@
 use gateway_core::{
     account::OpaqueProviderData,
     provider_ports::{
-        MAX_PROVIDER_REPLAY_BYTES, PROVIDER_REPLAY_TTL_SECONDS, ProviderReplayPort,
-        ProviderStoreError, ProviderStoreErrorKind,
+        MAX_PROVIDER_REPLAY_BYTES, PROVIDER_REPLAY_TTL_SECONDS, PROVIDER_TOOL_REPLAY_IDLE_SECONDS,
+        ProviderReplayPort, ProviderStoreError, ProviderStoreErrorKind,
     },
 };
 use redis::{Script, aio::ConnectionManager};
@@ -54,13 +54,20 @@ local function remove(key)
   redis.call('HINCRBY', KEYS[3], '_total', -size)
 end
 for _, key in ipairs(redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', clock)) do remove(key) end
-if ARGV[1] == 'read' then return redis.call('HGET', KEYS[1], ARGV[2]) end
 local previous = redis.call('HGET', KEYS[1], ARGV[2])
+local function touch()
+  local idle = tonumber(ARGV[8] or '0')
+  if previous and idle > 0 then
+    redis.call('ZADD', KEYS[2], clock + idle, ARGV[2])
+    for _, key in ipairs(KEYS) do redis.call('EXPIRE', key, idle) end
+  end
+end
+if ARGV[1] == 'read' then touch(); return previous end
 if ARGV[1] == 'cas' then
   if (previous or '') ~= ARGV[7] then return -1 end
   if previous then remove(ARGV[2]) end
 elseif previous then
-  if previous == ARGV[3] then return 1 else return -1 end
+  if previous == ARGV[3] then touch(); return 1 else return -1 end
 end
 local bytes = string.len(ARGV[3])
 while redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[5])
@@ -138,6 +145,77 @@ impl RedisProviderReplayRepository {
 }
 
 impl ProviderReplayPort for RedisProviderReplayRepository {
+    fn read_tool<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            Self::validate_key(key)?;
+            let bytes: Option<Vec<u8>> = Script::new(SCRIPT)
+                .key(format!("{}:tools:data", self.prefix))
+                .key(format!("{}:tools:expiry", self.prefix))
+                .key(format!("{}:tools:sizes", self.prefix))
+                .arg("read")
+                .arg(key)
+                .arg("")
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
+                .arg(1024)
+                .arg(16 * 1024 * 1024)
+                .arg("")
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;
+            let Some(bytes) = bytes else {
+                // Read-only compatibility with receipts written before budget separation.
+                return self.read(key).await;
+            };
+            if bytes.len() > 1024 * 1024 {
+                return Err(error(ProviderStoreErrorKind::InvalidData));
+            }
+            serde_json::from_slice(&bytes)
+                .map(OpaqueProviderData::new)
+                .map(Some)
+                .map_err(|_| error(ProviderStoreErrorKind::InvalidData))
+        })
+    }
+
+    fn write_tool<'a>(
+        &'a self,
+        key: &'a str,
+        payload: &'a OpaqueProviderData,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            Self::validate_key(key)?;
+            let bytes = serde_json::to_vec(payload.expose_to_provider())
+                .map_err(|_| error(ProviderStoreErrorKind::InvalidData))?;
+            if bytes.len() > 1024 * 1024 {
+                return Err(error(ProviderStoreErrorKind::InvalidData));
+            }
+            let outcome: i64 = Script::new(SCRIPT)
+                .key(format!("{}:tools:data", self.prefix))
+                .key(format!("{}:tools:expiry", self.prefix))
+                .key(format!("{}:tools:sizes", self.prefix))
+                .arg("write")
+                .arg(key)
+                .arg(bytes)
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
+                .arg(1024)
+                .arg(16 * 1024 * 1024)
+                .arg("")
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;
+            match outcome {
+                1 => Ok(()),
+                -1 => Err(error(ProviderStoreErrorKind::Conflict)),
+                _ => Err(error(ProviderStoreErrorKind::InvalidData)),
+            }
+        })
+    }
+
     fn read_catalog<'a>(
         &'a self,
         key: &'a str,
@@ -151,6 +229,12 @@ impl ProviderReplayPort for RedisProviderReplayRepository {
                 .key(format!("{}:catalog:sizes", self.prefix))
                 .arg("read")
                 .arg(key)
+                .arg("")
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
+                .arg(512)
+                .arg(16 * 1024 * 1024)
+                .arg("")
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
                 .invoke_async(&mut self.connection.clone())
                 .await
                 .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;
@@ -191,10 +275,11 @@ impl ProviderReplayPort for RedisProviderReplayRepository {
                 .arg("cas")
                 .arg(key)
                 .arg(bytes)
-                .arg(PROVIDER_REPLAY_TTL_SECONDS)
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
                 .arg(512)
                 .arg(16 * 1024 * 1024)
                 .arg(expected)
+                .arg(PROVIDER_TOOL_REPLAY_IDLE_SECONDS)
                 .invoke_async(&mut self.connection.clone())
                 .await
                 .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;

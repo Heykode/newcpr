@@ -11,6 +11,7 @@ use gateway_core::{
     },
 };
 use redis::{Script, aio::ConnectionManager};
+use uuid::Uuid;
 
 use crate::{Revision, StoreError, StoreResult, redis_unavailable, require_nonempty};
 
@@ -22,15 +23,21 @@ local incoming = tonumber(ARGV[1])
 local incoming_until = tonumber(ARGV[2])
 if current > incoming then return 0 end
 local current_until = tonumber(redis.call('HGET', KEYS[1], 'until_ms') or '0')
-if current == incoming and current_until >= incoming_until then return 0 end
 local clock = redis.call('TIME')
 local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
+if current == incoming and current_until >= incoming_until then
+  if incoming_until > now_ms and #KEYS > 1 then
+    redis.call('HSET', KEYS[1], 'observation_token', ARGV[4])
+  end
+  return 0
+end
 if incoming_until <= now_ms then
   redis.call('DEL', KEYS[1])
   if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[3]) end
   return 0
 end
 redis.call('HSET', KEYS[1], 'revision', ARGV[1], 'until_ms', ARGV[2])
+if #KEYS > 1 then redis.call('HSET', KEYS[1], 'observation_token', ARGV[4]) end
 local ttl = incoming_until - now_ms + 60000
 redis.call('PEXPIRE', KEYS[1], ttl)
 if #KEYS > 1 then redis.call('ZADD', KEYS[2], incoming_until, ARGV[3]) end
@@ -43,16 +50,16 @@ local until_ms = redis.call('HGET', KEYS[1], 'until_ms')
 if revision == false or until_ms == false then
   redis.call('DEL', KEYS[1])
   if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[1]) end
-  return {0, '0', '0'}
+  return {0, '0', '0', ''}
 end
 local clock = redis.call('TIME')
 local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
 if tonumber(until_ms) <= now_ms then
   redis.call('DEL', KEYS[1])
   if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[1]) end
-  return {0, '0', '0'}
+  return {0, '0', '0', ''}
 end
-return {1, revision, until_ms}
+return {1, revision, until_ms, redis.call('HGET', KEYS[1], 'observation_token') or ''}
 "#;
 
 const INVALIDATE_SCRIPT: &str = r#"
@@ -60,6 +67,16 @@ local current = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0')
 if current > tonumber(ARGV[1]) then return 0 end
 redis.call('DEL', KEYS[1])
 if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[2]) end
+return 1
+"#;
+
+const RECOVER_OBSERVED_SCRIPT: &str = r#"
+if redis.call('HGET', KEYS[1], 'revision') ~= ARGV[1]
+   or redis.call('HGET', KEYS[1], 'until_ms') ~= ARGV[2]
+   or ARGV[4] == ''
+   or redis.call('HGET', KEYS[1], 'observation_token') ~= ARGV[4] then return 0 end
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[3])
 return 1
 "#;
 
@@ -97,6 +114,12 @@ pub trait CredentialCooldownRepository: Send + Sync {
 pub struct RedisCredentialCooldownRepository {
     connection: ConnectionManager,
     namespace: String,
+}
+
+struct StoredCooldown {
+    revision: Revision,
+    until: DateTime<Utc>,
+    observation_token: Option<String>,
 }
 
 impl RedisCredentialCooldownRepository {
@@ -149,6 +172,7 @@ impl RedisCredentialCooldownRepository {
                 .arg(credential_revision.get())
                 .arg(until_ms)
                 .arg(index_member)
+                .arg(Uuid::new_v4().to_string())
                 .invoke_async::<i64>(&mut connection)
                 .await
         } else {
@@ -168,7 +192,7 @@ impl RedisCredentialCooldownRepository {
         &self,
         key: String,
         index_member: Option<&str>,
-    ) -> StoreResult<Option<(Revision, DateTime<Utc>)>> {
+    ) -> StoreResult<Option<StoredCooldown>> {
         let mut connection = self.connection.clone();
         let result = if let Some(index_member) = index_member {
             Script::new(READ_SCRIPT)
@@ -184,7 +208,7 @@ impl RedisCredentialCooldownRepository {
                 .invoke_async(&mut connection)
                 .await
         };
-        let (present, revision, until_ms): (i64, String, String) =
+        let (present, revision, until_ms, observation_token): (i64, String, String, String) =
             result.map_err(|_| redis_unavailable("read credential cooldown"))?;
         if present == 0 {
             return Ok(None);
@@ -197,7 +221,11 @@ impl RedisCredentialCooldownRepository {
             .map_err(|_| invalid("cached cooldown expiry is invalid"))?;
         let cooldown_until = DateTime::from_timestamp_millis(until_ms)
             .ok_or_else(|| invalid("cached cooldown expiry is invalid"))?;
-        Ok(Some((Revision::new(revision)?, cooldown_until)))
+        Ok(Some(StoredCooldown {
+            revision: Revision::new(revision)?,
+            until: cooldown_until,
+            observation_token: (!observation_token.is_empty()).then_some(observation_token),
+        }))
     }
 
     async fn invalidate_at_key(
@@ -282,10 +310,10 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
         self.read_at_key(self.key(provider_account_id)?, Some(provider_account_id))
             .await
             .map(|value| {
-                value.map(|(credential_revision, cooldown_until)| CredentialCooldown {
+                value.map(|record| CredentialCooldown {
                     provider_account_id: provider_account_id.to_owned(),
-                    credential_revision,
-                    cooldown_until,
+                    credential_revision: record.revision,
+                    cooldown_until: record.until,
                 })
             })
     }
@@ -360,6 +388,32 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
 }
 
 impl ProviderCooldownPort for RedisCredentialCooldownRepository {
+    fn clear_if_observed<'a>(
+        &'a self,
+        observed: &'a ProviderCooldown,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let Some(observation_token) = observed.observation_token() else {
+                return Ok(false);
+            };
+            let key = self
+                .key(observed.account_id().as_str())
+                .map_err(|_| provider_invalid("encode cooldown key"))?;
+            let until: DateTime<Utc> = observed.until().into();
+            let result: i64 = Script::new(RECOVER_OBSERVED_SCRIPT)
+                .key(key)
+                .key(self.active_index_key())
+                .arg(observed.credential_revision().get())
+                .arg(until.timestamp_millis())
+                .arg(observed.account_id().as_str())
+                .arg(observation_token)
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|_| provider_unavailable("recover observed cooldown"))?;
+            Ok(result == 1)
+        })
+    }
+
     fn put_if_later(
         &self,
         cooldown: ProviderCooldown,
@@ -382,21 +436,22 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
         account_id: &'a ProviderAccountId,
     ) -> futures::future::BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
         Box::pin(async move {
-            CredentialCooldownRepository::read_credential_cooldown(self, account_id.as_str())
-                .await
-                .map_err(|_| provider_unavailable("read credential cooldown"))?
-                .map(|record| {
-                    let account_id = ProviderAccountId::new(record.provider_account_id)
-                        .map_err(|_| provider_invalid("decode credential cooldown"))?;
-                    let revision = CredentialRevision::new(record.credential_revision.get())
-                        .map_err(|_| provider_invalid("decode credential cooldown"))?;
-                    Ok(ProviderCooldown::new(
-                        account_id,
-                        revision,
-                        record.cooldown_until.into(),
-                    ))
-                })
-                .transpose()
+            self.read_at_key(
+                self.key(account_id.as_str())
+                    .map_err(|_| provider_invalid("encode cooldown key"))?,
+                Some(account_id.as_str()),
+            )
+            .await
+            .map_err(|_| provider_unavailable("read credential cooldown"))?
+            .map(|record| {
+                let revision = CredentialRevision::new(record.revision.get())
+                    .map_err(|_| provider_invalid("decode credential cooldown"))?;
+                Ok(
+                    ProviderCooldown::new(account_id.clone(), revision, record.until.into())
+                        .with_observation_token(record.observation_token),
+                )
+            })
+            .transpose()
         })
     }
 
@@ -451,13 +506,13 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
             )
             .await
             .map_err(|_| provider_unavailable("read scoped credential cooldown"))?
-            .map(|(revision, until)| {
+            .map(|record| {
                 Ok(ProviderScopedCooldown::new(
                     account_id.clone(),
-                    CredentialRevision::new(revision.get())
+                    CredentialRevision::new(record.revision.get())
                         .map_err(|_| provider_invalid("decode scoped credential cooldown"))?,
                     scope.clone(),
-                    until.into(),
+                    record.until.into(),
                 ))
             })
             .transpose()

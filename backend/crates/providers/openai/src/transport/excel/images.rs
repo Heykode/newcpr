@@ -39,8 +39,8 @@ impl Default for ImageLimits {
 impl From<gateway_core::routing::RequestTuning> for ImageLimits {
     fn from(value: gateway_core::routing::RequestTuning) -> Self {
         Self {
-            single: value.excel_image_max_bytes.clamp(1, 20 * 1024 * 1024) as usize,
-            total: value.excel_image_total_bytes.clamp(1, 32 * 1024 * 1024) as usize,
+            single: value.excel_image_max_bytes.clamp(1, 128 * 1024 * 1024) as usize,
+            total: value.excel_image_total_bytes.clamp(1, 128 * 1024 * 1024) as usize,
             count: value.excel_image_max_count.clamp(1, 4096) as usize,
         }
     }
@@ -96,7 +96,7 @@ fn image_contents(input: &Value) -> impl Iterator<Item = &Value> {
     input.as_array().into_iter().flatten().filter_map(|item| {
         match item.get("type").and_then(Value::as_str) {
             Some("function_call_output" | "custom_tool_call_output") => item.get("output"),
-            None | Some("message") => item.get("content"),
+            None | Some("message" | "agent_message") => item.get("content"),
             _ => None,
         }
     })
@@ -153,15 +153,6 @@ pub(crate) fn validate_with_limits(
                 {
                     return Err(ExcelRequestError::ImageInput(
                         "provide only one of file_id or image_url",
-                    ));
-                }
-                if tool_output
-                    && fields
-                        .get("file_id")
-                        .is_some_and(|id| id.as_str().is_some_and(|value| !value.trim().is_empty()))
-                {
-                    return Err(ExcelRequestError::ImageInput(
-                        "tool image file_id is unsupported; return the original image as Base64 or HTTPS image_url",
                     ));
                 }
                 if fields.get("file_id").is_some_and(|id| {
@@ -229,7 +220,8 @@ pub(crate) fn validate_with_limits(
             item.get(if tool { "output" } else { "content" })
                 .unwrap_or(&Value::Null),
             tool,
-            is_user_message(item),
+            is_user_message(item)
+                || item.get("type").and_then(Value::as_str) == Some("agent_message"),
             decode,
             limits,
         )?;
@@ -680,9 +672,7 @@ fn validate_data_url(
     if metadata != actual
         || size.width == 0
         || size.height == 0
-        || size.width > 16_384
-        || size.height > 16_384
-        || size.width.saturating_mul(size.height) > 40_000_000
+        || size.width.saturating_mul(size.height) > 64 * 1024 * 1024
     {
         return Err(ExcelRequestError::ImageInput(
             "invalid image format or dimensions",

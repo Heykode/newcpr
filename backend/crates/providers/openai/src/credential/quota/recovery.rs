@@ -13,6 +13,54 @@ use super::{CodexAccountQuotaSnapshot, CodexCredentialQuotaError, CodexQuotaWind
 pub(super) const RECOVERY_FIELD: &str = "_quota_recovery";
 const RESET_RECOVERY_MAX_USED_PERCENT: f64 = 10.0;
 
+/// Only the fresh wire response can establish a complete reset, never DTO defaults.
+pub(super) fn confirms_zero_usage(value: &Value) -> bool {
+    let rate = &value["rate_limit"];
+    if rate["allowed"].as_bool() != Some(true) || rate["limit_reached"].as_bool() != Some(false) {
+        return false;
+    }
+    let mut windows = std::collections::BTreeSet::new();
+    for key in ["primary_window", "secondary_window"] {
+        let window = &rate[key];
+        if window["used_percent"].as_f64() != Some(0.0) {
+            return false;
+        }
+        let Some(seconds @ (18_000 | 604_800)) = window["limit_window_seconds"].as_u64() else {
+            return false;
+        };
+        windows.insert(seconds);
+    }
+    windows.len() == 2
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn zero_usage_requires_both_explicit_fresh_windows() {
+        let valid = json!({"rate_limit":{"allowed":true,"limit_reached":false,
+            "primary_window":{"used_percent":0,"limit_window_seconds":18000},
+            "secondary_window":{"used_percent":0,"limit_window_seconds":604800}}});
+        assert!(confirms_zero_usage(&valid));
+        for (path, replacement) in [
+            ("/rate_limit/allowed", json!(null)),
+            ("/rate_limit/limit_reached", json!(true)),
+            ("/rate_limit/primary_window/used_percent", json!(0.01)),
+            ("/rate_limit/secondary_window/used_percent", json!(null)),
+            (
+                "/rate_limit/secondary_window/limit_window_seconds",
+                json!(18000),
+            ),
+        ] {
+            let mut invalid = valid.clone();
+            *invalid.pointer_mut(path).unwrap() = replacement;
+            assert!(!confirms_zero_usage(&invalid), "{path}");
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct QuotaRecovery {
     // 绑定本次耗尽事实，避免真实推理成功后再次耗尽时复用上次的恢复进度。

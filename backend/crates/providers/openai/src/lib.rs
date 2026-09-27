@@ -92,6 +92,7 @@ async fn initialize_with_request_tuning_mode(
         transport::excel::image_relay::ImageRelay::new(config.excel_image_relay_public_url.clone())
             .with_request_tuning(request_tuning.clone()),
     );
+    image_relay.start_cleanup();
     let provider_kind =
         ProviderKind::new("openai").map_err(|_| OpenAiInitializeError::InvalidProviderKind)?;
     let accounts: Arc<dyn ProviderAccountStore> = ports.accounts();

@@ -4,6 +4,8 @@ import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
 
+export type ExcelImageTransport = { mode: 'native' } | { mode: 'relay', publicUrl: string }
+
 export interface SmartSchedulingConfig {
   loadWeight: number
   quotaWeight: number
@@ -46,6 +48,8 @@ export interface RequestTuning {
   excelImageRelayRequests: number
   excelImageRelayDownloads: number
   excelImageRelayEntries: number
+  excelImageRelayTtlMinutes: number
+  excelImageTransport: ExcelImageTransport | null
   openaiLocationOverrideEnabled: boolean
   openaiRequestLocation: RequestLocation | null
   maxWaitingPerKey: number

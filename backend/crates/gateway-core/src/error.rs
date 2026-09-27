@@ -137,6 +137,7 @@ pub struct ClientVisibleUpstreamError {
     message: String,
     code: Option<OpaqueUpstreamValue>,
     error_type: Option<OpaqueUpstreamValue>,
+    param: Option<Box<OpaqueUpstreamValue>>,
 }
 
 impl ClientVisibleUpstreamError {
@@ -151,7 +152,20 @@ impl ClientVisibleUpstreamError {
             message: message.into(),
             code: code.map(OpaqueUpstreamValue::new),
             error_type: error_type.map(OpaqueUpstreamValue::new),
+            param: None,
         }
+    }
+
+    /// 添加仅用于客户端协议展示的结构化参数位置。
+    #[must_use]
+    pub fn with_param(mut self, param: impl Into<String>) -> Self {
+        self.param = Some(Box::new(OpaqueUpstreamValue::new(param.into())));
+        self
+    }
+
+    #[must_use]
+    pub fn param(&self) -> Option<&str> {
+        self.param.as_deref().map(OpaqueUpstreamValue::as_str)
     }
 
     /// 返回原上游的结构化 message。
@@ -1160,6 +1174,14 @@ impl GatewayError {
         self.client_visible_upstream_error
             .as_ref()
             .and_then(ClientVisibleUpstreamError::error_type)
+    }
+
+    /// 参数位置只在协议响应中展示，不加入持久化消息或 Debug。
+    #[must_use]
+    pub fn client_error_param(&self) -> Option<&str> {
+        self.client_visible_upstream_error
+            .as_ref()
+            .and_then(ClientVisibleUpstreamError::param)
     }
 
     /// 返回原上游结构化 error code；没有时调用方应回退稳定网关 code。

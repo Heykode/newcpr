@@ -1,6 +1,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -13,9 +16,11 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{ClientTools, ExcelRequestError, request::message, tools::canonical_history_call};
+use futures::StreamExt;
 
 const STORE_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_NATIVE_CALLS: usize = 512;
+const MAX_SNAPSHOT_DECODED_BYTES: usize = 128 * 1024 * 1024;
+const SNAPSHOT_ENCODING: &str = "cpr-excel-replay-zstd-v1";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,6 +40,7 @@ struct ReplayRecord {
 pub(crate) struct ReplayCapture {
     store: Arc<dyn ProviderReplayPort>,
     record: ReplayRecord,
+    persisted: Arc<AtomicBool>,
 }
 
 pub(crate) struct RestoredInput {
@@ -76,8 +82,9 @@ pub(crate) async fn restore_scoped(
         let payload = load(store.as_ref(), &key(&owner, "response", previous))
             .await?
             .ok_or(ExcelRequestError::History)?;
-        let record: ReplayRecord = serde_json::from_value(Value::Object(payload))
-            .map_err(|_| ExcelRequestError::History)?;
+        let record = tokio::task::spawn_blocking(move || decode_snapshot(payload))
+            .await
+            .map_err(|_| ExcelRequestError::History)??;
         if record.owner != owner || record.version != 1 {
             return Err(ExcelRequestError::History);
         }
@@ -112,6 +119,44 @@ pub(crate) async fn restore_scoped(
     )
     .await?;
     record.tools = Some(catalog);
+    // Cache lookup is an optimization for complete calls, with one request-wide budget.
+    let ids: BTreeSet<_> = delta
+        .iter()
+        .filter(|item| {
+            matches!(
+                item["type"].as_str(),
+                Some(
+                    "function_call"
+                        | "custom_tool_call"
+                        | "function_call_output"
+                        | "custom_tool_call_output"
+                )
+            )
+        })
+        .filter_map(|item| item["call_id"].as_str().map(str::to_owned))
+        .collect();
+    let mut receipts = BTreeMap::new();
+    {
+        let reads = futures::stream::iter(ids)
+            .map(|id| {
+                let store = Arc::clone(&store);
+                let cache_key = key(&record.owner, &record.conversation, &id);
+                async move {
+                    let receipt = store.read_tool(&cache_key).await.ok().flatten();
+                    (id, receipt)
+                }
+            })
+            .buffer_unordered(16);
+        tokio::pin!(reads);
+        let _ = tokio::time::timeout(STORE_TIMEOUT, async {
+            while let Some((id, receipt)) = reads.next().await {
+                if let Some(receipt) = receipt {
+                    receipts.insert(id, receipt.expose_to_provider().clone());
+                }
+            }
+        })
+        .await;
+    }
     // previous_response_id explicitly means incremental input; never guess by text similarity.
     for (index, item) in delta.iter().enumerate() {
         if matches!(
@@ -139,12 +184,7 @@ pub(crate) async fn restore_scoped(
                     .as_ref()
                     .is_none_or(|signature| record.client_calls.get(id) == Some(signature));
             if !cached_matches {
-                let payload = load(
-                    store.as_ref(),
-                    &key(&record.owner, &record.conversation, id),
-                )
-                .await?;
-                let payload = payload.as_ref().filter(|payload| {
+                let payload = receipts.get(id).filter(|payload| {
                     payload.get("owner").and_then(Value::as_str) == Some(&record.owner)
                         && payload.get("conversation").and_then(Value::as_str)
                             == Some(&record.conversation)
@@ -174,17 +214,24 @@ pub(crate) async fn restore_scoped(
         }
     }
     record.input.extend(delta);
-    validate_record(&record)?;
     Ok(RestoredInput {
         input: record.input.clone(),
         conversation: record.conversation.clone(),
         native_calls: record.native_calls.clone(),
-        capture: ReplayCapture { store, record },
+        capture: ReplayCapture {
+            store,
+            record,
+            persisted: Default::default(),
+        },
         tools,
     })
 }
 
 impl ReplayCapture {
+    pub(crate) fn is_persisted(&self) -> bool {
+        self.persisted.load(Ordering::Acquire)
+    }
+
     pub(super) fn image_cache(
         &self,
         endpoint: &str,
@@ -247,27 +294,33 @@ impl ReplayCapture {
                 record
                     .client_calls
                     .insert(call_id.into(), signature.clone());
-                calls.push((call_id, replay_item.clone(), signature));
+                calls.push((call_id.to_owned(), replay_item.clone(), signature));
             }
             record.input.push(replay_item);
         }
         prune_compacted_history(&mut record, output_start);
-        validate_record(&record)?;
-        for (call_id, item, signature) in calls {
-            write(
-                    self.store.as_ref(),
-                    &key(&record.owner, &record.conversation, call_id),
-                    json!({"owner":record.owner,"conversation":record.conversation,"item":item,"client":signature}),
-                )
-                .await?;
-        }
-        let payload = serde_json::to_value(&record).map_err(|_| ExcelRequestError::History)?;
-        write(
-            self.store.as_ref(),
-            &key(&record.owner, "response", id),
-            payload,
-        )
-        .await
+        // Small receipts survive even when this full response cannot fit its cache.
+        let writes = futures::stream::iter(calls).map(|(call_id, item, signature)| {
+            let cache_key = key(&record.owner, &record.conversation, &call_id);
+            let store = Arc::clone(&self.store);
+            let payload = OpaqueProviderData::new(
+                json!({"owner":record.owner,"conversation":record.conversation,"item":item,"client":signature})
+                    .as_object().expect("receipt object").clone(),
+            );
+            async move { let _ = store.write_tool(&cache_key, &payload).await; }
+        }).buffer_unordered(16).collect::<Vec<_>>();
+        let _ = tokio::time::timeout(STORE_TIMEOUT, writes).await;
+        let response_key = key(&record.owner, "response", id);
+        let payload = tokio::task::spawn_blocking(move || encode_snapshot(&record))
+            .await
+            .map_err(|_| ExcelRequestError::History)??;
+        let Some(payload) = payload else {
+            tracing::debug!("Excel response history exceeds optional cache capacity");
+            return Ok(());
+        };
+        write(self.store.as_ref(), &response_key, payload).await?;
+        self.persisted.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -345,17 +398,61 @@ fn prune_compacted_history(record: &mut ReplayRecord, output_start: usize) {
         .retain(|id, _| retained.contains(id.as_str()));
 }
 
-fn validate_record(record: &ReplayRecord) -> Result<(), ExcelRequestError> {
-    if record.native_calls.len() > MAX_NATIVE_CALLS
-        || record.input.len() > 4096
-        || serde_json::to_vec(record)
-            .map_err(|_| ExcelRequestError::History)?
-            .len()
-            > MAX_PROVIDER_REPLAY_BYTES
+fn encode_snapshot(record: &ReplayRecord) -> Result<Option<Value>, ExcelRequestError> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let bytes = serde_json::to_vec(record).map_err(|_| ExcelRequestError::History)?;
+    if bytes.len() <= MAX_PROVIDER_REPLAY_BYTES {
+        return serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| ExcelRequestError::History);
+    }
+    if bytes.len() > MAX_SNAPSHOT_DECODED_BYTES {
+        return Ok(None);
+    }
+    let compressed = zstd::bulk::compress(&bytes, 1).map_err(|_| ExcelRequestError::History)?;
+    let payload = json!({
+        "encoding": SNAPSHOT_ENCODING,
+        "decoded_bytes": bytes.len(),
+        "data": STANDARD.encode(compressed),
+    });
+    if serde_json::to_vec(&payload)
+        .map_err(|_| ExcelRequestError::History)?
+        .len()
+        > MAX_PROVIDER_REPLAY_BYTES
     {
+        return Ok(None);
+    }
+    Ok(Some(payload))
+}
+
+fn decode_snapshot(payload: Map<String, Value>) -> Result<ReplayRecord, ExcelRequestError> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    if !payload.contains_key("encoding") {
+        return serde_json::from_value(Value::Object(payload))
+            .map_err(|_| ExcelRequestError::History);
+    }
+    if payload.get("encoding").and_then(Value::as_str) != Some(SNAPSHOT_ENCODING) {
         return Err(ExcelRequestError::History);
     }
-    Ok(())
+    let size = payload
+        .get("decoded_bytes")
+        .and_then(Value::as_u64)
+        .filter(|size| *size > 0 && *size <= MAX_SNAPSHOT_DECODED_BYTES as u64)
+        .ok_or(ExcelRequestError::History)? as usize;
+    let encoded = payload
+        .get("data")
+        .and_then(Value::as_str)
+        .filter(|data| data.len() <= MAX_PROVIDER_REPLAY_BYTES)
+        .ok_or(ExcelRequestError::History)?;
+    let compressed = STANDARD
+        .decode(encoded)
+        .map_err(|_| ExcelRequestError::History)?;
+    let bytes =
+        zstd::bulk::decompress(&compressed, size).map_err(|_| ExcelRequestError::History)?;
+    if bytes.len() != size {
+        return Err(ExcelRequestError::History);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| ExcelRequestError::History)
 }
 
 fn key(owner: &str, category: &str, id: &str) -> String {
@@ -451,7 +548,7 @@ mod tests {
             assert_eq!(
                 outer["summary"],
                 if custom {
-                    "cpr.custom/client.exec"
+                    "codex2api.custom/client.exec"
                 } else {
                     "codex2api.function_code/client.exec"
                 }
@@ -669,7 +766,113 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn excel_replay_rejects_failed_unknown_oversized_and_conflicting_records() {
+    async fn complete_history_over_cache_capacity_still_prepares_and_completes() {
+        let store: Arc<dyn ProviderReplayPort> = Arc::new(MemoryReplay::default());
+        let first = restore(
+            store.clone(),
+            "owner".into(),
+            "thread".into(),
+            None,
+            &json!("x".repeat(MAX_PROVIDER_REPLAY_BYTES + 1)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            first.input[0]["content"][0]["text"].as_str().unwrap().len(),
+            MAX_PROVIDER_REPLAY_BYTES + 1
+        );
+        first
+            .capture
+            .commit(
+                &json!({"id":"resp_large","status":"completed","output":[]}),
+                &ClientTools::default(),
+            )
+            .await
+            .unwrap();
+        assert!(first.capture.is_persisted());
+        let next = restore(
+            store.clone(),
+            "owner".into(),
+            "thread".into(),
+            Some("resp_large"),
+            &json!("next"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(next.input[0], first.input[0]);
+        assert!(
+            restore(
+                store,
+                "other-owner".into(),
+                "thread".into(),
+                Some("resp_large"),
+                &json!("next")
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_tool_history_rebuilds_when_cache_is_unavailable() {
+        let store: Arc<dyn ProviderReplayPort> =
+            Arc::new(gateway_core::provider_ports::UnavailableProviderReplay);
+        let source = json!({
+            "tools":[{"type":"function","name":"read"}],
+            "input":[
+                {"role":"user","content":"read"},
+                {"type":"function_call","name":"read","call_id":"call_fixture","arguments":"{\"path\":\"sample.txt\"}"},
+                {"type":"function_call_output","call_id":"call_fixture","output":"contents"}
+            ]
+        });
+        let restored = restore_scoped(
+            store.clone(),
+            "owner".into(),
+            "thread".into(),
+            None,
+            source.as_object().unwrap(),
+            Some("thread"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            restored.native_calls["call_fixture"]["name"],
+            "run_officejs"
+        );
+        assert_eq!(restored.input.len(), 3);
+        let missing = json!({"input":[{"type":"function_call_output","call_id":"call_fixture","output":"contents"}]});
+        assert!(
+            restore_scoped(
+                store,
+                "owner".into(),
+                "thread".into(),
+                None,
+                missing.as_object().unwrap(),
+                None
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn compressed_snapshots_reject_unknown_encoding_truncation_and_bombs() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let data = STANDARD.encode(zstd::bulk::compress(b"{}", 1).unwrap());
+        for payload in [
+            json!({"encoding":"unknown","decoded_bytes":2,"data":data}),
+            json!({"encoding":SNAPSHOT_ENCODING,"decoded_bytes":1,"data":data}),
+            json!({"encoding":SNAPSHOT_ENCODING,"decoded_bytes":3,"data":data}),
+            json!({"encoding":SNAPSHOT_ENCODING,"decoded_bytes":MAX_SNAPSHOT_DECODED_BYTES + 1,"data":data}),
+            json!({"encoding":SNAPSHOT_ENCODING,"decoded_bytes":2,"data":"broken"}),
+            json!({"encoding":SNAPSHOT_ENCODING,"decoded_bytes":2,"data":data}),
+        ] {
+            assert!(decode_snapshot(payload.as_object().unwrap().clone()).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn excel_replay_rejects_failed_unknown_and_conflicting_records() {
         let store: Arc<dyn ProviderReplayPort> = Arc::new(MemoryReplay::default());
         let first = restore(
             store.clone(),
@@ -729,7 +932,7 @@ mod tests {
                 &Value::Array(vec![message("user", "x"); 4097])
             )
             .await
-            .is_err()
+            .is_ok()
         );
     }
 }

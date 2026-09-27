@@ -339,6 +339,9 @@ async fn request_tuning_overrides_should_round_trip() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let mut update = settings_with_margin(3_600);
     update.request_tuning = RequestTuningOverrides {
+        excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Relay {
+            public_url: "https://images.example.com".into(),
+        }),
         smart_scheduling: Some(
             gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
                 [2.5, 0.4, 1.0, 0.2, 0.5, 0.7],
@@ -368,6 +371,7 @@ async fn request_tuning_overrides_should_round_trip() {
         excel_image_relay_requests: Some(128),
         excel_image_relay_downloads: Some(32),
         excel_image_relay_entries: Some(128),
+        excel_image_relay_ttl_minutes: Some(45),
         account_busy_wait_enabled: Some(true),
         account_busy_wait_sticky_max_waiting: Some(4),
         account_busy_wait_sticky_timeout_seconds: Some(121),

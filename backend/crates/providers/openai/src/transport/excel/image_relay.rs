@@ -1,43 +1,138 @@
 use std::{
     collections::BTreeMap,
+    io::{Read, Write},
+    path::Path,
     sync::{
-        Arc, Mutex, Weak,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use bytes::Bytes;
 use gateway_core::provider_ports::{TemporaryImage, TemporaryImageSource};
 use serde_json::{Map, Value};
-use url::Url;
 
 use super::{ExcelRequestError, images};
 
-const TTL: Duration = Duration::from_secs(300);
+const MEMORY_BUDGET: usize = 1024 * 1024 * 1024;
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+const ORPHAN_GRACE: Duration = Duration::from_secs(31 * 60);
 
 pub(crate) struct ImageRelay {
     origin: Option<String>,
     entries: Mutex<BTreeMap<String, Entry>>,
     byte_budget: Arc<AtomicUsize>,
+    entry_budget: Arc<AtomicUsize>,
+    memory_budget: Arc<AtomicUsize>,
     downloads: Arc<AtomicUsize>,
     requests: Arc<AtomicUsize>,
     tuning: gateway_core::runtime::RequestTuningHandle,
+    secret: Option<[u8; 32]>,
+    directory: Mutex<Option<Arc<RelayDirectory>>>,
 }
 
-struct ImageBytes {
-    bytes: Vec<u8>,
-    _capacity: CapacityPermit,
+struct RelayDirectory {
+    _owner: std::fs::File,
+    directory: tempfile::TempDir,
 }
 
-impl AsRef<[u8]> for ImageBytes {
-    fn as_ref(&self) -> &[u8] {
-        &self.bytes
+impl RelayDirectory {
+    fn create(root: &Path) -> std::io::Result<Self> {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        let metadata = root.symlink_metadata()?;
+        if !metadata.is_dir() {
+            return Err(std::io::ErrorKind::PermissionDenied.into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(std::io::ErrorKind::PermissionDenied.into());
+            }
+        }
+        let directory = tempfile::Builder::new()
+            .prefix("session-")
+            .tempdir_in(root)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+        }
+        let owner = std::fs::File::create_new(directory.path().join(".owner"))?;
+        owner.try_lock().map_err(std::io::Error::from)?;
+        let storage = Self {
+            _owner: owner,
+            directory,
+        };
+        storage.cleanup_orphans();
+        Ok(storage)
+    }
+
+    fn path(&self) -> &Path {
+        self.directory.path()
+    }
+
+    fn cleanup_orphans(&self) {
+        let Some(root) = self.path().parent() else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path == self.path()
+                || !entry.file_name().to_string_lossy().starts_with("session-")
+                || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+            {
+                continue;
+            }
+            let marker = path.join(".owner");
+            let Ok(metadata) = marker.symlink_metadata() else {
+                continue;
+            };
+            if !metadata.is_file()
+                || !metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| SystemTime::now().duration_since(time).ok())
+                    .is_some_and(|age| age > ORPHAN_GRACE)
+            {
+                continue;
+            }
+            let Ok(owner) = std::fs::File::options().read(true).write(true).open(marker) else {
+                continue;
+            };
+            // An idle but live process still owns the lock; age alone never permits deletion.
+            if owner.try_lock().is_ok() {
+                let _ = std::fs::remove_dir_all(path);
+            }
+        }
     }
 }
 
+struct DiskImage {
+    path: tempfile::TempPath,
+    size: usize,
+    _capacity: CapacityPermit,
+    _entry: CapacityPermit,
+}
+
 struct DownloadBytes {
-    bytes: Bytes,
+    bytes: Vec<u8>,
+    _image: Arc<DiskImage>,
+    _memory: CapacityPermit,
     _slot: CapacityPermit,
 }
 
@@ -83,60 +178,64 @@ impl AsRef<[u8]> for DownloadBytes {
 }
 
 struct Entry {
-    bytes: Bytes,
+    image: Arc<DiskImage>,
     content_type: &'static str,
     expires: Instant,
-    downloads: u8,
 }
 
 pub(crate) struct ImageLease {
-    relay: Weak<ImageRelay>,
-    tokens: Vec<String>,
     _request: CapacityPermit,
 }
 
-impl Drop for ImageLease {
-    fn drop(&mut self) {
-        if let Some(relay) = self.relay.upgrade() {
-            let mut entries = relay
-                .entries
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for token in &self.tokens {
-                entries.remove(token);
-            }
-        }
-    }
-}
-
 pub(crate) fn validate_origin(value: &str) -> bool {
-    Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none()
-            && url.path() == "/"
-            && url.host_str().is_some_and(|host| {
-                matches!(url.host(), Some(url::Host::Domain(_)))
-                    && host.contains('.')
-                    && host != "localhost"
-                    && !host.ends_with(".localhost")
-                    && !host.ends_with(".local")
-            })
-    })
+    gateway_core::routing::ExcelImageTransport::valid_public_url(value)
 }
 
 impl ImageRelay {
     pub(crate) fn new(origin: Option<String>) -> Self {
+        let mut secret = [0u8; 32];
+        let secret = getrandom::fill(&mut secret).ok().map(|()| secret);
         Self {
             origin,
             entries: Mutex::new(BTreeMap::new()),
             byte_budget: Arc::new(AtomicUsize::new(0)),
+            entry_budget: Arc::new(AtomicUsize::new(0)),
+            memory_budget: Arc::new(AtomicUsize::new(0)),
             downloads: Arc::new(AtomicUsize::new(0)),
             requests: Arc::new(AtomicUsize::new(0)),
             tuning: Default::default(),
+            secret,
+            directory: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn start_cleanup(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(CLEANUP_INTERVAL).await;
+                let Some(relay) = weak.upgrade() else { return };
+                let _ = tokio::task::spawn_blocking(move || {
+                    relay.cleanup();
+                    if let Some(directory) = relay
+                        .directory
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_ref()
+                    {
+                        directory.cleanup_orphans();
+                    }
+                })
+                .await;
+            }
+        });
+    }
+
+    fn cleanup(&self) {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|_, entry| entry.expires > Instant::now());
     }
 
     pub(crate) fn with_request_tuning(
@@ -151,36 +250,54 @@ impl ImageRelay {
         self.tuning.load()
     }
 
-    pub(crate) fn stage_with_tuning(
+    pub(crate) fn relay_origin(&self) -> Option<String> {
+        match self.tuning.excel_image_transport() {
+            Some(gateway_core::routing::ExcelImageTransport::Native {}) => None,
+            Some(gateway_core::routing::ExcelImageTransport::Relay { public_url }) => {
+                Some(public_url)
+            }
+            None => self.origin.clone(),
+        }
+    }
+
+    pub(crate) fn stage_with_origin(
         self: &Arc<Self>,
         body: &mut Map<String, Value>,
         limits: gateway_core::routing::RequestTuning,
+        scope: &str,
+        origin: &str,
     ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
-        let Some(origin) = &self.origin else {
-            return Ok(None);
-        };
+        if !validate_origin(origin) {
+            return Err(ExcelRequestError::ImageRelay);
+        }
         let input = body.get("input").unwrap_or(&Value::Null);
         let budget = images::decoded_budget_user_with_limits(input, limits.into())
             .map_err(|_| ExcelRequestError::Input)?;
         if budget == 0 {
             return Ok(None);
         }
-        self.entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|_, entry| entry.expires > Instant::now());
+        self.cleanup();
+        let directory = {
+            let mut directory = self
+                .directory
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if directory.is_none() {
+                *directory = Some(Arc::new(
+                    RelayDirectory::create(&std::env::temp_dir().join("cpr-excel-images"))
+                        .map_err(|_| ExcelRequestError::ImageRelay)?,
+                ));
+            }
+            Arc::clone(directory.as_ref().ok_or(ExcelRequestError::ImageRelay)?)
+        };
         let request = CapacityPermit::acquire(
             &self.requests,
             1,
             limits.excel_image_relay_requests as usize,
         )
         .ok_or(ExcelRequestError::ImageRelay)?;
-        let mut reserved = CapacityPermit::acquire(
-            &self.byte_budget,
-            budget,
-            limits.excel_image_relay_bytes as usize,
-        )
-        .ok_or(ExcelRequestError::ImageRelay)?;
+        let _memory = CapacityPermit::acquire(&self.memory_budget, budget, MEMORY_BUDGET)
+            .ok_or(ExcelRequestError::ImageRelay)?;
         let mut pictures = Vec::new();
         images::collect_user_with_limits(input, &mut pictures, limits.into())
             .map_err(|_| ExcelRequestError::Input)?;
@@ -203,15 +320,22 @@ impl ImageRelay {
             if media != picture.media
                 || dimensions.width == 0
                 || dimensions.height == 0
-                || dimensions.width > 16_384
-                || dimensions.height > 16_384
-                || dimensions.width.saturating_mul(dimensions.height) > 40_000_000
+                || dimensions.width.saturating_mul(dimensions.height) > 64 * 1024 * 1024
             {
                 return Err(ExcelRequestError::Input);
             }
-            let mut secret = [0_u8; 32];
-            getrandom::fill(&mut secret).map_err(|_| ExcelRequestError::ImageRelay)?;
-            candidates.push((hex::encode(secret), picture));
+            let secret = self.secret.as_ref().ok_or(ExcelRequestError::ImageRelay)?;
+            let token = crate::transport::session::hmac_sha256(
+                secret,
+                &[
+                    scope.as_bytes(),
+                    b"\0",
+                    picture.media.as_bytes(),
+                    b"\0",
+                    &picture.bytes,
+                ],
+            );
+            candidates.push((hex::encode(token), picture));
         }
         let now = Instant::now();
         let mut entries = self
@@ -219,29 +343,68 @@ impl ImageRelay {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         entries.retain(|_, entry| entry.expires > now);
-        if entries.len() + candidates.len() > limits.excel_image_relay_entries as usize {
+        let new_tokens: std::collections::BTreeSet<_> = candidates
+            .iter()
+            .map(|(token, _)| token)
+            .filter(|token| !entries.contains_key(*token))
+            .collect();
+        if entries.len() + new_tokens.len() > limits.excel_image_relay_entries as usize {
             return Err(ExcelRequestError::ImageRelay);
         }
+        let mut reserved_entries = CapacityPermit::acquire(
+            &self.entry_budget,
+            new_tokens.len(),
+            limits.excel_image_relay_entries as usize,
+        )
+        .ok_or(ExcelRequestError::ImageRelay)?;
+        let mut bytes_by_token = BTreeMap::new();
+        for (token, picture) in &candidates {
+            if !entries.contains_key(token) {
+                bytes_by_token.insert(token, picture.bytes.len());
+            }
+        }
+        let new_bytes = bytes_by_token.values().sum();
+        let mut reserved = CapacityPermit::acquire(
+            &self.byte_budget,
+            new_bytes,
+            limits.excel_image_relay_bytes as usize,
+        )
+        .ok_or(ExcelRequestError::ImageRelay)?;
+        let ttl = Duration::from_secs(
+            u64::from(limits.excel_image_relay_ttl_minutes.clamp(1, 1440)) * 60,
+        );
+        // Write all new files before publishing any links; a failed batch owns no entries.
+        let mut staged = BTreeMap::new();
+        for (token, picture) in &candidates {
+            if entries.contains_key(token) || staged.contains_key(token) {
+                continue;
+            }
+            let mut file = tempfile::NamedTempFile::new_in(directory.path())
+                .map_err(|_| ExcelRequestError::ImageRelay)?;
+            file.write_all(&picture.bytes)
+                .map_err(|_| ExcelRequestError::ImageRelay)?;
+            staged.insert(
+                token.clone(),
+                Entry {
+                    image: Arc::new(DiskImage {
+                        path: file.into_temp_path(),
+                        size: picture.bytes.len(),
+                        _capacity: reserved.split(picture.bytes.len()),
+                        _entry: reserved_entries.split(1),
+                    }),
+                    content_type: picture.media,
+                    expires: now + ttl,
+                },
+            );
+        }
+        entries.append(&mut staged);
         let mut replacements = BTreeMap::new();
-        let mut tokens = Vec::with_capacity(candidates.len());
         for (token, picture) in candidates {
             replacements.insert(
                 picture.url,
                 format!("{}/_cpr/excel-images/{token}", origin.trim_end_matches('/')),
             );
-            entries.insert(
-                token.clone(),
-                Entry {
-                    bytes: Bytes::from_owner(ImageBytes {
-                        _capacity: reserved.split(picture.bytes.len()),
-                        bytes: picture.bytes,
-                    }),
-                    content_type: picture.media,
-                    expires: now + TTL,
-                    downloads: 0,
-                },
-            );
-            tokens.push(token);
+            entries.get_mut(&token).expect("published image").expires = now + ttl;
         }
         if let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) {
             for item in items
@@ -253,11 +416,7 @@ impl ImageRelay {
                 }
             }
         }
-        Ok(Some(Arc::new(ImageLease {
-            relay: Arc::downgrade(self),
-            tokens,
-            _request: request,
-        })))
+        Ok(Some(Arc::new(ImageLease { _request: request })))
     }
 }
 
@@ -272,21 +431,35 @@ impl TemporaryImageSource for ImageRelay {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         entries.retain(|_, entry| entry.expires > now);
-        let entry = entries.get_mut(capability)?;
-        if entry.downloads >= 16 {
-            return None;
-        }
+        let entry = entries.get(capability)?;
+        let image = Arc::clone(&entry.image);
+        let content_type = entry.content_type;
+        drop(entries);
         let slot = CapacityPermit::acquire(
             &self.downloads,
             1,
             self.tuning.load().excel_image_relay_downloads as usize,
         )?;
-        entry.downloads += 1;
+        let memory = CapacityPermit::acquire(&self.memory_budget, image.size, MEMORY_BUDGET)?;
+        let mut file = std::fs::File::open(&image.path).ok()?;
+        if file.metadata().ok()?.len() != image.size as u64 {
+            return None;
+        }
+        let mut bytes = vec![0; image.size];
+        file.read_exact(&mut bytes).ok()?;
+        if file.read(&mut [0]).ok()? != 0 {
+            return None;
+        }
+        if bytes.len() != image.size {
+            return None;
+        }
         Some(TemporaryImage {
-            content_type: entry.content_type,
+            content_type,
             // Both permits live until the last HTTP-body clone is released.
             bytes: Bytes::from_owner(DownloadBytes {
-                bytes: entry.bytes.clone(),
+                bytes,
+                _image: image,
+                _memory: memory,
                 _slot: slot,
             }),
         })
@@ -324,15 +497,56 @@ fn rewrite_user_urls(value: &mut Value, replacements: &BTreeMap<String, String>)
 mod tests {
     const MAX_BYTES: usize = 1024 * 1024 * 1024;
     const MAX_REQUESTS: usize = 128;
+    const TTL: Duration = Duration::from_secs(30 * 60);
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn excel_image_orphan_cleanup_preserves_live_and_unmanaged_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let storage_root = root.path().join("private");
+        let live = RelayDirectory::create(&storage_root).unwrap();
+        let crashed = RelayDirectory::create(&storage_root).unwrap();
+        let live_path = live.path().to_path_buf();
+        let crashed_path = crashed.path().to_path_buf();
+        let old = SystemTime::now() - ORPHAN_GRACE - Duration::from_secs(60);
+        for directory in [&live, &crashed] {
+            directory
+                ._owner
+                .set_times(std::fs::FileTimes::new().set_modified(old))
+                .unwrap();
+        }
+        let RelayDirectory { _owner, directory } = crashed;
+        drop(_owner);
+        assert_eq!(directory.keep(), crashed_path);
+        let unmanaged = storage_root.join("session-unmanaged");
+        std::fs::create_dir(&unmanaged).unwrap();
+        live.cleanup_orphans();
+        assert!(live_path.exists());
+        assert!(unmanaged.exists());
+        assert!(!crashed_path.exists());
+        drop(live);
+        assert!(!live_path.exists());
+    }
+
     impl ImageRelay {
+        fn stage_with_tuning(
+            self: &Arc<Self>,
+            body: &mut Map<String, Value>,
+            limits: gateway_core::routing::RequestTuning,
+            scope: &str,
+        ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
+            let Some(origin) = self.relay_origin() else {
+                return Ok(None);
+            };
+            self.stage_with_origin(body, limits, scope, &origin)
+        }
+
         pub(crate) fn stage(
             self: &Arc<Self>,
             body: &mut Map<String, Value>,
         ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
-            self.stage_with_tuning(body, self.tuning.load())
+            self.stage_with_tuning(body, self.tuning.load(), &uuid::Uuid::new_v4().to_string())
         }
     }
 
@@ -342,8 +556,91 @@ mod tests {
             .as_object().unwrap().clone()
     }
 
+    fn image_token(body: &Map<String, Value>) -> String {
+        body["input"][0]["content"][0]["image_url"]
+            .as_str()
+            .unwrap()
+            .rsplit_once("/_cpr/excel-images/")
+            .expect("rewritten image URL")
+            .1
+            .to_owned()
+    }
+
     #[test]
-    fn excel_image_relay_is_opt_in_bounded_and_released_on_drop() {
+    fn excel_image_mode_switch_keeps_old_links_and_freezes_request_origin() {
+        use gateway_core::routing::ExcelImageTransport;
+        let tuning = gateway_core::runtime::RequestTuningHandle::default();
+        let relay = Arc::new(ImageRelay::new(None).with_request_tuning(tuning.clone()));
+        let original = input();
+        let mut native = original.clone();
+        assert!(relay.stage(&mut native).unwrap().is_none());
+        assert_eq!(native, original);
+        assert!(relay.directory.lock().unwrap().is_none());
+
+        tuning.publish_excel_image_transport(Some(ExcelImageTransport::Relay {
+            public_url: "https://images.example.com".into(),
+        }));
+        let frozen = relay.relay_origin().unwrap();
+        let mut first = original.clone();
+        let lease = relay
+            .stage_with_origin(&mut first, tuning.load(), "same-owner", &frozen)
+            .unwrap()
+            .unwrap();
+        let token = image_token(&first);
+        assert!(relay.read(&token).is_some());
+        tuning.publish_excel_image_transport(Some(ExcelImageTransport::Native {}));
+        let mut next = original.clone();
+        assert!(relay.stage(&mut next).unwrap().is_none());
+        assert_eq!(next, original);
+        drop(lease);
+        assert!(relay.read(&token).is_some());
+
+        tuning.publish_excel_image_transport(Some(ExcelImageTransport::Relay {
+            public_url: "https://other.example.com".into(),
+        }));
+        let mut in_flight = original.clone();
+        relay
+            .stage_with_origin(&mut in_flight, tuning.load(), "same-owner", &frozen)
+            .unwrap();
+        assert!(
+            in_flight["input"][0]["content"][0]["image_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://images.example.com/")
+        );
+        let mut latest = original;
+        relay.stage(&mut latest).unwrap();
+        assert!(
+            latest["input"][0]["content"][0]["image_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://other.example.com/")
+        );
+        assert!(relay.read(&token).is_some());
+    }
+
+    #[test]
+    fn excel_image_native_override_beats_legacy_relay_and_null_restores_it() {
+        let tuning = gateway_core::runtime::RequestTuningHandle::default();
+        let relay = ImageRelay::new(Some("https://images.example.com".into()))
+            .with_request_tuning(tuning.clone());
+        assert_eq!(
+            relay.relay_origin().as_deref(),
+            Some("https://images.example.com")
+        );
+        tuning.publish_excel_image_transport(Some(
+            gateway_core::routing::ExcelImageTransport::Native {},
+        ));
+        assert_eq!(relay.relay_origin(), None);
+        tuning.publish_excel_image_transport(None);
+        assert_eq!(
+            relay.relay_origin().as_deref(),
+            Some("https://images.example.com")
+        );
+    }
+
+    #[test]
+    fn excel_image_relay_is_opt_in_bounded_and_survives_request_drop() {
         let mut body = input();
         let original = body.clone();
         assert!(
@@ -355,17 +652,20 @@ mod tests {
         assert_eq!(original, body);
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
         let mut leases = Vec::new();
+        let mut tokens = Vec::new();
         for _ in 0..MAX_REQUESTS {
-            leases.push(relay.stage(&mut input()).unwrap().unwrap());
+            let mut body = input();
+            leases.push(relay.stage(&mut body).unwrap().unwrap());
+            tokens.push(image_token(&body));
         }
         assert!(relay.stage(&mut input()).is_err());
-        let token = leases[0].tokens[0].clone();
+        let token = tokens[0].clone();
         let image = relay.read(&token).unwrap();
         assert_eq!(image.content_type, "image/png");
         assert!(image.bytes.starts_with(b"\x89PNG"));
         assert!(relay.read("../config.yaml").is_none());
         drop(leases);
-        assert!(relay.read(&token).is_none());
+        assert!(relay.read(&token).is_some());
         assert!(relay.stage(&mut input()).is_ok());
     }
 
@@ -403,18 +703,20 @@ mod tests {
         wrong["input"][0]["content"][0]["image_url"] = "data:image/png;base64,AQID".into();
         assert!(relay.stage(&mut wrong).is_err());
         assert_eq!(relay.requests.load(Ordering::Acquire), 0);
+        relay.entries.lock().unwrap().clear();
         assert_eq!(relay.byte_budget.load(Ordering::Acquire), 0);
     }
 
     #[test]
     fn excel_image_relay_expiry_download_limits_and_media_are_checked() {
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
-        let lease = relay.stage(&mut input()).unwrap().unwrap();
-        let token = &lease.tokens[0];
+        let mut body = input();
+        let _lease = relay.stage(&mut body).unwrap().unwrap();
+        let token = &image_token(&body);
         for _ in 0..16 {
             assert!(relay.read(token).is_some());
         }
-        assert!(relay.read(token).is_none());
+        assert!(relay.read(token).is_some());
         relay
             .entries
             .lock()
@@ -443,8 +745,10 @@ mod tests {
             ImageRelay::new(Some("https://images.example.com".into()))
                 .with_request_tuning(tuning.clone()),
         );
-        let first = relay.stage(&mut input()).unwrap().unwrap();
-        let image = relay.read(&first.tokens[0]).unwrap();
+        let mut first_body = input();
+        let first = relay.stage(&mut first_body).unwrap().unwrap();
+        let token = image_token(&first_body);
+        let image = relay.read(&token).unwrap();
         let used = relay.byte_budget.load(Ordering::Acquire);
         tuning.publish(gateway_core::routing::RequestTuning {
             excel_image_relay_bytes: used as u64,
@@ -453,7 +757,7 @@ mod tests {
             ..Default::default()
         });
         assert!(relay.stage(&mut input()).is_err());
-        assert!(relay.read(&first.tokens[0]).is_none());
+        assert!(relay.read(&token).is_none());
         drop(first);
         assert!(relay.stage(&mut input()).is_err());
         assert_eq!(relay.byte_budget.load(Ordering::Acquire), used);
@@ -467,6 +771,7 @@ mod tests {
         let second = relay.stage(&mut input()).unwrap().unwrap();
         assert!(relay.byte_budget.load(Ordering::Acquire) > used);
         drop(second);
+        relay.entries.lock().unwrap().clear();
         assert_eq!(relay.byte_budget.load(Ordering::Acquire), used);
         drop(image);
         assert_eq!(relay.byte_budget.load(Ordering::Acquire), 0);
@@ -476,8 +781,14 @@ mod tests {
     #[test]
     fn excel_image_capacity_and_download_slots_follow_body_lifetime() {
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
+        let mut tokens = Vec::new();
         let leases: Vec<_> = (0..3)
-            .map(|_| relay.stage(&mut input()).unwrap().unwrap())
+            .map(|_| {
+                let mut body = input();
+                let lease = relay.stage(&mut body).unwrap().unwrap();
+                tokens.push(image_token(&body));
+                lease
+            })
             .collect();
         let bytes_per_image = relay
             .entries
@@ -486,15 +797,16 @@ mod tests {
             .values()
             .next()
             .unwrap()
-            .bytes
-            .len();
+            .image
+            .size;
         let mut downloads = Vec::new();
         for index in 0..32 {
-            downloads.push(relay.read(&leases[index % 3].tokens[0]).unwrap());
+            downloads.push(relay.read(&tokens[index % 3]).unwrap());
         }
-        assert!(relay.read(&leases[0].tokens[0]).is_none());
-        let token = leases[0].tokens[0].clone();
+        assert!(relay.read(&tokens[0]).is_none());
+        let token = tokens[0].clone();
         drop(leases);
+        relay.entries.lock().unwrap().clear();
         assert!(relay.read(&token).is_none());
         assert_eq!(
             relay.byte_budget.load(Ordering::Acquire),
@@ -507,7 +819,7 @@ mod tests {
         drop(copy);
         assert_eq!(relay.byte_budget.load(Ordering::Acquire), 0);
         assert_eq!(relay.downloads.load(Ordering::Acquire), 0);
-        let all = CapacityPermit::acquire(&relay.byte_budget, MAX_BYTES, MAX_BYTES).unwrap();
+        let all = CapacityPermit::acquire(&relay.memory_budget, MAX_BYTES, MAX_BYTES).unwrap();
         let mut bad = input();
         bad["input"][0]["content"][0]["image_url"] = "data:image/png;base64,!!!!".into();
         assert!(matches!(
@@ -526,5 +838,109 @@ mod tests {
             Err(ExcelRequestError::Input)
         ));
         assert_eq!(relay.byte_budget.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn excel_image_urls_reuse_within_scope_without_cross_scope_sharing() {
+        let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
+        let mut first = input();
+        let lease = relay
+            .stage_with_tuning(&mut first, relay.request_tuning(), "scope-a")
+            .unwrap()
+            .unwrap();
+        let bytes = relay.byte_budget.load(Ordering::Acquire);
+        let token = image_token(&first);
+        drop(lease);
+        let mut again = input();
+        relay
+            .stage_with_tuning(&mut again, relay.request_tuning(), "scope-a")
+            .unwrap();
+        assert_eq!(first, again);
+        assert_eq!(relay.byte_budget.load(Ordering::Acquire), bytes);
+        assert!(relay.read(&token).is_some());
+        let mut other = input();
+        relay
+            .stage_with_tuning(&mut other, relay.request_tuning(), "scope-b")
+            .unwrap();
+        assert_ne!(first, other);
+        assert_eq!(relay.entries.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn excel_image_disk_expiry_and_ttl_updates_preserve_live_downloads() {
+        let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
+        let limits = gateway_core::routing::RequestTuning {
+            excel_image_relay_ttl_minutes: 1,
+            excel_image_relay_entries: 1,
+            ..Default::default()
+        };
+        let mut body = input();
+        let lease = relay
+            .stage_with_tuning(&mut body, limits, "scope")
+            .unwrap()
+            .unwrap();
+        let token = image_token(&body);
+        let (path, expiry) = {
+            let entries = relay.entries.lock().unwrap();
+            let entry = entries.get(&token).unwrap();
+            (entry.image.path.to_path_buf(), entry.expires)
+        };
+        assert!(path.is_file());
+        assert!(expiry <= Instant::now() + Duration::from_secs(60));
+        let image = relay.read(&token).unwrap();
+        let data = image.bytes.clone();
+        drop(lease);
+        relay
+            .entries
+            .lock()
+            .unwrap()
+            .values_mut()
+            .for_each(|entry| entry.expires = Instant::now());
+        relay.cleanup();
+        assert!(relay.read(&token).is_none());
+        assert_eq!(relay.entry_budget.load(Ordering::Acquire), 1);
+        assert!(
+            relay
+                .stage_with_tuning(&mut input(), limits, "new-scope")
+                .is_err()
+        );
+        assert!(path.exists());
+        assert!(data.starts_with(b"\x89PNG"));
+        drop(image);
+        assert!(path.exists());
+        drop(data);
+        assert!(!path.exists());
+        assert_eq!(relay.byte_budget.load(Ordering::Acquire), 0);
+        assert_eq!(relay.memory_budget.load(Ordering::Acquire), 0);
+        assert_eq!(relay.entry_budget.load(Ordering::Acquire), 0);
+        assert!(
+            relay
+                .stage_with_tuning(&mut input(), limits, "new-scope")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn excel_image_modified_disk_file_is_rejected_without_leaking_download_permits() {
+        let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
+        let mut body = input();
+        let _lease = relay
+            .stage_with_tuning(&mut body, relay.request_tuning(), "scope")
+            .unwrap()
+            .unwrap();
+        let token = image_token(&body);
+        let path = relay.entries.lock().unwrap()[&token]
+            .image
+            .path
+            .to_path_buf();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"unexpected")
+            .unwrap();
+        assert!(relay.read(&token).is_none());
+        assert_eq!(relay.downloads.load(Ordering::Acquire), 0);
+        assert_eq!(relay.memory_budget.load(Ordering::Acquire), 0);
     }
 }

@@ -1277,25 +1277,58 @@ impl MemoryCooldownPort {
     pub(crate) fn new() -> Self {
         Self::default()
     }
+
+    pub(crate) fn record(&self, cooldown: ProviderCooldown) -> bool {
+        let mut cooldowns = self.cooldowns.lock().expect("cooldown lock");
+        let current = cooldowns.get(cooldown.account_id());
+        if current
+            .is_some_and(|current| current.credential_revision() > cooldown.credential_revision())
+            || cooldown.until() <= SystemTime::now()
+        {
+            return false;
+        }
+        let should_write = current.is_none_or(|current| {
+            current.credential_revision() < cooldown.credential_revision()
+                || current.until() < cooldown.until()
+        });
+        let retained = if should_write {
+            cooldown
+        } else {
+            current.unwrap().clone()
+        };
+        cooldowns.insert(
+            retained.account_id().clone(),
+            retained.with_observation_token(Some(uuid::Uuid::new_v4().to_string())),
+        );
+        should_write
+    }
 }
 
 impl ProviderCooldownPort for MemoryCooldownPort {
+    fn clear_if_observed<'a>(
+        &'a self,
+        observed: &'a ProviderCooldown,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut cooldowns = self.cooldowns.lock().expect("cooldown lock");
+            let matches = cooldowns.get(observed.account_id()).is_some_and(|current| {
+                current.credential_revision() == observed.credential_revision()
+                    && current.until() == observed.until()
+                    && observed.observation_token().is_some()
+                    && current.observation_token() == observed.observation_token()
+            });
+            if matches {
+                cooldowns.remove(observed.account_id());
+            }
+            Ok(matches)
+        })
+    }
+
     fn put_if_later(
         &self,
         cooldown: ProviderCooldown,
     ) -> BoxFuture<'_, Result<bool, ProviderStoreError>> {
-        Box::pin(async move {
-            let mut cooldowns = self.cooldowns.lock().expect("cooldown lock");
-            let should_write = cooldowns.get(cooldown.account_id()).is_none_or(|current| {
-                current.credential_revision() < cooldown.credential_revision()
-                    || (current.credential_revision() == cooldown.credential_revision()
-                        && current.until() < cooldown.until())
-            });
-            if should_write {
-                cooldowns.insert(cooldown.account_id().clone(), cooldown);
-            }
-            Ok(should_write)
-        })
+        Box::pin(async move { Ok(self.record(cooldown)) })
     }
 
     fn read<'a>(

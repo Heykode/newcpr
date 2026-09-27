@@ -197,6 +197,9 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         ..RequestTuning::default()
     };
     let overrides = RequestTuningOverrides {
+        excel_image_transport: Some(gateway_core::routing::ExcelImageTransport::Relay {
+            public_url: "https://images.example.com".into(),
+        }),
         excel_image_relay_bytes: Some(expected.excel_image_relay_bytes),
         excel_image_max_bytes: Some(expected.excel_image_max_bytes),
         excel_image_total_bytes: Some(expected.excel_image_total_bytes),
@@ -236,6 +239,11 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         .expect("compile enabled wait settings");
     assert_eq!(enabled.request_tuning(), expected);
     assert_eq!(enabled.request_location(), Some(&location));
+    assert_eq!(
+        enabled.excel_image_transport(),
+        overrides.excel_image_transport.as_ref()
+    );
+    assert!(defaults.excel_image_transport().is_none());
 
     sqlx::query(
         "update runtime_settings set request_tuning_json = $1, config_revision = config_revision + 1 where id = 1",
