@@ -272,6 +272,8 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "provider_egress_settings",
             "provider_outbound_user_agents",
             "provider_turn_states",
+            "quality_rules",
+            "quality_runs",
             "quota_learning_accounts",
             "quota_learning_plan_samples",
             "request_capture_config",

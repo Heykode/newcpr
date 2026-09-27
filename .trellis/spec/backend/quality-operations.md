@@ -29,3 +29,6 @@
   by `cfg(test)`, and after implementation items. Do not expose test APIs or exempt
   entire directories. Validate the gateway architecture suite and Clippy with
   `--all-targets`, not only the modified libraries.
+- New persisted tables must also be registered in the exact schema snapshot in
+  `crates/gateway-store/tests/postgres/mod.rs`; a frozen migration checksum and
+  feature-specific Store tests alone do not cover that integration contract.
