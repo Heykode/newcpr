@@ -162,6 +162,12 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         ("crates/providers/openai", Some("transport/excel/replay.rs"), Item::Fn(function)) => {
             function.sig.ident == "restore"
         }
+        // Fresh quota reset evidence stays private to its recovery owner.
+        ("crates/providers/openai", Some("credential/quota/recovery.rs"), Item::Mod(module)) => {
+            module.ident == "reset_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // Judge parsing/Cron calculation and SQL usage predicates stay private;
         // only their owner-local regression modules may access these details.
         ("crates/gateway-admin", Some("use_case/quality_ops.rs"), Item::Mod(module))
@@ -434,6 +440,34 @@ fn quality_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
                 "{relative}: {source}"
             );
         }
+    }
+}
+
+#[test]
+fn quota_reset_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
+    let owner = "crates/providers/openai";
+    let path = Path::new("credential/quota/recovery.rs");
+    let item: Item = syn::parse_str("#[cfg(test)] mod reset_tests {}").unwrap();
+    assert!(is_audited_private_test(owner, path, &item));
+    assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+    assert!(!is_audited_private_test(
+        owner,
+        Path::new("credential/quota/mod.rs"),
+        &item
+    ));
+    for source in [
+        "mod reset_tests {}",
+        "#[cfg(test)] mod reset_tests;",
+        "#[cfg(test)] pub(crate) mod reset_tests {}",
+        "#[cfg(test)] pub mod reset_tests {}",
+        "#[cfg(test)] mod other {}",
+        "#[cfg(test)] pub fn reset_tests() {}",
+        "#[cfg(any(test, feature = \"production\"))] mod reset_tests {}",
+        "#[cfg(test)] #[path = \"fixture.rs\"] mod reset_tests {}",
+        "#[cfg_attr(test, path = \"fixture.rs\")] mod reset_tests;",
+    ] {
+        let item: Item = syn::parse_str(source).unwrap();
+        assert!(!is_audited_private_test(owner, path, &item), "{source}");
     }
 }
 
