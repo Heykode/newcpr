@@ -176,7 +176,7 @@ watch(
         @remove-mapping="removeMapping"
       />
 
-      <RotationStrategyCard v-model="form.rotationStrategy" :options="rotationOptions" />
+      <RotationStrategyCard v-model="form.rotationStrategy" v-model:smart-scheduling="form.requestTuning.smartScheduling" :options="rotationOptions" :disabled="loading || saving" />
 
       <BaseConfirmModal
         v-model="showDeleteAdminKeyModal"

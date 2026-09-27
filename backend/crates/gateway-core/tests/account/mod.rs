@@ -118,6 +118,7 @@ fn account_scheduling_should_default_and_resolve_concurrency_override() {
 
 fn context(strategy: RotationStrategy) -> AccountSelectionContext {
     AccountSelectionContext {
+        waiting_counts: Default::default(),
         policy: AccountSelectionPolicy::new(
             strategy,
             NonZeroU32::new(3).expect("positive"),
@@ -1100,3 +1101,4 @@ fn elapsed_quota_reset_does_not_fabricate_recovery() {
         .expect("healthy candidate available");
     assert_eq!(selected.candidate().account.id().as_str(), "acct_healthy");
 }
+mod smart_scheduling;

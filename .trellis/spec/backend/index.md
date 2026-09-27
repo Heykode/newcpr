@@ -14,6 +14,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 
 | Guide | Description | Status |
 |-------|-------------|--------|
+| [Selective Upstream Hardening](./upstream-hardening.md) | Smart defaults, response-local interrupt, catalog sources, refresh and bounded recovery | Local selective adaptation |
 | [Excel Upstream](./excel-upstream.md) | Account-level route, scoped replay, downstream WS and State retirement | Integration verification in progress |
 | [Quality Operations](./quality-operations.md) | Fixed-account scheduled tests, judgment and leased jobs | Isolated OVH verification |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |

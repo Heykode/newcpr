@@ -253,6 +253,9 @@ fn to_core_request_tuning(
         websocket_large_request_threshold_bytes: overrides
             .websocket_large_request_threshold_bytes
             .unwrap_or(defaults.websocket_large_request_threshold_bytes),
+        smart_scheduling: overrides
+            .smart_scheduling
+            .unwrap_or(defaults.smart_scheduling),
         websocket_max_age_ms: overrides
             .websocket_max_age_ms
             .unwrap_or(defaults.websocket_max_age_ms),

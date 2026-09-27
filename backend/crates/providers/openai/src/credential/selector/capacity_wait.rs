@@ -273,13 +273,18 @@ impl CodexCredentialSelector {
             universe: ids.into_iter().collect(),
             invalid_credentials: BTreeSet::new(),
             context: AccountSelectionContext {
+                waiting_counts: Default::default(),
                 policy: request.attempt.account_selection_policy(),
                 now: SystemTime::now(),
                 excluded_accounts: excluded,
                 preferred_account: pinned
                     .clone()
                     .or_else(|| affinity.preferred_account().cloned()),
-                preferred_account_overrides_weight: true,
+                preferred_account_overrides_weight: pinned.is_some()
+                    || request
+                        .attempt
+                        .account_selection_policy()
+                        .preferred_account_overrides_weight(),
                 round_robin_cursor: scheduling.round_robin_cursor(),
                 eligibility: AccountEligibilityPolicy::Enforce,
                 account_scope: request.attempt.account_scope().cloned(),
@@ -313,7 +318,23 @@ impl CodexCredentialSelector {
             let original = state
                 .pinned
                 .clone()
-                .or_else(|| state.affinity.bound_account().cloned());
+                .or_else(|| state.affinity.bound_account().cloned())
+                .filter(|id| {
+                    if state.context.preferred_account_overrides_weight {
+                        return true;
+                    }
+                    let original_weight = candidates
+                        .iter()
+                        .find(|c| c.account.id() == id)
+                        .map(|c| c.account.weight());
+                    !AccountSelector
+                        .select_with_live_capacity(&candidates, &state.context, &limits)
+                        .is_some_and(|selected| {
+                            original_weight.is_some_and(|weight| {
+                                selected.candidate().account.weight() > weight
+                            })
+                        })
+                });
             if let Some(original) = original.as_ref()
                 && !sticky_tried.contains(original)
                 && candidates.iter().any(|candidate| {
@@ -497,6 +518,25 @@ impl CodexCredentialSelector {
                     .filter(|candidate| raced.contains(candidate.account.id()))
                     .cloned()
                     .collect::<Vec<_>>();
+                if matches!(
+                    context.policy.strategy(),
+                    gateway_core::account::RotationStrategy::Smart
+                        | gateway_core::account::RotationStrategy::Sticky
+                ) && context.policy.smart_scheduling().weights()[5] > 0.0
+                {
+                    let ids = candidates
+                        .iter()
+                        .map(|candidate| candidate.account.id().clone())
+                        .collect::<Vec<_>>();
+                    context.waiting_counts = control
+                        .run(async {
+                            self.leases
+                                .load_waiting_counts(&self.provider_kind, &ids)
+                                .await
+                                .map_err(Into::into)
+                        })
+                        .await?;
+                }
                 let selected = AccountSelector
                     .select_for_capacity_wait(&candidates, &context, &limits)
                     .or_else(|| {
@@ -897,7 +937,8 @@ impl CodexCredentialSelector {
             state.context.policy.strategy(),
             state.context.policy.max_concurrent_per_account(),
             Duration::ZERO,
-        );
+        )
+        .with_smart_scheduling(state.context.policy.smart_scheduling());
         if candidate.account != *acquired_account
             || limits.revision() != revision
             || matches!(

@@ -157,6 +157,9 @@ pub struct StartedExecution {
 }
 
 pub trait ExecutionSession: Send {
+    fn response_control(&self) -> Option<super::response_control::ResponseControl> {
+        None
+    }
     fn trace(&self) -> crate::diagnostics::TraceContext {
         crate::diagnostics::TraceContext::default()
     }
@@ -1176,9 +1179,10 @@ impl ExecutionService for DefaultExecutionService {
                     .await?
                 else {
                     for profile in client.snapshot.public_model_profiles_for_provider(kind) {
-                        if !scope.allows_provider_model(
+                        if !client.snapshot.catalog_model_allowed_for_scope(
                             kind,
-                            &client.snapshot.mapped_model(profile.model().as_str()),
+                            profile.model(),
+                            scope,
                         ) {
                             continue;
                         }
@@ -1409,6 +1413,10 @@ impl Drop for DefaultExecutionSession {
 }
 
 impl ExecutionSession for DefaultExecutionSession {
+    fn response_control(&self) -> Option<super::response_control::ResponseControl> {
+        Some(self.core.response_control())
+    }
+
     fn trace(&self) -> crate::diagnostics::TraceContext {
         self.core.trace()
     }

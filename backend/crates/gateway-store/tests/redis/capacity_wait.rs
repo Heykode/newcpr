@@ -29,6 +29,49 @@ use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
 
 #[tokio::test]
+async fn queue_pressure_reads_real_wait_ownership_without_advancing_rotation() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let id = account("pressure");
+    let ids = [id.clone()];
+    let provider = provider();
+    let client = ClientApiKeyId::new("key_queue_pressure").unwrap();
+    let before = fixture
+        .port
+        .load_state(&client, &provider, &ids)
+        .await
+        .unwrap();
+    let guard = fixture.wait("pressure", Duration::from_secs(10)).await;
+    for _ in 0..3 {
+        assert_eq!(
+            fixture
+                .port
+                .load_waiting_counts(&provider, &ids)
+                .await
+                .unwrap()[&id],
+            1
+        );
+    }
+    guard.release().await.unwrap();
+    assert_eq!(
+        fixture
+            .port
+            .load_waiting_counts(&provider, &ids)
+            .await
+            .unwrap()[&id],
+        0
+    );
+    let after = fixture
+        .port
+        .load_state(&client, &provider, &ids)
+        .await
+        .unwrap();
+    assert_eq!(after.round_robin_cursor(), before.round_robin_cursor() + 1);
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn capacity_wait_modes_share_atomic_limits_without_execution_or_cursor_changes() {
     let Some(mut fixture) = Fixture::new().await else {
         return;

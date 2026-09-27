@@ -57,6 +57,7 @@ impl CodexBackendClient {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
             direct_client: client.clone(),
+            response_control: None,
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
             outbound_proxy: None,
@@ -528,11 +529,22 @@ impl CodexBackendClient {
         .map_err(CodexClientError::WebSocketEncode)?;
         let tuning = self.request_tuning();
         let payload_bytes = websocket_create.payload_text().len() as u64;
-        // Only independent new chains can change transport without rebuilding history.
-        if requirement == TransportRequirement::NewChain
-            && tuning.websocket_http_fallback_enabled
+        let oversized = tuning.websocket_http_fallback_enabled
             && tuning.websocket_large_request_threshold_bytes != 0
-            && payload_bytes >= tuning.websocket_large_request_threshold_bytes
+            && payload_bytes >= tuning.websocket_large_request_threshold_bytes;
+        if oversized && requirement == TransportRequirement::ExactWebSocketContinuation {
+            return Err(CodexClientError::WebSocket(
+                CodexWebSocketExchangeError::ContinuationUnavailable {
+                    reason: super::websocket::PreviousResponseUnavailableReason::TransportPayloadTooLarge,
+                },
+            ));
+        }
+        // Only independent new chains can change transport without rebuilding history.
+        if oversized
+            && matches!(
+                requirement,
+                TransportRequirement::NewChain | TransportRequirement::WebSocketNewChain
+            )
         {
             let decision = CodexTransportDecision::HttpLargeRequest;
             context.trace.cloned().unwrap_or_default().record(
@@ -840,6 +852,7 @@ impl CodexBackendClient {
                 let mut exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
                     prepared,
+                    self.response_control.clone(),
                     context
                         .trace
                         .cloned()

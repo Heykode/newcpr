@@ -1,6 +1,6 @@
 //! AttemptContext 驱动的 Codex 账号选择与 Redis lease port。
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -420,6 +420,40 @@ impl CodexCredentialSelector {
                 .select_with_capacity_wait(request, cyber_policy_session_key)
                 .await;
         }
+        let mut universe = None;
+        for retry in 0..=3 {
+            let result = self
+                .select_snapshot(request, cyber_policy_session_key, &mut universe)
+                .await;
+            if !matches!(
+                result,
+                Err(CredentialSelectionError::AccountSnapshotChanged)
+            ) {
+                return result;
+            }
+            request.attempt.trace().record(
+                "account.snapshot_conflict",
+                serde_json::json!({
+                    "retryCount": retry, "maxRetries": 3,
+                }),
+            );
+            if request.attempt.cancellation().is_cancelled() {
+                return Err(CredentialSelectionError::Cancelled);
+            }
+            if SystemTime::now() >= request.attempt.deadline() {
+                break;
+            }
+        }
+        Err(CredentialSelectionError::AccountSnapshotChanged)
+    }
+
+    async fn select_snapshot(
+        &self,
+        request: &CredentialSelectionInput<'_>,
+        cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
+        universe: &mut Option<BTreeSet<ProviderAccountId>>,
+    ) -> Result<CodexCredentialLease, CredentialSelectionError> {
+        let diagnostic = request.attempt.is_diagnostic_required_account();
         let mut accounts = self.repository.list_for_provider().await?;
         self.retain_excel_auth_blocks(&accounts);
         // Normal scheduling excludes disabled rows; only the pinned diagnostic may restore one.
@@ -435,10 +469,17 @@ impl CodexCredentialSelector {
         {
             accounts.push(account);
         }
-        let accounts = accounts
+        let mut accounts = accounts
             .into_iter()
             .filter(|account| self.account_in_scope(account, request))
             .collect::<Vec<_>>();
+        let universe = universe.get_or_insert_with(|| {
+            accounts
+                .iter()
+                .map(|account| account.id().clone())
+                .collect()
+        });
+        accounts.retain(|account| universe.contains(account.id()));
         if !diagnostic {
             self.quota.prepare_scheduling(&accounts).await;
         }
@@ -560,6 +601,7 @@ impl CodexCredentialSelector {
             affinity.bound_account().cloned()
         };
         let mut shortest_retry = None;
+        let mut capacity_unavailable = false;
         let policy = request.attempt.account_selection_policy();
 
         loop {
@@ -567,11 +609,13 @@ impl CodexCredentialSelector {
                 .clone()
                 .or_else(|| affinity.preferred_account().cloned());
             let context = AccountSelectionContext {
+                waiting_counts: Default::default(),
                 policy,
                 now: SystemTime::now(),
                 excluded_accounts: excluded.clone(),
                 preferred_account: preferred.clone(),
-                preferred_account_overrides_weight: true,
+                preferred_account_overrides_weight: pinned_account.is_some()
+                    || policy.preferred_account_overrides_weight(),
                 round_robin_cursor,
                 eligibility: if diagnostic {
                     AccountEligibilityPolicy::BypassForDiagnostic
@@ -581,17 +625,19 @@ impl CodexCredentialSelector {
                 account_scope: request.attempt.account_scope().cloned(),
             };
             let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
+            capacity_unavailable |= AccountSelector.has_busy_candidate(&candidates, &context);
             let selection = AccountSelector.select(&candidates, &context);
             request
                 .attempt
                 .trace()
                 .account_selection(&candidates, &context, selection.as_ref());
             let Some(selection) = selection else {
-                return match shortest_retry {
-                    Some(retry_after) => Err(CredentialSelectionError::CapacityUnavailable {
-                        retry_after: Some(retry_after),
-                    }),
-                    None => Err(CredentialSelectionError::NoEligibleCredential),
+                return if capacity_unavailable {
+                    Err(CredentialSelectionError::CapacityUnavailable {
+                        retry_after: shortest_retry,
+                    })
+                } else {
+                    Err(CredentialSelectionError::NoEligibleCredential)
                 };
             };
             affinity.observe_preferred_selection(selection.preferred());
@@ -610,6 +656,20 @@ impl CodexCredentialSelector {
                 excluded.insert(account.id().clone());
                 continue;
             }
+            // Snapshot conflicts must not consume capacity or the request interval.
+            let runtime = match self.repository.load_runtime_credential(&account).await {
+                Ok(runtime) => runtime,
+                Err(CredentialRepositoryError::InvalidCredentialData)
+                    if pinned_account.is_none() =>
+                {
+                    if affinity.bound_account() == Some(account.id()) {
+                        affinity.escape(AffinityEscapeReason::HardUnavailable);
+                    }
+                    excluded.insert(account.id().clone());
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             match self
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -625,27 +685,22 @@ impl CodexCredentialSelector {
                 .await?
             {
                 ProviderLeaseAcquisition::Busy { retry_after } => {
+                    capacity_unavailable = true;
                     affinity.observe_lease_busy(account.id());
                     shortest_retry = minimum_duration(shortest_retry, retry_after);
                     excluded.insert(account.id().clone());
                 }
                 ProviderLeaseAcquisition::Acquired(guard) => {
-                    // Validate before claiming affinity. A corrupt unpinned candidate is
-                    // local to this unsent selection, never an account-health mutation.
-                    let runtime = match self.repository.load_runtime_credential(&account).await {
-                        Ok(runtime) => runtime,
-                        Err(CredentialRepositoryError::InvalidCredentialData)
-                            if pinned_account.is_none() =>
-                        {
-                            drop(guard);
-                            if affinity.bound_account() == Some(account.id()) {
-                                affinity.escape(AffinityEscapeReason::HardUnavailable);
-                            }
-                            excluded.insert(account.id().clone());
-                            continue;
-                        }
-                        Err(error) => return Err(error.into()),
-                    };
+                    let current = self
+                        .repository
+                        .store()
+                        .get_account(account.id())
+                        .await
+                        .map_err(|_| CredentialSelectionError::Store)?;
+                    if current.as_ref() != Some(&account) {
+                        drop(guard);
+                        return Err(CredentialSelectionError::AccountSnapshotChanged);
+                    }
                     let initial_affinity_claim = if !diagnostic
                         && observed_affinity_account.is_none()
                         && let Some(key) = request.session_affinity_key
@@ -1574,6 +1629,8 @@ pub enum CredentialSelectionError {
     CapacityUnavailable { retry_after: Option<Duration> },
     #[error("Codex account data is invalid")]
     InvalidCredential,
+    #[error("Codex account changed repeatedly during selection")]
+    AccountSnapshotChanged,
     #[error("Codex account store is unavailable")]
     Store,
     #[error("Codex account lease runtime is unavailable")]
@@ -1586,9 +1643,8 @@ impl From<CredentialRepositoryError> for CredentialSelectionError {
     fn from(error: CredentialRepositoryError) -> Self {
         match error {
             CredentialRepositoryError::InvalidCredentialData => Self::InvalidCredential,
-            CredentialRepositoryError::RevisionConflict | CredentialRepositoryError::Store => {
-                Self::Store
-            }
+            CredentialRepositoryError::RevisionConflict => Self::AccountSnapshotChanged,
+            CredentialRepositoryError::Store => Self::Store,
         }
     }
 }

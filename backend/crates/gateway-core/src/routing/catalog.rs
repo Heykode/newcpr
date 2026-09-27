@@ -1,9 +1,10 @@
 //! 快照编译与客户端读取需要的 Provider 目录合同，不暴露执行或账号选择能力。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use futures::future::BoxFuture;
 
+use crate::account::ProviderAccountId;
 use crate::identity::ProviderKind;
 use crate::operation::RawJsonPayload;
 
@@ -34,6 +35,7 @@ pub struct ProviderModelCapabilities {
     upstream_model: UpstreamModelId,
     capabilities: ModelCapabilities,
     presentation: Option<ModelPresentation>,
+    catalog_accounts: Option<BTreeSet<ProviderAccountId>>,
 }
 
 impl ProviderModelCapabilities {
@@ -43,6 +45,7 @@ impl ProviderModelCapabilities {
             upstream_model,
             capabilities,
             presentation: None,
+            catalog_accounts: None,
         }
     }
 
@@ -50,6 +53,18 @@ impl ProviderModelCapabilities {
     pub fn with_presentation(mut self, presentation: ModelPresentation) -> Self {
         self.presentation = Some(presentation);
         self
+    }
+
+    /// Discovery sources restrict catalog visibility, never inference authorization.
+    #[must_use]
+    pub fn with_catalog_accounts(mut self, accounts: BTreeSet<ProviderAccountId>) -> Self {
+        self.catalog_accounts = Some(accounts);
+        self
+    }
+
+    #[must_use]
+    pub const fn catalog_accounts(&self) -> Option<&BTreeSet<ProviderAccountId>> {
+        self.catalog_accounts.as_ref()
     }
 
     #[must_use]
