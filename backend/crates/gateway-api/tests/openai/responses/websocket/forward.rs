@@ -145,6 +145,27 @@ fn upstream_failure(
 }
 
 #[tokio::test]
+async fn initial_content_error_param_reaches_websocket_without_changing_status() {
+    let provider = ProviderError::new(
+        ProviderErrorKind::InvalidRequest,
+        UpstreamSendState::NotSent,
+    )
+    .with_status(400)
+    .with_client_visible_upstream_error(
+        ClientVisibleUpstreamError::new(
+            "unsupported history content",
+            Some("excel_unsupported_content".into()),
+            Some("invalid_request_error".into()),
+        )
+        .with_param("input[103].content[0]"),
+    );
+    let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
+    assert_eq!(error["status"], 400);
+    assert_eq!(error["error"]["param"], "input[103].content[0]");
+    assert_eq!(error["error"]["code"], "excel_unsupported_content");
+}
+
+#[tokio::test]
 async fn initial_capacity_error_projects_status_and_preserves_current_request_headers() {
     for code in ["server_is_overloaded", "slow_down"] {
         let provider = upstream_failure(

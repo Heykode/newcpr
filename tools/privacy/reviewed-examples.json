@@ -1,5 +1,21 @@
 [
   {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 715,
+    "file_sha256": "0f3aa9163b2dacde608c3eab4d02b9d28143a2001fd43b4701cad19132d33372",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Independently re-reviewed unchanged synthetic forwarded-header fixture after adding content-param keepalive regression; parsed test headers only, no connection to the private hop."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
+    "rule": "non-example-ip",
+    "line": 739,
+    "file_sha256": "0f3aa9163b2dacde608c3eab4d02b9d28143a2001fd43b4701cad19132d33372",
+    "line_sha256": "a9c8f94d9f263a3b89115fce6ef79eb501b560ead1e20e329ddc6ecf1b8a1f3d",
+    "reason": "Independently re-reviewed unchanged duplicate forwarded-header fixture for trusted-hop selection after content-param tests; synthetic data only, no server access."
+  },
+  {
     "path": "backend/apps/gateway/tests/bootstrap.rs",
     "rule": "authenticated-url",
     "line": 388,

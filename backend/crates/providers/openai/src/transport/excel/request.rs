@@ -37,6 +37,10 @@ pub(crate) enum ExcelRequestError {
         field: &'static str,
         part: usize,
     },
+    #[error(
+        "Excel attributed message content must be text or a content array (path=input[{input}].content)"
+    )]
+    AttributedContent { input: usize },
     #[error("unsupported client tool or tool choice for Excel")]
     Tool,
     #[error("Excel tool catalog changed concurrently; retry this request")]
@@ -55,6 +59,21 @@ pub(crate) enum ExcelRequestError {
         "unsupported Excel image-tool request; use PNG, gpt-image-2 and supported image options"
     )]
     Image,
+}
+
+impl ExcelRequestError {
+    pub(crate) fn content_param(self) -> Option<String> {
+        match self {
+            Self::Content {
+                input, field, part, ..
+            }
+            | Self::EncryptedContent { input, field, part } => {
+                Some(format!("input[{input}].{field}[{part}]"))
+            }
+            Self::AttributedContent { input } => Some(format!("input[{input}].content")),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn prepare_request(
@@ -199,6 +218,7 @@ fn translate_input(
         let mut item = value.as_object().cloned().ok_or(ExcelRequestError::Input)?;
         item.remove("internal_chat_message_metadata_passthrough");
         validate_content(item.get("content"), index, "content")?;
+        let mut item = super::history_messages::normalize(item, index)?;
         match item
             .get("type")
             .and_then(Value::as_str)

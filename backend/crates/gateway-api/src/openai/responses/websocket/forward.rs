@@ -375,7 +375,7 @@ pub(super) async fn send_gateway_error(
         error.client_error_type().unwrap_or(default_type),
         error.client_error_code().unwrap_or(default_code),
         error.client_message(),
-        None,
+        error.client_error_param(),
         request_id,
     )
     .await

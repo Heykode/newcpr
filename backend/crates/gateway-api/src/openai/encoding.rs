@@ -8,7 +8,7 @@ use gateway_core::{
 use gateway_protocol::openai::{
     chat::{ChatConversionError, ChatStreamEncoder, chat_response_from_events},
     output_recovery::recover_response_output,
-    sse::response_failed_sse_event_with_id,
+    sse::response_failed_sse_event_with_id_and_param,
 };
 use serde_json::{Value, json};
 
@@ -125,19 +125,24 @@ impl HttpResponseEncoder {
         let error_type = error.client_error_type().unwrap_or(default_type);
         let code = client_error_code(error.client_error_code().unwrap_or(default_code));
         if self.is_chat() {
-            chat_sse_frame(json!({
+            let mut body = json!({
                 "error": {
                     "type": error_type,
                     "code": code,
                     "message": error.client_message(),
                 }
-            }))
+            });
+            if let Some(param) = error.client_error_param() {
+                body["error"]["param"] = param.into();
+            }
+            chat_sse_frame(body)
         } else {
-            Bytes::from(response_failed_sse_event_with_id(
+            Bytes::from(response_failed_sse_event_with_id_and_param(
                 self.responses.response_id(),
                 error_type,
                 code,
                 error.client_message(),
+                error.client_error_param(),
             ))
         }
     }

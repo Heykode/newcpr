@@ -199,18 +199,26 @@ pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
         }
         return failure;
     }
-    if matches!(error, ExcelRequestError::EncryptedContent { .. }) {
+    if let Some(param) = error.content_param() {
+        let code = if matches!(error, ExcelRequestError::EncryptedContent { .. }) {
+            "excel_unsupported_content"
+        } else {
+            "excel_unsupported_request"
+        };
         return provider_error(
             ProviderErrorKind::InvalidRequest,
             UpstreamSendState::NotSent,
         )
         .with_status(400)
-        .with_upstream_code(OpaqueUpstreamValue::new("excel_unsupported_content"))
-        .with_client_visible_upstream_error(gateway_core::error::ClientVisibleUpstreamError::new(
-            error.to_string(),
-            Some("excel_unsupported_content".into()),
-            Some("invalid_request_error".into()),
-        ))
+        .with_upstream_code(OpaqueUpstreamValue::new(code))
+        .with_client_visible_upstream_error(
+            gateway_core::error::ClientVisibleUpstreamError::new(
+                error.to_string(),
+                Some(code.into()),
+                Some("invalid_request_error".into()),
+            )
+            .with_param(param),
+        )
         .with_diagnostic(ProviderDiagnostic::new(error.to_string()));
     }
     provider_error(
@@ -649,6 +657,52 @@ mod tests {
             assert_eq!(isolate_http_authentication_failure(&mut failure), None);
             assert_eq!(failure.error_message.as_deref(), Some("fixture"));
         }
+    }
+
+    #[test]
+    fn excel_content_errors_keep_safe_positions_without_retrying_or_changing_status() {
+        for (source, param, code) in [
+            (
+                ExcelRequestError::EncryptedContent {
+                    input: 103,
+                    field: "content",
+                    part: 0,
+                },
+                "input[103].content[0]",
+                "excel_unsupported_content",
+            ),
+            (
+                ExcelRequestError::Content {
+                    input: 26,
+                    field: "output",
+                    part: 2,
+                    kind: "input_file",
+                },
+                "input[26].output[2]",
+                "excel_unsupported_request",
+            ),
+            (
+                ExcelRequestError::AttributedContent { input: 26 },
+                "input[26].content",
+                "excel_unsupported_request",
+            ),
+        ] {
+            let error = request_error(source);
+            assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+            assert_eq!(error.upstream_status(), Some(400));
+            assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+            assert!(error.pre_delivery_retry().is_none());
+            assert!(!error.replay_is_safe());
+            let details = error.client_visible_upstream_error().unwrap();
+            assert_eq!(details.param(), Some(param));
+            assert_eq!(details.code(), Some(code));
+            assert!(details.message().contains(param));
+        }
+        assert!(
+            request_error(ExcelRequestError::Tool)
+                .client_visible_upstream_error()
+                .is_none()
+        );
     }
 
     #[test]

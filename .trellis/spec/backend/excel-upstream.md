@@ -110,6 +110,27 @@ Correct: apply the route label to response observations while retaining response
 
 ## 8. Compatibility Completion
 
+Sub2API #148 (`207f31e4`) message attribution normalization is Excel-only and
+runs after validating content in its original position. Move ordinary top-level
+author/recipient into a labelled text part, preserving role/id/phase/status and
+the original text/image sequence. Lower agent_message to a user message carrying
+all non-content metadata with an explicit collaboration-context warning; never
+grant it system/developer authority. Use output_text with empty annotations for
+assistant attribution, input_text otherwise. Do not scrub tool arguments/results
+recursively or mutate replay/canonical history. Normalization must be idempotent.
+Image prevalidation recognizes agent_message, but retains the existing carrier,
+size/count, upload and relay rules after normalization.
+
+Sub2API #145 (`8a9c2a4e`) diagnostic alignment adds an optional client-only error
+param for unsupported content, encrypted parts and malformed attributed content.
+Keep original input/content/output indices despite injected messages/tool calls.
+Preserve it in HTTP JSON, SSE response.failed (both error objects, also after
+keepalive), and downstream WS errors. No-param responses keep their prior shape.
+Do not change rejection codes/status, enable retry or native fallback, decrypt
+content, or place opaque error fields in Debug/persistent diagnostics. Regression
+must prove the original author-field rejection with a negative wire control,
+successful normalized sends, preserved context and safe failure locations.
+
 Tool envelopes may be normalized only without guessing tool names or missing values.
 Full history can rebuild a native wrapper; output-only history still requires scoped
 cache evidence. Cached call IDs must match the full canonical client call contents.

@@ -261,7 +261,22 @@ pub fn response_failed_sse_event_with_id(
     code: &str,
     message: &str,
 ) -> String {
-    let data = response_failed_sse_data_with_id(response_id, error_type, code, message);
+    response_failed_sse_event_with_id_and_param(response_id, error_type, code, message, None)
+}
+
+/// 保留结构化参数位置；未指定时保持既有事件格式。
+pub fn response_failed_sse_event_with_id_and_param(
+    response_id: Option<&str>,
+    error_type: &str,
+    code: &str,
+    message: &str,
+    param: Option<&str>,
+) -> String {
+    let mut data = response_failed_sse_data_with_id(response_id, error_type, code, message);
+    if let Some(param) = param {
+        data["error"]["param"] = param.into();
+        data["response"]["error"]["param"] = param.into();
+    }
     encode_sse_event("response.failed", &data.to_string())
 }
 

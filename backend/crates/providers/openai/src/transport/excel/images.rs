@@ -96,7 +96,7 @@ fn image_contents(input: &Value) -> impl Iterator<Item = &Value> {
     input.as_array().into_iter().flatten().filter_map(|item| {
         match item.get("type").and_then(Value::as_str) {
             Some("function_call_output" | "custom_tool_call_output") => item.get("output"),
-            None | Some("message") => item.get("content"),
+            None | Some("message" | "agent_message") => item.get("content"),
             _ => None,
         }
     })
@@ -220,7 +220,8 @@ pub(crate) fn validate_with_limits(
             item.get(if tool { "output" } else { "content" })
                 .unwrap_or(&Value::Null),
             tool,
-            is_user_message(item),
+            is_user_message(item)
+                || item.get("type").and_then(Value::as_str) == Some("agent_message"),
             decode,
             limits,
         )?;

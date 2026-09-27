@@ -178,7 +178,7 @@ pub(super) fn initial_engine_error_event(
         gateway.client_error_type().unwrap_or(default_type),
         gateway.client_error_code().unwrap_or(default_code),
         gateway.client_message(),
-        None,
+        gateway.client_error_param(),
         Some(request_id),
         headers,
     )

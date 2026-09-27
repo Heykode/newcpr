@@ -6,6 +6,9 @@ mod catalog;
 pub(crate) mod diagnostics;
 pub(super) mod encrypted;
 mod envelope;
+mod history_messages;
+#[cfg(test)]
+mod history_tests;
 mod image_cache;
 pub(crate) mod image_generation;
 pub(crate) mod image_relay;

@@ -12,6 +12,37 @@ use gateway_api::openai::error::{
 };
 
 #[tokio::test]
+async fn client_content_error_param_reaches_http_json_without_changing_status() {
+    for param in [
+        None,
+        Some("input[103].content[0]"),
+        Some("input[26].output[2]"),
+    ] {
+        let mut details = ClientVisibleUpstreamError::new(
+            "unsupported history content",
+            Some("excel_unsupported_content".into()),
+            Some("invalid_request_error".into()),
+        );
+        if let Some(param) = param {
+            details = details.with_param(param);
+        }
+        let provider = ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+        )
+        .with_status(400)
+        .with_client_visible_upstream_error(details);
+        let response = gateway_error_response(&GatewayError::from_provider(&provider));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["param"].as_str(), param);
+        assert_eq!(body["error"]["code"], "excel_unsupported_content");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+}
+
+#[tokio::test]
 async fn final_capacity_errors_project_http_status_without_mutating_upstream_facts() {
     use gateway_api::openai::error::engine_error_response;
     use gateway_core::error::ClientVisibleUpstreamResponse;
