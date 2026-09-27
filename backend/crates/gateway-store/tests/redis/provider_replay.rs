@@ -3,6 +3,80 @@ use gateway_store::redis::RedisProviderReplayRepository;
 use serde_json::json;
 
 #[tokio::test]
+async fn excel_tool_receipts_have_independent_capacity_and_idle_lru() {
+    let Some(url) = crate::support::test_env("CPR_TEST_REDIS_URL") else {
+        return;
+    };
+    let mut connection = redis::Client::open(url)
+        .unwrap()
+        .get_connection_manager()
+        .await
+        .unwrap();
+    let namespace = format!("test-tool-replay-{}", uuid::Uuid::new_v4());
+    let store = RedisProviderReplayRepository::new(connection.clone(), &namespace).unwrap();
+    let prefix = format!("{namespace}:{{provider-replay-v1}}");
+    let payload = OpaqueProviderData::new(json!({"item":"synthetic"}).as_object().unwrap().clone());
+    let history_key = format!("{:064x}", 9000);
+    store.write(&history_key, &payload).await.unwrap();
+    let hot = format!("{:064x}", 0);
+    for n in 0..1024 {
+        store
+            .write_tool(&format!("{n:064x}"), &payload)
+            .await
+            .unwrap();
+    }
+    let now: (i64, i64) = redis::cmd("TIME")
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    redis::cmd("ZADD")
+        .arg(format!("{prefix}:tools:expiry"))
+        .arg(now.0 + 5)
+        .arg(&hot)
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(store.read_tool(&hot).await.unwrap(), Some(payload.clone()));
+    let score: i64 = redis::cmd("ZSCORE")
+        .arg(format!("{prefix}:tools:expiry"))
+        .arg(&hot)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert!(score >= now.0 + 7190);
+    // Make a different entry the least recently used, without wall-clock sleeps.
+    let cold = format!("{:064x}", 1);
+    redis::cmd("ZADD")
+        .arg(format!("{prefix}:tools:expiry"))
+        .arg(now.0 + 5)
+        .arg(&cold)
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    store
+        .write_tool(&format!("{:064x}", 1024), &payload)
+        .await
+        .unwrap();
+    assert!(store.read_tool(&cold).await.unwrap().is_none());
+    assert_eq!(store.read_tool(&hot).await.unwrap(), Some(payload.clone()));
+    assert_eq!(
+        store.read(&history_key).await.unwrap(),
+        Some(payload.clone())
+    );
+    assert!(store.read(&hot).await.unwrap().is_none());
+    assert_eq!(store.read_tool(&history_key).await.unwrap(), Some(payload));
+    for part in ["", "tools:"] {
+        for suffix in ["data", "expiry", "sizes"] {
+            redis::cmd("DEL")
+                .arg(format!("{prefix}:{part}{suffix}"))
+                .query_async::<()>(&mut connection)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
 async fn excel_catalog_compare_exchange_preserves_concurrent_winner_and_clear() {
     let Some(url) = crate::support::test_env("CPR_TEST_REDIS_URL") else {
         return;

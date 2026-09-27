@@ -39,6 +39,8 @@ pub(crate) enum ExcelRequestError {
     },
     #[error("unsupported client tool or tool choice for Excel")]
     Tool,
+    #[error("Excel tool catalog changed concurrently; retry this request")]
+    CatalogConflict,
     #[error("Excel returned an undeclared or malformed client tool call")]
     ToolCall,
     #[error("Excel returned a tool outside the client's catalog")]
@@ -99,13 +101,12 @@ pub(crate) fn prepare_request(
     {
         input.push(message("developer", instructions));
     }
-    input.push(message("developer", &tools.instructions()));
-    if let Some(reminder) = tools.reminder() {
-        input.push(message("developer", &reminder));
-    }
+    let mut protocol = tools.instructions();
     if let Some(format) = structured {
-        input.push(message("developer", &format.instructions()));
+        protocol.push('\n');
+        protocol.push_str(&format.instructions());
     }
+    input.push(message("developer", &protocol));
     input.extend(history);
     let mut metadata = Map::new();
     if let Some(values) = source.get("metadata").and_then(Value::as_object) {

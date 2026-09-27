@@ -6,8 +6,25 @@ use super::{OpaqueProviderData, ProviderStoreError, ProviderStoreErrorKind};
 
 pub const MAX_PROVIDER_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 pub const PROVIDER_REPLAY_TTL_SECONDS: u64 = 3600;
+pub const PROVIDER_TOOL_REPLAY_IDLE_SECONDS: u64 = 2 * 3600;
 
 pub trait ProviderReplayPort: Send + Sync {
+    /// Small tool receipts must not compete with complete response snapshots.
+    fn read_tool<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        self.read(key)
+    }
+
+    fn write_tool<'a>(
+        &'a self,
+        key: &'a str,
+        payload: &'a OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        self.write(key, payload)
+    }
+
     /// Optional mutable tool catalogs, separate from immutable response history.
     fn read_catalog<'a>(
         &'a self,
@@ -24,7 +41,12 @@ pub trait ProviderReplayPort: Send + Sync {
         _expected: Option<&'a OpaqueProviderData>,
         _payload: &'a OpaqueProviderData,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
-        Box::pin(async { Ok(false) })
+        Box::pin(async {
+            Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::Unavailable,
+                "provider catalog persistence unsupported",
+            ))
+        })
     }
 
     fn read<'a>(

@@ -110,11 +110,10 @@ async fn persist_completion(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    if let (Some(replay), Some(raw)) = (replay, raw) {
-        replay
-            .commit(&raw, &relay.tools)
-            .await
-            .map_err(|_| protocol("Excel continuation history could not be stored"))?;
+    if let (Some(replay), Some(raw)) = (replay, raw)
+        && replay.commit(&raw, &relay.tools).await.is_err()
+    {
+        tracing::warn!("Excel optional history cache write failed; completion preserved");
     }
     Ok(())
 }
@@ -487,5 +486,53 @@ mod tests {
             prepared.completed.lock().unwrap().as_ref().unwrap()["output"][0]["name"],
             "run_officejs"
         );
+    }
+
+    #[tokio::test]
+    async fn cache_write_failure_preserves_success_and_usage_without_publishing_history() {
+        let source = json!({"input":"hello"});
+        let restored = super::super::replay::restore(
+            Arc::new(gateway_core::provider_ports::UnavailableProviderReplay),
+            "owner".into(),
+            "thread".into(),
+            None,
+            source.as_object().unwrap(),
+        )
+        .await
+        .unwrap();
+        let capture = restored.capture.clone();
+        let prepared = ExcelPreparedRequest {
+            body: Default::default(),
+            tools: restored.tools,
+            structured: None,
+            _image_lease: None,
+            image_limits: Default::default(),
+            completed: Default::default(),
+            usage: Default::default(),
+            replay: Some(restored.capture),
+            endpoint: super::super::RESPONSES_URL.into(),
+        };
+        let event = encode(
+            "response.completed",
+            &json!({
+                "type":"response.completed","response":{
+                    "id":"resp_cache_failure","status":"completed","output":[],
+                    "usage":{"input_tokens":100,"output_tokens":1,"total_tokens":101,"input_tokens_details":{"cached_tokens":90}}
+                }
+            }),
+        );
+        let output = transform_stream(Box::pin(futures::stream::iter([Ok(event)])), &prepared)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .concat();
+        let events = SseEventDecoder::default().push(&output).unwrap();
+        let final_event: Value = serde_json::from_str(&events.last().unwrap().data).unwrap();
+        assert_eq!(final_event["type"], "response.completed");
+        assert_eq!(
+            final_event["response"]["usage"]["input_tokens_details"]["cached_tokens"],
+            90
+        );
+        assert!(!capture.is_persisted());
     }
 }

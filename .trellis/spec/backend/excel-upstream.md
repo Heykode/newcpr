@@ -37,8 +37,10 @@ No retry can cross Codex/Excel. No Excel upstream WS or Codex Cookie/State.
 
 Replay binds Key/account/user/workspace/model; explicit parent means incremental.
 Core publication and Provider storage are separate guards. A provisional record
-must not make a cancelled response a valid parent. TTL is one hour, immutable on
-repeat writes; 8 MiB per record, 2048 entries and 128 MiB aggregate.
+must not make a cancelled response a valid parent. Full snapshot TTL is one hour,
+immutable on repeat writes; 8 MiB per record, 2048 entries and 128 MiB aggregate.
+These are optional storage admission limits, never validity checks on complete
+incoming history. Unstored snapshots must not publish continuation bindings.
 
 Transport observations must retain `excel_http_sse` after generic SSE facts are
 merged, including pre-stream rejection. Record client transport separately.
@@ -158,8 +160,9 @@ recurse into function schemas, change identity/fingerprints or apply it to Excel
 
 The optional image relay belongs to the provider; Core exposes only a neutral download
 capability and API serves bytes. Default off, HTTPS origin only, no filesystem paths,
-random per-request tokens, bounded image/aggregate capacity, five-minute maximum TTL,
-and RAII cleanup on cancellation/completion. Never apply image admission to text or
+scope/content HMAC tokens, bounded image/aggregate capacity, 30-minute default TTL refreshed
+on reuse, and request-slot RAII cleanup on cancellation/completion. Cached bytes
+outlive the request and expire on stage/read or the minute cleanup loop. Never apply image admission to text or
 other providers. Capability routes must not be included in ordinary URI access logs.
 Per-instance temporary data requires an instance-directed public origin.
 
@@ -226,10 +229,10 @@ Keep acceptance limitations in feature documentation and do not claim native par
 `excelImageRelayRequests` is a separate per-instance admission counter, default
 128 (1–512). Only image-bearing relay leases consume it. Lease clones retain a
 single permit until the last clone drops; decode errors release admission.
-Downloads remain 32 by default, independent of request slots. The decoded-byte
+Downloads remain 32 by default, independent of request slots. The disk-byte
 budget defaults to 1024 MiB and cache entries to 512; these are limits, not eager
-allocations. Saved runtime overrides win. Do not silently extend single-image,
-per-request, pixel or TTL limits to match an upstream disk-backed architecture.
+allocations. Saved runtime overrides win. The separate transient decode/download
+memory budget remains 1024 MiB even when disk capacity increases.
 
 ## Optional HTTP 403 Auto-disable
 
@@ -353,15 +356,15 @@ delta, so old history cannot resurrect an explicitly cleared catalog. `none`
 suppresses the current turn without erasing reusable declarations.
 Hints share the response owner isolation and add the trusted session identifier.
 Do not key them by anonymous fallback text. Redis CAS uses a random version nonce,
-one-hour non-sliding read TTL, 1 MiB per item, 512 items and 16 MiB aggregate.
+two-hour idle read TTL, 1 MiB per item, 512 items and 16 MiB aggregate.
 Timeouts are bounded; an explicit request remains usable if persistence fails.
 
 Raw `exec_command.cmd` uses FUNCTION_CMD while raw `code` support takes precedence.
 Do not transform command bytes, relax schema validation, or execute them in CPR.
 Corrections preserve both raw bytes and the other parameter fields.
 
-Image limits extend existing RequestTuning and override storage: 4 MiB per image,
-6 MiB deduplicated inline bytes, 16 references by default. Saved overrides win;
+Image limits extend existing RequestTuning and override storage: 20 MiB per image,
+32 MiB deduplicated inline bytes, 20 references by default. Saved overrides win;
 validate both admin writes and the provider snapshot. Reference count includes
 HTTPS/file IDs; byte checks do not fetch external resources. Replay/request bounds
 remain independent. Upload admission is 32 requests and 60 seconds including wait;
@@ -376,3 +379,102 @@ their recovery policy. Off/native routing is unchanged.
 Capture transport facts as fixed labels only. Terminal business outcomes are
 independent of HTTP status; an unverified completed event is not proof of success.
 Do not copy error strings or URLs into the fixed-label capture facts.
+
+## 13. Cache Admission And Completion
+
+Complete request input does not need to fit or be admitted to the full snapshot
+cache. Missing ID-only history is different: it must still fail explicitly, not
+guess content or cross owner scope. Snapshots above 8 MiB use a level-1 zstd
+envelope with encoding `cpr-excel-replay-zstd-v1`, `decoded_bytes` and Base64 `data`.
+Decode/encode runs on blocking workers; decoded data is limited to 128 MiB and the
+stored envelope to 8 MiB. Verify the actual length, owner and record version.
+Old plain JSON records stay readable. Oversized/incompressible records are not
+stored and cannot publish a continuation binding; full-history requests remain
+valid independently. This is compression, not deduplication or unbounded storage.
+
+Tool receipts use independent 16 MiB / 1024-entry storage with a 1 MiB item limit,
+two-hour idle expiry and access-refreshed eviction scores. Read old shared-space
+receipts for compatibility without writing new receipts there. Complete client
+calls can reconstruct native envelopes after receipt-cache failure; outputs
+without a complete call cannot. Deduplicate reads, use bounded concurrency and
+one two-second budget per read/write phase, not a separate timeout per call.
+
+Optional snapshot-write failure cannot replace a validated upstream completion
+with a protocol error. Preserve genuine usage and downstream event ordering;
+Provider publishes session updates only when the snapshot persisted. This does
+not promise recovery after cache eviction, timeout, cancellation or expiry.
+Delta-only catalog CAS exhaustion returns a conflict after eight attempts;
+explicit declarations remain frozen for that request.
+
+Mixed tool corrections retain valid original parameters when the decoded target
+type/name/namespace is unchanged, adopting only corrected call identities. A
+changed target or extra call remains rejected. Assert both native cached data
+and decoded downstream payload, not just the existence of completion.
+The correction reader's 32 MiB response budget must not reject the input request.
+Keep ordinary ingress/resource limits and the maximum correction count unchanged.
+
+Prompt-cache measurements use actual upstream cached/input tokens, distinct from
+local Redis hits. Separate cold and warm turns, HTTP byte size and token counts.
+Whitespace padding tests byte admission, not high-entropy context limits.
+An upstream token_revoked rejection followed by local no_available_provider is
+an authentication/scheduling observation, not evidence of a context-size limit.
+
+Current local implementation is not a full reference-equivalence claim. Never
+mark live image/concurrency acceptance as passed based only on provider mocks
+or a previously valid test credential.
+
+## 14. Disk Images, Diagnostics And Recovery
+
+Scope: Excel image storage/settings, the existing opt-in 403 diagnostic, and
+fresh quota reset recovery. Do not change selection scores, route fences,
+fingerprints, credentials or configured egress.
+
+Signatures: `excelImageRelayTtlMinutes` defaults to 30 (1..1440); migration 0046
+adds nullable `excel_auto_disabled_at`, projected as `excelAutoDisabledAt`.
+`ProviderCooldownPort::clear_if_observed` compares revision, deadline AND a
+store-owned random observation token. Every valid incoming account cooldown
+rotates the token even when its deadline is equal or shorter; retain the original
+deadline, TTL and write-result semantics. Stale-revision/expired writes do not
+rotate it. Missing legacy tokens cannot authorize recovery. Random generations
+also fence delete/recreate ABA; model scopes and normal successful-clear behavior
+remain unchanged.
+Only Excel-enabled accounts participate in this new quota-reset recovery;
+ordinary Codex accounts neither read nor clear cooldowns via this path.
+
+Contracts: per-image/total bytes each allow up to 128 MiB, disk storage up to
+16 GiB and 65536 entries. Validate effective defaults plus overrides using
+single <= total <= storage and count <= entries. Retain the legacy one-byte
+minimum for saved image budgets. Pixel limit is 64 * 1024 * 1024.
+Private files retain disk and entry permits through active downloads. Decode
+and download memory admission is separate. Disk staging and reads use blocking
+workers, pure text does not. Publish only fully staged batches. Same scoped
+content reuses its HMAC URL and refreshes configured TTL.
+One weak-owned minute task prunes expired entries and abandoned directories.
+Session markers hold OS file locks; only unlocked directories older than the
+fixed 31-minute grace can be removed. Keep live and unmanaged directories.
+Restart changes the random signing key: links are not persistent hosting.
+
+| Condition | Expected |
+| --- | --- |
+| Opt-in HTTP403 disables Excel | Store timestamp in the same fenced transaction |
+| Excel explicitly reopened | Clear timestamp, preserve credential revision |
+| Unrelated patch | Preserve diagnostic time |
+| Fresh explicit zero usage in both 5h/7d windows, allowed and not reached | Clear only the pre-fetch observed cooldown |
+| New cooldown/revision or stale/partial/nonzero quota | Do not clear |
+| Model-scoped cooldown | Do not clear via account reset recovery |
+| Expired image with an active download | Hide new reads, retain permits until body drops |
+| Disk corruption/oversize/unavailable | Bounded failure, no path/credential disclosure |
+
+Good: complete text success survives optional snapshot failure. Base: native
+requests keep their existing transport, scheduling and identity. Bad: treating
+missing relay configuration as permission to delete client images.
+
+Required tests: runtime default/persistence/relationship checks; PostgreSQL
+403 atomicity, unrelated patch and reopen; Redis newer-cooldown fencing; actual
+quota-fetch old/new failure race; disk TTL, corruption, download lifetime,
+orphan/live lock isolation; account badge and narrow viewport rendering.
+
+Wrong: introduce a proxy pool or fallback to native merely to match reference
+Mihomo/hosted-tool policies. Correct: preserve the single configured CPR proxy,
+send-state/error evidence and existing capability warnings; incompatible
+optional policies need separate explicit design, not hidden defaults.

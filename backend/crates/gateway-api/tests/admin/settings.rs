@@ -390,6 +390,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             excel_image_relay_requests: Some(128),
             excel_image_relay_downloads: Some(32),
             excel_image_relay_entries: Some(128),
+            excel_image_relay_ttl_minutes: Some(45),
             openai_location_override_enabled: Some(true),
             max_waiting_per_key: Some(8),
             key_concurrency_wait_timeout_seconds: Some(30),

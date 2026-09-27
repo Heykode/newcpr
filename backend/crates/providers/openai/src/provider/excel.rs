@@ -106,9 +106,22 @@ pub(super) async fn prepare_excel(
     let image_limits = image_tuning.into();
     crate::transport::excel::images::validate_with_limits(&body, false, image_limits)
         .map_err(request_error)?;
-    let image_lease = image_relay
-        .stage_with_tuning(&mut body, image_tuning)
-        .map_err(request_error)?;
+    let image_lease =
+        if image_relay.enabled() && crate::transport::excel::images::has_user_inline(&body) {
+            let relay = Arc::clone(image_relay);
+            let image_scope = format!("{owner}/{}", restored.conversation);
+            let (staged_body, lease) = tokio::task::spawn_blocking(move || {
+                let lease = relay.stage_with_tuning(&mut body, image_tuning, &image_scope)?;
+                Ok::<_, ExcelRequestError>((body, lease))
+            })
+            .await
+            .map_err(|_| request_error(ExcelRequestError::ImageRelay))?
+            .map_err(request_error)?;
+            body = staged_body;
+            lease
+        } else {
+            None
+        };
     crate::transport::excel::images::validate_with_limits(&body, true, image_limits)
         .map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
@@ -131,6 +144,21 @@ pub(super) async fn prepare_excel(
 }
 
 pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
+    if error == ExcelRequestError::CatalogConflict {
+        return provider_error(
+            ProviderErrorKind::InvalidRequest,
+            UpstreamSendState::NotSent,
+        )
+        .with_status(409)
+        .with_upstream_code(OpaqueUpstreamValue::new("excel_tool_catalog_conflict"))
+        .with_client_visible_upstream_error(
+            gateway_core::error::ClientVisibleUpstreamError::new(
+                error.to_string(),
+                Some("excel_tool_catalog_conflict".into()),
+                Some("invalid_request_error".into()),
+            ),
+        );
+    }
     if let ExcelRequestError::ImageInput(message) = error {
         return provider_error(
             ProviderErrorKind::InvalidRequest,

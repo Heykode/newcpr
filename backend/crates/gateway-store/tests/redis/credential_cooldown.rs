@@ -23,6 +23,149 @@ fn credential_cooldown_is_revision_fenced() {
 }
 
 #[tokio::test]
+async fn excel_quota_recovery_cannot_clear_newer_cooldown_or_model_scope() {
+    let Some((repository, _, _)) = repository().await else {
+        return;
+    };
+    let id = ProviderAccountId::new("acct_excel_recovery").unwrap();
+    let current = cooldown(id.as_str(), 2, 30);
+    repository
+        .cache_credential_cooldown(&current)
+        .await
+        .unwrap();
+    let observed = ProviderCooldownPort::read(&repository, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let newer = cooldown(id.as_str(), 2, 60);
+    repository.cache_credential_cooldown(&newer).await.unwrap();
+    assert!(!repository.clear_if_observed(&observed).await.unwrap());
+    let updated = ProviderCooldownPort::read(&repository, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(DateTime::<Utc>::from(updated.until()), newer.cooldown_until);
+    let scope = ProviderCooldownScope::UpstreamModel(
+        gateway_core::routing::UpstreamModelId::new("fixture-model").unwrap(),
+    );
+    repository
+        .put_scoped_if_later(ProviderScopedCooldown::new(
+            id.clone(),
+            CredentialRevision::new(2).unwrap(),
+            scope.clone(),
+            SystemTime::now() + StdDuration::from_secs(60),
+        ))
+        .await
+        .unwrap();
+    assert!(repository.clear_if_observed(&updated).await.unwrap());
+    assert!(
+        ProviderCooldownPort::read(&repository, &id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(repository.read_scoped(&id, &scope).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn excel_quota_recovery_fences_equal_shorter_and_recreated_cooldowns() {
+    let Some((repository, _, _)) = repository().await else {
+        return;
+    };
+    let id = ProviderAccountId::new("acct_excel_recovery_generation").unwrap();
+    let initial = cooldown(id.as_str(), 2, 120);
+    repository
+        .cache_credential_cooldown(&initial)
+        .await
+        .unwrap();
+    for seconds in [0, -30] {
+        let observed = ProviderCooldownPort::read(&repository, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        let repeated = CredentialCooldown {
+            cooldown_until: initial.cooldown_until + Duration::seconds(seconds),
+            ..initial.clone()
+        };
+        assert!(
+            !repository
+                .cache_credential_cooldown(&repeated)
+                .await
+                .unwrap()
+        );
+        assert!(!repository.clear_if_observed(&observed).await.unwrap());
+        let updated = ProviderCooldownPort::read(&repository, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.until(), observed.until());
+        assert_ne!(updated.observation_token(), observed.observation_token());
+    }
+
+    let observed = ProviderCooldownPort::read(&repository, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(repository.clear_if_observed(&observed).await.unwrap());
+    repository
+        .cache_credential_cooldown(&initial)
+        .await
+        .unwrap();
+    assert!(!repository.clear_if_observed(&observed).await.unwrap());
+    let recreated = ProviderCooldownPort::read(&repository, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(recreated.observation_token(), observed.observation_token());
+
+    let stale = cooldown(id.as_str(), 1, 240);
+    assert!(!repository.cache_credential_cooldown(&stale).await.unwrap());
+    let expired = cooldown(id.as_str(), 2, -1);
+    assert!(
+        !repository
+            .cache_credential_cooldown(&expired)
+            .await
+            .unwrap()
+    );
+    assert!(repository.clear_if_observed(&recreated).await.unwrap());
+}
+
+#[tokio::test]
+async fn excel_quota_recovery_does_not_clear_legacy_cooldown_without_generation() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let id = ProviderAccountId::new("acct_excel_recovery_legacy").unwrap();
+    repository
+        .cache_credential_cooldown(&cooldown(id.as_str(), 2, 120))
+        .await
+        .unwrap();
+    let key = namespace_keys(&mut connection, &namespace)
+        .await
+        .into_iter()
+        .find(|key| key.ends_with(":cooldown"))
+        .unwrap();
+    redis::cmd("HDEL")
+        .arg(key)
+        .arg("observation_token")
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    let observed = ProviderCooldownPort::read(&repository, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(observed.observation_token().is_none());
+    assert!(!repository.clear_if_observed(&observed).await.unwrap());
+    assert!(
+        ProviderCooldownPort::read(&repository, &id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn credential_cooldown_round_trips_and_indexes_active_account_without_raw_id_in_keys() {
     let Some((repository, mut connection, namespace)) = repository().await else {
         return;

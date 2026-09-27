@@ -1149,6 +1149,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 apply_failure(&failure_context, &active_account, failure)
                 .await;
             }
+            if request.excel.as_ref().is_some_and(|excel| {
+                excel.replay.as_ref().is_none_or(|replay| !replay.is_persisted())
+            }) && completed {
+                session_capture = None;
+            }
             attach_openai_session_update(&mut events, &mut session_capture);
             if allows_account_state_mutation && completed && terminal_failure.is_none() {
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
@@ -1285,6 +1290,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         )
         .await
         .unwrap_or(false);
+        if request.excel.as_ref().is_some_and(|excel| {
+            excel.replay.as_ref().is_none_or(|replay| !replay.is_persisted())
+        }) && completed {
+            session_capture = None;
+        }
         attach_openai_session_update(&mut events, &mut session_capture);
         let terminal_changed = completed
             && observation_state.mark_completed(terminal_response_is_incomplete(&events));

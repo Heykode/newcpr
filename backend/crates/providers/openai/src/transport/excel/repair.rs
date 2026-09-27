@@ -183,9 +183,6 @@ pub(super) fn correct_unknown<'a>(
              one tool declared in the client catalog and its documented run_officejs transport. \
              Do not call executor-internal helpers as standalone tools. Preserve the original \
              task and use only the declared argument schema."));
-        if serde_json::to_vec(&body).map_err(CodexClientError::RequestBodyEncode)?.len() > MAX_RESPONSE_BYTES {
-            Err(invalid("Excel correction exceeds its request size limit"))?;
-        }
         let mut stream = sender(body).await?;
         let mut reader = read_response(&mut stream, original, &usage, usage_policy);
         let mut event = None;
@@ -317,7 +314,17 @@ fn bind_original_code(
     corrected: &mut [Value],
 ) -> Result<(), CodexClientError> {
     for (before, after) in original.iter().zip(corrected) {
-        if tools.convert_call(before).is_ok() {
+        if let Ok(original) = tools.convert_call(before) {
+            if let Ok(corrected) = tools.convert_call(after)
+                && original["type"] == corrected["type"]
+                && original["name"] == corrected["name"]
+                && original["namespace"] == corrected["namespace"]
+            {
+                let mut bound = before.clone();
+                bound["id"] = after["id"].clone();
+                bound["call_id"] = after["call_id"].clone();
+                *after = bound;
+            }
             continue;
         }
         let Some(args) = arguments(before) else {
@@ -448,7 +455,7 @@ fn extend_request(
     input.push(super::request::message("developer", &format!(
         "The preceding batch failed transport validation before any client tool executed. \
          Return exactly {count} run_officejs calls in the same order, correcting transport only. \
-         Preserve operations and exact source text. CUSTOM requires summary=cpr.custom/CATALOG_NAME \
+         Preserve operations and exact source text. CUSTOM requires summary=codex2api.custom/CATALOG_NAME \
          and raw input in code; FUNCTION_CODE requires summary=codex2api.function_code/CATALOG_NAME, \
          raw code and remaining arguments as JSON in extended_summary. FUNCTION_CMD requires \
          summary=codex2api.function_cmd/CATALOG_NAME, raw command in code and other arguments \
@@ -469,13 +476,6 @@ fn extend_request(
         .and_then(|value| value.checked_add(1))
         .ok_or_else(|| invalid("Excel correction has invalid iteration metadata"))?;
     *iteration = next.to_string().into();
-    if serde_json::to_vec(body)
-        .map_err(CodexClientError::RequestBodyEncode)?
-        .len()
-        > MAX_RESPONSE_BYTES
-    {
-        return Err(invalid("Excel correction exceeds its request size limit"));
-    }
     Ok(())
 }
 
@@ -678,4 +678,61 @@ fn sum_usage(total: &mut Value, usage: &Value) -> Result<(), CodexClientError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn correction_response_budget_does_not_reject_a_large_input_history() {
+        let text = "x".repeat(MAX_RESPONSE_BYTES + 1);
+        let mut body = json!({
+            "input":[{"role":"user","content":text},{"type":"compaction_trigger"}],
+            "metadata":{"agent_iteration":"2"}
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let original = json!({
+            "status":"completed","output":[{
+                "type":"function_call","name":"run_officejs","id":"fc_fixture",
+                "call_id":"call_fixture","arguments":{"summary":"Run","code":"read()"}
+            }]
+        });
+        extend_request(&mut body, &original, 1).unwrap();
+        assert_eq!(body["input"][0]["content"].as_str(), Some(text.as_str()));
+        assert_eq!(body["metadata"]["agent_iteration"], "3");
+        assert_eq!(
+            body["input"].as_array().unwrap().last().unwrap()["type"],
+            "compaction_trigger"
+        );
+    }
+
+    #[test]
+    fn mixed_repair_restores_legal_operation_but_not_a_different_target() {
+        let tools = ClientTools::parse(
+            json!({"tools":[
+                {"type":"function","name":"read"}, {"type":"function","name":"write"}
+            ]})
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap();
+        let call = |name: &str, path: &str, id: &str| {
+            json!({
+                "type":"function_call","name":"run_officejs","id":id,"call_id":id,
+                "arguments":json!({"code":json!({"name":name,"arguments":{"path":path}}).to_string()}).to_string()
+            })
+        };
+        let original = vec![call("read", "original.txt", "old")];
+        let mut corrected = vec![call("read", "changed.txt", "new")];
+        bind_original_code(&tools, &original, &mut corrected).unwrap();
+        assert_eq!(corrected[0]["arguments"], original[0]["arguments"]);
+        assert_eq!(corrected[0]["call_id"], "new");
+        assert!(preserves_operations(&tools, &original, &corrected));
+        let mut wrong_target = vec![call("write", "original.txt", "new")];
+        bind_original_code(&tools, &original, &mut wrong_target).unwrap();
+        assert!(!preserves_operations(&tools, &original, &wrong_target));
+    }
 }

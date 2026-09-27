@@ -4,6 +4,7 @@ import { RefreshCw, UserRound } from '@lucide/vue'
 
 import { computed, shallowRef } from 'vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
@@ -90,6 +91,9 @@ const profileOpen = shallowRef(false)
       </p>
     </div>
 
+    <p v-if="account.responsesUpstream !== 'excel' && account.excelAutoDisabledAt" class="m-0 break-words border-t border-cp-border-secondary pt-3 text-cp-sm text-cp-text-secondary">
+      Excel 因上游 HTTP 403 自动关闭：{{ formatDateTime(account.excelAutoDisabledAt) }}
+    </p>
     <dl v-if="account.responsesUpstream === 'excel'" class="m-0 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-cp-border-secondary pt-3 text-cp-sm max-sm:w-[calc(100vw-5.5rem)]">
       <dt class="text-cp-text-tertiary">
         生成入口

@@ -62,6 +62,7 @@ const tuningValues = {
   excelImageRelayRequests: tuningNumber('excelImageRelayRequests'),
   excelImageRelayDownloads: tuningNumber('excelImageRelayDownloads'),
   excelImageRelayEntries: tuningNumber('excelImageRelayEntries'),
+  excelImageRelayTtlMinutes: tuningNumber('excelImageRelayTtlMinutes'),
   accountBusyWaitStickyMaxWaiting: tuningNumber('accountBusyWaitStickyMaxWaiting'),
   accountBusyWaitStickyTimeoutSeconds: tuningNumber('accountBusyWaitStickyTimeoutSeconds'),
   accountBusyWaitFallbackMaxWaiting: tuningNumber('accountBusyWaitFallbackMaxWaiting'),
@@ -263,16 +264,16 @@ const tuningValues = {
 
       <BaseForm v-if="advancedOpen" class="mt-4 max-w-6xl sm:grid-cols-2">
         <BaseFormItem label="Excel 单张图片上限（字节）">
-          <BaseInput v-model="tuningValues.excelImageMaxBytes.value" aria-label="Excel 单张图片上限" type="number" min="1" max="20971520" step="1" />
+          <BaseInput v-model="tuningValues.excelImageMaxBytes.value" aria-label="Excel 单张图片上限" type="number" min="1" max="134217728" step="1" />
         </BaseFormItem>
         <BaseFormItem label="Excel 请求图片总量上限（字节）" description="内联图片去重后的字节预算；仍受请求正文和会话回放上限约束。">
-          <BaseInput v-model="tuningValues.excelImageTotalBytes.value" aria-label="Excel 请求图片总量上限" type="number" min="1" max="33554432" step="1" />
+          <BaseInput v-model="tuningValues.excelImageTotalBytes.value" aria-label="Excel 请求图片总量上限" type="number" min="1" max="134217728" step="1" />
         </BaseFormItem>
         <BaseFormItem label="Excel 单请求图片数量上限">
           <BaseInput v-model="tuningValues.excelImageMaxCount.value" aria-label="Excel 单请求图片数量上限" type="number" min="1" max="4096" step="1" />
         </BaseFormItem>
         <BaseFormItem label="Excel 图片中转字节预算">
-          <BaseInput v-model="tuningValues.excelImageRelayBytes.value" aria-label="Excel 图片中转字节预算" type="number" min="1048576" max="2147483648" step="1048576" />
+          <BaseInput v-model="tuningValues.excelImageRelayBytes.value" aria-label="Excel 图片中转字节预算" type="number" min="1048576" max="17179869184" step="1048576" />
         </BaseFormItem>
         <BaseFormItem label="Excel 图片中转下载并发">
           <BaseInput v-model="tuningValues.excelImageRelayDownloads.value" aria-label="Excel 图片中转下载并发" type="number" min="1" max="128" step="1" />
@@ -281,7 +282,10 @@ const tuningValues = {
           <BaseInput v-model="tuningValues.excelImageRelayRequests.value" aria-label="Excel 图片在途请求上限" type="number" min="1" max="512" step="1" />
         </BaseFormItem>
         <BaseFormItem label="Excel 图片中转条目上限">
-          <BaseInput v-model="tuningValues.excelImageRelayEntries.value" aria-label="Excel 图片中转条目上限" type="number" min="1" max="4096" step="1" />
+          <BaseInput v-model="tuningValues.excelImageRelayEntries.value" aria-label="Excel 图片中转条目上限" type="number" min="1" max="65536" step="1" />
+        </BaseFormItem>
+        <BaseFormItem label="Excel 图片有效期（分钟）">
+          <BaseInput v-model="tuningValues.excelImageRelayTtlMinutes.value" aria-label="Excel 图片有效期" type="number" min="1" max="1440" step="1" />
         </BaseFormItem>
         <BaseFormItem label="同账号传输失败重试次数" description="同一账号传输失败后最多重试次数，范围 0–100">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />

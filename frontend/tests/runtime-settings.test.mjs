@@ -279,9 +279,10 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       excelImageRelayRequests: 128,
       excelImageRelayDownloads: 32,
       excelImageRelayEntries: 512,
-      excelImageMaxBytes: 4 * 1024 * 1024,
-      excelImageTotalBytes: 6 * 1024 * 1024,
-      excelImageMaxCount: 16,
+      excelImageMaxBytes: 20 * 1024 * 1024,
+      excelImageTotalBytes: 32 * 1024 * 1024,
+      excelImageMaxCount: 20,
+      excelImageRelayTtlMinutes: 30,
       openaiLocationOverrideEnabled: false,
       openaiRequestLocation: null,
       maxWaitingPerKey: 0,
@@ -304,10 +305,11 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
   try {
     await query.state.loadSettings()
     for (const [field, value] of [
-      ['excelImageRelayBytes', 2 * 1024 * 1024],
+      ['excelImageRelayBytes', 64 * 1024 * 1024],
       ['excelImageRelayRequests', 8],
       ['excelImageRelayDownloads', 4],
-      ['excelImageRelayEntries', 16],
+      ['excelImageRelayEntries', 64],
+      ['excelImageRelayTtlMinutes', 90],
       ['excelImageMaxBytes', 8 * 1024 * 1024],
       ['excelImageTotalBytes', 16 * 1024 * 1024],
       ['excelImageMaxCount', 32],
@@ -316,10 +318,11 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     }
     await query.state.saveSettings()
     await query.state.loadSettings()
-    assert.equal(query.state.form.requestTuning.excelImageRelayBytes, 2 * 1024 * 1024)
+    assert.equal(query.state.form.requestTuning.excelImageRelayBytes, 64 * 1024 * 1024)
     assert.equal(query.state.form.requestTuning.excelImageRelayDownloads, 4)
     assert.equal(query.state.form.requestTuning.excelImageRelayRequests, 8)
-    assert.equal(query.state.form.requestTuning.excelImageRelayEntries, 16)
+    assert.equal(query.state.form.requestTuning.excelImageRelayEntries, 64)
+    assert.equal(query.state.form.requestTuning.excelImageRelayTtlMinutes, 90)
     assert.equal(query.state.form.requestTuning.excelImageMaxBytes, 8 * 1024 * 1024)
     assert.equal(query.state.form.requestTuning.excelImageTotalBytes, 16 * 1024 * 1024)
     assert.equal(query.state.form.requestTuning.excelImageMaxCount, 32)
@@ -327,17 +330,19 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
     for (const [field, invalid] of [
       ['excelImageRelayBytes', 1024],
-      ['excelImageRelayBytes', 2048 * 1024 * 1024 + 1],
+      ['excelImageRelayBytes', 16384 * 1024 * 1024 + 1],
       ['excelImageRelayDownloads', 0],
       ['excelImageRelayDownloads', 129],
       ['excelImageRelayRequests', 0],
       ['excelImageRelayRequests', 513],
       ['excelImageRelayEntries', 0],
-      ['excelImageRelayEntries', 4097],
+      ['excelImageRelayEntries', 65537],
+      ['excelImageRelayTtlMinutes', 0],
+      ['excelImageRelayTtlMinutes', 1441],
       ['excelImageMaxBytes', 0],
-      ['excelImageMaxBytes', 20 * 1024 * 1024 + 1],
+      ['excelImageMaxBytes', 128 * 1024 * 1024 + 1],
       ['excelImageTotalBytes', 0],
-      ['excelImageTotalBytes', 32 * 1024 * 1024 + 1],
+      ['excelImageTotalBytes', 128 * 1024 * 1024 + 1],
       ['excelImageMaxCount', 0],
       ['excelImageMaxCount', 4097],
     ]) {
@@ -347,7 +352,19 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
       assert.equal(query.requests.length, 1)
       query.state.form.requestTuning[field] = before
     }
-    assert.equal(warnings.length, 14)
+    assert.equal(warnings.length, 16)
+    for (const [field, invalid] of [
+      ['excelImageRelayBytes', 1024 * 1024],
+      ['excelImageRelayEntries', 16],
+      ['excelImageTotalBytes', 4 * 1024 * 1024],
+    ]) {
+      const before = query.state.form.requestTuning[field]
+      query.state.form.requestTuning[field] = invalid
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 1)
+      query.state.form.requestTuning[field] = before
+    }
+    assert.equal(warnings.length, 19)
   }
   finally {
     query.stop()

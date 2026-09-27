@@ -56,6 +56,7 @@ async function main() {
       items: accounts.map((account, index) => ({
         ...account,
         responsesUpstream: index === 0 && enabled ? 'excel' : 'codex',
+        excelAutoDisabledAt: index === 1 ? '2026-09-27T00:00:00Z' : null,
         excelModels: index === 0 ? excelModels : ['gpt-5.6-sol'],
         excelModelsFollowGlobal: index === 0 ? followGlobal : true,
         effectiveExcelModels: index === 0 && !followGlobal ? excelModels : ['gpt-5.6-sol', 'gpt-6-astra'],
@@ -96,6 +97,9 @@ async function main() {
       return fulfill(route, null)
     })
     await page.goto(`http://127.0.0.1:${port}/accounts`)
+    const disabledBadge = page.getByText('Excel 403 自动关闭', { exact: true })
+    await disabledBadge.waitFor()
+    assert.ok((await disabledBadge.getAttribute('title')).includes('HTTP 403'))
     const more = page.getByRole('button', { name: '更多操作', exact: true }).first()
     await more.click()
     await page.getByRole('button', { name: '开启 Excel 入口', exact: true }).click()
@@ -239,16 +243,37 @@ async function main() {
     const globalModels = page.getByRole('textbox', { name: '全局 Excel 模型', exact: true })
     await globalModels.waitFor()
     assert.equal(await globalModels.inputValue(), 'gpt-5.6-sol, gpt-6-astra')
+    await page.getByRole('button', { name: '请求与连接高级参数', exact: true }).click()
+    for (const [name, value, maximum] of [
+      ['Excel 单张图片上限', '20971520', '134217728'],
+      ['Excel 请求图片总量上限', '33554432', '134217728'],
+      ['Excel 单请求图片数量上限', '20', '4096'],
+      ['Excel 图片中转字节预算', '1073741824', '17179869184'],
+      ['Excel 图片中转条目上限', '512', '65536'],
+      ['Excel 图片有效期', '30', '1440'],
+    ]) {
+      const field = page.getByRole('spinbutton', { name, exact: true })
+      assert.equal(await field.inputValue(), value)
+      assert.equal(await field.getAttribute('max'), maximum)
+    }
+    const imageTtl = page.getByRole('spinbutton', { name: 'Excel 图片有效期', exact: true })
+    await imageTtl.fill('60')
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
       await globalModels.scrollIntoViewIfNeeded()
       assert.ok(await globalModels.evaluate(element => element.getBoundingClientRect().right <= window.innerWidth))
       await page.screenshot({ path: `${output}/excel-global-settings-${width}.png` })
+      await imageTtl.scrollIntoViewIfNeeded()
+      assert.ok(await imageTtl.evaluate(element => element.getBoundingClientRect().right <= window.innerWidth))
+      await page.screenshot({ path: `${output}/excel-image-settings-${width}.png` })
     }
     await globalModels.fill('gpt-6-astra')
     await page.getByRole('button', { name: '保存', exact: true }).click()
     await page.getByText('设置已保存', { exact: true }).waitFor()
     assert.deepEqual(settings.excelDefaultModels, ['gpt-6-astra'])
+    assert.equal(settings.requestTuning.excelImageRelayTtlMinutes, 60)
+    assert.equal(settings.rotationStrategy, 'smart')
+    assert.equal(settings.requestIntervalMs, 25)
     assert.equal(await page.getByText('Local fixture: unsupported operation', { exact: true }).count(), 0)
     assert.deepEqual(errors, [])
     process.stdout.write('Excel menu, inheritance, templates, import, relogin push and responsive layouts passed.\n')

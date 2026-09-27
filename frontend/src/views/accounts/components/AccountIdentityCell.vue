@@ -4,6 +4,7 @@ import { KeyRound, Table2 } from '@lucide/vue'
 import { computed } from 'vue'
 
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import { formatDateTime } from '@/utils/date'
 import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
@@ -13,7 +14,7 @@ type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeD
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
   & Partial<Pick<AccountRow, 'accountId'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
-  & Partial<Pick<AccountRow, 'responsesUpstream'>>
+  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt'>>
 
 const props = withDefaults(
   defineProps<{
@@ -127,6 +128,13 @@ const avatarToneClass = computed(() => {
       </div>
       <div v-if="secondaryText && (customName || metaPosition !== 'secondary' || (!showPlan && !$slots.meta))" class="truncate font-emphasis" :class="secondaryClass" :title="secondaryText">
         {{ secondaryText }}
+      </div>
+      <div
+        v-if="account.responsesUpstream !== 'excel' && account.excelAutoDisabledAt"
+        class="mt-0.5 text-cp-xs text-cp-text-secondary"
+        :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelAutoDisabledAt)}`"
+      >
+        Excel 403 自动关闭
       </div>
     </div>
   </div>

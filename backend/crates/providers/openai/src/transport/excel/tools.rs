@@ -274,7 +274,7 @@ impl ClientTools {
         }
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
-            "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=cpr.custom/CATALOG_NAME and put exact raw input directly in code. \
+            "{CLIENT_TOOL_INSTRUCTIONS}{catalog}\nFor custom tools, prefer summary=codex2api.custom/CATALOG_NAME and put exact raw input directly in code. \
              For other function tools, put exactly one catalog-tool JSON object in code. Never combine calls. {}{}{}{}{warning}",
             if self.serial {
                 "Return at most one client tool call per response; wait for its result before requesting another."
@@ -343,7 +343,7 @@ impl ClientTools {
         };
         let mut outer = envelope::json_value(&native["arguments"])?;
         if spec.kind == "custom" && call["type"] == "custom_tool_call" {
-            outer["summary"] = format!("cpr.custom/{name}").into();
+            outer["summary"] = format!("codex2api.custom/{name}").into();
             outer["code"] = call["input"].clone();
         } else if call["type"] == "function_call"
             && self.supports_function_code(&name)
@@ -489,16 +489,6 @@ impl ClientTools {
                 }
             }
         }
-    }
-
-    pub(crate) fn reminder(&self) -> Option<String> {
-        (!self.specs.is_empty()).then(|| format!(
-            "Reminder: use the outer native run_officejs transport; it never executes Office code here. Function tools use one JSON envelope unless the raw-code contract below applies. Custom tools use summary=cpr.custom/CATALOG_NAME and exact raw code input. The catalog names are: {}. Other native tools are unavailable.{}{}{}",
-            self.specs.keys().cloned().collect::<Vec<_>>().join(", "),
-            self.function_code_instructions(),
-            self.function_cmd_instructions(),
-            self.choice_instructions()
-        ))
     }
 
     pub(crate) fn convert_call(&self, native: &Value) -> Result<Value, ExcelRequestError> {

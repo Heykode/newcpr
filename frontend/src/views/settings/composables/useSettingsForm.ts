@@ -25,12 +25,13 @@ const requestTuningFallbacks: RequestTuning = {
   websocketFailureOpenDurationMs: 30_000,
   rateLimitCooldownSeconds: 60,
   excelImageRelayBytes: 1024 * 1024 * 1024,
-  excelImageMaxBytes: 4 * 1024 * 1024,
-  excelImageTotalBytes: 6 * 1024 * 1024,
-  excelImageMaxCount: 16,
+  excelImageMaxBytes: 20 * 1024 * 1024,
+  excelImageTotalBytes: 32 * 1024 * 1024,
+  excelImageMaxCount: 20,
   excelImageRelayRequests: 128,
   excelImageRelayDownloads: 32,
   excelImageRelayEntries: 512,
+  excelImageRelayTtlMinutes: 30,
   openaiLocationOverrideEnabled: false,
   openaiRequestLocation: null,
   maxWaitingPerKey: 0,
@@ -195,17 +196,24 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
-    if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 20 * 1024 * 1024
-      || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 32 * 1024 * 1024
+    if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 128 * 1024 * 1024
+      || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 128 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageMaxCount) || tuning.excelImageMaxCount < 1 || tuning.excelImageMaxCount > 4096) {
-      toast.warning('单张图片上限须为 1–20971520 字节，请求图片总量须为 1–33554432 字节，图片数量须为 1–4096')
+      toast.warning('单张图片和请求图片总量须为 1–134217728 字节，图片数量须为 1–4096')
       return
     }
-    if (!Number.isInteger(tuning.excelImageRelayBytes) || tuning.excelImageRelayBytes < 1024 * 1024 || tuning.excelImageRelayBytes > 2048 * 1024 * 1024
+    if (!Number.isInteger(tuning.excelImageRelayBytes) || tuning.excelImageRelayBytes < 1024 * 1024 || tuning.excelImageRelayBytes > 16384 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageRelayRequests) || tuning.excelImageRelayRequests < 1 || tuning.excelImageRelayRequests > 512
       || !Number.isInteger(tuning.excelImageRelayDownloads) || tuning.excelImageRelayDownloads < 1 || tuning.excelImageRelayDownloads > 128
-      || !Number.isInteger(tuning.excelImageRelayEntries) || tuning.excelImageRelayEntries < 1 || tuning.excelImageRelayEntries > 4096) {
-      toast.warning('图片预算须为 1–2048 MiB，下载并发须为 1–128，图片条目须为 1–4096')
+      || !Number.isInteger(tuning.excelImageRelayEntries) || tuning.excelImageRelayEntries < 1 || tuning.excelImageRelayEntries > 65536
+      || !Number.isInteger(tuning.excelImageRelayTtlMinutes) || tuning.excelImageRelayTtlMinutes < 1 || tuning.excelImageRelayTtlMinutes > 1440) {
+      toast.warning('图片预算须为 1–16384 MiB，下载并发须为 1–128，条目须为 1–65536，有效期须为 1–1440 分钟')
+      return
+    }
+    if (tuning.excelImageTotalBytes < tuning.excelImageMaxBytes
+      || tuning.excelImageRelayBytes < tuning.excelImageTotalBytes
+      || tuning.excelImageRelayEntries < tuning.excelImageMaxCount) {
+      toast.warning('图片总量不得小于单张上限，中转预算不得小于总量，条目不得小于图片数量')
       return
     }
     if (!Number.isInteger(form.responsesMaxDecompressedBodyBytes)

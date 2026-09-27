@@ -522,7 +522,8 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
         let changed = sqlx::query(
             "update provider_accounts
-             set responses_upstream = 'codex', updated_at = greatest(now(), updated_at)
+             set responses_upstream = 'codex', excel_auto_disabled_at = now(),
+                 updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
                and provider_kind = 'openai' and authentication_kind = 'oauth'
                and responses_upstream = 'excel' and excel_auto_disable_on_403",

@@ -24,6 +24,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         excel_image_relay_requests: Some(128),
         excel_image_relay_downloads: Some(32),
         excel_image_relay_entries: Some(128),
+        excel_image_relay_ttl_minutes: Some(45),
         openai_location_override_enabled: Some(true),
         max_waiting_per_key: Some(8),
         key_concurrency_wait_timeout_seconds: Some(30),
@@ -56,6 +57,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "excelImageRelayRequests": 128,
             "excelImageRelayDownloads": 32,
             "excelImageRelayEntries": 128,
+            "excelImageRelayTtlMinutes": 45,
             "openaiLocationOverrideEnabled": true,
             "openaiRequestLocation": null,
             "maxWaitingPerKey": 8,
@@ -83,9 +85,10 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
     assert_eq!(defaults["excelImageRelayRequests"], 128);
     assert_eq!(defaults["excelImageRelayDownloads"], 32);
     assert_eq!(defaults["excelImageRelayEntries"], 512);
-    assert_eq!(defaults["excelImageMaxBytes"], 4 * 1024 * 1024);
-    assert_eq!(defaults["excelImageTotalBytes"], 6 * 1024 * 1024);
-    assert_eq!(defaults["excelImageMaxCount"], 16);
+    assert_eq!(defaults["excelImageMaxBytes"], 20 * 1024 * 1024);
+    assert_eq!(defaults["excelImageTotalBytes"], 32 * 1024 * 1024);
+    assert_eq!(defaults["excelImageMaxCount"], 20);
+    assert_eq!(defaults["excelImageRelayTtlMinutes"], 30);
     assert_eq!(defaults["accountBusyWaitEnabled"], false);
     assert_eq!(defaults["accountBusyWaitStickyMaxWaiting"], 3);
     assert_eq!(defaults["accountBusyWaitStickyTimeoutSeconds"], 120);
@@ -98,14 +101,21 @@ fn excel_image_limits_validate_inheritance_bounds_and_integer_types() {
     for (field, maximum) in [
         ("excelImageRelayRequests", 512),
         ("excelImageRelayDownloads", 128),
-        ("excelImageRelayEntries", 4096),
-        ("excelImageMaxBytes", 20 * 1024 * 1024),
-        ("excelImageTotalBytes", 32 * 1024 * 1024),
+        ("excelImageRelayEntries", 65536),
+        ("excelImageRelayTtlMinutes", 1440),
+        ("excelImageMaxBytes", 128 * 1024 * 1024),
+        ("excelImageTotalBytes", 128 * 1024 * 1024),
         ("excelImageMaxCount", 4096),
     ] {
         for value in [json!(null), json!(1), json!(maximum)] {
-            let overrides: RequestTuningOverrides =
-                serde_json::from_value(json!({field: value})).unwrap();
+            let mut values = json!({
+                "excelImageMaxBytes":1,
+                "excelImageTotalBytes":134217728,
+                "excelImageMaxCount":1,
+                "excelImageRelayEntries":65536
+            });
+            values[field] = value;
+            let overrides: RequestTuningOverrides = serde_json::from_value(values).unwrap();
             assert!(overrides.validate(), "{field}");
         }
         for value in [0, maximum + 1] {
@@ -119,6 +129,21 @@ fn excel_image_limits_validate_inheritance_bounds_and_integer_types() {
                 "{field}"
             );
         }
+    }
+}
+
+#[test]
+fn excel_image_limits_reject_inconsistent_explicit_capacities() {
+    for value in [
+        json!({"excelImageMaxBytes":200,"excelImageTotalBytes":100}),
+        json!({"excelImageTotalBytes":2_097_152,"excelImageRelayBytes":1_048_576}),
+        json!({"excelImageMaxCount":20,"excelImageRelayEntries":19}),
+    ] {
+        assert!(
+            !serde_json::from_value::<RequestTuningOverrides>(value)
+                .unwrap()
+                .validate()
+        );
     }
 }
 

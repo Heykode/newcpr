@@ -19,7 +19,11 @@ async fn download(
     State(source): State<Arc<dyn TemporaryImageSource>>,
     Path(capability): Path<String>,
 ) -> Response {
-    let Some(image) = source.read(&capability) else {
+    let Some(image) = tokio::task::spawn_blocking(move || source.read(&capability))
+        .await
+        .ok()
+        .flatten()
+    else {
         return (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, "no-store")]).into_response();
     };
     (

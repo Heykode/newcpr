@@ -134,6 +134,8 @@ pub struct RequestTuning {
     pub excel_image_relay_downloads: u32,
     #[serde(default = "default_excel_image_relay_entries")]
     pub excel_image_relay_entries: u32,
+    #[serde(default = "default_excel_image_relay_ttl_minutes")]
+    pub excel_image_relay_ttl_minutes: u32,
     #[serde(default)]
     pub openai_location_override_enabled: bool,
     #[serde(default)]
@@ -161,13 +163,13 @@ const fn default_excel_image_relay_bytes() -> u64 {
 }
 
 const fn default_excel_image_max_bytes() -> u64 {
-    4 * 1024 * 1024
+    20 * 1024 * 1024
 }
 const fn default_excel_image_total_bytes() -> u64 {
-    6 * 1024 * 1024
+    32 * 1024 * 1024
 }
 const fn default_excel_image_max_count() -> u32 {
-    16
+    20
 }
 
 const fn default_excel_image_relay_downloads() -> u32 {
@@ -180,6 +182,10 @@ const fn default_excel_image_relay_requests() -> u32 {
 
 const fn default_excel_image_relay_entries() -> u32 {
     512
+}
+
+const fn default_excel_image_relay_ttl_minutes() -> u32 {
+    30
 }
 
 const fn default_sticky_max_waiting() -> u32 {
@@ -227,6 +233,7 @@ impl RequestTuning {
             excel_image_relay_requests: default_excel_image_relay_requests(),
             excel_image_relay_downloads: default_excel_image_relay_downloads(),
             excel_image_relay_entries: default_excel_image_relay_entries(),
+            excel_image_relay_ttl_minutes: default_excel_image_relay_ttl_minutes(),
             openai_location_override_enabled: false,
             max_waiting_per_key: 0,
             key_concurrency_wait_timeout_seconds: 30,

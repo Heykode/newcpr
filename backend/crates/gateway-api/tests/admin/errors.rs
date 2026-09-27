@@ -501,6 +501,7 @@ mod provider {
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
+                excel_auto_disabled_at: None,
                 excel_models: Default::default(),
                 concurrency_limit: None,
                 weight: AccountWeight::default(),

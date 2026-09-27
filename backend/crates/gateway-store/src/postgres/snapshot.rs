@@ -292,6 +292,9 @@ fn to_core_request_tuning(
         excel_image_relay_entries: overrides
             .excel_image_relay_entries
             .unwrap_or(defaults.excel_image_relay_entries),
+        excel_image_relay_ttl_minutes: overrides
+            .excel_image_relay_ttl_minutes
+            .unwrap_or(defaults.excel_image_relay_ttl_minutes),
         openai_location_override_enabled: overrides
             .openai_location_override_enabled
             .unwrap_or(defaults.openai_location_override_enabled),

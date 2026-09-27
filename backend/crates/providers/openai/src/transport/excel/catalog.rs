@@ -30,7 +30,7 @@ pub(super) async fn resolve(
         .get("input")
         .and_then(Value::as_array)
         .is_some_and(|items| items.iter().any(|item| item["type"] == "additional_tools"));
-    for attempt in 0..4 {
+    for _ in 0..8 {
         let previous = match key
             .as_ref()
             .filter(|_| explicit || additional || inherited.is_none())
@@ -82,9 +82,80 @@ pub(super) async fn resolve(
         .await;
         // Explicit requests keep their own catalog even when a newer writer wins.
         // Only a delta-only update retries against a fresh snapshot.
-        if explicit || inherited.is_some() || attempt == 3 || !matches!(written, Ok(Ok(false))) {
+        if explicit || inherited.is_some() || !matches!(written, Ok(Ok(false))) {
             return Ok((tools, catalog));
         }
     }
-    unreachable!("bounded catalog loop always returns")
+    Err(ExcelRequestError::CatalogConflict)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::future::BoxFuture;
+    use gateway_core::provider_ports::ProviderStoreError;
+
+    struct Contended;
+    impl ProviderReplayPort for Contended {
+        fn read<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn write<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a OpaqueProviderData,
+        ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn compare_exchange_catalog<'a>(
+            &'a self,
+            _: &'a str,
+            _: Option<&'a OpaqueProviderData>,
+            _: &'a OpaqueProviderData,
+        ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+            Box::pin(async { Ok(false) })
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_conflict_is_not_a_successful_delta_merge() {
+        let delta = json!({"input":[{"type":"additional_tools","tools":[{"type":"function","name":"read"}]}]});
+        assert!(matches!(
+            resolve(
+                &Contended,
+                "owner",
+                Some("thread"),
+                None,
+                delta.as_object().unwrap()
+            )
+            .await,
+            Err(ExcelRequestError::CatalogConflict)
+        ));
+        let explicit = json!({"tools":[{"type":"function","name":"read"}],"input":"hello"});
+        assert!(
+            resolve(
+                &Contended,
+                "owner",
+                Some("thread"),
+                None,
+                explicit.as_object().unwrap()
+            )
+            .await
+            .is_ok()
+        );
+        assert!(
+            resolve(
+                &gateway_core::provider_ports::UnavailableProviderReplay,
+                "owner",
+                Some("thread"),
+                None,
+                delta.as_object().unwrap()
+            )
+            .await
+            .is_ok()
+        );
+    }
 }

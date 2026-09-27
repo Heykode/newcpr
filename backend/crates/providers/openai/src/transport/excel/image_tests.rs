@@ -271,7 +271,7 @@ fn excel_image_validation_bounds_inline_bytes_and_ignores_metadata() {
         PNG.replace("image/png", "image/jpeg"),
         format!(
             "data:image/png;base64,{}",
-            "A".repeat(4 * 1024 * 1024 * 4 / 3 + 128)
+            "A".repeat(20 * 1024 * 1024 * 4 / 3 + 128)
         ),
     ] {
         for (kind, field) in [("message", "content"), ("function_call_output", "output")] {
@@ -419,7 +419,7 @@ async fn excel_mixed_tool_and_user_images_relay_without_mutating_history_or_iden
         .await
         .unwrap();
     drop(req);
-    assert!(relay.read(token).is_none());
+    assert!(relay.read(token).is_some());
     let next = replay::restore(
         store,
         "owner".into(),

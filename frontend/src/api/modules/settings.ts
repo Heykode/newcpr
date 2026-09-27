@@ -23,6 +23,7 @@ export interface RequestTuning {
   excelImageRelayRequests: number
   excelImageRelayDownloads: number
   excelImageRelayEntries: number
+  excelImageRelayTtlMinutes: number
   openaiLocationOverrideEnabled: boolean
   openaiRequestLocation: RequestLocation | null
   maxWaitingPerKey: number

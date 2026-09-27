@@ -257,9 +257,9 @@ async fn excel_correction_is_bounded_and_never_leaks_a_partial_batch() {
 }
 
 #[tokio::test]
-async fn excel_correction_rejects_changed_valid_operation_and_extra_calls() {
+async fn excel_correction_restores_valid_operations_and_rejects_extra_calls() {
     use wiremock::ResponseTemplate;
-    for changed in [
+    for (index, changed) in [
         vec![
             native("read", json!({"changed":true})),
             repair_call("fixed", "cpr.custom/exec", "text(1)"),
@@ -269,7 +269,10 @@ async fn excel_correction_rejects_changed_valid_operation_and_extra_calls() {
             repair_call("fixed", "cpr.custom/exec", "text(1)"),
             repair_call("extra", "cpr.custom/exec", "text(2)"),
         ],
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let (text, error, _, completed, requests) = http_repair(
             vec![
                 ResponseTemplate::new(200).set_body_raw(
@@ -290,10 +293,34 @@ async fn excel_correction_rejects_changed_valid_operation_and_extra_calls() {
             false,
         )
         .await;
-        assert!(error.is_some());
-        assert!(completed.is_none());
         assert_eq!(requests.len(), 2);
-        assert!(!text.contains("response.output_item.done"));
+        if index == 0 {
+            assert!(error.is_none(), "{error:?}");
+            let completed = completed.unwrap();
+            assert_eq!(
+                completed["output"][0]["arguments"],
+                native("read", json!({}))["arguments"]
+            );
+            let events = gateway_protocol::openai::sse::SseEventDecoder::default()
+                .push(text.as_bytes())
+                .unwrap();
+            let delivered: Value = events
+                .iter()
+                .filter_map(|event| serde_json::from_str::<Value>(&event.data).ok())
+                .find(|event| event["type"] == "response.completed")
+                .unwrap();
+            let calls = delivered["response"]["output"].as_array().unwrap();
+            assert_eq!(calls.len(), 2);
+            assert_eq!(calls[0]["name"], "read");
+            assert_eq!(calls[0]["arguments"], "{}");
+            assert_eq!(calls[1]["name"], "exec");
+            assert_eq!(calls[1]["input"], "text(1)");
+            assert!(text.contains("response.output_item.done"));
+        } else {
+            assert!(error.is_some());
+            assert!(completed.is_none());
+            assert!(!text.contains("response.output_item.done"));
+        }
     }
 }
 
@@ -1270,7 +1297,7 @@ fn required_and_named_choices_enforce_cardinality_and_exact_identity() {
         {"type":"namespace","name":"workspace","tools":[function(json!({}))]}]);
     let required = parse(json!({"tool_choice":"required","tools":catalog})).unwrap();
     assert!(required.instructions().contains("at least one"));
-    assert!(required.reminder().unwrap().contains("at least one"));
+    assert!(required.instructions().contains("at least one"));
     assert!(required.validate_call_count(0).is_err());
     assert!(required.validate_call_count(2).is_ok());
     let serial =
