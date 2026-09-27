@@ -1307,13 +1307,13 @@ impl CodexCredentialSelector {
             .ok_or(CredentialSelectionError::InvalidCredential)
     }
 
-    pub(crate) async fn disable_excel_on_403(
+    pub(crate) async fn pause_account_on_excel_403(
         &self,
         account: &ProviderAccount,
     ) -> Result<bool, CredentialSelectionError> {
         self.repository
             .store()
-            .disable_excel_on_403(account)
+            .pause_account_on_excel_403(account)
             .await
             .map_err(|_| CredentialSelectionError::Store)
     }

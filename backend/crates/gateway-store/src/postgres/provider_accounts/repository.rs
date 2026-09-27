@@ -143,7 +143,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_auto_disable_on_403,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_auto_disable_on_403, excel_auto_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
@@ -391,7 +391,9 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             .map_err(|_| postgres_unavailable("begin provider account enabled state"))?;
         lock_account_egress_in_transaction(&mut transaction).await?;
         let result = sqlx::query(
-            "update provider_accounts set enabled = $2, updated_at = greatest(now(), updated_at) where id = $1",
+            "update provider_accounts set enabled = $2,
+             excel_auto_disabled_at = case when $2 then null else excel_auto_disabled_at end,
+             updated_at = greatest(now(), updated_at) where id = $1",
         )
         .bind(id)
         .bind(enabled)
@@ -934,6 +936,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             let recovered = sqlx::query_scalar::<_, String>(
                 "update provider_accounts
                  set enabled = true,
+                     excel_auto_disabled_at = null,
                      credential_state = 'ready',
                      credential_observed_at = now(),
                      access_token_expires_at = case
@@ -1311,6 +1314,9 @@ async fn update_provider_accounts_scheduling_in_transaction(
              excel_models_follow_global = coalesce($13, case when $12::text[] is not null then false else excel_models_follow_global end),
              excel_cache_creation_as_input = case when coalesce($11, responses_upstream) = 'codex'
                 then false else coalesce($14, excel_cache_creation_as_input) end,
+             excel_auto_disabled_at = case when $2 is true then null
+                when $11 is not null and $11 <> responses_upstream then null
+                else excel_auto_disabled_at end,
              excel_auto_disable_on_403 = case when $11 = 'codex' then false
                 else coalesce($15, excel_auto_disable_on_403) end
          where id = any($1::text[])

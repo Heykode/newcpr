@@ -55,7 +55,10 @@ async function main() {
     await page.route('**/dev/api/admin/accounts?*', route => fulfill(route, {
       items: accounts.map((account, index) => ({
         ...account,
-        responsesUpstream: index === 0 && enabled ? 'excel' : 'codex',
+        enabled: index === 1 ? false : account.enabled,
+        status: index === 1 ? 'disabled' : account.status,
+        responsesUpstream: (index === 0 && enabled) || index === 1 ? 'excel' : 'codex',
+        excelAutoDisabledAt: index > 0 ? '2026-09-27T00:00:00Z' : null,
         excelModels: index === 0 ? excelModels : ['gpt-5.6-sol'],
         excelModelsFollowGlobal: index === 0 ? followGlobal : true,
         effectiveExcelModels: index === 0 && !followGlobal ? excelModels : ['gpt-5.6-sol', 'gpt-6-astra'],
@@ -63,7 +66,7 @@ async function main() {
         turnState: null,
       })),
       page: { page: 1, pageSize: 20, total: 3, totalPages: 1 },
-      summary: { total: 3, normal: 3, error: 0, disabled: 0, rateLimited: 0, quotaExhausted: 0 },
+      summary: { total: 3, normal: 2, error: 0, disabled: 1, rateLimited: 0, quotaExhausted: 0 },
     }))
     await page.route('**/dev/api/admin/accounts/update', (route) => {
       const body = route.request().postDataJSON()
@@ -96,6 +99,18 @@ async function main() {
       return fulfill(route, null)
     })
     await page.goto(`http://127.0.0.1:${port}/accounts`)
+    const pausedBadge = page.getByText('Excel 403 自动暂停调度', { exact: true })
+    await pausedBadge.waitFor()
+    assert.ok((await pausedBadge.getAttribute('title')).includes('HTTP 403'))
+    assert.ok((await pausedBadge.getAttribute('title')).includes('手动启用账号调度'))
+    await page.getByText('Excel 403 自动关闭', { exact: true }).waitFor()
+    await page.locator('button[title="展开统计"]').nth(1).click()
+    await page.getByText('Excel 上游 HTTP 403，已自动暂停此账号调度：', { exact: false }).waitFor()
+    const resume = page.getByRole('switch', { name: '启用账号调度', exact: true })
+    assert.equal(await resume.isChecked(), false)
+    assert.equal(await resume.isEnabled(), true)
+    await page.screenshot({ path: `${output}/excel-403-paused.png` })
+    await page.locator('button[title="收起统计"]').click()
     const more = page.getByRole('button', { name: '更多操作', exact: true }).first()
     await more.click()
     await page.getByRole('button', { name: '开启 Excel 入口', exact: true }).click()
@@ -122,7 +137,7 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 900 })
     await more.click()
     await page.getByRole('button', { name: '关闭 Excel 入口', exact: true }).click()
-    await page.locator('[aria-label="Excel 入口"]').waitFor({ state: 'detached' })
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Excel 入口"]').length === 1)
     assert.deepEqual(patches[1], { accountIds: [accounts[0].id], responsesUpstream: 'codex' })
     await page.getByRole('button', { name: '编辑账号', exact: true }).first().click()
     const dialog = page.getByRole('dialog')
@@ -154,8 +169,8 @@ async function main() {
     await dialog.getByRole('button', { name: '新建模板', exact: true }).click()
     await dialog.getByRole('textbox', { name: '模板名称', exact: true }).fill('Excel template')
     await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
-    const autoDisable = dialog.getByRole('switch', { name: 'Excel 遇到 HTTP 403 自动关闭', exact: true })
-    await autoDisable.locator('..').click()
+    const autoPause = dialog.getByRole('switch', { name: 'Excel 遇到 HTTP 403 自动暂停此账号调度', exact: true })
+    await autoPause.locator('..').click()
     await dialog.getByRole('combobox', { name: 'Excel 模型来源' }).click()
     await page.getByRole('option', { name: '自定义', exact: true }).click()
     await models.fill('gpt-6-astra')
@@ -252,6 +267,14 @@ async function main() {
     assert.equal(await page.getByText('Local fixture: unsupported operation', { exact: true }).count(), 0)
     assert.deepEqual(errors, [])
     process.stdout.write('Excel menu, inheritance, templates, import, relogin push and responsive layouts passed.\n')
+  }
+  catch (error) {
+    const page = browser?.contexts()[0]?.pages()[0]
+    if (page) {
+      await page.screenshot({ path: `${output}/failure.png` })
+      console.error((await page.locator('body').textContent())?.slice(0, 6000))
+    }
+    throw error
   }
   finally {
     await browser?.close()

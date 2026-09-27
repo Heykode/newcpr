@@ -164,6 +164,7 @@ export interface Account {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelAutoDisableOn403?: boolean
+  excelAutoDisabledAt?: string | null
   effectiveExcelModels?: string[]
   turnState?: {
     enabled?: boolean

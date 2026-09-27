@@ -4,7 +4,7 @@ use super::*;
 use gateway_core::account::ResponsesUpstream;
 
 #[tokio::test]
-async fn excel_auto_disable_403_is_atomic_fenced_and_preserves_other_account_fields() {
+async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_fields() {
     let Some(database) = TestDatabase::create("excel_disable_403").await else {
         return;
     };
@@ -16,11 +16,16 @@ async fn excel_auto_disable_403_is_atomic_fenced_and_preserves_other_account_fie
     let id = ProviderAccountId::new("acct_excel_403").unwrap();
     let initial = repository.get_account(&id).await.unwrap().unwrap();
     assert!(!initial.excel_auto_disable_on_403());
-    assert!(!repository.disable_excel_on_403(&initial).await.unwrap());
+    assert!(
+        !repository
+            .pause_account_on_excel_403(&initial)
+            .await
+            .unwrap()
+    );
     sqlx::query("update provider_accounts set responses_upstream='excel', excel_auto_disable_on_403=true, excel_cache_creation_as_input=true where id=$1")
         .bind(id.as_str()).execute(&database.pool).await.unwrap();
     let frozen = repository.get_account(&id).await.unwrap().unwrap();
-    let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['responses_upstream','updated_at'] from provider_accounts a where id=$1")
+    let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['enabled','excel_auto_disabled_at','updated_at'] from provider_accounts a where id=$1")
         .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
     let revision: i64 =
         sqlx::query_scalar("select config_revision from runtime_settings where id=1")
@@ -31,16 +36,28 @@ async fn excel_auto_disable_403_is_atomic_fenced_and_preserves_other_account_fie
     for _ in 0..16 {
         let repository = repository.clone();
         let frozen = frozen.clone();
-        tasks.spawn(async move { repository.disable_excel_on_403(&frozen).await.unwrap() });
+        tasks.spawn(async move {
+            repository
+                .pause_account_on_excel_403(&frozen)
+                .await
+                .unwrap()
+        });
     }
     let mut changes = 0;
     while let Some(result) = tasks.join_next().await {
         changes += usize::from(result.unwrap());
     }
     assert_eq!(changes, 1);
-    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['responses_upstream','updated_at'] from provider_accounts a where id=$1")
+    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['enabled','excel_auto_disabled_at','updated_at'] from provider_accounts a where id=$1")
         .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
     assert_eq!(before, after);
+    let paused_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("select excel_auto_disabled_at from provider_accounts where id=$1")
+            .bind(id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert!(paused_at.is_some());
     let next_revision: i64 =
         sqlx::query_scalar("select config_revision from runtime_settings where id=1")
             .fetch_one(&database.pool)
@@ -48,32 +65,88 @@ async fn excel_auto_disable_403_is_atomic_fenced_and_preserves_other_account_fie
             .unwrap();
     assert_eq!(next_revision, revision + 1);
     let updated = repository.get_account(&id).await.unwrap().unwrap();
-    assert_eq!(updated.responses_upstream(), ResponsesUpstream::Codex);
+    assert!(!updated.enabled());
+    assert_eq!(updated.responses_upstream(), ResponsesUpstream::Excel);
     assert!(updated.excel_auto_disable_on_403());
     assert!(updated.excel_cache_creation_as_input());
-    sqlx::query("update provider_accounts set responses_upstream='excel', credential_revision=credential_revision+1 where id=$1")
-        .bind(id.as_str()).execute(&database.pool).await.unwrap();
-    assert!(!repository.disable_excel_on_403(&frozen).await.unwrap());
+    assert!(
+        repository
+            .list_for_provider(updated.provider())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    repository.set_enabled(&id, true).await.unwrap();
+    let resumed = repository
+        .load_provider_account(id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(resumed.summary.enabled);
+    assert!(resumed.summary.excel_auto_disabled_at.is_none());
+    assert_eq!(resumed.summary.responses_upstream, ResponsesUpstream::Excel);
+    sqlx::query(
+        "update provider_accounts set credential_revision=credential_revision+1 where id=$1",
+    )
+    .bind(id.as_str())
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    assert!(
+        !repository
+            .pause_account_on_excel_403(&frozen)
+            .await
+            .unwrap()
+    );
     let current = repository.get_account(&id).await.unwrap().unwrap();
     sqlx::query("update provider_accounts set excel_auto_disable_on_403=false where id=$1")
         .bind(id.as_str())
         .execute(&database.pool)
         .await
         .unwrap();
-    assert!(!repository.disable_excel_on_403(&current).await.unwrap());
-    sqlx::query("update provider_accounts set excel_auto_disable_on_403=true where id=$1")
+    assert!(
+        !repository
+            .pause_account_on_excel_403(&current)
+            .await
+            .unwrap()
+    );
+    sqlx::query("update provider_accounts set excel_auto_disable_on_403=true, responses_upstream='codex' where id=$1")
+        .bind(id.as_str()).execute(&database.pool).await.unwrap();
+    assert!(
+        !repository
+            .pause_account_on_excel_403(&current)
+            .await
+            .unwrap()
+    );
+    sqlx::query("update provider_accounts set responses_upstream='excel' where id=$1")
         .bind(id.as_str())
         .execute(&database.pool)
         .await
         .unwrap();
-    assert!(repository.disable_excel_on_403(&current).await.unwrap());
+    assert!(
+        repository
+            .pause_account_on_excel_403(&current)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repository
+            .pause_account_on_excel_403(&current)
+            .await
+            .unwrap()
+    );
     sqlx::query("update provider_accounts set enabled=false where id=$1")
         .bind(id.as_str())
         .execute(&database.pool)
         .await
         .unwrap();
     repository.delete_account(&id).await.unwrap();
-    assert!(!repository.disable_excel_on_403(&current).await.unwrap());
+    assert!(
+        !repository
+            .pause_account_on_excel_403(&current)
+            .await
+            .unwrap()
+    );
     database.close().await;
 }
 
@@ -370,6 +443,87 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap();
     assert!(configured.excel_cache_creation_as_input());
     assert!(configured.excel_auto_disable_on_403());
+    assert!(
+        repository
+            .pause_account_on_excel_403(&configured)
+            .await
+            .unwrap()
+    );
+    let disabled = repository
+        .load_provider_account("acct_excel")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(disabled.summary.excel_auto_disabled_at.is_some());
+    assert!(!disabled.summary.enabled);
+    assert_eq!(
+        disabled.summary.responses_upstream,
+        ResponsesUpstream::Excel
+    );
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                responses_upstream: None,
+                excel_models: None,
+                excel_auto_disable_on_403: None,
+                excel_cache_creation_as_input: None,
+                ..command.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .load_provider_account("acct_excel")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .excel_auto_disabled_at,
+        disabled.summary.excel_auto_disabled_at
+    );
+    store
+        .batch_update_accounts(command.clone(), &context)
+        .await
+        .unwrap();
+    let reopened = repository
+        .load_provider_account("acct_excel")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!reopened.summary.enabled);
+    assert_eq!(
+        reopened.summary.excel_auto_disabled_at,
+        disabled.summary.excel_auto_disabled_at
+    );
+    assert_eq!(
+        reopened.summary.responses_upstream,
+        ResponsesUpstream::Excel
+    );
+    assert_eq!(
+        reopened.summary.credential_revision,
+        disabled.summary.credential_revision
+    );
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                enabled: Some(true),
+                ..command.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    let resumed = repository
+        .load_provider_account("acct_excel")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(resumed.summary.enabled);
+    assert!(resumed.summary.excel_auto_disabled_at.is_none());
+    assert_eq!(resumed.summary.responses_upstream, ResponsesUpstream::Excel);
+    assert!(resumed.summary.excel_auto_disable_on_403);
     assert_eq!(
         configured.responses_upstream_for_model("gpt-6-astra"),
         ResponsesUpstream::Excel
