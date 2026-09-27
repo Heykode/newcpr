@@ -175,6 +175,7 @@ where
         );
         let image_generation_requested = operation.image_generation_requested();
         let mut session = ResponseExecutionSession {
+            response_control: super::response_control::ResponseControl::default(),
             engine: Arc::clone(&self.engine),
             request_id,
             client_api_key_ref,
@@ -289,6 +290,7 @@ struct PendingAttemptRetry {
 /// API 只能提交下游 delivery 边界；账号重试、断流终结与
 /// `model_requests` 写回均留在本类型内。
 pub struct ResponseExecutionSession<S: ?Sized> {
+    response_control: super::response_control::ResponseControl,
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
     client_api_key_ref: crate::policy::ClientApiKeyId,
@@ -376,6 +378,11 @@ where
     /// 当前请求共享的诊断上下文。
     pub fn trace(&self) -> TraceContext {
         self.trace.clone()
+    }
+
+    #[must_use]
+    pub fn response_control(&self) -> super::response_control::ResponseControl {
+        self.response_control.clone()
     }
 
     /// 读取下一条 canonical event；首条未提交事件会携带 commit 要求。
@@ -914,6 +921,7 @@ where
         }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_response_control(Some(self.response_control.clone()))
                 .with_provider_route(Arc::clone(
                     self.provider_routes
                         .entry(candidate.provider().clone())

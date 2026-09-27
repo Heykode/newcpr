@@ -726,6 +726,7 @@ pub struct CodexBackendJsonResponse {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     pub(super) client: Client,
     pub(super) direct_client: Client,
     pub(super) base_url: String,
@@ -744,6 +745,14 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_response_control(
+        mut self,
+        control: Option<gateway_core::engine::response_control::ResponseControl>,
+    ) -> Self {
+        self.response_control = control;
+        self
+    }
+
     pub(crate) fn request_profile(
         &self,
     ) -> Result<gateway_core::account::OpaqueProviderData, serde_json::Error> {

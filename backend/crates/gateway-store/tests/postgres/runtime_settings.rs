@@ -339,6 +339,13 @@ async fn request_tuning_overrides_should_round_trip() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let mut update = settings_with_margin(3_600);
     update.request_tuning = RequestTuningOverrides {
+        smart_scheduling: Some(
+            gateway_core::account::smart_scheduling::SmartSchedulingConfig::new(
+                [2.5, 0.4, 1.0, 0.2, 0.5, 0.7],
+                true,
+            )
+            .unwrap(),
+        ),
         openai_request_location: Some(gateway_core::account::RequestLocation::default()),
         openai_location_override_enabled: Some(true),
         max_waiting_per_key: Some(8),

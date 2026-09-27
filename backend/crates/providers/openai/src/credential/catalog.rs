@@ -115,7 +115,13 @@ impl CodexPlanCatalog {
 pub struct CodexCredentialCatalogSnapshot {
     observed_at: SystemTime,
     models: Vec<CodexCatalogModel>,
-    scope_models: BTreeMap<CodexCatalogScope, Vec<String>>,
+    scope_models: BTreeMap<CodexCatalogScope, CatalogScopeSnapshot>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct CatalogScopeSnapshot {
+    models: Vec<String>,
+    accounts: BTreeSet<ProviderAccountId>,
 }
 
 impl CodexCredentialCatalogSnapshot {
@@ -134,7 +140,24 @@ impl CodexCredentialCatalogSnapshot {
         account: &ProviderAccount,
     ) -> Result<Option<&[String]>, CodexCredentialCatalogError> {
         let scope = CodexCatalogScope::for_account(account)?;
-        Ok(self.scope_models.get(&scope).map(Vec::as_slice))
+        Ok(self
+            .scope_models
+            .get(&scope)
+            .map(|catalog| catalog.models.as_slice()))
+    }
+
+    #[must_use]
+    pub fn model_catalog_accounts(&self) -> BTreeMap<&str, BTreeSet<ProviderAccountId>> {
+        let mut accounts = BTreeMap::<&str, BTreeSet<ProviderAccountId>>::new();
+        for catalog in self.scope_models.values() {
+            for model in &catalog.models {
+                accounts
+                    .entry(model.as_str())
+                    .or_default()
+                    .extend(catalog.accounts.iter().cloned());
+            }
+        }
+        accounts
     }
 }
 
@@ -593,6 +616,10 @@ impl CodexCredentialCatalogService {
         let mut scope_models = BTreeMap::new();
         let mut etags = Vec::new();
         for (scope, candidates) in groups {
+            let accounts = candidates
+                .iter()
+                .map(|account| account.id().clone())
+                .collect();
             let fetched = self.fetch_scope_models(&client, candidates).await?;
             let entitlement = model_ids(&fetched.models);
             self.replace_plan_catalog(&CodexPlanCatalog::new(
@@ -611,7 +638,13 @@ impl CodexCredentialCatalogService {
                     Entry::Occupied(_) => {}
                 }
             }
-            scope_models.insert(scope, entitlement);
+            scope_models.insert(
+                scope,
+                CatalogScopeSnapshot {
+                    models: entitlement,
+                    accounts,
+                },
+            );
             etags.extend(fetched.etag);
         }
         let observed_at = SystemTime::now();

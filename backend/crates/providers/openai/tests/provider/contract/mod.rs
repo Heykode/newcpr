@@ -509,6 +509,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
         "acct_header_old",
         "acct_header_same",
         "acct_http_sse_exhausted",
+        "acct_large_replay",
         "acct_local_affinity",
         "acct_metadata_new",
         "acct_metadata_old",
@@ -3853,6 +3854,308 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
     assert!(body.pointer("/client_metadata/installation_id").is_none());
     assert!(body["client_metadata"]["x-codex-installation-id"].is_string());
     assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
+}
+
+#[tokio::test]
+async fn account_switch_drops_parent_response_but_preserves_nested_metadata() {
+    for owner in ["acct_scope_new", "acct_scope_old"] {
+        let request = capture_scoped_http_request(
+            "req_scope_parent",
+            "acct_scope_new",
+            owner,
+            json!({"model":"gpt-5.4","input":"hello","client_metadata":{
+                "parent_response_id":"resp_old", "future":{"parent_response_id":"opaque"}
+            }})
+            .as_object()
+            .unwrap()
+            .clone(),
+            Map::from_iter([(
+                "opaque_request_headers".to_owned(),
+                json!([
+                    [
+                        "x-openai-account-routing-override",
+                        STANDARD.encode("untrusted")
+                    ],
+                    ["x-openai-fedramp", STANDARD.encode("untrusted")]
+                ]),
+            )]),
+        )
+        .await;
+        let body = captured_request_body(&request);
+        assert_eq!(
+            body["client_metadata"]["future"]["parent_response_id"],
+            "opaque"
+        );
+        if owner == "acct_scope_new" {
+            assert_eq!(body["client_metadata"]["parent_response_id"], "resp_old");
+        } else {
+            assert!(body["client_metadata"].get("parent_response_id").is_none());
+        }
+        assert!(captured_header_values(&request, "x-openai-account-routing-override").is_empty());
+        assert!(captured_header_values(&request, "x-openai-fedramp").is_empty());
+    }
+}
+
+#[tokio::test]
+async fn websocket_interrupt_is_sent_on_owner_socket_and_retires_after_terminal() {
+    use gateway_core::engine::response_control::{ResponseControl, ResponseInterruptError};
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_new").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_codex_test_websocket(socket).await;
+        assert!(ws.next().await.unwrap().unwrap().is_text());
+        ws.send(Message::Text(
+            json!({"type":"response.created","response":{
+                "id":"resp_interrupt_owner","model":"gpt-5.4","status":"in_progress"
+            }})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        let frame = timeout(Duration::from_secs(10), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let interrupt: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+        assert_eq!(
+            interrupt,
+            json!({"type":"response.interrupt","response_id":"resp_interrupt_owner","mode":"discard_partial_items"})
+        );
+        ws.send(Message::Text(
+            json!({"type":"response.incomplete","response":{
+                "id":"resp_interrupt_owner","model":"gpt-5.4","status":"incomplete","output":[],
+                "incomplete_details":{"reason":"interrupted"},
+                "usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}
+            }})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        let next = timeout(Duration::from_secs(10), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let next: Value = serde_json::from_str(next.to_text().unwrap()).unwrap();
+        assert_eq!(next["previous_response_id"], "resp_interrupt_owner");
+        ws.send(Message::Text(
+            json!({"type":"response.completed","response":{
+                "id":"resp_after_interrupt","model":"gpt-5.4","status":"completed","output":[],
+                "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+            }})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+    });
+    let control = ResponseControl::default();
+    let attempt = AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new("req_interrupt_owner").unwrap(),
+            ClientApiKeyId::new("key_openai_contract").unwrap(),
+        )
+        .with_response_control(Some(control.clone())),
+        NonZeroU32::MIN,
+        SystemTime::now() + Duration::from_secs(20),
+        account_policy(),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    );
+    let provider = provider_with_base_url(&store, base_url);
+    let mut stream = provider
+        .execute(
+            planned_request(
+                "openai",
+                Operation::Generate(websocket_fixture_request(
+                    generate_with_persisted_session_context(
+                        "acct_scope_new",
+                        "interrupt-conversation",
+                        "interrupt-session",
+                        "interrupt-thread",
+                    ),
+                )),
+            ),
+            attempt,
+        )
+        .await
+        .unwrap();
+    let sender = async {
+        for _ in 0..200 {
+            match control.interrupt("wrong_response") {
+                Err(ResponseInterruptError::ResponseMismatch) => {
+                    control.interrupt("resp_interrupt_owner").unwrap();
+                    control.interrupt("resp_interrupt_owner").unwrap();
+                    return;
+                }
+                Err(ResponseInterruptError::Unavailable) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                Ok(()) => panic!("wrong response accepted"),
+            }
+        }
+        panic!("response control never activated");
+    };
+    let mut session_state = None;
+    let receiver = async {
+        let mut terminal = false;
+        while let Some(event) = stream.next().await {
+            let event = event.unwrap();
+            if let Some(update) = event.session_update() {
+                session_state = Some(update.clone());
+            }
+            terminal |= event
+                .wire_event()
+                .is_some_and(|wire| wire.event_type() == Some("response.incomplete"));
+        }
+        assert!(terminal);
+    };
+    timeout(Duration::from_secs(15), async {
+        tokio::join!(sender, receiver);
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        control.interrupt("resp_interrupt_owner"),
+        Err(ResponseInterruptError::Unavailable)
+    );
+    let session_state = session_state.expect("interrupted response publishes continuation");
+    assert_eq!(
+        session_state.payload()["continuation_scope"],
+        "connection_local"
+    );
+    let continuation = GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4","input":"continue","previous_response_id":"resp_interrupt_owner"})
+                .as_object().unwrap().clone(),
+        ).unwrap(),
+    ).with_provider_session_state(session_state);
+    let mut next = provider
+        .execute(
+            planned_request("openai", Operation::Generate(continuation)),
+            pinned_continuation_context(
+                "req_after_interrupt",
+                "acct_scope_new",
+                "resp_interrupt_owner",
+                "resp_interrupt_owner",
+                1,
+                ContinuationAttempt::Native,
+            ),
+        )
+        .await
+        .unwrap();
+    let mut completed = false;
+    while let Some(event) = timeout(Duration::from_secs(10), next.next()).await.unwrap() {
+        completed |= event
+            .unwrap()
+            .wire_event()
+            .is_some_and(|wire| wire.event_type() == Some("response.completed"));
+    }
+    assert!(completed);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn oversized_websocket_new_chain_requires_full_replay_after_http_store_false() {
+    let _guard = crate::support::LARGE_PAYLOAD_TEST_LOCK.lock().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_large_replay").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(CAPTURE_COMPLETED_SSE),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let operation = |previous: Option<&str>| {
+        let input = if previous.is_none() {
+            "x".repeat(15 * 1024 * 1024)
+        } else {
+            "delta".to_owned()
+        };
+        let mut body = json!({"model":"gpt-5.4","input":input,"store":false})
+            .as_object()
+            .unwrap()
+            .clone();
+        if let Some(previous) = previous {
+            body.insert("previous_response_id".to_owned(), json!(previous));
+        }
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", body)
+                .unwrap()
+                .with_context(Map::from_iter([(
+                    "downstream_websocket_connection_id".to_owned(),
+                    json!("large-fixture"),
+                )])),
+        )
+    };
+    let mut stream = provider
+        .execute(
+            planned_request("openai", Operation::Generate(operation(None))),
+            context("req_large_replay_seed", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    let mut state = None;
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        let event = event.unwrap();
+        if let Some(update) = event.session_update() {
+            state = Some(update.clone());
+        }
+        completed |= event
+            .wire_event()
+            .is_some_and(|wire| wire.event_type() == Some("response.completed"));
+    }
+    assert!(completed);
+    let state = state.expect("HTTP scope captured");
+    assert_eq!(state.payload()["continuation_scope"], "replay_required");
+    let result = provider
+        .execute(
+            planned_request(
+                "openai",
+                Operation::Generate(
+                    operation(Some("resp_scope_capture")).with_provider_session_state(state),
+                ),
+            ),
+            pinned_continuation_context(
+                "req_large_replay_delta",
+                "acct_large_replay",
+                "resp_scope_capture",
+                "resp_scope_capture",
+                1,
+                ContinuationAttempt::Native,
+            ),
+        )
+        .await;
+    let Err(error) = result else {
+        panic!("delta continuation must be rejected before send")
+    };
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(
+        error.continuation_recovery_disposition(),
+        Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
 #[tokio::test]

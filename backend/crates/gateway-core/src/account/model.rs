@@ -1121,7 +1121,6 @@ impl ProviderRefreshQuery {
     #[must_use]
     pub fn contains(&self, account: &ProviderAccount) -> bool {
         account.provider() == &self.provider
-            && account.enabled()
             && account.has_refresh_token()
             && !self.excluded_account_ids.contains(account.id())
             && if account.needs_authentication_refresh() {

@@ -510,6 +510,47 @@ async fn raw_instructions_only_change_advances_catalog_generation() {
 }
 
 #[tokio::test]
+async fn catalog_source_changes_advance_generation_even_when_models_are_unchanged() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let original = seed_account(&store, "acct_catalog_original").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            br#"{"models":[{"slug":"gpt-native","display_name":"Native"}]}"#.to_vec(),
+            "application/json",
+        ))
+        .expect(3)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+    let initial = service.synchronize().await.unwrap();
+    assert_eq!(
+        initial.model_catalog_accounts()["gpt-native"],
+        [original.id().clone()].into()
+    );
+    let generation = service.catalog_generation();
+    let added = seed_account(&store, "acct_catalog_added").await;
+    service.refresh_catalogs().await.unwrap();
+    assert!(service.catalog_generation() > generation);
+    let expanded = service.synchronize().await.unwrap();
+    assert_eq!(
+        expanded.model_catalog_accounts()["gpt-native"],
+        [original.id().clone(), added.id().clone()].into()
+    );
+    let generation = service.catalog_generation();
+    store.set_enabled(original.id(), false).await.unwrap();
+    service.refresh_catalogs().await.unwrap();
+    assert!(service.catalog_generation() > generation);
+    let shrunk = service.synchronize().await.unwrap();
+    assert_eq!(
+        shrunk.model_catalog_accounts()["gpt-native"],
+        [added.id().clone()].into()
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn client_catalog_evicts_old_entries_after_32_distinct_versions() {
     let store = Arc::new(MemoryAccountStore::default());
     let account = seed_account(&store, "acct_client_bounded").await;

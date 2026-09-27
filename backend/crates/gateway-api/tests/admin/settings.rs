@@ -82,6 +82,7 @@ fn update_body() -> Value {
         }
     });
     body["requestTuning"]["excelImageRelayBytes"] = Value::Null;
+    body["requestTuning"]["smartScheduling"] = Value::Null;
     body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
     body["requestTuning"]["excelImageRelayDownloads"] = Value::Null;
     body["requestTuning"]["excelImageRelayEntries"] = Value::Null;
@@ -371,6 +372,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         ops_event_retention_days: 31,
         audit_retention_days: 91,
         request_tuning: RequestTuningOverrides {
+            smart_scheduling: None,
             openai_request_location: None,
             max_account_switches: Some(7),
             max_request_attempts: Some(8),
@@ -453,6 +455,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         "updatedAt": "2026-08-02T10:30:00Z"
     });
     expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
+    expected["requestTuning"]["smartScheduling"] = Value::Null;
     expected["requestTuning"]["excelImageRelayRequests"] = json!(128);
     expected["requestTuning"]["excelImageRelayDownloads"] = json!(32);
     expected["requestTuning"]["excelImageRelayEntries"] = json!(128);

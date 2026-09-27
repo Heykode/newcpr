@@ -608,6 +608,15 @@ impl RedisProviderLeaseCoordinator {
 }
 
 impl ProviderLeasePort for RedisProviderLeaseCoordinator {
+    fn load_waiting_counts<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+    ) -> futures::future::BoxFuture<'a, Result<BTreeMap<ProviderAccountId, u32>, ProviderStoreError>>
+    {
+        Box::pin(self.capacity_wait.waiting_counts(accounts))
+    }
+
     fn try_acquire_scheduling(
         &self,
         request: ProviderSchedulingLeaseRequest,
