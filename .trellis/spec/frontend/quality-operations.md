@@ -14,10 +14,28 @@
 - Render answers and judge explanations as escaped text, never raw HTML/Markdown.
   Keep requested and returned model separate. Capture the round's original prompt
   and reference so later rule edits do not misrepresent past scores.
-- Browser coverage must include creating through real dropdowns (not just editing
+- Browser coverage must include creating through real selectors (not just editing
   text), pause, queue deduplication, delete, failed history refresh, both themes,
   and 1440/390/320px bounds. Preview samples are not live model results.
 - Render narrow-screen history as individual records with time, verdict and counts;
   do not force sideways scrolling for core results. Paused rule status is neutral,
   regardless of the previous verdict. Set screenshot animations to disabled so
   theme-transition frames are not mistaken for settled colors.
+- Rule account and judge-group pickers load immediately into bounded, scrollable
+  lists. Account creation supports multiple checkboxes (one rule per account), while
+  judge group remains single-choice. Search is optional; pagination must allow selecting beyond
+  the first 50 records. Fence stale searches and preserve the selected item across
+  filters. Load, failure/retry, and a successful empty result are distinct states.
+- Account and enabled judge-group catalogs have independent requests/errors;
+  searching or failing one must not clear or cancel the other. Editing a rule
+  keeps its account immutable. Do not place a whole picker inside one FormItem.
+- Scheduling presets serialize to the existing five-field Cron contract. The
+  default stays `0 */6 * * *`, evaluated in the chosen timezone; daily time is
+  minute-precise. Preserve arbitrary existing Cron expressions in advanced mode
+  without rewriting them on open. Repetitions are 1–8 parallel answers per round,
+  bounded by normal account concurrency and interval. Disabled rules cannot trigger
+  manually and saving a rule does not immediately run it.
+- Failed batch creation preserves successes, leaves only failed accounts selected,
+  and retries without duplicating completed rules. Failure-action groups are separate
+  from the judge group and may include disabled groups. Optional auto_restore is off
+  by default. Show persisted action/recovery outcomes, not inferred status changes.

@@ -65,7 +65,10 @@ impl DaemonTask for QualityWorker {
                     }
                 }
             };
-            tokio::join!(lane(), lane(), cleanup);
+            let lanes = futures::future::join_all(
+                (0..crate::model::quality_ops::QUALITY_MAX_WORKERS).map(|_| lane()),
+            );
+            tokio::join!(lanes, cleanup);
             Ok(())
         })
     }

@@ -427,6 +427,8 @@ pub enum AccountEligibilityPolicy {
     #[default]
     Enforce,
     BypassForDiagnostic,
+    /// Provider must verify persistent quality ownership for the pinned account first.
+    IgnoreQualityPause,
 }
 
 impl AccountEligibilityPolicy {
@@ -806,7 +808,12 @@ impl AccountSelector {
         if !context.eligibility.bypasses_local_eligibility() {
             let status = candidate
                 .account
-                .status_projection(context.now, candidate.signals.rate_limited_until)
+                .status_with_scheduling(
+                    context.now,
+                    candidate.signals.rate_limited_until,
+                    candidate.account.enabled()
+                        || context.eligibility == AccountEligibilityPolicy::IgnoreQualityPause,
+                )
                 .status;
             if status != AccountStatus::Normal {
                 return Some(AccountSchedulingBlocker::LocalAvailability);

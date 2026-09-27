@@ -162,6 +162,7 @@ pub struct AccountAttemptContext {
     state_owner: Option<ProviderAccountStateOwner>,
     credential_recovery_attempted: bool,
     diagnostic_required_account: bool,
+    quality_check: bool,
     account_scope: Option<Arc<crate::account::scope::FrozenAccountScope>>,
 }
 
@@ -178,6 +179,7 @@ impl AccountAttemptContext {
             state_owner,
             credential_recovery_attempted: false,
             diagnostic_required_account: false,
+            quality_check: false,
             account_scope: None,
         }
     }
@@ -197,6 +199,7 @@ impl AccountAttemptContext {
             state_owner,
             credential_recovery_attempted: false,
             diagnostic_required_account: true,
+            quality_check: false,
             account_scope: None,
         }
     }
@@ -242,6 +245,11 @@ impl AccountAttemptContext {
     #[must_use]
     pub const fn is_diagnostic_required_account(&self) -> bool {
         self.diagnostic_required_account
+    }
+
+    pub(crate) const fn with_quality_check(mut self, quality: bool) -> Self {
+        self.quality_check = quality;
+        self
     }
 
     #[must_use]
@@ -605,6 +613,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn is_diagnostic_required_account(&self) -> bool {
         self.account.is_diagnostic_required_account()
+    }
+
+    #[must_use]
+    pub const fn is_quality_check(&self) -> bool {
+        self.account.quality_check
     }
 
     /// 普通请求认证时冻结的账号范围；管理端诊断为 `None`。

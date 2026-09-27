@@ -1,4 +1,4 @@
-//! Scheduled answer checks, isolated from automatic account-management actions.
+//! Scheduled answer checks through current account transport, with opt-in quality policy.
 
 use std::{
     str::FromStr as _,
@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use futures::{StreamExt as _, stream};
 use gateway_core::{
     account::ProviderAccountId,
     engine::probe::{AccountProbe, AccountProbeRequest, AccountProbeResult},
@@ -72,6 +73,19 @@ fn validate(config: &QualityRuleConfig) -> Result<(), AdminError> {
     }
     if !(1..=8).contains(&config.repetitions) {
         return Err(AdminError::invalid("每轮检测次数必须为1至8"));
+    }
+    let groups = config
+        .failure_group_ids
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if groups.len() != config.failure_group_ids.len()
+        || groups.len() > 100
+        || groups
+            .iter()
+            .any(|id| AccountGroupId::new(id.as_str()).is_err())
+        || (config.failure_action == QualityFailureAction::RemoveGroups && groups.is_empty())
+    {
+        return Err(AdminError::invalid("请选择有效且不重复的处置分组"));
     }
     if config.reasoning_effort.as_deref().is_some_and(|effort| {
         !["none", "minimal", "low", "medium", "high", "xhigh", "max"].contains(&effort)
@@ -236,6 +250,9 @@ impl QualityOpsService {
         judge_group: Option<&str>,
         cancellation: CancellationToken,
     ) -> Result<AccountProbeResult, AdminError> {
+        if cancellation.is_cancelled() {
+            return Err(AdminError::unavailable("检测已取消"));
+        }
         let item = self
             .accounts
             .load_account(account_id, AccountRuntimeSnapshot::default())
@@ -362,72 +379,73 @@ impl QualityOpsService {
         cancellation: CancellationToken,
     ) -> Vec<QualityAnswer> {
         let config = &claim.rule.config;
-        let mut answers = Vec::new();
-        for index in 1..=config.repetitions {
-            if cancellation.is_cancelled() {
-                break;
-            }
-            let started = Instant::now();
-            let result = self
-                .request(
-                    &config.account_id,
-                    &config.model,
-                    &config.prompt,
-                    config.reasoning_effort.as_deref(),
-                    None,
-                    cancellation.clone(),
-                )
-                .await;
-            let mut answer = QualityAnswer {
-                index,
-                answer: String::new(),
-                verdict: QualityVerdict::RequestError,
-                reason: String::new(),
-                elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                returned_model: None,
-                judge_account_id: None,
-            };
-            match result {
-                Ok(result) => {
-                    answer.answer = result.text.concat();
-                    answer.returned_model = result.upstream_response_model;
-                    answer.verdict = QualityVerdict::Unknown;
-                    if answer.answer.trim().is_empty() {
-                        answer.reason = "上游未返回文本，不能确定答案质量".to_owned();
-                        answers.push(answer);
-                        continue;
-                    }
-                    let judge_cancel = CancellationToken::new();
-                    let judging = self.judge(config, &answer.answer, judge_cancel.clone());
-                    tokio::pin!(judging);
-                    let result = tokio::select! {
-                        result = &mut judging => Some(result),
-                        () = cancellation.cancelled() => None,
-                        () = tokio::time::sleep(Duration::from_secs(90)) => None,
+        let mut answers = stream::iter(1..=config.repetitions)
+            .map(|index| {
+                let cancellation = cancellation.clone();
+                async move {
+                    let started = Instant::now();
+                    let result = self
+                        .request(
+                            &config.account_id,
+                            &config.model,
+                            &config.prompt,
+                            config.reasoning_effort.as_deref(),
+                            None,
+                            cancellation.clone(),
+                        )
+                        .await;
+                    let mut answer = QualityAnswer {
+                        index,
+                        answer: String::new(),
+                        verdict: QualityVerdict::RequestError,
+                        reason: String::new(),
+                        elapsed_ms: u64::try_from(started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX),
+                        returned_model: None,
+                        judge_account_id: None,
                     };
                     match result {
-                        Some(Ok((verdict, reason, id))) => {
-                            answer.verdict = verdict;
-                            answer.reason = reason;
-                            answer.judge_account_id = Some(id);
+                        Ok(result) => {
+                            answer.answer = result.text.concat();
+                            answer.returned_model = result.upstream_response_model;
+                            answer.verdict = QualityVerdict::Unknown;
+                            if answer.answer.trim().is_empty() {
+                                answer.reason = "上游未返回文本，不能确定答案质量".to_owned();
+                                return answer;
+                            }
+                            let judge_cancel = CancellationToken::new();
+                            let judging = self.judge(config, &answer.answer, judge_cancel.clone());
+                            tokio::pin!(judging);
+                            let result = tokio::select! {
+                                result = &mut judging => Some(result),
+                                () = cancellation.cancelled() => None,
+                                () = tokio::time::sleep(Duration::from_secs(90)) => None,
+                            };
+                            match result {
+                                Some(Ok((verdict, reason, id))) => {
+                                    answer.verdict = verdict;
+                                    answer.reason = reason;
+                                    answer.judge_account_id = Some(id);
+                                }
+                                Some(Err(error)) => answer.reason = error.message().to_owned(),
+                                None => {
+                                    judge_cancel.cancel();
+                                    let _ = judging.await;
+                                    answer.reason = "判题超时，不能确定答案质量".to_owned();
+                                }
+                            }
                         }
-                        Some(Err(error)) => answer.reason = error.message().to_owned(),
-                        None => {
-                            judge_cancel.cancel();
-                            let _ = judging.await;
-                            answer.reason = "判题超时，不能确定答案质量".to_owned();
+                        Err(error) => {
+                            answer.reason = error.message().to_owned();
                         }
                     }
+                    answer
                 }
-                Err(error) => {
-                    answer.reason = error.message().to_owned();
-                    answers.push(answer);
-                    // Stop the round on request failure; do not hammer an invalid account.
-                    break;
-                }
-            }
-            answers.push(answer);
-        }
+            })
+            .buffer_unordered(usize::from(config.repetitions))
+            .collect::<Vec<_>>()
+            .await;
+        answers.sort_by_key(|answer| answer.index);
         answers
     }
 
@@ -465,7 +483,7 @@ impl QualityOpsService {
                 }
             }
         };
-        if cancellation.is_cancelled() {
+        if cancellation.is_cancelled() || local.is_cancelled() {
             // Leave the lease for recovery; do not publish a cancelled partial round as a verdict.
             return Ok(true);
         }
@@ -521,6 +539,9 @@ mod tests {
             judge_group_id: "group".into(),
             judge_model: "judge".into(),
             judge_prompt: "compare".into(),
+            failure_action: QualityFailureAction::None,
+            failure_group_ids: Vec::new(),
+            auto_restore: false,
         };
         let now = DateTime::parse_from_rfc3339("2026-09-27T00:01:00Z")
             .unwrap()
@@ -536,6 +557,31 @@ mod tests {
         assert!(next_run(&config, now).is_err());
         config.timezone = "UTC".into();
         config.repetitions = 9;
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn quality_legacy_configuration_does_not_opt_into_account_mutations() {
+        let legacy = serde_json::json!({
+            "accountId": "account", "model": "model", "enabled": true,
+            "cron": "0 */6 * * *", "timezone": "UTC", "repetitions": 1,
+            "prompt": "question", "referenceAnswer": "answer", "reasoningEffort": null,
+            "judgeGroupId": "grp_00000000000000000000000000000001", "judgeModel": "judge",
+            "judgePrompt": "compare"
+        });
+        let mut config: QualityRuleConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(config.failure_action, QualityFailureAction::None);
+        assert!(!config.auto_restore);
+        assert!(validate(&config).is_ok());
+        config.failure_action = QualityFailureAction::RemoveGroups;
+        assert!(validate(&config).is_err());
+        config.failure_group_ids = vec!["invalid".into()];
+        assert!(validate(&config).is_err());
+        config.failure_group_ids = vec!["grp_00000000000000000000000000000001".into()];
+        assert!(validate(&config).is_ok());
+        config
+            .failure_group_ids
+            .push(config.failure_group_ids[0].clone());
         assert!(validate(&config).is_err());
     }
 }

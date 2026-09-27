@@ -1238,6 +1238,7 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             context: AttemptContext,
         ) -> Result<ProviderStream, ProviderError> {
             assert!(!context.is_diagnostic_required_account());
+            assert!(context.is_quality_check());
             assert_eq!(context.required_account().unwrap().as_str(), "acct_start");
             let model = request.candidate().upstream_model().unwrap().clone();
             let metadata = ProviderCallMetadata::new(

@@ -813,12 +813,11 @@ impl DefaultExecutionService {
         // The real coordinator owns account leases, observations and usage settlement.
         let mut session = self
             .coordinator
-            .start(
+            .start_quality(
                 new_request,
                 request.operation,
                 plan,
-                Some(request.account_id),
-                None,
+                request.account_id,
                 cancellation,
             )
             .await

@@ -3095,6 +3095,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            explicit_scheduling_intent: true,
             model_access: Default::default(),
             custom_name: None,
             outbound_proxy: None,

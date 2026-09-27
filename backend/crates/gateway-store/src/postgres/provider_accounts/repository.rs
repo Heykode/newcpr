@@ -391,7 +391,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
             .map_err(|_| postgres_unavailable("begin provider account enabled state"))?;
         lock_account_egress_in_transaction(&mut transaction).await?;
         let result = sqlx::query(
-            "update provider_accounts set enabled = $2,
+            "update provider_accounts set enabled = $2, quality_pause_owner = null,
              excel_auto_disabled_at = case when $2 then null else excel_auto_disabled_at end,
              updated_at = greatest(now(), updated_at) where id = $1",
         )
@@ -668,6 +668,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     &unique_ids,
                     AccountSchedulingPatch {
                         enabled: Some(settings.enabled),
+                        explicit_scheduling_intent: true,
                         concurrency_limit: Some(settings.concurrency_limit),
                         weight: Some(settings.weight),
                         turn_state_injection_enabled: settings.turn_state_injection_enabled,
@@ -883,6 +884,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &command.account_ids,
                 AccountSchedulingPatch {
                     enabled: command.enabled,
+                    explicit_scheduling_intent: command.explicit_scheduling_intent,
                     concurrency_limit: command.concurrency_limit,
                     weight: command.weight,
                     turn_state_injection_enabled: command.turn_state_injection_enabled,
@@ -1235,6 +1237,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
 
 struct AccountSchedulingPatch<'a> {
     enabled: Option<bool>,
+    explicit_scheduling_intent: bool,
     concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     weight: Option<AccountWeight>,
     turn_state_injection_enabled: Option<bool>,
@@ -1254,6 +1257,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
 ) -> StoreResult<()> {
     let AccountSchedulingPatch {
         enabled,
+        explicit_scheduling_intent,
         concurrency_limit,
         weight,
         turn_state_injection_enabled,
@@ -1266,6 +1270,15 @@ async fn update_provider_accounts_scheduling_in_transaction(
         outbound_proxy,
     } = patch;
     lock_account_egress_in_transaction(transaction).await?;
+    if enabled.is_some() && explicit_scheduling_intent {
+        sqlx::query(
+            "update provider_accounts set quality_pause_owner=null where id=any($1::text[])",
+        )
+        .bind(account_ids)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| postgres_unavailable("release quality scheduling ownership"))?;
+    }
     if let Some(upstream) = excel_models
         .map(|_| gateway_core::account::ResponsesUpstream::Excel)
         .or(excel_models_follow_global.map(|_| gateway_core::account::ResponsesUpstream::Excel))

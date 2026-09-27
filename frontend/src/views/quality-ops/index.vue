@@ -16,7 +16,9 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { formatDateTime } from '@/utils/date'
+import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
+import QualitySchedule from './QualitySchedule.vue'
 
 const rules = ref<QualityRule[]>([])
 const runs = ref<QualityRun[]>([])
@@ -31,17 +33,23 @@ const historyError = ref('')
 const editorError = ref('')
 const editorOpen = ref(false)
 const editing = ref<QualityRule | null>(null)
+const selectedAccounts = ref<string[]>([])
+const actions: Record<string, string> = {
+  scheduling_paused: '已暂停账号调度',
+  groups_removed: '已移出指定分组',
+  restored: '已恢复质量检测前的状态',
+  restore_blocked: '恢复受阻：账号状态或分组已变化，请检查',
+  ownership_released: '已保留人工设置，不自动恢复',
+  already_applied: '保持此前的质量处置',
+  no_change: '账号原已暂停或不在指定分组，未改动',
+  identity_changed: '检测期间账号身份已变化，未执行处置',
+}
 const deleteTarget = ref<QualityRule | null>(null)
 const deleteOpen = ref(false)
 const detailOpen = ref(false)
 const detail = ref<QualityRun | null>(null)
 const detailError = ref('')
-const accountSearch = ref('')
-const groupSearch = ref('')
-const accounts = ref<{ value: string, label: string, description: string }[]>([])
-const groups = ref<{ value: string, label: string }[]>([])
 const names = ref<Record<string, string>>({})
-const catalogError = ref('')
 const efforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ value, label: value }))
 const labels: Record<string, string> = {
   correct: '通过',
@@ -73,6 +81,9 @@ function defaults(): QualityRuleConfig {
     judgeGroupId: '',
     judgeModel: '',
     judgePrompt: '判断实际答案是否与参考答案一致。无法确定时返回 unknown。',
+    failureAction: 'none',
+    failureGroupIds: [],
+    autoRestore: false,
   }
 }
 const draft = ref(defaults())
@@ -84,7 +95,6 @@ const effort = computed({
 })
 let alive = true
 let timer: ReturnType<typeof setTimeout> | undefined
-let searchTimer: ReturnType<typeof setTimeout> | undefined
 let listController: AbortController | undefined
 let historyController: AbortController | undefined
 let detailController: AbortController | undefined
@@ -173,56 +183,74 @@ async function refresh() {
   await load()
   await history()
 }
-async function catalogs() {
+async function accountPage(page: number, search: string, signal: AbortSignal) {
+  const result = await getAccounts({ page, pageSize: 50, search: search || undefined }, { signal, silent: true })
+  if (!signal.aborted && alive) {
+    for (const account of result.items)
+      names.value[account.id] = account.name
+  }
+  return {
+    items: result.items.map(account => ({ value: account.id, label: account.name, description: account.email && account.email !== account.name ? account.email : undefined })),
+    total: result.page.total,
+    totalPages: result.page.totalPages,
+  }
+}
+async function groupPage(page: number, search: string, signal: AbortSignal) {
+  const result = await getAccountGroups({ page, pageSize: 50, search: search || undefined, enabled: true }, { signal, silent: true })
+  return {
+    items: result.items.map(group => ({ value: group.id, label: group.name, description: `${group.memberCount} 个账号` })),
+    total: result.page.total,
+    totalPages: result.page.totalPages,
+  }
+}
+async function actionGroupPage(page: number, search: string, signal: AbortSignal) {
+  const result = await getAccountGroups({ page, pageSize: 50, search: search || undefined }, { signal, silent: true })
+  return {
+    items: result.items.map(group => ({ value: group.id, label: group.name, description: `${group.memberCount} 个账号${group.enabled ? '' : ' · 分组已停用'}` })),
+    total: result.page.total,
+    totalPages: result.page.totalPages,
+  }
+}
+async function loadAccountNames() {
   catalogController?.abort()
   const controller = new AbortController()
   catalogController = controller
   try {
-    const options = { signal: controller.signal, silent: true }
-    const [accountPage, groupPage] = await Promise.all([
-      getAccounts({ page: 1, pageSize: 50, search: accountSearch.value.trim() || undefined }, options),
-      getAccountGroups({ page: 1, pageSize: 50, search: groupSearch.value.trim() || undefined }, options),
-    ])
-    if (!alive || controller.signal.aborted)
-      return
-    accounts.value = accountPage.items.map(account => ({ value: account.id, label: account.name, description: account.id }))
-    for (const account of accountPage.items)
-      names.value[account.id] = account.name
-    groups.value = groupPage.items.filter(group => group.enabled).map(group => ({ value: group.id, label: group.name }))
-    if (draft.value.accountId && !accounts.value.some(item => item.value === draft.value.accountId))
-      accounts.value.unshift({ value: draft.value.accountId, label: accountName(draft.value.accountId), description: draft.value.accountId })
-    if (draft.value.judgeGroupId && !groups.value.some(item => item.value === draft.value.judgeGroupId))
-      groups.value.unshift({ value: draft.value.judgeGroupId, label: draft.value.judgeGroupId })
-    catalogError.value = ''
+    await accountPage(1, '', controller.signal)
   }
-  catch (cause) {
-    if (alive && !controller.signal.aborted)
-      catalogError.value = message(cause)
+  catch {
+    // Rules remain usable with account IDs; the picker owns retryable load errors.
   }
 }
-watch([accountSearch, groupSearch], () => {
-  catalogController?.abort()
-  clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => void catalogs(), 250)
-})
 function edit(rule: QualityRule | null) {
   editing.value = rule ? { ...rule, config: { ...rule.config } } : null
-  draft.value = rule ? { ...rule.config } : defaults()
+  draft.value = rule ? { ...defaults(), ...rule.config, failureGroupIds: [...(rule.config.failureGroupIds ?? [])] } : defaults()
+  selectedAccounts.value = rule ? [rule.config.accountId] : []
   editorError.value = ''
   editorOpen.value = true
-  void catalogs()
 }
 async function save() {
   if (busy.value)
     return
   busy.value = true
-  const data = { id: editing.value?.id ?? null, revision: editing.value?.revision ?? null, config: { ...draft.value } }
+  const config = { ...draft.value, failureGroupIds: [...draft.value.failureGroupIds] }
+  const accountIds = editing.value ? [config.accountId] : [...selectedAccounts.value]
+  const failures: string[] = []
   try {
-    const result = await saveQualityRule(data)
-    if (!alive)
-      return
-    editorOpen.value = false
-    selectedId.value = result.id
+    for (const accountId of accountIds) {
+      try {
+        const result = await saveQualityRule({ id: editing.value?.id ?? null, revision: editing.value?.revision ?? null, config: { ...config, accountId } })
+        if (!alive)
+          return
+        selectedId.value = result.id
+        selectedAccounts.value = selectedAccounts.value.filter(id => id !== accountId)
+      }
+      catch (cause) {
+        failures.push(`${accountName(accountId)}：${message(cause)}`)
+      }
+    }
+    editorOpen.value = failures.length > 0
+    editorError.value = failures.length ? `${failures.length} 项未保存；成功项已保留。${failures.slice(0, 5).join('；')}` : ''
     await load()
     await history()
   }
@@ -287,13 +315,12 @@ watch(detailOpen, (open) => {
   }
 })
 onMounted(() => {
-  void catalogs()
+  void loadAccountNames()
   void poll()
 })
 onBeforeUnmount(() => {
   alive = false
   clearTimeout(timer)
-  clearTimeout(searchTimer)
   for (const controller of [listController, historyController, detailController, catalogController])
     controller?.abort()
 })
@@ -358,7 +385,7 @@ onBeforeUnmount(() => {
               <span class="text-xs text-cp-text-secondary">下次 {{ rule.config.enabled ? formatDateTime(rule.nextRunAt) : '—' }}</span>
             </button>
             <div class="mt-2 flex gap-1 px-2">
-              <BaseIconButton label="立即检测" :disabled="busy || rule.running || rule.pending" @click="mutate(() => runQualityRule({ id: rule.id, revision: rule.revision }))">
+              <BaseIconButton label="立即检测" :disabled="busy || !rule.config.enabled || rule.running || rule.pending" @click="mutate(() => runQualityRule({ id: rule.id, revision: rule.revision }))">
                 <Play class="size-4" />
               </BaseIconButton>
               <BaseIconButton :label="rule.config.enabled ? '暂停定时检测' : '启用定时检测'" :disabled="busy" @click="toggle(rule)">
@@ -414,6 +441,9 @@ onBeforeUnmount(() => {
               </dd>
             </div>
           </dl>
+          <p v-if="selected.lastAction" class="mt-3 text-xs text-cp-text-secondary">
+            {{ actions[selected.lastAction] || selected.lastAction }}
+          </p>
         </div>
         <div class="mb-3 flex items-center justify-between gap-3">
           <h2 class="text-base font-semibold">
@@ -521,13 +551,19 @@ onBeforeUnmount(() => {
     </div>
     <QualityDrawer v-model="editorOpen" :title="editing ? '编辑检测规则' : '新建检测规则'" :busy="busy">
       <form id="quality-rule-form" class="grid min-w-0 gap-4" @submit.prevent="save">
-        <p v-if="editorError || catalogError" role="alert" class="text-cp-error">
-          {{ editorError || catalogError }}
+        <p v-if="editorError" role="alert" class="text-cp-error">
+          {{ editorError }}
         </p>
-        <BaseInput v-if="!editing" v-model="accountSearch" aria-label="搜索被测账号" placeholder="搜索账号" />
-        <FormItem label="被测账号" required>
-          <BaseSelect v-model="draft.accountId" class="min-w-0 w-full" :options="accounts" :disabled="!!editing" aria-label="被测账号" />
-        </FormItem>
+        <div v-if="editing" class="grid gap-1 text-cp-sm">
+          <span class="font-medium">被测账号</span>
+          <span class="break-all text-cp-text-secondary">{{ accountName(draft.accountId) }}</span>
+        </div>
+        <div v-else class="grid gap-2">
+          <QualityCatalogPicker v-model:selected-values="selectedAccounts" multiple label="被测账号" search-placeholder="搜索账号名称或邮箱" :load-page="accountPage" />
+          <p class="text-xs text-cp-text-secondary">
+            每个账号单独建立一条规则，已有规则的账号不会被覆盖。
+          </p>
+        </div>
         <div class="grid gap-4 sm:grid-cols-2">
           <FormItem label="检测模型" required>
             <BaseInput v-model="draft.model" placeholder="模型 ID" />
@@ -535,16 +571,18 @@ onBeforeUnmount(() => {
           <FormItem label="推理强度">
             <BaseSelect v-model="effort" :options="[{ value: '', label: '按默认' }, ...efforts]" />
           </FormItem>
-          <FormItem label="定时 Cron" required>
-            <BaseInput v-model="draft.cron" placeholder="0 */6 * * *" />
-          </FormItem>
+          <QualitySchedule v-model="draft.cron" />
           <FormItem label="时区" required>
             <BaseInput v-model="draft.timezone" />
           </FormItem>
           <div class="grid gap-2 text-cp-sm">
-            <span>每轮次数</span><BaseNumberInput v-model="draft.repetitions" label="每轮次数" :min="1" :max="8" />
+            <span>每轮并行答题次数</span><BaseNumberInput v-model="draft.repetitions" label="每轮并行答题次数" :min="1" :max="8" />
+            <span class="text-xs text-cp-text-secondary">每轮并行检测 {{ draft.repetitions }} 次，仍遵守账号并发及请求间隔。</span>
           </div>
           <BaseSwitch v-model="draft.enabled" label="启用定时检测" show-label />
+          <p class="text-xs text-cp-text-secondary sm:col-span-2">
+            关闭后不会定时或手动检测；保存规则不会立即消耗额度。
+          </p>
         </div>
         <FormItem label="题目" required>
           <BaseTextarea v-model="draft.prompt" :rows="5" />
@@ -554,13 +592,13 @@ onBeforeUnmount(() => {
         </FormItem>
         <div class="border-t border-cp-border pt-4">
           <h3 class="mb-3 font-semibold">
-            判题配置
+            答案判定
           </h3>
           <div class="grid gap-4">
-            <BaseInput v-model="groupSearch" aria-label="搜索判题分组" placeholder="搜索分组" />
-            <FormItem label="判题分组" required>
-              <BaseSelect v-model="draft.judgeGroupId" class="min-w-0 w-full" :options="groups" aria-label="判题分组" />
-            </FormItem>
+            <p class="text-xs text-cp-text-secondary">
+              从所选分组调度其他账号，用判题模型对照参考答案评分；不会让被测账号给自己判题。
+            </p>
+            <QualityCatalogPicker v-model="draft.judgeGroupId" label="判题账号分组" search-placeholder="搜索分组名称" :load-page="groupPage" />
             <FormItem label="判题模型" required>
               <BaseInput v-model="draft.judgeModel" placeholder="模型 ID" />
             </FormItem>
@@ -569,12 +607,25 @@ onBeforeUnmount(() => {
             </FormItem>
           </div>
         </div>
+        <div class="grid gap-4 border-t border-cp-border pt-4">
+          <h3 class="font-semibold">
+            答错后的处理
+          </h3>
+          <FormItem label="处理方式">
+            <BaseSelect v-model="draft.failureAction" :options="[{ value: 'none', label: '仅记录结果' }, { value: 'disable_scheduling', label: '暂停此账号调度' }, { value: 'remove_groups', label: '移出指定分组' }]" />
+          </FormItem>
+          <QualityCatalogPicker v-if="draft.failureAction === 'remove_groups'" v-model:selected-values="draft.failureGroupIds" multiple label="处置分组" :load-page="actionGroupPage" />
+          <BaseSwitch v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
+          <p class="text-xs text-cp-text-secondary">
+            仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。
+          </p>
+        </div>
       </form>
       <template #footer>
         <BaseButton :disabled="busy" @click="editorOpen = false">
           取消
         </BaseButton>
-        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || !draft.accountId || !draft.judgeGroupId">
+        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (editing ? !draft.accountId : !selectedAccounts.length) || !draft.judgeGroupId || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length)">
           <Save class="size-4" />保存
         </BaseButton>
       </template>
@@ -592,6 +643,7 @@ onBeforeUnmount(() => {
           <span class="break-all font-mono">{{ detail.model }}</span>
           <span>{{ formatDateTime(detail.startedAt) }}</span>
           <strong :class="statusColor(detail.status)">{{ labels[detail.status] ?? detail.status }}</strong>
+          <span v-if="detail.action">{{ actions[detail.action] || detail.action }}</span>
         </div>
         <details v-if="detail.config" class="min-w-0 border-b border-cp-border pb-4 text-cp-sm">
           <summary class="cursor-pointer font-semibold">
@@ -625,7 +677,7 @@ onBeforeUnmount(() => {
       </div>
     </QualityDrawer>
     <BaseConfirmModal v-model="deleteOpen" title="删除检测规则" destructive :loading="busy" @confirm="confirmDelete">
-      删除此账号的检测规则及其历史记录？
+      删除此账号的检测规则及其历史记录？此前暂停的调度或移出的分组不会自动恢复。
     </BaseConfirmModal>
   </div>
 </template>
