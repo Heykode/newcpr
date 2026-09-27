@@ -455,9 +455,20 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
         let mut accounts = self.repository.list_for_provider().await?;
+        let quality_recovery = if request.attempt.is_quality_check()
+            && let Some(required) = request.attempt.required_account()
+        {
+            self.repository
+                .store()
+                .quality_pause_is_owned(required)
+                .await
+                .map_err(|_| CredentialSelectionError::Store)?
+        } else {
+            false
+        };
         self.retain_excel_auth_blocks(&accounts);
-        // Normal scheduling excludes disabled rows; only the pinned diagnostic may restore one.
-        if diagnostic
+        // Only pinned diagnostics or verified quality recovery can load disabled rows.
+        if (diagnostic || quality_recovery)
             && let Some(required) = request.attempt.required_account()
             && !accounts.iter().any(|account| account.id() == required)
             && let Some(account) = self
@@ -619,6 +630,8 @@ impl CodexCredentialSelector {
                 round_robin_cursor,
                 eligibility: if diagnostic {
                     AccountEligibilityPolicy::BypassForDiagnostic
+                } else if quality_recovery {
+                    AccountEligibilityPolicy::IgnoreQualityPause
                 } else {
                     AccountEligibilityPolicy::Enforce
                 },
@@ -651,7 +664,7 @@ impl CodexCredentialSelector {
             // selected account's health facts, even when scheduling has
             // disabled that account. Ordinary scheduling keeps the enabled
             // guard in case the account changes after candidate loading.
-            let allows_account_state_mutation = diagnostic || account.enabled();
+            let allows_account_state_mutation = diagnostic || quality_recovery || account.enabled();
             if !diagnostic && self.excel_auth_block(&account).is_some() {
                 excluded.insert(account.id().clone());
                 continue;
@@ -790,6 +803,17 @@ impl CodexCredentialSelector {
                         drop(guard);
                         excluded.insert(account.id().clone());
                         continue;
+                    }
+                    if quality_recovery
+                        && !self
+                            .repository
+                            .store()
+                            .quality_pause_is_owned(account.id())
+                            .await
+                            .map_err(|_| CredentialSelectionError::Store)?
+                    {
+                        drop(guard);
+                        return Err(CredentialSelectionError::AccountSnapshotChanged);
                     }
                     return Ok(CodexCredentialLease {
                         installation_id: runtime.installation_id,

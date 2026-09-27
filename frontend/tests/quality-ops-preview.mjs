@@ -18,6 +18,9 @@ const config = {
   judgeGroupId: 'preview-group',
   judgeModel: 'example-judge',
   judgePrompt: '比较实际答案与参考答案。',
+  failureAction: 'none',
+  failureGroupIds: [],
+  autoRestore: false,
 }
 let rules = [{
   id: 'preview-rule',
@@ -29,6 +32,22 @@ let rules = [{
   lastStatus: null,
   lastRunAt: null,
 }]
+const accounts = [
+  { id: 'preview-account', name: '示例账号（非真实数据）', email: 'sample@example.test' },
+  ...Array.from({ length: 63 }, (_, i) => ({
+    id: `quality-preview-${i + 1}`,
+    name: `演示账号 ${String(i + 1).padStart(2, '0')}`,
+    email: `sample-${i + 1}@example.test`,
+  })),
+]
+const groups = [{ id: 'preview-group', name: '示例判题分组', enabled: true, memberCount: 3 }]
+function catalog(items, url) {
+  const search = (url.searchParams.get('search') || '').toLowerCase()
+  const filtered = items.filter(item => `${item.name} ${item.email || ''}`.toLowerCase().includes(search))
+  const page = Math.max(1, Number(url.searchParams.get('page') || 1))
+  const pageSize = Math.min(200, Math.max(1, Number(url.searchParams.get('pageSize') || 50)))
+  return { items: filtered.slice((page - 1) * pageSize, page * pageSize), page: { page, pageSize, total: filtered.length, totalPages: Math.ceil(filtered.length / pageSize) } }
+}
 async function main() {
   const server = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
@@ -51,9 +70,9 @@ async function main() {
             if (path === '/api/admin/system/version')
               data = { version: 'quality-ui-preview', buildType: 'test' }
             if (path === '/api/admin/accounts')
-              data = { items: [{ id: 'preview-account', name: '示例账号（非真实数据）' }], page: { page: 1, pageSize: 50, total: 1, totalPages: 1 } }
+              data = catalog(accounts, url)
             if (path === '/api/admin/account-groups')
-              data = { items: [{ id: 'preview-group', name: '示例判题分组', enabled: true }], page: { page: 1, pageSize: 50, total: 1, totalPages: 1 } }
+              data = catalog(groups, url)
             if (path === '/api/admin/quality-ops/rules')
               data = rules
             if (path === '/api/admin/quality-ops/runs')

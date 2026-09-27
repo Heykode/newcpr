@@ -335,6 +335,16 @@ impl std::fmt::Debug for GrokCredentialRepository {
 }
 
 impl GrokCredentialRepository {
+    pub(crate) async fn quality_pause_is_owned(
+        &self,
+        account: &ProviderAccountId,
+    ) -> Result<bool, GrokCredentialRepositoryError> {
+        self.store
+            .quality_pause_is_owned(account)
+            .await
+            .map_err(map_store_error)
+    }
+
     #[must_use]
     pub fn new(store: Arc<dyn ProviderAccountStore>) -> Self {
         Self { store }

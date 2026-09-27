@@ -45,6 +45,7 @@ pub struct AttemptCoordinator<S: ?Sized> {
 #[derive(Debug, Clone)]
 enum AccountSelection {
     Scheduled(Option<crate::account::ProviderAccountId>),
+    Quality(crate::account::ProviderAccountId),
     Diagnostic(crate::account::ProviderAccountId),
 }
 
@@ -52,7 +53,7 @@ impl AccountSelection {
     fn required_account(&self) -> Option<&crate::account::ProviderAccountId> {
         match self {
             Self::Scheduled(account) => account.as_ref(),
-            Self::Diagnostic(account) => Some(account),
+            Self::Diagnostic(account) | Self::Quality(account) => Some(account),
         }
     }
 
@@ -115,6 +116,25 @@ where
             plan,
             AccountSelection::Diagnostic(required_account),
             continuation,
+            cancellation,
+        )
+        .await
+    }
+
+    pub(crate) async fn start_quality(
+        &self,
+        request: NewModelRequest,
+        operation: Operation,
+        plan: RoutingPlan,
+        account: crate::account::ProviderAccountId,
+        cancellation: CancellationToken,
+    ) -> Result<ResponseExecutionSession<S>, EngineError> {
+        self.start_with_account_selection(
+            request,
+            operation,
+            plan,
+            AccountSelection::Quality(account),
+            None,
             cancellation,
         )
         .await
@@ -867,7 +887,7 @@ where
                 AccountSelection::Diagnostic(account) => {
                     (Some(account.clone()), AttemptTransport::Default)
                 }
-                AccountSelection::Scheduled(_) => (
+                AccountSelection::Scheduled(_) | AccountSelection::Quality(_) => (
                     self.recovery_account
                         .take()
                         .or_else(|| self.account_selection.required_account().cloned()),
@@ -888,12 +908,18 @@ where
                 account.clone(),
                 self.account_state_owner.clone(),
             ),
-            AccountSelection::Scheduled(_) => AccountAttemptContext::new(
-                self.excluded_accounts.clone(),
-                pinned_account.clone(),
-                self.account_state_owner.clone(),
-            )
-            .with_account_scope(Arc::clone(self.plan.account_scope())),
+            AccountSelection::Scheduled(_) | AccountSelection::Quality(_) => {
+                AccountAttemptContext::new(
+                    self.excluded_accounts.clone(),
+                    pinned_account.clone(),
+                    self.account_state_owner.clone(),
+                )
+                .with_account_scope(Arc::clone(self.plan.account_scope()))
+                .with_quality_check(matches!(
+                    &self.account_selection,
+                    AccountSelection::Quality(_)
+                ))
+            }
         }
         .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(|account| {
             self.credential_recovery_attempted_accounts

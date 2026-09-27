@@ -16,6 +16,14 @@ use super::{
 /// `provider_accounts` 的数据库中立端口。
 #[async_trait]
 pub trait ProviderAccountStore: Send + Sync {
+    /// Only an active quality job may retest its own scheduling pause.
+    async fn quality_pause_is_owned(
+        &self,
+        _account: &ProviderAccountId,
+    ) -> Result<bool, StoreError> {
+        Ok(false)
+    }
+
     /// Persistent implementations backfill existing devices before serving
     /// traffic and apply the codec in subsequent account write transactions.
     async fn initialize_device_registry(

@@ -14,6 +14,9 @@ export interface QualityRuleConfig {
   judgeGroupId: string
   judgeModel: string
   judgePrompt: string
+  failureAction: 'none' | 'disable_scheduling' | 'remove_groups'
+  failureGroupIds: string[]
+  autoRestore: boolean
 }
 
 export interface QualityRule {
@@ -25,6 +28,7 @@ export interface QualityRule {
   pending: boolean
   lastStatus: string | null
   lastRunAt: string | null
+  lastAction?: string | null
 }
 
 export interface QualityAnswer {
@@ -49,6 +53,7 @@ export interface QualityRun {
   incorrect: number
   unknown: number
   requestErrors: number
+  action?: string | null
   config?: QualityRuleConfig
   answers?: QualityAnswer[]
 }

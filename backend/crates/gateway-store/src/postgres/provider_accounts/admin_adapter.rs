@@ -1103,6 +1103,7 @@ impl AccountStore for PgAdminAccountStore {
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 custom_name: command.custom_name,
                 account_ids: vec![command.account_id.clone()],
+                explicit_scheduling_intent: false,
                 enabled: Some(command.enabled),
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
                 responses_upstream: command.responses_upstream,
@@ -1231,6 +1232,7 @@ impl AccountStore for PgAdminAccountStore {
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 custom_name: command.custom_name,
                 account_ids: command.account_ids,
+                explicit_scheduling_intent: true,
                 enabled: command.enabled,
                 turn_state_injection_enabled: command.turn_state_injection_enabled,
                 responses_upstream: command.responses_upstream,

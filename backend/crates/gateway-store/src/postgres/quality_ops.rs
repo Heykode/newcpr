@@ -11,6 +11,8 @@ use gateway_admin::{
 };
 use sqlx::{PgPool, Row as _};
 
+mod policy;
+
 use crate::{
     mutation_audit,
     postgres::{append_admin_audit_event_in_transaction, bump_config_revision_in_transaction},
@@ -57,6 +59,7 @@ fn rule(row: &sqlx::postgres::PgRow) -> AdminStoreResult<QualityRule> {
         pending: row.try_get("pending").map_err(unavailable)?,
         last_status: row.try_get("last_status").map_err(unavailable)?,
         last_run_at: row.try_get("last_run_at").map_err(unavailable)?,
+        last_action: row.try_get("last_action").map_err(unavailable)?,
     })
 }
 
@@ -75,6 +78,7 @@ fn run(row: &sqlx::postgres::PgRow, detail: bool) -> AdminStoreResult<QualityRun
         account_id: row.try_get("account_id").map_err(unavailable)?,
         model: row.try_get("model").map_err(unavailable)?,
         status: row.try_get("status").map_err(unavailable)?,
+        action: row.try_get("action").map_err(unavailable)?,
         started_at: row.try_get("started_at").map_err(unavailable)?,
         finished_at: row.try_get("finished_at").map_err(unavailable)?,
         correct: u32::try_from(row.try_get::<i32, _>("correct").map_err(unavailable)?)
@@ -121,6 +125,16 @@ async fn audit(
     .map_err(unavailable)
 }
 
+async fn lock_configuration(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> AdminStoreResult<()> {
+    sqlx::query("select id from runtime_settings where id=1 for update")
+        .execute(&mut **tx)
+        .await
+        .map_err(unavailable)?;
+    Ok(())
+}
+
 #[async_trait]
 impl QualityOpsStore for PgQualityOpsStore {
     async fn rules(&self) -> AdminStoreResult<Vec<QualityRule>> {
@@ -142,7 +156,19 @@ impl QualityOpsStore for PgQualityOpsStore {
         context: &MutationContext,
     ) -> AdminStoreResult<QualityRule> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        lock_configuration(&mut tx).await?;
         let value = serde_json::to_value(&config).map_err(unavailable)?;
+        if config.failure_action == QualityFailureAction::RemoveGroups {
+            let count: i64 =
+                sqlx::query_scalar("select count(*) from account_groups where id=any($1::text[])")
+                    .bind(&config.failure_group_ids)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(unavailable)?;
+            if usize::try_from(count).ok() != Some(config.failure_group_ids.len()) {
+                return Err(conflict());
+            }
+        }
         let row = if let Some(id) = id {
             let row = sqlx::query(
                 "update quality_rules set config=$3,enabled=$4,next_run_at=$5,
@@ -188,6 +214,7 @@ impl QualityOpsStore for PgQualityOpsStore {
         context: &MutationContext,
     ) -> AdminStoreResult<()> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        lock_configuration(&mut tx).await?;
         let result = sqlx::query("delete from quality_rules where id=$1 and revision=$2")
             .bind(id)
             .bind(revision)
@@ -208,9 +235,10 @@ impl QualityOpsStore for PgQualityOpsStore {
         context: &MutationContext,
     ) -> AdminStoreResult<()> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        lock_configuration(&mut tx).await?;
         let result = sqlx::query(
             "update quality_rules set pending=true where id=$1 and revision=$2
-             and not pending and (lease_until is null or lease_until<now())",
+             and enabled and not pending and (lease_until is null or lease_until<now())",
         )
         .bind(id)
         .bind(revision)
@@ -244,11 +272,11 @@ impl QualityOpsStore for PgQualityOpsStore {
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(unavailable)?;
-        if active >= 2 {
+        if active >= QUALITY_MAX_WORKERS {
             return Ok(None);
         }
         let row = sqlx::query(
-            "select * from quality_rules where (pending or (enabled and next_run_at<=now()))
+            "select * from quality_rules where enabled and (pending or next_run_at<=now())
              and (lease_until is null or lease_until<now())
              order by pending desc,next_run_at,id limit 1 for update skip locked",
         )
@@ -259,6 +287,13 @@ impl QualityOpsStore for PgQualityOpsStore {
             return Ok(None);
         };
         let rule = rule(&row)?;
+        let account_identity = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "select upstream_user_id,upstream_account_id from provider_accounts where id=$1",
+        )
+        .bind(&rule.config.account_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
         sqlx::query(
             "update quality_runs set status='interrupted',finished_at=now()
             where rule_id=$1 and status='running'",
@@ -282,6 +317,7 @@ impl QualityOpsStore for PgQualityOpsStore {
             rule,
             run_id,
             lease_token,
+            account_identity,
         }))
     }
 
@@ -306,6 +342,7 @@ impl QualityOpsStore for PgQualityOpsStore {
         answers: Vec<QualityAnswer>,
     ) -> AdminStoreResult<()> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        lock_configuration(&mut tx).await?;
         let mut counts = [0_i32; 4];
         for answer in &answers {
             counts[match answer.verdict {
@@ -315,12 +352,12 @@ impl QualityOpsStore for PgQualityOpsStore {
                 QualityVerdict::RequestError => 3,
             }] += 1;
         }
-        let status = if counts[3] > 0 {
-            "request_error"
-        } else if counts[2] > 0 || answers.is_empty() {
-            "unknown"
-        } else if counts[1] > 0 {
+        let status = if counts[1] > 0 {
             "incorrect"
+        } else if counts[3] > 0 {
+            "request_error"
+        } else if counts[2] > 0 || answers.len() != usize::from(claim.rule.config.repetitions) {
+            "unknown"
         } else {
             "correct"
         };
@@ -330,9 +367,16 @@ impl QualityOpsStore for PgQualityOpsStore {
             .bind(&claim.rule.id).bind(claim.rule.revision).bind(&claim.lease_token).bind(next).bind(status)
             .execute(&mut *tx).await.map_err(unavailable)?;
         if affected.rows_affected() == 1 {
+            let action = policy::apply(&mut tx, claim, status).await?;
+            sqlx::query("update quality_rules set last_action=$2 where id=$1")
+                .bind(&claim.rule.id)
+                .bind(action)
+                .execute(&mut *tx)
+                .await
+                .map_err(unavailable)?;
             sqlx::query(
                 "update quality_runs set status=$2,finished_at=now(),correct=$3,incorrect=$4,
-                unknown=$5,request_errors=$6,answers=$7 where id=$1 and status='running'",
+                unknown=$5,request_errors=$6,answers=$7,action=$8 where id=$1 and status='running'",
             )
             .bind(&claim.run_id)
             .bind(status)
@@ -341,6 +385,7 @@ impl QualityOpsStore for PgQualityOpsStore {
             .bind(counts[2])
             .bind(counts[3])
             .bind(serde_json::to_value(answers).map_err(unavailable)?)
+            .bind(action)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
@@ -350,7 +395,7 @@ impl QualityOpsStore for PgQualityOpsStore {
 
     async fn runs(&self, rule_id: &str) -> AdminStoreResult<Vec<QualityRun>> {
         sqlx::query("select id,rule_id,account_id,model,status,started_at,finished_at,correct,incorrect,
-            unknown,request_errors from quality_runs where rule_id=$1 order by started_at desc limit 100")
+            unknown,request_errors,action from quality_runs where rule_id=$1 order by started_at desc limit 100")
             .bind(rule_id).fetch_all(&self.pool).await.map_err(unavailable)?
             .iter().map(|row| run(row, false)).collect()
     }

@@ -148,6 +148,52 @@ fn rotation_strategy_parse_should_round_trip_stable_wire_values() {
 }
 
 #[test]
+fn quality_recovery_ignores_only_its_scheduling_pause() {
+    let mut candidate = candidate("acct_quality", 0, Some(100));
+    candidate.account = candidate.account.with_account_facts(
+        false,
+        CredentialState::Ready,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
+    let mut context = context(RotationStrategy::Smart);
+    assert!(
+        AccountSelector
+            .select(&[candidate.clone()], &context)
+            .is_none()
+    );
+    context.eligibility = AccountEligibilityPolicy::IgnoreQualityPause;
+    assert!(
+        AccountSelector
+            .select(&[candidate.clone()], &context)
+            .is_some()
+    );
+    candidate.signals.in_flight = 3;
+    assert!(
+        AccountSelector
+            .select(&[candidate.clone()], &context)
+            .is_none()
+    );
+    candidate.signals.in_flight = 0;
+    candidate.signals.rate_limited_until = Some(SystemTime::now() + Duration::from_secs(60));
+    assert!(
+        AccountSelector
+            .select(&[candidate.clone()], &context)
+            .is_none()
+    );
+    candidate.signals.rate_limited_until = None;
+    candidate.account = candidate.account.with_account_facts(
+        false,
+        CredentialState::Expired,
+        QuotaState::unknown(),
+        None,
+        None,
+    );
+    assert!(AccountSelector.select(&[candidate], &context).is_none());
+}
+
+#[test]
 fn plaintext_credential_debug_should_redact_values() {
     let mut object = Map::new();
     object.insert("access_token".to_owned(), Value::from("secret-at"));

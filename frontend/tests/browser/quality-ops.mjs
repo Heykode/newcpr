@@ -48,20 +48,45 @@ async function main() {
       judgeGroupId: 'quality-group',
       judgeModel: 'fixture-judge',
       judgePrompt: 'Compare only.',
+      failureAction: 'none',
+      failureGroupIds: [],
+      autoRestore: false,
     }
     let rules = [{ id: 'quality-rule', revision: 1, config, nextRunAt: now, running: false, pending: false, lastStatus: 'correct', lastRunAt: now }]
     const run = { id: 'quality-run', ruleId: 'quality-rule', accountId: config.accountId, model: config.model, status: 'correct', startedAt: now, finishedAt: now, correct: 2, incorrect: 0, unknown: 0, requestErrors: 0 }
     let enqueues = 0
     let saves = 0
     let failHistory = false
-    await page.route('**/dev/api/admin/accounts?**', route => fulfill(route, {
-      items: [{ id: config.accountId, name: 'fixture-quality-account@example.test' }],
-      page: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
-    }))
-    await page.route('**/dev/api/admin/account-groups?**', route => fulfill(route, {
-      items: [{ id: 'quality-group', name: '独立判题分组', enabled: true }],
-      page: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
-    }))
+    let failGroups = false
+    let failAccounts = false
+    let failCreationAccount = ''
+    let groupRequests = 0
+    const catalogAccounts = [
+      { id: config.accountId, name: 'fixture-quality-account@example.test' },
+      ...Array.from({ length: 60 }, (_, i) => ({ id: `sample-${i + 1}`, name: `sample-${String(i + 1).padStart(2, '0')}@example.test` })),
+    ]
+    await page.route('**/dev/api/admin/accounts?**', async (route) => {
+      if (failAccounts)
+        return route.fulfill({ status: 503, json: { code: 503, message: 'fixture accounts unavailable', data: null } })
+      const params = new URL(route.request().url()).searchParams
+      const search = params.get('search') || ''
+      const current = Number(params.get('page') || 1)
+      const size = Number(params.get('pageSize') || 50)
+      const items = catalogAccounts.filter(account => account.name.includes(search))
+      if (search === 'sample-01')
+        await new Promise(resolve => setTimeout(resolve, 500))
+      return fulfill(route, { items: items.slice((current - 1) * size, current * size), page: { page: current, pageSize: size, total: items.length, totalPages: Math.ceil(items.length / size) } })
+    })
+    await page.route('**/dev/api/admin/account-groups?**', (route) => {
+      groupRequests++
+      assert.ok([null, 'true'].includes(new URL(route.request().url()).searchParams.get('enabled')))
+      return failGroups
+        ? route.fulfill({ status: 503, json: { code: 503, message: 'fixture groups unavailable', data: null } })
+        : fulfill(route, {
+            items: [{ id: 'quality-group', name: '独立判题分组', enabled: true, memberCount: 3 }],
+            page: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
+          })
+    })
     await page.route('**/dev/api/admin/quality-ops/**', async (route) => {
       const url = new URL(route.request().url())
       if (url.pathname.endsWith('/rules'))
@@ -92,8 +117,12 @@ async function main() {
         const body = route.request().postDataJSON()
         if (body.id === null) {
           assert.equal(body.revision, null)
-          rules = [{ id: 'new-rule', revision: 1, config: body.config, nextRunAt: now, running: false, pending: false, lastStatus: null, lastRunAt: null }]
-          return fulfill(route, rules[0])
+          if (body.config.accountId === failCreationAccount)
+            return route.fulfill({ status: 503, json: { code: 503, message: 'fixture save failed', data: null } })
+          assert.ok(!rules.some(rule => rule.config.accountId === body.config.accountId))
+          const result = { id: `new-${body.config.accountId}`, revision: 1, config: body.config, nextRunAt: now, running: false, pending: false, lastStatus: null, lastRunAt: null }
+          rules.push(result)
+          return fulfill(route, result)
         }
         assert.equal(body.id, 'quality-rule')
         assert.equal(body.config.accountId, config.accountId)
@@ -113,15 +142,21 @@ async function main() {
     assert.equal(enqueues, 1)
     await page.getByRole('button', { name: '暂停定时检测', exact: true }).click()
     await page.getByRole('button', { name: '启用定时检测', exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: '立即检测', exact: true }).isDisabled(), true)
     assert.equal(saves, 1)
     assert.match(await page.locator('.quality-rule').getByText('已暂停', { exact: true }).getAttribute('class'), /text-cp-text-secondary/)
     await page.getByRole('button', { name: '编辑规则', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '编辑检测规则' })
     await editor.waitFor()
+    await editor.getByText('每天 00:00、06:00、12:00、18:00（所选时区）', { exact: true }).waitFor()
+    await editor.getByRole('combobox', { name: /^检测频率/ }).click()
+    await page.getByRole('option', { name: '自定义 Cron（高级）', exact: true }).click()
+    await editor.getByRole('textbox', { name: /^Cron 表达式/ }).fill('15 9 * * 1-5')
     await editor.getByRole('textbox', { name: /^题目/ }).fill('Changed fixture question')
     await editor.getByRole('button', { name: '保存', exact: true }).click()
     await editor.waitFor({ state: 'hidden' })
     assert.equal(rules[0].config.prompt, 'Changed fixture question')
+    assert.equal(rules[0].config.cron, '15 9 * * 1-5')
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
       await page.mouse.move(0, 0)
@@ -145,6 +180,7 @@ async function main() {
       await drawer.getByRole('button', { name: '关闭', exact: true }).click()
       await page.getByRole('button', { name: '编辑规则', exact: true }).click()
       await editor.waitFor()
+      assert.equal(await editor.getByRole('textbox', { name: /^Cron 表达式/ }).inputValue(), '15 9 * * 1-5')
       await page.screenshot({ path: `${output}/quality-editor-${width}.png`, fullPage: true, animations: 'disabled' })
       assert.ok(await editor.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
       const saveBox = await editor.getByRole('button', { name: '保存', exact: true }).boundingBox()
@@ -171,24 +207,84 @@ async function main() {
     await page.getByRole('alertdialog').getByRole('button', { name: '确认', exact: true }).click()
     await page.getByText('暂无规则', { exact: true }).waitFor()
     assert.equal(rules.length, 0)
+    failGroups = true
     await page.getByRole('button', { name: '新建规则', exact: true }).click()
     const creation = page.getByRole('dialog', { name: '新建检测规则' })
-    await creation.getByRole('combobox', { name: '被测账号', exact: true }).click()
-    await page.getByRole('option', { name: /fixture-quality-account/ }).click()
+    const accountPicker = creation.getByRole('group', { name: /^被测账号/ })
+    await accountPicker.getByRole('checkbox', { name: 'fixture-quality-account@example.test', exact: true }).check()
+    await creation.getByText('fixture groups unavailable', { exact: true }).waitFor()
+    failGroups = false
+    await creation.getByRole('button', { name: '重试加载判题账号分组', exact: true }).click()
+    await creation.getByRole('radio', { name: '独立判题分组', exact: true }).waitFor()
+    const originalGroupRequests = groupRequests
+    await accountPicker.getByRole('button', { name: '加载更多被测账号', exact: true }).click()
+    await accountPicker.getByRole('checkbox', { name: 'sample-60@example.test', exact: true }).check()
+    const search = accountPicker.getByRole('textbox', { name: '搜索被测账号', exact: true })
+    const slowSearch = page.waitForRequest(request => request.url().includes('/accounts?') && new URL(request.url()).searchParams.get('search') === 'sample-01')
+    await search.fill('sample-01')
+    await slowSearch
+    await search.fill('sample-02')
+    await accountPicker.getByRole('checkbox', { name: 'sample-02@example.test', exact: true }).waitFor()
+    assert.equal(await accountPicker.getByRole('checkbox').count(), 1)
+    assert.equal(await accountPicker.getByRole('checkbox', { name: 'sample-01@example.test', exact: true }).count(), 0)
+    await accountPicker.getByText('已选 2 项', { exact: true }).waitFor()
+    await search.fill('no-such-account')
+    await accountPicker.getByText('没有匹配结果', { exact: true }).waitFor()
+    await search.fill('')
+    await accountPicker.getByRole('checkbox', { name: 'fixture-quality-account@example.test', exact: true }).check()
+    assert.equal(groupRequests, originalGroupRequests)
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 })
+      await accountPicker.scrollIntoViewIfNeeded()
+      assert.ok(await creation.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      const list = accountPicker.locator('[aria-label="被测账号列表"]')
+      assert.ok(await list.evaluate(element => element.scrollHeight > element.clientHeight && element.clientHeight <= 210))
+      await page.screenshot({ path: `${output}/quality-create-${width}.png`, fullPage: true, animations: 'disabled' })
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 })
     await creation.getByRole('textbox', { name: /^检测模型/ }).fill('fixture-create-model')
     await creation.getByRole('textbox', { name: /^题目/ }).fill('question')
     await creation.getByRole('textbox', { name: /^参考答案/ }).fill('answer')
-    await creation.getByRole('combobox', { name: '判题分组', exact: true }).click()
-    await page.getByRole('option', { name: '独立判题分组', exact: true }).click()
+    await creation.getByRole('radio', { name: '独立判题分组', exact: true }).check()
     await creation.getByRole('textbox', { name: /^判题模型/ }).fill('fixture-judge')
     await creation.getByRole('combobox', { name: '推理强度', exact: true }).click()
     await page.getByRole('option', { name: 'high', exact: true }).click()
+    await creation.getByRole('combobox', { name: /^检测频率/ }).click()
+    await page.getByRole('option', { name: '每天固定时间', exact: true }).click()
+    await creation.getByLabel(/^每天检测时间/).fill('08:30')
+    await creation.getByText('每天 08:30（所选时区）', { exact: true }).waitFor()
+    await creation.getByRole('combobox', { name: '处理方式', exact: true }).click()
+    await page.getByRole('option', { name: '移出指定分组', exact: true }).click()
+    await creation.getByRole('group', { name: /^处置分组/ }).getByRole('checkbox', { name: '独立判题分组', exact: true }).check()
+    await creation.getByText('后续整轮通过后自动恢复', { exact: true }).click()
+    assert.equal(await creation.getByRole('switch', { name: '后续整轮通过后自动恢复', exact: true }).isChecked(), true)
+    failCreationAccount = 'sample-60'
+    await creation.getByRole('button', { name: '保存', exact: true }).click()
+    await creation.getByText(/1 项未保存；成功项已保留/).waitFor()
+    assert.equal(rules.length, 1)
+    await accountPicker.getByText('已选 1 项', { exact: true }).waitFor()
+    failCreationAccount = ''
     await creation.getByRole('button', { name: '保存', exact: true }).click()
     await creation.waitFor({ state: 'hidden' })
+    assert.equal(rules.length, 2)
+    assert.equal(rules[1].config.accountId, 'sample-60')
+    assert.equal(rules[1].config.failureAction, 'remove_groups')
+    assert.deepEqual(rules[1].config.failureGroupIds, ['quality-group'])
+    assert.equal(rules[1].config.autoRestore, true)
     assert.equal(rules[0].config.accountId, config.accountId)
     assert.equal(rules[0].config.reasoningEffort, 'high')
+    assert.equal(rules[0].config.cron, '30 8 * * *')
+    failAccounts = true
+    await page.getByRole('button', { name: '新建规则', exact: true }).click()
+    await creation.getByText('fixture accounts unavailable', { exact: true }).waitFor()
+    await creation.getByRole('radio', { name: '独立判题分组', exact: true }).check()
+    failAccounts = false
+    await creation.getByRole('button', { name: '重试加载被测账号', exact: true }).click()
+    await accountPicker.getByRole('checkbox', { name: 'fixture-quality-account@example.test', exact: true }).waitFor()
+    assert.equal(await search.inputValue(), '')
+    await creation.getByRole('button', { name: '取消', exact: true }).click()
     assert.deepEqual(errors, [])
-    process.stdout.write('Quality UI: scheduling controls, revision payload, deduplication, escaped detail and 1440/390/320px layouts passed.\n')
+    process.stdout.write('Quality UI: multi-account partial retry, failure policies, disabled trigger, searchable catalogs, daily/custom schedules and 1440/390/320px layouts passed.\n')
   }
   finally {
     await browser?.close()

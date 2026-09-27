@@ -1032,9 +1032,18 @@ impl ProviderAccount {
         now: SystemTime,
         rate_limited_until: Option<SystemTime>,
     ) -> AccountStatusProjection {
+        self.status_with_scheduling(now, rate_limited_until, self.enabled)
+    }
+
+    pub(crate) fn status_with_scheduling(
+        &self,
+        now: SystemTime,
+        rate_limited_until: Option<SystemTime>,
+        enabled: bool,
+    ) -> AccountStatusProjection {
         resolve_account_status(
             &AccountStatusFacts {
-                enabled: self.enabled,
+                enabled,
                 credential_state: self.credential_state,
                 access_token_expires_at: self.access_token_expires_at,
                 quota: self.quota,

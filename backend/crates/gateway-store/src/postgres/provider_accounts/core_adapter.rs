@@ -17,6 +17,21 @@ fn loaded_credential_from_record(
 
 #[async_trait]
 impl ProviderAccountStore for PgProviderAccountRepository {
+    async fn quality_pause_is_owned(
+        &self,
+        account: &CoreProviderAccountId,
+    ) -> Result<bool, CoreStoreError> {
+        sqlx::query_scalar(
+            "select exists(select 1 from provider_accounts a join quality_rules q
+            on q.id=a.quality_pause_owner and q.account_id=a.id
+            where a.id=$1 and not a.enabled and q.enabled and q.lease_until>now())",
+        )
+        .bind(account.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))
+    }
+
     async fn initialize_device_registry(
         &self,
         codec: Arc<dyn ProviderDeviceCodec>,
@@ -526,7 +541,8 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                  updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
                and provider_kind = 'openai' and authentication_kind = 'oauth'
-               and responses_upstream = 'excel' and excel_auto_disable_on_403 and enabled",
+               and responses_upstream = 'excel' and excel_auto_disable_on_403
+               and (enabled or quality_pause_owner is not null)",
         )
         .bind(account.id().as_str())
         .bind(to_i64(account.revision().get()).map_err(core_store_error)?)

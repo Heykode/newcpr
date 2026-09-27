@@ -278,8 +278,10 @@ HTTP stage; a 403 encoded in an HTTP200 SSE payload cannot. Exclude
 on this opted-in path, preserve the current response evidence, and never
 replay the current request through another protocol.
 Store locks config then account and conditionally changes `enabled` to false
-for the current credential revision/type/flags and enabled row; config revision
-increments in that transaction exactly once. Preserve the Excel route, credentials,
+for the current credential revision/type/flags and an enabled or quality-owned paused
+row. In the latter case the independent HTTP 403 pause takes ownership, preventing
+quality auto-recovery from undoing it. Config revision increments in that transaction
+exactly once. Preserve the Excel route, credentials,
 quotas, model list, other options and opt-in flag. No Codex fallback or in-flight
 cancellation. Resume uses the existing manual scheduling control, not a timer.
 Keep legacy `excelAutoDisableOn403` and `excelAutoDisabledAt` wire/storage names

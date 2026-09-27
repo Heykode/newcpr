@@ -89,12 +89,23 @@ impl GrokAccountSessionSelector {
         request: GrokSessionSelection,
     ) -> Result<SelectedGrokSession, GrokSessionSelectorError> {
         let diagnostic = request.eligibility() == AccountEligibilityPolicy::BypassForDiagnostic;
+        let quality_recovery = if request.eligibility()
+            == AccountEligibilityPolicy::IgnoreQualityPause
+            && let Some(required) = request.required_account()
+        {
+            self.repository
+                .quality_pause_is_owned(required)
+                .await
+                .map_err(|_| GrokSessionSelectorError::Unavailable)?
+        } else {
+            false
+        };
         let mut accounts = self
             .repository
             .list_accounts_for_provider()
             .await
             .map_err(|_| GrokSessionSelectorError::Unavailable)?;
-        if diagnostic
+        if (diagnostic || quality_recovery)
             && let Some(required) = request.required_account()
             && !accounts.iter().any(|account| account.id() == required)
             && let Some(account) = self
@@ -213,7 +224,13 @@ impl GrokAccountSessionSelector {
             preferred_account: request.required_account().cloned().or(affinity_account),
             preferred_account_overrides_weight: false,
             round_robin_cursor: scheduling.round_robin_cursor(),
-            eligibility: request.eligibility(),
+            eligibility: if diagnostic {
+                AccountEligibilityPolicy::BypassForDiagnostic
+            } else if quality_recovery {
+                AccountEligibilityPolicy::IgnoreQualityPause
+            } else {
+                AccountEligibilityPolicy::Enforce
+            },
             account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
         };
         let mut capacity_denied = false;
@@ -262,6 +279,15 @@ impl GrokAccountSessionSelector {
                 .load(&selected_id, selected_revision)
                 .await
                 .map_err(|_| GrokSessionSelectorError::InvalidSession)?;
+            if quality_recovery
+                && !self
+                    .repository
+                    .quality_pause_is_owned(&selected_id)
+                    .await
+                    .map_err(|_| GrokSessionSelectorError::Unavailable)?
+            {
+                return Err(GrokSessionSelectorError::NoEligibleSession);
+            }
             if !diagnostic
                 && loaded
                     .refresh_token_expires_at
