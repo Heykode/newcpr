@@ -200,6 +200,9 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
             "crates/providers/openai",
             Some(
                 "provider/excel.rs"
+                | "transport/excel/catalog.rs"
+                | "transport/excel/history_messages.rs"
+                | "transport/excel/repair.rs"
                 | "transport/excel/request.rs"
                 | "transport/excel/replay.rs"
                 | "transport/excel/tools.rs"
@@ -219,7 +222,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         ("crates/providers/openai", Some("transport/excel/mod.rs"), Item::Mod(module)) => {
             matches!(
                 module.ident.to_string().as_str(),
-                "tests" | "tool_compat_tests" | "image_tests"
+                "tests" | "tool_compat_tests" | "image_tests" | "history_tests"
             ) && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
@@ -557,7 +560,7 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
 #[test]
 fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     let owner = "crates/providers/openai";
-    for name in ["tool_compat_tests", "image_tests"] {
+    for name in ["tool_compat_tests", "image_tests", "history_tests"] {
         let file = Path::new("transport/excel/mod.rs");
         let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name};")).unwrap();
         assert!(is_audited_private_test(owner, file, &item));
@@ -577,6 +580,9 @@ fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     }
     for relative in [
         "provider/excel.rs",
+        "transport/excel/catalog.rs",
+        "transport/excel/history_messages.rs",
+        "transport/excel/repair.rs",
         "transport/excel/request.rs",
         "transport/excel/replay.rs",
         "transport/excel/tools.rs",

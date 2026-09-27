@@ -18,8 +18,6 @@ use super::{ExcelRequestError, images};
 const MEMORY_BUDGET: usize = 1024 * 1024 * 1024;
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 const ORPHAN_GRACE: Duration = Duration::from_secs(31 * 60);
-#[cfg(test)]
-const TTL: Duration = Duration::from_secs(30 * 60);
 
 pub(crate) struct ImageRelay {
     origin: Option<String>,
@@ -186,8 +184,6 @@ struct Entry {
 }
 
 pub(crate) struct ImageLease {
-    #[cfg(test)]
-    tokens: Vec<String>,
     _request: CapacityPermit,
 }
 
@@ -262,19 +258,6 @@ impl ImageRelay {
             }
             None => self.origin.clone(),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn stage_with_tuning(
-        self: &Arc<Self>,
-        body: &mut Map<String, Value>,
-        limits: gateway_core::routing::RequestTuning,
-        scope: &str,
-    ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
-        let Some(origin) = self.relay_origin() else {
-            return Ok(None);
-        };
-        self.stage_with_origin(body, limits, scope, &origin)
     }
 
     pub(crate) fn stage_with_origin(
@@ -416,16 +399,12 @@ impl ImageRelay {
         }
         entries.append(&mut staged);
         let mut replacements = BTreeMap::new();
-        #[cfg(test)]
-        let mut tokens = Vec::with_capacity(candidates.len());
         for (token, picture) in candidates {
             replacements.insert(
                 picture.url,
                 format!("{}/_cpr/excel-images/{token}", origin.trim_end_matches('/')),
             );
             entries.get_mut(&token).expect("published image").expires = now + ttl;
-            #[cfg(test)]
-            tokens.push(token);
         }
         if let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) {
             for item in items
@@ -437,11 +416,7 @@ impl ImageRelay {
                 }
             }
         }
-        Ok(Some(Arc::new(ImageLease {
-            #[cfg(test)]
-            tokens,
-            _request: request,
-        })))
+        Ok(Some(Arc::new(ImageLease { _request: request })))
     }
 }
 
@@ -522,6 +497,7 @@ fn rewrite_user_urls(value: &mut Value, replacements: &BTreeMap<String, String>)
 mod tests {
     const MAX_BYTES: usize = 1024 * 1024 * 1024;
     const MAX_REQUESTS: usize = 128;
+    const TTL: Duration = Duration::from_secs(30 * 60);
     use super::*;
     use serde_json::json;
 
@@ -554,6 +530,18 @@ mod tests {
     }
 
     impl ImageRelay {
+        fn stage_with_tuning(
+            self: &Arc<Self>,
+            body: &mut Map<String, Value>,
+            limits: gateway_core::routing::RequestTuning,
+            scope: &str,
+        ) -> Result<Option<Arc<ImageLease>>, ExcelRequestError> {
+            let Some(origin) = self.relay_origin() else {
+                return Ok(None);
+            };
+            self.stage_with_origin(body, limits, scope, &origin)
+        }
+
         pub(crate) fn stage(
             self: &Arc<Self>,
             body: &mut Map<String, Value>,
@@ -566,6 +554,16 @@ mod tests {
         json!({"input":[{"role":"user","content":[{"type":"input_image",
             "image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="}]}]})
             .as_object().unwrap().clone()
+    }
+
+    fn image_token(body: &Map<String, Value>) -> String {
+        body["input"][0]["content"][0]["image_url"]
+            .as_str()
+            .unwrap()
+            .rsplit_once("/_cpr/excel-images/")
+            .expect("rewritten image URL")
+            .1
+            .to_owned()
     }
 
     #[test]
@@ -588,7 +586,7 @@ mod tests {
             .stage_with_origin(&mut first, tuning.load(), "same-owner", &frozen)
             .unwrap()
             .unwrap();
-        let token = lease.tokens[0].clone();
+        let token = image_token(&first);
         assert!(relay.read(&token).is_some());
         tuning.publish_excel_image_transport(Some(ExcelImageTransport::Native {}));
         let mut next = original.clone();
@@ -654,11 +652,14 @@ mod tests {
         assert_eq!(original, body);
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
         let mut leases = Vec::new();
+        let mut tokens = Vec::new();
         for _ in 0..MAX_REQUESTS {
-            leases.push(relay.stage(&mut input()).unwrap().unwrap());
+            let mut body = input();
+            leases.push(relay.stage(&mut body).unwrap().unwrap());
+            tokens.push(image_token(&body));
         }
         assert!(relay.stage(&mut input()).is_err());
-        let token = leases[0].tokens[0].clone();
+        let token = tokens[0].clone();
         let image = relay.read(&token).unwrap();
         assert_eq!(image.content_type, "image/png");
         assert!(image.bytes.starts_with(b"\x89PNG"));
@@ -709,8 +710,9 @@ mod tests {
     #[test]
     fn excel_image_relay_expiry_download_limits_and_media_are_checked() {
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
-        let lease = relay.stage(&mut input()).unwrap().unwrap();
-        let token = &lease.tokens[0];
+        let mut body = input();
+        let _lease = relay.stage(&mut body).unwrap().unwrap();
+        let token = &image_token(&body);
         for _ in 0..16 {
             assert!(relay.read(token).is_some());
         }
@@ -743,8 +745,10 @@ mod tests {
             ImageRelay::new(Some("https://images.example.com".into()))
                 .with_request_tuning(tuning.clone()),
         );
-        let first = relay.stage(&mut input()).unwrap().unwrap();
-        let image = relay.read(&first.tokens[0]).unwrap();
+        let mut first_body = input();
+        let first = relay.stage(&mut first_body).unwrap().unwrap();
+        let token = image_token(&first_body);
+        let image = relay.read(&token).unwrap();
         let used = relay.byte_budget.load(Ordering::Acquire);
         tuning.publish(gateway_core::routing::RequestTuning {
             excel_image_relay_bytes: used as u64,
@@ -753,7 +757,7 @@ mod tests {
             ..Default::default()
         });
         assert!(relay.stage(&mut input()).is_err());
-        assert!(relay.read(&first.tokens[0]).is_none());
+        assert!(relay.read(&token).is_none());
         drop(first);
         assert!(relay.stage(&mut input()).is_err());
         assert_eq!(relay.byte_budget.load(Ordering::Acquire), used);
@@ -777,8 +781,14 @@ mod tests {
     #[test]
     fn excel_image_capacity_and_download_slots_follow_body_lifetime() {
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
+        let mut tokens = Vec::new();
         let leases: Vec<_> = (0..3)
-            .map(|_| relay.stage(&mut input()).unwrap().unwrap())
+            .map(|_| {
+                let mut body = input();
+                let lease = relay.stage(&mut body).unwrap().unwrap();
+                tokens.push(image_token(&body));
+                lease
+            })
             .collect();
         let bytes_per_image = relay
             .entries
@@ -791,10 +801,10 @@ mod tests {
             .size;
         let mut downloads = Vec::new();
         for index in 0..32 {
-            downloads.push(relay.read(&leases[index % 3].tokens[0]).unwrap());
+            downloads.push(relay.read(&tokens[index % 3]).unwrap());
         }
-        assert!(relay.read(&leases[0].tokens[0]).is_none());
-        let token = leases[0].tokens[0].clone();
+        assert!(relay.read(&tokens[0]).is_none());
+        let token = tokens[0].clone();
         drop(leases);
         relay.entries.lock().unwrap().clear();
         assert!(relay.read(&token).is_none());
@@ -839,7 +849,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let bytes = relay.byte_budget.load(Ordering::Acquire);
-        let token = lease.tokens[0].clone();
+        let token = image_token(&first);
         drop(lease);
         let mut again = input();
         relay
@@ -864,11 +874,12 @@ mod tests {
             excel_image_relay_entries: 1,
             ..Default::default()
         };
+        let mut body = input();
         let lease = relay
-            .stage_with_tuning(&mut input(), limits, "scope")
+            .stage_with_tuning(&mut body, limits, "scope")
             .unwrap()
             .unwrap();
-        let token = lease.tokens[0].clone();
+        let token = image_token(&body);
         let (path, expiry) = {
             let entries = relay.entries.lock().unwrap();
             let entry = entries.get(&token).unwrap();
@@ -912,11 +923,13 @@ mod tests {
     #[test]
     fn excel_image_modified_disk_file_is_rejected_without_leaking_download_permits() {
         let relay = Arc::new(ImageRelay::new(Some("https://images.example.com".into())));
-        let lease = relay
-            .stage_with_tuning(&mut input(), relay.request_tuning(), "scope")
+        let mut body = input();
+        let _lease = relay
+            .stage_with_tuning(&mut body, relay.request_tuning(), "scope")
             .unwrap()
             .unwrap();
-        let path = relay.entries.lock().unwrap()[&lease.tokens[0]]
+        let token = image_token(&body);
+        let path = relay.entries.lock().unwrap()[&token]
             .image
             .path
             .to_path_buf();
@@ -926,7 +939,7 @@ mod tests {
             .unwrap()
             .write_all(b"unexpected")
             .unwrap();
-        assert!(relay.read(&lease.tokens[0]).is_none());
+        assert!(relay.read(&token).is_none());
         assert_eq!(relay.downloads.load(Ordering::Acquire), 0);
         assert_eq!(relay.memory_budget.load(Ordering::Acquire), 0);
     }
