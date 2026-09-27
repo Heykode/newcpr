@@ -24,3 +24,8 @@
   are authenticated and no-store. Retain seven days / 200 runs per rule.
 - Regression coverage lives in Core execution, Admin parsing/Cron, API auth,
   Store lease/fence/retention tests and frontend `tests/browser/quality-ops.mjs`.
+- Private Admin parsing/Cron and Store usage-predicate tests have exact owner/file
+  entries in `apps/gateway/tests/main.rs`. Keep them private, inline, gated only
+  by `cfg(test)`, and after implementation items. Do not expose test APIs or exempt
+  entire directories. Validate the gateway architecture suite and Clippy with
+  `--all-targets`, not only the modified libraries.
