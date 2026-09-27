@@ -501,7 +501,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         require_core_update(updated)
     }
 
-    async fn disable_excel_on_403(
+    async fn pause_account_on_excel_403(
         &self,
         account: &CoreProviderAccount,
     ) -> Result<bool, CoreStoreError> {
@@ -522,10 +522,11 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
         let changed = sqlx::query(
             "update provider_accounts
-             set responses_upstream = 'codex', updated_at = greatest(now(), updated_at)
+             set enabled = false, excel_auto_disabled_at = now(),
+                 updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
                and provider_kind = 'openai' and authentication_kind = 'oauth'
-               and responses_upstream = 'excel' and excel_auto_disable_on_403",
+               and responses_upstream = 'excel' and excel_auto_disable_on_403 and enabled",
         )
         .bind(account.id().as_str())
         .bind(to_i64(account.revision().get()).map_err(core_store_error)?)

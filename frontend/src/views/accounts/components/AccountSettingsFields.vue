@@ -129,18 +129,18 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       />
     </BaseFormItem>
 
-    <BaseFormItem v-if="excelAvailable" label="Excel 遇到 HTTP 403 自动关闭">
+    <BaseFormItem v-if="excelAvailable" label="Excel 遇到 HTTP 403 自动暂停此账号调度">
       <template v-if="batch" #extra>
         <BaseCheckbox
           v-model="updateExcelAutoDisableOn403"
-          label="应用 Excel 403 自动关闭更改"
+          label="应用 Excel 403 自动暂停调度更改"
           :disabled="disabled"
         />
       </template>
       <BaseSwitch
         v-model="excelAutoDisableOn403"
-        label="Excel 遇到 HTTP 403 自动关闭"
-        title="仅上游 HTTP 403 触发，模型权限变更除外；不重发当前请求"
+        label="Excel 遇到 HTTP 403 自动暂停此账号调度"
+        title="仅 Excel 上游 HTTP 403 触发，模型权限变更除外；暂停整个账号调度，保留 Excel 设置，不回退 Codex；处理后手动启用账号调度"
         :disabled="disabled || (batch ? !updateExcelAutoDisableOn403 : !excelEnabled)"
       />
     </BaseFormItem>

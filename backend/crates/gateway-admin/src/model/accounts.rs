@@ -167,6 +167,7 @@ pub struct AccountRecord {
     pub excel_models_follow_global: bool,
     pub excel_cache_creation_as_input: bool,
     pub excel_auto_disable_on_403: bool,
+    pub excel_auto_disabled_at: Option<DateTime<Utc>>,
     pub effective_excel_models: gateway_core::account::ExcelModels,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,

@@ -102,9 +102,12 @@ pub trait ProviderAccountStore: Send + Sync {
 
     async fn update_account(&self, update: ProviderAccountUpdate) -> Result<(), StoreError>;
 
-    /// Disable only the opted-in Excel route, fenced against credential changes.
-    /// Shared request snapshots and all other account settings stay unchanged.
-    async fn disable_excel_on_403(&self, account: &ProviderAccount) -> Result<bool, StoreError> {
+    /// Pause scheduling for an opted-in Excel account, fenced against credential changes.
+    /// Preserve its Excel route and other settings; already-running requests are not cancelled.
+    async fn pause_account_on_excel_403(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<bool, StoreError> {
         let _ = account;
         Ok(false)
     }
