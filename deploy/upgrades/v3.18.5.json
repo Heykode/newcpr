@@ -1,0 +1,11 @@
+{
+  "from_version": "3.18.5",
+  "to_version": "3.18.5",
+  "from_migrations_tree": "a2b35e96416d690567f289db58c421d9877f5024",
+  "to_migrations_tree": "dcefec9676e998ab761c2a77e750c4b8530f122e",
+  "added": [
+    "0046_quality_ops.sql",
+    "0047_excel_pause_diagnostics.sql"
+  ],
+  "recovery": "manual"
+}
