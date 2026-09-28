@@ -84,8 +84,14 @@ editing prior entries.
   proxy policy atomically after applying both settings, preserving historical
   affinity, credentials and fingerprint. Publish only after the transaction commits.
 - Bulk/template IPv6 controls reuse the existing generation and affinity hooks, not
-  the request hot path. Normal HTTP idle timeout remains None and source-bound IPv6
-  remains 60 seconds; these are idle connection policies, not request deadlines.
+  the request hot path. Following the user-approved a5a844a adaptation, normal HTTP
+  uses the pinned reqwest pool and TCP/H2 keepalive defaults: 90-second idle expiry,
+  no per-host idle-count override, 15-second TCP keepalive and no periodic H2 PING.
+  Source-bound IPv6 retains its separate 60-second/one-idle-connection pool and
+  existing keepalive policy. These are idle connection policies, not request
+  deadlines or account concurrency limits. Do not reset UA, account/profile cache
+  keys, CA/TLS selection, proxy/source binding, native retry suppression, 15-second
+  connect timeout or exact WebSocket owners when aligning HTTP defaults.
 
 - Default and custom UA are explicit independent modes. A custom string equal to
   the current default is still custom. Verified release updates change only the

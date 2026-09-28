@@ -27,6 +27,7 @@ pub struct RequestTuningOverrides {
     pub websocket_max_retries: Option<u32>,
     pub websocket_http_fallback_enabled: Option<bool>,
     pub websocket_large_request_threshold_bytes: Option<u64>,
+    pub stream_prefetch_bytes: Option<u64>,
     pub websocket_max_age_ms: Option<u64>,
     pub websocket_stream_idle_timeout_ms: Option<u64>,
     pub websocket_failure_threshold: Option<u32>,
@@ -75,6 +76,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_max_retries: Option<u32>,
             websocket_http_fallback_enabled: Option<bool>,
             websocket_large_request_threshold_bytes: Option<u64>,
+            stream_prefetch_bytes: Option<u64>,
             websocket_max_age_ms: Option<u64>,
             // Old API clients and persisted settings may carry this removed limit.
             #[serde(rename = "websocketMaxConnecting")]
@@ -115,6 +117,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_max_retries: wire.websocket_max_retries,
             websocket_http_fallback_enabled: wire.websocket_http_fallback_enabled,
             websocket_large_request_threshold_bytes: wire.websocket_large_request_threshold_bytes,
+            stream_prefetch_bytes: wire.stream_prefetch_bytes,
             websocket_max_age_ms: wire.websocket_max_age_ms,
             websocket_stream_idle_timeout_ms: wire.websocket_stream_idle_timeout_ms,
             websocket_failure_threshold: wire.websocket_failure_threshold,

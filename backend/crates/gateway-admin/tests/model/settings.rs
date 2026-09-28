@@ -30,6 +30,37 @@ fn excel_image_policy_defaults_and_warning_bounds_are_explicit() {
 }
 
 #[test]
+fn stream_prefetch_settings_preserve_zero_custom_values_and_legacy_defaults() {
+    for bytes in [0, 1, 128 * 1024, 256 * 1024, u64::MAX] {
+        let overrides: RequestTuningOverrides =
+            serde_json::from_value(json!({"streamPrefetchBytes": bytes})).unwrap();
+        assert!(overrides.validate());
+        assert_eq!(overrides.stream_prefetch_bytes, Some(bytes));
+        assert_eq!(
+            serde_json::to_value(overrides).unwrap()["streamPrefetchBytes"],
+            bytes
+        );
+    }
+    for value in [json!({}), json!({"streamPrefetchBytes": null})] {
+        let overrides: RequestTuningOverrides = serde_json::from_value(value).unwrap();
+        assert_eq!(overrides.stream_prefetch_bytes, None);
+    }
+    for value in [json!(-1), json!(0.5), json!("128")] {
+        assert!(
+            serde_json::from_value::<RequestTuningOverrides>(json!({"streamPrefetchBytes": value}))
+                .is_err()
+        );
+    }
+    let mut legacy = serde_json::to_value(RequestTuning::defaults()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("streamPrefetchBytes");
+    let tuning: RequestTuning = serde_json::from_value(legacy).unwrap();
+    assert_eq!(tuning.stream_prefetch_bytes, 128 * 1024);
+}
+
+#[test]
 fn excel_image_transport_validates_explicit_modes_and_origin() {
     for value in [
         json!({}),
@@ -87,6 +118,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         websocket_max_retries: Some(9),
         websocket_http_fallback_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(4096),
+        stream_prefetch_bytes: Some(256 * 1024),
         websocket_max_age_ms: Some(60_000),
         websocket_stream_idle_timeout_ms: Some(120_000),
         websocket_failure_threshold: Some(3),
@@ -129,6 +161,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "websocketMaxRetries": 9,
             "websocketHttpFallbackEnabled": false,
             "websocketLargeRequestThresholdBytes": 4096,
+            "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
             "websocketFailureThreshold": 3,

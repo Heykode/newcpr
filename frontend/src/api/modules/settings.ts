@@ -35,6 +35,7 @@ export interface RequestTuning {
   websocketMaxRetries: number
   websocketHttpFallbackEnabled: boolean
   websocketLargeRequestThresholdBytes: number
+  streamPrefetchBytes: number
   websocketMaxAgeMs: number
   websocketStreamIdleTimeoutMs: number
   websocketFailureThreshold: number
