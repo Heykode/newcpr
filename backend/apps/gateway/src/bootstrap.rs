@@ -69,12 +69,24 @@ pub async fn run() -> Result<(), BootstrapError> {
         _compose_services: _,
     } = config;
 
-    let host = gateway_host::initialize(host).await?;
+    let host = gateway_host::initialize_with_proxy_client_builder(
+        host,
+        provider_openai::build_reqwest_client_with_custom_ca,
+    )
+    .await?;
     host.report_startup_ready("Host");
     let mut store = gateway_store::initialize(store).await?;
     host.report_startup_ready("Store");
     let request_tuning = RequestTuningHandle::default();
-    let provider_ports = store.provider_ports();
+    let provider_ports = store
+        .provider_ports()
+        .with_session_proxy_pool(host.session_proxy_pool());
+    host.start_proxy_warm(
+        provider_ports.accounts(),
+        store.admin_ports().proxies(),
+        request_tuning.account_concurrency(),
+    )
+    .await;
     let mut openai = provider_openai::initialize_with_request_tuning(
         openai,
         provider_ports.clone(),
@@ -110,7 +122,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     let api = gateway_api::initialize(
         api,
         core.execution_service(),
-        admin.services(),
+        admin.services().with_mihomo(host.mihomo_management()),
         probes,
         host.worker_health(),
         host.connection_lifecycle(),

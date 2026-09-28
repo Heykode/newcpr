@@ -145,6 +145,7 @@ pub struct ProviderAccountSummary {
     pub excel_models_follow_global: bool,
     pub excel_cache_creation_as_input: bool,
     pub excel_ignore_encrypted_content: bool,
+    pub request_proxy_source: gateway_core::provider_ports::session_proxy::RequestProxySource,
     pub excel_auto_disable_on_403: bool,
     pub excel_403_action: gateway_core::account::Excel403Action,
     pub excel_auto_disabled_at: Option<DateTime<Utc>>,
@@ -300,6 +301,14 @@ impl ImportProviderAccounts {
         let mut ids = BTreeSet::new();
         for account in &self.accounts {
             account.validate()?;
+            if self
+                .settings
+                .as_ref()
+                .and_then(|s| s.request_proxy_source)
+                .is_some_and(|source| !source.supports_provider(&account.provider_kind))
+            {
+                return Err(invalid("request proxy pools require an OpenAI account"));
+            }
             if let Some(upstream) = self.settings.as_ref().and_then(|s| {
                 s.excel_models
                     .as_ref()
@@ -381,6 +390,8 @@ pub struct BatchUpdateProviderAccountsAdmin {
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
     pub excel_ignore_encrypted_content: Option<bool>,
+    pub request_proxy_source:
+        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
@@ -452,7 +463,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
@@ -463,7 +474,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
@@ -476,7 +487,7 @@ pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
-            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
+            has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
             provider_quota_json, quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
             last_error_reason, last_error_message,
@@ -564,6 +575,7 @@ pub(crate) fn core_account_from_summary(
     .with_excel_models(summary.effective_excel_models)
     .with_excel_cache_creation_as_input(summary.excel_cache_creation_as_input)
     .with_excel_ignore_encrypted_content(summary.excel_ignore_encrypted_content)
+    .with_request_proxy_source(summary.request_proxy_source)
     .with_excel_403_action(summary.excel_403_action)
     .with_turn_state_binding_revision(binding_revision)
     .with_scheduling(summary.concurrency_limit, summary.weight)
@@ -668,6 +680,12 @@ pub(crate) fn account_summary_from_row(
         excel_models_follow_global: get(&row, "excel_models_follow_global")?,
         excel_cache_creation_as_input: get(&row, "excel_cache_creation_as_input")?,
         excel_ignore_encrypted_content: get(&row, "excel_ignore_encrypted_content")?,
+        request_proxy_source:
+            gateway_core::provider_ports::session_proxy::RequestProxySource::parse(&get::<String>(
+                &row,
+                "request_proxy_source",
+            )?)
+            .ok_or_else(|| invalid("invalid Excel proxy source"))?,
         excel_auto_disable_on_403: get(&row, "excel_auto_disable_on_403")?,
         excel_403_action: gateway_core::account::Excel403Action::parse(&get::<String>(
             &row,

@@ -668,6 +668,7 @@ async fn quality_account_rename_keeps_recovery_ownership() {
                 excel_models_follow_global: None,
                 excel_cache_creation_as_input: None,
                 excel_ignore_encrypted_content: None,
+                request_proxy_source: None,
                 excel_auto_disable_on_403: None,
                 excel_403_action: Default::default(),
                 model_access: None,

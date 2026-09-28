@@ -23,6 +23,18 @@ const { templateForm, templateConfig } = load('../src/components/account-templat
   '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
 })
 
+test('managed exit templates do not require or toggle Excel', () => {
+  const form = templateForm({ name: 'Native proxy', requestProxySource: 'mihomo' })
+  assert.equal(form.applyExcel, false)
+  assert.equal(form.applyRequestProxySource, true)
+  const config = templateConfig(form)
+  assert.equal(config.requestProxySource, 'mihomo')
+  assert.equal('responsesUpstream' in config, false)
+  assert.equal('excelModels' in config, false)
+  form.applyRequestProxySource = false
+  assert.equal('requestProxySource' in templateConfig(form), false)
+})
+
 test('templates roundtrip scheduling, groups and proxy without sharing mutable arrays', () => {
   const config = { name: 'Team', enabled: false, concurrencyLimit: 8, weight: 19, groupIds: ['group-a'], outboundProxyId: 'proxy-a' }
   const form = templateForm(config)

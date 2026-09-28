@@ -3,6 +3,7 @@
 pub mod client_distribution;
 pub mod config;
 mod logging;
+mod mihomo;
 mod notifications;
 pub mod proxy_probe;
 pub mod serve;
@@ -38,10 +39,19 @@ pub struct HostBundle {
     workers: WorkerSupervisor,
     system: Arc<ProcessSystemOperations>,
     client_distribution: Arc<RgAdguardClientDistribution>,
+    mihomo: Arc<mihomo::ManagedMihomo>,
 }
 
 /// 在启动其他包之前初始化进程级能力。
 pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
+    initialize_with_proxy_client_builder(config, reqwest::ClientBuilder::build).await
+}
+
+/// Compose managed-proxy probes with the same certificate trust as provider traffic.
+pub async fn initialize_with_proxy_client_builder<E>(
+    config: HostConfig,
+    build: impl Fn(reqwest::ClientBuilder) -> Result<reqwest::Client, E> + Send + Sync + 'static,
+) -> Result<HostBundle, HostError> {
     let log_guard = initialize_logging(&config.logging)?;
     let cancellation = CancellationToken::new();
     let connections = Arc::new(ConnectionTracker::new(cancellation.clone()));
@@ -51,6 +61,15 @@ pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
         config.system_update.clone(),
     ));
     let client_distribution = Arc::new(RgAdguardClientDistribution::new());
+    let mihomo = Arc::new(
+        mihomo::ManagedMihomo::open(
+            config.runtime_data_dir.join("mihomo"),
+            cancellation.clone(),
+            build,
+        )
+        .await
+        .map_err(|_| HostError::Mihomo)?,
+    );
     Ok(HostBundle {
         config,
         log_guard,
@@ -59,10 +78,32 @@ pub async fn initialize(config: HostConfig) -> Result<HostBundle, HostError> {
         workers,
         system,
         client_distribution,
+        mihomo,
     })
 }
 
 impl HostBundle {
+    #[must_use]
+    pub fn mihomo_management(&self) -> Arc<dyn gateway_admin::ports::mihomo::MihomoManagement> {
+        self.mihomo.clone()
+    }
+
+    #[must_use]
+    pub fn session_proxy_pool(
+        &self,
+    ) -> Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyPool> {
+        self.mihomo.pools.clone()
+    }
+
+    pub async fn start_proxy_warm(
+        &self,
+        accounts: Arc<dyn gateway_core::account::ProviderAccountStore>,
+        proxies: Arc<dyn gateway_admin::ports::proxy::ProxyStore>,
+        limits: gateway_core::runtime::AccountConcurrencyHandle,
+    ) {
+        self.mihomo.start_warm(accounts, proxies, limits).await;
+    }
+
     /// 向启动控制台报告一个组装阶段已就绪。
     pub fn report_startup_ready(&self, service: &'static str) {
         tracing::info!(target: "gateway_startup", service, "服务启动正常");
@@ -143,6 +184,7 @@ impl HostBundle {
         )
         .await;
         self.cancellation.cancel();
+        self.mihomo.shutdown().await;
         self.workers
             .shutdown(self.config.worker_shutdown_timeout())
             .await;
@@ -153,6 +195,8 @@ impl HostBundle {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
+    #[error("managed proxy initialization failed; saved configuration retained")]
+    Mihomo,
     #[error("notification delivery initialization failed")]
     Notifications,
     #[error(transparent)]

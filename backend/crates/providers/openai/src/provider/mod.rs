@@ -100,6 +100,7 @@ mod execution;
 mod failure;
 mod observation;
 mod quality_probe;
+mod request_proxy;
 mod workers;
 
 use excel::prepare_excel;
@@ -156,10 +157,19 @@ pub struct CodexProvider {
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
     excel_replay: Arc<dyn gateway_core::provider_ports::ProviderReplayPort>,
+    session_proxy_pool:
+        Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyPool>>,
     excel_image_relay: Arc<crate::transport::excel::image_relay::ImageRelay>,
 }
 
 impl CodexProvider {
+    pub(crate) fn with_session_proxy_pool(
+        mut self,
+        pool: Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyPool>>,
+    ) -> Self {
+        self.session_proxy_pool = pool;
+        self
+    }
     pub(crate) fn with_excel_image_relay(
         mut self,
         relay: Arc<crate::transport::excel::image_relay::ImageRelay>,
@@ -237,6 +247,7 @@ impl CodexProvider {
         let client =
             CodexBackendClient::new(http, base_url, profile).with_websocket_pool(websocket_pool);
         Ok(Self {
+            session_proxy_pool: None,
             selector,
             catalog,
             quota,
@@ -755,14 +766,27 @@ impl Provider for CodexProvider {
             AttemptTransport::Retry(retry_index) => retry_index.get(),
             AttemptTransport::Default | AttemptTransport::Fallback => 0,
         };
+        let session = upstream_request
+            .local_conversation_id
+            .as_deref()
+            .or_else(|| {
+                upstream_request
+                    .body()
+                    .get("prompt_cache_key")
+                    .and_then(Value::as_str)
+            })
+            .or_else(|| {
+                upstream_request
+                    .body()
+                    .get("session_id")
+                    .and_then(Value::as_str)
+            });
+        let client = self.account_exit_client(&context, lease.account(), excel, session)?;
+        if let Some(prepared) = upstream_request.excel.as_mut() {
+            prepared.exit_lease = client.session_proxy_lease();
+        }
         let events = cold_response_stream(ColdResponse {
-            client: self
-                .client_for_request(&context)?
-                .with_response_control(context.response_control().cloned())
-                .for_account(lease.account())
-                .map_err(|_| {
-                    provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-                })?,
+            client: client.with_response_control(context.response_control().cloned()),
             response_origin: if excel {
                 Url::parse(crate::transport::excel::RESPONSES_URL).map_err(|_| {
                     provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)

@@ -26,6 +26,7 @@ pub(crate) fn transform_stream_with_repair(
     mut sender: Option<super::repair::Sender>,
 ) -> CodexBackendSseStream {
     let replay = prepared.replay.clone();
+    let exit_lease = prepared.exit_lease.clone();
     let request_body = sender.as_ref().map(|_| prepared.body.clone());
     let mut transform = Relay {
         tools: prepared.tools.clone(),
@@ -46,7 +47,13 @@ pub(crate) fn transform_stream_with_repair(
         let mut recorded = false;
         loop {
             let chunk = match &mut source {
-                Some(source) => source.next().await.transpose()?,
+                Some(source) => match source.next().await {
+                    Some(Err(error)) => {
+                        if let Some(lease)=&exit_lease {lease.report(gateway_core::provider_ports::session_proxy::SessionProxyOutcome::StreamFailure);}
+                        Err(error)?
+                    },
+                    value=>value.transpose()?,
+                },
                 None => None,
             };
             let finished = chunk.is_none();
@@ -81,6 +88,11 @@ pub(crate) fn transform_stream_with_repair(
                 }
                 let events = transform.event(event)?;
                 persist_completion(&transform, replay.as_ref(), &mut recorded).await?;
+                // A consumer may stop polling as soon as it receives completion.
+                // Observe the successful upstream before yielding that last frame.
+                if transform.terminal
+                    && transform.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
+                    && let Some(lease)=&exit_lease {lease.report(gateway_core::provider_ports::session_proxy::SessionProxyOutcome::Completed);}
                 let last = events.len().saturating_sub(1);
                 for (index, bytes) in events.into_iter().enumerate() {
                     if transform.terminal && index == last && transform.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some() {
@@ -88,11 +100,14 @@ pub(crate) fn transform_stream_with_repair(
                     }
                     yield bytes;
                 }
-                if transform.terminal { return; }
+                if transform.terminal {
+                    return;
+                }
             }
             if finished { break; }
         }
         // No synthetic completion: the canonical decoder owns truncated-stream errors.
+        if let Some(lease)=&exit_lease {lease.report(gateway_core::provider_ports::session_proxy::SessionProxyOutcome::StreamFailure);}
     })
 }
 
@@ -363,6 +378,7 @@ mod tests {
                 "usage":{"input_tokens":1000,"output_tokens":50,"total_tokens":1050,
                     "input_tokens_details":{"cached_tokens":100},"cache_creation_input_tokens":200}});
             let prepared = ExcelPreparedRequest {
+                exit_lease: None,
                 body: Default::default(),
                 tools: ClientTools::default(),
                 structured: None,
@@ -416,6 +432,7 @@ mod tests {
             b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
         ))]);
         let prepared = ExcelPreparedRequest {
+            exit_lease: None,
             body: Default::default(),
             tools: ClientTools::default(),
             structured: None,
@@ -454,6 +471,7 @@ mod tests {
             }}),
         ));
         let prepared = ExcelPreparedRequest {
+            exit_lease: None,
             body: Default::default(),
             tools: ClientTools::parse(source_body.as_object().unwrap()).unwrap(),
             structured: None,
@@ -566,6 +584,7 @@ mod tests {
                 }),
             ));
             let prepared = ExcelPreparedRequest {
+                exit_lease: None,
                 body: Default::default(),
                 tools: ClientTools::parse(source_body.as_object().unwrap()).unwrap(),
                 structured: StructuredOutput::parse(source_body.as_object().unwrap()).unwrap(),
@@ -644,6 +663,7 @@ mod tests {
         .unwrap();
         let capture = restored.capture.clone();
         let prepared = ExcelPreparedRequest {
+            exit_lease: None,
             body: Default::default(),
             tools: restored.tools,
             structured: None,

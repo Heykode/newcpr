@@ -30,6 +30,8 @@ export function useAccountEditor(options: {
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
   const excelIgnoreEncryptedContent = shallowRef(false)
+  const requestProxySource = shallowRef<import('@/utils/request-proxy-source').RequestProxySource>('account')
+  let initialRequestProxySource: import('@/utils/request-proxy-source').RequestProxySource = 'account'
   const excel403Action = shallowRef<Excel403Action>('none')
   let initialExcelCacheCreationAsInput = false
   let initialExcelIgnoreEncryptedContent = false
@@ -65,6 +67,8 @@ export function useAccountEditor(options: {
     excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
     excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
     excelIgnoreEncryptedContent.value = account.excelIgnoreEncryptedContent ?? false
+    requestProxySource.value = account.requestProxySource ?? 'account'
+    initialRequestProxySource = requestProxySource.value
     excel403Action.value = accountExcel403Action(account)
     initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
     initialExcelIgnoreEncryptedContent = excelIgnoreEncryptedContent.value
@@ -132,6 +136,8 @@ export function useAccountEditor(options: {
       }
       if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
         payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
+      if (editingAccount.value?.provider === 'openai' && requestProxySource.value !== initialRequestProxySource)
+        payload.requestProxySource = requestProxySource.value
       if (excelAvailable && (excelIgnoreEncryptedContent.value !== initialExcelIgnoreEncryptedContent || (initialExcelEnabled && !excelEnabled.value)))
         payload.excelIgnoreEncryptedContent = excelEnabled.value && excelIgnoreEncryptedContent.value
       if (excelAvailable && (excel403Action.value !== initialExcel403Action || (initialExcelEnabled && !excelEnabled.value)))
@@ -158,6 +164,8 @@ export function useAccountEditor(options: {
     excelModelsFollowGlobal.value = true
     excelCacheCreationAsInput.value = false
     excelIgnoreEncryptedContent.value = false
+    requestProxySource.value = 'account'
+    initialRequestProxySource = 'account'
     excel403Action.value = 'none'
     initialExcelCacheCreationAsInput = false
     initialExcelIgnoreEncryptedContent = false
@@ -181,6 +189,7 @@ export function useAccountEditor(options: {
     excelModelsFollowGlobal,
     excelCacheCreationAsInput,
     excelIgnoreEncryptedContent,
+    requestProxySource,
     excel403Action,
     concurrencyLimit,
     weight,

@@ -313,6 +313,9 @@ impl PgAdminAccountStore {
             {
                 changed_fields.push("excel_ignore_encrypted_content".to_owned());
             }
+            if settings.request_proxy_source.is_some() {
+                changed_fields.push("request_proxy_source".to_owned());
+            }
             if settings.custom_name.is_some() {
                 changed_fields.push("custom_name".to_owned());
             }
@@ -1103,6 +1106,9 @@ impl AccountStore for PgAdminAccountStore {
         {
             changed_fields.push("excel_ignore_encrypted_content".to_owned());
         }
+        if command.request_proxy_source.is_some() {
+            changed_fields.push("request_proxy_source".to_owned());
+        }
         if command.excel_403_action.is_some() {
             changed_fields.push("excel_403_action".to_owned());
         }
@@ -1129,6 +1135,7 @@ impl AccountStore for PgAdminAccountStore {
                 excel_models_follow_global: command.excel_models_follow_global,
                 excel_cache_creation_as_input: command.excel_cache_creation_as_input,
                 excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
+                request_proxy_source: command.request_proxy_source,
                 excel_auto_disable_on_403: command.excel_auto_disable_on_403,
                 excel_403_action: command.excel_403_action,
                 concurrency_limit: Some(command.concurrency_limit),
@@ -1213,6 +1220,10 @@ impl AccountStore for PgAdminAccountStore {
         };
         let mut changed_fields = Vec::new();
         for (changed, field) in [
+            (
+                command.request_proxy_source.is_some(),
+                "request_proxy_source",
+            ),
             (command.egress_mode.is_some(), "egress_mode"),
             (command.enabled.is_some(), "enabled"),
             (command.responses_upstream.is_some(), "responses_upstream"),
@@ -1269,6 +1280,7 @@ impl AccountStore for PgAdminAccountStore {
                 excel_models_follow_global: command.excel_models_follow_global,
                 excel_cache_creation_as_input: command.excel_cache_creation_as_input,
                 excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
+                request_proxy_source: command.request_proxy_source,
                 excel_auto_disable_on_403: command.excel_auto_disable_on_403,
                 excel_403_action: command.excel_403_action,
                 concurrency_limit: command.concurrency_limit,

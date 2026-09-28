@@ -659,6 +659,7 @@ impl AccountsService for DefaultAccountsService {
                         excel_models_follow_global: None,
                         excel_cache_creation_as_input: Default::default(),
                         excel_ignore_encrypted_content: Default::default(),
+                        request_proxy_source: Default::default(),
                         excel_auto_disable_on_403: Default::default(),
                         excel_403_action: Default::default(),
                         concurrency_limit: None,
@@ -695,6 +696,12 @@ impl AccountsService for DefaultAccountsService {
         let account_id = ProviderAccountId::new(command.account_id.clone())
             .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
         let (item, provider) = self.provider_for_account(&account_id).await?;
+        if command
+            .request_proxy_source
+            .is_some_and(|source| !source.supports_provider(item.account.provider_kind.as_str()))
+        {
+            return Err(AdminError::invalid("账号请求代理池仅支持 OpenAI 账号"));
+        }
         if let Some(upstream) = command
             .excel_models
             .as_ref()
@@ -768,6 +775,11 @@ impl AccountsService for DefaultAccountsService {
         >::new();
         for account_id in &account_ids {
             let (item, provider) = self.provider_for_account(account_id).await?;
+            if command.request_proxy_source.is_some_and(|source| {
+                !source.supports_provider(item.account.provider_kind.as_str())
+            }) {
+                return Err(AdminError::invalid("账号请求代理池仅支持 OpenAI 账号"));
+            }
             if let Some(upstream) = command
                 .excel_models
                 .as_ref()

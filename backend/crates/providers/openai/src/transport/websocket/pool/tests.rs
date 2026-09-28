@@ -242,6 +242,7 @@ async fn connected_with_buffer(
             None,
         ),
         metadata: CodexWebSocketConnectionMetadata {
+            session_proxy: None,
             turn_state: None,
             set_cookie_headers: Vec::new(),
             rate_limit_headers: Vec::new(),

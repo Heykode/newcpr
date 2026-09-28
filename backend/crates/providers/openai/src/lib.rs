@@ -222,6 +222,7 @@ async fn initialize_with_request_tuning_mode(
     .map_err(OpenAiInitializeError::Provider)?
     .with_request_tuning(request_tuning.clone())
     .with_excel_replay(ports.replay())
+    .with_session_proxy_pool(ports.session_proxy_pool())
     .with_excel_image_relay(Arc::clone(&image_relay))
     .with_session_identity(session_identity);
     let core_provider: Arc<dyn Provider> = Arc::new(match &egress_runtime {

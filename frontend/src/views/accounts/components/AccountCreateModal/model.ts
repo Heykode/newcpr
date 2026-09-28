@@ -1,5 +1,6 @@
 import type { AccountModelAccess } from '@/api'
 import type { Excel403Action } from '@/utils/excel-settings'
+import type { RequestProxySource } from '@/utils/request-proxy-source'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelSettings } from '@/utils/excel-settings'
@@ -15,6 +16,8 @@ export interface AccountCreateForm {
   provider: AccountCreateProvider | ''
   enabled: boolean
   applyExcel: boolean
+  applyRequestProxySource: boolean
+  requestProxySource: RequestProxySource
   excelEnabled: boolean
   excelModelsFollowGlobal: boolean
   excelCacheCreationAsInput: boolean
@@ -41,6 +44,8 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     provider: '',
     enabled: true,
     applyExcel: false,
+    applyRequestProxySource: false,
+    requestProxySource: 'account',
     excelEnabled: false,
     excelModelsFollowGlobal: true,
     excelCacheCreationAsInput: true,
@@ -80,6 +85,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
   return {
     ...(customName ? { customName } : {}),
     enabled: form.enabled,
+    ...(form.applyRequestProxySource && provider === 'openai' ? { requestProxySource: form.requestProxySource } : {}),
     ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action) : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],

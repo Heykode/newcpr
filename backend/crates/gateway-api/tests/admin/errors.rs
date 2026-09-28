@@ -11,6 +11,22 @@ use super::{AdminTestFixture, AdminTestState};
 
 const SESSION_COOKIE: &str = "cpr_admin_session=valid-session";
 
+#[tokio::test]
+async fn managed_mihomo_routes_require_admin_before_reading_or_mutating() {
+    let fixture = AdminTestFixture::new().await;
+    for (method, uri) in [
+        (Method::GET, "/api/admin/proxies/mihomo"),
+        (Method::POST, "/api/admin/proxies/mihomo"),
+        (Method::POST, "/api/admin/proxies/mihomo/check"),
+    ] {
+        let response = app(fixture.state())
+            .oneshot(request(method, uri, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+    }
+}
+
 fn app(state: AdminTestState) -> Router {
     admin::router::<AdminTestState>().with_state(state)
 }
@@ -501,6 +517,7 @@ mod provider {
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
                 excel_ignore_encrypted_content: Default::default(),
+                request_proxy_source: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_auto_disabled_at: None,

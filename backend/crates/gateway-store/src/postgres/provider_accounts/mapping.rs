@@ -37,6 +37,7 @@ pub(crate) fn admin_account_record(
         excel_models_follow_global: summary.excel_models_follow_global,
         excel_cache_creation_as_input: summary.excel_cache_creation_as_input,
         excel_ignore_encrypted_content: summary.excel_ignore_encrypted_content,
+        request_proxy_source: summary.request_proxy_source,
         excel_auto_disable_on_403: summary.excel_auto_disable_on_403,
         excel_403_action: summary.excel_403_action,
         excel_auto_disabled_at: summary.excel_auto_disabled_at,

@@ -422,6 +422,11 @@ fn start_pooled_websocket_connect(
                 }
             } => result,
         };
+        if let Err(error) = &connected
+            && let Some(lease) = &connection.session_proxy
+        {
+            lease.report_websocket_error(error);
+        }
         match finish_breaker_attempt(permit, connected) {
             Ok((connection, connect_elapsed)) => {
                 match connect_lease.connected_reserved(connection).await {
@@ -668,10 +673,12 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     let (lease, reused, pool_decision) = binding.into_parts();
     let PooledWebSocketConnection {
         websocket,
-        metadata,
+        mut metadata,
         continuation,
         created_at,
     } = connection;
+    // Only the current exchange owns an active exit reference. Idle sockets do not.
+    metadata.session_proxy = request.connection.session_proxy.clone();
     trace.record("upstream.connection", serde_json::json!({
         "connectionId": websocket.connection_id().to_string(), "reused": reused,
         "pool": pool_decision.map_or("unpooled", WebSocketPoolDecision::kind),
@@ -681,6 +688,9 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     }));
     trace.capture("upstream.request.body", request.payload_text().as_bytes());
     if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
+        if let Some(lease) = &metadata.session_proxy {
+            lease.report_websocket_error(&error);
+        }
         let observation = websocket
             .observation()
             .with_exit_reason("outbound_transport_error");

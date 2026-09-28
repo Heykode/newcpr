@@ -143,7 +143,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
                     (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
+                    access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_mode_disabled_at,
             case when excel_models_follow_global then (select excel_default_models from runtime_settings where id = 1) else excel_models end as effective_excel_models, concurrency_limit, weight, model_access_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
@@ -678,6 +678,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                         excel_models_follow_global: settings.excel_models_follow_global,
                         excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
                         excel_ignore_encrypted_content: settings.excel_ignore_encrypted_content,
+                        request_proxy_source: settings.request_proxy_source,
                         excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
                         excel_403_action: settings.excel_403_action,
                         model_access: settings.model_access.as_ref(),
@@ -897,6 +898,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     excel_models_follow_global: command.excel_models_follow_global,
                     excel_cache_creation_as_input: command.excel_cache_creation_as_input,
                     excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
+                    request_proxy_source: command.request_proxy_source,
                     excel_auto_disable_on_403: command.excel_auto_disable_on_403,
                     excel_403_action: command.excel_403_action,
                     model_access: command.model_access.as_ref(),
@@ -1253,6 +1255,7 @@ struct AccountSchedulingPatch<'a> {
     excel_models_follow_global: Option<bool>,
     excel_cache_creation_as_input: Option<bool>,
     excel_ignore_encrypted_content: Option<bool>,
+    request_proxy_source: Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
     excel_auto_disable_on_403: Option<bool>,
     excel_403_action: Option<gateway_core::account::Excel403Action>,
     model_access: Option<&'a gateway_core::account::AccountModelAccess>,
@@ -1276,6 +1279,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
         excel_models_follow_global,
         excel_cache_creation_as_input,
         excel_ignore_encrypted_content,
+        request_proxy_source,
         excel_auto_disable_on_403,
         excel_403_action,
         model_access,
@@ -1294,7 +1298,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
         .await
         .map_err(|_| postgres_unavailable("release quality scheduling ownership"))?;
     }
-    if let Some(upstream) = excel_models
+    let upstream = excel_models
         .map(|_| gateway_core::account::ResponsesUpstream::Excel)
         .or(excel_models_follow_global.map(|_| gateway_core::account::ResponsesUpstream::Excel))
         .or(excel_cache_creation_as_input
@@ -1309,8 +1313,8 @@ async fn update_provider_accounts_scheduling_in_transaction(
         .or(excel_403_action
             .filter(|action| *action != gateway_core::account::Excel403Action::None)
             .map(|_| gateway_core::account::ResponsesUpstream::Excel))
-        .or(responses_upstream)
-    {
+        .or(responses_upstream);
+    if upstream.is_some() || request_proxy_source.is_some() {
         let identities = sqlx::query(
             "select provider_kind, authentication_kind from provider_accounts
              where id = any($1::text[]) for update",
@@ -1322,8 +1326,13 @@ async fn update_provider_accounts_scheduling_in_transaction(
         for row in identities {
             let provider: String = get(&row, "provider_kind")?;
             let authentication: String = get(&row, "authentication_kind")?;
-            if !upstream.supports_account(&provider, &authentication) {
+            if upstream
+                .is_some_and(|upstream| !upstream.supports_account(&provider, &authentication))
+            {
                 return Err(invalid("Excel upstream requires an OpenAI OAuth account"));
+            }
+            if request_proxy_source.is_some_and(|source| !source.supports_provider(&provider)) {
+                return Err(invalid("request proxy pools require an OpenAI account"));
             }
         }
     }
@@ -1349,6 +1358,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
              excel_cache_creation_as_input = coalesce($14, excel_cache_creation_as_input),
              excel_ignore_encrypted_content = case when $11 = 'codex' then false
                 else coalesce($16, excel_ignore_encrypted_content) end,
+             request_proxy_source = coalesce($17, request_proxy_source),
              excel_auto_disabled_at = case when $2 is true then null
                 when $11 is not null and $11 <> responses_upstream then null
                 else excel_auto_disabled_at end,
@@ -1386,6 +1396,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
     .bind(excel_cache_creation_as_input)
     .bind(excel_403_action.map(gateway_core::account::Excel403Action::as_str))
     .bind(excel_ignore_encrypted_content)
+    .bind(request_proxy_source.map(gateway_core::provider_ports::session_proxy::RequestProxySource::as_str))
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?

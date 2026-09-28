@@ -35,6 +35,7 @@ fn batch(ids: &[&str]) -> gateway_admin::model::accounts::BatchUpdateAccounts {
         excel_models: None,
         excel_models_follow_global: None,
         excel_ignore_encrypted_content: None,
+        request_proxy_source: None,
         excel_cache_creation_as_input: None,
         excel_auto_disable_on_403: None,
         excel_403_action: None,

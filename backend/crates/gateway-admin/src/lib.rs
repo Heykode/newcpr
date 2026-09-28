@@ -159,6 +159,7 @@ pub enum AdminConfigError {
 /// 字段全部私有；调用方经 accessor 直接调用能力，不需要命名内部 `use_case` 模块。
 #[derive(Clone)]
 pub struct AdminServices {
+    mihomo: Option<Arc<dyn ports::mihomo::MihomoManagement>>,
     quality_ops: Arc<use_case::quality_ops::QualityOpsService>,
     account_templates: Arc<dyn AccountTemplatesService>,
     group_monitor: Arc<dyn GroupMonitorService>,
@@ -183,6 +184,17 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn mihomo(&self) -> Option<&dyn ports::mihomo::MihomoManagement> {
+        self.mihomo.as_deref()
+    }
+
+    #[must_use]
+    pub fn with_mihomo(mut self, mihomo: Arc<dyn ports::mihomo::MihomoManagement>) -> Self {
+        self.mihomo = Some(mihomo);
+        self
+    }
+
     #[must_use]
     pub fn quality_ops(&self) -> &use_case::quality_ops::QualityOpsService {
         self.quality_ops.as_ref()
@@ -421,6 +433,7 @@ pub async fn initialize(
         probe,
     ));
     let services = AdminServices {
+        mihomo: None,
         quality_ops: quality_ops.clone(),
         account_templates,
         group_monitor: group_monitor.clone(),

@@ -682,6 +682,7 @@ pub struct ProviderAccount {
     excel_models: super::ExcelModels,
     excel_cache_creation_as_input: bool,
     excel_ignore_encrypted_content: bool,
+    request_proxy_source: super::RequestProxySource,
     excel_403_action: super::Excel403Action,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
@@ -726,6 +727,7 @@ impl ProviderAccount {
             excel_models: super::ExcelModels::default(),
             excel_cache_creation_as_input: false,
             excel_ignore_encrypted_content: false,
+            request_proxy_source: Default::default(),
             excel_403_action: Default::default(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
@@ -874,6 +876,17 @@ impl ProviderAccount {
     #[must_use]
     pub const fn excel_ignore_encrypted_content(&self) -> bool {
         self.excel_ignore_encrypted_content
+    }
+
+    #[must_use]
+    pub const fn with_request_proxy_source(mut self, source: super::RequestProxySource) -> Self {
+        self.request_proxy_source = source;
+        self
+    }
+
+    #[must_use]
+    pub const fn request_proxy_source(&self) -> super::RequestProxySource {
+        self.request_proxy_source
     }
 
     #[must_use]

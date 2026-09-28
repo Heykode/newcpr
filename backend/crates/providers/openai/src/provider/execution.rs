@@ -126,7 +126,7 @@ impl CodexProvider {
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
-        let excel = if request.endpoint_path
+        let mut excel = if request.endpoint_path
             == crate::transport::endpoints::CODEX_RESPONSES_COMPACT_PATH
             && request.upstream_model.as_ref().is_some_and(|model| {
                 lease.account().responses_upstream_for_model(model.as_str())
@@ -205,13 +205,21 @@ impl CodexProvider {
             &request.body,
             lease.installation_id(),
         );
+        let session = request
+            .session_affinity
+            .as_ref()
+            .map(CodexSessionAffinity::persistence_hash);
+        let client = self.account_exit_client(
+            &context,
+            lease.account(),
+            excel.is_some() || excel_image.is_some(),
+            session,
+        )?;
+        if let Some(prepared) = excel.as_mut().and_then(|request| request.excel.as_mut()) {
+            prepared.exit_lease = client.session_proxy_lease();
+        }
         let events = cold_json_response_stream(ColdJsonResponse {
-            client: self
-                .client_for_request(&context)?
-                .for_account(lease.account())
-                .map_err(|_| {
-                    provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
-                })?,
+            client,
             response_origin: request.response_origin,
             endpoint_path: request.endpoint_path,
             body,
@@ -582,6 +590,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             }
         };
 
+        request.client.report_session_proxy_completed();
         let compact_metering = if request.endpoint_path
             == crate::transport::endpoints::CODEX_RESPONSES_COMPACT_PATH
         {
@@ -791,6 +800,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             _ => None,
         };
         if let Err(CodexHandshakeAttemptError::Client(error)) = &response {
+            if request.excel.is_none() && matches!(error, CodexClientError::WebSocket(_)) {
+                client.report_session_proxy_stream_error(error);
+            }
             log_client_upstream_error(
                 UpstreamErrorLogContext::new(&context, &active_account, None),
                 error,
@@ -966,6 +978,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 chunk = body.next() => match chunk {
                     Some(Ok(chunk)) => Ok(PreCommitPoll::Upstream(Some(chunk))),
                     Some(Err(error)) => {
+                        if request.excel.is_none() {
+                            client.report_session_proxy_stream_error(&error);
+                        }
                         log_client_upstream_error(
                             UpstreamErrorLogContext::new(
                                 &context,
@@ -1138,6 +1153,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 .flat_map(ProviderEvent::canonical_facts)
                 .any(|event| matches!(event, GatewayEvent::Completed(_)));
             let quota_completed = terminal_failure.is_none() && passive_quota_success(&events);
+            if completed && terminal_failure.is_none() && request.excel.is_none() {
+                client.report_session_proxy_completed();
+            }
             quota_success |= quota_completed;
             let terminal_changed = completed
                 && observation_state.mark_completed(terminal_response_is_incomplete(&events));
@@ -1280,6 +1298,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             .flat_map(ProviderEvent::canonical_facts)
             .any(|event| matches!(event, GatewayEvent::Completed(_)));
         quota_success |= terminal_failure.is_none() && passive_quota_success(&events);
+        if completed && terminal_failure.is_none() && request.excel.is_none() {
+            client.report_session_proxy_completed();
+        }
         if allows_account_state_mutation {
             synchronize_passive_quota(
                 &quota,

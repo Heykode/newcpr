@@ -32,6 +32,8 @@ pub struct AccountImportSettings {
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
     pub excel_ignore_encrypted_content: Option<bool>,
+    pub request_proxy_source:
+        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
@@ -170,6 +172,7 @@ pub struct AccountRecord {
     pub excel_models_follow_global: bool,
     pub excel_cache_creation_as_input: bool,
     pub excel_ignore_encrypted_content: bool,
+    pub request_proxy_source: gateway_core::provider_ports::session_proxy::RequestProxySource,
     pub excel_auto_disable_on_403: bool,
     pub excel_403_action: gateway_core::account::Excel403Action,
     pub excel_auto_disabled_at: Option<DateTime<Utc>>,
@@ -365,6 +368,8 @@ pub struct UpdateAccount {
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
     pub excel_ignore_encrypted_content: Option<bool>,
+    pub request_proxy_source:
+        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
@@ -394,6 +399,8 @@ pub struct BatchUpdateAccounts {
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
     pub excel_ignore_encrypted_content: Option<bool>,
+    pub request_proxy_source:
+        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,

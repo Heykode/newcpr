@@ -34,6 +34,7 @@ pub use capacity_wait::{
 };
 
 pub mod egress;
+pub mod session_proxy;
 mod turn_state;
 pub use turn_state::{
     NoopProviderTurnStatePort, OpaqueTurnState, ProviderTurnStateAnomaly,
@@ -1175,6 +1176,7 @@ pub struct ProviderStorePorts {
     oauth_pending: Arc<dyn OAuthPendingFlowPort>,
     turn_states: Arc<dyn ProviderTurnStatePort>,
     egress: Option<Arc<dyn egress::ProviderEgressStorePort>>,
+    session_proxy_pool: Option<Arc<dyn session_proxy::SessionProxyPool>>,
 }
 
 impl ProviderStorePorts {
@@ -1208,12 +1210,27 @@ impl ProviderStorePorts {
             oauth_pending,
             turn_states: Arc::new(NoopProviderTurnStatePort),
             egress: None,
+            session_proxy_pool: None,
         }
     }
 
     #[must_use]
     pub fn accounts(&self) -> Arc<dyn ProviderAccountStore> {
         Arc::clone(&self.accounts)
+    }
+
+    #[must_use]
+    pub fn with_session_proxy_pool(
+        mut self,
+        pool: Arc<dyn session_proxy::SessionProxyPool>,
+    ) -> Self {
+        self.session_proxy_pool = Some(pool);
+        self
+    }
+
+    #[must_use]
+    pub fn session_proxy_pool(&self) -> Option<Arc<dyn session_proxy::SessionProxyPool>> {
+        self.session_proxy_pool.clone()
     }
 
     #[must_use]

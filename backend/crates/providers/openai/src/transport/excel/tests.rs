@@ -368,6 +368,7 @@ pub(super) fn request(endpoint: String, input: Value) -> CodexResponsesRequest {
     request.use_websocket = true;
     let tools = ClientTools::default();
     request.excel = Some(ExcelPreparedRequest {
+        exit_lease: None,
         body: prepare_request(request.body(), &tools, &BTreeMap::new(), None).unwrap(),
         tools,
         structured: None,
@@ -395,6 +396,163 @@ pub(super) fn completed() -> ResponseTemplate {
         .insert_header("set-cookie", "excel_secret=fixture; Path=/")
         .insert_header("x-codex-turn-state", "unwanted-state")
         .set_body_string("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"completed\",\"output\":[]}}\n\n")
+}
+
+struct FixtureExitLease {
+    proxy: gateway_core::account::OutboundProxy,
+    outcomes: Arc<Mutex<Vec<gateway_core::provider_ports::session_proxy::SessionProxyOutcome>>>,
+    released: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl gateway_core::provider_ports::session_proxy::SessionProxyLease for FixtureExitLease {
+    fn proxy(&self) -> &gateway_core::account::OutboundProxy {
+        &self.proxy
+    }
+    fn node_id(&self) -> &str {
+        "fixture-exit"
+    }
+    fn report(&self, outcome: gateway_core::provider_ports::session_proxy::SessionProxyOutcome) {
+        self.outcomes.lock().unwrap().push(outcome);
+    }
+}
+impl Drop for FixtureExitLease {
+    fn drop(&mut self) {
+        self.released
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn managed_exit_http_sse_keeps_identity_and_releases_on_completion_or_cancel() {
+    use gateway_core::provider_ports::session_proxy::SessionProxyOutcome;
+    use gateway_core::{
+        account::{CredentialRevision, ProviderAccount, ProviderAccountId},
+        routing::ProviderKind,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for cancel in [false, true] {
+        let proxy = MockServer::start().await;
+        Mock::given(path(RESPONSES_PATH))
+            .respond_with(completed())
+            .mount(&proxy)
+            .await;
+        let account = ProviderAccount::new(
+            ProviderAccountId::new("acct_managed_fixture").unwrap(),
+            ProviderKind::new("openai").unwrap(),
+            "fixture".into(),
+            Some("workspace".into()),
+            "oauth".into(),
+            CredentialRevision::new(1).unwrap(),
+            None,
+        );
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let released = Arc::new(AtomicBool::new(false));
+        let lease = Arc::new(FixtureExitLease {
+            proxy: gateway_core::account::OutboundProxy::parse(&proxy.uri()).unwrap(),
+            outcomes: outcomes.clone(),
+            released: released.clone(),
+        });
+        // The nonexistent origin makes any accidental direct fallback fail.
+        let client = client("http://unresolvable.invalid")
+            .for_session_proxy(&account, lease)
+            .unwrap();
+        let mut request = request(
+            format!("http://unresolvable.invalid{RESPONSES_PATH}"),
+            json!("fixture"),
+        );
+        request.excel.as_mut().unwrap().exit_lease = client.session_proxy_lease();
+        let response = client
+            .create_response_stream_with_pool_account(
+                &request,
+                CodexRequestContext::auxiliary(
+                    "Bearer fixture-token",
+                    Some("workspace"),
+                    "request-fixture",
+                    None,
+                ),
+                Some("acct_managed_fixture"),
+            )
+            .await
+            .unwrap();
+        drop(request);
+        drop(client);
+        assert!(!released.load(Ordering::SeqCst));
+        if cancel {
+            drop(response);
+        } else {
+            let mut body = response.body;
+            assert!(futures::StreamExt::next(&mut body).await.unwrap().is_ok());
+            // Consumers stop on response.completed without asking for another chunk.
+            assert_eq!(
+                *outcomes.lock().unwrap(),
+                vec![SessionProxyOutcome::Completed]
+            );
+            drop(body);
+        }
+        assert!(released.load(Ordering::SeqCst));
+        assert_eq!(
+            *outcomes.lock().unwrap(),
+            if cancel {
+                vec![]
+            } else {
+                vec![SessionProxyOutcome::Completed]
+            }
+        );
+        let requests = proxy.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].headers["authorization"], "Bearer fixture-token");
+        assert_eq!(requests[0].headers["chatgpt-account-id"], "workspace");
+        assert!(!requests[0].headers.contains_key("upgrade"));
+    }
+}
+
+#[tokio::test]
+async fn managed_exit_does_not_penalize_business_errors_or_replay_http_statuses() {
+    use gateway_core::provider_ports::session_proxy::SessionProxyOutcome;
+    for status in [400, 401, 403, 429, 500, 503] {
+        let server = MockServer::start().await;
+        Mock::given(path(RESPONSES_PATH))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(json!({"error":{"message":"fixture"}})),
+            )
+            .mount(&server)
+            .await;
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let mut client = client(&server.uri());
+        client.session_proxy = Some(Arc::new(FixtureExitLease {
+            proxy: gateway_core::account::OutboundProxy::parse(&server.uri()).unwrap(),
+            outcomes: outcomes.clone(),
+            released: Default::default(),
+        }));
+        let request = request(
+            format!("{}{RESPONSES_PATH}", server.uri()),
+            json!("fixture"),
+        );
+        assert!(
+            client
+                .create_response_stream_with_pool_account(
+                    &request,
+                    CodexRequestContext::auxiliary(
+                        "Bearer fixture",
+                        Some("workspace"),
+                        "fixture",
+                        None
+                    ),
+                    Some("account")
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(
+            *outcomes.lock().unwrap(),
+            if status >= 500 {
+                vec![SessionProxyOutcome::UpstreamFailure]
+            } else {
+                vec![]
+            }
+        );
+    }
 }
 
 fn fixture_tools() -> ClientTools {
@@ -887,6 +1045,7 @@ async fn excel_stream_projects_effective_effort_and_plaintext_metadata_on_all_to
         "tools":[{"type":"function","name":"spawn_agent"}]});
     let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
     let prepared = ExcelPreparedRequest {
+        exit_lease: None,
         body: prepare_request(source.as_object().unwrap(), &tools, &BTreeMap::new(), None).unwrap(),
         tools,
         structured: None,
@@ -1243,6 +1402,7 @@ async fn transformed_fixture(
     let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
     let structured = StructuredOutput::parse(source.as_object().unwrap()).unwrap();
     let request = ExcelPreparedRequest {
+        exit_lease: None,
         body: Default::default(),
         tools,
         structured,

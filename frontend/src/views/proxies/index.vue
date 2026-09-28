@@ -18,11 +18,14 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 import { formatDateTime } from '@/utils/date'
+import ManagedProxyPanel from './components/ManagedProxyPanel.vue'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
 import ProxyFormModal from './components/ProxyFormModal.vue'
 import { proxyLocationMessage, proxyTestFeedback } from './utils/location'
 
 const search = shallowRef('')
+const activeTab = shallowRef('regular')
+const tabs = [{ id: 'regular', label: '普通代理' }, { id: 'subscriptions', label: '订阅管理' }, { id: 'dynamic', label: '动态代理' }, { id: 'nodes', label: '节点管理' }, { id: 'kernel', label: '内核与规则' }]
 const query = usePagedQuery({
   initialPageSize: 20,
   load: (pagination, options) => getProxies({ ...pagination, search: search.value.trim() || undefined }, options),
@@ -181,7 +184,13 @@ onMounted(() => void query.execute())
       title="代理管理"
       description="管理账号使用的代理，测试连接并查看出口 IP"
     />
-    <BaseCard class="mt-5 flex h-[calc(100dvh-136px)] min-h-125 flex-col">
+    <nav class="flex shrink-0 gap-5 overflow-x-auto border-b border-cp-border" aria-label="代理管理分类">
+      <button v-for="tab in tabs" :key="tab.id" class="whitespace-nowrap border-b-2 px-1 py-3 text-cp-sm" :class="activeTab === tab.id ? 'border-cp-primary font-medium text-cp-primary' : 'border-transparent text-cp-text-secondary'" :aria-current="activeTab === tab.id ? 'page' : undefined" @click="activeTab = tab.id">
+        {{ tab.label }}
+      </button>
+    </nav>
+    <ManagedProxyPanel v-if="activeTab !== 'regular'" :key="activeTab" :tab="activeTab" />
+    <BaseCard v-else class="mt-5 flex min-h-0 flex-1 flex-col">
       <template #header>
         <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
           <BaseInput v-model="search" class="sm:w-80" aria-label="搜索代理" placeholder="搜索代理名称...">

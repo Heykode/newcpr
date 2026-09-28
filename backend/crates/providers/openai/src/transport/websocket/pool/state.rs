@@ -270,6 +270,7 @@ impl WebSocketPoolState {
 
 #[derive(Clone)]
 pub(crate) struct CodexWebSocketConnectionMetadata {
+    pub(crate) session_proxy: Option<crate::transport::session_proxy::SessionProxyHold>,
     pub(crate) turn_state: Option<String>,
     pub(crate) set_cookie_headers: Vec<String>,
     pub(crate) rate_limit_headers: Vec<(String, String)>,
