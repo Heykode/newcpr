@@ -118,6 +118,10 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
             Some(serde_json::Value::Null)
         );
     }
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("request_proxy_source"),
+        Some(serde_json::json!("account"))
+    );
     assert_eq!(before, after);
     database.close().await;
 }
@@ -169,6 +173,10 @@ async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics()
             .remove("excel_ignore_encrypted_content"),
         Some(serde_json::json!(false))
     );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("request_proxy_source"),
+        Some(serde_json::json!("account"))
+    );
     assert_eq!(before, after);
     database.close().await;
 }
@@ -214,6 +222,10 @@ async fn encrypted_omission_upgrade_defaults_off_without_changing_accounts_or_se
             .unwrap()
             .remove("excel_ignore_encrypted_content"),
         Some(serde_json::json!(false))
+    );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("request_proxy_source"),
+        Some(serde_json::json!("account"))
     );
     assert_eq!(before, after);
     let settings_after: serde_json::Value =
