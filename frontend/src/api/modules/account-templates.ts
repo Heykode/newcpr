@@ -9,6 +9,7 @@ export interface AccountTemplateConfig {
   responsesUpstream?: 'codex' | 'excel' | null
   excelModelsFollowGlobal?: boolean | null
   excelCacheCreationAsInput?: boolean | null
+  excelIgnoreEncryptedContent?: boolean | null
   excelAutoDisableOn403?: boolean | null
   excel403Action?: Excel403Action
   excelModels?: string[] | null

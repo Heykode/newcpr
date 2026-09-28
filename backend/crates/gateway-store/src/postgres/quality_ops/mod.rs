@@ -12,6 +12,7 @@ use gateway_admin::{
 use sqlx::{PgPool, Row as _};
 
 mod policy;
+mod template_action;
 
 use crate::{
     mutation_audit,
@@ -221,12 +222,29 @@ impl QualityOpsStore for PgQualityOpsStore {
         &self,
         id: Option<&str>,
         revision: Option<i64>,
-        config: QualityRuleConfig,
+        mut config: QualityRuleConfig,
         next: DateTime<Utc>,
         context: &MutationContext,
     ) -> AdminStoreResult<QualityRule> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
+        if config.failure_action == QualityFailureAction::ApplyAccountTemplate {
+            let selected = config.failure_template.as_ref().ok_or_else(conflict)?;
+            let template = template_action::resolve(&mut tx, selected)
+                .await?
+                .ok_or_else(|| {
+                    AdminStoreError::new(
+                        AdminStoreErrorKind::Conflict,
+                        "quality template",
+                        "模板已删除或版本变化，请重新选择",
+                    )
+                })?;
+            template_action::validate_for_save(&mut tx, &config, &template).await?;
+            // The catalog owns the snapshot; never persist client-supplied template fields.
+            config.failure_template = Some(template);
+        } else {
+            config.failure_template = None;
+        }
         if config.detection_mode == QualityDetectionMode::StateProbe
             || config.failure_action == QualityFailureAction::EnableExcel
         {

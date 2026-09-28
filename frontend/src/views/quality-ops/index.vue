@@ -5,6 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getAccountGroups } from '@/api/modules/account-groups'
 import { getAccounts } from '@/api/modules/accounts'
 import { deleteQualityRule, getQualityDetail, getQualityRules, getQualityRuns, runQualityRule, saveQualityRule } from '@/api/modules/quality-ops'
+import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -17,6 +18,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { formatDateTime } from '@/utils/date'
+import { failureActionOptions, usesFailureThreshold } from './failure-actions'
 import { CANDY_PROMPT, CANDY_REFERENCE_ANSWER, DEFAULT_JUDGE_PROMPT } from './presets'
 import QualityBulkEditor from './QualityBulkEditor.vue'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
@@ -40,6 +42,12 @@ const batchSelection = ref<string[]>([])
 const editing = ref<QualityRule | null>(null)
 const selectedAccounts = ref<string[]>([])
 const actions: Record<string, string> = {
+  template_applied: '已应用账号模板',
+  template_applied_probe_paused: '已应用账号模板并暂停状态探针',
+  template_unavailable: '模板已删除或版本变化，请重新选择',
+  template_blocked_references: '模板分组或代理不可用，未修改账号',
+  template_blocked_settings: '模板代理或 IPv6 等设置冲突，未修改账号',
+  template_blocked_account: '账号当前不可用或已被独立暂停，未应用模板',
   scheduling_paused: '已暂停账号调度',
   groups_removed: '已移出指定分组',
   restored: '已恢复质量检测前的状态',
@@ -56,7 +64,7 @@ const actions: Record<string, string> = {
   excel_blocked_403: 'Excel 曾因 HTTP 403 关闭，未自动重开',
   excel_blocked_model: '检测模型未配置为 Excel 模型，未改动账号',
   excel_blocked_account: '账号当前不可用，未开启 Excel',
-  excel_threshold_pending: '连续异常尚未达到阈值，未开启 Excel',
+  excel_threshold_pending: '连续异常尚未达到阈值，未执行处置',
   excel_streak_reset: '本轮正常，连续异常计数已清零',
 }
 const deleteTarget = ref<QualityRule | null>(null)
@@ -111,15 +119,20 @@ function defaults(): QualityRuleConfig {
     judgeModel: '',
     judgePrompt: DEFAULT_JUDGE_PROMPT,
     failureAction: 'none',
+    failureTemplate: null,
     failureGroupIds: [],
     autoRestore: false,
     excelFailureThreshold: 1,
   }
 }
 const draft = ref(defaults())
+const selectedTemplate = computed({
+  get: () => draft.value.failureTemplate ?? null,
+  set: (value) => { draft.value.failureTemplate = value },
+})
 const isProbe = computed(() => draft.value.detectionMode === 'state_probe')
 watch(() => draft.value.failureAction, (action) => {
-  if (action === 'enable_excel')
+  if (usesFailureThreshold(action))
     draft.value.autoRestore = false
 })
 function verdictLabel(status: string | null, mode?: QualityRuleConfig['detectionMode']) {
@@ -285,8 +298,10 @@ async function save() {
     config.repetitions = 1
     config.reasoningEffort = null
   }
-  if (config.failureAction === 'enable_excel')
+  if (usesFailureThreshold(config.failureAction))
     config.autoRestore = false
+  if (config.failureAction !== 'apply_account_template')
+    delete config.failureTemplate
   const accountIds = editing.value ? [config.accountId] : [...selectedAccounts.value]
   const failures: string[] = []
   try {
@@ -441,7 +456,8 @@ onBeforeUnmount(() => {
               <span class="truncate font-semibold" :title="accountName(rule.config.accountId)">{{ accountName(rule.config.accountId) }}</span>
               <span class="truncate font-mono text-cp-sm text-cp-text-secondary" :title="rule.config.model">{{ rule.config.model }}</span>
               <span class="text-xs text-cp-text-secondary">{{ modeLabel(rule.config.detectionMode) }}</span>
-              <span v-if="rule.config.failureAction === 'enable_excel'" class="text-xs tabular-nums text-cp-text-secondary">连续异常 {{ rule.excelFailureStreak ?? 0 }}/{{ rule.config.excelFailureThreshold ?? 1 }} 轮</span>
+              <span v-if="usesFailureThreshold(rule.config.failureAction)" class="text-xs tabular-nums text-cp-text-secondary">连续异常 {{ rule.excelFailureStreak ?? 0 }}/{{ rule.config.excelFailureThreshold ?? 1 }} 轮</span>
+              <span v-if="rule.config.failureAction === 'apply_account_template'" class="truncate text-xs text-cp-text-secondary">模板：{{ rule.config.failureTemplate?.config.name ?? '未选择' }}</span>
               <span class="mt-1 flex items-center gap-1.5 text-xs" :class="ruleStatusColor(rule)"><span class="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />{{ rule.running ? '检测中' : rule.pending ? '已排队' : !rule.config.enabled ? '已暂停' : verdictLabel(rule.lastStatus, rule.config.detectionMode) }}</span>
               <span class="text-xs text-cp-text-secondary">下次 {{ rule.config.enabled ? formatDateTime(rule.nextRunAt) : '—' }}</span>
             </button>
@@ -677,17 +693,21 @@ onBeforeUnmount(() => {
             {{ isProbe ? '异常后的处理' : '答错后的处理' }}
           </h3>
           <FormItem label="处理方式">
-            <BaseSelect v-model="draft.failureAction" :options="[{ value: 'none', label: '仅记录结果' }, { value: 'disable_scheduling', label: '暂停此账号调度' }, { value: 'remove_groups', label: '移出指定分组' }, { value: 'enable_excel', label: '开启Excel模式' }]" />
+            <BaseSelect v-model="draft.failureAction" :options="failureActionOptions(draft.failureAction)" />
           </FormItem>
           <QualityCatalogPicker v-if="draft.failureAction === 'remove_groups'" v-model:selected-values="draft.failureGroupIds" multiple label="处置分组" :load-page="actionGroupPage" />
-          <div v-if="draft.failureAction === 'enable_excel'" class="grid gap-2 text-cp-sm">
-            <span>连续异常多少轮后开启 Excel</span>
+          <AccountTemplatePicker v-if="draft.failureAction === 'apply_account_template'" v-model="selectedTemplate" label="异常处置账号模板" :disabled="busy" />
+          <p v-if="draft.failureAction === 'apply_account_template'" class="text-xs text-cp-text-secondary">
+            达到阈值后完整应用模板，包含调度、并发、权重、分组、代理及所选 Excel/IPv6 设置；Excel 是否开启由模板决定。模板修改后需重新选择确认。
+          </p>
+          <div v-if="usesFailureThreshold(draft.failureAction)" class="grid gap-2 text-cp-sm">
+            <span>连续异常多少轮后执行处置</span>
             <BaseNumberInput v-model="draft.excelFailureThreshold" label="连续异常阈值" :min="1" :max="100" />
             <p class="text-xs text-cp-text-secondary">
-              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。开启后不自动关闭 Excel。
+              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。不会自动撤销已应用的配置。
             </p>
           </div>
-          <BaseSwitch v-if="draft.failureAction !== 'enable_excel'" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
+          <BaseSwitch v-if="!usesFailureThreshold(draft.failureAction)" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
           <p class="text-xs text-cp-text-secondary">
             {{ isProbe ? '无法判断时不执行处置。换票结果仅表示探针观察，不等于模型能力的完整评估。' : '仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。' }}
           </p>
@@ -697,7 +717,7 @@ onBeforeUnmount(() => {
         <BaseButton :disabled="busy" @click="editorOpen = false">
           取消
         </BaseButton>
-        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length)">
+        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length) || (draft.failureAction === 'apply_account_template' && !draft.failureTemplate)">
           <Save class="size-4" />保存
         </BaseButton>
       </template>
@@ -718,6 +738,9 @@ onBeforeUnmount(() => {
           <span>{{ modeLabel(detail.detectionMode) }}</span>
           <strong :class="statusColor(detail.status)">{{ verdictLabel(detail.status, detail.detectionMode) }}</strong>
           <span v-if="detail.action">{{ actions[detail.action] || detail.action }}</span>
+          <span v-if="detail.config?.failureTemplate" class="break-words">
+            本轮处置模板：{{ detail.config.failureTemplate.config.name }}（版本 {{ detail.config.failureTemplate.revision }}）
+          </span>
         </div>
         <details v-if="detail.config && detail.detectionMode !== 'state_probe'" class="min-w-0 border-b border-cp-border pb-4 text-cp-sm">
           <summary class="cursor-pointer font-semibold">

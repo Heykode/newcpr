@@ -67,7 +67,10 @@ pub(super) async fn apply(
         return Ok(None);
     }
     let config = &claim.rule.config;
-    if config.failure_action == QualityFailureAction::EnableExcel {
+    if matches!(
+        config.failure_action,
+        QualityFailureAction::EnableExcel | QualityFailureAction::ApplyAccountTemplate
+    ) {
         return apply_excel_threshold(tx, claim, status).await;
     }
     let value: serde_json::Value =
@@ -156,7 +159,9 @@ pub(super) async fn apply(
                     "no_change"
                 };
             }
-            QualityFailureAction::EnableExcel => unreachable!("handled before recovery"),
+            QualityFailureAction::EnableExcel | QualityFailureAction::ApplyAccountTemplate => {
+                unreachable!("handled before recovery")
+            }
         }
     } else {
         let credential: String = row.try_get("credential_state").map_err(unavailable)?;
@@ -312,7 +317,11 @@ async fn apply_excel_threshold(
     if count < claim.rule.config.excel_failure_threshold {
         return Ok(Some("excel_threshold_pending"));
     }
-    enable_excel(tx, claim).await.map(Some)
+    if claim.rule.config.failure_action == QualityFailureAction::ApplyAccountTemplate {
+        super::template_action::apply(tx, claim).await.map(Some)
+    } else {
+        enable_excel(tx, claim).await.map(Some)
+    }
 }
 
 async fn enable_excel(
