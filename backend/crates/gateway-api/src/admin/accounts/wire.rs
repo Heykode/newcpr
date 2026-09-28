@@ -80,6 +80,7 @@ pub struct BatchUpdateAccountsRequest {
     pub excel_models: Option<gateway_core::account::ExcelModels>,
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
+    pub excel_ignore_encrypted_content: Option<bool>,
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
@@ -154,6 +155,7 @@ impl BatchUpdateAccountsRequest {
             && self.excel_models.is_none()
             && self.excel_models_follow_global.is_none()
             && self.excel_cache_creation_as_input.is_none()
+            && self.excel_ignore_encrypted_content.is_none()
             && self.excel_auto_disable_on_403.is_none()
             && self.excel_403_action.is_none()
             && self.concurrency_limit.is_none()
@@ -183,6 +185,7 @@ impl BatchUpdateAccountsRequest {
             excel_models: self.excel_models,
             excel_models_follow_global: self.excel_models_follow_global,
             excel_cache_creation_as_input: self.excel_cache_creation_as_input,
+            excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             excel_auto_disable_on_403: self.excel_auto_disable_on_403,
             excel_403_action: self.excel_403_action,
             concurrency_limit: self
@@ -355,6 +358,7 @@ pub struct AccountView {
     pub excel_models: gateway_core::account::ExcelModels,
     pub excel_models_follow_global: bool,
     pub excel_cache_creation_as_input: bool,
+    pub excel_ignore_encrypted_content: bool,
     pub excel_auto_disable_on_403: bool,
     pub excel_403_action: gateway_core::account::Excel403Action,
     pub excel_auto_disabled_at: Option<DateTime<Utc>>,

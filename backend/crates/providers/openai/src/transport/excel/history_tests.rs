@@ -185,6 +185,68 @@ fn excel_attribution_checks_encrypted_content_before_normalization() {
 }
 
 #[test]
+fn opted_in_encrypted_history_keeps_plaintext_tool_pairs_and_other_validation() {
+    let original = json!({"model":VERIFIED_MODEL,"input":[
+        {"type":"agent_message","role":"assistant","author":"worker","recipient":"parent","content":[
+            {"type":"output_text","text":"before"}, {"type":"encrypted_content","encrypted_content":"opaque-fixture"},
+            {"type":"output_text","text":"after"}]},
+        {"type":"function_call","name":"read_note","call_id":"call_fixture","arguments":"{}"},
+        {"type":"function_call_output","call_id":"call_fixture","output":[
+            {"type":"input_text","text":"tool plaintext"}, {"type":"encrypted_content","encrypted_content":"opaque-tool"}]}
+    ]});
+    let calls = BTreeMap::from([(
+        "call_fixture".into(),
+        json!({"type":"function_call","name":"run_officejs","call_id":"call_fixture","arguments":"{}"}),
+    )]);
+    let mut source = original.as_object().unwrap().clone();
+    assert_eq!(
+        super::encrypted_content::omit_encrypted_content(&mut source),
+        2
+    );
+    let body = prepare_request(&source, &ClientTools::default(), &calls, None).unwrap();
+    let input = body["input"].as_array().unwrap();
+    let assistant = &input[1];
+    assert_eq!(assistant["role"], "user");
+    assert!(
+        assistant["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not a new user instruction")
+    );
+    assert_eq!(assistant["content"][1]["text"], "before");
+    assert_eq!(assistant["content"][3]["text"], "after");
+    assert!(
+        assistant["content"][2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Encrypted content omitted")
+    );
+    assert_eq!(
+        input
+            .iter()
+            .filter(|item| item["call_id"] == "call_fixture")
+            .count(),
+        2
+    );
+    assert_eq!(
+        original["input"][0]["content"][1]["type"],
+        "encrypted_content"
+    );
+    let snapshot = source.clone();
+    assert_eq!(
+        super::encrypted_content::omit_encrypted_content(&mut source),
+        0
+    );
+    assert_eq!(source, snapshot);
+    source.get_mut("input").unwrap()[0]["content"][1] = json!({"type":"unsupported_fixture"});
+    assert_eq!(
+        super::encrypted_content::omit_encrypted_content(&mut source),
+        0
+    );
+    assert!(prepare_request(&source, &ClientTools::default(), &calls, None).is_err());
+}
+
+#[test]
 fn excel_attribution_does_not_rewrite_tool_business_data_during_preparation() {
     let business = r#"{"author":"customer","recipient":"vendor","content":"unchanged"}"#;
     let native = json!({"type":"function_call","name":"run_officejs", "call_id":"call_business",

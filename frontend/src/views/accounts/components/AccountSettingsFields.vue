@@ -23,6 +23,7 @@ withDefaults(defineProps<{
   preserveProxy?: boolean
   proxyError?: string
   excelAvailable?: boolean
+  encryptedContentAvailable?: boolean
   nameAvailable?: boolean
   modelAccessAvailable?: boolean
   preserveModelAccess?: boolean
@@ -35,6 +36,8 @@ const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
 const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
+const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
+const updateExcelIgnoreEncryptedContent = defineModel<boolean>('updateExcelIgnoreEncryptedContent', { default: false })
 const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
 const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
@@ -130,6 +133,24 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         label="缓存写入按普通输入计费"
         :disabled="disabled || (batch ? !updateExcelCacheCreationAsInput : !excelEnabled)"
       />
+    </BaseFormItem>
+
+    <BaseFormItem v-if="excelAvailable && encryptedContentAvailable" label="忽略历史中的加密消息内容">
+      <template v-if="batch" #extra>
+        <BaseCheckbox
+          v-model="updateExcelIgnoreEncryptedContent"
+          label="应用加密消息省略更改"
+          :disabled="disabled"
+        />
+      </template>
+      <BaseSwitch
+        v-model="excelIgnoreEncryptedContent"
+        label="忽略历史中的加密消息内容"
+        :disabled="disabled || (batch ? !updateExcelIgnoreEncryptedContent || (updateExcelEnabled && !excelEnabled) : !excelEnabled)"
+      />
+      <p class="m-0 mt-2 text-cp-xs leading-relaxed text-cp-text-secondary">
+        默认关闭。仅实际走 Excel 时，将无法转发的历史加密消息替换为省略提示；不会解密，模型将看不到这些内容。无此类内容时不修改，原生 Codex 请求不受影响。
+      </p>
     </BaseFormItem>
 
     <BaseFormItem v-if="excelAvailable" label="Excel遇到HTTP 403">

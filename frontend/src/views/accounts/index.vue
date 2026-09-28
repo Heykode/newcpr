@@ -248,8 +248,10 @@ const {
   excelModels: batchExcelModels,
   excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
   excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
+  excelIgnoreEncryptedContent: batchExcelIgnoreEncryptedContent,
   excel403Action: batchExcel403Action,
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
+  updateExcelIgnoreEncryptedContent: batchUpdateExcelIgnoreEncryptedContent,
   updateExcel403Action: batchUpdateExcel403Action,
   updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
@@ -286,6 +288,7 @@ const {
   excelModels,
   excelModelsFollowGlobal,
   excelCacheCreationAsInput,
+  excelIgnoreEncryptedContent,
   excel403Action,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
@@ -659,6 +662,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-models="excelModels"
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
+      v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
       v-model:excel-403-action="excel403Action"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
@@ -682,8 +686,10 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-models="batchExcelModels"
       v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
+      v-model:excel-ignore-encrypted-content="batchExcelIgnoreEncryptedContent"
       v-model:excel-403-action="batchExcel403Action"
       v-model:update-excel-cache-creation-as-input="batchUpdateExcelCacheCreationAsInput"
+      v-model:update-excel-ignore-encrypted-content="batchUpdateExcelIgnoreEncryptedContent"
       v-model:update-excel-403-action="batchUpdateExcel403Action"
       v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"

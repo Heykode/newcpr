@@ -311,6 +311,33 @@ mod batch_update {
     use serde_json::json;
 
     #[test]
+    fn encrypted_content_patch_accepts_only_boolean_and_preserves_omission() {
+        for enabled in [false, true] {
+            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+                "accountIds":["acct_test"], "excelIgnoreEncryptedContent":enabled
+            }))
+            .unwrap();
+            request.validate().unwrap();
+            assert_eq!(request.excel_ignore_encrypted_content, Some(enabled));
+            assert!(request.responses_upstream.is_none());
+            assert!(request.weight.is_none());
+        }
+        let omitted: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds":["acct_test"], "enabled":true
+        }))
+        .unwrap();
+        assert!(omitted.excel_ignore_encrypted_content.is_none());
+        for invalid in [json!("true"), json!(1), json!([]), json!({})] {
+            assert!(
+                serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                    "accountIds":["acct_test"], "excelIgnoreEncryptedContent":invalid
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn model_access_only_patch_validates_without_changing_other_settings() {
         for policy in [
             json!({"mode":"all","models":[]}),
@@ -1579,6 +1606,7 @@ mod response {
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_auto_disabled_at: None,

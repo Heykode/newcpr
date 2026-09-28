@@ -246,6 +246,54 @@ fn stable_facts(capture: &Capture) -> Value {
 }
 
 #[tokio::test]
+async fn excel_omission_option_does_not_change_native_http_or_websocket_wire_or_identity() {
+    for websocket in [false, true] {
+        for excel_account in [false, true] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            if excel_account {
+                store.set_responses_upstream(
+                    "acct_provider_contract",
+                    gateway_core::account::ResponsesUpstream::Excel,
+                );
+            }
+            let runtime = tempfile::tempdir().unwrap();
+            let body = json!({"model":"gpt-5.4","session_id":"native-encrypted-fixture","input":[
+                {"role":"user","content":[{"type":"input_text","text":"original"},
+                    {"type":"encrypted_content","encrypted_content":"opaque-fixture"}]}
+            ]});
+            let before = capture(
+                &store,
+                "acct_provider_contract",
+                runtime.path(),
+                body.clone(),
+                websocket,
+                true,
+            )
+            .await;
+            // The Excel account's different model list intentionally routes this model natively.
+            store.set_excel_encrypted_content_policy(
+                "acct_provider_contract",
+                true,
+                vec!["gpt-5.6-sol".into()],
+            );
+            let after = capture(
+                &store,
+                "acct_provider_contract",
+                runtime.path(),
+                body.clone(),
+                websocket,
+                true,
+            )
+            .await;
+            assert_eq!(after.body["input"], body["input"]);
+            assert_eq!(before.body["input"], after.body["input"]);
+            assert_eq!(stable_facts(&before), stable_facts(&after));
+        }
+    }
+}
+
+#[tokio::test]
 async fn string_and_message_inputs_keep_wire_identity_affinity_and_cache() {
     let accounts = Arc::new(MemoryAccountStore::default());
     let account_id = format!("acct_alignment_{}", uuid::Uuid::new_v4());
