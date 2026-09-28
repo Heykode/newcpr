@@ -120,3 +120,68 @@
   Excel off automatically and does not alter normal routing or retry decisions.
 - No migration is required for the JSON addition, but old strict-config binaries
   still require stored-config reconciliation before a downgrade.
+
+## Account Template Remediation
+
+### 1. Scope / Trigger
+- `apply_account_template` is a quality failure action, not a new scheduler or
+  request path. It applies the existing full template only after the confirmed
+  incorrect-round threshold. Excel on/off is determined by that template.
+
+### 2. Signatures
+- `QualityRuleConfig.failure_template: Option<ReloginTemplate>` serializes as
+  optional `failureTemplate: { id, revision, config }`. Old rules omit it.
+- `apply_account_template_in_transaction(tx, account_id, config)` reuses the
+  ordinary account scheduling/egress and group-assignment helpers.
+
+### 3. Contracts
+- Save resolves `id + revision` from `account_relogin_templates` under the
+  configuration transaction and replaces the submitted config with the catalog's
+  authoritative snapshot. Execution rechecks the version and snapshot. A catalog
+  edit must not silently change an existing scheduled action.
+- Preserve omitted / null / explicit `egressMode` semantics. Full templates also
+  control enabled, concurrency, weight, groups and proxy; omitted optional Excel
+  fields preserve current values. No credential, fingerprint or transport edits.
+- Retain rule/lease/action-scope/identity fences, unavailable-account guards and
+  independent 403 protection. Do not restore an independently paused account.
+- Lock configuration before egress and account mutation. Group/proxy references
+  are shared-locked; their normal mutation paths also take the configuration fence.
+  Template edits do not acquire that fence after locking the template catalog.
+- Apply account settings inside a savepoint. Validation/conflict failure rolls
+  back every account/egress/group change while preserving the quality result.
+  Storage-unavailable errors roll back the entire finish transaction. Successful
+  mutation, config publication, audit and result share one transaction.
+- Reuse `excel_streak` and `excelFailureThreshold`; no second counter. Successful
+  template application clears this rule's recovery, has no auto-restore, and
+  pauses state-probe rules only if the resulting account route is Excel.
+- Historical `QualityRun.config` retains template name, version and settings.
+  A binary-only downgrade cannot read the new action; reconcile configs first.
+
+### 4. Validation / Error Matrix
+- Missing/stale/deleted template at save: reject, no rule write.
+- Missing/stale template at finish: `template_unavailable`, no account mutation.
+- Missing group or untested proxy: `template_blocked_references`.
+- Credential/expiry/quota/independent pause: `template_blocked_account`.
+- 403-disabled Excel or disallowed model: existing `excel_blocked_*` guards.
+- Proxy/IPv6 conflict: `template_blocked_settings`, complete savepoint rollback.
+- Success: `template_applied` or `template_applied_probe_paused`.
+
+### 5. Good / Base / Bad Cases
+- Good: a confirmed degraded OAuth account receives the selected Excel/IPv6
+  template after three incorrect rounds, with all settings published together.
+- Base: old `enable_excel`, `none`, pause and remove-groups rules stay compatible.
+- Bad: a template with enabled=true revives a 403-paused or invalid account.
+
+### 6. Tests Required
+- `tests/postgres/quality_ops/templates.rs` runs against an isolated PostgreSQL:
+  forged snapshot replacement, thresholds, full settings, off template, probe
+  pause, references/versions, current availability, conflicts, egress values,
+  duplicate/stale completion and independent concurrent account actions.
+- Preserve ordinary template service, relogin/import, egress and legacy quality
+  regressions; missing database env is not evidence of a passing transaction test.
+
+### 7. Wrong vs Correct
+- Wrong: finish the quality result, then call the public account-template service
+  in a second transaction, or trust the browser's template config.
+- Correct: resolve the versioned catalog template and reuse account mutation
+  helpers in the caller's existing finish transaction.

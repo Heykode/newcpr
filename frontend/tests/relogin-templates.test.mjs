@@ -32,18 +32,19 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
   const blank = templateForm()
   assert.equal(blank.excelModels, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
   blank.name = '  Defaults  '
-  assert.equal(JSON.stringify(templateConfig(blank)), JSON.stringify({
+  assert.deepEqual(JSON.parse(JSON.stringify(templateConfig(blank))), {
     name: 'Defaults',
     enabled: true,
     responsesUpstream: 'codex',
     excelModelsFollowGlobal: true,
     excelCacheCreationAsInput: true,
+    excelIgnoreEncryptedContent: false,
     excel403Action: 'none',
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
     outboundProxyId: null,
-  }))
+  })
 })
 
 test('IPv6 templates distinguish preserve, inherit and all existing modes', () => {
@@ -109,6 +110,24 @@ test('template validation reuses account scheduling limits and rejects missing p
   ]) {
     assert.throws(() => templateConfig({ ...templateForm(), name: 'Test', ...values }))
   }
+})
+
+test('encrypted history omission is opt-in, roundtrips and is absent without Excel settings', () => {
+  const form = templateForm()
+  form.name = 'Encrypted history'
+  form.excelEnabled = true
+  assert.equal(form.excelIgnoreEncryptedContent, false)
+  for (const enabled of [true, false]) {
+    form.excelIgnoreEncryptedContent = enabled
+    assert.equal(templateConfig(form).excelIgnoreEncryptedContent, enabled)
+    assert.equal(templateForm(templateConfig(form)).excelIgnoreEncryptedContent, enabled)
+  }
+  form.excelIgnoreEncryptedContent = true
+  form.excelEnabled = false
+  assert.equal(templateConfig(form).excelIgnoreEncryptedContent, false)
+  form.applyExcel = false
+  assert.equal('excelIgnoreEncryptedContent' in templateConfig(form), false)
+  assert.equal(templateForm({ name: 'Legacy' }).excelIgnoreEncryptedContent, false)
 })
 
 test('push snapshots template revision and remains backward compatible without one', async () => {

@@ -4,6 +4,7 @@ import type { QualityRule, QualityRuleConfig } from '@/api/modules/quality-ops'
 import { Save, Square } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getQualityRules, saveQualityRule } from '@/api/modules/quality-ops'
+import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import FormItem from '@/components/base/BaseForm/FormItem.vue'
@@ -13,6 +14,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { buildQualityPatch, qualityEditableFields, saveQualityBatch } from './batch-edit'
+import { failureActionOptions } from './failure-actions'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
 import QualitySchedule from './QualitySchedule.vue'
@@ -50,12 +52,17 @@ const labels: Record<QualityEditableField, string> = {
   judgeModel: '判题模型（仅题目检测）',
   judgePrompt: '判题提示词（仅题目检测）',
   failureAction: '异常后的处理',
+  failureTemplate: '异常处置账号模板（仅应用模板规则）',
   failureGroupIds: '处置分组（仅移出分组规则）',
-  autoRestore: '自动恢复（不适用于开启 Excel）',
-  excelFailureThreshold: '连续异常阈值（仅开启 Excel 规则）',
+  autoRestore: '自动恢复（不适用于应用模板或旧版开启 Excel）',
+  excelFailureThreshold: '连续异常阈值（模板或旧版开启 Excel 规则）',
 }
 const fields = ref<QualityEditableField[]>([])
 const draft = ref<QualityRuleConfig>({ ...props.defaultConfig, failureGroupIds: [] })
+const selectedTemplate = computed({
+  get: () => draft.value.failureTemplate ?? null,
+  set: (value) => { draft.value.failureTemplate = value },
+})
 const pending = ref<string[]>([])
 const results = ref<QualityBatchResult[]>([])
 const saving = ref(false)
@@ -160,9 +167,10 @@ onBeforeUnmount(() => {
           <BaseNumberInput v-else-if="field === 'repetitions' || field === 'excelFailureThreshold'" v-model="draft[field]" :label="labels[field]" :min="1" :max="field === 'repetitions' ? 8 : 100" />
           <QualityCatalogPicker v-else-if="field === 'judgeGroupId'" v-model="draft.judgeGroupId" label="判题分组" :load-page="groupPage" />
           <QualityCatalogPicker v-else-if="field === 'failureGroupIds'" v-model:selected-values="draft.failureGroupIds" label="处置分组" multiple :load-page="actionGroupPage" />
+          <AccountTemplatePicker v-else-if="field === 'failureTemplate'" v-model="selectedTemplate" label="异常处置账号模板" :disabled="saving" />
           <FormItem v-else :label="labels[field]">
             <BaseSelect v-if="field === 'detectionMode'" v-model="draft.detectionMode" :options="[{ value: 'answer', label: '题目检测' }, { value: 'state_probe', label: '状态探针' }]" />
-            <BaseSelect v-else-if="field === 'failureAction'" v-model="draft.failureAction" :options="[{ value: 'none', label: '仅记录结果' }, { value: 'disable_scheduling', label: '暂停此账号调度' }, { value: 'remove_groups', label: '移出指定分组' }, { value: 'enable_excel', label: '开启 Excel 模式' }]" />
+            <BaseSelect v-else-if="field === 'failureAction'" v-model="draft.failureAction" :options="failureActionOptions(draft.failureAction)" />
             <BaseSelect v-else-if="field === 'reasoningEffort'" v-model="effort" :options="[{ value: '', label: '按默认' }, ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ value, label: value }))]" />
             <BaseTextarea v-else-if="field === 'prompt' || field === 'referenceAnswer' || field === 'judgePrompt'" v-model="draft[field]" :rows="3" />
             <BaseInput v-else-if="field === 'timezone' || field === 'model' || field === 'judgeModel'" v-model="draft[field]" />

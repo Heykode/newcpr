@@ -9,7 +9,11 @@ const { outputText } = ts.transpileModule(readFileSync(new URL('../src/views/qua
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
 })
 const exports = {}
-runInNewContext(outputText, { exports })
+const actions = {}
+runInNewContext(ts.transpileModule(readFileSync(new URL('../src/views/quality-ops/failure-actions.ts', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
+}).outputText, { exports: actions })
+runInNewContext(outputText, { exports, require: () => actions })
 const { applyQualityPatch, buildQualityPatch, saveQualityBatch } = exports
 const plain = value => JSON.parse(JSON.stringify(value))
 function base(overrides = {}) {
@@ -73,6 +77,27 @@ test('Excel threshold applies only to Excel actions and never enables automatic 
   assert.equal(next.excelFailureThreshold, 8)
   assert.equal(next.autoRestore, false)
   assert.equal(applyQualityPatch(next, { autoRestore: true }).autoRestore, false)
+})
+
+test('template action reuses threshold and preserves each unselected template', () => {
+  const template = { id: 'template-a', revision: 3, config: { name: 'Excel', responsesUpstream: 'excel', egressMode: 'random_ipv6_reuse' } }
+  const source = base({ failureAction: 'apply_account_template', failureTemplate: template })
+  const next = applyQualityPatch(source, { excelFailureThreshold: 6, autoRestore: true })
+  assert.deepEqual(plain(next.failureTemplate), template)
+  assert.equal(next.excelFailureThreshold, 6)
+  assert.equal(next.autoRestore, false)
+  assert.throws(() => applyQualityPatch(base(), { failureAction: 'apply_account_template' }), /请选择/)
+  assert.equal('failureTemplate' in applyQualityPatch(source, { failureAction: 'none' }), false)
+  const replacement = { ...template, revision: 4 }
+  assert.equal(applyQualityPatch(source, { failureTemplate: replacement }).failureTemplate.revision, 4)
+  assert.equal('failureTemplate' in applyQualityPatch(base(), { failureTemplate: replacement }), false)
+  assert.deepEqual(plain(buildQualityPatch(['failureTemplate'], source)), { failureTemplate: template })
+})
+
+test('new rules choose templates instead of standalone Excel while legacy rules remain editable', () => {
+  assert.equal(actions.failureActionOptions('none').some(value => value.value === 'enable_excel'), false)
+  assert.equal(actions.failureActionOptions('none').some(value => value.value === 'apply_account_template'), true)
+  assert.equal(actions.failureActionOptions('enable_excel').some(value => value.value === 'enable_excel'), true)
 })
 
 test('batch refreshes revisions, preserves fresh unrelated values and retries failures only', async () => {

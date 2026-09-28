@@ -36,6 +36,29 @@ async function main() {
     page.on('pageerror', error => errors.push(error.message))
     const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
     const now = new Date().toISOString()
+    const template = {
+      id: 'quality-template',
+      revision: 2,
+      config: {
+        name: 'Excel 异常处置',
+        enabled: true,
+        concurrencyLimit: 5,
+        weight: 20,
+        groupIds: ['quality-group'],
+        outboundProxyId: null,
+        responsesUpstream: 'excel',
+        excelModelsFollowGlobal: true,
+        excelCacheCreationAsInput: true,
+        excelIgnoreEncryptedContent: true,
+        excel403Action: 'disable_excel',
+        egressMode: 'random_ipv6_reuse',
+      },
+    }
+    await page.route('**/dev/api/admin/relogin/templates', route => fulfill(route, [template]))
+    await page.route('**/dev/api/admin/proxies?**', route => fulfill(route, {
+      items: [],
+      page: { page: 1, pageSize: 50, total: 0, totalPages: 0 },
+    }))
     const config = {
       accountId: 'quality-fixture-account',
       model: 'fixture-long-model-name-for-layout',
@@ -325,7 +348,13 @@ async function main() {
     await accountPicker.getByRole('checkbox', { name: 'sample-02@example.test', exact: true }).check()
     await creation.getByRole('textbox', { name: /^检测模型/ }).fill('fixture-model')
     await creation.getByRole('combobox', { name: '处理方式', exact: true }).click()
-    await page.getByRole('option', { name: '开启Excel模式', exact: true }).click()
+    assert.equal(await page.getByRole('option', { name: /^开启Excel模式/ }).count(), 0)
+    await page.getByRole('option', { name: '应用账号模板', exact: true }).click()
+    assert.equal(await creation.getByRole('button', { name: '保存', exact: true }).isDisabled(), true)
+    await creation.getByRole('combobox', { name: '异常处置账号模板', exact: true }).click()
+    await page.getByRole('option', { name: template.config.name, exact: true }).click()
+    await creation.getByText('开启（有损省略）', { exact: true }).waitFor()
+    await creation.getByText('关闭Excel模式', { exact: true }).waitFor()
     assert.equal(await creation.getByRole('switch', { name: '后续整轮通过后自动恢复', exact: true }).count(), 0)
     assert.equal(await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).inputValue(), '1')
     await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).fill('3')
@@ -340,18 +369,20 @@ async function main() {
     await creation.waitFor({ state: 'hidden' })
     assert.equal(rules[2].config.detectionMode, 'state_probe')
     assert.equal(rules[2].config.repetitions, 1)
-    assert.equal(rules[2].config.failureAction, 'enable_excel')
+    assert.equal(rules[2].config.failureAction, 'apply_account_template')
+    assert.deepEqual(rules[2].config.failureTemplate, template)
     assert.equal(rules[2].config.autoRestore, false)
     assert.equal(rules[2].config.excelFailureThreshold, 3)
-    Object.assign(run, { detectionMode: 'state_probe', status: 'incorrect', correct: 0, incorrect: 1, action: 'excel_enabled_probe_paused' })
+    Object.assign(run, { config: rules[2].config, detectionMode: 'state_probe', status: 'incorrect', correct: 0, incorrect: 1, action: 'template_applied_probe_paused' })
     rules[2].config.enabled = false
-    rules[2].lastAction = 'excel_enabled_probe_paused'
+    rules[2].lastAction = 'template_applied_probe_paused'
     await page.getByRole('button', { name: '刷新', exact: true }).click()
-    await page.getByText('已开启 Excel 模式，探针规则已暂停', { exact: true }).waitFor()
+    await page.getByText('已应用账号模板并暂停状态探针', { exact: true }).waitFor()
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
       await page.getByRole('button', { name: '查看结果', exact: true }).click()
       const drawer = page.getByRole('dialog', { name: '检测详情' })
+      await drawer.getByText('本轮处置模板：Excel 异常处置（版本 2）', { exact: true }).waitFor()
       await drawer.getByText('票据已变化', { exact: true }).waitFor()
       assert.equal(await drawer.getByText('智商异常', { exact: true }).count(), 2)
       assert.ok(await drawer.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
@@ -410,14 +441,17 @@ async function main() {
     await page.getByRole('checkbox', { name: '选择规则 sample-02@example.test', exact: true }).locator('..').click()
     await page.getByRole('button', { name: '批量编辑（1）', exact: true }).click()
     assert.equal(await bulk.locator('input[type=checkbox]:checked').count(), 0)
-    await bulk.getByRole('checkbox', { name: '修改连续异常阈值（仅开启 Excel 规则）', exact: true }).locator('..').click()
-    await bulk.getByRole('spinbutton', { name: '连续异常阈值（仅开启 Excel 规则）', exact: true }).fill('5')
-    await bulk.getByRole('checkbox', { name: '修改自动恢复（不适用于开启 Excel）', exact: true }).locator('..').click()
-    await bulk.getByRole('switch', { name: '自动恢复（不适用于开启 Excel）', exact: true }).locator('..').click()
-    assert.equal(await bulk.getByRole('switch', { name: '自动恢复（不适用于开启 Excel）', exact: true }).isChecked(), true)
+    await bulk.getByRole('checkbox', { name: '修改连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).locator('..').click()
+    await bulk.getByRole('spinbutton', { name: '连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).fill('5')
+    await bulk.getByRole('checkbox', { name: '修改自动恢复（不适用于应用模板或旧版开启 Excel）', exact: true }).locator('..').click()
+    await bulk.getByRole('switch', { name: '自动恢复（不适用于应用模板或旧版开启 Excel）', exact: true }).locator('..').click()
+    assert.equal(await bulk.getByRole('switch', { name: '自动恢复（不适用于应用模板或旧版开启 Excel）', exact: true }).isChecked(), true)
+    await bulk.getByRole('checkbox', { name: '修改异常处置账号模板（仅应用模板规则）', exact: true }).locator('..').click()
+    await bulk.getByRole('combobox', { name: '异常处置账号模板', exact: true }).click()
+    await page.getByRole('option', { name: template.config.name, exact: true }).click()
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
-      await bulk.getByRole('spinbutton', { name: '连续异常阈值（仅开启 Excel 规则）', exact: true }).scrollIntoViewIfNeeded()
+      await bulk.getByRole('spinbutton', { name: '连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).scrollIntoViewIfNeeded()
       assert.ok(await bulk.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
       await page.screenshot({ path: `${output}/quality-bulk-threshold-${width}.png`, fullPage: true, animations: 'disabled' })
     }
@@ -426,7 +460,30 @@ async function main() {
     assert.equal(rules[2].config.excelFailureThreshold, 5)
     assert.equal(rules[2].config.autoRestore, false)
     assert.equal(rules[2].config.enabled, false)
+    assert.deepEqual(rules[2].config.failureTemplate, template)
     await bulk.getByRole('button', { name: '关闭', exact: true }).last().click()
+    // Selecting the same template name must adopt its new revision explicitly.
+    template.revision++
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.locator('.quality-rule').filter({ hasText: 'sample-02@example.test' }).getByRole('button', { name: '编辑规则', exact: true }).click()
+    await editor.getByRole('alert').getByText('所选模板已修改或删除，请重新选择并确认配置。', { exact: true }).waitFor()
+    assert.equal(rules[2].config.failureTemplate.revision, 2)
+    await editor.getByRole('combobox', { name: '异常处置账号模板', exact: true }).click()
+    await page.getByRole('option', { name: template.config.name, exact: true }).click()
+    await editor.getByRole('button', { name: '保存', exact: true }).click()
+    await editor.waitFor({ state: 'hidden' })
+    assert.equal(rules[2].config.failureTemplate.revision, 3)
+    // An old direct-Excel rule remains editable without being silently converted.
+    rules[2].config.failureAction = 'enable_excel'
+    delete rules[2].config.failureTemplate
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.getByRole('button', { name: '刷新', exact: true }).click()
+    await page.locator('.quality-rule').filter({ hasText: 'sample-02@example.test' }).getByRole('button', { name: '编辑规则', exact: true }).click()
+    await editor.getByRole('combobox', { name: '处理方式', exact: true }).click()
+    await page.getByRole('option', { name: '开启Excel模式（旧规则）', exact: true }).click()
+    await editor.getByRole('button', { name: '保存', exact: true }).click()
+    await editor.waitFor({ state: 'hidden' })
+    assert.equal(rules[2].config.failureAction, 'enable_excel')
     assert.deepEqual(errors, [])
     process.stdout.write('Quality UI: legacy rules, probe modes, thresholds, selective bulk edits, refresh failure, partial retry, catalogs, schedules and 1440/390/320px layouts passed.\n')
   }

@@ -1,5 +1,19 @@
 # Quality Operations UI
 
+- New remediation uses `apply_account_template` and the shared versioned
+  `AccountTemplatePicker`, with a full-settings summary. Show `enable_excel` only
+  when editing that legacy action; never silently convert a saved rule.
+- Single/bulk edits reuse the existing threshold. `failureTemplate` is opt-in in
+  batch patches: preserve per-rule selections when unchecked, reject missing
+  templates for the selected action, and disallow automatic reverse restoration.
+- Keep historical template names/revisions from `QualityRun.config`, not today's
+  template catalog. A changed/deleted selection remains explicit until reselected;
+  catalog failure has retry and aborts on unmount.
+- Template `excelIgnoreEncryptedContent` is an explicit lossy option, default
+  false; serialize false when the template explicitly turns Excel off. Disabling
+  inclusion of Excel settings omits the entire optional group. Reuse existing
+  IPv6 fields and preserve omission versus null.
+
 - Keep a standalone sidebar route, compact overview, rule list, history table and
   editing/detail side panels. Reuse CPR controls and themes.
 - New question rules and synthetic preview share `quality-ops/presets.ts`: the exact
