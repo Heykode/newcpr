@@ -107,11 +107,16 @@ pub struct ReloginTemplateConfig {
     pub concurrency_limit: Option<u32>,
     pub weight: u16,
     pub group_ids: Vec<String>,
+    #[serde(default)]
+    pub preserve_outbound_proxy: bool,
     pub outbound_proxy_id: Option<String>,
 }
 
 impl ReloginTemplateConfig {
     pub fn settings(&self) -> Result<AccountImportSettings, AdminError> {
+        if self.preserve_outbound_proxy && self.outbound_proxy_id.is_some() {
+            return Err(AdminError::invalid("保持原代理与指定代理不能同时设置"));
+        }
         gateway_core::account::Excel403Action::resolve(
             self.excel_403_action,
             self.excel_auto_disable_on_403,
@@ -139,6 +144,7 @@ impl ReloginTemplateConfig {
             }
         }
         Ok(AccountImportSettings {
+            clear_outbound_proxy: !self.preserve_outbound_proxy && self.outbound_proxy_id.is_none(),
             egress_mode: self.egress_mode,
             model_access: None,
             custom_name: None,

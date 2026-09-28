@@ -1,6 +1,7 @@
 import type { AccountModelAccess } from '@/api'
 import type { Excel403Action } from '@/utils/excel-settings'
 import type { RequestProxySource } from '@/utils/request-proxy-source'
+import { accountEgressPatch } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelSettings } from '@/utils/excel-settings'
@@ -16,7 +17,6 @@ export interface AccountCreateForm {
   provider: AccountCreateProvider | ''
   enabled: boolean
   applyExcel: boolean
-  applyRequestProxySource: boolean
   requestProxySource: RequestProxySource
   excelEnabled: boolean
   excelModelsFollowGlobal: boolean
@@ -36,6 +36,7 @@ export interface AccountCreateForm {
   oauthCallback: string
   proxyMode: string
   proxyId: string
+  egressMode: string
 }
 
 export function emptyAccountCreateForm(): AccountCreateForm {
@@ -44,7 +45,6 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     provider: '',
     enabled: true,
     applyExcel: false,
-    applyRequestProxySource: false,
     requestProxySource: 'account',
     excelEnabled: false,
     excelModelsFollowGlobal: true,
@@ -63,15 +63,18 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     oauthCallback: '',
     proxyMode: 'direct',
     proxyId: '',
+    egressMode: 'fixed_ipv6_reuse',
   }
 }
 
 export function accountProxyError(form: AccountCreateForm): string | undefined {
-  if (form.proxyMode !== 'proxy')
+  try {
+    accountEgressPatch(form, form.provider === 'openai')
     return undefined
-  if (!form.proxyId.trim())
-    return '请选择已通过测试的代理'
-  return undefined
+  }
+  catch (error) {
+    return error instanceof Error ? error.message : '请选择出站隧道'
+  }
 }
 
 export function accountImportSettings(form: AccountCreateForm, provider = form.provider) {
@@ -82,10 +85,13 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
     throw new Error(scheduling.message)
+  const { requestProxySource, egressMode, outboundProxyId } = accountEgressPatch(form, provider === 'openai')
   return {
+    ...(outboundProxyId === '' ? { clearOutboundProxy: true } : {}),
     ...(customName ? { customName } : {}),
     enabled: form.enabled,
-    ...(form.applyRequestProxySource && provider === 'openai' ? { requestProxySource: form.requestProxySource } : {}),
+    ...(requestProxySource === undefined ? {} : { requestProxySource }),
+    ...(egressMode === undefined ? {} : { egressMode }),
     ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action) : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],

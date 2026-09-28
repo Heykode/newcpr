@@ -47,6 +47,19 @@ profiles or random fingerprint generation.
 - Account `outboundProxyId`: omitted preserves, empty string selects direct,
   nonempty selects a saved and successfully tested proxy. Do not send a redacted
   display endpoint back as a connection URL when toggling account status.
+- Single-account updates carry the same nullable `egress_mode` as bulk updates and
+  commit it with proxy changes, scheduling and audit through the existing transaction.
+  A complete direct/proxy selection (`Account` source, explicit proxy selection,
+  `Unchanged` egress) resets OpenAI overrides in mixed batches only; unsupported
+  explicit IPv6 policies still fail atomically rather than partially applying.
+- Import `clear_outbound_proxy` defaults false. Explicit true clears URL and saved
+  proxy ID inside the import transaction and conflicts with a saved-proxy reservation.
+  Wire settings and durable 2FA enrollment must preserve this flag and all three
+  `egress_mode` states. Existing-account relogin remains credential-only.
+- Template `preserve_outbound_proxy` defaults false for legacy compatibility. True
+  omits the proxy mutation and cannot accompany a proxy ID. Both manual application
+  and quality-remediation application honor it. New template preservation must also
+  omit request source and IPv6 overrides, not silently clear them.
 - Batch `concurrencyLimit`: absent preserves, `null` restores default, number
   sets the override. Use `deserialize_optional_nullable`; plain nested `Option`
   does not distinguish JSON null from an omitted field.

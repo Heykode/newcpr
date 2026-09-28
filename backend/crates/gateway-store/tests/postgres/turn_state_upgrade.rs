@@ -112,7 +112,11 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
         after.as_object_mut().unwrap().remove("excel_403_action"),
         Some(serde_json::json!("none"))
     );
-    for field in ["excel_mode_disabled_at", "quality_pause_owner"] {
+    for field in [
+        "excel_mode_disabled_at",
+        "excel_403_warning_at",
+        "quality_pause_owner",
+    ] {
         assert_eq!(
             after.as_object_mut().unwrap().remove(field),
             Some(serde_json::Value::Null)
@@ -173,6 +177,13 @@ async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics()
         after
             .as_object_mut()
             .unwrap()
+            .remove("excel_403_warning_at"),
+        Some(serde_json::Value::Null)
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
             .remove("excel_ignore_encrypted_content"),
         Some(serde_json::json!(false))
     );
@@ -222,6 +233,13 @@ async fn encrypted_omission_upgrade_defaults_off_without_changing_accounts_or_se
             .fetch_one(&database.pool)
             .await
             .unwrap();
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("excel_403_warning_at"),
+        Some(before["excel_auto_disabled_at"].clone())
+    );
     assert_eq!(
         after
             .as_object_mut()

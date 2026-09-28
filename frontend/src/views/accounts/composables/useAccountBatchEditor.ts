@@ -7,6 +7,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { batchUpdateAccounts } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { accountEgressPatch } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountExcel403Action } from '@/utils/excel-settings'
@@ -34,7 +35,6 @@ export function useAccountBatchEditor(options: {
   const excelCacheCreationAsInput = shallowRef(false)
   const excelIgnoreEncryptedContent = shallowRef(false)
   const requestProxySource = shallowRef<import('@/utils/request-proxy-source').RequestProxySource>('account')
-  const updateRequestProxySource = ref(false)
   const excel403Action = shallowRef<Excel403Action>('none')
   const updateExcelCacheCreationAsInput = ref(false)
   const updateExcelIgnoreEncryptedContent = ref(false)
@@ -54,9 +54,7 @@ export function useAccountBatchEditor(options: {
   const updateWeight = ref(false)
   const updateGroups = ref(false)
   const updateProxy = ref(false)
-  const egressAvailable = shallowRef(false)
-  const egressMode = shallowRef('inherit')
-  const updateEgressMode = ref(false)
+  const egressMode = shallowRef('fixed_ipv6_reuse')
   const hasUpdates = computed(() =>
     updateCustomName.value
     || updateEnabled.value
@@ -64,14 +62,12 @@ export function useAccountBatchEditor(options: {
     || (excelAvailable.value && updateExcelModels.value)
     || (excelAvailable.value && updateExcelCacheCreationAsInput.value)
     || (excelAvailable.value && updateExcelIgnoreEncryptedContent.value)
-    || (requestProxyAvailable.value && updateRequestProxySource.value)
     || (excelAvailable.value && updateExcel403Action.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
     || updateModelAccess.value
     || updateGroups.value
-    || (updateProxy.value && proxyMode.value !== 'preserve')
-    || (egressAvailable.value && updateEgressMode.value),
+    || (updateProxy.value && proxyMode.value !== 'preserve'),
   )
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -83,14 +79,12 @@ export function useAccountBatchEditor(options: {
     updateExcelModels.value = false
     updateExcelCacheCreationAsInput.value = false
     updateExcelIgnoreEncryptedContent.value = false
-    updateRequestProxySource.value = false
     updateExcel403Action.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
     updateModelAccess.value = false
     updateGroups.value = false
     updateProxy.value = false
-    updateEgressMode.value = false
   }
 
   function open() {
@@ -103,15 +97,13 @@ export function useAccountBatchEditor(options: {
     schedulingEnabled.value = accounts.every(account => account.enabled)
     excelAvailable.value = accounts.every(account => account.provider === 'openai' && account.authenticationKind === 'oauth')
     requestProxyAvailable.value = accounts.every(account => account.provider === 'openai')
-    egressAvailable.value = accounts.every(account => account.provider === 'openai')
-    egressMode.value = 'inherit'
+    egressMode.value = 'fixed_ipv6_reuse'
     excelEnabled.value = accounts.every(account => account.responsesUpstream === 'excel')
     excelModels.value = (accounts[0]?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
     excelCacheCreationAsInput.value = accounts.every(account => account.excelCacheCreationAsInput ?? false)
     excelIgnoreEncryptedContent.value = accounts.every(account => account.excelIgnoreEncryptedContent ?? false)
     requestProxySource.value = accounts[0]?.requestProxySource ?? 'account'
-    updateRequestProxySource.value = false
     excel403Action.value = accounts[0] ? accountExcel403Action(accounts[0]) : 'none'
     proxyMode.value = 'preserve'
     proxyId.value = ''
@@ -149,12 +141,6 @@ export function useAccountBatchEditor(options: {
       toast.warning('请选择已通过测试的代理')
       return
     }
-    if (egressAvailable.value && updateEgressMode.value
-      && egressMode.value !== 'inherit' && egressMode.value !== 'unchanged'
-      && updateProxy.value && proxyMode.value === 'proxy') {
-      toast.warning('IPv6 策略不能与账号代理同时启用，请同时将出站代理改为直连')
-      return
-    }
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
@@ -167,16 +153,12 @@ export function useAccountBatchEditor(options: {
       }
       if (updateCustomName.value)
         payload.customName = normalizeAccountName(customName.value)
-      if (egressAvailable.value && updateEgressMode.value)
-        payload.egressMode = egressMode.value === 'inherit' ? null : egressMode.value
       if (updateEnabled.value)
         payload.enabled = schedulingEnabled.value
       if (excelAvailable.value && updateExcelEnabled.value)
         payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
       if (excelAvailable.value && updateExcelCacheCreationAsInput.value)
         payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
-      if (requestProxyAvailable.value && updateRequestProxySource.value)
-        payload.requestProxySource = requestProxySource.value
       if (excelAvailable.value && (updateExcelIgnoreEncryptedContent.value || (updateExcelEnabled.value && !excelEnabled.value)))
         payload.excelIgnoreEncryptedContent = !(updateExcelEnabled.value && !excelEnabled.value) && excelIgnoreEncryptedContent.value
       if (excelAvailable.value && updateExcel403Action.value)
@@ -194,8 +176,11 @@ export function useAccountBatchEditor(options: {
         payload.modelAccess = { ...modelAccess.value, models: [...modelAccess.value.models] }
       if (updateGroups.value)
         payload.groupIds = [...new Set(selectedGroupIds.value)]
-      if (updateProxy.value && proxyMode.value !== 'preserve') {
-        payload.outboundProxyId = proxyMode.value === 'direct' ? '' : proxyId.value.trim()
+      if (updateProxy.value) {
+        const mode = proxyMode.value
+        const hasOpenai = selectedAccounts().some(account => account.provider === 'openai')
+        const commonMode = mode === 'direct' || mode === 'proxy'
+        Object.assign(payload, accountEgressPatch({ proxyMode: mode, proxyId: proxyId.value, egressMode: egressMode.value }, requestProxyAvailable.value || (hasOpenai && commonMode)))
       }
       await batchUpdateAccounts(payload)
       showBatchEditModal.value = false
@@ -236,10 +221,8 @@ export function useAccountBatchEditor(options: {
     schedulingEnabled.value = true
     excelAvailable.value = false
     requestProxyAvailable.value = false
-    updateRequestProxySource.value = false
     requestProxySource.value = 'account'
-    egressAvailable.value = false
-    egressMode.value = 'inherit'
+    egressMode.value = 'fixed_ipv6_reuse'
     excelEnabled.value = false
     proxyMode.value = 'preserve'
     proxyId.value = ''
@@ -264,7 +247,6 @@ export function useAccountBatchEditor(options: {
     excelCacheCreationAsInput,
     excelIgnoreEncryptedContent,
     requestProxySource,
-    updateRequestProxySource,
     excel403Action,
     updateExcelCacheCreationAsInput,
     updateExcelIgnoreEncryptedContent,
@@ -284,9 +266,7 @@ export function useAccountBatchEditor(options: {
     updateWeight,
     updateGroups,
     updateProxy,
-    egressAvailable,
     egressMode,
-    updateEgressMode,
     hasUpdates,
     saving,
     open,

@@ -34,6 +34,43 @@ export interface QualityRule {
   lastRunAt: string | null
   lastAction?: string | null
   excelFailureStreak?: number
+  sourceTemplate?: QualityRuleTemplateRef | null
+}
+
+export interface QualityRuleTemplateRef {
+  id: string
+  revision: number
+  name: string
+}
+
+export interface QualityRuleTemplate extends QualityRuleTemplateRef {
+  config: Omit<QualityRuleConfig, 'accountId'>
+}
+
+export interface QualityMonitoring {
+  ruleId: string
+  revision: number
+  enabled: boolean
+  running: boolean
+  pending: boolean
+  nextRunAt: string
+  lastStatus: string | null
+  lastRunAt: string | null
+  lastAction: string | null
+  sourceTemplate?: QualityRuleTemplateRef | null
+}
+
+export interface QualityTemplateTarget {
+  accountId: string
+  ruleId: string | null
+  revision: number | null
+}
+
+export interface QualityTemplateApplyResult {
+  accountId: string
+  ruleId: string | null
+  success: boolean
+  message: string | null
 }
 
 export interface QualityAnswer {
@@ -87,4 +124,20 @@ export function getQualityRuns(id: string, options: RequestOptions = {}) {
 }
 export function getQualityDetail(id: string, options: RequestOptions = {}) {
   return request<QualityRun>({ url: `${base}/detail`, method: 'GET', params: { id }, ...options })
+}
+
+export function getQualityTemplates(options: RequestOptions = {}) {
+  return request<QualityRuleTemplate[]>({ url: `${base}/templates`, method: 'GET', ...options })
+}
+export function saveQualityTemplate(data: { id: string | null, revision: number | null, name: string, config: QualityRuleTemplate['config'] }) {
+  return request<QualityRuleTemplate>({ url: `${base}/templates/save`, method: 'POST', data })
+}
+export function deleteQualityTemplate(data: { id: string, revision: number }) {
+  return request<void>({ url: `${base}/templates/delete`, method: 'POST', data })
+}
+export function applyQualityTemplate(data: { id: string, revision: number, targets: QualityTemplateTarget[] }) {
+  return request<QualityTemplateApplyResult[]>({ url: `${base}/templates/apply`, method: 'POST', data, silent: true })
+}
+export function getQualityMonitoring(accountIds: string[], options: RequestOptions = {}) {
+  return request<Record<string, QualityMonitoring>>({ url: `${base}/monitoring`, method: 'POST', data: { accountIds }, ...options })
 }

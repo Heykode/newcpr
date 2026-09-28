@@ -187,9 +187,12 @@ impl ReloginEnrollment {
         outbound_proxy_id: Option<String>,
         context: super::MutationContext,
     ) -> Result<Self, AdminError> {
+        if settings.clear_outbound_proxy && outbound_proxy_id.is_some() {
+            return Err(AdminError::invalid("不能同时清除和指定账号代理"));
+        }
         let result = Self {
             config: super::relogin_templates::ReloginTemplateConfig {
-                egress_mode: None,
+                egress_mode: settings.egress_mode,
                 name: "2FA account import".to_owned(),
                 enabled: settings.enabled,
                 turn_state_injection_enabled: settings.turn_state_injection_enabled,
@@ -208,6 +211,8 @@ impl ReloginEnrollment {
                     .iter()
                     .map(|id| id.as_str().to_owned())
                     .collect(),
+                preserve_outbound_proxy: !settings.clear_outbound_proxy
+                    && outbound_proxy_id.is_none(),
                 outbound_proxy_id,
             },
             custom_name: super::accounts::normalize_custom_name(settings.custom_name.as_deref())?,

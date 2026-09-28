@@ -287,6 +287,12 @@ impl PgAdminAccountStore {
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut changed_fields = vec!["credentials".to_owned()];
         if let Some(settings) = &settings {
+            if settings.clear_outbound_proxy {
+                changed_fields.push("outbound_proxy".to_owned());
+            }
+            if settings.egress_mode.is_some() {
+                changed_fields.push("egress_mode".to_owned());
+            }
             changed_fields
                 .extend(["enabled", "concurrency_limit", "weight", "group_ids"].map(str::to_owned));
             if settings.turn_state_injection_enabled.is_some() {
@@ -619,6 +625,10 @@ impl AccountStore for PgAdminAccountStore {
             .map(|account| account.id.clone())
             .collect::<Vec<_>>();
         let mut groups_by_account = self.account_groups_by_account(&item_ids).await?;
+        let mut monitoring =
+            crate::postgres::quality_ops::PgQualityOpsStore::new(self.pool.clone())
+                .account_monitoring(&item_ids)
+                .await?;
         let items = page
             .accounts
             .into_iter()
@@ -631,6 +641,7 @@ impl AccountStore for PgAdminAccountStore {
                 );
                 let mut account = admin_account_record(summary)?;
                 account.groups = groups_by_account.remove(&account_id).unwrap_or_default();
+                account.quality_monitoring = monitoring.remove(&account_id);
                 Ok(AccountPageItem {
                     account,
                     projection,
@@ -674,6 +685,11 @@ impl AccountStore for PgAdminAccountStore {
             .await?;
         let mut account = admin_account_record(record.summary)?;
         account.groups = groups.remove(&account_id).unwrap_or_default();
+        account.quality_monitoring =
+            crate::postgres::quality_ops::PgQualityOpsStore::new(self.pool.clone())
+                .account_monitoring(std::slice::from_ref(&account_id))
+                .await?
+                .remove(&account_id);
         Ok(Some(AccountPageItem {
             account,
             projection,
@@ -1086,6 +1102,9 @@ impl AccountStore for PgAdminAccountStore {
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
+        if command.egress_mode.is_some() {
+            changed_fields.push("egress_mode".to_owned());
+        }
         if command.turn_state_injection_enabled.is_some() {
             changed_fields.push("turn_state_injection_enabled".to_owned());
         }
@@ -1124,7 +1143,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
-                egress_mode: None,
+                egress_mode: command.egress_mode,
                 custom_name: command.custom_name,
                 account_ids: vec![command.account_id.clone()],
                 explicit_scheduling_intent: false,

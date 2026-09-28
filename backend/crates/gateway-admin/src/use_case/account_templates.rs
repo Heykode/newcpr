@@ -180,10 +180,12 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
                     concurrency_limit: Some(settings.concurrency_limit),
                     weight: Some(settings.weight),
                     group_ids: Some(settings.group_ids),
-                    outbound_proxy: Some(match template.config.outbound_proxy_id {
-                        Some(id) => AccountProxySelection::Saved(id),
-                        None => AccountProxySelection::Direct,
-                    }),
+                    outbound_proxy: (!template.config.preserve_outbound_proxy).then_some(
+                        match template.config.outbound_proxy_id {
+                            Some(id) => AccountProxySelection::Saved(id),
+                            None => AccountProxySelection::Direct,
+                        },
+                    ),
                 },
             )
             .await

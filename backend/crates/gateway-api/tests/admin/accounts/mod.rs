@@ -311,6 +311,45 @@ mod batch_update {
     use serde_json::json;
 
     #[test]
+    fn single_edit_and_import_preserve_egress_patch_three_states() {
+        use gateway_api::admin::accounts::AccountImportSettingsRequest;
+        use gateway_core::provider_ports::egress::EgressMode;
+        let base = json!({"enabled": true, "concurrencyLimit": null, "weight": 1, "groupIds": []});
+        for mode in [
+            None,
+            Some(None),
+            Some(Some(EgressMode::Unchanged)),
+            Some(Some(EgressMode::FixedIpv6Reuse)),
+            Some(Some(EgressMode::RandomIpv6Reuse)),
+            Some(Some(EgressMode::FixedIpv6Fresh)),
+            Some(Some(EgressMode::RandomIpv6Fresh)),
+        ] {
+            let mut value = base.clone();
+            if let Some(mode) = mode {
+                value["egressMode"] = serde_json::to_value(mode).unwrap();
+            }
+            let import: AccountImportSettingsRequest =
+                serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(import.egress_mode, mode);
+            let snapshot = serde_json::to_value(&import).unwrap();
+            assert_eq!(snapshot.get("egressMode"), value.get("egressMode"));
+            let replay: AccountImportSettingsRequest = serde_json::from_value(snapshot).unwrap();
+            assert_eq!(replay.egress_mode, mode);
+            value["accountId"] = json!("acct_test");
+            let update: UpdateAccountRequest = serde_json::from_value(value).unwrap();
+            update.validate().unwrap();
+            assert_eq!(update.egress_mode, mode);
+        }
+        for invalid in [json!("inherit"), json!("invalid"), json!(false), json!({})] {
+            let mut value = base.clone();
+            value["egressMode"] = invalid;
+            assert!(serde_json::from_value::<AccountImportSettingsRequest>(value.clone()).is_err());
+            value["accountId"] = json!("acct_test");
+            assert!(serde_json::from_value::<UpdateAccountRequest>(value).is_err());
+        }
+    }
+
+    #[test]
     fn ipv6_batch_patch_preserves_absence_null_and_validates_all_modes() {
         use gateway_core::provider_ports::egress::EgressMode;
         let omitted: BatchUpdateAccountsRequest = serde_json::from_value(json!({
@@ -929,6 +968,42 @@ mod response {
                 .account
                 .enabled
         );
+    }
+
+    #[tokio::test]
+    async fn account_routes_preserve_excel_403_warning_after_scheduling_and_route_recovery() {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        let warning_at = "2026-09-27T00:00:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap();
+        for upstream in [
+            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
+        ] {
+            let mut account = account_fixture();
+            account.account.enabled = true;
+            account.account.responses_upstream = upstream;
+            account.account.excel_auto_disabled_at = None;
+            account.account.excel_403_warning_at = Some(warning_at);
+            *fixture.account.lock().unwrap() = Some(account);
+            for (method, path, is_list) in [
+                (Method::GET, "/api/admin/accounts", true),
+                (
+                    Method::GET,
+                    "/api/admin/accounts/detail?accountId=acct_cost",
+                    false,
+                ),
+                (Method::POST, "/api/admin/accounts/quota/refresh", false),
+            ] {
+                let value = account_response(&fixture, method, path, is_list).await;
+                let actual: Option<chrono::DateTime<Utc>> =
+                    serde_json::from_value(value["excel403WarningAt"].clone()).unwrap();
+                assert_eq!(actual, Some(warning_at));
+                assert_eq!(value["enabled"], true);
+                assert!(value["excelAutoDisabledAt"].is_null());
+            }
+        }
     }
 
     #[tokio::test]
@@ -1657,6 +1732,8 @@ mod response {
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_auto_disabled_at: None,
+                excel_403_warning_at: None,
+                quality_monitoring: None,
                 excel_mode_disabled_at: None,
                 excel_models: Default::default(),
                 concurrency_limit: None,

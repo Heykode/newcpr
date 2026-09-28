@@ -702,6 +702,9 @@ impl AccountsService for DefaultAccountsService {
         {
             return Err(AdminError::invalid("账号请求代理池仅支持 OpenAI 账号"));
         }
+        if command.egress_mode.is_some() && item.account.provider_kind.as_str() != "openai" {
+            return Err(AdminError::invalid("IPv6 出口策略仅支持 OpenAI 账号"));
+        }
         if let Some(upstream) = command
             .excel_models
             .as_ref()

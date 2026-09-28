@@ -29,6 +29,7 @@ pub enum QualityFailureAction {
 pub struct QualityRuleConfig {
     #[serde(default)]
     pub detection_mode: QualityDetectionMode,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub account_id: String,
     pub model: String,
     pub enabled: bool,
@@ -76,6 +77,57 @@ pub struct QualityRule {
     pub last_action: Option<String>,
     #[serde(default)]
     pub excel_failure_streak: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_template: Option<QualityRuleTemplateRef>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QualityRuleTemplateRef {
+    pub id: String,
+    pub revision: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityRuleTemplate {
+    pub id: String,
+    pub revision: i64,
+    pub name: String,
+    pub config: QualityRuleConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QualityTemplateTarget {
+    pub account_id: String,
+    pub rule_id: Option<String>,
+    pub revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityTemplateApplyResult {
+    pub account_id: String,
+    pub rule_id: Option<String>,
+    pub success: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityMonitoring {
+    pub rule_id: String,
+    pub revision: i64,
+    pub enabled: bool,
+    pub running: bool,
+    pub pending: bool,
+    pub next_run_at: DateTime<Utc>,
+    pub last_status: Option<String>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub last_action: Option<String>,
+    pub source_template: Option<QualityRuleTemplateRef>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

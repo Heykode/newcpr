@@ -38,16 +38,15 @@ const form = defineModel<AccountCreateForm>({ required: true })
       v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
       v-model:excel-403-action="form.excel403Action"
       v-model:request-proxy-source="form.requestProxySource"
-      v-model:update-request-proxy-source="form.applyRequestProxySource"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
       v-model:model-access="form.modelAccess"
       v-model:selected-group-ids="form.groupIds"
       v-model:proxy-mode="form.proxyMode"
       v-model:proxy-id="form.proxyId"
+      v-model:egress-mode="form.egressMode"
       :excel-available="form.applyExcel && (form.provider === 'openai' || form.provider === 'batch')"
-      :request-proxy-available="form.provider === 'openai' || form.provider === 'batch'"
-      preserve-request-proxy-source
+      :request-proxy-available="form.provider === 'openai'"
       name-available
       model-access-available
       preserve-model-access

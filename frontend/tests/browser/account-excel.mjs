@@ -38,6 +38,7 @@ async function main() {
     let ignoreEncryptedContent = false
     let excelModels = ['gpt-5.6-sol']
     let followGlobal = false
+    let recovered = false
     const templates = []
     const pushes = []
     const patches = []
@@ -56,11 +57,26 @@ async function main() {
     await page.route('**/dev/api/admin/accounts?*', route => fulfill(route, {
       items: accounts.map((account, index) => ({
         ...account,
-        enabled: index === 1 ? false : account.enabled,
-        status: index === 1 ? 'disabled' : account.status,
-        responsesUpstream: (index === 0 && enabled) || index === 1 ? 'excel' : 'codex',
-        excelAutoDisabledAt: index > 0 ? '2026-09-27T00:00:00Z' : null,
+        enabled: index === 1 ? recovered : account.enabled,
+        status: index === 1 && !recovered ? 'disabled' : account.status,
+        responsesUpstream: (index === 0 && enabled) || (index === 1 && !recovered) ? 'excel' : 'codex',
+        excelAutoDisabledAt: index === 1 && !recovered ? '2026-09-27T00:00:00Z' : null,
+        excel403WarningAt: index === 1 ? '2026-09-27T00:00:00Z' : null,
         excelModeDisabledAt: index === 2 ? '2026-09-27T00:00:00Z' : null,
+        qualityMonitoring: index === 1
+          ? {
+              ruleId: 'avatar-monitor-rule',
+              revision: 1,
+              enabled: true,
+              running: false,
+              pending: false,
+              nextRunAt: '2026-09-29T08:00:00Z',
+              lastStatus: null,
+              lastRunAt: null,
+              lastAction: null,
+              sourceTemplate: null,
+            }
+          : null,
         excelModels: index === 0 ? excelModels : ['gpt-5.6-sol'],
         excelModelsFollowGlobal: index === 0 ? followGlobal : true,
         excelIgnoreEncryptedContent: index === 0 ? ignoreEncryptedContent : false,
@@ -109,10 +125,20 @@ async function main() {
       return fulfill(route, null)
     })
     await page.goto(`http://127.0.0.1:${port}/accounts`)
-    const pausedBadge = page.getByText('Excel 403 自动暂停调度', { exact: true })
-    await pausedBadge.waitFor()
-    assert.ok((await pausedBadge.getAttribute('title')).includes('HTTP 403'))
-    assert.ok((await pausedBadge.getAttribute('title')).includes('手动启用账号调度'))
+    const warningRow = page.locator(`tr[data-row-key="${accounts[1].id}"]`)
+    const warningAvatar = warningRow.locator('[data-account-avatar][data-account-excel-status="warning"]')
+    const firstRow = page.locator(`tr[data-row-key="${accounts[0].id}"]`)
+    const firstAvatar = firstRow.locator('[data-account-avatar]')
+    const monitor = warningRow.getByRole('link', { name: '监测中', exact: true })
+    await warningAvatar.waitFor()
+    await monitor.waitFor()
+    assert.ok((await warningAvatar.getAttribute('title')).includes('HTTP 403'))
+    assert.ok((await warningAvatar.getAttribute('title')).includes('不代表当前调度状态'))
+    assert.equal(await page.getByText('BPS 403疑似被封excel', { exact: true }).count(), 0)
+    assert.equal(await page.locator('[aria-label="Excel 入口"]').count(), 0)
+    assert.equal(await firstAvatar.getAttribute('data-account-excel-status'), 'default')
+    const defaultAvatarClass = await firstAvatar.getAttribute('class')
+    const originalAvatarSize = await firstAvatar.evaluate(element => ({ width: element.offsetWidth, height: element.offsetHeight }))
     await page.getByText('Excel 403 自动关闭', { exact: true }).waitFor()
     await page.locator('button[title="展开统计"]').nth(1).click()
     await page.getByText('Excel 上游 HTTP 403，已自动暂停此账号调度：', { exact: false }).waitFor()
@@ -121,10 +147,21 @@ async function main() {
     assert.equal(await resume.isEnabled(), true)
     await page.screenshot({ path: `${output}/excel-403-paused.png` })
     await page.locator('button[title="收起统计"]').click()
+    recovered = true
+    await page.reload()
+    await warningAvatar.waitFor()
+    const recoveredRow = page.locator(`tr[data-row-key="${accounts[1].id}"]`)
+    assert.equal(await recoveredRow.getByRole('switch', { name: '暂停账号调度', exact: true }).isChecked(), true)
+    assert.ok((await warningAvatar.getAttribute('title')).includes('Excel 模式未开启'))
+    await page.screenshot({ path: `${output}/excel-403-history-after-recovery.png` })
+    recovered = false
+    await page.reload()
+    await warningAvatar.waitFor()
     const more = page.getByRole('button', { name: '更多操作', exact: true }).first()
     await more.click()
     await page.getByRole('button', { name: '开启 Excel 入口', exact: true }).click()
-    await page.locator('[aria-label="Excel 入口"]').first().waitFor()
+    await firstRow.locator('[data-account-avatar][data-account-excel-status="enabled"]').waitFor()
+    assert.deepEqual(await firstAvatar.evaluate(element => ({ width: element.offsetWidth, height: element.offsetHeight })), originalAvatarSize)
     assert.deepEqual(patches[0], { accountIds: [accounts[0].id], responsesUpstream: 'excel' })
     await page.locator('button[title="展开统计"]').first().click()
     const panel = page.locator('dl').filter({ hasText: '生成入口' })
@@ -137,22 +174,42 @@ async function main() {
       }
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: 900 })
-        const badgeStyle = await pausedBadge.evaluate((element) => {
+        await warningAvatar.scrollIntoViewIfNeeded()
+        const avatarStyle = await warningAvatar.evaluate((element) => {
           const style = getComputedStyle(element)
           return {
-            warningBackground: element.classList.contains('bg-cp-warning-container'),
+            warningBorder: element.classList.contains('border-cp-warning'),
+            successBorder: element.classList.contains('border-cp-success'),
             background: style.backgroundColor,
             border: style.borderTopStyle,
-            padding: Number.parseFloat(style.paddingInlineStart),
+            borderColor: style.borderTopColor,
+            borderWidth: Number.parseFloat(style.borderTopWidth),
+            width: element.offsetWidth,
+            height: element.offsetHeight,
             fits: element.getBoundingClientRect().width <= element.parentElement.getBoundingClientRect().width,
           }
         })
-        assert.equal(badgeStyle.warningBackground, true)
-        assert.notEqual(badgeStyle.background, 'rgba(0, 0, 0, 0)')
-        assert.equal(badgeStyle.border, 'solid')
-        assert.ok(badgeStyle.padding > 0)
-        assert.ok(badgeStyle.fits)
-        await pausedBadge.screenshot({ path: `${output}/excel-403-badge-${theme}-${width}.png` })
+        assert.equal(avatarStyle.warningBorder, true)
+        assert.equal(avatarStyle.successBorder, false)
+        assert.notEqual(avatarStyle.background, 'rgba(0, 0, 0, 0)')
+        assert.notEqual(avatarStyle.borderColor, 'rgba(0, 0, 0, 0)')
+        assert.equal(avatarStyle.border, 'solid')
+        assert.equal(avatarStyle.borderWidth, 2)
+        assert.equal(avatarStyle.width, originalAvatarSize.width)
+        assert.equal(avatarStyle.height, originalAvatarSize.height)
+        assert.ok(avatarStyle.fits)
+        const greenStyle = await firstAvatar.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { successBorder: element.classList.contains('border-cp-success'), borderColor: style.borderTopColor, borderWidth: Number.parseFloat(style.borderTopWidth) }
+        })
+        assert.equal(greenStyle.successBorder, true)
+        assert.equal(greenStyle.borderWidth, 2)
+        assert.notEqual(greenStyle.borderColor, avatarStyle.borderColor)
+        const avatarBounds = await warningAvatar.boundingBox()
+        const monitorBounds = await monitor.boundingBox()
+        assert.ok(monitorBounds.x >= avatarBounds.x + avatarBounds.width)
+        await warningAvatar.locator('..').locator('..').screenshot({ path: `${output}/excel-403-avatar-${theme}-${width}.png` })
+        await firstAvatar.locator('..').locator('..').screenshot({ path: `${output}/excel-enabled-avatar-${theme}-${width}.png` })
         await panel.scrollIntoViewIfNeeded()
         assert.ok(await panel.evaluate(element => element.scrollWidth <= element.clientWidth))
         if (width < 640)
@@ -163,7 +220,10 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 900 })
     await more.click()
     await page.getByRole('button', { name: '关闭 Excel 入口', exact: true }).click()
-    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Excel 入口"]').length === 1)
+    await firstRow.locator('[data-account-avatar][data-account-excel-status="default"]').waitFor()
+    assert.equal(await firstAvatar.getAttribute('class'), defaultAvatarClass)
+    assert.deepEqual(await firstAvatar.evaluate(element => ({ width: element.offsetWidth, height: element.offsetHeight })), originalAvatarSize)
+    assert.equal(await page.locator('[aria-label="Excel 入口"]').count(), 0)
     assert.deepEqual(patches[1], { accountIds: [accounts[0].id], responsesUpstream: 'codex' })
     await page.getByRole('button', { name: '编辑账号', exact: true }).first().click()
     const dialog = page.getByRole('dialog')
@@ -255,7 +315,8 @@ async function main() {
     await page.getByRole('button', { name: '账号模板', exact: true }).click()
     await page.getByRole('button', { name: '管理模板', exact: true }).click()
     await dialog.getByRole('button', { name: '新建模板', exact: true }).click()
-    assert.equal(await encrypted.count(), 0)
+    assert.equal(await encrypted.count(), 1)
+    assert.equal(await encrypted.isChecked(), false)
     await dialog.getByRole('textbox', { name: '模板名称', exact: true }).fill('Excel template')
     await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
     const policy = dialog.getByRole('combobox', { name: 'Excel遇到HTTP 403', exact: true })

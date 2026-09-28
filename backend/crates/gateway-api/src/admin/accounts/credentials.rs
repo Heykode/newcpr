@@ -22,6 +22,14 @@ impl AccountProvider {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_outbound_proxy: bool,
+    #[serde(
+        default,
+        deserialize_with = "super::wire::deserialize_optional_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_name: Option<String>,
     pub enabled: bool,
@@ -57,7 +65,8 @@ impl AccountImportSettingsRequest {
         self,
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
-            egress_mode: None,
+            clear_outbound_proxy: self.clear_outbound_proxy,
+            egress_mode: self.egress_mode,
             custom_name: parse_custom_name(self.custom_name.as_deref())?,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,
@@ -246,6 +255,11 @@ pub struct UpdateAccountRequest {
         default,
         deserialize_with = "super::wire::deserialize_optional_nullable"
     )]
+    pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
+    #[serde(
+        default,
+        deserialize_with = "super::wire::deserialize_optional_nullable"
+    )]
     pub custom_name: Option<Option<String>>,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<super::wire::AccountProxyUpdate>,
@@ -283,6 +297,7 @@ impl UpdateAccountRequest {
     pub(super) fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
         Ok(UpdateAccount {
+            egress_mode: self.egress_mode,
             custom_name: self
                 .custom_name
                 .map(|value| parse_custom_name(value.as_deref()))
