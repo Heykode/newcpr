@@ -153,6 +153,11 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         return false;
     }
     match (member, relative.to_str(), item) {
+        ("crates/gateway-host", Some("mihomo/mod.rs"), Item::Mod(module)) => {
+            module.ident == "tests"
+                && module.content.is_none()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         ("crates/providers/openai", Some("transport/excel/images.rs"), Item::Fn(function)) => {
             matches!(
                 function.sig.ident.to_string().as_str(),
@@ -654,6 +659,30 @@ fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
                 "{relative}: {source}"
             );
         }
+    }
+}
+
+#[test]
+fn mihomo_private_tests_require_exact_owner_and_private_external_module() {
+    let path = Path::new("mihomo/mod.rs");
+    let item: Item = syn::parse_str("#[cfg(test)] mod tests;").unwrap();
+    assert!(is_audited_private_test("crates/gateway-host", path, &item));
+    assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+    assert!(!is_audited_private_test(
+        "crates/gateway-host",
+        Path::new("mihomo/pool.rs"),
+        &item
+    ));
+    for source in [
+        "mod tests;",
+        "#[cfg(test)] pub mod tests;",
+        "#[cfg(test)] mod tests {}",
+        "#[cfg(test)] mod other;",
+        "#[cfg(test)] pub fn test_api() {}",
+        "#[cfg_attr(test, path = \"fixture.rs\")] mod tests;",
+    ] {
+        let item: Item = syn::parse_str(source).unwrap();
+        assert!(!is_audited_private_test("crates/gateway-host", path, &item));
     }
 }
 

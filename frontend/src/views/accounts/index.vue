@@ -243,12 +243,15 @@ const {
   customName: batchCustomName,
   updateCustomName: batchUpdateCustomName,
   excelAvailable: batchExcelAvailable,
+  requestProxyAvailable: batchRequestProxyAvailable,
   schedulingEnabled: batchSchedulingEnabled,
   excelEnabled: batchExcelEnabled,
   excelModels: batchExcelModels,
   excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
   excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
   excelIgnoreEncryptedContent: batchExcelIgnoreEncryptedContent,
+  requestProxySource: batchRequestProxySource,
+  updateRequestProxySource: batchUpdateRequestProxySource,
   excel403Action: batchExcel403Action,
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
   updateExcelIgnoreEncryptedContent: batchUpdateExcelIgnoreEncryptedContent,
@@ -292,6 +295,7 @@ const {
   excelModelsFollowGlobal,
   excelCacheCreationAsInput,
   excelIgnoreEncryptedContent,
+  requestProxySource,
   excel403Action,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
@@ -666,6 +670,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
+      v-model:request-proxy-source="requestProxySource"
       v-model:excel-403-action="excel403Action"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
@@ -687,6 +692,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:enabled="batchSchedulingEnabled"
       v-model:excel-enabled="batchExcelEnabled"
       v-model:excel-models="batchExcelModels"
+      v-model:request-proxy-source="batchRequestProxySource"
+      v-model:update-request-proxy-source="batchUpdateRequestProxySource"
       v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="batchExcelIgnoreEncryptedContent"
@@ -714,6 +721,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :catalog-account-id="batchCatalogAccountId"
       :has-updates="batchHasUpdates"
       :excel-available="batchExcelAvailable"
+      :request-proxy-available="batchRequestProxyAvailable"
       :selected-count="selectedIds.size"
       :groups="groups"
       :groups-loading="groupsLoading"

@@ -4,6 +4,144 @@ use super::*;
 use gateway_core::account::ResponsesUpstream;
 
 #[tokio::test]
+async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
+    use gateway_core::provider_ports::session_proxy::RequestProxySource;
+    let Some(database) = TestDatabase::create("excel_exit").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_excel_exit", "fixture"))
+        .await
+        .unwrap();
+    let id = ProviderAccountId::new("acct_excel_exit").unwrap();
+    assert_eq!(
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .request_proxy_source(),
+        RequestProxySource::Account
+    );
+    let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['request_proxy_source','responses_upstream','updated_at'] from provider_accounts a where id=$1")
+        .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    let store = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "excel-exit-regression".into(),
+    };
+    let patch = BatchUpdateAccounts {
+        account_ids: vec![id.as_str().into()],
+        request_proxy_source: Some(RequestProxySource::Mihomo),
+        responses_upstream: None,
+        egress_mode: None,
+        excel_models: None,
+        excel_models_follow_global: None,
+        excel_cache_creation_as_input: None,
+        excel_ignore_encrypted_content: None,
+        excel_auto_disable_on_403: None,
+        excel_403_action: None,
+        model_access: None,
+        custom_name: None,
+        enabled: None,
+        turn_state_injection_enabled: None,
+        concurrency_limit: None,
+        weight: None,
+        group_ids: None,
+        outbound_proxy: None,
+    };
+    store
+        .batch_update_accounts(patch.clone(), &context)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .responses_upstream(),
+        ResponsesUpstream::Codex
+    );
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                responses_upstream: Some(ResponsesUpstream::Excel),
+                request_proxy_source: None,
+                ..patch.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .request_proxy_source(),
+        RequestProxySource::Mihomo
+    );
+    assert_eq!(
+        repository
+            .load_provider_account(id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .request_proxy_source,
+        RequestProxySource::Mihomo
+    );
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                responses_upstream: Some(ResponsesUpstream::Codex),
+                request_proxy_source: None,
+                ..patch.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    let restored = repository.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(restored.responses_upstream(), ResponsesUpstream::Codex);
+    assert_eq!(restored.request_proxy_source(), RequestProxySource::Mihomo);
+    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['request_proxy_source','responses_upstream','updated_at'] from provider_accounts a where id=$1")
+        .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(before, after);
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                responses_upstream: None,
+                request_proxy_source: Some(RequestProxySource::ProxyPool),
+                ..patch
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .get_account(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .request_proxy_source(),
+        RequestProxySource::ProxyPool
+    );
+    assert!(
+        sqlx::query("update provider_accounts set request_proxy_source='invalid' where id=$1")
+            .bind(id.as_str())
+            .execute(&database.pool)
+            .await
+            .is_err()
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn excel_disable_mode_403_keeps_identity_scheduling_and_quality_pause_owner() {
     let Some(database) = TestDatabase::create("excel_mode_403").await else {
         return;
@@ -196,6 +334,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         excel_models_follow_global: None,
         excel_cache_creation_as_input: Some(true),
         excel_ignore_encrypted_content: None,
+        request_proxy_source: None,
         excel_auto_disable_on_403: Some(true),
         excel_403_action: Some(gateway_core::account::Excel403Action::PauseAccount),
         excel_models: None,
@@ -270,6 +409,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 excel_models_follow_global: Some(true),
                 excel_cache_creation_as_input: Default::default(),
                 excel_ignore_encrypted_content: Default::default(),
+                request_proxy_source: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Some(
@@ -341,6 +481,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 excel_models_follow_global: Some(false),
                 excel_cache_creation_as_input: Default::default(),
                 excel_ignore_encrypted_content: Default::default(),
+                request_proxy_source: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Some(
@@ -400,6 +541,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Some(true),
         excel_ignore_encrypted_content: Some(true),
+        request_proxy_source: Some(Default::default()),
         excel_auto_disable_on_403: Some(true),
         excel_403_action: Some(gateway_core::account::Excel403Action::PauseAccount),
         excel_models: Some(
@@ -486,6 +628,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             BatchUpdateAccounts {
                 responses_upstream: None,
                 excel_ignore_encrypted_content: Some(false),
+                request_proxy_source: Some(Default::default()),
                 ..command.clone()
             },
             &context,
@@ -511,6 +654,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
                 excel_ignore_encrypted_content: Default::default(),
+                request_proxy_source: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -564,6 +708,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 excel_403_action: Default::default(),
                 excel_cache_creation_as_input: None,
                 excel_ignore_encrypted_content: None,
+                request_proxy_source: None,
                 ..command.clone()
             },
             &context,
@@ -637,6 +782,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
                 excel_ignore_encrypted_content: Default::default(),
+                request_proxy_source: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),

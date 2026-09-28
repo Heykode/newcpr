@@ -1,5 +1,61 @@
 [
   {
+    "path": "backend/crates/gateway-host/src/mihomo/diagnostics.rs",
+    "rule": "non-example-ip",
+    "line": 301,
+    "file_sha256": "3dc2e17e4c3dc4031bc95aabd294a8946964333f1015944a261496a743bc155d",
+    "line_sha256": "19155d417797b7e17a425de4d86c9fcfd0623c72e83d2ee1be7083fa63750743",
+    "reason": "Reviewed literal browser User-Agent: the dotted number is a Chrome version, not a server address; preserve the diagnostic request fingerprint."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 24,
+    "file_sha256": "c5fee7f135f70e353d644b8aabf886a75c7dab8263e45cb2df2338e850186153",
+    "line_sha256": "cbd914e4a34502f4b54aef8748141991fba97e8d22c1fe6514d96dbedc834545",
+    "reason": "Reviewed synthetic user/secret credentials in a loopback-only proxy factory for pool lifecycle tests; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 224,
+    "file_sha256": "c5fee7f135f70e353d644b8aabf886a75c7dab8263e45cb2df2338e850186153",
+    "line_sha256": "d71fd35a201d1505a38593ed1431d183348595f33bf5d74fcacb896827c0ab53",
+    "reason": "Reviewed parser-only documentation-domain fixture exercising encoded password normalization and deduplication; no network request."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 245,
+    "file_sha256": "c5fee7f135f70e353d644b8aabf886a75c7dab8263e45cb2df2338e850186153",
+    "line_sha256": "d6f3935f8b0e8df47b35ed5d8f680b16c01057e169f634cefb1f41c005cc1f5e",
+    "reason": "Reviewed parser-only documentation IPv6 address with synthetic credentials, asserting extraction of the proxy server field."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 248,
+    "file_sha256": "c5fee7f135f70e353d644b8aabf886a75c7dab8263e45cb2df2338e850186153",
+    "line_sha256": "ede25af4398910b34492dda3a622aad655f97054233ecdfcf552fc354a77887d",
+    "reason": "Reviewed synthetic u/p credentials and placeholder host in a parser-only TLS flag assertion; no connection is made."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 262,
+    "file_sha256": "c5fee7f135f70e353d644b8aabf886a75c7dab8263e45cb2df2338e850186153",
+    "line_sha256": "0631835a9cbfbbf569a3ec90cc2ce7cfbb2f68ba006493604d10bea630d3f66b",
+    "reason": "Reviewed deliberately invalid parser input with synthetic private-secret marker; tests verify returned errors never echo that marker."
+  },
+  {
+    "path": "backend/crates/gateway-host/src/mihomo/tests.rs",
+    "rule": "authenticated-url",
+    "line": 263,
+    "file_sha256": "c5fee7f135f70e353d644b8aabf886a75c7dab8263e45cb2df2338e850186153",
+    "line_sha256": "ad5a015389ca8cf6de7f89155a0cf758753245d3f265663d07e7a40394b3d510",
+    "reason": "Reviewed malformed percent-encoding rejection fixture with synthetic credentials; parser-only error redaction test."
+  },
+  {
     "path": "backend/crates/gateway-api/tests/openai/responses/http.rs",
     "rule": "non-example-ip",
     "line": 715,

@@ -63,7 +63,15 @@ async fn template_threshold_snapshot_and_complete_application_are_atomic() {
         return;
     };
     let store = setup(&db).await;
-    let authoritative = template(&db).await;
+    let mut authoritative = template(&db).await;
+    authoritative.config.request_proxy_source =
+        Some(gateway_core::account::RequestProxySource::Mihomo);
+    sqlx::query("update account_relogin_templates set config=$1 where id=$2")
+        .bind(serde_json::to_value(&authoritative.config).unwrap())
+        .bind(&authoritative.id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
     let mut forged = authoritative.clone();
     forged.config.enabled = false;
     forged.config.weight = 90;
@@ -129,6 +137,7 @@ async fn template_threshold_snapshot_and_complete_application_are_atomic() {
     assert_eq!(account["excel_models_follow_global"], false);
     assert_eq!(account["excel_cache_creation_as_input"], false);
     assert_eq!(account["excel_ignore_encrypted_content"], true);
+    assert_eq!(account["request_proxy_source"], "mihomo");
     assert_eq!(account["excel_403_action"], "pause_account");
     assert_eq!(applied["groups"][0]["account_group_id"], GROUP);
     assert_eq!(applied["egress"]["mode"], "unchanged");

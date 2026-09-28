@@ -10,6 +10,7 @@ use crate::transport::protocol::responses::{
 /// WebSocket opening 描述。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexWebSocketConnection {
+    pub(crate) session_proxy: Option<crate::transport::session_proxy::SessionProxyHold>,
     pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
     pub(crate) egress_source: Option<Ipv6Addr>,
     pub(super) endpoint: String,
@@ -120,6 +121,7 @@ impl CodexWebSocketConnection {
             headers,
             outbound_proxy: None,
             egress_source: None,
+            session_proxy: None,
         }
     }
 

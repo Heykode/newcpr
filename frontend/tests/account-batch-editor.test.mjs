@@ -100,6 +100,7 @@ function mountEditor(t, options = {}) {
 }
 
 function assertNoUpdates(state) {
+  assert.equal(state.updateRequestProxySource.value, false)
   assert.equal(state.updateEgressMode.value, false)
   for (const field of updateFields)
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
@@ -108,6 +109,35 @@ function assertNoUpdates(state) {
   assert.equal(state.updateExcel403Action.value, false)
   assert.equal(state.updateExcelIgnoreEncryptedContent.value, false)
 }
+
+test('Account exit selection is independently opted in without changing native proxy or IPv6', async (t) => {
+  const { state, requests, selectedIds } = mountEditor(t)
+  state.open()
+  state.requestProxySource.value = 'mihomo'
+  assert.equal(state.hasUpdates.value, false)
+  state.updateRequestProxySource.value = true
+  await state.save()
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].requestProxySource, 'mihomo')
+  assert.deepEqual(Object.keys(requests[0]).sort(), ['accountIds', 'requestProxySource'])
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  assert.equal(state.updateRequestProxySource.value, false)
+})
+
+test('Managed exits remain available for native non-OAuth OpenAI accounts', async (t) => {
+  const { state, accounts, requests } = mountEditor(t)
+  accounts.value = accounts.value.map(account => ({ ...account, authenticationKind: 'api_key', responsesUpstream: 'codex' }))
+  state.open()
+  assert.equal(state.excelAvailable.value, false)
+  assert.equal(state.requestProxyAvailable.value, true)
+  state.updateRequestProxySource.value = true
+  state.requestProxySource.value = 'proxy_pool'
+  assert.equal(state.hasUpdates.value, true)
+  await state.save()
+  assert.equal(requests[0].requestProxySource, 'proxy_pool')
+  assert.deepEqual(Object.keys(requests[0]).sort(), ['accountIds', 'requestProxySource'])
+})
 
 test('IPv6 batch editing is opt-in, nullable and resets on reopen', async (t) => {
   for (const mode of ['inherit', 'unchanged', 'fixed_ipv6_reuse', 'random_ipv6_reuse', 'fixed_ipv6_fresh', 'random_ipv6_fresh']) {

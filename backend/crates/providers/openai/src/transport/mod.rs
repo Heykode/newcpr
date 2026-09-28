@@ -20,6 +20,7 @@ pub mod request;
 pub mod reset_credits;
 mod response_meta;
 pub(crate) mod session;
+mod session_proxy;
 pub mod subscription;
 mod time;
 pub mod tls;

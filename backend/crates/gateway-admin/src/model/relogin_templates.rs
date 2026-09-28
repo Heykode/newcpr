@@ -25,6 +25,9 @@ pub struct ExcelImportSettings {
     #[serde(default)]
     pub excel_ignore_encrypted_content: bool,
     #[serde(default)]
+    pub request_proxy_source:
+        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
+    #[serde(default)]
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     pub excel_models: Option<gateway_core::account::ExcelModels>,
@@ -47,6 +50,9 @@ impl ExcelImportSettings {
         settings.responses_upstream = Some(self.responses_upstream);
         settings.excel_cache_creation_as_input = Some(self.excel_cache_creation_as_input);
         settings.excel_ignore_encrypted_content = Some(self.excel_ignore_encrypted_content);
+        if let Some(source) = self.request_proxy_source {
+            settings.request_proxy_source = Some(source);
+        }
         let action =
             self.excel_403_action
                 .unwrap_or(if self.excel_auto_disable_on_403.unwrap_or(false) {
@@ -93,6 +99,8 @@ pub struct ReloginTemplateConfig {
     pub excel_cache_creation_as_input: Option<bool>,
     #[serde(default)]
     pub excel_ignore_encrypted_content: Option<bool>,
+    pub request_proxy_source:
+        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
     #[serde(default)]
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
@@ -141,6 +149,7 @@ impl ReloginTemplateConfig {
             excel_models_follow_global: self.excel_models_follow_global,
             excel_cache_creation_as_input: self.excel_cache_creation_as_input,
             excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
+            request_proxy_source: self.request_proxy_source,
             excel_auto_disable_on_403: self.excel_auto_disable_on_403,
             excel_403_action: self.excel_403_action,
             concurrency_limit: self

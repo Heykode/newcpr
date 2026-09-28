@@ -134,6 +134,7 @@ pub(super) async fn prepare_excel(
     request.force_http_sse = true;
     request.use_websocket = false;
     request.excel = Some(ExcelPreparedRequest {
+        exit_lease: None,
         body,
         tools,
         structured,
@@ -565,6 +566,7 @@ mod tests {
             );
             let tools = ClientTools::parse(request.body()).unwrap();
             request.excel = Some(ExcelPreparedRequest {
+                exit_lease: None,
                 body: prepare_request(request.body(), &tools, &Default::default(), None).unwrap(),
                 tools,
                 structured: None,
@@ -887,6 +889,7 @@ mod tests {
                     .clone(),
             );
             request.excel = Some(ExcelPreparedRequest {
+                exit_lease: None,
                 body: request.body().clone(),
                 tools: ClientTools::default(),
                 structured: None,
@@ -978,6 +981,7 @@ mod tests {
                     .clone(),
             );
             request.excel = Some(ExcelPreparedRequest {
+                exit_lease: None,
                 body: request.body().clone(),
                 tools: ClientTools::default(),
                 structured: None,

@@ -56,6 +56,7 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            session_proxy: None,
             direct_client: client.clone(),
             response_control: None,
             client,
@@ -135,14 +136,14 @@ impl CodexBackendClient {
             let mut uploaded = upstream_request.clone();
             uploaded.excel.as_mut().expect("Excel request").body = images.body.clone();
             let result = self
-                .create_prepared_response_stream(&uploaded, context)
+                .create_prepared_response_stream(&uploaded, context, false)
                 .await;
             if let Err(error) = &result {
                 images.observe_error(error).await;
             }
             return result;
         }
-        self.create_prepared_response_stream(upstream_request, context)
+        self.create_prepared_response_stream(upstream_request, context, true)
             .await
     }
 
@@ -150,9 +151,58 @@ impl CodexBackendClient {
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
+        allow_proxy_retry: bool,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
-        match self.send_response_http_sse(request, context).await {
-            Ok(response) => Ok(self.with_excel_repair(response, request, context)),
+        let response = self.send_response_http_sse(request, context).await;
+        // Reqwest's connect error establishes failure before obtaining a usable
+        // connection. Timeouts, response errors and prior uploads are not proof.
+        let definitely_unsent = matches!(&response, Err(CodexClientError::Http(error) | CodexClientError::HttpJson(error)) if error.is_connect() && !error.is_timeout());
+        if allow_proxy_retry
+            && definitely_unsent
+            && request.excel.is_some()
+            && let Some(lease) = self
+                .session_proxy
+                .as_ref()
+                .and_then(|lease| lease.retry_unsent())
+            && let Some(account) = self.egress_account.as_ref()
+        {
+            let client = self.for_session_proxy(account, lease)?;
+            let mut retried = request.clone();
+            retried.excel.as_mut().expect("Excel request").exit_lease =
+                client.session_proxy_lease();
+            context.trace.cloned().unwrap_or_default().record(
+                "excel.proxy_retry",
+                serde_json::json!({"attempt":2,"reason":"connection_not_established"}),
+            );
+            tokio::task::yield_now().await;
+            let response = client.send_response_http_sse(&retried, context).await;
+            return client
+                .finish_prepared_response(response, &retried, context)
+                .await;
+        }
+        self.finish_prepared_response(response, request, context)
+            .await
+    }
+
+    async fn finish_prepared_response(
+        &self,
+        response: CodexClientResult<CodexBackendStreamingResponse>,
+        request: &CodexResponsesRequest,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        match response {
+            Ok(mut response) => {
+                if request.excel.is_none()
+                    && let Some(lease) = self.session_proxy_lease()
+                {
+                    response.body = Box::pin(response.body.map(move |item| {
+                        // A response can outlive the caller's prepared client.
+                        let _hold = &lease;
+                        item
+                    }));
+                }
+                Ok(self.with_excel_repair(response, request, context))
+            }
             Err(error) => {
                 let body = match (&request.excel, &error) {
                     (Some(excel), CodexClientError::Upstream { status, body, .. })
@@ -569,6 +619,9 @@ impl CodexBackendClient {
             });
         }
         websocket_create.connection.outbound_proxy = self.outbound_proxy.clone();
+        websocket_create.connection.session_proxy = self
+            .session_proxy_lease()
+            .map(super::session_proxy::SessionProxyHold);
         websocket_create.connection.egress_source =
             self.egress_route.as_ref().map(|route| route.source);
         context.trace.cloned().unwrap_or_default().headers(

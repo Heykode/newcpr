@@ -9,7 +9,9 @@ export function templateForm(config?: AccountTemplateConfig) {
     name: config?.name ?? '',
     enabled: config?.enabled ?? true,
     applyExcel: config === undefined || config.responsesUpstream != null || config.excelModelsFollowGlobal != null || config.excelModels != null,
+    applyRequestProxySource: config?.requestProxySource != null,
     excelEnabled: config?.responsesUpstream === 'excel',
+    requestProxySource: config?.requestProxySource ?? 'account',
     excelCacheCreationAsInput: config ? config.excelCacheCreationAsInput ?? false : true,
     excelIgnoreEncryptedContent: config?.excelIgnoreEncryptedContent ?? false,
     excel403Action: config ? accountExcel403Action(config) : 'none' as Excel403Action,
@@ -44,6 +46,7 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
           excelIgnoreEncryptedContent: form.excelEnabled && form.excelIgnoreEncryptedContent,
         }
       : {}),
+    ...(form.applyRequestProxySource ? { requestProxySource: form.requestProxySource } : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     outboundProxyId: form.proxyMode === 'proxy' ? form.proxyId : null,

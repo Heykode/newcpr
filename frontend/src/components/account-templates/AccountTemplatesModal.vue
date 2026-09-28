@@ -141,6 +141,8 @@ onScopeDispose(() => {
       <AccountSettingsFields
         v-model:enabled="form.enabled"
         v-model:excel-enabled="form.excelEnabled"
+        v-model:request-proxy-source="form.requestProxySource"
+        v-model:update-request-proxy-source="form.applyRequestProxySource"
         v-model:excel-models="form.excelModels"
         v-model:excel-models-follow-global="form.excelModelsFollowGlobal"
         v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
@@ -151,6 +153,8 @@ onScopeDispose(() => {
         v-model:selected-group-ids="form.groupIds"
         v-model:proxy-mode="form.proxyMode"
         v-model:proxy-id="form.proxyId"
+        preserve-request-proxy-source
+        request-proxy-available
         :excel-available="form.applyExcel"
         encrypted-content-available
         :groups="groups"

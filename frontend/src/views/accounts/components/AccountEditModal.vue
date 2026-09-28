@@ -33,6 +33,7 @@ const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
 const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
+const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
 const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -77,6 +78,7 @@ const egressSaving = shallowRef(false)
         v-model:excel-models-follow-global="excelModelsFollowGlobal"
         v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
         v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
+        v-model:request-proxy-source="requestProxySource"
         v-model:excel-403-action="excel403Action"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
@@ -90,6 +92,7 @@ const egressSaving = shallowRef(false)
         :groups="groups"
         :groups-loading="groupsLoading"
         :excel-available="account.provider === 'openai' && account.authenticationKind === 'oauth'"
+        :request-proxy-available="account.provider === 'openai'"
         :disabled="saving || egressSaving"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"

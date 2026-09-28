@@ -3,6 +3,7 @@
 mod error;
 mod model;
 mod model_access;
+mod request_proxy;
 mod responses_upstream;
 pub use model_access::{
     AccountModelAccess, AccountModelAccessMode, InvalidAccountModelAccess,
@@ -17,6 +18,7 @@ mod store;
 
 pub use error::CredentialError;
 pub use model::*;
+pub use request_proxy::RequestProxySource;
 pub(crate) use selection::smart_score;
 pub use selection::*;
 pub use store::ProviderAccountStore;

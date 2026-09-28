@@ -66,6 +66,7 @@ impl CodexWebSocketConnection {
             headers,
             outbound_proxy: None,
             egress_source: None,
+            session_proxy: None,
         }
     }
 
@@ -152,6 +153,7 @@ pub(super) fn websocket_connection_metadata(
     response: &WsResponse<Option<Vec<u8>>>,
 ) -> CodexWebSocketConnectionMetadata {
     CodexWebSocketConnectionMetadata {
+        session_proxy: None,
         turn_state: response_meta::turn_state(response.headers()),
         set_cookie_headers: response_meta::set_cookie_headers(response.headers()),
         rate_limit_headers: response_meta::rate_limit_headers(response.headers()),

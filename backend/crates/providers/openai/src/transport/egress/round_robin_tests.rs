@@ -1,11 +1,26 @@
 use super::*;
 use std::collections::BTreeMap;
 
-use futures::{TryStreamExt, future::BoxFuture};
+use crate::{
+    config::OpenAiConfig,
+    transport::{
+        CodexBackendClient, CodexBackendTransport, CodexRequestContext,
+        protocol::responses::CodexResponsesRequest,
+        session_proxy::SessionProxyHold,
+        websocket::{CodexWebSocketExchangeError, CodexWebSocketPool},
+    },
+};
+use futures::{SinkExt, StreamExt, TryStreamExt, future::BoxFuture};
+use gateway_core::provider_ports::session_proxy::{SessionProxyLease, SessionProxyOutcome};
 use gateway_core::{
-    account::CredentialRevision,
+    account::{CredentialRevision, OutboundProxy},
     provider_ports::{ProviderStoreError, egress::ProviderEgressAddress},
     routing::ProviderKind,
+};
+use serde_json::json;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
 };
 
 struct Store(Mutex<ProviderEgressConfig>);
@@ -329,6 +344,7 @@ async fn excel_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
         request.use_websocket = true;
         let tools = ClientTools::default();
         request.excel = Some(ExcelPreparedRequest {
+            exit_lease: None,
             body: prepare_request(request.body(), &tools, &BTreeMap::new(), None).unwrap(),
             tools,
             structured: None,
@@ -378,4 +394,213 @@ async fn excel_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
             .unwrap()
             .unwrap();
     }
+}
+
+struct Exit {
+    proxy: OutboundProxy,
+    reports: Mutex<Vec<SessionProxyOutcome>>,
+}
+impl SessionProxyLease for Exit {
+    fn proxy(&self) -> &OutboundProxy {
+        &self.proxy
+    }
+    fn node_id(&self) -> &str {
+        "synthetic-node"
+    }
+    fn report(&self, outcome: SessionProxyOutcome) {
+        self.reports.lock().unwrap().push(outcome);
+    }
+}
+fn managed_proxy_account() -> ProviderAccount {
+    ProviderAccount::new(
+        ProviderAccountId::new("acct_native_exit").unwrap(),
+        ProviderKind::new("openai").unwrap(),
+        "synthetic".into(),
+        Some("workspace".into()),
+        "oauth".into(),
+        CredentialRevision::new(1).unwrap(),
+        None,
+    )
+}
+fn managed_proxy_client() -> CodexBackendClient {
+    CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        "http://unresolvable.invalid",
+        OpenAiConfig::default().wire_profile_state(),
+    )
+}
+fn managed_proxy_request(http: bool) -> CodexResponsesRequest {
+    let mut request = CodexResponsesRequest::from_body(
+        json!({"model":"synthetic-model","input":"fixture","stream":true,"store":false})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    request.force_http_sse = http;
+    request.use_websocket = !http;
+    request.local_conversation_id = Some("synthetic-session".into());
+    request.client_api_key_id = Some("synthetic-key".into());
+    request.downstream_websocket_connection_id = (!http).then(|| "synthetic-downstream".into());
+    request
+}
+fn completed(id: &str) -> String {
+    json!({"type":"response.completed","response":{"id":id,"status":"completed","output":[]}})
+        .to_string()
+}
+
+#[tokio::test]
+async fn native_http_uses_selected_proxy_and_holds_lease_until_body_drop() {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+    let proxy = MockServer::start().await;
+    Mock::given(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("data: {}\n\n", completed("resp_native"))),
+        )
+        .mount(&proxy)
+        .await;
+    let exit = Arc::new(Exit {
+        proxy: OutboundProxy::parse(&proxy.uri()).unwrap(),
+        reports: Mutex::new(Vec::new()),
+    });
+    let weak = Arc::downgrade(&exit);
+    let account = managed_proxy_account();
+    let client = managed_proxy_client()
+        .for_session_proxy(&account, exit)
+        .unwrap();
+    let response = client
+        .create_response_stream_with_pool_account(
+            &managed_proxy_request(true),
+            CodexRequestContext::auxiliary(
+                "Bearer synthetic",
+                Some("workspace"),
+                "native-http",
+                None,
+            ),
+            Some(account.id().as_str()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.transport, CodexBackendTransport::HttpSse);
+    drop(client);
+    assert!(weak.upgrade().is_some());
+    let body = response.body.try_collect::<Vec<_>>().await.unwrap();
+    assert!(!body.is_empty());
+    assert!(weak.upgrade().is_none());
+    let requests = proxy.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].headers.contains_key("user-agent"));
+    assert_eq!(requests[0].headers["authorization"], "Bearer synthetic");
+}
+
+#[tokio::test]
+async fn native_ws_tunnels_through_proxy_reuses_socket_and_releases_idle_lease() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy =
+        OutboundProxy::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut opening = Vec::new();
+        while !opening.ends_with(b"\r\n\r\n") {
+            opening.push(stream.read_u8().await.unwrap());
+            assert!(opening.len() < 8192);
+        }
+        assert!(opening.starts_with(b"CONNECT unresolvable.invalid:80 HTTP/1.1\r\n"));
+        stream
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .unwrap();
+        use tokio_tungstenite::tungstenite::{
+            extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
+            protocol::WebSocketConfig,
+        };
+        let mut extensions = ExtensionsConfig::default();
+        extensions.permessage_deflate = Some(DeflateConfig::default());
+        let mut config = WebSocketConfig::default();
+        config.extensions = extensions;
+        let mut socket = tokio_tungstenite::accept_async_with_config(stream, Some(config))
+            .await
+            .unwrap();
+        for id in ["resp_first", "resp_second"] {
+            let message = socket.next().await.unwrap().unwrap();
+            assert!(message.is_text());
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    completed(id).into(),
+                ))
+                .await
+                .unwrap();
+        }
+        while let Some(message) = socket.next().await {
+            if message.is_err() || message.unwrap().is_close() {
+                break;
+            }
+        }
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_secs(60)));
+    let base = managed_proxy_client().with_websocket_pool(pool.clone());
+    let account = managed_proxy_account();
+    for expected in ["new", "reuse"] {
+        let exit = Arc::new(Exit {
+            proxy: proxy.clone(),
+            reports: Mutex::new(Vec::new()),
+        });
+        let weak = Arc::downgrade(&exit);
+        let client = base.for_session_proxy(&account, exit).unwrap();
+        let mut request = managed_proxy_request(false);
+        if expected == "reuse" {
+            request.set_previous_response_id(Some("resp_first".into()));
+            request.previous_response_scope =
+                Some(crate::transport::protocol::responses::PreviousResponseScope::ConnectionLocal);
+        }
+        let response = client
+            .create_response_stream_with_pool_account(
+                &request,
+                CodexRequestContext::auxiliary(
+                    "Bearer synthetic",
+                    Some("workspace"),
+                    "native-ws",
+                    None,
+                ),
+                Some(account.id().as_str()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.transport, CodexBackendTransport::WebSocket);
+        assert_eq!(response.websocket_pool_decision.unwrap().kind(), expected);
+        drop(client);
+        response.body.try_collect::<Vec<_>>().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("idle websocket must not retain an active exit lease");
+    }
+    pool.shutdown().await;
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn local_ws_failures_do_not_penalize_the_proxy() {
+    let exit = Arc::new(Exit {
+        proxy: OutboundProxy::parse("http://127.0.0.1:18000").unwrap(),
+        reports: Mutex::new(Vec::new()),
+    });
+    let guard = SessionProxyHold(exit.clone());
+    guard.report_websocket_error(&CodexWebSocketExchangeError::OriginCircuitOpen);
+    guard.report_websocket_error(&CodexWebSocketExchangeError::SharedConnectFailed);
+    assert!(exit.reports.lock().unwrap().is_empty());
+    guard.report_websocket_error(&CodexWebSocketExchangeError::ConnectTimeout {
+        timeout: Duration::from_secs(1),
+    });
+    assert_eq!(
+        *exit.reports.lock().unwrap(),
+        vec![SessionProxyOutcome::NetworkFailure]
+    );
 }

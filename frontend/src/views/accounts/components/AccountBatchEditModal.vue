@@ -18,6 +18,7 @@ defineProps<{
   saving: boolean
   hasUpdates: boolean
   excelAvailable: boolean
+  requestProxyAvailable: boolean
   egressAvailable: boolean
   catalogAccountId?: string
 }>()
@@ -35,9 +36,11 @@ const excelModels = defineModel<string>('excelModels', { required: true })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
 const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
+const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
 const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
 const updateExcelIgnoreEncryptedContent = defineModel<boolean>('updateExcelIgnoreEncryptedContent', { default: false })
+const updateRequestProxySource = defineModel<boolean>('updateRequestProxySource', { default: false })
 const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
@@ -75,9 +78,11 @@ const egressOptions = [{ value: 'inherit', label: '继承全局策略' }, ...ipv
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
+      v-model:request-proxy-source="requestProxySource"
       v-model:excel-403-action="excel403Action"
       v-model:update-excel-cache-creation-as-input="updateExcelCacheCreationAsInput"
       v-model:update-excel-ignore-encrypted-content="updateExcelIgnoreEncryptedContent"
+      v-model:update-request-proxy-source="updateRequestProxySource"
       v-model:update-excel-403-action="updateExcel403Action"
       v-model:update-excel-models="updateExcelModels"
       v-model:concurrency-limit="concurrencyLimit"
@@ -100,6 +105,7 @@ const egressOptions = [{ value: 'inherit', label: '继承全局策略' }, ...ipv
       :groups="groups"
       :groups-loading="groupsLoading"
       :excel-available="excelAvailable"
+      :request-proxy-available="requestProxyAvailable"
       :disabled="saving"
       batch
     />

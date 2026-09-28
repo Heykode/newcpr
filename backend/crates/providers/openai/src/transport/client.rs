@@ -726,6 +726,8 @@ pub struct CodexBackendJsonResponse {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) session_proxy:
+        Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
     pub(super) response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     pub(super) client: Client,
     pub(super) direct_client: Client,
@@ -806,6 +808,7 @@ impl CodexBackendClient {
         account: &gateway_core::account::ProviderAccount,
     ) -> Result<Self, CodexClientError> {
         let mut client = self.clone();
+        client.session_proxy = None;
         client.profile = self.profile.frozen();
         client.outbound_proxy = account.outbound_proxy().cloned();
         client.egress_key = egress_key(account.id().as_str(), account.outbound_proxy());
@@ -834,6 +837,42 @@ impl CodexBackendClient {
     pub fn with_egress_runtime(mut self, runtime: Arc<CodexEgressRuntime>) -> Self {
         self.egress_runtime = Some(runtime);
         self
+    }
+
+    pub(crate) fn session_proxy_lease(
+        &self,
+    ) -> Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>> {
+        self.session_proxy.clone()
+    }
+
+    pub(crate) fn for_session_proxy(
+        &self,
+        account: &gateway_core::account::ProviderAccount,
+        lease: Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>,
+    ) -> Result<Self, CodexClientError> {
+        let mut client = self.clone();
+        client.profile = self.profile.frozen();
+        client.attempt_pinned = false;
+        client.forced_pool_key = None;
+        client.client = build_account_http_client(
+            account.id().as_str(),
+            Some(lease.proxy()),
+            &client.profile.snapshot().user_agent(),
+        )?;
+        client.outbound_proxy = Some(lease.proxy().clone());
+        client.egress_key = egress_key(account.id().as_str(), Some(lease.proxy()));
+        client.websocket_origin_key = format!(
+            "{}:{}",
+            websocket_origin_key(&self.base_url),
+            client.egress_key
+        );
+        // Explicit account source wins only for this attempt. The saved IPv6/proxy
+        // configuration and its original native-route client remain unchanged.
+        client.egress_runtime = None;
+        client.egress_route = None;
+        client.egress_account = Some(account.clone());
+        client.session_proxy = Some(lease);
+        Ok(client)
     }
 
     pub fn with_request_tuning(mut self, request_tuning: RequestTuningHandle) -> Self {
@@ -881,10 +920,20 @@ impl CodexBackendClient {
     where
         F: FnOnce(Client) -> reqwest::RequestBuilder + Send,
     {
-        build(self.request_client(profile)?)
-            .send()
-            .await
-            .map_err(|error| self.http_send_error(error, json))
+        let response = build(self.request_client(profile)?).send().await;
+        if let Some(lease) = &self.session_proxy {
+            use gateway_core::provider_ports::session_proxy::SessionProxyOutcome;
+            match &response {
+                Ok(response) if response.status().is_server_error() => {
+                    lease.report(SessionProxyOutcome::UpstreamFailure)
+                }
+                Err(error) if error.is_connect() || error.is_timeout() => {
+                    lease.report(SessionProxyOutcome::NetworkFailure)
+                }
+                _ => {}
+            }
+        }
+        response.map_err(|error| self.http_send_error(error, json))
     }
 
     pub(super) fn http_send_error(&self, error: reqwest::Error, json: bool) -> CodexClientError {

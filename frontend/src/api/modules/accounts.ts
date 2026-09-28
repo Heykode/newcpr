@@ -165,6 +165,7 @@ export interface Account {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelIgnoreEncryptedContent?: boolean
+  requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   excelAutoDisabledAt?: string | null
@@ -450,6 +451,7 @@ interface AccountUpdateParam {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelIgnoreEncryptedContent?: boolean
+  requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   concurrencyLimit: number | null
@@ -471,6 +473,7 @@ interface AccountBatchUpdateParam {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelIgnoreEncryptedContent?: boolean
+  requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   concurrencyLimit?: number | null
@@ -493,6 +496,7 @@ export interface AccountImportSettings {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelIgnoreEncryptedContent?: boolean
+  requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   concurrencyLimit: number | null

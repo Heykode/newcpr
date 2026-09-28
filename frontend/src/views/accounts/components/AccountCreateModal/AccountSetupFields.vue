@@ -37,6 +37,8 @@ const form = defineModel<AccountCreateForm>({ required: true })
       v-model:excel-models-follow-global="form.excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
       v-model:excel-403-action="form.excel403Action"
+      v-model:request-proxy-source="form.requestProxySource"
+      v-model:update-request-proxy-source="form.applyRequestProxySource"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
       v-model:model-access="form.modelAccess"
@@ -44,6 +46,8 @@ const form = defineModel<AccountCreateForm>({ required: true })
       v-model:proxy-mode="form.proxyMode"
       v-model:proxy-id="form.proxyId"
       :excel-available="form.applyExcel && (form.provider === 'openai' || form.provider === 'batch')"
+      :request-proxy-available="form.provider === 'openai' || form.provider === 'batch'"
+      preserve-request-proxy-source
       name-available
       model-access-available
       preserve-model-access

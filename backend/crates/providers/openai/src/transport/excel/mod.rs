@@ -36,6 +36,8 @@ pub(crate) use tools::ClientTools;
 
 #[derive(Clone)]
 pub(crate) struct ExcelPreparedRequest {
+    pub(crate) exit_lease:
+        Option<std::sync::Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
     pub(crate) body: serde_json::Map<String, serde_json::Value>,
     pub(crate) tools: ClientTools,
     pub(crate) structured: Option<StructuredOutput>,

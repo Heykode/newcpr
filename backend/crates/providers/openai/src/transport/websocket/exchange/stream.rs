@@ -61,13 +61,14 @@ impl StreamWebSocketDiscardReason {
 
 pub(in crate::transport::websocket) fn stream_websocket_response(
     websocket: PumpedWebSocket,
-    metadata: CodexWebSocketConnectionMetadata,
+    mut metadata: CodexWebSocketConnectionMetadata,
     pool_return: Option<WebSocketStreamPoolReturn>,
     reused_connection: bool,
     stream_idle_timeout: Option<Duration>,
     trace: TraceContext,
     response_control: Option<ResponseControl>,
 ) -> CodexWebSocketStreamingExchange {
+    let session_proxy = metadata.session_proxy.take();
     let websocket_connection_id = websocket.connection_id();
     let response_metadata = metadata.clone();
     let rate_limit_updates = Arc::new(Mutex::new(Vec::new()));
@@ -87,6 +88,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
         );
     let forward = async move {
         forward_websocket_response_stream(WebSocketStreamForwardState {
+            session_proxy,
             response_control,
             websocket,
             metadata,
@@ -128,6 +130,7 @@ pub(in crate::transport::websocket) fn stream_websocket_response(
 }
 
 struct WebSocketStreamForwardState {
+    session_proxy: Option<crate::transport::session_proxy::SessionProxyHold>,
     response_control: Option<ResponseControl>,
     trace: TraceContext,
     websocket: PumpedWebSocket,
@@ -143,6 +146,7 @@ struct WebSocketStreamForwardState {
 
 async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
     let WebSocketStreamForwardState {
+        session_proxy: _session_proxy,
         response_control,
         trace,
         mut websocket,
