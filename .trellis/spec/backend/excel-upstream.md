@@ -573,3 +573,9 @@ native wire and identity isolation; plaintext/order/tool pairing; no-op and
 idempotence; persistence/default/omission/close semantics; editor save/readback,
 batch opt-in reset and narrow viewport rendering. Use synthetic local mocks,
 not real BPS requests, for these tests.
+
+Keep pure-transform regressions in the already audited `history_tests.rs` and
+provider contracts under `tests/provider/contract/`. New production helper
+files must not add inline test modules. Run the gateway application's
+architecture suite as well as provider tests; do not broaden the architecture
+allowlist to accommodate a new helper's test placement.

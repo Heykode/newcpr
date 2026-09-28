@@ -5,10 +5,86 @@ use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
 use super::{
-    ClientTools, ExcelRequestError, RESPONSES_PATH, images, prepare_request,
+    ClientTools, ExcelRequestError, RESPONSES_PATH,
+    encrypted_content::omit_encrypted_content,
+    images, prepare_request,
     tests::{VERIFIED_MODEL, client, completed, request},
 };
 use crate::transport::CodexRequestContext;
+
+#[test]
+fn excel_encrypted_omission_replaces_only_message_and_tool_result_parts_in_place() {
+    for kind in [
+        "message",
+        "agent_message",
+        "",
+        "function_call_output",
+        "custom_tool_call_output",
+    ] {
+        for role in ["user", "assistant", "developer"] {
+            let field = if kind.ends_with("_output") {
+                "output"
+            } else {
+                "content"
+            };
+            let original = json!({"input":[{"type":kind,"role":role,"call_id":"call_fixture",
+            "author":"worker","recipient":"parent",field:[
+                {"type":"input_text","text":"before"},
+                {"type":"encrypted_content","encrypted_content":"opaque-fixture"},
+                {"type":"input_text","text":"after"}
+            ]}]});
+            let mut source = original.as_object().unwrap().clone();
+            assert_eq!(omit_encrypted_content(&mut source), 1);
+            let item = &source["input"][0];
+            assert_eq!(item["call_id"], "call_fixture");
+            assert_eq!(item["author"], "worker");
+            assert_eq!(item["recipient"], "parent");
+            assert_eq!(item[field][0], original["input"][0][field][0]);
+            assert_eq!(item[field][2], original["input"][0][field][2]);
+            assert_eq!(
+                item[field][1],
+                json!({
+                    "type":if role == "assistant" && field == "content" {"output_text"} else {"input_text"},
+                    "text":"[Encrypted content omitted: it cannot be forwarded through Excel / BPS.]"
+                })
+            );
+            assert_eq!(omit_encrypted_content(&mut source), 0);
+            assert_eq!(original["input"][0][field][1]["type"], "encrypted_content");
+        }
+    }
+}
+
+#[test]
+fn excel_encrypted_omission_preserves_reasoning_compaction_arguments_and_large_integers() {
+    let original = json!({"input":[
+        {"type":"reasoning","encrypted_content":"reasoning-fixture"},
+        {"type":"compaction","encrypted_content":"compact-fixture"},
+        {"type":"function_call","arguments":"encrypted_content","encrypted_function_args":["message"]},
+        {"role":"user","content":[{"type":"input_text","text":"encrypted_content"}]},
+        {"type":"function_call_output","output":"encrypted_content"}
+    ],"tools":[{"type":"function","parameters":{"encrypted_content":true}}],
+        "metadata":{"sequence":9007199254740993_u64}});
+    let mut source = original.as_object().unwrap().clone();
+    let bytes = serde_json::to_vec(&source).unwrap();
+    assert_eq!(omit_encrypted_content(&mut source), 0);
+    assert_eq!(serde_json::to_vec(&source).unwrap(), bytes);
+    source
+        .get_mut("input")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "role":"user","content":[{"type":"encrypted_content","encrypted_content":"fixture"}]
+        }));
+    assert_eq!(omit_encrypted_content(&mut source), 1);
+    source
+        .get_mut("input")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    assert_eq!(serde_json::to_value(&source).unwrap(), original);
+}
 
 fn attributed_history(agent: bool) -> Vec<Value> {
     let mut input = (0..26)
