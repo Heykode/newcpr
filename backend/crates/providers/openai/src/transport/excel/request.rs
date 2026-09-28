@@ -55,6 +55,25 @@ pub(crate) enum ExcelRequestError {
     ImageRelay,
     #[error("Excel image input: {0}")]
     ImageInput(&'static str),
+    #[error("Excel image input: {reason} (path=input[{input}].{field}[{part}])")]
+    ImageAt {
+        input: usize,
+        field: &'static str,
+        part: usize,
+        reason: &'static str,
+    },
+    #[error("Excel image {kind} limit exceeded: observed {actual}, allowed {limit}")]
+    ImageLimit {
+        kind: &'static str,
+        actual: usize,
+        limit: usize,
+    },
+    #[error("Excel image policy: {0}; run compact manually or retry with the same conversation")]
+    ImagePolicy(&'static str),
+    #[error(
+        "Excel image limit approaching: {remaining} additional image slots remain; run compact or retry to continue"
+    )]
+    ImageWarning { remaining: usize },
     #[error(
         "unsupported Excel image-tool request; use PNG, gpt-image-2 and supported image options"
     )]
@@ -67,10 +86,12 @@ impl ExcelRequestError {
             Self::Content {
                 input, field, part, ..
             }
-            | Self::EncryptedContent { input, field, part } => {
-                Some(format!("input[{input}].{field}[{part}]"))
-            }
+            | Self::EncryptedContent { input, field, part }
+            | Self::ImageAt {
+                input, field, part, ..
+            } => Some(format!("input[{input}].{field}[{part}]")),
             Self::AttributedContent { input } => Some(format!("input[{input}].content")),
+            Self::ImageLimit { .. } => Some("input".into()),
             _ => None,
         }
     }

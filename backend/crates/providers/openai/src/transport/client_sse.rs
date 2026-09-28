@@ -95,6 +95,14 @@ impl CodexBackendClient {
         upstream_request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
+        if upstream_request
+            .excel
+            .as_ref()
+            .and_then(|excel| excel.image_policy.as_ref())
+            .is_some_and(|policy| policy.split.is_some())
+        {
+            return super::excel::image_policy_stream::start(self, upstream_request, context).await;
+        }
         // User images need account-scoped attachments; tool-result images must
         // retain Base64/HTTPS because that position rejects file_id.
         if let Some(excel) = &upstream_request.excel {
@@ -147,7 +155,7 @@ impl CodexBackendClient {
             .await
     }
 
-    async fn create_prepared_response_stream(
+    pub(super) async fn create_prepared_response_stream(
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,

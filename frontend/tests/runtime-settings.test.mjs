@@ -25,6 +25,44 @@ function loadModule(filename, dependencies = {}) {
 const apiErrors = loadModule(new URL('../src/api/error.ts', import.meta.url))
 const asyncUtils = loadModule(new URL('../src/utils/async.ts', import.meta.url))
 
+test('Excel image policy defaults off and roundtrips without changing scheduling', async () => {
+  for (const mode of ['off', 'auto_compact', 'warn']) {
+    const initial = settings()
+    const query = mountSettings(initial)
+    try {
+      await query.state.loadSettings()
+      assert.equal(query.state.form.requestTuning.excelImageLimitPolicy, 'off')
+      assert.equal(query.state.form.requestTuning.excelImageWarningRemaining, 8)
+      assert.equal(query.state.form.requestTuning.excelImageCompactReserve, 3)
+      query.state.form.requestTuning.excelImageLimitPolicy = mode
+      await query.state.saveSettings()
+      assert.equal(query.requests[0].requestTuning.excelImageLimitPolicy, mode)
+      assert.equal(query.requests[0].rotationStrategy, initial.rotationStrategy)
+    }
+    finally { query.stop() }
+  }
+})
+
+test('Excel warning thresholds reject unsafe combinations before saving', async () => {
+  for (const [warning, reserve] of [[3, 3], [8, 0], [20, 3]]) {
+    const warnings = []
+    const query = mountSettings(settings(), message => warnings.push(message))
+    try {
+      await query.state.loadSettings()
+      Object.assign(query.state.form.requestTuning, {
+        excelImageLimitPolicy: 'warn',
+        excelImageMaxCount: 20,
+        excelImageWarningRemaining: warning,
+        excelImageCompactReserve: reserve,
+      })
+      await query.state.saveSettings()
+      assert.equal(query.requests.length, 0)
+      assert.equal(warnings.length, 1)
+    }
+    finally { query.stop() }
+  }
+})
+
 test('Excel image transport preserves explicit modes and inherited startup settings', async () => {
   for (const transport of [null, { mode: 'native' }, { mode: 'relay', publicUrl: 'https://images.example.com' }]) {
     const initial = settings()
@@ -350,6 +388,9 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       excelImageMaxBytes: 20 * 1024 * 1024,
       excelImageTotalBytes: 32 * 1024 * 1024,
       excelImageMaxCount: 20,
+      excelImageLimitPolicy: 'off',
+      excelImageWarningRemaining: 8,
+      excelImageCompactReserve: 3,
       excelImageRelayTtlMinutes: 30,
       excelImageTransport: null,
       openaiLocationOverrideEnabled: false,

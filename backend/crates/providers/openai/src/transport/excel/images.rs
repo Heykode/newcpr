@@ -201,30 +201,102 @@ pub(crate) fn validate_with_limits(
         }
         Ok(())
     }
+    let inspect = |decode| -> Result<(), ExcelRequestError> {
+        for (input, item) in body
+            .get("input")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let tool = matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("function_call_output" | "custom_tool_call_output")
+            );
+            let field = if tool { "output" } else { "content" };
+            let content = item.get(field).unwrap_or(&Value::Null);
+            let parts = content
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(std::slice::from_ref(content));
+            for (part, value) in parts.iter().enumerate() {
+                visit(
+                    value,
+                    tool,
+                    is_user_message(item)
+                        || item.get("type").and_then(Value::as_str) == Some("agent_message"),
+                    decode,
+                    limits,
+                )
+                .map_err(|error| match error {
+                    ExcelRequestError::ImageInput(reason) => ExcelRequestError::ImageAt {
+                        input,
+                        field,
+                        part,
+                        reason,
+                    },
+                    other => other,
+                })?;
+            }
+        }
+        Ok(())
+    };
+    inspect(false)?;
     decoded_budget(
         image_contents(body.get("input").unwrap_or(&Value::Null)),
         limits,
-    )
-    .map_err(|_| ExcelRequestError::ImageInput("inline image input is invalid"))?;
-    for item in body
+    )?;
+    if decode {
+        inspect(true)?;
+    }
+    Ok(())
+}
+
+/// Policy reconciliation cannot hide bytes from admission, including repeated images.
+pub(crate) fn validate_raw_budget(
+    body: &Map<String, Value>,
+    limits: ImageLimits,
+) -> Result<(), ExcelRequestError> {
+    let mut total = 0usize;
+    for (input, item) in body
         .get("input")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .enumerate()
     {
-        let tool = matches!(
-            item.get("type").and_then(Value::as_str),
-            Some("function_call_output" | "custom_tool_call_output")
-        );
-        visit(
-            item.get(if tool { "output" } else { "content" })
-                .unwrap_or(&Value::Null),
-            tool,
-            is_user_message(item)
-                || item.get("type").and_then(Value::as_str) == Some("agent_message"),
-            decode,
-            limits,
-        )?;
+        let field = match item["type"].as_str() {
+            None | Some("message" | "agent_message") => "content",
+            Some("function_call_output" | "custom_tool_call_output") => "output",
+            _ => continue,
+        };
+        for (part, value) in item[field].as_array().into_iter().flatten().enumerate() {
+            total = total.saturating_add(
+                decoded_budget(
+                    std::iter::once(value),
+                    ImageLimits {
+                        count: usize::MAX,
+                        ..limits
+                    },
+                )
+                .map_err(|error| match error {
+                    ExcelRequestError::ImageInput(reason) => ExcelRequestError::ImageAt {
+                        input,
+                        field,
+                        part,
+                        reason,
+                    },
+                    other => other,
+                })?,
+            );
+            if total > limits.total {
+                return Err(ExcelRequestError::ImageLimit {
+                    kind: "raw total decoded bytes",
+                    actual: total,
+                    limit: limits.total,
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -240,13 +312,13 @@ pub(super) struct Picture {
 fn decoded_budget<'a>(
     values: impl Iterator<Item = &'a Value>,
     limits: ImageLimits,
-) -> Result<usize, CodexClientError> {
+) -> Result<usize, ExcelRequestError> {
     fn visit<'a>(
         value: &'a Value,
         urls: &mut BTreeSet<&'a str>,
         count: &mut usize,
         limits: ImageLimits,
-    ) -> Result<(), CodexClientError> {
+    ) -> Result<(), ExcelRequestError> {
         match value {
             Value::Array(items) => {
                 for item in items {
@@ -257,7 +329,11 @@ fn decoded_budget<'a>(
                 if fields.get("type").and_then(Value::as_str) == Some("input_image") {
                     *count += 1;
                     if *count > limits.count {
-                        return Err(invalid("Excel image count limit exceeded"));
+                        return Err(ExcelRequestError::ImageLimit {
+                            kind: "count",
+                            actual: *count,
+                            limit: limits.count,
+                        });
                     }
                 }
                 if fields.get("type").and_then(Value::as_str) == Some("input_image")
@@ -268,7 +344,11 @@ fn decoded_budget<'a>(
                 {
                     urls.insert(url);
                     if url.len() > limits.single * 4 / 3 + 128 {
-                        return Err(invalid("Excel inline image input limit exceeded"));
+                        return Err(ExcelRequestError::ImageLimit {
+                            kind: "single encoded bytes",
+                            actual: url.len(),
+                            limit: limits.single * 4 / 3 + 128,
+                        });
                     }
                 }
             }
@@ -283,9 +363,9 @@ fn decoded_budget<'a>(
     }
     let mut total = 0usize;
     for url in urls {
-        let (_, data) = url
-            .split_once(',')
-            .ok_or_else(|| invalid("Malformed image data URL"))?;
+        let (_, data) = url.split_once(',').ok_or(ExcelRequestError::ImageInput(
+            "malformed image data URL: missing comma",
+        ))?;
         let size = data.len().div_ceil(4) * 3
             - data
                 .bytes()
@@ -293,13 +373,24 @@ fn decoded_budget<'a>(
                 .take(2)
                 .take_while(|byte| *byte == b'=')
                 .count();
-        if size == 0 || size > limits.single {
-            return Err(invalid("Excel inline image input limit exceeded"));
+        if size == 0 {
+            return Err(ExcelRequestError::ImageInput("inline image data is empty"));
+        }
+        if size > limits.single {
+            return Err(ExcelRequestError::ImageLimit {
+                kind: "single decoded bytes",
+                actual: size,
+                limit: limits.single,
+            });
         }
         total += size;
     }
     if total > limits.total {
-        return Err(invalid("Excel inline image input limit exceeded"));
+        return Err(ExcelRequestError::ImageLimit {
+            kind: "total decoded bytes",
+            actual: total,
+            limit: limits.total,
+        });
     }
     Ok(total)
 }
@@ -313,7 +404,7 @@ pub(super) fn decoded_budget_user_with_limits(
     value: &Value,
     limits: ImageLimits,
 ) -> Result<usize, CodexClientError> {
-    decoded_budget(user_contents(value), limits)
+    decoded_budget(user_contents(value), limits).map_err(|error| invalid(&error.to_string()))
 }
 
 #[cfg(test)]
@@ -649,6 +740,9 @@ fn validate_data_url(
             "inline images support PNG, JPEG, GIF and WebP data URLs",
         ));
     }
+    if encoded.is_empty() {
+        return Err(ExcelRequestError::ImageInput("inline image data is empty"));
+    }
     if !decode {
         return Ok(());
     }
@@ -669,14 +763,22 @@ fn validate_data_url(
     };
     let size = imagesize::blob_size(&bytes)
         .map_err(|_| ExcelRequestError::ImageInput("invalid image dimensions"))?;
-    if metadata != actual
-        || size.width == 0
-        || size.height == 0
-        || size.width.saturating_mul(size.height) > 64 * 1024 * 1024
-    {
+    if metadata != actual {
         return Err(ExcelRequestError::ImageInput(
-            "invalid image format or dimensions",
+            "image MIME type does not match image bytes",
         ));
+    }
+    if size.width == 0 || size.height == 0 {
+        return Err(ExcelRequestError::ImageInput(
+            "image dimensions must be nonzero",
+        ));
+    }
+    if size.width.saturating_mul(size.height) > 64 * 1024 * 1024 {
+        return Err(ExcelRequestError::ImageLimit {
+            kind: "pixels",
+            actual: size.width.saturating_mul(size.height),
+            limit: 64 * 1024 * 1024,
+        });
     }
     Ok(())
 }

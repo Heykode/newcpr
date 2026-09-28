@@ -61,6 +61,9 @@ pub(super) async fn prepare_excel_compact(
         )
     })?;
     body.insert("tool_choice".into(), "none".into());
+    if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
+        input.push(json!({"type":"compaction_trigger"}));
+    }
     let mut request = CodexResponsesRequest::from_body(body);
     super::excel::prepare_excel(&mut request, lease, context, replay, image_relay).await?;
     let prepared = request.excel.as_mut().expect("prepared Excel request");
@@ -76,7 +79,12 @@ pub(super) async fn prepare_excel_compact(
                 "invalid compact input",
             )
         })?;
-    input.push(json!({"type":"compaction_trigger"}));
+    if !input
+        .iter()
+        .any(|item| item["type"] == "compaction_trigger")
+    {
+        input.push(json!({"type":"compaction_trigger"}));
+    }
     Ok(request)
 }
 

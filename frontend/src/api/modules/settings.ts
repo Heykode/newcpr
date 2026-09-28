@@ -45,6 +45,9 @@ export interface RequestTuning {
   excelImageMaxBytes: number
   excelImageTotalBytes: number
   excelImageMaxCount: number
+  excelImageLimitPolicy: 'off' | 'auto_compact' | 'warn'
+  excelImageWarningRemaining: number
+  excelImageCompactReserve: number
   excelImageRelayRequests: number
   excelImageRelayDownloads: number
   excelImageRelayEntries: number

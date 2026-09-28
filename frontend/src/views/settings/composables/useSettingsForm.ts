@@ -30,6 +30,9 @@ const requestTuningFallbacks: RequestTuning = {
   excelImageMaxBytes: 20 * 1024 * 1024,
   excelImageTotalBytes: 32 * 1024 * 1024,
   excelImageMaxCount: 20,
+  excelImageLimitPolicy: 'off',
+  excelImageWarningRemaining: 8,
+  excelImageCompactReserve: 3,
   excelImageRelayRequests: 128,
   excelImageRelayDownloads: 32,
   excelImageRelayEntries: 512,
@@ -200,6 +203,14 @@ export function useSettingsForm() {
       return
     }
     const tuning = form.requestTuning
+    if (!['off', 'auto_compact', 'warn'].includes(tuning.excelImageLimitPolicy)
+      || !Number.isInteger(tuning.excelImageWarningRemaining) || tuning.excelImageWarningRemaining < 1 || tuning.excelImageWarningRemaining > 4096
+      || !Number.isInteger(tuning.excelImageCompactReserve) || tuning.excelImageCompactReserve < 1 || tuning.excelImageCompactReserve > 4096
+      || (tuning.excelImageLimitPolicy === 'warn'
+        && !(tuning.excelImageCompactReserve < tuning.excelImageWarningRemaining && tuning.excelImageWarningRemaining < tuning.excelImageMaxCount))) {
+      toast.warning('Excel 图片预警需要：1 ≤ 压缩预留 < 预警余量 < 图片数量上限')
+      return
+    }
     const imageTransport = tuning.excelImageTransport
     if (imageTransport?.mode === 'relay') {
       const origin = imageTransport.publicUrl.trim()

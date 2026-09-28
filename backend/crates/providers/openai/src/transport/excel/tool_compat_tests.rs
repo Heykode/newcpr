@@ -1497,6 +1497,7 @@ fn tool_choice_never_authorizes_undeclared_or_hosted_tools() {
 
 async fn relay(tools: ClientTools, output: Value) -> (String, bool) {
     let prepared = ExcelPreparedRequest {
+        image_policy: None,
         exit_lease: None,
         body: Default::default(),
         tools,

@@ -145,6 +145,81 @@ impl RedisProviderReplayRepository {
 }
 
 impl ProviderReplayPort for RedisProviderReplayRepository {
+    fn read_image_policy<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            Self::validate_key(key)?;
+            let data: Option<Vec<u8>> = Script::new(SCRIPT)
+                .key(format!("{}:image-policy:data", self.prefix))
+                .key(format!("{}:image-policy:expiry", self.prefix))
+                .key(format!("{}:image-policy:sizes", self.prefix))
+                .arg("read")
+                .arg(key)
+                .arg("")
+                .arg(7200)
+                .arg(2048)
+                .arg(16 * 1024 * 1024)
+                .arg("")
+                .arg(7200)
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;
+            data.map(|bytes| {
+                if bytes.len() > 32 * 1024 {
+                    return Err(error(ProviderStoreErrorKind::InvalidData));
+                }
+                serde_json::from_slice(&bytes)
+                    .map(OpaqueProviderData::new)
+                    .map_err(|_| error(ProviderStoreErrorKind::InvalidData))
+            })
+            .transpose()
+        })
+    }
+
+    fn compare_exchange_image_policy<'a>(
+        &'a self,
+        key: &'a str,
+        expected: Option<&'a OpaqueProviderData>,
+        payload: &'a OpaqueProviderData,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            Self::validate_key(key)?;
+            let bytes = serde_json::to_vec(payload.expose_to_provider())
+                .map_err(|_| error(ProviderStoreErrorKind::InvalidData))?;
+            if bytes.len() > 32 * 1024 {
+                return Err(error(ProviderStoreErrorKind::InvalidData));
+            }
+            let expected = expected
+                .map(|v| serde_json::to_vec(v.expose_to_provider()))
+                .transpose()
+                .map_err(|_| error(ProviderStoreErrorKind::InvalidData))?
+                .unwrap_or_default();
+            let result: i64 = Script::new(SCRIPT)
+                .key(format!("{}:image-policy:data", self.prefix))
+                .key(format!("{}:image-policy:expiry", self.prefix))
+                .key(format!("{}:image-policy:sizes", self.prefix))
+                .arg("cas")
+                .arg(key)
+                .arg(bytes)
+                .arg(7200)
+                .arg(2048)
+                .arg(16 * 1024 * 1024)
+                .arg(expected)
+                .arg(7200)
+                .invoke_async(&mut self.connection.clone())
+                .await
+                .map_err(|_| error(ProviderStoreErrorKind::Unavailable))?;
+            match result {
+                1 => Ok(true),
+                -1 => Ok(false),
+                _ => Err(error(ProviderStoreErrorKind::InvalidData)),
+            }
+        })
+    }
+
     fn read_tool<'a>(
         &'a self,
         key: &'a str,

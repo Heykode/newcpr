@@ -288,6 +288,29 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     update: &RuntimeSettingsUpdate,
 ) -> StoreResult<Revision> {
     update.validate()?;
+    let previous: Option<sqlx::types::Json<RequestTuningOverrides>> = sqlx::query_scalar(
+        "select request_tuning_json from runtime_settings where id = 1 for update",
+    )
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| postgres_unavailable("lock image policy settings"))?;
+    let previous = previous.map(|value| value.0).unwrap_or_default();
+    let mut tuning = update.request_tuning.clone();
+    tuning.excel_image_limit_policy = tuning
+        .excel_image_limit_policy
+        .or(previous.excel_image_limit_policy);
+    tuning.excel_image_warning_remaining = tuning
+        .excel_image_warning_remaining
+        .or(previous.excel_image_warning_remaining);
+    tuning.excel_image_compact_reserve = tuning
+        .excel_image_compact_reserve
+        .or(previous.excel_image_compact_reserve);
+    if !tuning.validate() {
+        return Err(StoreError::InvalidData {
+            entity: "runtime settings",
+            message: "Excel image policy thresholds are invalid".into(),
+        });
+    }
     if let Some(Some(id)) = &update.turn_state_probe_proxy_id {
         // Match proxy edits: lock runtime settings before the referenced proxy row.
         sqlx::query("select id from runtime_settings where id = 1 for update")
@@ -341,7 +364,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(i64::from(update.audit_retention_days))
     .bind(update.min_codex_desktop_version.as_deref())
     .bind(update.min_codex_cli_version.as_deref())
-    .bind(sqlx::types::Json(&update.request_tuning))
+    .bind(sqlx::types::Json(&tuning))
     .bind(
         i64::try_from(update.responses_max_decompressed_body_bytes)
             .map_err(|_| invalid_numeric())?,

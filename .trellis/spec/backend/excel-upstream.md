@@ -64,6 +64,18 @@ Keep 403 auto-disable unchanged; do not add #105 group migration.
 
 ## 4. Validation Matrix
 
+Excel image policy (`off` / `auto_compact` / `warn`) is opt-in and must not enter
+native Codex preparation or transport. Default `off` returns before reading its
+state store. Preserve original image byte limits even after checkpoint reconciliation.
+Automatic compaction uses a genuine upstream window and one bounded continuation
+on the same pinned client/egress, not proxy retry across phases. Persist a digest-only
+checkpoint with CAS before delivering it. Keep new tool batches intact; reject
+unverifiable windows and oversized new batches. Account for both phases, including
+known usage on failure/cancellation, and preserve upstream failure events. Do not
+change ordinary transport compression to simplify tests: decode the actual captured
+ZSTD body in native isolation fixtures. See `docs/excel-image-policy.md` for defaults,
+the retained CPR image-count definition and the exact reference revision.
+
 | Condition | Result |
 | --- | --- |
 | Toggle omitted during reimport/relogin | Preserve route |

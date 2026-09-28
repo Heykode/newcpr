@@ -41,6 +41,11 @@ const imageModes = [
   { value: 'native', label: '原生附件', description: '上传到 Excel 附件接口，不使用公网中转' },
   { value: 'relay', label: 'HTTPS 中转', description: '使用本实例的公网域名提供临时图片' },
 ]
+const imagePolicies = [
+  { value: 'off', label: '保持现状（默认）' },
+  { value: 'auto_compact', label: '自动压缩旧历史' },
+  { value: 'warn', label: '预警并预留压缩空间' },
+]
 const customLocation = computed({
   get: () => requestTuning.value.openaiRequestLocation !== null,
   set: (enabled: boolean) => {
@@ -81,6 +86,8 @@ const tuningValues = {
   excelImageMaxBytes: tuningNumber('excelImageMaxBytes'),
   excelImageTotalBytes: tuningNumber('excelImageTotalBytes'),
   excelImageMaxCount: tuningNumber('excelImageMaxCount'),
+  excelImageWarningRemaining: tuningNumber('excelImageWarningRemaining'),
+  excelImageCompactReserve: tuningNumber('excelImageCompactReserve'),
   excelImageRelayRequests: tuningNumber('excelImageRelayRequests'),
   excelImageRelayDownloads: tuningNumber('excelImageRelayDownloads'),
   excelImageRelayEntries: tuningNumber('excelImageRelayEntries'),
@@ -299,6 +306,15 @@ const tuningValues = {
       </button>
 
       <BaseForm v-if="advancedOpen" class="mt-4 max-w-6xl sm:grid-cols-2">
+        <BaseFormItem label="Excel 图片限额策略" description="仅作用于 Excel。自动压缩需要稳定会话和受支持的 Codex 客户端，会产生额外调用与用量；不删除本次新增图片。">
+          <BaseSelect v-model="requestTuning.excelImageLimitPolicy" :options="imagePolicies" aria-label="Excel 图片限额策略" />
+        </BaseFormItem>
+        <BaseFormItem v-if="requestTuning.excelImageLimitPolicy === 'warn'" label="Excel 图片预警余量">
+          <BaseInput v-model="tuningValues.excelImageWarningRemaining.value" type="number" min="1" max="4096" aria-label="Excel 图片预警余量" />
+        </BaseFormItem>
+        <BaseFormItem v-if="requestTuning.excelImageLimitPolicy === 'warn'" label="Excel 压缩预留图片数">
+          <BaseInput v-model="tuningValues.excelImageCompactReserve.value" type="number" min="1" max="4096" aria-label="Excel 压缩预留图片数" />
+        </BaseFormItem>
         <BaseFormItem label="Excel 单张图片上限（字节）">
           <BaseInput v-model="tuningValues.excelImageMaxBytes.value" aria-label="Excel 单张图片上限" type="number" min="1" max="134217728" step="1" />
         </BaseFormItem>
