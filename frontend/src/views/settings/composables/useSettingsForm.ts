@@ -10,6 +10,7 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { errorMessage } from '@/utils/async'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { parseExcelModels } from '@/views/accounts/utils/schedulingForm'
+import { useExcelImageSettings } from './useExcelImageSettings'
 
 type RotationStrategy = (typeof rotationOptions)[number]['value']
 
@@ -72,6 +73,8 @@ export function useSettingsForm() {
     requestTuning: { ...requestTuningFallbacks, smartScheduling: defaultSmartScheduling() },
   })
 
+  const excelImages = useExcelImageSettings(computed(() => form.requestTuning))
+
   function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
@@ -133,6 +136,7 @@ export function useSettingsForm() {
       ),
     )
     form.requestTuning.smartScheduling = { ...form.requestTuning.smartScheduling }
+    excelImages.resetDrafts()
     mappings.value = Object.entries(data.modelMappings || {}).map(([requestedModel, upstreamModel]) => ({
       requestedModel,
       upstreamModel: String(upstreamModel),
@@ -188,6 +192,10 @@ export function useSettingsForm() {
   async function saveSettings() {
     if (saving.value || loading.value)
       return
+    if (excelImages.errors.value.length) {
+      toast.warning(excelImages.errors.value[0])
+      return
+    }
     const excelDefaultModels = parseExcelModels(form.excelDefaultModels)
     if (excelDefaultModels === null) {
       toast.warning('Excel 模型名称不合法，或超过 64 个')
@@ -247,7 +255,7 @@ export function useSettingsForm() {
     if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 128 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 128 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageMaxCount) || tuning.excelImageMaxCount < 1 || tuning.excelImageMaxCount > 4096) {
-      toast.warning('单张图片和请求图片总量须为 1–134217728 字节，图片数量须为 1–4096')
+      toast.warning('单张图片和每请求图片总大小须为 1 字节至 128 MiB，图片数量须为 1–4096 张')
       return
     }
     if (!Number.isInteger(tuning.excelImageRelayBytes) || tuning.excelImageRelayBytes < 1024 * 1024 || tuning.excelImageRelayBytes > 16384 * 1024 * 1024
@@ -255,13 +263,13 @@ export function useSettingsForm() {
       || !Number.isInteger(tuning.excelImageRelayDownloads) || tuning.excelImageRelayDownloads < 1 || tuning.excelImageRelayDownloads > 128
       || !Number.isInteger(tuning.excelImageRelayEntries) || tuning.excelImageRelayEntries < 1 || tuning.excelImageRelayEntries > 65536
       || !Number.isInteger(tuning.excelImageRelayTtlMinutes) || tuning.excelImageRelayTtlMinutes < 1 || tuning.excelImageRelayTtlMinutes > 1440) {
-      toast.warning('图片预算须为 1–16384 MiB，下载并发须为 1–128，条目须为 1–65536，有效期须为 1–1440 分钟')
+      toast.warning('暂存容量须为 1–16384 MiB，在途请求数须为 1–512，下载并发须为 1–128，暂存图片数须为 1–65536，链接有效期须为 1–1440 分钟')
       return
     }
     if (tuning.excelImageTotalBytes < tuning.excelImageMaxBytes
       || tuning.excelImageRelayBytes < tuning.excelImageTotalBytes
       || tuning.excelImageRelayEntries < tuning.excelImageMaxCount) {
-      toast.warning('图片总量不得小于单张上限，中转预算不得小于总量，条目不得小于图片数量')
+      toast.warning('每请求图片总大小不得小于单张上限，进程暂存容量不得小于每请求总大小，暂存图片数不得小于每请求图片数上限')
       return
     }
     if (!Number.isInteger(form.responsesMaxDecompressedBodyBytes)
@@ -330,6 +338,7 @@ export function useSettingsForm() {
     saving,
     error,
     form,
+    excelImages,
     mappings,
     addMapping,
     updateMapping,

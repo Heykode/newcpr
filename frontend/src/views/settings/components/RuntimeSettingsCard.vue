@@ -7,7 +7,6 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
 
@@ -20,32 +19,6 @@ const responsesMaxDecompressedBodyBytes = defineModel<string>('responsesMaxDecom
 const disableFast = defineModel<boolean>('disableFast', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
-const lastImageRelayUrl = ref('')
-const imageMode = computed({
-  get: () => requestTuning.value.excelImageTransport?.mode ?? 'inherit',
-  set: (mode: string) => {
-    const previous = requestTuning.value.excelImageTransport
-    if (previous?.mode === 'relay')
-      lastImageRelayUrl.value = previous.publicUrl
-    requestTuning.value.excelImageTransport = mode === 'relay'
-      ? { mode: 'relay', publicUrl: lastImageRelayUrl.value }
-      : mode === 'native' ? { mode: 'native' } : null
-  },
-})
-const imageRelayUrl = computed({
-  get: () => requestTuning.value.excelImageTransport?.mode === 'relay' ? requestTuning.value.excelImageTransport.publicUrl : '',
-  set: (publicUrl: string) => { requestTuning.value.excelImageTransport = { mode: 'relay', publicUrl } },
-})
-const imageModes = [
-  { value: 'inherit', label: '继承启动配置', description: '未配置中转网址时使用原生附件' },
-  { value: 'native', label: '原生附件', description: '上传到 Excel 附件接口，不使用公网中转' },
-  { value: 'relay', label: 'HTTPS 中转', description: '使用本实例的公网域名提供临时图片' },
-]
-const imagePolicies = [
-  { value: 'off', label: '保持现状（默认）' },
-  { value: 'auto_compact', label: '自动压缩旧历史' },
-  { value: 'warn', label: '预警并预留压缩空间' },
-]
 const customLocation = computed({
   get: () => requestTuning.value.openaiRequestLocation !== null,
   set: (enabled: boolean) => {
@@ -82,16 +55,6 @@ const tuningValues = {
   websocketFailureWindowMs: tuningNumber('websocketFailureWindowMs'),
   websocketFailureOpenDurationMs: tuningNumber('websocketFailureOpenDurationMs'),
   rateLimitCooldownSeconds: tuningNumber('rateLimitCooldownSeconds'),
-  excelImageRelayBytes: tuningNumber('excelImageRelayBytes'),
-  excelImageMaxBytes: tuningNumber('excelImageMaxBytes'),
-  excelImageTotalBytes: tuningNumber('excelImageTotalBytes'),
-  excelImageMaxCount: tuningNumber('excelImageMaxCount'),
-  excelImageWarningRemaining: tuningNumber('excelImageWarningRemaining'),
-  excelImageCompactReserve: tuningNumber('excelImageCompactReserve'),
-  excelImageRelayRequests: tuningNumber('excelImageRelayRequests'),
-  excelImageRelayDownloads: tuningNumber('excelImageRelayDownloads'),
-  excelImageRelayEntries: tuningNumber('excelImageRelayEntries'),
-  excelImageRelayTtlMinutes: tuningNumber('excelImageRelayTtlMinutes'),
   accountBusyWaitStickyMaxWaiting: tuningNumber('accountBusyWaitStickyMaxWaiting'),
   accountBusyWaitStickyTimeoutSeconds: tuningNumber('accountBusyWaitStickyTimeoutSeconds'),
   accountBusyWaitFallbackMaxWaiting: tuningNumber('accountBusyWaitFallbackMaxWaiting'),
@@ -101,8 +64,8 @@ const tuningValues = {
 
 <template>
   <BaseCard
-    title="运行参数"
-    description="请求节奏、账号并发和 Token 刷新"
+    title="通用与 Codex 配置"
+    description="请求节奏、并发、重试和账号切换为共用参数，Excel 请求继续遵循；原生 Codex 连接参数另列。"
   >
     <BaseForm class="max-w-6xl sm:grid-cols-2">
       <BaseFormItem
@@ -183,20 +146,6 @@ const tuningValues = {
         </BaseInput>
       </BaseFormItem>
     </BaseForm>
-
-    <section class="mt-5 border-t border-(--cp-border-color) pt-4" aria-labelledby="excel-image-settings-title">
-      <h3 id="excel-image-settings-title" class="mb-3 text-sm font-medium text-cp-text-secondary">
-        Excel 图片
-      </h3>
-      <BaseForm class="max-w-6xl sm:grid-cols-2">
-        <BaseFormItem label="图片处理方式" description="仅影响 Excel 请求；按所选模式执行，不自动切换或回退。">
-          <BaseSelect v-model="imageMode" :options="imageModes" :disabled="disabled" aria-label="Excel 图片处理方式" />
-        </BaseFormItem>
-        <BaseFormItem v-if="imageMode === 'relay'" label="公网 HTTPS 地址" description="填写指向本实例的公网域名，并转发 /_cpr/excel-images/ 路径。">
-          <BaseInput v-model="imageRelayUrl" :disabled="disabled" type="url" placeholder="https://images.example.com" aria-label="Excel 图片中转地址" />
-        </BaseFormItem>
-      </BaseForm>
-    </section>
 
     <div class="mt-5 border-t border-(--cp-border-color) pt-4">
       <div class="flex items-center justify-between gap-3">
@@ -301,44 +250,14 @@ const tuningValues = {
         :aria-expanded="advancedOpen"
         @click="advancedOpen = !advancedOpen"
       >
-        <span>请求与连接高级参数</span>
+        <span>共享重试与原生连接高级参数</span>
         <ChevronDown class="size-4 transition-transform" :class="{ 'rotate-180': advancedOpen }" />
       </button>
 
       <BaseForm v-if="advancedOpen" class="mt-4 max-w-6xl sm:grid-cols-2">
-        <BaseFormItem label="Excel 图片限额策略" description="仅作用于 Excel。自动压缩需要稳定会话和受支持的 Codex 客户端，会产生额外调用与用量；不删除本次新增图片。">
-          <BaseSelect v-model="requestTuning.excelImageLimitPolicy" :options="imagePolicies" aria-label="Excel 图片限额策略" />
-        </BaseFormItem>
-        <BaseFormItem v-if="requestTuning.excelImageLimitPolicy === 'warn'" label="Excel 图片预警余量">
-          <BaseInput v-model="tuningValues.excelImageWarningRemaining.value" type="number" min="1" max="4096" aria-label="Excel 图片预警余量" />
-        </BaseFormItem>
-        <BaseFormItem v-if="requestTuning.excelImageLimitPolicy === 'warn'" label="Excel 压缩预留图片数">
-          <BaseInput v-model="tuningValues.excelImageCompactReserve.value" type="number" min="1" max="4096" aria-label="Excel 压缩预留图片数" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 单张图片上限（字节）">
-          <BaseInput v-model="tuningValues.excelImageMaxBytes.value" aria-label="Excel 单张图片上限" type="number" min="1" max="134217728" step="1" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 请求图片总量上限（字节）" description="内联图片去重后的字节预算；仍受请求正文和会话回放上限约束。">
-          <BaseInput v-model="tuningValues.excelImageTotalBytes.value" aria-label="Excel 请求图片总量上限" type="number" min="1" max="134217728" step="1" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 单请求图片数量上限">
-          <BaseInput v-model="tuningValues.excelImageMaxCount.value" aria-label="Excel 单请求图片数量上限" type="number" min="1" max="4096" step="1" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 图片中转字节预算">
-          <BaseInput v-model="tuningValues.excelImageRelayBytes.value" aria-label="Excel 图片中转字节预算" type="number" min="1048576" max="17179869184" step="1048576" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 图片中转下载并发">
-          <BaseInput v-model="tuningValues.excelImageRelayDownloads.value" aria-label="Excel 图片中转下载并发" type="number" min="1" max="128" step="1" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 图片在途请求上限">
-          <BaseInput v-model="tuningValues.excelImageRelayRequests.value" aria-label="Excel 图片在途请求上限" type="number" min="1" max="512" step="1" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 图片中转条目上限">
-          <BaseInput v-model="tuningValues.excelImageRelayEntries.value" aria-label="Excel 图片中转条目上限" type="number" min="1" max="65536" step="1" />
-        </BaseFormItem>
-        <BaseFormItem label="Excel 图片有效期（分钟）">
-          <BaseInput v-model="tuningValues.excelImageRelayTtlMinutes.value" aria-label="Excel 图片有效期" type="number" min="1" max="1440" step="1" />
-        </BaseFormItem>
+        <h3 class="m-0 text-sm font-medium text-cp-text-secondary sm:col-span-2">
+          共享重试与限流（Codex / Excel）
+        </h3>
         <BaseFormItem label="同账号传输失败重试次数" description="用于 WS 传输恢复和 Excel 可安全重试的首包前错误（含接口 429），范围 0–100；Excel 还受总路由尝试次数限制">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />
         </BaseFormItem>
@@ -348,6 +267,12 @@ const tuningValues = {
         <BaseFormItem label="单个请求最多路由尝试次数" description="本次请求最多尝试的账号总次数，范围 1–32">
           <BaseInput v-model="tuningValues.maxRequestAttempts.value" aria-label="单个请求最多路由尝试次数" type="number" />
         </BaseFormItem>
+        <BaseFormItem label="真实限流冷却时间" description="收到真实限流后等待多久，单位：秒">
+          <BaseInput v-model="tuningValues.rateLimitCooldownSeconds.value" aria-label="真实限流冷却时间" type="number" />
+        </BaseFormItem>
+        <h3 class="mb-0 mt-3 text-sm font-medium text-cp-text-secondary sm:col-span-2">
+          原生 Codex 上游连接
+        </h3>
         <BaseFormItem label="允许 WebSocket 自动切换 HTTP">
           <BaseSwitch v-model="requestTuning.websocketHttpFallbackEnabled" label="允许回退" show-label />
         </BaseFormItem>
@@ -368,9 +293,6 @@ const tuningValues = {
         </BaseFormItem>
         <BaseFormItem label="WebSocket 暂停时长" description="触发失败保护后暂停多久，单位：毫秒">
           <BaseInput v-model="tuningValues.websocketFailureOpenDurationMs.value" aria-label="WebSocket 暂停时长" type="number" />
-        </BaseFormItem>
-        <BaseFormItem label="真实限流冷却时间" description="收到真实限流后等待多久，单位：秒">
-          <BaseInput v-model="tuningValues.rateLimitCooldownSeconds.value" aria-label="真实限流冷却时间" type="number" />
         </BaseFormItem>
       </BaseForm>
     </div>
