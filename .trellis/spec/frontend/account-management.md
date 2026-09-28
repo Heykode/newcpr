@@ -1,17 +1,30 @@
 # Account Management Contracts
 
-## IPv6 Batch and Template Settings
+## Unified Account Egress
 
-- Batch editing exposes `updateEgressMode` only for all-OpenAI selections. Reset it on
-  every open; unchecked mode changes must not be validated or submitted. Reuse
-  `ipv6EgressModes` labels and keep the single-account independent-save control intact.
-- `egressMode` omission preserves overrides; explicit null inherits global policy.
-  Templates default to preserve, including old stored templates without this field.
-  Apply and new-account import use the same optional setting; existing-account relogin
-  does not apply a new-account template.
-- Final proxy plus IPv6 policy must be checked in one backend transaction; conflicts
-  roll back the whole batch. Do not silently clear proxy, partially apply mixed
-  providers, or rewrite historical IPv6 bindings.
+- `AccountOutboundField` is shared by editing, bulk editing, onboarding and templates.
+  It selects one of global inheritance, server direct, saved proxy, Mihomo pool,
+  ordinary pool or IPv6 pool. Excel selects the upstream, independently of egress.
+- `accountEgressPatch` is the single submission mapping. Preserve omits all egress
+  fields; managed pools only change `requestProxySource`. Direct/saved-proxy selections
+  restore the account route and disable OpenAI IPv6 overrides. IPv6/global selections
+  clear an old saved proxy explicitly. Hidden draft fields never select another exit.
+- IPv6 has fixed/round-robin and reused/fresh connection options. Keep the existing
+  global rotation and historical fixed bindings. Single-account editing has one atomic
+  save; there is no independent IPv6 write. Cancellation sends no mutation.
+- Bulk edits use only `updateProxy` for the entire egress selection, unchecked/reset on
+  every open. Mixed platforms allow direct/saved proxy; OpenAI overrides reset in the
+  same transaction, without assigning IPv6 policies to other platforms.
+- `egressMode` omission preserves, null inherits, and a mode sets an override. Imports
+  carry `clearOutboundProxy` when a selected exit explicitly removes an old proxy;
+  missing/false retains legacy import semantics. All five onboarding modes share this
+  contract. Login credential retrieval does not gain model-route transport capabilities.
+- Templates distinguish target-account preservation from global inheritance using
+  `preserveOutboundProxy`; missing means the old direct selection. Unchanged legacy
+  partial configurations roundtrip exactly. Ambiguous old selections display as keeping
+  the template's existing configuration, not as global inheritance.
+- Egress configuration reads abort on account change/unmount and never populate or
+  overwrite unsaved drafts. Failed status reads do not invent a current exit.
 
 ## 2FA Enrollment and Excel Policy
 

@@ -657,6 +657,11 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     .await?;
             }
             if let Some(settings) = &command.settings {
+                if settings.clear_outbound_proxy && command.outbound_proxy.is_some() {
+                    return Err(invalid(
+                        "cannot clear and select an outbound proxy in one import",
+                    ));
+                }
                 let unique_ids = account_ids
                     .iter()
                     .cloned()
@@ -682,7 +687,9 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                         excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
                         excel_403_action: settings.excel_403_action,
                         model_access: settings.model_access.as_ref(),
-                        outbound_proxy: None,
+                        outbound_proxy: settings.clear_outbound_proxy.then_some(
+                            &gateway_admin::model::proxies::AccountProxySelection::Direct,
+                        ),
                     },
                 )
                 .await?;
@@ -1277,7 +1284,7 @@ pub(crate) async fn apply_account_template_in_transaction(
             excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
             excel_403_action: settings.excel_403_action,
             model_access: settings.model_access.as_ref(),
-            outbound_proxy: Some(&proxy),
+            outbound_proxy: (!config.preserve_outbound_proxy).then_some(&proxy),
         },
     )
     .await?;
@@ -1355,9 +1362,10 @@ async fn update_provider_accounts_scheduling_in_transaction(
             .filter(|action| *action != gateway_core::account::Excel403Action::None)
             .map(|_| gateway_core::account::ResponsesUpstream::Excel))
         .or(responses_upstream);
+    let mut openai_ids = Vec::new();
     if upstream.is_some() || request_proxy_source.is_some() {
         let identities = sqlx::query(
-            "select provider_kind, authentication_kind from provider_accounts
+            "select id, provider_kind, authentication_kind from provider_accounts
              where id = any($1::text[]) for update",
         )
         .bind(account_ids)
@@ -1366,6 +1374,9 @@ async fn update_provider_accounts_scheduling_in_transaction(
         .map_err(|_| postgres_unavailable("validate account responses upstream"))?;
         for row in identities {
             let provider: String = get(&row, "provider_kind")?;
+            if provider == "openai" {
+                openai_ids.push(get::<String>(&row, "id")?);
+            }
             let authentication: String = get(&row, "authentication_kind")?;
             if upstream
                 .is_some_and(|upstream| !upstream.supports_account(&provider, &authentication))
@@ -1446,8 +1457,20 @@ async fn update_provider_accounts_scheduling_in_transaction(
     let expected = account_ids.iter().cloned().collect::<BTreeSet<_>>();
     if updated == expected {
         if let Some(mode) = egress_mode {
-            super::super::egress::set_account_modes_in_transaction(transaction, account_ids, mode)
-                .await?;
+            // A unified direct/proxy selection resets only OpenAI overrides in a
+            // mixed batch. Other explicit IPv6 patches keep their existing fence.
+            let ids = if mode == Some(gateway_core::provider_ports::egress::EgressMode::Unchanged)
+                && request_proxy_source == Some(gateway_core::account::RequestProxySource::Account)
+                && outbound_proxy.is_some()
+            {
+                openai_ids.as_slice()
+            } else {
+                account_ids
+            };
+            if !ids.is_empty() {
+                super::super::egress::set_account_modes_in_transaction(transaction, ids, mode)
+                    .await?;
+            }
         }
         if outbound_proxy.is_some() || egress_mode.is_some() {
             super::super::synchronize_account_egress_in_transaction(transaction, account_ids)

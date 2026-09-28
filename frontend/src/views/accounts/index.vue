@@ -251,7 +251,6 @@ const {
   excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
   excelIgnoreEncryptedContent: batchExcelIgnoreEncryptedContent,
   requestProxySource: batchRequestProxySource,
-  updateRequestProxySource: batchUpdateRequestProxySource,
   excel403Action: batchExcel403Action,
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
   updateExcelIgnoreEncryptedContent: batchUpdateExcelIgnoreEncryptedContent,
@@ -271,9 +270,7 @@ const {
   updateWeight: batchUpdateWeight,
   updateGroups: batchUpdateGroups,
   updateProxy: batchUpdateProxy,
-  egressAvailable: batchEgressAvailable,
   egressMode: batchEgressMode,
-  updateEgressMode: batchUpdateEgressMode,
   hasUpdates: batchHasUpdates,
   saving: savingBatchEdit,
   open: openBatchEdit,
@@ -302,6 +299,7 @@ const {
   modelAccess: editingModelAccess,
   proxyMode: editingProxyMode,
   proxyId: editingProxyId,
+  egressMode: editingEgressMode,
   selectedGroupIds: editingGroupIds,
   saving: savingAccountEdit,
   open: openAccountEdit,
@@ -676,6 +674,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
       v-model:proxy-mode="editingProxyMode"
+      v-model:egress-mode="editingEgressMode"
       v-model:proxy-id="editingProxyId"
       v-model:selected-group-ids="editingGroupIds"
       :account="editingAccount"
@@ -693,7 +692,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-enabled="batchExcelEnabled"
       v-model:excel-models="batchExcelModels"
       v-model:request-proxy-source="batchRequestProxySource"
-      v-model:update-request-proxy-source="batchUpdateRequestProxySource"
       v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="batchExcelIgnoreEncryptedContent"
@@ -716,8 +714,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-groups="batchUpdateGroups"
       v-model:update-proxy="batchUpdateProxy"
       v-model:egress-mode="batchEgressMode"
-      v-model:update-egress-mode="batchUpdateEgressMode"
-      :egress-available="batchEgressAvailable"
       :catalog-account-id="batchCatalogAccountId"
       :has-updates="batchHasUpdates"
       :excel-available="batchExcelAvailable"

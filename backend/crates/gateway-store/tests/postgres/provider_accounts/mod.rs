@@ -221,6 +221,7 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
         repository
             .import_provider_accounts(ImportProviderAccounts {
                 settings: Some(AccountImportSettings {
+                    clear_outbound_proxy: false,
                     egress_mode: None,
                     model_access: Default::default(),
                     custom_name: name.map(str::to_owned),
@@ -1220,6 +1221,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
             store
                 .update_account(
                     UpdateAccount {
+                        egress_mode: None,
                         model_access: Default::default(),
                         custom_name: None,
                         account_id: id.clone(),
@@ -1956,6 +1958,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
@@ -2046,6 +2049,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        egress_mode: None,
         model_access: Default::default(),
         custom_name: None,
         account_id: "acct_proxy".to_owned(),
@@ -2606,6 +2610,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         .commit_authorization(
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    clear_outbound_proxy: false,
                     egress_mode: None,
                     model_access: Default::default(),
                     custom_name: None,
@@ -3733,6 +3738,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 account_id: id.as_str().to_owned(),
@@ -3805,6 +3811,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     )
     .unwrap();
     let settings = AccountImportSettings {
+        clear_outbound_proxy: false,
         egress_mode: None,
         model_access: Some(policy.clone()),
         custom_name: None,
@@ -3935,6 +3942,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
     .enumerate()
     {
         let settings = AccountImportSettings {
+            clear_outbound_proxy: false,
             egress_mode: None,
             model_access: Default::default(),
             custom_name: None,

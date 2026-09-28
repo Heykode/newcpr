@@ -9,6 +9,8 @@ import * as vue from 'vue'
 
 const require = createRequire(import.meta.url)
 function load(path, dependencies = {}) {
+  if (path !== '../src/utils/account-egress.ts')
+    dependencies['@/utils/account-egress'] = load('../src/utils/account-egress.ts')
   const exports = {}
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
@@ -44,7 +46,7 @@ test('imports omit blank names, preserve other settings and reject invalid names
   assert.equal('customName' in original, false)
   form.customName = '  Import batch  '
   const settings = creation.accountImportSettings(form)
-  assert.equal(JSON.stringify(settings), JSON.stringify({ customName: 'Import batch', ...original }))
+  assert.deepEqual(JSON.parse(JSON.stringify(settings)), { customName: 'Import batch', ...JSON.parse(JSON.stringify(original)) })
   form.customName = ' '.repeat(5)
   assert.equal('customName' in creation.accountImportSettings(form), false)
   form.customName = 'bad\nname'

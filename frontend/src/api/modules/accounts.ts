@@ -440,6 +440,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
+  egressMode?: string | null
   customName?: string | null
   outboundProxyUrl?: string
   outboundProxyId?: string
@@ -488,6 +489,8 @@ interface AccountDeleteParams {
 }
 
 export interface AccountImportSettings {
+  clearOutboundProxy?: boolean
+  egressMode?: string | null
   customName?: string
   enabled: boolean
   turnStateInjectionEnabled?: boolean

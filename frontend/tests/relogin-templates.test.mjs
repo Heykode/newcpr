@@ -8,6 +8,8 @@ import ts from 'typescript'
 
 const require = createRequire(import.meta.url)
 function load(path, dependencies = {}) {
+  if (path !== '../src/utils/account-egress.ts')
+    dependencies['@/utils/account-egress'] = load('../src/utils/account-egress.ts')
   const source = readFileSync(new URL(path, import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
@@ -26,13 +28,14 @@ const { templateForm, templateConfig } = load('../src/components/account-templat
 test('managed exit templates do not require or toggle Excel', () => {
   const form = templateForm({ name: 'Native proxy', requestProxySource: 'mihomo' })
   assert.equal(form.applyExcel, false)
-  assert.equal(form.applyRequestProxySource, true)
+  assert.equal(form.proxyMode, 'mihomo')
   const config = templateConfig(form)
   assert.equal(config.requestProxySource, 'mihomo')
   assert.equal('responsesUpstream' in config, false)
   assert.equal('excelModels' in config, false)
-  form.applyRequestProxySource = false
+  form.proxyMode = 'preserve'
   assert.equal('requestProxySource' in templateConfig(form), false)
+  assert.equal(templateConfig(form).preserveOutboundProxy, true)
 })
 
 test('templates roundtrip scheduling, groups and proxy without sharing mutable arrays', () => {
@@ -55,26 +58,29 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
+    preserveOutboundProxy: true,
     outboundProxyId: null,
   })
 })
 
 test('IPv6 templates distinguish preserve, inherit and all existing modes', () => {
   const legacy = { name: 'Legacy', enabled: true, concurrencyLimit: null, weight: 1, groupIds: [], outboundProxyId: null }
-  assert.equal(templateForm(legacy).egressMode, 'preserve')
   assert.equal('egressMode' in templateConfig(templateForm(legacy)), false)
   for (const mode of [null, 'unchanged', 'fixed_ipv6_reuse', 'random_ipv6_reuse', 'fixed_ipv6_fresh', 'random_ipv6_fresh']) {
     const config = { ...legacy, egressMode: mode }
     const form = templateForm(config)
-    assert.equal(form.egressMode, mode ?? 'inherit')
     assert.equal(templateConfig(form).egressMode, mode)
-    form.egressMode = 'preserve'
+    form.proxyMode = 'preserve'
     assert.equal('egressMode' in templateConfig(form), false)
+    assert.equal(templateConfig(form).preserveOutboundProxy, true)
   }
   const proxy = { ...templateForm(legacy), proxyMode: 'proxy', proxyId: 'proxy-a' }
-  assert.throws(() => templateConfig({ ...proxy, egressMode: 'fixed_ipv6_reuse' }), /IPv6/)
-  for (const egressMode of ['preserve', 'inherit', 'unchanged'])
-    assert.doesNotThrow(() => templateConfig({ ...proxy, egressMode }))
+  assert.equal(templateConfig({ ...proxy, egressMode: 'fixed_ipv6_reuse' }).egressMode, 'unchanged')
+  const inherit = templateConfig({ ...templateForm(), name: 'Global', proxyMode: 'inherit' })
+  assert.equal(inherit.egressMode, null)
+  assert.equal(inherit.requestProxySource, 'account')
+  assert.equal(inherit.preserveOutboundProxy, false)
+  assert.equal(inherit.outboundProxyId, null)
 })
 
 test('Excel templates preserve legacy omission and roundtrip global/custom/empty lists', () => {

@@ -1,15 +1,39 @@
 import type { AccountTemplateConfig } from '@/api/modules/account-templates'
 import type { Excel403Action } from '@/utils/excel-settings'
+import { accountEgressPatch, accountIpv6Modes } from '@/utils/account-egress'
 import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { accountExcel403Action, excelSettings } from '@/utils/excel-settings'
 import { parseAccountSchedulingForm } from '@/views/accounts/utils/schedulingForm'
 
 export function templateForm(config?: AccountTemplateConfig) {
+  const proxyMode = config?.requestProxySource && config.requestProxySource !== 'account'
+    ? config.requestProxySource
+    : config?.outboundProxyId
+      ? 'proxy'
+      : config?.egressMode && accountIpv6Modes.includes(config.egressMode)
+        ? 'ipv6'
+        : config?.egressMode === 'unchanged'
+          ? 'direct'
+          : config?.egressMode === null
+            ? 'inherit'
+            : config && !config.preserveOutboundProxy ? 'legacy' : 'preserve'
+  const proxyId = config?.outboundProxyId ?? ''
+  const egressMode = config?.egressMode ?? 'fixed_ipv6_reuse'
   return {
+    // Preserve partial settings from pre-unification templates until the user
+    // explicitly changes the outbound selection; absence is not inheritance.
+    initialEgress: JSON.stringify([proxyMode, proxyId, egressMode]),
+    originalEgress: config
+      ? {
+          ...(config.requestProxySource == null ? {} : { requestProxySource: config.requestProxySource }),
+          ...(config.egressMode === undefined ? {} : { egressMode: config.egressMode }),
+          ...(config.preserveOutboundProxy === undefined ? {} : { preserveOutboundProxy: config.preserveOutboundProxy }),
+          outboundProxyId: config.outboundProxyId ?? null,
+        }
+      : undefined,
     name: config?.name ?? '',
     enabled: config?.enabled ?? true,
     applyExcel: config === undefined || config.responsesUpstream != null || config.excelModelsFollowGlobal != null || config.excelModels != null,
-    applyRequestProxySource: config?.requestProxySource != null,
     excelEnabled: config?.responsesUpstream === 'excel',
     requestProxySource: config?.requestProxySource ?? 'account',
     excelCacheCreationAsInput: config ? config.excelCacheCreationAsInput ?? false : true,
@@ -20,9 +44,9 @@ export function templateForm(config?: AccountTemplateConfig) {
     concurrencyLimit: config?.concurrencyLimit == null ? '' : String(config.concurrencyLimit),
     weight: String(config?.weight ?? 1),
     groupIds: [...(config?.groupIds ?? [])],
-    proxyMode: config?.outboundProxyId ? 'proxy' : 'direct',
-    proxyId: config?.outboundProxyId ?? '',
-    egressMode: config?.egressMode === undefined ? 'preserve' : config.egressMode ?? 'inherit',
+    proxyMode,
+    proxyId,
+    egressMode,
   }
 }
 
@@ -33,10 +57,13 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
     throw new Error(scheduling.message)
-  if (form.proxyMode === 'proxy' && !form.proxyId)
-    throw new Error('请选择已通过测试的代理')
-  if (form.proxyMode === 'proxy' && !['preserve', 'inherit', 'unchanged'].includes(form.egressMode))
-    throw new Error('IPv6 策略不能与账号代理同时启用，请将出站代理改为直连')
+  const unchangedEgress = form.originalEgress && form.initialEgress === JSON.stringify([form.proxyMode, form.proxyId, form.egressMode]) ? form.originalEgress : undefined
+  const patch = unchangedEgress ? {} : accountEgressPatch(form, true)
+  const egress = unchangedEgress ?? {
+    ...patch,
+    preserveOutboundProxy: patch.outboundProxyId === undefined,
+    outboundProxyId: patch.outboundProxyId || null,
+  }
   return {
     name,
     enabled: form.enabled,
@@ -46,10 +73,8 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
           excelIgnoreEncryptedContent: form.excelEnabled && form.excelIgnoreEncryptedContent,
         }
       : {}),
-    ...(form.applyRequestProxySource ? { requestProxySource: form.requestProxySource } : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
-    outboundProxyId: form.proxyMode === 'proxy' ? form.proxyId : null,
-    ...(form.egressMode === 'preserve' ? {} : { egressMode: form.egressMode === 'inherit' ? null : form.egressMode }),
+    ...egress,
   }
 }

@@ -7,6 +7,49 @@ use gateway_admin::model::{
 };
 
 #[tokio::test]
+async fn template_preserve_outbound_is_explicit_and_legacy_null_still_means_direct() {
+    let account = account_record("openai");
+    let h = Harness::new(vec![account.clone()]).await;
+    let service = h.services.account_templates();
+    for preserve in [false, true] {
+        let mut config = template_config();
+        config.name = format!("Preserve proxy {preserve}");
+        config.preserve_outbound_proxy = preserve;
+        let template = service.save_template(None, config).await.unwrap();
+        service
+            .apply(
+                vec![account.id.clone()],
+                template_selection(&template),
+                &context("preserve-egress"),
+            )
+            .await
+            .unwrap();
+        let updates = h.accounts.batch_updates.lock().unwrap();
+        let update = updates.last().unwrap();
+        assert_eq!(
+            update.outbound_proxy,
+            (!preserve).then_some(AccountProxySelection::Direct)
+        );
+        assert_eq!(update.egress_mode, None);
+        assert_eq!(update.request_proxy_source, None);
+    }
+    let mut config = template_config();
+    config.preserve_outbound_proxy = true;
+    config.outbound_proxy_id = Some("proxy-test".into());
+    assert!(config.settings().is_err());
+    let mut legacy = serde_json::to_value(template_config()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("preserveOutboundProxy");
+    assert!(
+        !serde_json::from_value::<ReloginTemplateConfig>(legacy)
+            .unwrap()
+            .preserve_outbound_proxy
+    );
+}
+
+#[tokio::test]
 async fn templates_apply_one_snapshot_to_one_or_many_accounts_without_credential_writes() {
     let first = account_record("openai");
     let mut second = first.clone();

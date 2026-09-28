@@ -10,6 +10,8 @@ import * as vue from 'vue'
 const require = createRequire(import.meta.url)
 
 function load(path, dependencies = {}) {
+  if (path !== '../src/utils/account-egress.ts')
+    dependencies['@/utils/account-egress'] = load('../src/utils/account-egress.ts')
   const exports = {}
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },

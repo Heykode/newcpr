@@ -9,10 +9,9 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
-import RequestProxySourceSelect from '@/components/RequestProxySourceSelect.vue'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import AccountModelAccessField from './AccountModelAccessField.vue'
-import AccountProxyField from './AccountProxyField.vue'
+import AccountOutboundField from './AccountOutboundField.vue'
 
 withDefaults(defineProps<{
   groups: AccountGroup[]
@@ -22,7 +21,6 @@ withDefaults(defineProps<{
   endpoint?: string | null
   accountId?: string
   preserveProxy?: boolean
-  preserveRequestProxySource?: boolean
   requestProxyAvailable?: boolean
   proxyError?: string
   excelAvailable?: boolean
@@ -41,7 +39,6 @@ const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', 
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
 const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
 const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
-const updateRequestProxySource = defineModel<boolean>('updateRequestProxySource', { default: false })
 const updateExcelIgnoreEncryptedContent = defineModel<boolean>('updateExcelIgnoreEncryptedContent', { default: false })
 const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
@@ -53,6 +50,7 @@ const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess')
 const updateModelAccess = defineModel<boolean>('updateModelAccess', { default: false })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
+const egressMode = defineModel<string>('egressMode', { default: 'fixed_ipv6_reuse' })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 const updateEnabled = defineModel<boolean>('updateEnabled', { default: false })
 const updateExcelEnabled = defineModel<boolean>('updateExcelEnabled', { default: false })
@@ -64,12 +62,6 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
 
 <template>
   <div class="grid gap-5">
-    <BaseFormItem v-if="requestProxyAvailable" label="账号请求出口">
-      <template v-if="batch || preserveRequestProxySource" #extra>
-        <BaseCheckbox v-model="updateRequestProxySource" label="应用账号请求出口更改" show-label :disabled="disabled" />
-      </template>
-      <RequestProxySourceSelect v-model="requestProxySource" :disabled="disabled || ((batch || preserveRequestProxySource) && !updateRequestProxySource)" />
-    </BaseFormItem>
     <BaseFormItem v-if="nameAvailable" label="自定义账号名称（选填）">
       <template v-if="batch" #extra>
         <BaseCheckbox v-model="updateCustomName" label="应用账号名称更改" title="应用账号名称更改" :disabled="disabled" />
@@ -247,9 +239,12 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         :disabled="disabled || (batch && !updateGroups)"
       />
     </BaseFormItem>
-    <AccountProxyField
+    <AccountOutboundField
       v-model:mode="proxyMode"
       v-model:proxy-id="proxyId"
+      v-model:egress-mode="egressMode"
+      :openai="requestProxyAvailable"
+      :current-source="requestProxySource"
       :preserve="preserveProxy"
       :error="proxyError"
       :endpoint="endpoint"
@@ -264,6 +259,6 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
           :disabled="disabled"
         />
       </template>
-    </AccountProxyField>
+    </AccountOutboundField>
   </div>
 </template>

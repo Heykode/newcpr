@@ -311,6 +311,45 @@ mod batch_update {
     use serde_json::json;
 
     #[test]
+    fn single_edit_and_import_preserve_egress_patch_three_states() {
+        use gateway_api::admin::accounts::AccountImportSettingsRequest;
+        use gateway_core::provider_ports::egress::EgressMode;
+        let base = json!({"enabled": true, "concurrencyLimit": null, "weight": 1, "groupIds": []});
+        for mode in [
+            None,
+            Some(None),
+            Some(Some(EgressMode::Unchanged)),
+            Some(Some(EgressMode::FixedIpv6Reuse)),
+            Some(Some(EgressMode::RandomIpv6Reuse)),
+            Some(Some(EgressMode::FixedIpv6Fresh)),
+            Some(Some(EgressMode::RandomIpv6Fresh)),
+        ] {
+            let mut value = base.clone();
+            if let Some(mode) = mode {
+                value["egressMode"] = serde_json::to_value(mode).unwrap();
+            }
+            let import: AccountImportSettingsRequest =
+                serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(import.egress_mode, mode);
+            let snapshot = serde_json::to_value(&import).unwrap();
+            assert_eq!(snapshot.get("egressMode"), value.get("egressMode"));
+            let replay: AccountImportSettingsRequest = serde_json::from_value(snapshot).unwrap();
+            assert_eq!(replay.egress_mode, mode);
+            value["accountId"] = json!("acct_test");
+            let update: UpdateAccountRequest = serde_json::from_value(value).unwrap();
+            update.validate().unwrap();
+            assert_eq!(update.egress_mode, mode);
+        }
+        for invalid in [json!("inherit"), json!("invalid"), json!(false), json!({})] {
+            let mut value = base.clone();
+            value["egressMode"] = invalid;
+            assert!(serde_json::from_value::<AccountImportSettingsRequest>(value.clone()).is_err());
+            value["accountId"] = json!("acct_test");
+            assert!(serde_json::from_value::<UpdateAccountRequest>(value).is_err());
+        }
+    }
+
+    #[test]
     fn ipv6_batch_patch_preserves_absence_null_and_validates_all_modes() {
         use gateway_core::provider_ports::egress::EgressMode;
         let omitted: BatchUpdateAccountsRequest = serde_json::from_value(json!({
