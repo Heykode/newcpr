@@ -2591,6 +2591,91 @@ mod errors {
     use super::*;
 
     #[tokio::test]
+    async fn quota_refresh_exposes_static_reasons_without_mutating_credentials() {
+        let store = Arc::new(MemoryAccountStore::default());
+        let account_id = "acct_quota_error";
+        store
+            .seed_oauth_credential(ImportCodexOAuthCredential {
+                account_id: account_id.to_owned(),
+                name: "quota error".to_owned(),
+                secret: secret("quota-error-test-token"),
+                verified_account: profile("chatgpt-quota-error"),
+                next_refresh_at: None,
+                enabled: true,
+            })
+            .await;
+        let before = store.account(account_id).unwrap();
+        let server = MockServer::start().await;
+        let mut config = valid_config();
+        config.config.api.base_url = server.uri();
+        let bundle = provider_openai::initialize(
+            config.config,
+            provider_ports_with(store.clone(), Arc::new(TestOAuthPending::default())),
+        )
+        .await
+        .unwrap();
+        for (status, code, expected_kind, fragment) in [
+            (401, "token_revoked", Kind::BadGateway, "token_revoked"),
+            (401, "unknown_code", Kind::BadGateway, "HTTP 401"),
+            (403, "forbidden", Kind::BadGateway, "HTTP 403"),
+            (429, "rate_limited", Kind::BadGateway, "被限流"),
+            (503, "unavailable", Kind::BadGateway, "服务异常"),
+            (400, "invalid_request", Kind::Unavailable, "出站连接"),
+        ] {
+            server.reset().await;
+            Mock::given(method("GET"))
+                .and(path("/api/codex/usage"))
+                .respond_with(
+                    ResponseTemplate::new(status).set_body_json(
+                        json!({"error":{"code":code,"message":"raw-secret-marker"}}),
+                    ),
+                )
+                .mount(&server)
+                .await;
+            let error = bundle
+                .admin_provider()
+                .quota(ProviderQuotaRequest {
+                    account_id: before.id().clone(),
+                    refresh: true,
+                    rolling_usage: None,
+                })
+                .await
+                .expect_err("quota rejection");
+            assert_eq!(error.kind(), expected_kind);
+            assert!(error.public_message().unwrap().contains(fragment));
+            assert!(
+                !error
+                    .public_message()
+                    .unwrap()
+                    .contains("raw-secret-marker")
+            );
+            assert!(!format!("{error:?} {error}").contains("raw-secret-marker"));
+            assert_eq!(store.account(account_id).unwrap(), before);
+        }
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"rate_limit":{"allowed":true,"primary_window":{"used_percent":8}}}),
+            ))
+            .mount(&server)
+            .await;
+        let quota = bundle
+            .admin_provider()
+            .quota(ProviderQuotaRequest {
+                account_id: before.id().clone(),
+                refresh: true,
+                rolling_usage: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(quota.representative_used_percent(), Some(8.0));
+        let current = store.account(account_id).unwrap();
+        assert_eq!(current.credential_state(), CredentialState::Ready);
+        assert!(current.last_error_message().is_none());
+    }
+
+    #[tokio::test]
     async fn manual_refresh_preserves_banned_evidence_without_promoting_401_to_terminal() {
         for (status, kind, message) in [
             (400, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),

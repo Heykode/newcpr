@@ -21,6 +21,7 @@ const requestTuningFallbacks: RequestTuning = {
   websocketMaxRetries: 5,
   websocketHttpFallbackEnabled: true,
   websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
+  streamPrefetchBytes: 128 * 1024,
   websocketMaxAgeMs: 55 * 60 * 1_000,
   websocketStreamIdleTimeoutMs: 300_000,
   websocketFailureThreshold: 3,
@@ -217,6 +218,10 @@ export function useSettingsForm() {
       || (tuning.excelImageLimitPolicy === 'warn'
         && !(tuning.excelImageCompactReserve < tuning.excelImageWarningRemaining && tuning.excelImageWarningRemaining < tuning.excelImageMaxCount))) {
       toast.warning('Excel 图片预警需要：1 ≤ 压缩预留 < 预警余量 < 图片数量上限')
+      return
+    }
+    if (!Number.isSafeInteger(tuning.streamPrefetchBytes) || tuning.streamPrefetchBytes < 0) {
+      toast.warning('提交前缓冲阈值须对应非负、安全整数的字节数；0 为立即透传')
       return
     }
     const imageTransport = tuning.excelImageTransport

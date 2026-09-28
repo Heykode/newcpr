@@ -109,14 +109,29 @@ async fn review(mode: &str) {
         Version::HTTP_11
     };
     let acceptor = acceptor(&identity, h2);
-    let client = build_reqwest_native_client_with_custom_ca(
-        reqwest::Client::builder()
-            .no_proxy()
-            .tcp_nodelay(true)
-            .pool_max_idle_per_host(CONCURRENCY)
-            .timeout(Duration::from_secs(10)),
-    )
-    .unwrap();
+    let client = if mode.ends_with("-current") {
+        provider_openai::transport::build_reqwest_client().unwrap()
+    } else if mode.ends_with("-upstream") {
+        // a5a844a removes explicit pooling and keepalive overrides. Preserve
+        // New CPR's native TLS, IPv4 and redirect policy in this test candidate.
+        build_reqwest_native_client_with_custom_ca(
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(15))
+                .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+        )
+        .unwrap()
+    } else {
+        build_reqwest_native_client_with_custom_ca(
+            reqwest::Client::builder()
+                .no_proxy()
+                .tcp_nodelay(true)
+                .pool_max_idle_per_host(CONCURRENCY)
+                .timeout(Duration::from_secs(10)),
+        )
+        .unwrap()
+    };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("https://{}", listener.local_addr().unwrap());
     let connections = Arc::new(AtomicUsize::new(0));
@@ -254,6 +269,54 @@ async fn review(mode: &str) {
     );
     stop.send(()).unwrap();
     server.await.unwrap();
+}
+
+#[test]
+fn compare_upstream_connection_defaults_without_changing_production() {
+    const CASE: &str = "CPR_TEST_A5A844A_COMPARISON";
+    if let Ok(mode) = std::env::var(CASE) {
+        assert!(matches!(
+            mode.as_str(),
+            "native-h1-current" | "native-h1-upstream" | "native-h2-current" | "native-h2-upstream"
+        ));
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                timeout(Duration::from_secs(20), review(&mode))
+                    .await
+                    .expect("bounded A/B comparison");
+            });
+        return;
+    }
+    for mode in [
+        "native-h1-current",
+        "native-h1-upstream",
+        "native-h2-current",
+        "native-h2-upstream",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "transport::http_transport_review::compare_upstream_connection_defaults_without_changing_production", "--nocapture"])
+            .env(CASE, mode).env(CODEX_CA_CERT_ENV, directory.path().join("ca.pem"))
+            .env_remove(SSL_CERT_FILE_ENV).output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{mode}\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            stdout
+                .lines()
+                .filter(|line| line.starts_with("LOOPBACK_REVIEW "))
+                .count(),
+            1
+        );
+        print!("{stdout}");
+    }
 }
 
 #[test]
