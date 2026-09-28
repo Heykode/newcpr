@@ -37,7 +37,7 @@ async function main() {
       }))
       assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1))
       await control.click()
-      await page.getByRole('option', { name: /随机 IPv6 · 复用连接/ }).waitFor()
+      await page.getByRole('option', { name: /轮询 IPv6 · 复用连接/ }).waitFor()
       assert.ok(await page.getByRole('option').evaluateAll(options => options.every((option) => {
         const label = option.querySelector('span')
         return label && label.scrollWidth <= label.clientWidth + 1
@@ -63,7 +63,7 @@ async function main() {
     assert.equal(await select().isDisabled(), false)
     await layouts('batch', select())
     await select().click()
-    await page.getByRole('option', { name: /随机 IPv6 · 复用连接/ }).click()
+    await page.getByRole('option', { name: /轮询 IPv6 · 复用连接/ }).click()
     await dialog.getByRole('button', { name: '保存更改', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
     assert.deepEqual(batches.at(-1), { accountIds: ['acct_sample_0', 'acct_sample_1'], egressMode: 'random_ipv6_reuse' })

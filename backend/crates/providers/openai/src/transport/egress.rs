@@ -24,6 +24,10 @@ const MAX_ACCOUNT_HTTP_CLIENTS: usize = 8;
 const SOURCE_HEALTH_TTL: Duration = Duration::from_secs(30);
 const SOURCE_FAILURE_COOLDOWN: Duration = Duration::from_secs(15);
 
+#[cfg(test)]
+#[path = "egress_round_robin_tests.rs"]
+mod round_robin_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CodexEgressError {
     #[error("IPv6 configuration is unavailable")]
@@ -88,6 +92,7 @@ pub struct CodexEgressRuntime {
     state: RwLock<Option<Arc<ProviderEgressConfig>>>,
     clients: Mutex<VecDeque<CachedClient>>,
     source_health: Mutex<HashMap<Ipv6Addr, SourceHealth>>,
+    last_rotating_source: Mutex<Option<Ipv6Addr>>,
 }
 
 impl CodexEgressRuntime {
@@ -104,6 +109,7 @@ impl CodexEgressRuntime {
             state: RwLock::new(Some(state)),
             clients: Mutex::new(VecDeque::new()),
             source_health: Mutex::new(HashMap::new()),
+            last_rotating_source: Mutex::new(None),
         }))
     }
 
@@ -195,30 +201,7 @@ impl CodexEgressRuntime {
             return Err(CodexEgressError::ProxyConflict);
         }
         let source = if mode.is_random() {
-            let available = state
-                .addresses
-                .iter()
-                .filter(|item| item.enabled && !self.source_temporarily_blocked(item.address))
-                .collect::<Vec<_>>();
-            let available = if available.is_empty() {
-                // A complete temporary block must not be reported as an empty
-                // configured pool. Let the next connection attempt re-check a
-                // candidate after the cooldown expires.
-                state
-                    .addresses
-                    .iter()
-                    .filter(|item| item.enabled)
-                    .collect::<Vec<_>>()
-            } else {
-                available
-            };
-            if available.is_empty() {
-                return Err(CodexEgressError::EmptyPool);
-            }
-            let mut bytes = [0; 8];
-            getrandom::fill(&mut bytes).map_err(|_| CodexEgressError::Unavailable)?;
-            let index = u64::from_ne_bytes(bytes) % available.len() as u64;
-            available[index as usize].address
+            self.next_rotating_source(&state)?
         } else {
             *state
                 .fixed_bindings
@@ -234,6 +217,43 @@ impl CodexEgressRuntime {
         };
         self.check(&route)?;
         Ok(Some(route))
+    }
+
+    fn next_rotating_source(
+        &self,
+        state: &ProviderEgressConfig,
+    ) -> Result<Ipv6Addr, CodexEgressError> {
+        // One cursor for both rotating modes and every account using this
+        // runtime. Keep it across reloads; account edits must not restart at A.
+        let mut last = self
+            .last_rotating_source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let start = last
+            .and_then(|address| {
+                state
+                    .addresses
+                    .iter()
+                    .position(|item| item.address == address)
+            })
+            .map_or(0, |index| index + 1);
+        let candidates = || {
+            state
+                .addresses
+                .iter()
+                .cycle()
+                .skip(start)
+                .take(state.addresses.len())
+                .filter(|item| item.enabled)
+        };
+        let next = candidates()
+            .find(|item| !self.source_temporarily_blocked(item.address))
+            // Preserve the cooldown error when every enabled source is blocked,
+            // rather than misreporting an empty configured pool.
+            .or_else(|| candidates().next())
+            .ok_or(CodexEgressError::EmptyPool)?;
+        *last = Some(next.address);
+        Ok(next.address)
     }
 
     pub(crate) fn check(&self, route: &CodexEgressRoute) -> Result<(), CodexEgressError> {
