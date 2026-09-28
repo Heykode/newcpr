@@ -177,6 +177,7 @@ pub struct AccountRecord {
     pub excel_auto_disable_on_403: bool,
     pub excel_403_action: gateway_core::account::Excel403Action,
     pub excel_auto_disabled_at: Option<DateTime<Utc>>,
+    pub excel_403_warning_at: Option<DateTime<Utc>>,
     pub excel_mode_disabled_at: Option<DateTime<Utc>>,
     pub effective_excel_models: gateway_core::account::ExcelModels,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,

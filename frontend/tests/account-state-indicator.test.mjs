@@ -82,6 +82,30 @@ test('Excel selection renders an accessible route icon without changing provider
   assert.ok(html.includes(stablePresetVisualToneClass(account.id)))
 })
 
+test('Excel 403 historical warning survives scheduling and route changes', async () => {
+  for (const enabled of [false, true]) {
+    for (const responsesUpstream of ['excel', 'codex']) {
+      const html = await render({
+        enabled,
+        responsesUpstream,
+        excel403WarningAt: '2026-09-27T00:00:00Z',
+        excelAutoDisabledAt: null,
+      })
+      assert.match(html, /BPS 403疑似被封excel/)
+      assert.match(html, /bg-cp-warning-container/)
+      assert.match(html, /历史标记/)
+      assert.match(html, /不代表当前调度状态/)
+      assert.doesNotMatch(html, /Excel 403 自动暂停调度/)
+    }
+  }
+})
+
+test('Excel warning supports legacy pause data without marking clean accounts', async () => {
+  assert.match(await render({ excelAutoDisabledAt: '2026-09-27T00:00:00Z' }), /BPS 403疑似被封excel/)
+  for (const fields of [{}, { excel403WarningAt: null, excelAutoDisabledAt: '2026-09-27T00:00:00Z' }, { excelModeDisabledAt: '2026-09-27T00:00:00Z' }])
+    assert.doesNotMatch(await render(fields), /BPS 403疑似被封excel/)
+})
+
 test('retired State fields never alter avatars or enable Excel', async () => {
   const original = await render()
   for (const enabled of [false, true, null]) {

@@ -971,6 +971,42 @@ mod response {
     }
 
     #[tokio::test]
+    async fn account_routes_preserve_excel_403_warning_after_scheduling_and_route_recovery() {
+        let fixture = AdminTestFixture::new().await;
+        fixture.auth.insert_session("valid-session");
+        let warning_at = "2026-09-27T00:00:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap();
+        for upstream in [
+            gateway_core::account::ResponsesUpstream::Excel,
+            gateway_core::account::ResponsesUpstream::Codex,
+        ] {
+            let mut account = account_fixture();
+            account.account.enabled = true;
+            account.account.responses_upstream = upstream;
+            account.account.excel_auto_disabled_at = None;
+            account.account.excel_403_warning_at = Some(warning_at);
+            *fixture.account.lock().unwrap() = Some(account);
+            for (method, path, is_list) in [
+                (Method::GET, "/api/admin/accounts", true),
+                (
+                    Method::GET,
+                    "/api/admin/accounts/detail?accountId=acct_cost",
+                    false,
+                ),
+                (Method::POST, "/api/admin/accounts/quota/refresh", false),
+            ] {
+                let value = account_response(&fixture, method, path, is_list).await;
+                let actual: Option<chrono::DateTime<Utc>> =
+                    serde_json::from_value(value["excel403WarningAt"].clone()).unwrap();
+                assert_eq!(actual, Some(warning_at));
+                assert_eq!(value["enabled"], true);
+                assert!(value["excelAutoDisabledAt"].is_null());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn account_routes_should_serialize_persisted_relogin_count_and_last_success() {
         let fixture = AdminTestFixture::new().await;
         fixture.auth.insert_session("valid-session");
@@ -1696,6 +1732,7 @@ mod response {
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_auto_disabled_at: None,
+                excel_403_warning_at: None,
                 excel_mode_disabled_at: None,
                 excel_models: Default::default(),
                 concurrency_limit: None,

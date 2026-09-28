@@ -14,7 +14,7 @@ type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeD
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
   & Partial<Pick<AccountRow, 'accountId'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
-  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt' | 'excelModeDisabledAt'>>
+  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt' | 'excel403WarningAt' | 'excelModeDisabledAt'>>
 
 const props = withDefaults(
   defineProps<{
@@ -44,6 +44,9 @@ const emailText = computed(() => {
 })
 
 const customName = computed(() => props.account.customName?.trim() || null)
+const excel403WarningAt = computed(() => props.account.excel403WarningAt !== undefined
+  ? props.account.excel403WarningAt
+  : props.account.excelAutoDisabledAt)
 const displayTitle = computed(() => customName.value
   ?? (props.titleMode === 'email' ? emailText.value : emailText.value.split('@')[0]))
 
@@ -130,11 +133,11 @@ const avatarToneClass = computed(() => {
         {{ secondaryText }}
       </div>
       <div
-        v-if="account.enabled === false && account.responsesUpstream === 'excel' && account.excelAutoDisabledAt"
+        v-if="excel403WarningAt"
         class="mt-1 inline-flex max-w-full items-center rounded-md border border-cp-warning-border bg-cp-warning-container px-2 py-0.5 text-cp-xs font-emphasis text-cp-warning-on-container"
-        :title="`Excel 上游返回 HTTP 403，已于 ${formatDateTime(account.excelAutoDisabledAt)} 暂停此账号调度；保留 Excel 设置，处理后手动启用账号调度`"
+        :title="`此账号曾因 Excel 上游 HTTP 403 触发自动暂停（${formatDateTime(excel403WarningAt)}）。此为历史标记，恢复调度或切换模式后仍保留，不代表当前调度状态。`"
       >
-        Excel 403 自动暂停调度
+        BPS 403疑似被封excel
       </div>
       <div
         v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt"

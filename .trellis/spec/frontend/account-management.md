@@ -28,6 +28,11 @@
 
 ## 2FA Enrollment and Excel Policy
 
+- The yellow account-name warning reads `BPS 403疑似被封excel`. Its persistent
+  `excel403WarningAt` timestamp is independent of enabled/route state; resuming
+  scheduling or leaving Excel must not hide it. Fall back to legacy pause metadata
+  only when the new response field is absent, not when it explicitly returns null.
+  Tooltips describe historical evidence, never a confirmed ban or current pause.
 - Share the exact `Excel遇到HTTP 403` label and three options through
   `Excel403ActionSelect`: `不自动处理`, `暂停账号调度`, `关闭Excel模式`.
   Single edits send changed fields only, batches retain explicit opt-in, and old

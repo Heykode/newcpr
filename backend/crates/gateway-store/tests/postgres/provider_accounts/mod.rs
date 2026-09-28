@@ -211,6 +211,9 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
     };
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let id = "acct_custom_name";
+    let warning_at = "2026-09-27T00:00:00Z"
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .unwrap();
     let scope = ProviderAccountAdminScope {
         provider_kind: "openai".into(),
     };
@@ -246,6 +249,24 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
             })
             .await
             .unwrap();
+        if index == 0 {
+            sqlx::query("update provider_accounts set excel_403_warning_at=$2 where id=$1")
+                .bind(id)
+                .bind(warning_at)
+                .execute(&database.pool)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            repository
+                .load_provider_account(id)
+                .await
+                .unwrap()
+                .unwrap()
+                .summary
+                .excel_403_warning_at,
+            Some(warning_at)
+        );
         assert_eq!(
             repository
                 .load_provider_account(id)
@@ -317,6 +338,16 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
             .unwrap(),
         CredentialCasOutcome::Updated(_)
     ));
+    assert_eq!(
+        repository
+            .load_provider_account(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .excel_403_warning_at,
+        Some(warning_at)
+    );
     assert_eq!(
         repository
             .load_provider_account(id)

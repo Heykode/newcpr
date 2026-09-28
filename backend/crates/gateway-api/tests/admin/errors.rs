@@ -521,6 +521,7 @@ mod provider {
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_auto_disabled_at: None,
+                excel_403_warning_at: None,
                 excel_mode_disabled_at: None,
                 excel_models: Default::default(),
                 concurrency_limit: None,

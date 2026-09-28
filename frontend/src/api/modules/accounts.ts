@@ -169,6 +169,7 @@ export interface Account {
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   excelAutoDisabledAt?: string | null
+  excel403WarningAt?: string | null
   excelModeDisabledAt?: string | null
   effectiveExcelModels?: string[]
   turnState?: {

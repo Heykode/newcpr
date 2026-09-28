@@ -38,6 +38,7 @@ async function main() {
     let ignoreEncryptedContent = false
     let excelModels = ['gpt-5.6-sol']
     let followGlobal = false
+    let recovered = false
     const templates = []
     const pushes = []
     const patches = []
@@ -56,10 +57,11 @@ async function main() {
     await page.route('**/dev/api/admin/accounts?*', route => fulfill(route, {
       items: accounts.map((account, index) => ({
         ...account,
-        enabled: index === 1 ? false : account.enabled,
-        status: index === 1 ? 'disabled' : account.status,
-        responsesUpstream: (index === 0 && enabled) || index === 1 ? 'excel' : 'codex',
-        excelAutoDisabledAt: index > 0 ? '2026-09-27T00:00:00Z' : null,
+        enabled: index === 1 ? recovered : account.enabled,
+        status: index === 1 && !recovered ? 'disabled' : account.status,
+        responsesUpstream: (index === 0 && enabled) || (index === 1 && !recovered) ? 'excel' : 'codex',
+        excelAutoDisabledAt: index === 1 && !recovered ? '2026-09-27T00:00:00Z' : null,
+        excel403WarningAt: index === 1 ? '2026-09-27T00:00:00Z' : null,
         excelModeDisabledAt: index === 2 ? '2026-09-27T00:00:00Z' : null,
         excelModels: index === 0 ? excelModels : ['gpt-5.6-sol'],
         excelModelsFollowGlobal: index === 0 ? followGlobal : true,
@@ -109,10 +111,10 @@ async function main() {
       return fulfill(route, null)
     })
     await page.goto(`http://127.0.0.1:${port}/accounts`)
-    const pausedBadge = page.getByText('Excel 403 自动暂停调度', { exact: true })
+    const pausedBadge = page.getByText('BPS 403疑似被封excel', { exact: true })
     await pausedBadge.waitFor()
     assert.ok((await pausedBadge.getAttribute('title')).includes('HTTP 403'))
-    assert.ok((await pausedBadge.getAttribute('title')).includes('手动启用账号调度'))
+    assert.ok((await pausedBadge.getAttribute('title')).includes('不代表当前调度状态'))
     await page.getByText('Excel 403 自动关闭', { exact: true }).waitFor()
     await page.locator('button[title="展开统计"]').nth(1).click()
     await page.getByText('Excel 上游 HTTP 403，已自动暂停此账号调度：', { exact: false }).waitFor()
@@ -121,6 +123,16 @@ async function main() {
     assert.equal(await resume.isEnabled(), true)
     await page.screenshot({ path: `${output}/excel-403-paused.png` })
     await page.locator('button[title="收起统计"]').click()
+    recovered = true
+    await page.reload()
+    await pausedBadge.waitFor()
+    const recoveredRow = page.locator(`tr[data-row-key="${accounts[1].id}"]`)
+    assert.equal(await recoveredRow.getByRole('switch', { name: '暂停账号调度', exact: true }).isChecked(), true)
+    assert.equal(await recoveredRow.locator('[aria-label="Excel 入口"]').count(), 0)
+    await page.screenshot({ path: `${output}/excel-403-history-after-recovery.png` })
+    recovered = false
+    await page.reload()
+    await pausedBadge.waitFor()
     const more = page.getByRole('button', { name: '更多操作', exact: true }).first()
     await more.click()
     await page.getByRole('button', { name: '开启 Excel 入口', exact: true }).click()
@@ -255,7 +267,8 @@ async function main() {
     await page.getByRole('button', { name: '账号模板', exact: true }).click()
     await page.getByRole('button', { name: '管理模板', exact: true }).click()
     await dialog.getByRole('button', { name: '新建模板', exact: true }).click()
-    assert.equal(await encrypted.count(), 0)
+    assert.equal(await encrypted.count(), 1)
+    assert.equal(await encrypted.isChecked(), false)
     await dialog.getByRole('textbox', { name: '模板名称', exact: true }).fill('Excel template')
     await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
     const policy = dialog.getByRole('combobox', { name: 'Excel遇到HTTP 403', exact: true })

@@ -540,6 +540,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
              set enabled = case when $3 = 'pause_account' then false else enabled end,
                  responses_upstream = case when $3 = 'disable_excel' then 'codex' else responses_upstream end,
                  excel_auto_disabled_at = case when $3 = 'pause_account' then now() else excel_auto_disabled_at end,
+                 excel_403_warning_at = case when $3 = 'pause_account' then coalesce(excel_403_warning_at, now()) else excel_403_warning_at end,
                  excel_mode_disabled_at = case when $3 = 'disable_excel' then now() else excel_mode_disabled_at end,
                  updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
