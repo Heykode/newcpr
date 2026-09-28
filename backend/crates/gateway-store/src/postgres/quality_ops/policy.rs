@@ -20,6 +20,22 @@ struct Membership {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Deserialize, Serialize)]
+struct ExcelStreak {
+    count: u8,
+    scope: serde_json::Value,
+    identity: (Option<String>, Option<String>),
+}
+
+pub(super) fn excel_failure_streak(recovery: serde_json::Value) -> AdminStoreResult<u8> {
+    recovery
+        .get("excel_streak")
+        .map(|value| serde_json::from_value::<ExcelStreak>(value.clone()).map(|state| state.count))
+        .transpose()
+        .map(|count| count.unwrap_or(0))
+        .map_err(unavailable)
+}
+
 async fn memberships(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     account: &str,
@@ -52,11 +68,7 @@ pub(super) async fn apply(
     }
     let config = &claim.rule.config;
     if config.failure_action == QualityFailureAction::EnableExcel {
-        return if status == "incorrect" {
-            enable_excel(tx, claim).await.map(Some)
-        } else {
-            Ok(None)
-        };
+        return apply_excel_threshold(tx, claim, status).await;
     }
     let value: serde_json::Value =
         sqlx::query_scalar("select recovery from quality_rules where id=$1")
@@ -244,6 +256,63 @@ pub(super) async fn apply(
         .map_err(unavailable)?;
     }
     Ok(Some(action))
+}
+
+async fn apply_excel_threshold(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    claim: &QualityClaim,
+    status: &str,
+) -> AdminStoreResult<Option<&'static str>> {
+    if action_scope(tx, &claim.rule.config.account_id).await? != claim.action_scope {
+        return Ok(Some("excel_blocked_configuration_changed"));
+    }
+    let value: serde_json::Value =
+        sqlx::query_scalar("select recovery from quality_rules where id=$1")
+            .bind(&claim.rule.id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(unavailable)?;
+    if status == "correct" {
+        if value.get("excel_streak").is_none() {
+            return Ok(None);
+        }
+        sqlx::query("update quality_rules set recovery=recovery-'excel_streak' where id=$1")
+            .bind(&claim.rule.id)
+            .execute(&mut **tx)
+            .await
+            .map_err(unavailable)?;
+        return Ok(Some("excel_streak_reset"));
+    }
+    let previous = value
+        .get("excel_streak")
+        .map(|value| serde_json::from_value::<ExcelStreak>(value.clone()))
+        .transpose()
+        .map_err(unavailable)?;
+    // A changed account identity or outbound policy starts a new evidence sequence.
+    let count = previous
+        .filter(|state| {
+            state.scope == claim.action_scope && state.identity == claim.account_identity
+        })
+        .map_or(0, |state| state.count)
+        .saturating_add(1)
+        .min(100);
+    let state = ExcelStreak {
+        count,
+        scope: claim.action_scope.clone(),
+        identity: claim.account_identity.clone(),
+    };
+    sqlx::query(
+        "update quality_rules set recovery=jsonb_set(recovery,'{excel_streak}',$2) where id=$1",
+    )
+    .bind(&claim.rule.id)
+    .bind(serde_json::to_value(state).map_err(unavailable)?)
+    .execute(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    if count < claim.rule.config.excel_failure_threshold {
+        return Ok(Some("excel_threshold_pending"));
+    }
+    enable_excel(tx, claim).await.map(Some)
 }
 
 async fn enable_excel(

@@ -51,6 +51,12 @@ pub struct QualityRuleConfig {
     pub failure_group_ids: Vec<String>,
     #[serde(default)]
     pub auto_restore: bool,
+    #[serde(default = "default_excel_failure_threshold")]
+    pub excel_failure_threshold: u8,
+}
+
+const fn default_excel_failure_threshold() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,6 +71,8 @@ pub struct QualityRule {
     pub last_status: Option<String>,
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_action: Option<String>,
+    #[serde(default)]
+    pub excel_failure_streak: u8,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

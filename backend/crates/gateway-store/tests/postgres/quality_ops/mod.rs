@@ -17,6 +17,7 @@ fn context() -> MutationContext {
 
 fn config(account: &str) -> QualityRuleConfig {
     QualityRuleConfig {
+        excel_failure_threshold: 1,
         detection_mode: QualityDetectionMode::Answer,
         account_id: account.into(),
         model: "fixture-model".into(),

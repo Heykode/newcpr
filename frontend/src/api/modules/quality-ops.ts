@@ -18,6 +18,7 @@ export interface QualityRuleConfig {
   failureAction: 'none' | 'disable_scheduling' | 'remove_groups' | 'enable_excel'
   failureGroupIds: string[]
   autoRestore: boolean
+  excelFailureThreshold: number
 }
 
 export interface QualityRule {
@@ -30,6 +31,7 @@ export interface QualityRule {
   lastStatus: string | null
   lastRunAt: string | null
   lastAction?: string | null
+  excelFailureStreak?: number
 }
 
 export interface QualityAnswer {
