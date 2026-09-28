@@ -1,5 +1,6 @@
 //! 核心 Generate operation 到 Codex Responses wire request 的严格编码。
 
+pub(crate) mod compatibility;
 mod raw_json;
 
 pub use raw_json::scope_raw_json_to_account;

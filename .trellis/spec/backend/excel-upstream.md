@@ -591,3 +591,45 @@ provider contracts under `tests/provider/contract/`. New production helper
 files must not add inline test modules. Run the gateway application's
 architecture suite as well as provider tests; do not broaden the architecture
 allowlist to accommodate a new helper's test placement.
+
+## 16. Narrow Tool And OAuth Wire Compatibility
+
+Scope: a wrong CUSTOM transport marker around a valid FUNCTION envelope can
+make a completed correction fail operation preservation despite unchanged
+arguments. This is independent of optional encrypted message omission.
+
+`repair::mislabeled_function` is guard-only: custom marker and JSON envelope
+must explicitly name the same declared FUNCTION, with object arguments that
+pass its existing schema. Only name/tool and arguments/args fields qualify;
+ambiguous aliases, unknown targets, raw FUNCTION_CODE/CMD and true CUSTOM input
+do not gain this exception. Decode through the existing converter, compare
+canonical operations, and retain count/order/parameter/source equality. Do not
+increase correction retries, execute tools, or relax batch/terminal validation.
+
+The selected OAuth send copy uses
+`request::compatibility::default_missing_format_name` and
+`normalize_custom_history_ids` after account/identity selection, before transport
+selection. These are common OAuth request-format fixes, not Excel-only policy.
+API-key routes, canonical input, affinity, fingerprints and cache keys are unchanged.
+No new setting, migration or production log is needed.
+
+| Input | Behavior |
+| --- | --- |
+| Object JSON schema, name absent, existing local validation passes | Add stable `text.format.name = response` |
+| Existing name, including empty/null/invalid | Preserve for normal validation; do not guess a replacement |
+| Invalid/oversized/external-reference schema or invalid format fields | Do not normalize into a valid request |
+| Complete plaintext paired custom history with a wrong `fc_` item id | Remove only that optional item id; keep call_id/input/output |
+| Correct custom id, references, opaque/encrypted or incomplete history | No id repair |
+| previous_response_id or conversation continuation | No id repair |
+
+Good: identical long source code survives a wrapper correction, and a complete
+legacy custom-call replay continues. Base: valid requests remain unchanged.
+Bad: replacing argument contents, deleting all history IDs, silently omitting
+ciphertext, or changing request scope to manufacture a successful response.
+
+Required regressions assert unchanged operations and changed-operation rejection,
+cumulative correction usage and one delivered call, format/id invalid boundaries,
+HTTP/WS wire identity and original-payload isolation, and #154 on/off behavior.
+Wrong: count a synthetic fixture or build as real upstream acceptance. Correct:
+report mock regressions separately from bounded isolated live requests, including
+genuine upstream rejections and any untested scenarios.
