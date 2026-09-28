@@ -73,13 +73,18 @@ function mark(html, name) {
   return element
 }
 
-test('Excel selection renders an accessible route icon without changing provider identity', async () => {
+test('Excel selection renders an accessible green avatar frame without changing provider identity', async () => {
   const html = await render({ responsesUpstream: 'excel' })
-  assert.match(html, /aria-label="Excel 入口"/)
-  assert.match(html, /data-icon="Table2"/)
+  const avatar = mark(html, 'avatar')
+  assert.match(avatar, /data-account-excel-status="enabled"/)
+  assert.match(avatar, /border-cp-success /)
+  assert.match(avatar, /aria-label="[^"]*Excel 模式已开启"/)
+  assert.match(avatar, /title="[^"]*Excel 模式已开启"/)
+  assert.match(avatar, /role="img"/)
+  assert.doesNotMatch(html, /data-icon="Table2"|aria-label="Excel 入口"/)
   assert.match(html, /data-icon="Openai"/)
   assert.match(html, /state-sample@example\.invalid/)
-  assert.ok(html.includes(stablePresetVisualToneClass(account.id)))
+  assert.ok(!avatar.includes(stablePresetVisualToneClass(account.id)))
 })
 
 test('Excel 403 historical warning survives scheduling and route changes', async () => {
@@ -91,19 +96,31 @@ test('Excel 403 historical warning survives scheduling and route changes', async
         excel403WarningAt: '2026-09-27T00:00:00Z',
         excelAutoDisabledAt: null,
       })
-      assert.match(html, /BPS 403疑似被封excel/)
-      assert.match(html, /bg-cp-warning-container/)
-      assert.match(html, /历史标记/)
-      assert.match(html, /不代表当前调度状态/)
-      assert.doesNotMatch(html, /Excel 403 自动暂停调度/)
+      const avatar = mark(html, 'avatar')
+      assert.match(avatar, /data-account-excel-status="warning"/)
+      assert.match(avatar, /border-cp-warning /)
+      assert.match(avatar, /bg-cp-warning-container/)
+      assert.match(avatar, /BPS 403疑似被封excel/)
+      assert.match(avatar, /历史标记/)
+      assert.match(avatar, /不代表当前调度状态/)
+      assert.match(avatar, responsesUpstream === 'excel' ? /Excel 模式已开启/ : /Excel 模式未开启/)
+      assert.doesNotMatch(avatar, /border-cp-success/)
+      assert.doesNotMatch(html, />\s*BPS 403疑似被封excel\s*</)
+      assert.doesNotMatch(html, /Excel 403 自动暂停调度|data-icon="Table2"/)
     }
   }
 })
 
 test('Excel warning supports legacy pause data without marking clean accounts', async () => {
-  assert.match(await render({ excelAutoDisabledAt: '2026-09-27T00:00:00Z' }), /BPS 403疑似被封excel/)
-  for (const fields of [{}, { excel403WarningAt: null, excelAutoDisabledAt: '2026-09-27T00:00:00Z' }, { excelModeDisabledAt: '2026-09-27T00:00:00Z' }])
-    assert.doesNotMatch(await render(fields), /BPS 403疑似被封excel/)
+  const legacy = await render({ excelAutoDisabledAt: '2026-09-27T00:00:00Z' })
+  assert.match(mark(legacy, 'avatar'), /data-account-excel-status="warning"/)
+  for (const fields of [{}, { excel403WarningAt: null, excelAutoDisabledAt: '2026-09-27T00:00:00Z' }, { excelModeDisabledAt: '2026-09-27T00:00:00Z' }]) {
+    const html = await render(fields)
+    assert.doesNotMatch(html, /BPS 403疑似被封excel/)
+    assert.match(mark(html, 'avatar'), /data-account-excel-status="default"/)
+    assert.ok(mark(html, 'avatar').includes(stablePresetVisualToneClass(account.id)))
+  }
+  assert.match(await render({ excelModeDisabledAt: '2026-09-27T00:00:00Z' }), />\s*Excel 403 自动关闭\s*</)
 })
 
 test('retired State fields never alter avatars or enable Excel', async () => {
@@ -120,12 +137,16 @@ test('retired State fields never alter avatars or enable Excel', async () => {
 test('Excel and 2FA indicators retain fixed sizes and swipe selection handles', async () => {
   for (const size of ['md', 'lg']) {
     const html = await render({ responsesUpstream: 'excel' }, { size, hasTotp: true })
+    const avatar = mark(html, 'avatar')
     const totp = mark(html, 'totp-mark')
     assert.match(totp, /absolute -left-1 -top-1/)
     assert.match(totp, /size-4/)
     assert.match(totp, /data-swipe-select-handle/)
-    assert.match(html, size === 'lg' ? /size-10 / : /size-9 /)
-    assert.match(html, /data-icon="Table2"/)
+    assert.match(avatar, size === 'lg' ? /size-10 / : /size-9 /)
+    assert.match(avatar, /border-2/)
+    assert.match(avatar, /data-swipe-select-handle/)
+    assert.match(avatar, /data-account-excel-status="enabled"/)
+    assert.doesNotMatch(html, /data-icon="Table2"/)
     assert.match(html, /data-icon="KeyRound"/)
     assert.match(html, /data-swipe-select-ignore/)
   }
@@ -135,9 +156,12 @@ test('Excel indicator follows the account switch and preserves other identity pr
   const props = { size: 'lg', hasTotp: true, showPlan: true, titleMode: 'email' }
   const off = await render({ responsesUpstream: 'codex' }, props)
   const on = await render({ responsesUpstream: 'excel' }, props)
-  assert.match(on, /data-icon="Table2"/)
+  assert.match(mark(on, 'avatar'), /data-account-excel-status="enabled"/)
   assert.match(on, />Team</)
   assert.match(on, /data-account-totp-mark/)
   assert.equal(await render({ responsesUpstream: 'codex' }, props), off)
+  assert.match(mark(off, 'avatar'), /data-account-excel-status="default"/)
+  assert.match(mark(off, 'avatar'), /border-2[^"]*border-transparent/)
+  assert.ok(mark(off, 'avatar').includes(stablePresetVisualToneClass(account.id)))
   assert.doesNotMatch(off, /data-icon="Table2"|data-account-state/)
 })

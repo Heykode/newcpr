@@ -16,6 +16,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
+import QualityTemplateApplyMenu from '@/components/quality-ops/QualityTemplateApplyMenu.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
@@ -52,6 +53,7 @@ import { accountHasReloginTotp, reloginTotpEmailSet } from './relogin-availabili
 
 const selectedIds = ref<Set<string>>(new Set())
 const applyingTemplate = shallowRef(false)
+const applyingQualityTemplate = shallowRef(false)
 const forecastAccount = ref<AccountRow | null>(null)
 const forecastOpen = ref(false)
 
@@ -420,7 +422,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           :selected-count="selectedIds.size"
           :batch-deleting="batchDeleting"
           :exporting-accounts="exportingAccounts"
-          :template-applying="applyingTemplate"
+          :template-applying="applyingTemplate || applyingQualityTemplate"
           @delete-selected="showDeleteModal = true"
           @export-selected="handleExportAccounts"
           @create="openCreateAccount"
@@ -428,7 +430,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           @toggle-column="toggleColumn"
         >
           <template #account-templates>
-            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
+            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingQualityTemplate" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
+            <QualityTemplateApplyMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingTemplate" @applying="applyingQualityTemplate = $event" @applied="onTemplateApplied" />
           </template>
         </AccountFilters>
       </template>

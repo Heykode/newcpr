@@ -42,6 +42,7 @@ pub(crate) fn admin_account_record(
         excel_403_action: summary.excel_403_action,
         excel_auto_disabled_at: summary.excel_auto_disabled_at,
         excel_403_warning_at: summary.excel_403_warning_at,
+        quality_monitoring: None,
         excel_mode_disabled_at: summary.excel_mode_disabled_at,
         effective_excel_models: summary.effective_excel_models,
         concurrency_limit: summary.concurrency_limit,

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { getAccounts } from '@/api'
-import { KeyRound, Table2 } from '@lucide/vue'
+import { KeyRound } from '@lucide/vue'
 import { computed } from 'vue'
 
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import AccountQualityMonitorBadge from '@/components/quality-ops/AccountQualityMonitorBadge.vue'
 import { formatDateTime } from '@/utils/date'
 import { stablePresetVisualToneClass } from '../utils/visualTone'
 import AccountPlanBadge from './AccountPlanBadge.vue'
@@ -13,6 +14,7 @@ type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeD
   & Partial<Pick<AccountRow, 'customName'>>
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
   & Partial<Pick<AccountRow, 'accountId'>>
+  & Partial<Pick<AccountRow, 'qualityMonitoring'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
   & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt' | 'excel403WarningAt' | 'excelModeDisabledAt'>>
 
@@ -66,9 +68,26 @@ const secondaryClass = computed(() =>
 
 const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
 
+const avatarExcelStatus = computed(() => {
+  if (excel403WarningAt.value)
+    return 'warning'
+  return props.account.responsesUpstream === 'excel' ? 'enabled' : 'default'
+})
+
 const avatarToneClass = computed(() => {
+  if (avatarExcelStatus.value === 'warning')
+    return 'border-cp-warning bg-cp-warning-container text-cp-warning-on-container'
+  if (avatarExcelStatus.value === 'enabled')
+    return 'border-cp-success bg-cp-success-container text-cp-success-on-container'
   const identity = props.account.id || props.account.email || displayTitle.value
-  return stablePresetVisualToneClass(identity)
+  return `border-transparent ${stablePresetVisualToneClass(identity)}`
+})
+
+const avatarDescription = computed(() => {
+  const mode = props.account.responsesUpstream === 'excel' ? 'Excel 模式已开启' : 'Excel 模式未开启'
+  if (excel403WarningAt.value)
+    return `${displayTitle.value}：BPS 403疑似被封excel。${mode}。此账号曾因 Excel 上游 HTTP 403 触发自动暂停（${formatDateTime(excel403WarningAt.value)}）。此为历史标记，恢复调度或切换模式后仍保留，不代表当前调度状态。`
+  return `${displayTitle.value}：${mode}`
 })
 </script>
 
@@ -76,9 +95,14 @@ const avatarToneClass = computed(() => {
   <div class="flex min-w-0 items-center gap-3">
     <span class="relative inline-flex shrink-0">
       <span
+        data-account-avatar
+        :data-account-excel-status="avatarExcelStatus"
         data-swipe-select-handle
-        class="inline-flex items-center justify-center rounded-lg"
+        class="inline-flex items-center justify-center rounded-lg border-2"
         :class="[avatarSizeClass, avatarToneClass]"
+        :title="avatarDescription"
+        :aria-label="avatarDescription"
+        role="img"
       >
         <ProviderIconGroup
           v-if="account.provider"
@@ -101,14 +125,6 @@ const avatarToneClass = computed(() => {
     </span>
     <div class="min-w-0 flex-1" data-swipe-select-ignore>
       <div class="flex min-w-0 items-center gap-2">
-        <Table2
-          v-if="account.responsesUpstream === 'excel'"
-          class="size-3.5 shrink-0 text-cp-link"
-          aria-label="Excel 入口"
-          role="img"
-        >
-          <title>Excel 入口</title>
-        </Table2>
         <span :title="displayTitle" class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
           {{ displayTitle }}
         </span>
@@ -133,18 +149,14 @@ const avatarToneClass = computed(() => {
         {{ secondaryText }}
       </div>
       <div
-        v-if="excel403WarningAt"
-        class="mt-1 inline-flex max-w-full items-center rounded-md border border-cp-warning-border bg-cp-warning-container px-2 py-0.5 text-cp-xs font-emphasis text-cp-warning-on-container"
-        :title="`此账号曾因 Excel 上游 HTTP 403 触发自动暂停（${formatDateTime(excel403WarningAt)}）。此为历史标记，恢复调度或切换模式后仍保留，不代表当前调度状态。`"
-      >
-        BPS 403疑似被封excel
-      </div>
-      <div
         v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt"
         class="mt-0.5 text-cp-xs text-cp-text-secondary"
         :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelModeDisabledAt)}`"
       >
         Excel 403 自动关闭
+      </div>
+      <div v-if="account.qualityMonitoring">
+        <AccountQualityMonitorBadge :account-id="account.id" :monitor="account.qualityMonitoring" />
       </div>
     </div>
   </div>

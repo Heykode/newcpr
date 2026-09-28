@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { QualityRule, QualityRuleConfig, QualityRun } from '@/api/modules/quality-ops'
-import { ClipboardCheck, Eye, Pause, Pencil, Play, Plus, RefreshCw, Save, Trash2 } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { QualityRule, QualityRuleConfig, QualityRuleTemplate, QualityRun } from '@/api/modules/quality-ops'
+import { ClipboardCheck, Copy, Eye, Pause, Pencil, Play, Plus, RefreshCw, Save, Trash2 } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { getAccountGroups } from '@/api/modules/account-groups'
 import { getAccounts } from '@/api/modules/accounts'
-import { deleteQualityRule, getQualityDetail, getQualityRules, getQualityRuns, runQualityRule, saveQualityRule } from '@/api/modules/quality-ops'
+import { deleteQualityRule, deleteQualityTemplate, getQualityDetail, getQualityRules, getQualityRuns, getQualityTemplates, runQualityRule, saveQualityRule, saveQualityTemplate } from '@/api/modules/quality-ops'
 import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -24,7 +25,18 @@ import QualityBulkEditor from './QualityBulkEditor.vue'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
 import QualitySchedule from './QualitySchedule.vue'
+import QualityTemplateCatalog from './QualityTemplateCatalog.vue'
 
+const route = useRoute()
+const activeTab = ref<'rules' | 'templates'>(route.query.tab === 'templates' ? 'templates' : 'rules')
+const templates = ref<QualityRuleTemplate[]>([])
+const templatesLoading = ref(false)
+const templatesError = ref('')
+const templateMode = ref(false)
+const editingTemplate = ref<QualityRuleTemplate | null>(null)
+const templateName = ref('')
+const deleteTemplateTarget = ref<QualityRuleTemplate | null>(null)
+const deleteTemplateOpen = ref(false)
 const rules = ref<QualityRule[]>([])
 const runs = ref<QualityRun[]>([])
 const selectedId = ref('')
@@ -158,6 +170,7 @@ let listController: AbortController | undefined
 let historyController: AbortController | undefined
 let detailController: AbortController | undefined
 let catalogController: AbortController | undefined
+let templatesController: AbortController | undefined
 let listVersion = 0
 
 function message(cause: unknown) {
@@ -189,7 +202,7 @@ async function load() {
     batchSelection.value = batchSelection.value.filter(id => result.some(rule => rule.id === id))
     error.value = ''
     if (!result.some(rule => rule.id === selectedId.value))
-      selectedId.value = result[0]?.id ?? ''
+      selectedId.value = linkedRuleId() || result[0]?.id || ''
   }
   catch (cause) {
     if (alive && !controller.signal.aborted)
@@ -198,6 +211,38 @@ async function load() {
   finally {
     if (alive && version === listVersion)
       loading.value = false
+  }
+}
+function linkedRuleId() {
+  return rules.value.find(rule => rule.id === route.query.ruleId || rule.config.accountId === route.query.accountId)?.id
+}
+watch(() => [route.query.accountId, route.query.ruleId, route.query.tab], () => {
+  activeTab.value = route.query.tab === 'templates' ? 'templates' : 'rules'
+  const id = linkedRuleId()
+  if (id) {
+    selectedId.value = id
+    filter.value = ''
+  }
+})
+async function loadTemplates() {
+  templatesController?.abort()
+  const controller = new AbortController()
+  templatesController = controller
+  templatesLoading.value = true
+  try {
+    const result = await getQualityTemplates({ signal: controller.signal, silent: true })
+    if (alive && !controller.signal.aborted) {
+      templates.value = result
+      templatesError.value = ''
+    }
+  }
+  catch (cause) {
+    if (alive && !controller.signal.aborted)
+      templatesError.value = message(cause)
+  }
+  finally {
+    if (alive && templatesController === controller)
+      templatesLoading.value = false
   }
 }
 async function history() {
@@ -240,6 +285,10 @@ async function poll() {
     timer = setTimeout(poll, 10000)
 }
 async function refresh() {
+  if (activeTab.value === 'templates') {
+    await loadTemplates()
+    return
+  }
   await load()
   await history()
 }
@@ -283,9 +332,21 @@ async function loadAccountNames() {
   }
 }
 function edit(rule: QualityRule | null) {
+  templateMode.value = false
   editing.value = rule ? { ...rule, config: { ...rule.config } } : null
   draft.value = rule ? { ...defaults(), ...rule.config, failureGroupIds: [...(rule.config.failureGroupIds ?? [])] } : defaults()
   selectedAccounts.value = rule ? [rule.config.accountId] : []
+  editorError.value = ''
+  editorOpen.value = true
+}
+function editTemplate(template: QualityRuleTemplate | null, rule?: QualityRule) {
+  templateMode.value = true
+  editing.value = null
+  editingTemplate.value = template ? { ...template } : null
+  templateName.value = template?.name ?? ''
+  const config = template?.config ?? rule?.config
+  draft.value = config ? { ...defaults(), ...structuredClone(toRaw(config)), accountId: '' } : defaults()
+  selectedAccounts.value = []
   editorError.value = ''
   editorOpen.value = true
 }
@@ -305,7 +366,19 @@ async function save() {
   const accountIds = editing.value ? [config.accountId] : [...selectedAccounts.value]
   const failures: string[] = []
   try {
+    if (templateMode.value) {
+      const { accountId: _accountId, ...templateConfig } = config
+      await saveQualityTemplate({ id: editingTemplate.value?.id ?? null, revision: editingTemplate.value?.revision ?? null, name: templateName.value.trim(), config: templateConfig })
+      if (alive) {
+        editorOpen.value = false
+        activeTab.value = 'templates'
+        await loadTemplates()
+      }
+      return
+    }
     for (const accountId of accountIds) {
+      if (!alive)
+        return
       try {
         const result = await saveQualityRule({ id: editing.value?.id ?? null, revision: editing.value?.revision ?? null, config: { ...config, accountId } })
         if (!alive)
@@ -325,6 +398,25 @@ async function save() {
   catch (cause) {
     if (alive)
       editorError.value = message(cause)
+  }
+  finally { busy.value = false }
+}
+async function confirmDeleteTemplate() {
+  if (busy.value || !deleteTemplateTarget.value)
+    return
+  busy.value = true
+  try {
+    const { id, revision } = deleteTemplateTarget.value
+    await deleteQualityTemplate({ id, revision })
+    if (alive) {
+      deleteTemplateOpen.value = false
+      deleteTemplateTarget.value = null
+      await loadTemplates()
+    }
+  }
+  catch (cause) {
+    if (alive)
+      templatesError.value = message(cause)
   }
   finally { busy.value = false }
 }
@@ -384,12 +476,13 @@ watch(detailOpen, (open) => {
 })
 onMounted(() => {
   void loadAccountNames()
+  void loadTemplates()
   void poll()
 })
 onBeforeUnmount(() => {
   alive = false
   clearTimeout(timer)
-  for (const controller of [listController, historyController, detailController, catalogController])
+  for (const controller of [listController, historyController, detailController, catalogController, templatesController])
     controller?.abort()
 })
 </script>
@@ -401,7 +494,7 @@ onBeforeUnmount(() => {
         <BaseIconButton label="刷新" :disabled="loading || historyLoading" @click="refresh">
           <RefreshCw class="size-4" />
         </BaseIconButton>
-        <BaseButton variant="primary" :disabled="busy" @click="edit(null)">
+        <BaseButton v-if="activeTab === 'rules'" variant="primary" :disabled="busy" @click="edit(null)">
           <Plus class="size-4" />新建规则
         </BaseButton>
       </template>
@@ -409,7 +502,13 @@ onBeforeUnmount(() => {
     <p v-if="error" role="alert" class="text-cp-error">
       {{ error }}
     </p>
-    <div class="grid grid-cols-2 border-y border-cp-border sm:grid-cols-4">
+    <nav class="flex gap-5 border-b border-cp-border" aria-label="质量运维视图">
+      <button v-for="tab in [{ value: 'rules' as const, label: '账号监测' }, { value: 'templates' as const, label: '规则模板' }]" :key="tab.value" type="button" class="border-b-2 px-1 py-3 text-cp-sm font-semibold" :class="activeTab === tab.value ? 'border-cp-primary text-cp-primary' : 'border-transparent text-cp-text-secondary'" :aria-pressed="activeTab === tab.value" @click="activeTab = tab.value">
+        {{ tab.label }}
+      </button>
+    </nav>
+    <QualityTemplateCatalog v-if="activeTab === 'templates'" :templates="templates" :loading="templatesLoading" :busy="busy" :error="templatesError" @create="editTemplate(null)" @edit="editTemplate($event)" @remove="deleteTemplateTarget = $event; deleteTemplateOpen = true" @refresh="loadTemplates" />
+    <div v-if="activeTab === 'rules'" class="grid grid-cols-2 border-y border-cp-border sm:grid-cols-4">
       <div class="border-b border-cp-border px-4 py-3 sm:border-b-0 sm:border-r">
         <div class="flex items-center gap-3">
           <span class="text-cp-sm text-cp-text-secondary">启用规则</span>
@@ -435,7 +534,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-    <div class="grid min-w-0 gap-5 xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
+    <div v-if="activeTab === 'rules'" class="grid min-w-0 gap-5 xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
       <section class="min-w-0">
         <div class="mb-3 flex items-center justify-between gap-3">
           <h2 class="text-base font-semibold">
@@ -456,6 +555,7 @@ onBeforeUnmount(() => {
               <span class="truncate font-semibold" :title="accountName(rule.config.accountId)">{{ accountName(rule.config.accountId) }}</span>
               <span class="truncate font-mono text-cp-sm text-cp-text-secondary" :title="rule.config.model">{{ rule.config.model }}</span>
               <span class="text-xs text-cp-text-secondary">{{ modeLabel(rule.config.detectionMode) }}</span>
+              <span v-if="rule.sourceTemplate" class="truncate text-xs text-cp-text-secondary" :title="`版本 ${rule.sourceTemplate.revision}`">来源模板：{{ rule.sourceTemplate.name }}</span>
               <span v-if="usesFailureThreshold(rule.config.failureAction)" class="text-xs tabular-nums text-cp-text-secondary">连续异常 {{ rule.excelFailureStreak ?? 0 }}/{{ rule.config.excelFailureThreshold ?? 1 }} 轮</span>
               <span v-if="rule.config.failureAction === 'apply_account_template'" class="truncate text-xs text-cp-text-secondary">模板：{{ rule.config.failureTemplate?.config.name ?? '未选择' }}</span>
               <span class="mt-1 flex items-center gap-1.5 text-xs" :class="ruleStatusColor(rule)"><span class="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />{{ rule.running ? '检测中' : rule.pending ? '已排队' : !rule.config.enabled ? '已暂停' : verdictLabel(rule.lastStatus, rule.config.detectionMode) }}</span>
@@ -471,6 +571,9 @@ onBeforeUnmount(() => {
               </BaseIconButton>
               <BaseIconButton label="编辑规则" :disabled="busy" @click="edit(rule)">
                 <Pencil class="size-4" />
+              </BaseIconButton>
+              <BaseIconButton label="另存为规则模板" :disabled="busy" @click="editTemplate(null, rule)">
+                <Copy class="size-4" />
               </BaseIconButton>
               <BaseIconButton label="删除规则" :disabled="busy" @click="remove(rule)">
                 <Trash2 class="size-4" />
@@ -627,19 +730,22 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
-    <QualityDrawer v-model="editorOpen" :title="editing ? '编辑检测规则' : '新建检测规则'" :busy="busy">
+    <QualityDrawer v-model="editorOpen" :title="templateMode ? (editingTemplate ? '编辑规则模板' : '新建规则模板') : editing ? '编辑检测规则' : '新建检测规则'" :busy="busy">
       <form id="quality-rule-form" class="grid min-w-0 gap-4" @submit.prevent="save">
         <p v-if="editorError" role="alert" class="text-cp-error">
           {{ editorError }}
         </p>
+        <FormItem v-if="templateMode" label="模板名称" required>
+          <BaseInput v-model="templateName" maxlength="128" placeholder="模板名称" />
+        </FormItem>
         <FormItem label="检测模式" required>
           <BaseSelect v-model="draft.detectionMode" :options="[{ value: 'answer', label: '题目检测' }, { value: 'state_probe', label: '状态探针' }]" />
         </FormItem>
-        <div v-if="editing" class="grid gap-1 text-cp-sm">
+        <div v-if="!templateMode && editing" class="grid gap-1 text-cp-sm">
           <span class="font-medium">被测账号</span>
           <span class="break-all text-cp-text-secondary">{{ accountName(draft.accountId) }}</span>
         </div>
-        <div v-else class="grid gap-2">
+        <div v-else-if="!templateMode" class="grid gap-2">
           <QualityCatalogPicker v-model:selected-values="selectedAccounts" multiple label="被测账号" search-placeholder="搜索账号名称或邮箱" :load-page="accountPage" />
           <p class="text-xs text-cp-text-secondary">
             每个账号单独建立一条规则，已有规则的账号不会被覆盖。
@@ -717,7 +823,7 @@ onBeforeUnmount(() => {
         <BaseButton :disabled="busy" @click="editorOpen = false">
           取消
         </BaseButton>
-        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length) || (draft.failureAction === 'apply_account_template' && !draft.failureTemplate)">
+        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (templateMode ? !templateName.trim() : editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length) || (draft.failureAction === 'apply_account_template' && !draft.failureTemplate)">
           <Save class="size-4" />保存
         </BaseButton>
       </template>
@@ -790,6 +896,12 @@ onBeforeUnmount(() => {
     </QualityDrawer>
     <BaseConfirmModal v-model="deleteOpen" title="删除检测规则" destructive :loading="busy" @confirm="confirmDelete">
       删除此账号的检测规则及其历史记录？此前暂停的调度或移出的分组不会自动恢复。
+    </BaseConfirmModal>
+    <BaseConfirmModal v-model="deleteTemplateOpen" title="删除规则模板" destructive :loading="busy" @confirm="confirmDeleteTemplate">
+      删除「{{ deleteTemplateTarget?.name }}」？已应用到账号的规则和检测历史会保留。
+      <p v-if="templatesError" class="mt-2 text-cp-error" role="alert">
+        {{ templatesError }}
+      </p>
     </BaseConfirmModal>
   </div>
 </template>

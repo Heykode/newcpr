@@ -749,6 +749,7 @@ fn account_record(account: &ProviderAccount) -> AccountRecord {
         excel_403_action: Default::default(),
         excel_auto_disabled_at: None,
         excel_403_warning_at: None,
+        quality_monitoring: None,
         excel_mode_disabled_at: None,
         excel_models: Default::default(),
         concurrency_limit: account.concurrency_limit(),

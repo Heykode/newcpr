@@ -28,8 +28,13 @@
 
 ## 2FA Enrollment and Excel Policy
 
-- The yellow account-name warning reads `BPS 403疑似被封excel`. Its persistent
-  `excel403WarningAt` timestamp is independent of enabled/route state; resuming
+- Account avatar frames carry Excel status: yellow historical warning takes precedence
+  over green Excel-enabled status; otherwise retain the stable default identity color.
+  Use a constant two-pixel border (transparent by default), preserving avatar dimensions,
+  provider icons, 2FA marks, swipe handles and independent quality-monitoring badges.
+  Remove the separate Excel route icon and visible yellow account-name warning;
+  retain `BPS 403疑似被封excel`, timestamp and actual Excel mode in tooltip/accessible text.
+  The persistent `excel403WarningAt` timestamp is independent of enabled/route state; resuming
   scheduling or leaving Excel must not hide it. Fall back to legacy pause metadata
   only when the new response field is absent, not when it explicitly returns null.
   Tooltips describe historical evidence, never a confirmed ban or current pause.

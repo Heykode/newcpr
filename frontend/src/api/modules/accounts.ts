@@ -1,5 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
+import type { QualityMonitoring } from './quality-ops'
 import type { Excel403Action } from '@/utils/excel-settings'
 import request from '../request'
 
@@ -170,6 +171,7 @@ export interface Account {
   excel403Action?: Excel403Action
   excelAutoDisabledAt?: string | null
   excel403WarningAt?: string | null
+  qualityMonitoring?: QualityMonitoring | null
   excelModeDisabledAt?: string | null
   effectiveExcelModels?: string[]
   turnState?: {

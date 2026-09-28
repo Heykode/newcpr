@@ -625,6 +625,10 @@ impl AccountStore for PgAdminAccountStore {
             .map(|account| account.id.clone())
             .collect::<Vec<_>>();
         let mut groups_by_account = self.account_groups_by_account(&item_ids).await?;
+        let mut monitoring =
+            crate::postgres::quality_ops::PgQualityOpsStore::new(self.pool.clone())
+                .account_monitoring(&item_ids)
+                .await?;
         let items = page
             .accounts
             .into_iter()
@@ -637,6 +641,7 @@ impl AccountStore for PgAdminAccountStore {
                 );
                 let mut account = admin_account_record(summary)?;
                 account.groups = groups_by_account.remove(&account_id).unwrap_or_default();
+                account.quality_monitoring = monitoring.remove(&account_id);
                 Ok(AccountPageItem {
                     account,
                     projection,
@@ -680,6 +685,11 @@ impl AccountStore for PgAdminAccountStore {
             .await?;
         let mut account = admin_account_record(record.summary)?;
         account.groups = groups.remove(&account_id).unwrap_or_default();
+        account.quality_monitoring =
+            crate::postgres::quality_ops::PgQualityOpsStore::new(self.pool.clone())
+                .account_monitoring(std::slice::from_ref(&account_id))
+                .await?
+                .remove(&account_id);
         Ok(Some(AccountPageItem {
             account,
             projection,

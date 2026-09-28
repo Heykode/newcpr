@@ -7,6 +7,7 @@ use gateway_admin::{
 use gateway_store::postgres::quality_ops::PgQualityOpsStore;
 
 mod policy;
+mod rule_templates;
 mod templates;
 
 fn context() -> MutationContext {

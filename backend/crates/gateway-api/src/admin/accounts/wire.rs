@@ -372,6 +372,7 @@ pub struct AccountView {
     pub excel_403_action: gateway_core::account::Excel403Action,
     pub excel_auto_disabled_at: Option<DateTime<Utc>>,
     pub excel_403_warning_at: Option<DateTime<Utc>>,
+    pub quality_monitoring: Option<gateway_admin::model::quality_ops::QualityMonitoring>,
     pub excel_mode_disabled_at: Option<DateTime<Utc>>,
     pub effective_excel_models: gateway_core::account::ExcelModels,
     pub turn_state: Option<AccountTurnStateView>,
