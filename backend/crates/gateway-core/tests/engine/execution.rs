@@ -1218,6 +1218,7 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
 fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges() {
     struct QualityProvider {
         complete: bool,
+        probe: bool,
     }
     #[async_trait]
     impl Provider for QualityProvider {
@@ -1240,6 +1241,20 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             assert!(!context.is_diagnostic_required_account());
             assert!(context.is_quality_check());
             assert_eq!(context.required_account().unwrap().as_str(), "acct_start");
+            if self.probe {
+                let Operation::Generate(generate) = request.operation() else {
+                    panic!("generate");
+                };
+                let step = generate.quality_probe().expect("trusted quality step");
+                assert!(step.begin());
+                step.observe(
+                    gateway_core::operation::quality_probe::StateProbeShot {
+                        changed: step.is_continuation().then_some(true),
+                        ..Default::default()
+                    },
+                    None,
+                );
+            }
             let model = request.candidate().upstream_model().unwrap().clone();
             let metadata = ProviderCallMetadata::new(
                 request.candidate().provider().clone(),
@@ -1281,11 +1296,12 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             ))
         }
     }
-    for complete in [true, false] {
+    for (complete, probe) in [(true, false), (false, false), (true, true), (false, true)] {
         let store = Arc::new(TrackingExecutionStore::default());
-        let providers =
-            ProviderRegistry::new([Arc::new(QualityProvider { complete }) as Arc<dyn Provider>])
-                .unwrap();
+        let providers = ProviderRegistry::new([
+            Arc::new(QualityProvider { complete, probe }) as Arc<dyn Provider>
+        ])
+        .unwrap();
         let service = DefaultExecutionService::new(
             RuntimeSnapshotHandle::new(start_snapshot().with_account_directory(Arc::new(
                 RuntimeAccountDirectory::new(BTreeMap::from([(
@@ -1300,31 +1316,46 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
         );
-        let result = block_on(service.quality_check(
-            AccountProbeRequest {
-                account_id: ProviderAccountId::new("acct_start").unwrap(),
-                provider_kind: ProviderKind::new("openai").unwrap(),
-                upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
-                operation: start_operation(),
-            },
-            gateway_core::lifecycle::CancellationToken::new(),
-        ));
-        if complete {
-            assert_eq!(result.unwrap().text.concat(), "fixture answer");
-        } else {
-            assert_eq!(
-                result.unwrap_err().kind(),
-                GatewayErrorKind::UpstreamUnavailable
+        let request = AccountProbeRequest {
+            account_id: ProviderAccountId::new("acct_start").unwrap(),
+            provider_kind: ProviderKind::new("openai").unwrap(),
+            upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
+            operation: start_operation(),
+        };
+        if probe {
+            let report = block_on(
+                service.state_probe(request, gateway_core::lifecycle::CancellationToken::new()),
             );
+            assert_eq!(
+                report.verdict,
+                if complete {
+                    gateway_core::operation::quality_probe::StateProbeVerdict::Degraded
+                } else {
+                    gateway_core::operation::quality_probe::StateProbeVerdict::Inconclusive
+                }
+            );
+        } else {
+            let result = block_on(
+                service.quality_check(request, gateway_core::lifecycle::CancellationToken::new()),
+            );
+            if complete {
+                assert_eq!(result.unwrap().text.concat(), "fixture answer");
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    GatewayErrorKind::UpstreamUnavailable
+                );
+            }
         }
         let requests = store.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
+        let expected = if probe && complete { 2 } else { 1 };
+        assert_eq!(requests.len(), expected);
         assert!(requests[0].client_api_key_id.is_none());
         assert_eq!(
             requests[0].request_kind.as_deref(),
             Some("account_quality_check")
         );
-        assert_eq!(store.finalizations.lock().unwrap().len(), 1);
+        assert_eq!(store.finalizations.lock().unwrap().len(), expected);
     }
 }
 

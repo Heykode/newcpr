@@ -745,6 +745,42 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn quality_probe_scope(
+        &self,
+        account: &gateway_core::account::ProviderAccount,
+    ) -> Result<serde_json::Value, gateway_core::operation::quality_probe::StateProbeReason> {
+        use gateway_core::operation::quality_probe::StateProbeReason;
+        // Keep the configured proxy. Only a known, per-request IPv6 rotation makes
+        // the two-shot comparison unsuitable; do not force a different exit.
+        let egress = if let Some(runtime) = &self.egress_runtime
+            && account.outbound_proxy().is_none()
+        {
+            let state = runtime
+                .snapshot()
+                .map_err(|_| StateProbeReason::UnverifiedEgress)?;
+            let mode = state
+                .account_overrides
+                .get(account.id())
+                .copied()
+                .flatten()
+                .unwrap_or(state.default_mode);
+            if mode.is_random() {
+                return Err(StateProbeReason::UnverifiedEgress);
+            }
+            serde_json::json!({
+                "mode": mode.as_str(),
+                "binding": state.fixed_bindings.get(account.id()).map(ToString::to_string),
+            })
+        } else {
+            serde_json::Value::Null
+        };
+        Ok(serde_json::json!({
+            "proxy": account.outbound_proxy().map(gateway_core::account::OutboundProxy::expose_url),
+            "profile": self.request_profile().map_err(|_| StateProbeReason::MissingEvidence)?.into_inner(),
+            "egress": egress,
+        }))
+    }
+
     pub(crate) fn with_response_control(
         mut self,
         control: Option<gateway_core::engine::response_control::ResponseControl>,

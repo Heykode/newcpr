@@ -14,6 +14,8 @@ use serde_json::{Map, Value};
 
 use crate::validation::{OperationError, validate_text};
 
+pub mod quality_probe;
+
 /// 网关支持的稳定 operation 分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
@@ -304,6 +306,7 @@ pub struct GenerateRequest {
 struct GeneratePayload {
     protocol_payload: ProtocolPayload,
     provider_session_state: Option<ProviderSessionState>,
+    quality_probe: Option<quality_probe::QualityProbeStep>,
 }
 
 impl GenerateRequest {
@@ -317,6 +320,7 @@ impl GenerateRequest {
             payload: Arc::new(GeneratePayload {
                 protocol_payload,
                 provider_session_state: None,
+                quality_probe: None,
             }),
         }
     }
@@ -331,6 +335,17 @@ impl GenerateRequest {
     /// 原地附着会话状态；payload 独占时不复制正文。
     pub fn set_provider_session_state(&mut self, state: ProviderSessionState) {
         Arc::make_mut(&mut self.payload).provider_session_state = Some(state);
+    }
+
+    #[must_use]
+    pub fn with_quality_probe(mut self, step: quality_probe::QualityProbeStep) -> Self {
+        Arc::make_mut(&mut self.payload).quality_probe = Some(step);
+        self
+    }
+
+    #[must_use]
+    pub fn quality_probe(&self) -> Option<&quality_probe::QualityProbeStep> {
+        self.payload.quality_probe.as_ref()
     }
 
     /// 返回最大输出 token 数。

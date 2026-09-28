@@ -163,6 +163,14 @@ impl From<GatewayError> for AccountProbeError {
 }
 
 pub trait AccountProbe: Send + Sync {
+    fn state_probe(
+        &self,
+        _request: AccountProbeRequest,
+        _cancellation: crate::lifecycle::CancellationToken,
+    ) -> BoxFuture<'_, crate::operation::quality_probe::StateProbeReport> {
+        Box::pin(async { crate::operation::quality_probe::StateProbeReport::default() })
+    }
+
     fn probe(
         &self,
         request: AccountProbeRequest,

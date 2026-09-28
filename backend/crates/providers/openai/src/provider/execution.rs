@@ -740,7 +740,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             allows_account_state_mutation,
         };
         let mut active_account = lease.account().clone();
-        let cookie_header = if request.excel.is_some() {
+        let cookie_header = if request.quality_probe.is_some() {
+            super::quality_probe::cookie_header(&request, &client, lease.account())?
+        } else if request.excel.is_some() {
             None
         } else {
             build_cookie_header(lease.cookies())?
@@ -823,6 +825,14 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         },
                     );
                 }
+                if let Some(step) = &request.quality_probe {
+                    failure.set_cookie_headers.clear();
+                    step.observe(gateway_core::operation::quality_probe::StateProbeShot {
+                        status: failure.http_rejection_status.or(failure.error.upstream_status()),
+                        reason: Some(gateway_core::operation::quality_probe::StateProbeReason::RequestFailed),
+                        ..Default::default()
+                    }, None);
+                }
                 if let Some(observation) = failure.observation.take() {
                     yield ProviderEvent::observation(response_route_observation(
                         observation,
@@ -849,6 +859,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             Err(failure.error)?;
             return;
         }
+        super::quality_probe::observe(&request, &client, &active_account, &response);
         if let Some(capture) = session_capture.as_mut() {
             capture.continuation_scope = Some(if request.excel.is_some() {
                 OpenAiContinuationScope::ReplayRequired
@@ -880,7 +891,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 "OpenAI model ETag observation was rejected"
             );
         }
-        if allows_account_state_mutation
+        if allows_account_state_mutation && request.quality_probe.is_none()
             && !response.set_cookie_headers.is_empty()
             && let Ok(outcome) = selector
                 .capture_response_cookies(
@@ -903,7 +914,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             // opening ID 标识连接，不可作为缺失请求级错误头时的当前请求 ID。
             failure_diagnostics.request_id = None;
         }
-        let failure_set_cookie_headers = response.set_cookie_headers.clone();
+        let failure_set_cookie_headers = if request.quality_probe.is_some() {
+            Vec::new()
+        } else {
+            response.set_cookie_headers.clone()
+        };
         let mut passive_quota_observation =
             OpenAiPassiveQuotaObservation::new(response.rate_limit_headers, response.rate_limit_observed_at);
         let rate_limit_updates = response.rate_limit_updates;

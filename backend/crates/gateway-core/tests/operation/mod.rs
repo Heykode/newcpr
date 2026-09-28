@@ -5,6 +5,8 @@ use gateway_core::operation::{
 };
 use serde_json::{Map, Value, json};
 
+mod quality_probe;
+
 #[test]
 fn compact_is_explicit_and_does_not_inherit_generation_or_tools() {
     use gateway_core::operation::CompactRequest;

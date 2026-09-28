@@ -16,6 +16,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { formatDateTime } from '@/utils/date'
+import { CANDY_PROMPT, CANDY_REFERENCE_ANSWER, DEFAULT_JUDGE_PROMPT } from './presets'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
 import QualitySchedule from './QualitySchedule.vue'
@@ -43,6 +44,14 @@ const actions: Record<string, string> = {
   already_applied: '保持此前的质量处置',
   no_change: '账号原已暂停或不在指定分组，未改动',
   identity_changed: '检测期间账号身份已变化，未执行处置',
+  excel_enabled: '已开启 Excel 模式',
+  excel_enabled_probe_paused: '已开启 Excel 模式，探针规则已暂停',
+  probe_paused_excel: '账号已开启 Excel 模式，探针规则已暂停',
+  excel_already_enabled: '账号已开启 Excel 模式',
+  excel_blocked_configuration_changed: '检测期间配置已变化，未开启 Excel',
+  excel_blocked_403: 'Excel 曾因 HTTP 403 关闭，未自动重开',
+  excel_blocked_model: '检测模型未配置为 Excel 模型，未改动账号',
+  excel_blocked_account: '账号当前不可用，未开启 Excel',
 }
 const deleteTarget = ref<QualityRule | null>(null)
 const deleteOpen = ref(false)
@@ -69,24 +78,41 @@ const counts = computed(() => ({
 }))
 function defaults(): QualityRuleConfig {
   return {
+    detectionMode: 'answer',
     accountId: '',
     model: '',
     enabled: true,
     cron: '0 */6 * * *',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     repetitions: 1,
-    prompt: '',
-    referenceAnswer: '',
+    prompt: CANDY_PROMPT,
+    referenceAnswer: CANDY_REFERENCE_ANSWER,
     reasoningEffort: null,
     judgeGroupId: '',
     judgeModel: '',
-    judgePrompt: '判断实际答案是否与参考答案一致。无法确定时返回 unknown。',
+    judgePrompt: DEFAULT_JUDGE_PROMPT,
     failureAction: 'none',
     failureGroupIds: [],
     autoRestore: false,
   }
 }
 const draft = ref(defaults())
+const isProbe = computed(() => draft.value.detectionMode === 'state_probe')
+watch(() => draft.value.failureAction, (action) => {
+  if (action === 'enable_excel')
+    draft.value.autoRestore = false
+})
+function verdictLabel(status: string | null, mode?: QualityRuleConfig['detectionMode']) {
+  if (mode === 'state_probe') {
+    const probeLabels: Record<string, string> = { correct: '智商正常', incorrect: '智商异常', unknown: '无法判断', request_error: '无法判断' }
+    if (status && probeLabels[status])
+      return probeLabels[status]
+  }
+  return labels[status ?? ''] ?? status ?? '等待首次检测'
+}
+function modeLabel(mode?: QualityRuleConfig['detectionMode']) {
+  return mode === 'state_probe' ? '状态探针' : '题目检测'
+}
 const effort = computed({
   get: () => draft.value.reasoningEffort ?? '',
   set: (value: string) => {
@@ -234,6 +260,12 @@ async function save() {
     return
   busy.value = true
   const config = { ...draft.value, failureGroupIds: [...draft.value.failureGroupIds] }
+  if (config.detectionMode === 'state_probe') {
+    config.repetitions = 1
+    config.reasoningEffort = null
+  }
+  if (config.failureAction === 'enable_excel')
+    config.autoRestore = false
   const accountIds = editing.value ? [config.accountId] : [...selectedAccounts.value]
   const failures: string[] = []
   try {
@@ -356,7 +388,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="px-4 py-3 sm:border-r sm:border-cp-border">
         <div class="flex items-center gap-3">
-          <span class="text-cp-sm text-cp-text-secondary">最近答案不符</span>
+          <span class="text-cp-sm text-cp-text-secondary">最近检测异常</span>
           <strong class="text-xl tabular-nums text-cp-warning">{{ counts.incorrect }}</strong>
         </div>
       </div>
@@ -381,7 +413,8 @@ onBeforeUnmount(() => {
             <button type="button" class="grid w-full min-w-0 gap-1 px-3 text-left text-cp-text outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline" :aria-pressed="selectedId === rule.id" @click="selectedId = rule.id">
               <span class="truncate font-semibold" :title="accountName(rule.config.accountId)">{{ accountName(rule.config.accountId) }}</span>
               <span class="truncate font-mono text-cp-sm text-cp-text-secondary" :title="rule.config.model">{{ rule.config.model }}</span>
-              <span class="mt-1 flex items-center gap-1.5 text-xs" :class="ruleStatusColor(rule)"><span class="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />{{ rule.running ? '检测中' : rule.pending ? '已排队' : !rule.config.enabled ? '已暂停' : labels[rule.lastStatus ?? ''] ?? '等待首次检测' }}</span>
+              <span class="text-xs text-cp-text-secondary">{{ modeLabel(rule.config.detectionMode) }}</span>
+              <span class="mt-1 flex items-center gap-1.5 text-xs" :class="ruleStatusColor(rule)"><span class="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />{{ rule.running ? '检测中' : rule.pending ? '已排队' : !rule.config.enabled ? '已暂停' : verdictLabel(rule.lastStatus, rule.config.detectionMode) }}</span>
               <span class="text-xs text-cp-text-secondary">下次 {{ rule.config.enabled ? formatDateTime(rule.nextRunAt) : '—' }}</span>
             </button>
             <div class="mt-2 flex gap-1 px-2">
@@ -418,10 +451,10 @@ onBeforeUnmount(() => {
           <dl class="mt-4 grid min-w-0 grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-3">
             <div>
               <dt class="text-cp-text-secondary">
-                每轮次数
+                {{ selected.config.detectionMode === 'state_probe' ? '检测模式' : '每轮次数' }}
               </dt>
               <dd class="mt-1 font-medium tabular-nums">
-                {{ selected.config.repetitions }} 次
+                {{ selected.config.detectionMode === 'state_probe' ? '状态探针 · 两步检测' : `${selected.config.repetitions} 次` }}
               </dd>
             </div>
             <div class="min-w-0">
@@ -458,7 +491,7 @@ onBeforeUnmount(() => {
           <article v-for="run in runs" :key="run.id" class="py-3 text-cp-sm">
             <div class="flex items-center justify-between gap-2">
               <div class="min-w-0">
-                <span class="font-medium" :class="statusColor(run.status)">{{ labels[run.status] ?? run.status }}</span>
+                <span class="font-medium" :class="statusColor(run.status)">{{ verdictLabel(run.status, run.detectionMode) }}</span>
                 <p class="mt-1 text-xs tabular-nums text-cp-text-secondary">
                   {{ formatDateTime(run.startedAt) }}
                 </p>
@@ -525,7 +558,7 @@ onBeforeUnmount(() => {
                   {{ formatDateTime(run.startedAt) }}
                 </td>
                 <td class="whitespace-nowrap px-3 py-3" :class="statusColor(run.status)">
-                  {{ labels[run.status] ?? run.status }}
+                  {{ verdictLabel(run.status, run.detectionMode) }}
                 </td>
                 <td class="px-3 py-3 tabular-nums">
                   {{ run.correct }} / {{ run.incorrect }}
@@ -554,6 +587,9 @@ onBeforeUnmount(() => {
         <p v-if="editorError" role="alert" class="text-cp-error">
           {{ editorError }}
         </p>
+        <FormItem label="检测模式" required>
+          <BaseSelect v-model="draft.detectionMode" :options="[{ value: 'answer', label: '题目检测' }, { value: 'state_probe', label: '状态探针' }]" />
+        </FormItem>
         <div v-if="editing" class="grid gap-1 text-cp-sm">
           <span class="font-medium">被测账号</span>
           <span class="break-all text-cp-text-secondary">{{ accountName(draft.accountId) }}</span>
@@ -568,14 +604,14 @@ onBeforeUnmount(() => {
           <FormItem label="检测模型" required>
             <BaseInput v-model="draft.model" placeholder="模型 ID" />
           </FormItem>
-          <FormItem label="推理强度">
+          <FormItem v-if="!isProbe" label="推理强度">
             <BaseSelect v-model="effort" :options="[{ value: '', label: '按默认' }, ...efforts]" />
           </FormItem>
           <QualitySchedule v-model="draft.cron" />
           <FormItem label="时区" required>
             <BaseInput v-model="draft.timezone" />
           </FormItem>
-          <div class="grid gap-2 text-cp-sm">
+          <div v-if="!isProbe" class="grid gap-2 text-cp-sm">
             <span>每轮并行答题次数</span><BaseNumberInput v-model="draft.repetitions" label="每轮并行答题次数" :min="1" :max="8" />
             <span class="text-xs text-cp-text-secondary">每轮并行检测 {{ draft.repetitions }} 次，仍遵守账号并发及请求间隔。</span>
           </div>
@@ -584,13 +620,13 @@ onBeforeUnmount(() => {
             关闭后不会定时或手动检测；保存规则不会立即消耗额度。
           </p>
         </div>
-        <FormItem label="题目" required>
+        <FormItem v-if="!isProbe" label="题目" required>
           <BaseTextarea v-model="draft.prompt" :rows="5" />
         </FormItem>
-        <FormItem label="参考答案" required>
+        <FormItem v-if="!isProbe" label="参考答案" required>
           <BaseTextarea v-model="draft.referenceAnswer" :rows="3" />
         </FormItem>
-        <div class="border-t border-cp-border pt-4">
+        <div v-if="!isProbe" class="border-t border-cp-border pt-4">
           <h3 class="mb-3 font-semibold">
             答案判定
           </h3>
@@ -609,15 +645,15 @@ onBeforeUnmount(() => {
         </div>
         <div class="grid gap-4 border-t border-cp-border pt-4">
           <h3 class="font-semibold">
-            答错后的处理
+            {{ isProbe ? '异常后的处理' : '答错后的处理' }}
           </h3>
           <FormItem label="处理方式">
-            <BaseSelect v-model="draft.failureAction" :options="[{ value: 'none', label: '仅记录结果' }, { value: 'disable_scheduling', label: '暂停此账号调度' }, { value: 'remove_groups', label: '移出指定分组' }]" />
+            <BaseSelect v-model="draft.failureAction" :options="[{ value: 'none', label: '仅记录结果' }, { value: 'disable_scheduling', label: '暂停此账号调度' }, { value: 'remove_groups', label: '移出指定分组' }, { value: 'enable_excel', label: '开启Excel模式' }]" />
           </FormItem>
           <QualityCatalogPicker v-if="draft.failureAction === 'remove_groups'" v-model:selected-values="draft.failureGroupIds" multiple label="处置分组" :load-page="actionGroupPage" />
-          <BaseSwitch v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
+          <BaseSwitch v-if="draft.failureAction !== 'enable_excel'" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
           <p class="text-xs text-cp-text-secondary">
-            仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。
+            {{ isProbe ? '无法判断时不执行处置。换票结果仅表示探针观察，不等于模型能力的完整评估。' : '仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。' }}
           </p>
         </div>
       </form>
@@ -625,7 +661,7 @@ onBeforeUnmount(() => {
         <BaseButton :disabled="busy" @click="editorOpen = false">
           取消
         </BaseButton>
-        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (editing ? !draft.accountId : !selectedAccounts.length) || !draft.judgeGroupId || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length)">
+        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length)">
           <Save class="size-4" />保存
         </BaseButton>
       </template>
@@ -642,10 +678,11 @@ onBeforeUnmount(() => {
           <span class="break-all">{{ accountName(detail.accountId) }}</span>
           <span class="break-all font-mono">{{ detail.model }}</span>
           <span>{{ formatDateTime(detail.startedAt) }}</span>
-          <strong :class="statusColor(detail.status)">{{ labels[detail.status] ?? detail.status }}</strong>
+          <span>{{ modeLabel(detail.detectionMode) }}</span>
+          <strong :class="statusColor(detail.status)">{{ verdictLabel(detail.status, detail.detectionMode) }}</strong>
           <span v-if="detail.action">{{ actions[detail.action] || detail.action }}</span>
         </div>
-        <details v-if="detail.config" class="min-w-0 border-b border-cp-border pb-4 text-cp-sm">
+        <details v-if="detail.config && detail.detectionMode !== 'state_probe'" class="min-w-0 border-b border-cp-border pb-4 text-cp-sm">
           <summary class="cursor-pointer font-semibold">
             本轮题目与参考答案
           </summary>
@@ -661,12 +698,27 @@ onBeforeUnmount(() => {
         </details>
         <section v-for="answer in detail.answers ?? []" :key="answer.index" class="min-w-0 border-b border-cp-border pb-4">
           <div class="mb-2 flex flex-wrap gap-3 text-cp-sm">
-            <strong>第 {{ answer.index }} 次</strong><span :class="statusColor(answer.verdict)">{{ labels[answer.verdict] }}</span><span>{{ (answer.elapsedMs / 1000).toFixed(1) }} 秒</span>
+            <strong>第 {{ answer.index }} 次</strong><span :class="statusColor(answer.verdict)">{{ verdictLabel(answer.verdict, detail.detectionMode) }}</span><span>{{ (answer.elapsedMs / 1000).toFixed(1) }} 秒</span>
           </div>
           <p v-if="answer.returnedModel" class="mb-2 break-all text-xs text-cp-text-secondary">
             返回模型 {{ answer.returnedModel }}
           </p>
-          <pre class="max-h-80 overflow-auto whitespace-pre-wrap break-words text-cp-sm [overflow-wrap:anywhere]">{{ answer.answer || '无回答' }}</pre>
+          <dl v-if="answer.probe" class="grid gap-2 text-cp-sm">
+            <div v-for="(shot, index) in answer.probe.shots" :key="index" class="flex flex-wrap gap-x-3 gap-y-1">
+              <dt class="font-medium">
+                第 {{ index + 1 }} 步
+              </dt>
+              <dd>{{ shot.transport || '链路未确认' }}</dd>
+              <dd v-if="shot.status">
+                HTTP {{ shot.status }}
+              </dd>
+              <dd>票据长度 {{ shot.ticketLength }}</dd>
+              <dd v-if="shot.changed !== null">
+                {{ shot.changed ? '票据已变化' : '未观察到换票' }}
+              </dd>
+            </div>
+          </dl>
+          <pre v-else class="max-h-80 overflow-auto whitespace-pre-wrap break-words text-cp-sm [overflow-wrap:anywhere]">{{ answer.answer || '无回答' }}</pre>
           <p class="mt-3 whitespace-pre-wrap break-words text-cp-sm [overflow-wrap:anywhere]">
             {{ answer.reason }}
           </p>

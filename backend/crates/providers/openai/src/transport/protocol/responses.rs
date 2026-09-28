@@ -25,6 +25,7 @@ pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
 /// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
 #[derive(Clone)]
 pub struct CodexResponsesRequest {
+    pub(crate) quality_probe: Option<gateway_core::operation::quality_probe::QualityProbeStep>,
     pub(crate) excel: Option<crate::transport::excel::ExcelPreparedRequest>,
     /// 上游请求体（唯一真相源）。
     body: Map<String, Value>,
@@ -508,6 +509,7 @@ impl CodexResponsesRequest {
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
             excel: None,
+            quality_probe: None,
             body,
             passthrough_headers: HeaderMap::new(),
             explicit_prompt_cache_key: false,
