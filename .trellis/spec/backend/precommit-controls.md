@@ -46,6 +46,9 @@ No schema migration is required. Before a future deployment, back up runtime
 settings. An older strict binary may need only `streamPrefetchBytes` removed
 from the override JSON on rollback; do not replace the whole settings object.
 
-Connection-default A/B cases live only in `tests/transport/http_transport_review.rs`.
-Local H1/H2 success is not proof of Linux upstream performance, idle keepalive
-behavior, proxy/IPv6 acceptance, or risk-control outcomes.
+Connection-default A/B cases live in `tests/transport/http_transport_review.rs`.
+After the follow-up approval, standard HTTP follows a5a844a; source-bound IPv6
+retains its independent policy. Preserve the pre-alignment builder as an explicit
+test-only legacy control, so current-vs-upstream does not compare two identical
+builders without a baseline. Local H1/H2 success is not proof of Linux upstream
+performance, idle keepalive behavior, proxy/IPv6 acceptance, or risk-control outcomes.
