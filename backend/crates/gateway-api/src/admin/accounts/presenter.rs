@@ -116,6 +116,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         excel_models: account.excel_models,
         excel_models_follow_global: account.excel_models_follow_global,
         excel_cache_creation_as_input: account.excel_cache_creation_as_input,
+        excel_ignore_encrypted_content: account.excel_ignore_encrypted_content,
         excel_auto_disable_on_403: account.excel_auto_disable_on_403,
         excel_403_action: account.excel_403_action,
         excel_auto_disabled_at: account.excel_auto_disabled_at,

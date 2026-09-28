@@ -71,6 +71,7 @@ const OFFICIAL_FIXTURE: &[u8] =
 mod affinity;
 mod cache_diagnostics;
 mod compact;
+mod excel_encrypted_content;
 mod generate_compat;
 mod identity_isolation;
 mod quota_continuation;

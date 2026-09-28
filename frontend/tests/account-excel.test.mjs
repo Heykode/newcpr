@@ -130,6 +130,30 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   state.excel403Action.value = 'disable_excel'
   await state.save()
   assert.equal(updates[13].excel403Action, 'disable_excel')
+  state.open(accounts.value[0])
+  assert.equal(state.excelIgnoreEncryptedContent.value, false)
+  state.excelIgnoreEncryptedContent.value = true
+  await state.save()
+  assert.equal(updates.at(-1).excelIgnoreEncryptedContent, true)
+  accounts.value[0].excelIgnoreEncryptedContent = true
+  state.open(accounts.value[0])
+  assert.equal(state.excelIgnoreEncryptedContent.value, true)
+  await state.save()
+  assert.equal('excelIgnoreEncryptedContent' in updates.at(-1), false)
+  state.open(accounts.value[0])
+  state.excelIgnoreEncryptedContent.value = false
+  await state.save()
+  assert.equal(updates.at(-1).excelIgnoreEncryptedContent, false)
+  state.open(accounts.value[0])
+  state.excelEnabled.value = false
+  await state.save()
+  assert.equal(updates.at(-1).responsesUpstream, 'codex')
+  assert.equal(updates.at(-1).excelIgnoreEncryptedContent, false)
+  accounts.value[0].authenticationKind = 'api_key'
+  state.open(accounts.value[0])
+  state.excelIgnoreEncryptedContent.value = true
+  await state.save()
+  assert.equal('excelIgnoreEncryptedContent' in updates.at(-1), false)
 })
 
 test('Excel import defaults preserve, explicit global follows, mixed providers stay isolated', () => {

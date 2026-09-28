@@ -29,8 +29,10 @@ export function useAccountEditor(options: {
   const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
+  const excelIgnoreEncryptedContent = shallowRef(false)
   const excel403Action = shallowRef<Excel403Action>('none')
   let initialExcelCacheCreationAsInput = false
+  let initialExcelIgnoreEncryptedContent = false
   let initialExcel403Action: Excel403Action = 'none'
   let initialExcelModelsFollowGlobal = true
   let initialExcelModels = ''
@@ -62,8 +64,10 @@ export function useAccountEditor(options: {
     excelModels.value = (account.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
     excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
+    excelIgnoreEncryptedContent.value = account.excelIgnoreEncryptedContent ?? false
     excel403Action.value = accountExcel403Action(account)
     initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
+    initialExcelIgnoreEncryptedContent = excelIgnoreEncryptedContent.value
     initialExcel403Action = excel403Action.value
     initialExcelModelsFollowGlobal = excelModelsFollowGlobal.value
     initialExcelModels = excelModels.value
@@ -128,6 +132,8 @@ export function useAccountEditor(options: {
       }
       if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
         payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
+      if (excelAvailable && (excelIgnoreEncryptedContent.value !== initialExcelIgnoreEncryptedContent || (initialExcelEnabled && !excelEnabled.value)))
+        payload.excelIgnoreEncryptedContent = excelEnabled.value && excelIgnoreEncryptedContent.value
       if (excelAvailable && (excel403Action.value !== initialExcel403Action || (initialExcelEnabled && !excelEnabled.value)))
         payload.excel403Action = excelEnabled.value ? excel403Action.value : 'none'
       await updateAccount(payload)
@@ -151,8 +157,10 @@ export function useAccountEditor(options: {
     excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
     excelModelsFollowGlobal.value = true
     excelCacheCreationAsInput.value = false
+    excelIgnoreEncryptedContent.value = false
     excel403Action.value = 'none'
     initialExcelCacheCreationAsInput = false
+    initialExcelIgnoreEncryptedContent = false
     initialExcel403Action = 'none'
     initialExcelModelsFollowGlobal = true
     initialExcelModels = ''
@@ -172,6 +180,7 @@ export function useAccountEditor(options: {
     excelModels,
     excelModelsFollowGlobal,
     excelCacheCreationAsInput,
+    excelIgnoreEncryptedContent,
     excel403Action,
     concurrencyLimit,
     weight,

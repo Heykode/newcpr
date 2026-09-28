@@ -32,6 +32,7 @@ const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
 const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
+const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
 const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -75,6 +76,7 @@ const egressSaving = shallowRef(false)
         v-model:excel-models="excelModels"
         v-model:excel-models-follow-global="excelModelsFollowGlobal"
         v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
+        v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
         v-model:excel-403-action="excel403Action"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
@@ -82,6 +84,7 @@ const egressSaving = shallowRef(false)
         v-model:selected-group-ids="selectedGroupIds"
         v-model:proxy-mode="proxyMode"
         v-model:proxy-id="proxyId"
+        encrypted-content-available
         name-available
         model-access-available
         :groups="groups"

@@ -85,6 +85,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Default::default(),
+        excel_ignore_encrypted_content: Default::default(),
         excel_auto_disable_on_403: Default::default(),
         excel_403_action: Default::default(),
         excel_models: Default::default(),
@@ -202,7 +203,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
 }
 
 #[tokio::test]
-async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
+async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credential_refresh() {
     use gateway_admin::model::accounts::AccountImportSettings;
     let Some(database) = TestDatabase::create("custom_name_retention").await else {
         return;
@@ -227,6 +228,7 @@ async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
                     responses_upstream: Default::default(),
                     excel_models_follow_global: Default::default(),
                     excel_cache_creation_as_input: Default::default(),
+                    excel_ignore_encrypted_content: (index == 0).then_some(true),
                     excel_auto_disable_on_403: Default::default(),
                     excel_403_action: Default::default(),
                     excel_models: Default::default(),
@@ -252,6 +254,14 @@ async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
                 .as_deref(),
             Some("New batch")
         );
+        assert!(
+            repository
+                .get_account(&ProviderAccountId::new(id).unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .excel_ignore_encrypted_content()
+        );
     }
     let current = repository
         .load_provider_account(id)
@@ -276,6 +286,7 @@ async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
         .unwrap();
     let account_id = ProviderAccountId::new(id).unwrap();
     let current = repository.get_account(&account_id).await.unwrap().unwrap();
+    assert!(current.excel_ignore_encrypted_content());
     let refresh = CredentialCasUpdate::new(
         account_id.clone(),
         current.revision(),
@@ -313,6 +324,14 @@ async fn custom_names_survive_reimport_rotation_and_credential_refresh() {
             .custom_name
             .as_deref(),
         Some("New batch")
+    );
+    assert!(
+        repository
+            .get_account(&ProviderAccountId::new(id).unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .excel_ignore_encrypted_content()
     );
     database.close().await;
 }
@@ -1207,6 +1226,7 @@ async fn disabled_accounts_are_exclusive_in_status_filters_counts_and_sorting() 
                         responses_upstream: Default::default(),
                         excel_models_follow_global: Default::default(),
                         excel_cache_creation_as_input: Default::default(),
+                        excel_ignore_encrypted_content: Default::default(),
                         excel_auto_disable_on_403: Default::default(),
                         excel_403_action: Default::default(),
                         excel_models: Default::default(),
@@ -1942,6 +1962,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -2029,6 +2050,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Default::default(),
+        excel_ignore_encrypted_content: Default::default(),
         excel_auto_disable_on_403: Default::default(),
         excel_403_action: Default::default(),
         excel_models: Default::default(),
@@ -2184,6 +2206,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -2322,6 +2345,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -2371,6 +2395,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -2581,6 +2606,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     responses_upstream: Default::default(),
                     excel_models_follow_global: Default::default(),
                     excel_cache_creation_as_input: Default::default(),
+                    excel_ignore_encrypted_content: Default::default(),
                     excel_auto_disable_on_403: Default::default(),
                     excel_403_action: Default::default(),
                     excel_models: Default::default(),
@@ -3121,6 +3147,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             responses_upstream: Default::default(),
             excel_models_follow_global: Default::default(),
             excel_cache_creation_as_input: Default::default(),
+            excel_ignore_encrypted_content: Default::default(),
             excel_auto_disable_on_403: Default::default(),
             excel_403_action: Default::default(),
             excel_models: Default::default(),
@@ -3704,6 +3731,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -3774,6 +3802,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         responses_upstream: Default::default(),
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Default::default(),
+        excel_ignore_encrypted_content: Default::default(),
         excel_auto_disable_on_403: Default::default(),
         excel_403_action: Default::default(),
         excel_models: Default::default(),
@@ -3831,6 +3860,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
                 responses_upstream: Default::default(),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -3900,6 +3930,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
             responses_upstream: Default::default(),
             excel_models_follow_global: Default::default(),
             excel_cache_creation_as_input: Default::default(),
+            excel_ignore_encrypted_content: Default::default(),
             excel_auto_disable_on_403: Default::default(),
             excel_403_action: Default::default(),
             excel_models: Default::default(),

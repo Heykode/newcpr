@@ -82,6 +82,34 @@ fn named_envelope(args: &Value) -> Option<Value> {
     Some(value)
 }
 
+// A wrong CUSTOM marker can hide an otherwise unambiguous FUNCTION envelope.
+// Decode only for the correction guard, never accept or execute the bad wrapper.
+fn mislabeled_function(tools: &ClientTools, call: &Value) -> Option<Value> {
+    let mut args = arguments(call)?;
+    let summary = args["summary"].as_str()?;
+    let target = summary
+        .strip_prefix("codex2api.custom/")
+        .or_else(|| summary.strip_prefix("cpr.custom/"))?;
+    let value = envelope::json_value(args.get("code")?).ok()?;
+    if envelope::name(&value).ok()? != target
+        || !tools.contains(target)
+        || value
+            .as_object()?
+            .keys()
+            .any(|key| !matches!(key.as_str(), "name" | "tool" | "arguments" | "args"))
+        || !envelope::json_value(envelope::arguments_field(&value).ok()?)
+            .ok()?
+            .is_object()
+    {
+        return None;
+    }
+    args.as_object_mut()?.remove("summary");
+    let mut unmarked = call.clone();
+    unmarked["arguments"] = args.to_string().into();
+    let converted = tools.convert_call(&unmarked).ok()?;
+    (converted["type"] == "function_call").then_some(converted)
+}
+
 fn explicit_target(args: &Value) -> Option<String> {
     marked_target(args).map(str::to_owned).or_else(|| {
         named_envelope(args).and_then(|value| envelope::name(&value).ok().map(str::to_owned))
@@ -330,7 +358,7 @@ fn bind_original_code(
         let Some(args) = arguments(before) else {
             continue;
         };
-        if named_envelope(&args).is_some() {
+        if named_envelope(&args).is_some() || mislabeled_function(tools, before).is_some() {
             continue;
         }
         let Some(code) = args["code"].as_str() else {
@@ -357,6 +385,9 @@ fn operation(call: &Value) -> Option<Value> {
 }
 
 fn preserves_operations(tools: &ClientTools, original: &[Value], corrected: &[Value]) -> bool {
+    if original.len() != corrected.len() {
+        return false;
+    }
     original.iter().zip(corrected).all(|(before, after)| {
         let raw_cmd = arguments(after).is_some_and(|args| {
             args["summary"]
@@ -367,6 +398,9 @@ fn preserves_operations(tools: &ClientTools, original: &[Value], corrected: &[Va
             return false;
         };
         if let Ok(before) = tools.convert_call(before) {
+            return operation(&before) == operation(&after);
+        }
+        if let Some(before) = mislabeled_function(tools, before) {
             return operation(&before) == operation(&after);
         }
         let Some(args) = arguments(before) else {
@@ -683,6 +717,112 @@ fn sum_usage(total: &mut Value, usage: &Value) -> Result<(), CodexClientError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn marker_tools() -> ClientTools {
+        ClientTools::parse(
+            json!({"tools":[{"type":"namespace","name":"files","tools":[
+                {"type":"function","name":"write_file","parameters":{"type":"object",
+                    "properties":{"path":{"type":"string"},"content":{"type":"string"}},
+                    "required":["path","content"],"additionalProperties":false}},
+                {"type":"custom","name":"raw"}
+            ]}]})
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn marker_call(summary: &str, name: &str, args: Value) -> Value {
+        json!({"type":"function_call","name":"run_officejs","id":"fc_fixture","call_id":"call_fixture",
+            "arguments":json!({"summary":summary,
+                "code":json!({"name":name,"arguments":args}).to_string(),
+                "extended_summary":"Write the file","destructive":false,"references":[]}).to_string()})
+    }
+
+    #[test]
+    fn mislabeled_function_preserves_only_identical_valid_operations() {
+        let tools = marker_tools();
+        let args = json!({"path":"fixture.html","content":"<html>\r\n  exact source\n</html>"});
+        for prefix in ["codex2api.custom/", "cpr.custom/"] {
+            let before = marker_call(
+                &format!("{prefix}files.write_file"),
+                "files.write_file",
+                args.clone(),
+            );
+            assert!(tools.convert_call(&before).is_err());
+            let after = marker_call("Write a file", "files.write_file", args.clone());
+            assert!(tools.convert_call(&after).is_ok());
+            assert!(preserves_operations(
+                &tools,
+                std::slice::from_ref(&before),
+                std::slice::from_ref(&after)
+            ));
+            for field in ["path", "content"] {
+                let mut changed = args.clone();
+                changed[field] = "changed".into();
+                let mut corrected = vec![marker_call("Write a file", "files.write_file", changed)];
+                bind_original_code(&tools, std::slice::from_ref(&before), &mut corrected).unwrap();
+                assert!(!preserves_operations(
+                    &tools,
+                    std::slice::from_ref(&before),
+                    &corrected
+                ));
+            }
+            let wrong = marker_call("codex2api.custom/files.raw", "files.raw", args.clone());
+            assert!(!preserves_operations(
+                &tools,
+                std::slice::from_ref(&before),
+                &[wrong]
+            ));
+            assert!(!preserves_operations(&tools, &[before], &[]));
+        }
+    }
+
+    #[test]
+    fn mislabeled_function_never_guesses_target_schema_or_raw_transport() {
+        let tools = marker_tools();
+        let args = json!({"path":"fixture.html","content":"source"});
+        let after = marker_call("Write a file", "files.write_file", args.clone());
+        for marker in [
+            "codex2api.custom/files.raw",
+            "codex2api.custom/unknown",
+            "codex2api.function_code/files.write_file",
+            "codex2api.function_cmd/files.write_file",
+        ] {
+            let before = marker_call(marker, "files.write_file", args.clone());
+            assert!(!preserves_operations(
+                &tools,
+                &[before],
+                std::slice::from_ref(&after)
+            ));
+        }
+        for invalid in [
+            json!({"path":7,"content":"source"}),
+            json!({"path":"fixture.html"}),
+        ] {
+            let before = marker_call(
+                "codex2api.custom/files.write_file",
+                "files.write_file",
+                invalid,
+            );
+            assert!(!preserves_operations(
+                &tools,
+                &[before],
+                std::slice::from_ref(&after)
+            ));
+        }
+        let mut before = marker_call(
+            "codex2api.custom/files.write_file",
+            "files.write_file",
+            args,
+        );
+        let mut wrapper = arguments(&before).unwrap();
+        let mut envelope = envelope::json_value(&wrapper["code"]).unwrap();
+        envelope["tool"] = "files.raw".into();
+        wrapper["code"] = envelope.to_string().into();
+        before["arguments"] = wrapper.to_string().into();
+        assert!(!preserves_operations(&tools, &[before], &[after]));
+    }
 
     #[test]
     fn correction_response_budget_does_not_reject_a_large_input_history() {

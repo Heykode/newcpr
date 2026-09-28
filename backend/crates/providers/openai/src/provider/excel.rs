@@ -76,6 +76,9 @@ pub(super) async fn prepare_excel(
     .map_err(request_error)?;
     source.remove("previous_response_id");
     source.insert("input".into(), Value::Array(restored.input));
+    if lease.account().excel_ignore_encrypted_content() {
+        crate::transport::excel::encrypted_content::omit_encrypted_content(&mut source);
+    }
     source.insert(
         "prompt_cache_key".into(),
         hex::encode(Sha256::digest(

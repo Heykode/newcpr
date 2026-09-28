@@ -307,6 +307,12 @@ impl PgAdminAccountStore {
             if settings.excel_cache_creation_as_input.is_some() {
                 changed_fields.push("excel_cache_creation_as_input".to_owned());
             }
+            if settings.excel_ignore_encrypted_content.is_some()
+                || settings.responses_upstream
+                    == Some(gateway_core::account::ResponsesUpstream::Codex)
+            {
+                changed_fields.push("excel_ignore_encrypted_content".to_owned());
+            }
             if settings.custom_name.is_some() {
                 changed_fields.push("custom_name".to_owned());
             }
@@ -1092,6 +1098,11 @@ impl AccountStore for PgAdminAccountStore {
         if command.excel_cache_creation_as_input.is_some() {
             changed_fields.push("excel_cache_creation_as_input".to_owned());
         }
+        if command.excel_ignore_encrypted_content.is_some()
+            || command.responses_upstream == Some(gateway_core::account::ResponsesUpstream::Codex)
+        {
+            changed_fields.push("excel_ignore_encrypted_content".to_owned());
+        }
         if command.excel_403_action.is_some() {
             changed_fields.push("excel_403_action".to_owned());
         }
@@ -1117,6 +1128,7 @@ impl AccountStore for PgAdminAccountStore {
                 excel_models: command.excel_models.clone(),
                 excel_models_follow_global: command.excel_models_follow_global,
                 excel_cache_creation_as_input: command.excel_cache_creation_as_input,
+                excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
                 excel_auto_disable_on_403: command.excel_auto_disable_on_403,
                 excel_403_action: command.excel_403_action,
                 concurrency_limit: Some(command.concurrency_limit),
@@ -1214,6 +1226,12 @@ impl AccountStore for PgAdminAccountStore {
                 "excel_cache_creation_as_input",
             ),
             (
+                command.excel_ignore_encrypted_content.is_some()
+                    || command.responses_upstream
+                        == Some(gateway_core::account::ResponsesUpstream::Codex),
+                "excel_ignore_encrypted_content",
+            ),
+            (
                 command.excel_auto_disable_on_403.is_some(),
                 "excel_auto_disable_on_403",
             ),
@@ -1250,6 +1268,7 @@ impl AccountStore for PgAdminAccountStore {
                 excel_models: command.excel_models.clone(),
                 excel_models_follow_global: command.excel_models_follow_global,
                 excel_cache_creation_as_input: command.excel_cache_creation_as_input,
+                excel_ignore_encrypted_content: command.excel_ignore_encrypted_content,
                 excel_auto_disable_on_403: command.excel_auto_disable_on_403,
                 excel_403_action: command.excel_403_action,
                 concurrency_limit: command.concurrency_limit,

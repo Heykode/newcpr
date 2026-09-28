@@ -235,7 +235,10 @@ mod tests {
         let mut ordinary = CodexResponsesRequest::from_body(body.as_object().unwrap().clone());
         ordinary.client_session_id = Some("ordinary-session".into());
         initialize(&mut ordinary, true, "must-not-replace").unwrap();
-        assert_eq!(ordinary.client_session_id.as_deref(), Some("ordinary-session"));
+        assert_eq!(
+            ordinary.client_session_id.as_deref(),
+            Some("ordinary-session")
+        );
         assert_eq!(serde_json::to_value(&ordinary).unwrap(), body);
 
         let exchange = QualityProbeExchange::default();

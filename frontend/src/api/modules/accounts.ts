@@ -164,6 +164,7 @@ export interface Account {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelIgnoreEncryptedContent?: boolean
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   excelAutoDisabledAt?: string | null
@@ -448,6 +449,7 @@ interface AccountUpdateParam {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelIgnoreEncryptedContent?: boolean
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   concurrencyLimit: number | null
@@ -468,6 +470,7 @@ interface AccountBatchUpdateParam {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelIgnoreEncryptedContent?: boolean
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   concurrencyLimit?: number | null
@@ -489,6 +492,7 @@ export interface AccountImportSettings {
   excelModels?: string[]
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
+  excelIgnoreEncryptedContent?: boolean
   excelAutoDisableOn403?: boolean
   excel403Action?: Excel403Action
   concurrencyLimit: number | null

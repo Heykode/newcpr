@@ -246,6 +246,98 @@ fn stable_facts(capture: &Capture) -> Value {
 }
 
 #[tokio::test]
+async fn oauth_format_compatibility_preserves_http_websocket_identity_and_source() {
+    let accounts = Arc::new(MemoryAccountStore::default());
+    let id = format!("acct_compatibility_{}", uuid::Uuid::new_v4());
+    let account_id = id.as_str();
+    create_account(&accounts, account_id).await;
+    let runtime = tempfile::tempdir().unwrap();
+    for websocket in [false, true] {
+        let source = json!({"model":"gpt-5.4","session_id":"compatibility-fixture",
+            "prompt_cache_key":"fixed-cache-key","input":[
+                {"role":"user","content":"Continue the tool history."},
+                {"type":"custom_tool_call","id":"fc_old_kind","call_id":"call_fixture","name":"fixture","input":"exact input"},
+                {"type":"custom_tool_call_output","call_id":"call_fixture","output":"exact output"}],
+            "tools":[{"type":"custom","name":"fixture"}],
+            "text":{"format":{"type":"json_schema","schema":{"type":"object"}}}});
+        let mut normalized = source.clone();
+        normalized["text"]["format"]["name"] = "response".into();
+        normalized["input"][1].as_object_mut().unwrap().remove("id");
+        let repaired = capture(
+            &accounts,
+            account_id,
+            runtime.path(),
+            source.clone(),
+            websocket,
+            true,
+        )
+        .await;
+        let control = capture(
+            &accounts,
+            account_id,
+            runtime.path(),
+            normalized.clone(),
+            websocket,
+            true,
+        )
+        .await;
+        assert_eq!(repaired.body["input"], normalized["input"]);
+        assert_eq!(repaired.body["text"], normalized["text"]);
+        assert_eq!(stable_facts(&repaired), stable_facts(&control));
+        assert_eq!(source["input"][1]["id"], "fc_old_kind");
+        assert!(source["text"]["format"].get("name").is_none());
+    }
+}
+
+#[tokio::test]
+async fn excel_omission_option_does_not_change_native_http_or_websocket_wire_or_identity() {
+    for websocket in [false, true] {
+        for excel_account in [false, true] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            if excel_account {
+                store.set_responses_upstream(
+                    "acct_provider_contract",
+                    gateway_core::account::ResponsesUpstream::Excel,
+                );
+            }
+            let runtime = tempfile::tempdir().unwrap();
+            let body = json!({"model":"gpt-5.4","session_id":"native-encrypted-fixture","input":[
+                {"role":"user","content":[{"type":"input_text","text":"original"},
+                    {"type":"encrypted_content","encrypted_content":"opaque-fixture"}]}
+            ]});
+            let before = capture(
+                &store,
+                "acct_provider_contract",
+                runtime.path(),
+                body.clone(),
+                websocket,
+                true,
+            )
+            .await;
+            // The Excel account's different model list intentionally routes this model natively.
+            store.set_excel_encrypted_content_policy(
+                "acct_provider_contract",
+                true,
+                vec!["gpt-5.6-sol".into()],
+            );
+            let after = capture(
+                &store,
+                "acct_provider_contract",
+                runtime.path(),
+                body.clone(),
+                websocket,
+                true,
+            )
+            .await;
+            assert_eq!(after.body["input"], body["input"]);
+            assert_eq!(before.body["input"], after.body["input"]);
+            assert_eq!(stable_facts(&before), stable_facts(&after));
+        }
+    }
+}
+
+#[tokio::test]
 async fn string_and_message_inputs_keep_wire_identity_affinity_and_cache() {
     let accounts = Arc::new(MemoryAccountStore::default());
     let account_id = format!("acct_alignment_{}", uuid::Uuid::new_v4());

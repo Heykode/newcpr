@@ -490,6 +490,18 @@ records cannot reconstruct omitted constraints; explicit full catalogs remain
 authoritative. Hosted-tool omission is the existing fixed-Excel policy, not an
 authorization to add native fallback or change sticky account selection.
 
+The 256-tool admission limit counts unique catalog identities, not declarations.
+Compare an existing key before applying that limit to a new key; preserve all
+execution-conflict checks, explicit/inherited precedence and stable catalog order.
+The boundary must survive historical additional_tools and cache round trips.
+Native Codex HTTP/WS requests do not use this Excel catalog admission policy.
+
+Before releasing a completed tool batch, check both call_id and converted item id
+for uniqueness, including structured-output requests without a repair sender.
+Use converted identities: custom calls intentionally receive their scoped derived
+item ids. Reject the whole malformed batch before any executable event, preserving
+the existing bounded repair and terminal rules. Native stream processing is unchanged.
+
 Scope: Excel image storage/settings, the existing opt-in 403 diagnostic, and
 fresh quota reset recovery. Do not change selection scores, route fences,
 fingerprints, credentials or configured egress.
@@ -543,3 +555,81 @@ Wrong: introduce a proxy pool or fallback to native merely to match reference
 Mihomo/hosted-tool policies. Correct: preserve the single configured CPR proxy,
 send-state/error evidence and existing capability warnings; incompatible
 optional policies need separate explicit design, not hidden defaults.
+
+## 15. Optional Encrypted Message Omission
+
+Sub2API #154 (`96cb37623963d4759f3b5b09b58a3a8ee49df55b`) is adapted as
+account-level `excelIgnoreEncryptedContent`, default false. Only after an
+actual Excel route is resolved may its outgoing request copy replace
+`encrypted_content` parts in message/agent_message `content` or function/custom
+tool result `output` arrays. Replace each part in place with a fixed omission
+notice (`output_text` for assistant messages, otherwise `input_text`). Never
+decrypt, fabricate plaintext, drop neighboring parts or change call IDs.
+
+Run after scoped replay restore and before content/image validation. Do not
+mutate the incoming payload or replay capture. Reasoning/compaction encrypted
+items, tool definitions/arguments and strings are outside this option's scope.
+The default still rejects unsupported encrypted message parts before sending;
+other unsupported content must continue to fail validation. Native HTTP/WS,
+including native models on Excel-enabled accounts, must bypass this transform.
+
+Migration 0050 adds a false-default column without changing existing settings.
+Omitted API fields preserve the saved value; explicit false disables it. An
+explicit route change to Codex clears it. Credential refresh/relogin must not
+overwrite it. UI single edits send only changes; batch edits require an
+independent opt-in. Show a clear lossy warning: omitted content is unavailable
+to the model, not recovered plaintext. Never enable accounts automatically.
+
+Regression gate: default rejection vs opt-in for HTTP/downstream WS/compact;
+native wire and identity isolation; plaintext/order/tool pairing; no-op and
+idempotence; persistence/default/omission/close semantics; editor save/readback,
+batch opt-in reset and narrow viewport rendering. Use synthetic local mocks,
+not real BPS requests, for these tests.
+
+Keep pure-transform regressions in the already audited `history_tests.rs` and
+provider contracts under `tests/provider/contract/`. New production helper
+files must not add inline test modules. Run the gateway application's
+architecture suite as well as provider tests; do not broaden the architecture
+allowlist to accommodate a new helper's test placement.
+
+## 16. Narrow Tool And OAuth Wire Compatibility
+
+Scope: a wrong CUSTOM transport marker around a valid FUNCTION envelope can
+make a completed correction fail operation preservation despite unchanged
+arguments. This is independent of optional encrypted message omission.
+
+`repair::mislabeled_function` is guard-only: custom marker and JSON envelope
+must explicitly name the same declared FUNCTION, with object arguments that
+pass its existing schema. Only name/tool and arguments/args fields qualify;
+ambiguous aliases, unknown targets, raw FUNCTION_CODE/CMD and true CUSTOM input
+do not gain this exception. Decode through the existing converter, compare
+canonical operations, and retain count/order/parameter/source equality. Do not
+increase correction retries, execute tools, or relax batch/terminal validation.
+
+The selected OAuth send copy uses
+`request::compatibility::default_missing_format_name` and
+`normalize_custom_history_ids` after account/identity selection, before transport
+selection. These are common OAuth request-format fixes, not Excel-only policy.
+API-key routes, canonical input, affinity, fingerprints and cache keys are unchanged.
+No new setting, migration or production log is needed.
+
+| Input | Behavior |
+| --- | --- |
+| Object JSON schema, name absent, existing local validation passes | Add stable `text.format.name = response` |
+| Existing name, including empty/null/invalid | Preserve for normal validation; do not guess a replacement |
+| Invalid/oversized/external-reference schema or invalid format fields | Do not normalize into a valid request |
+| Complete plaintext paired custom history with a wrong `fc_` item id | Remove only that optional item id; keep call_id/input/output |
+| Correct custom id, references, opaque/encrypted or incomplete history | No id repair |
+| previous_response_id or conversation continuation | No id repair |
+
+Good: identical long source code survives a wrapper correction, and a complete
+legacy custom-call replay continues. Base: valid requests remain unchanged.
+Bad: replacing argument contents, deleting all history IDs, silently omitting
+ciphertext, or changing request scope to manufacture a successful response.
+
+Required regressions assert unchanged operations and changed-operation rejection,
+cumulative correction usage and one delivered call, format/id invalid boundaries,
+HTTP/WS wire identity and original-payload isolation, and #154 on/off behavior.
+Wrong: count a synthetic fixture or build as real upstream acceptance. Correct:
+report mock regressions separately from bounded isolated live requests, including
+genuine upstream rejections and any untested scenarios.

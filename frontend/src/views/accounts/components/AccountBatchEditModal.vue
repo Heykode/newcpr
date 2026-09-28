@@ -34,8 +34,10 @@ const excelEnabled = defineModel<boolean>('excelEnabled', { required: true })
 const excelModels = defineModel<string>('excelModels', { required: true })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
+const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedContent', { default: false })
 const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
+const updateExcelIgnoreEncryptedContent = defineModel<boolean>('updateExcelIgnoreEncryptedContent', { default: false })
 const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
@@ -72,8 +74,10 @@ const egressOptions = [{ value: 'inherit', label: '继承全局策略' }, ...ipv
       v-model:excel-models="excelModels"
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
+      v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
       v-model:excel-403-action="excel403Action"
       v-model:update-excel-cache-creation-as-input="updateExcelCacheCreationAsInput"
+      v-model:update-excel-ignore-encrypted-content="updateExcelIgnoreEncryptedContent"
       v-model:update-excel-403-action="updateExcel403Action"
       v-model:update-excel-models="updateExcelModels"
       v-model:concurrency-limit="concurrencyLimit"
@@ -89,6 +93,7 @@ const egressOptions = [{ value: 'inherit', label: '继承全局策略' }, ...ipv
       v-model:update-weight="updateWeight"
       v-model:update-groups="updateGroups"
       v-model:update-proxy="updateProxy"
+      encrypted-content-available
       name-available
       model-access-available
       :account-id="catalogAccountId"

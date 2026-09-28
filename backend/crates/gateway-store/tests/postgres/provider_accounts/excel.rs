@@ -195,6 +195,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: None,
         excel_cache_creation_as_input: Some(true),
+        excel_ignore_encrypted_content: None,
         excel_auto_disable_on_403: Some(true),
         excel_403_action: Some(gateway_core::account::Excel403Action::PauseAccount),
         excel_models: None,
@@ -268,6 +269,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(true),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Some(
@@ -338,6 +340,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(false),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Some(
@@ -373,8 +376,21 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .insert_provider_account(account("acct_excel", "owner"))
         .await
         .unwrap();
+    repository
+        .insert_provider_account(account("acct_untouched", "other"))
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .load_provider_account("acct_excel")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .excel_ignore_encrypted_content
+    );
     let before: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','excel_403_action','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_ignore_encrypted_content','excel_auto_disable_on_403','excel_403_action','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
@@ -383,6 +399,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Some(true),
+        excel_ignore_encrypted_content: Some(true),
         excel_auto_disable_on_403: Some(true),
         excel_403_action: Some(gateway_core::account::Excel403Action::PauseAccount),
         excel_models: Some(
@@ -410,7 +427,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','excel_403_action','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_ignore_encrypted_content','excel_auto_disable_on_403','excel_403_action','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     assert_eq!(before, after);
     let loaded = repository
@@ -419,6 +436,16 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap()
         .unwrap();
     assert_eq!(loaded.summary.responses_upstream, ResponsesUpstream::Excel);
+    assert!(loaded.summary.excel_ignore_encrypted_content);
+    assert!(
+        !repository
+            .load_provider_account("acct_untouched")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .excel_ignore_encrypted_content
+    );
     assert!(!loaded.summary.excel_models_follow_global);
     assert!(loaded.summary.excel_cache_creation_as_input);
     assert_eq!(
@@ -429,12 +456,61 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         loaded.summary.excel_models.as_slice(),
         ["gpt-5.6-sol", "gpt-6-astra"]
     );
+    let listed = store
+        .list_accounts(
+            AccountListQuery {
+                page: 1,
+                page_size: PageSize::new(20).unwrap(),
+                provider_kind: None,
+                group_filter: None,
+                search: None,
+                status: None,
+                plan_type: None,
+                sort: None,
+            },
+            AccountRuntimeSnapshot::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        listed
+            .items
+            .iter()
+            .find(|item| item.account.id.as_str() == "acct_excel")
+            .unwrap()
+            .account
+            .excel_ignore_encrypted_content
+    );
+    store
+        .batch_update_accounts(
+            BatchUpdateAccounts {
+                responses_upstream: None,
+                excel_ignore_encrypted_content: Some(false),
+                ..command.clone()
+            },
+            &context,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !repository
+            .get_account(&ProviderAccountId::new("acct_excel").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .excel_ignore_encrypted_content()
+    );
+    store
+        .batch_update_accounts(command.clone(), &context)
+        .await
+        .unwrap();
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
                 responses_upstream: None,
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -460,6 +536,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap()
         .unwrap();
     assert!(configured.excel_cache_creation_as_input());
+    assert!(configured.excel_ignore_encrypted_content());
     assert!(configured.excel_auto_disable_on_403());
     assert!(
         repository
@@ -486,6 +563,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 excel_auto_disable_on_403: None,
                 excel_403_action: Default::default(),
                 excel_cache_creation_as_input: None,
+                excel_ignore_encrypted_content: None,
                 ..command.clone()
             },
             &context,
@@ -542,6 +620,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     assert!(resumed.summary.enabled);
     assert!(resumed.summary.excel_auto_disabled_at.is_none());
     assert_eq!(resumed.summary.responses_upstream, ResponsesUpstream::Excel);
+    assert!(resumed.summary.excel_ignore_encrypted_content);
     assert!(resumed.summary.excel_auto_disable_on_403);
     assert_eq!(
         configured.responses_upstream_for_model("gpt-6-astra"),
@@ -557,6 +636,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 responses_upstream: Some(ResponsesUpstream::Codex),
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
+                excel_ignore_encrypted_content: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
                 excel_403_action: Default::default(),
                 excel_models: Default::default(),
@@ -593,6 +673,14 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             .unwrap()
             .summary
             .excel_auto_disable_on_403
+    );
+    assert!(
+        !repository
+            .get_account(&ProviderAccountId::new("acct_excel").unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .excel_ignore_encrypted_content()
     );
     database.close().await;
 }

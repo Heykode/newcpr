@@ -5,6 +5,7 @@
 mod catalog;
 pub(crate) mod diagnostics;
 pub(super) mod encrypted;
+pub(crate) mod encrypted_content;
 mod envelope;
 mod history_messages;
 #[cfg(test)]

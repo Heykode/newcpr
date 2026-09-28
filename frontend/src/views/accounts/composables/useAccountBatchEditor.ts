@@ -31,8 +31,10 @@ export function useAccountBatchEditor(options: {
   const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
+  const excelIgnoreEncryptedContent = shallowRef(false)
   const excel403Action = shallowRef<Excel403Action>('none')
   const updateExcelCacheCreationAsInput = ref(false)
+  const updateExcelIgnoreEncryptedContent = ref(false)
   const updateExcel403Action = ref(false)
   const updateExcelModels = ref(false)
   const concurrencyLimit = shallowRef('')
@@ -58,6 +60,7 @@ export function useAccountBatchEditor(options: {
     || (excelAvailable.value && updateExcelEnabled.value)
     || (excelAvailable.value && updateExcelModels.value)
     || (excelAvailable.value && updateExcelCacheCreationAsInput.value)
+    || (excelAvailable.value && updateExcelIgnoreEncryptedContent.value)
     || (excelAvailable.value && updateExcel403Action.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
@@ -75,6 +78,7 @@ export function useAccountBatchEditor(options: {
     updateExcelEnabled.value = false
     updateExcelModels.value = false
     updateExcelCacheCreationAsInput.value = false
+    updateExcelIgnoreEncryptedContent.value = false
     updateExcel403Action.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
@@ -99,6 +103,7 @@ export function useAccountBatchEditor(options: {
     excelModels.value = (accounts[0]?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
     excelCacheCreationAsInput.value = accounts.every(account => account.excelCacheCreationAsInput ?? false)
+    excelIgnoreEncryptedContent.value = accounts.every(account => account.excelIgnoreEncryptedContent ?? false)
     excel403Action.value = accounts[0] ? accountExcel403Action(accounts[0]) : 'none'
     proxyMode.value = 'preserve'
     proxyId.value = ''
@@ -162,6 +167,8 @@ export function useAccountBatchEditor(options: {
         payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
       if (excelAvailable.value && updateExcelCacheCreationAsInput.value)
         payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
+      if (excelAvailable.value && (updateExcelIgnoreEncryptedContent.value || (updateExcelEnabled.value && !excelEnabled.value)))
+        payload.excelIgnoreEncryptedContent = !(updateExcelEnabled.value && !excelEnabled.value) && excelIgnoreEncryptedContent.value
       if (excelAvailable.value && updateExcel403Action.value)
         payload.excel403Action = excel403Action.value
       if (excelAvailable.value && updateExcelModels.value && models !== null) {
@@ -241,8 +248,10 @@ export function useAccountBatchEditor(options: {
     excelModels,
     excelModelsFollowGlobal,
     excelCacheCreationAsInput,
+    excelIgnoreEncryptedContent,
     excel403Action,
     updateExcelCacheCreationAsInput,
+    updateExcelIgnoreEncryptedContent,
     updateExcel403Action,
     updateExcelModels,
     concurrencyLimit,

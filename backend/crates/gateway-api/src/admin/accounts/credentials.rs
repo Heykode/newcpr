@@ -32,6 +32,7 @@ pub struct AccountImportSettingsRequest {
     pub excel_models: Option<gateway_core::account::ExcelModels>,
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
+    pub excel_ignore_encrypted_content: Option<bool>,
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
@@ -62,6 +63,7 @@ impl AccountImportSettingsRequest {
             excel_models: self.excel_models,
             excel_models_follow_global: self.excel_models_follow_global,
             excel_cache_creation_as_input: self.excel_cache_creation_as_input,
+            excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             excel_auto_disable_on_403: self.excel_auto_disable_on_403,
             excel_403_action: self.excel_403_action,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
@@ -251,6 +253,7 @@ pub struct UpdateAccountRequest {
     pub excel_models: Option<gateway_core::account::ExcelModels>,
     pub excel_models_follow_global: Option<bool>,
     pub excel_cache_creation_as_input: Option<bool>,
+    pub excel_ignore_encrypted_content: Option<bool>,
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
@@ -290,6 +293,7 @@ impl UpdateAccountRequest {
             excel_models: self.excel_models,
             excel_models_follow_global: self.excel_models_follow_global,
             excel_cache_creation_as_input: self.excel_cache_creation_as_input,
+            excel_ignore_encrypted_content: self.excel_ignore_encrypted_content,
             excel_auto_disable_on_403: self.excel_auto_disable_on_403,
             excel_403_action: self.excel_403_action,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,

@@ -205,7 +205,7 @@ impl ClientTools {
                 )?;
                 continue;
             }
-            if !matches!(kind, "function" | "custom") || self.specs.len() >= 256 {
+            if !matches!(kind, "function" | "custom") {
                 return Err(ExcelRequestError::Tool);
             }
             let key = namespace.map_or_else(|| name.to_owned(), |ns| format!("{ns}.{name}"));
@@ -237,6 +237,10 @@ impl ClientTools {
                     return Err(ExcelRequestError::Tool);
                 }
                 continue;
+            }
+            // Repeated declarations do not consume another unique-tool slot.
+            if self.specs.len() >= 256 {
+                return Err(ExcelRequestError::Tool);
             }
             let validator = if kind == "function" {
                 if serde_json::to_vec(&schema)
@@ -743,6 +747,104 @@ fn normalize_plan(args: Value) -> Result<Value, ExcelRequestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tools_at_limit() -> Vec<Value> {
+        (0..256)
+            .map(|index| {
+                json!({"type":"function","name":format!("fixture_{index:03}"),
+                    "parameters":{"type":"object"}})
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tool_limit_counts_unique_declarations_not_repeated_entries() {
+        let declarations = tools_at_limit();
+        let source = json!({"tools":declarations});
+        let baseline = ClientTools::parse(source.as_object().unwrap()).unwrap();
+        for duplicate_index in [0, 127, 255] {
+            let mut repeated = declarations.clone();
+            repeated.push(declarations[duplicate_index].clone());
+            let source = json!({"tools":repeated});
+            let parsed = ClientTools::parse(source.as_object().unwrap()).unwrap();
+            assert_eq!(parsed.specs.len(), 256);
+            assert_eq!(parsed.catalog(), baseline.catalog());
+            assert_eq!(parsed.instructions(), baseline.instructions());
+        }
+    }
+
+    #[test]
+    fn tool_limit_preserves_current_declaration_over_historical_annotations() {
+        let mut declarations = tools_at_limit();
+        declarations[127]["strict"] = json!(true);
+        declarations[127]["description"] = json!("Current");
+        let mut historical = declarations[127].clone();
+        historical["description"] = json!("Historical");
+        historical["defer_loading"] = json!(true);
+        historical.as_object_mut().unwrap().remove("parameters");
+        historical["inputSchema"] = json!({"type":"object"});
+        let source = json!({"tools":declarations,"input":[
+            {"type":"additional_tools","tools":[historical]}
+        ]});
+        let parsed = ClientTools::parse(source.as_object().unwrap()).unwrap();
+        assert_eq!(parsed.catalog(), json!(declarations));
+        assert!(!parsed.instructions().contains("Historical"));
+        let restored = json!({"tools":parsed.catalog(),"input":source["input"]});
+        let restored = ClientTools::parse(restored.as_object().unwrap()).unwrap();
+        assert_eq!(restored.catalog(), parsed.catalog());
+        assert_eq!(restored.instructions(), parsed.instructions());
+    }
+
+    #[test]
+    fn tool_limit_still_rejects_new_unique_tools_and_execution_conflicts() {
+        let declarations = tools_at_limit();
+        let mut extra = declarations.clone();
+        extra.push(json!({"type":"function","name":"extra","parameters":{}}));
+        let source = json!({"tools":extra});
+        assert!(matches!(
+            ClientTools::parse(source.as_object().unwrap()),
+            Err(ExcelRequestError::Tool)
+        ));
+        for (field, value) in [
+            ("parameters", json!({"type":"string"})),
+            ("strict", json!(true)),
+            ("type", json!("custom")),
+            ("future_execution_constraint", json!(false)),
+        ] {
+            let mut conflicting = declarations[0].clone();
+            conflicting[field] = value;
+            let source = json!({"tools":declarations,"input":[
+                {"type":"additional_tools","tools":[conflicting]}
+            ]});
+            assert!(
+                matches!(
+                    ClientTools::parse(source.as_object().unwrap()),
+                    Err(ExcelRequestError::Tool)
+                ),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_limit_deduplicates_namespaced_tools_without_merging_identities() {
+        let declarations = tools_at_limit();
+        let source = json!({"tools":[
+            {"type":"namespace","name":"workspace","tools":declarations},
+            {"type":"namespace","name":"workspace","tools":[declarations[0]]}
+        ]});
+        let parsed = ClientTools::parse(source.as_object().unwrap()).unwrap();
+        assert_eq!(parsed.specs.len(), 256);
+        let collision = json!({"tools":parsed.catalog(),"input":[
+            {"type":"additional_tools","tools":[
+                {"type":"function","name":"workspace.fixture_000","parameters":{"type":"object"}}
+            ]}
+        ]});
+        assert!(matches!(
+            ClientTools::parse(collision.as_object().unwrap()),
+            Err(ExcelRequestError::Tool)
+        ));
+    }
 
     #[test]
     fn duplicate_function_tools_normalize_aliases_without_relaxing_arguments() {

@@ -25,7 +25,6 @@ const SOURCE_HEALTH_TTL: Duration = Duration::from_secs(30);
 const SOURCE_FAILURE_COOLDOWN: Duration = Duration::from_secs(15);
 
 #[cfg(test)]
-#[path = "egress_round_robin_tests.rs"]
 mod round_robin_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

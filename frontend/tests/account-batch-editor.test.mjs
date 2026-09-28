@@ -106,6 +106,7 @@ function assertNoUpdates(state) {
   assert.equal(state.hasUpdates.value, false)
   assert.equal(state.updateExcelCacheCreationAsInput.value, false)
   assert.equal(state.updateExcel403Action.value, false)
+  assert.equal(state.updateExcelIgnoreEncryptedContent.value, false)
 }
 
 test('IPv6 batch editing is opt-in, nullable and resets on reopen', async (t) => {
@@ -152,6 +153,40 @@ test('IPv6 batch supports atomic proxy removal and blocks explicit proxy conflic
   state.proxyMode.value = 'direct'
   await state.save()
   assert.deepEqual(requests[0], { accountIds: ['account-a'], egressMode: 'fixed_ipv6_reuse', outboundProxyId: '' })
+})
+
+test('encrypted content omission needs fresh batch opt-in and clears when Excel is closed', async (t) => {
+  const { state, accounts, selectedIds, requests } = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })
+  state.open()
+  assert.equal(state.excelIgnoreEncryptedContent.value, false)
+  state.excelIgnoreEncryptedContent.value = true
+  assert.equal(state.hasUpdates.value, false)
+  state.updateExcelIgnoreEncryptedContent.value = true
+  assert.equal(state.hasUpdates.value, true)
+  await state.save()
+  assert.deepEqual(requests[0], { accountIds: ['account-a'], excelIgnoreEncryptedContent: true })
+  await vue.nextTick()
+  assertNoUpdates(state)
+  accounts.value[0].excelIgnoreEncryptedContent = true
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  assert.equal(state.excelIgnoreEncryptedContent.value, true)
+  state.updateWeight.value = true
+  await state.save()
+  assert.equal('excelIgnoreEncryptedContent' in requests.at(-1), false)
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  state.updateExcelIgnoreEncryptedContent.value = true
+  state.excelIgnoreEncryptedContent.value = false
+  await state.save()
+  assert.deepEqual(requests.at(-1), { accountIds: ['account-a'], excelIgnoreEncryptedContent: false })
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  state.updateExcelEnabled.value = true
+  state.excelEnabled.value = false
+  await state.save()
+  assert.equal(requests.at(-1).responsesUpstream, 'codex')
+  assert.equal(requests.at(-1).excelIgnoreEncryptedContent, false)
 })
 
 test('Excel batch defaults preserve saved and empty lists and reset every opt-in on reopen', async (t) => {
@@ -486,7 +521,7 @@ test('saving without opt-ins warns and never validates stale values or sends a r
 test('every single field and combination sends exactly the opted-in patch after other fields are unchecked', async (t) => {
   const patches = [
     { enabled: false },
-    { responsesUpstream: 'codex' },
+    { responsesUpstream: 'codex', excelIgnoreEncryptedContent: false },
     { excelModels: ['gpt-5.6-sol'], excelModelsFollowGlobal: false },
     { concurrencyLimit: 6 },
     { weight: 23 },
