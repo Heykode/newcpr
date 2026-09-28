@@ -46,6 +46,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/admin/egress.rs",
         "src/admin/extract.rs",
         "src/admin/group_monitor.rs",
+        "src/admin/mihomo.rs",
         "src/admin/mod.rs",
         "src/admin/notifications.rs",
         "src/admin/observability/mod.rs",
