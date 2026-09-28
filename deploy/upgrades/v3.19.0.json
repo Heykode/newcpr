@@ -1,0 +1,13 @@
+{
+  "from_version": "3.18.5",
+  "to_version": "3.19.0",
+  "from_migrations_tree": "dcefec9676e998ab761c2a77e750c4b8530f122e",
+  "to_migrations_tree": "f3ef8c966352c93206fb81da1a698075c30432e3",
+  "added": [
+    "0048_quality_policy.sql",
+    "0049_excel_403_policy.sql",
+    "0050_excel_ignore_encrypted_content.sql",
+    "0051_request_proxy_source.sql"
+  ],
+  "recovery": "manual"
+}
