@@ -3,6 +3,7 @@ import type { AccountTemplate } from '@/api/modules/account-templates'
 import { Pencil, Plus, RefreshCw, Trash2, X } from '@lucide/vue'
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { deleteAccountTemplate, getAccountTemplates, saveAccountTemplate } from '@/api/modules/account-templates'
+import { ipv6EgressModes } from '@/api/modules/ipv6-egress'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -10,6 +11,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import { toast } from '@/components/base/BaseToast'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { errorMessage } from '@/utils/async'
@@ -26,6 +28,11 @@ const current = shallowRef<AccountTemplate>()
 const deleting = shallowRef<AccountTemplate>()
 const deleteOpen = shallowRef(false)
 const form = ref(templateForm())
+const egressOptions = [
+  { value: 'preserve', label: '不修改 IPv6 出口策略' },
+  { value: 'inherit', label: '继承全局策略' },
+  ...ipv6EgressModes.map(({ value, label }) => ({ value, label })),
+]
 const { groups, loading: groupsLoading, loadGroups } = useAccountGroupCatalog({ immediate: false })
 const missingGroups = computed(() => groupsLoading.value ? [] : form.value.groupIds.filter(id => !groups.value.some(group => group.id === id)))
 let controller: AbortController | undefined
@@ -150,6 +157,9 @@ onScopeDispose(() => {
         :disabled="busy"
       />
       <BaseCheckbox v-model="form.applyExcel" label="模板包含 Excel 设置" show-label :disabled="busy" />
+      <BaseFormItem label="IPv6 出口策略">
+        <BaseSelect v-model="form.egressMode" class="w-full" :options="egressOptions" :disabled="busy" aria-label="模板 IPv6 出口策略" />
+      </BaseFormItem>
       <div v-for="id in missingGroups" :key="id" class="flex min-w-0 items-center gap-2 text-cp-sm text-cp-warning">
         <span class="min-w-0 flex-1 break-all">未识别分组：{{ id }}</span>
         <BaseIconButton :label="`移除未识别分组 ${id}`" :disabled="busy" @click="form.groupIds = form.groupIds.filter(value => value !== id)">

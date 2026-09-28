@@ -163,6 +163,7 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
             .batch_update(
                 context,
                 BatchUpdateAccounts {
+                    egress_mode: settings.egress_mode,
                     model_access: settings.model_access,
                     custom_name: None,
                     account_ids,

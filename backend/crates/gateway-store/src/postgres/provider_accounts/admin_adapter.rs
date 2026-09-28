@@ -1107,6 +1107,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                egress_mode: None,
                 custom_name: command.custom_name,
                 account_ids: vec![command.account_id.clone()],
                 explicit_scheduling_intent: false,
@@ -1200,6 +1201,7 @@ impl AccountStore for PgAdminAccountStore {
         };
         let mut changed_fields = Vec::new();
         for (changed, field) in [
+            (command.egress_mode.is_some(), "egress_mode"),
             (command.enabled.is_some(), "enabled"),
             (command.responses_upstream.is_some(), "responses_upstream"),
             (command.excel_models.is_some(), "excel_models"),
@@ -1238,6 +1240,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                egress_mode: command.egress_mode,
                 custom_name: command.custom_name,
                 account_ids: command.account_ids,
                 explicit_scheduling_intent: true,

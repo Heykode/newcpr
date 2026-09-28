@@ -175,8 +175,47 @@ pub(crate) async fn validate_account_proxy_egress_in_transaction(
     Ok(())
 }
 
-/// Account mutation hook, including deletion. Preserve historical bindings while
-/// advancing the egress generation so late snapshot loads cannot restore deleted accounts.
+/// Called under the account mutation's egress lock; validate final proxy state afterwards.
+pub(crate) async fn set_account_modes_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_ids: &[String],
+    mode: Option<EgressMode>,
+) -> StoreResult<()> {
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from provider_accounts where id = any($1::text[]) and provider_kind = 'openai'",
+    )
+    .bind(account_ids)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| unavailable())?;
+    if usize::try_from(count).ok() != Some(account_ids.len()) {
+        return Err(StoreError::InvalidData {
+            entity: ENTITY,
+            message: "IPv6 出口策略仅支持 OpenAI 账号".to_owned(),
+        });
+    }
+    if let Some(mode) = mode {
+        sqlx::query(
+            "insert into provider_egress_account_overrides (provider_account_id, mode)
+             select unnest($1::text[]), $2
+             on conflict (provider_account_id) do update set mode = excluded.mode",
+        )
+        .bind(account_ids)
+        .bind(mode.as_str())
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| unavailable())?;
+    } else {
+        sqlx::query("delete from provider_egress_account_overrides where provider_account_id = any($1::text[])")
+            .bind(account_ids)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| unavailable())?;
+    }
+    Ok(())
+}
+
+/// Preserve historical bindings and fence stale runtime snapshots after account mutations.
 pub(crate) async fn synchronize_account_egress_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     account_ids: &[String],

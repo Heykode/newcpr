@@ -70,6 +70,8 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub custom_name: Option<Option<String>>,
     pub outbound_proxy_id: Option<String>,
     pub outbound_proxy_url: Option<AccountProxyUpdate>,
@@ -148,6 +150,7 @@ impl BatchUpdateAccountsRequest {
             self.outbound_proxy_url.clone(),
         )?;
         if self.custom_name.is_none()
+            && self.egress_mode.is_none()
             && self.enabled.is_none()
             && self.turn_state_injection_enabled.is_none()
             && self.responses_upstream.is_none()
@@ -171,6 +174,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            egress_mode: self.egress_mode,
             custom_name: self
                 .custom_name
                 .map(|value| super::credentials::parse_custom_name(value.as_deref()))

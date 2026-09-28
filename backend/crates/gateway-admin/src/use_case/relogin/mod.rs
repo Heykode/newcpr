@@ -555,6 +555,7 @@ impl DefaultReloginService {
             if custom_name.is_some() || new_account_excel.is_some() {
                 let settings =
                     settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
+                        egress_mode: None,
                         model_access: None,
                         custom_name: None,
                         enabled: true,

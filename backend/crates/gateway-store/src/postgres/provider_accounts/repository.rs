@@ -667,6 +667,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     &mut transaction,
                     &unique_ids,
                     AccountSchedulingPatch {
+                        egress_mode: settings.egress_mode,
                         enabled: Some(settings.enabled),
                         explicit_scheduling_intent: true,
                         concurrency_limit: Some(settings.concurrency_limit),
@@ -884,6 +885,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 &mut transaction,
                 &command.account_ids,
                 AccountSchedulingPatch {
+                    egress_mode: command.egress_mode,
                     enabled: command.enabled,
                     explicit_scheduling_intent: command.explicit_scheduling_intent,
                     concurrency_limit: command.concurrency_limit,
@@ -1238,6 +1240,7 @@ pub(crate) async fn rotate_provider_account_in_transaction(
 }
 
 struct AccountSchedulingPatch<'a> {
+    egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     enabled: Option<bool>,
     explicit_scheduling_intent: bool,
     concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
@@ -1259,6 +1262,7 @@ async fn update_provider_accounts_scheduling_in_transaction(
     patch: AccountSchedulingPatch<'_>,
 ) -> StoreResult<()> {
     let AccountSchedulingPatch {
+        egress_mode,
         enabled,
         explicit_scheduling_intent,
         concurrency_limit,
@@ -1379,7 +1383,11 @@ async fn update_provider_accounts_scheduling_in_transaction(
     .collect::<BTreeSet<_>>();
     let expected = account_ids.iter().cloned().collect::<BTreeSet<_>>();
     if updated == expected {
-        if outbound_proxy.is_some() {
+        if let Some(mode) = egress_mode {
+            super::super::egress::set_account_modes_in_transaction(transaction, account_ids, mode)
+                .await?;
+        }
+        if outbound_proxy.is_some() || egress_mode.is_some() {
             super::super::synchronize_account_egress_in_transaction(transaction, account_ids)
                 .await?;
         }

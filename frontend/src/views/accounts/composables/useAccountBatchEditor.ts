@@ -49,6 +49,9 @@ export function useAccountBatchEditor(options: {
   const updateWeight = ref(false)
   const updateGroups = ref(false)
   const updateProxy = ref(false)
+  const egressAvailable = shallowRef(false)
+  const egressMode = shallowRef('inherit')
+  const updateEgressMode = ref(false)
   const hasUpdates = computed(() =>
     updateCustomName.value
     || updateEnabled.value
@@ -60,7 +63,8 @@ export function useAccountBatchEditor(options: {
     || updateWeight.value
     || updateModelAccess.value
     || updateGroups.value
-    || (updateProxy.value && proxyMode.value !== 'preserve'),
+    || (updateProxy.value && proxyMode.value !== 'preserve')
+    || (egressAvailable.value && updateEgressMode.value),
   )
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -77,6 +81,7 @@ export function useAccountBatchEditor(options: {
     updateModelAccess.value = false
     updateGroups.value = false
     updateProxy.value = false
+    updateEgressMode.value = false
   }
 
   function open() {
@@ -88,6 +93,8 @@ export function useAccountBatchEditor(options: {
 
     schedulingEnabled.value = accounts.every(account => account.enabled)
     excelAvailable.value = accounts.every(account => account.provider === 'openai' && account.authenticationKind === 'oauth')
+    egressAvailable.value = accounts.every(account => account.provider === 'openai')
+    egressMode.value = 'inherit'
     excelEnabled.value = accounts.every(account => account.responsesUpstream === 'excel')
     excelModels.value = (accounts[0]?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
@@ -129,6 +136,12 @@ export function useAccountBatchEditor(options: {
       toast.warning('请选择已通过测试的代理')
       return
     }
+    if (egressAvailable.value && updateEgressMode.value
+      && egressMode.value !== 'inherit' && egressMode.value !== 'unchanged'
+      && updateProxy.value && proxyMode.value === 'proxy') {
+      toast.warning('IPv6 策略不能与账号代理同时启用，请同时将出站代理改为直连')
+      return
+    }
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
@@ -141,6 +154,8 @@ export function useAccountBatchEditor(options: {
       }
       if (updateCustomName.value)
         payload.customName = normalizeAccountName(customName.value)
+      if (egressAvailable.value && updateEgressMode.value)
+        payload.egressMode = egressMode.value === 'inherit' ? null : egressMode.value
       if (updateEnabled.value)
         payload.enabled = schedulingEnabled.value
       if (excelAvailable.value && updateExcelEnabled.value)
@@ -203,6 +218,8 @@ export function useAccountBatchEditor(options: {
     customName.value = ''
     schedulingEnabled.value = true
     excelAvailable.value = false
+    egressAvailable.value = false
+    egressMode.value = 'inherit'
     excelEnabled.value = false
     proxyMode.value = 'preserve'
     proxyId.value = ''
@@ -242,6 +259,9 @@ export function useAccountBatchEditor(options: {
     updateWeight,
     updateGroups,
     updateProxy,
+    egressAvailable,
+    egressMode,
+    updateEgressMode,
     hasUpdates,
     saving,
     open,

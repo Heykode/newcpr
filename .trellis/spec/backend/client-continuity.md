@@ -69,6 +69,15 @@ editing prior entries.
 
 ## 3. Contracts
 
+- Account batch and template `egressMode` distinguishes omitted (preserve), null
+  (inherit global), and the five existing EgressMode values. Old templates serialize
+  without the field. Require OpenAI accounts for explicit changes; validate final
+  proxy policy atomically after applying both settings, preserving historical
+  affinity, credentials and fingerprint. Publish only after the transaction commits.
+- Bulk/template IPv6 controls reuse the existing generation and affinity hooks, not
+  the request hot path. Normal HTTP idle timeout remains None and source-bound IPv6
+  remains 60 seconds; these are idle connection policies, not request deadlines.
+
 - Default and custom UA are explicit independent modes. A custom string equal to
   the current default is still custom. Verified release updates change only the
   default profile. Parsing custom text is not artifact or TLS verification.

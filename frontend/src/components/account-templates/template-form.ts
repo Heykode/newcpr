@@ -19,6 +19,7 @@ export function templateForm(config?: AccountTemplateConfig) {
     groupIds: [...(config?.groupIds ?? [])],
     proxyMode: config?.outboundProxyId ? 'proxy' : 'direct',
     proxyId: config?.outboundProxyId ?? '',
+    egressMode: config?.egressMode === undefined ? 'preserve' : config.egressMode ?? 'inherit',
   }
 }
 
@@ -31,6 +32,8 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
     throw new Error(scheduling.message)
   if (form.proxyMode === 'proxy' && !form.proxyId)
     throw new Error('请选择已通过测试的代理')
+  if (form.proxyMode === 'proxy' && !['preserve', 'inherit', 'unchanged'].includes(form.egressMode))
+    throw new Error('IPv6 策略不能与账号代理同时启用，请将出站代理改为直连')
   return {
     name,
     enabled: form.enabled,
@@ -38,5 +41,6 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     outboundProxyId: form.proxyMode === 'proxy' ? form.proxyId : null,
+    ...(form.egressMode === 'preserve' ? {} : { egressMode: form.egressMode === 'inherit' ? null : form.egressMode }),
   }
 }

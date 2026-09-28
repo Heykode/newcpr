@@ -1,5 +1,18 @@
 # Account Management Contracts
 
+## IPv6 Batch and Template Settings
+
+- Batch editing exposes `updateEgressMode` only for all-OpenAI selections. Reset it on
+  every open; unchecked mode changes must not be validated or submitted. Reuse
+  `ipv6EgressModes` labels and keep the single-account independent-save control intact.
+- `egressMode` omission preserves overrides; explicit null inherits global policy.
+  Templates default to preserve, including old stored templates without this field.
+  Apply and new-account import use the same optional setting; existing-account relogin
+  does not apply a new-account template.
+- Final proxy plus IPv6 policy must be checked in one backend transaction; conflicts
+  roll back the whole batch. Do not silently clear proxy, partially apply mixed
+  providers, or rewrite historical IPv6 bindings.
+
 ## 2FA Enrollment and Excel Policy
 
 - Share the exact `Excel遇到HTTP 403` label and three options through

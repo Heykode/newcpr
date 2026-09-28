@@ -100,12 +100,59 @@ function mountEditor(t, options = {}) {
 }
 
 function assertNoUpdates(state) {
+  assert.equal(state.updateEgressMode.value, false)
   for (const field of updateFields)
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
   assert.equal(state.updateExcelCacheCreationAsInput.value, false)
   assert.equal(state.updateExcel403Action.value, false)
 }
+
+test('IPv6 batch editing is opt-in, nullable and resets on reopen', async (t) => {
+  for (const mode of ['inherit', 'unchanged', 'fixed_ipv6_reuse', 'random_ipv6_reuse', 'fixed_ipv6_fresh', 'random_ipv6_fresh']) {
+    const { state, requests, selectedIds } = mountEditor(t)
+    state.open()
+    assertNoUpdates(state)
+    assert.equal(state.egressAvailable.value, true)
+    state.egressMode.value = mode
+    state.updateEgressMode.value = true
+    assert.equal(state.hasUpdates.value, true)
+    await state.save()
+    assert.deepEqual(requests, [{ accountIds: ['account-a'], egressMode: mode === 'inherit' ? null : mode }])
+    selectedIds.value = new Set(['account-a'])
+    state.open()
+    assertNoUpdates(state)
+    assert.equal(state.egressMode.value, 'inherit')
+  }
+})
+
+test('IPv6 omitted selection and mixed providers never change egress', async (t) => {
+  for (const accounts of [[account('a')], [account('a'), account('b', { provider: 'xai' })]]) {
+    const { state, requests } = mountEditor(t, { accounts })
+    state.open()
+    state.egressMode.value = 'random_ipv6_reuse'
+    state.updateEgressMode.value = accounts.length > 1
+    state.updateEnabled.value = true
+    await state.save()
+    assert.equal('egressMode' in requests[0], false)
+  }
+})
+
+test('IPv6 batch supports atomic proxy removal and blocks explicit proxy conflicts', async (t) => {
+  const { state, requests, messages } = mountEditor(t)
+  state.open()
+  state.updateEgressMode.value = true
+  state.egressMode.value = 'fixed_ipv6_reuse'
+  state.updateProxy.value = true
+  state.proxyMode.value = 'proxy'
+  state.proxyId.value = 'proxy-a'
+  await state.save()
+  assert.equal(requests.length, 0)
+  assert.match(messages.warning.at(-1), /IPv6/)
+  state.proxyMode.value = 'direct'
+  await state.save()
+  assert.deepEqual(requests[0], { accountIds: ['account-a'], egressMode: 'fixed_ipv6_reuse', outboundProxyId: '' })
+})
 
 test('Excel batch defaults preserve saved and empty lists and reset every opt-in on reopen', async (t) => {
   const { state, accounts, requests } = mountEditor(t, { accounts: [account('account-a', { excelModels: undefined, responsesUpstream: 'excel' })] })

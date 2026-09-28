@@ -1901,6 +1901,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
@@ -3892,6 +3893,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        egress_mode: None,
         model_access: Default::default(),
         custom_name: None,
         enabled: false,
