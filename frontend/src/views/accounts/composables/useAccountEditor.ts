@@ -6,6 +6,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { updateAccount } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
+import { accountEgressPatch } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountExcel403Action } from '@/utils/excel-settings'
@@ -31,7 +32,6 @@ export function useAccountEditor(options: {
   const excelCacheCreationAsInput = shallowRef(false)
   const excelIgnoreEncryptedContent = shallowRef(false)
   const requestProxySource = shallowRef<import('@/utils/request-proxy-source').RequestProxySource>('account')
-  let initialRequestProxySource: import('@/utils/request-proxy-source').RequestProxySource = 'account'
   const excel403Action = shallowRef<Excel403Action>('none')
   let initialExcelCacheCreationAsInput = false
   let initialExcelIgnoreEncryptedContent = false
@@ -44,6 +44,7 @@ export function useAccountEditor(options: {
   let initialModelAccess = ''
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
+  const egressMode = shallowRef('fixed_ipv6_reuse')
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -60,6 +61,7 @@ export function useAccountEditor(options: {
     initialCustomName = customName.value
     proxyMode.value = 'preserve'
     proxyId.value = ''
+    egressMode.value = 'fixed_ipv6_reuse'
     schedulingEnabled.value = account.enabled
     excelEnabled.value = account.responsesUpstream === 'excel'
     initialExcelEnabled = excelEnabled.value
@@ -68,7 +70,6 @@ export function useAccountEditor(options: {
     excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
     excelIgnoreEncryptedContent.value = account.excelIgnoreEncryptedContent ?? false
     requestProxySource.value = account.requestProxySource ?? 'account'
-    initialRequestProxySource = requestProxySource.value
     excel403Action.value = accountExcel403Action(account)
     initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
     initialExcelIgnoreEncryptedContent = excelIgnoreEncryptedContent.value
@@ -101,10 +102,6 @@ export function useAccountEditor(options: {
       toast.warning('Excel 模型最多 64 个，每个名称最多 128 个字母、数字、点、下划线或连字符')
       return
     }
-    if (proxyMode.value === 'proxy' && !proxyId.value.trim()) {
-      toast.warning('请选择已通过测试的代理')
-      return
-    }
     if (!scheduling.valid) {
       toast.warning(scheduling.message)
       return
@@ -113,7 +110,7 @@ export function useAccountEditor(options: {
     await saveAction.run(async () => {
       const payload: Parameters<typeof updateAccount>[0] = {
         accountId,
-        outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
+        ...accountEgressPatch({ proxyMode: proxyMode.value, proxyId: proxyId.value, egressMode: egressMode.value }, editingAccount.value?.provider === 'openai'),
         enabled: schedulingEnabled.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
@@ -136,8 +133,6 @@ export function useAccountEditor(options: {
       }
       if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
         payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
-      if (editingAccount.value?.provider === 'openai' && requestProxySource.value !== initialRequestProxySource)
-        payload.requestProxySource = requestProxySource.value
       if (excelAvailable && (excelIgnoreEncryptedContent.value !== initialExcelIgnoreEncryptedContent || (initialExcelEnabled && !excelEnabled.value)))
         payload.excelIgnoreEncryptedContent = excelEnabled.value && excelIgnoreEncryptedContent.value
       if (excelAvailable && (excel403Action.value !== initialExcel403Action || (initialExcelEnabled && !excelEnabled.value)))
@@ -165,7 +160,6 @@ export function useAccountEditor(options: {
     excelCacheCreationAsInput.value = false
     excelIgnoreEncryptedContent.value = false
     requestProxySource.value = 'account'
-    initialRequestProxySource = 'account'
     excel403Action.value = 'none'
     initialExcelCacheCreationAsInput = false
     initialExcelIgnoreEncryptedContent = false
@@ -196,6 +190,7 @@ export function useAccountEditor(options: {
     modelAccess,
     proxyMode,
     proxyId,
+    egressMode,
     selectedGroupIds,
     saving,
     open,

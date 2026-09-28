@@ -306,7 +306,7 @@ for (const mode of ['access_token', 'refresh_token']) {
     assert.deepEqual(body.items, ['synthetic-a', 'synthetic-b', 'synthetic-a'].map(value => ({
       provider: 'openai',
       data: { accounts: [{ [key]: value }] },
-      settings: { customName: 'Import batch', enabled: false, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'] },
+      settings: { customName: 'Import batch', enabled: false, concurrencyLimit: 7, weight: 23, groupIds: ['group-a', 'group-b'], requestProxySource: 'account', egressMode: 'unchanged' },
       outboundProxyId: 'proxy-a',
     })))
     assert.equal(h.created.length, 1)
@@ -598,6 +598,9 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
     assert.equal(h.submissions.length, 0)
     assert.equal(h.oauthStarts[0].accountId, undefined)
     assert.deepEqual(h.oauthCompletions[0].settings, {
+      clearOutboundProxy: true,
+      requestProxySource: 'account',
+      ...(provider === 'openai' ? { egressMode: null } : {}),
       customName: 'OAuth batch',
       enabled: true,
       concurrencyLimit: null,

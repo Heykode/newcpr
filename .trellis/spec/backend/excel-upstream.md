@@ -317,6 +317,14 @@ flag, while automatic pause preserves it. The two-second bounded write outlives
 client cancellation; failures must not replace the original upstream error.
 No per-account polling or credential guardian is introduced.
 
+Migration 0052 adds `excel_403_warning_at` as display-only historical metadata.
+Record the first automatic pause in the existing fenced transaction; never use
+this history for routing, eligibility or quality-action guards. Backfill existing
+Excel pause records, without reclassifying old Codex mode-disable diagnostics.
+Explicit resume, recovery, route changes, same-identity import, credential rotation
+and refresh retain the history while clearing active pause diagnostics as before.
+An absent history is not inferred from arbitrary request failures or action `none`.
+
 ## 10. Excel Compatibility Diagnostics
 
 Scope: only Excel request/stream conversion. `reasoning_effort` returns the

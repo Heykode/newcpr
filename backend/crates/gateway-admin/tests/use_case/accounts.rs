@@ -1804,6 +1804,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
@@ -1852,6 +1853,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
@@ -3579,6 +3581,8 @@ pub(super) fn account_record(kind: &str) -> AccountRecord {
         excel_auto_disable_on_403: Default::default(),
         excel_403_action: Default::default(),
         excel_auto_disabled_at: None,
+        excel_403_warning_at: None,
+        quality_monitoring: None,
         excel_mode_disabled_at: None,
         excel_models: Default::default(),
         concurrency_limit: None,
@@ -3901,6 +3905,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        clear_outbound_proxy: false,
         egress_mode: None,
         model_access: Default::default(),
         custom_name: None,

@@ -12,6 +12,7 @@ use gateway_admin::{
 use sqlx::{PgPool, Row as _};
 
 mod policy;
+mod rule_templates;
 mod template_action;
 
 use crate::{
@@ -65,6 +66,12 @@ fn rule(row: &sqlx::postgres::PgRow) -> AdminStoreResult<QualityRule> {
             row.try_get::<serde_json::Value, _>("recovery")
                 .map_err(unavailable)?,
         )?,
+        source_template: row
+            .try_get::<Option<serde_json::Value>, _>("source_template")
+            .map_err(unavailable)?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(unavailable)?,
     })
 }
 
@@ -206,28 +213,39 @@ async fn pause_excel_probes(
     Ok(())
 }
 
-#[async_trait]
-impl QualityOpsStore for PgQualityOpsStore {
-    async fn rules(&self) -> AdminStoreResult<Vec<QualityRule>> {
-        sqlx::query("select * from quality_rules order by updated_at desc limit 1000")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(unavailable)?
-            .iter()
-            .map(rule)
-            .collect()
-    }
-
-    async fn save(
+impl PgQualityOpsStore {
+    async fn save_checked(
         &self,
         id: Option<&str>,
         revision: Option<i64>,
         mut config: QualityRuleConfig,
         next: DateTime<Utc>,
         context: &MutationContext,
+        source: Option<&QualityRuleTemplate>,
     ) -> AdminStoreResult<QualityRule> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
+        let source = if let Some(expected) = source {
+            let current = rule_templates::load_locked(&mut tx, &expected.id)
+                .await?
+                .ok_or_else(conflict)?;
+            if current.revision != expected.revision {
+                return Err(conflict());
+            }
+            let account_id = config.account_id;
+            config = current.config;
+            config.account_id = account_id;
+            Some(
+                serde_json::to_value(QualityRuleTemplateRef {
+                    id: current.id,
+                    revision: current.revision,
+                    name: current.name,
+                })
+                .map_err(unavailable)?,
+            )
+        } else {
+            None
+        };
         if config.failure_action == QualityFailureAction::ApplyAccountTemplate {
             let selected = config.failure_template.as_ref().ok_or_else(conflict)?;
             let template = template_action::resolve(&mut tx, selected)
@@ -278,6 +296,7 @@ impl QualityOpsStore for PgQualityOpsStore {
         let row = if let Some(id) = id {
             let row = sqlx::query(
                 "update quality_rules set config=$3,enabled=$4,next_run_at=$5,
+                 source_template=coalesce($7,source_template),
                  recovery=recovery-'excel_streak',
                  last_action=case when last_action in ('excel_threshold_pending','excel_streak_reset')
                     then null else last_action end,
@@ -288,7 +307,7 @@ impl QualityOpsStore for PgQualityOpsStore {
                  revision=revision+1,pending=false,lease_token=null,lease_until=null,updated_at=now()
                  where id=$1 and revision=$2 and account_id=$6 returning *")
                 .bind(id).bind(revision).bind(value).bind(config.enabled).bind(next)
-                .bind(&config.account_id).fetch_optional(&mut *tx).await.map_err(unavailable)?
+                .bind(&config.account_id).bind(&source).fetch_optional(&mut *tx).await.map_err(unavailable)?
                 .ok_or_else(conflict)?;
             sqlx::query(
                 "update quality_runs set status='cancelled',finished_at=now()
@@ -301,14 +320,15 @@ impl QualityOpsStore for PgQualityOpsStore {
             row
         } else {
             sqlx::query(
-                "insert into quality_rules(id,account_id,config,enabled,next_run_at)
-                 values($1,$2,$3,$4,$5) on conflict(account_id) do nothing returning *",
+                "insert into quality_rules(id,account_id,config,enabled,next_run_at,source_template)
+                 values($1,$2,$3,$4,$5,$6) on conflict(account_id) do nothing returning *",
             )
             .bind(uuid::Uuid::now_v7().to_string())
             .bind(&config.account_id)
             .bind(value)
             .bind(config.enabled)
             .bind(next)
+            .bind(&source)
             .fetch_optional(&mut *tx)
             .await
             .map_err(unavailable)?
@@ -318,6 +338,80 @@ impl QualityOpsStore for PgQualityOpsStore {
         audit(&mut tx, context, "quality_rule.save", &result.id).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
+    }
+}
+
+#[async_trait]
+impl QualityOpsStore for PgQualityOpsStore {
+    async fn templates(&self) -> AdminStoreResult<Vec<QualityRuleTemplate>> {
+        self.list_rule_templates().await
+    }
+    async fn template(&self, id: &str) -> AdminStoreResult<Option<QualityRuleTemplate>> {
+        self.load_rule_template(id).await
+    }
+    async fn save_template(
+        &self,
+        id: Option<&str>,
+        revision: Option<i64>,
+        name: String,
+        config: QualityRuleConfig,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRuleTemplate> {
+        self.save_rule_template(id, revision, name, config, context)
+            .await
+    }
+    async fn delete_template(
+        &self,
+        id: &str,
+        revision: i64,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        self.delete_rule_template(id, revision, context).await
+    }
+    async fn apply_template(
+        &self,
+        template: &QualityRuleTemplate,
+        target: &QualityTemplateTarget,
+        next: DateTime<Utc>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRule> {
+        let mut config = template.config.clone();
+        config.account_id.clone_from(&target.account_id);
+        self.save_checked(
+            target.rule_id.as_deref(),
+            target.revision,
+            config,
+            next,
+            context,
+            Some(template),
+        )
+        .await
+    }
+    async fn monitoring(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<std::collections::BTreeMap<String, QualityMonitoring>> {
+        self.account_monitoring(account_ids).await
+    }
+    async fn rules(&self) -> AdminStoreResult<Vec<QualityRule>> {
+        sqlx::query("select * from quality_rules order by updated_at desc")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(unavailable)?
+            .iter()
+            .map(rule)
+            .collect()
+    }
+    async fn save(
+        &self,
+        id: Option<&str>,
+        revision: Option<i64>,
+        config: QualityRuleConfig,
+        next: DateTime<Utc>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRule> {
+        self.save_checked(id, revision, config, next, context, None)
+            .await
     }
 
     async fn delete(

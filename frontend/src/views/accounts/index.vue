@@ -16,6 +16,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
+import QualityTemplateApplyMenu from '@/components/quality-ops/QualityTemplateApplyMenu.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
@@ -52,6 +53,7 @@ import { accountHasReloginTotp, reloginTotpEmailSet } from './relogin-availabili
 
 const selectedIds = ref<Set<string>>(new Set())
 const applyingTemplate = shallowRef(false)
+const applyingQualityTemplate = shallowRef(false)
 const forecastAccount = ref<AccountRow | null>(null)
 const forecastOpen = ref(false)
 
@@ -251,7 +253,6 @@ const {
   excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
   excelIgnoreEncryptedContent: batchExcelIgnoreEncryptedContent,
   requestProxySource: batchRequestProxySource,
-  updateRequestProxySource: batchUpdateRequestProxySource,
   excel403Action: batchExcel403Action,
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
   updateExcelIgnoreEncryptedContent: batchUpdateExcelIgnoreEncryptedContent,
@@ -271,9 +272,7 @@ const {
   updateWeight: batchUpdateWeight,
   updateGroups: batchUpdateGroups,
   updateProxy: batchUpdateProxy,
-  egressAvailable: batchEgressAvailable,
   egressMode: batchEgressMode,
-  updateEgressMode: batchUpdateEgressMode,
   hasUpdates: batchHasUpdates,
   saving: savingBatchEdit,
   open: openBatchEdit,
@@ -302,6 +301,7 @@ const {
   modelAccess: editingModelAccess,
   proxyMode: editingProxyMode,
   proxyId: editingProxyId,
+  egressMode: editingEgressMode,
   selectedGroupIds: editingGroupIds,
   saving: savingAccountEdit,
   open: openAccountEdit,
@@ -422,7 +422,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           :selected-count="selectedIds.size"
           :batch-deleting="batchDeleting"
           :exporting-accounts="exportingAccounts"
-          :template-applying="applyingTemplate"
+          :template-applying="applyingTemplate || applyingQualityTemplate"
           @delete-selected="showDeleteModal = true"
           @export-selected="handleExportAccounts"
           @create="openCreateAccount"
@@ -430,7 +430,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           @toggle-column="toggleColumn"
         >
           <template #account-templates>
-            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
+            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingQualityTemplate" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
+            <QualityTemplateApplyMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingTemplate" @applying="applyingQualityTemplate = $event" @applied="onTemplateApplied" />
           </template>
         </AccountFilters>
       </template>
@@ -676,6 +677,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
       v-model:proxy-mode="editingProxyMode"
+      v-model:egress-mode="editingEgressMode"
       v-model:proxy-id="editingProxyId"
       v-model:selected-group-ids="editingGroupIds"
       :account="editingAccount"
@@ -693,7 +695,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-enabled="batchExcelEnabled"
       v-model:excel-models="batchExcelModels"
       v-model:request-proxy-source="batchRequestProxySource"
-      v-model:update-request-proxy-source="batchUpdateRequestProxySource"
       v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="batchExcelIgnoreEncryptedContent"
@@ -716,8 +717,6 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-groups="batchUpdateGroups"
       v-model:update-proxy="batchUpdateProxy"
       v-model:egress-mode="batchEgressMode"
-      v-model:update-egress-mode="batchUpdateEgressMode"
-      :egress-available="batchEgressAvailable"
       :catalog-account-id="batchCatalogAccountId"
       :has-updates="batchHasUpdates"
       :excel-available="batchExcelAvailable"

@@ -205,7 +205,7 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
     sqlx::query("update provider_accounts set responses_upstream='excel', excel_auto_disable_on_403=true, excel_403_action='pause_account', excel_cache_creation_as_input=true where id=$1")
         .bind(id.as_str()).execute(&database.pool).await.unwrap();
     let frozen = repository.get_account(&id).await.unwrap().unwrap();
-    let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['enabled','excel_auto_disabled_at','updated_at'] from provider_accounts a where id=$1")
+    let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['enabled','excel_auto_disabled_at','excel_403_warning_at','updated_at'] from provider_accounts a where id=$1")
         .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
     let revision: i64 =
         sqlx::query_scalar("select config_revision from runtime_settings where id=1")
@@ -223,7 +223,7 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
         changes += usize::from(result.unwrap());
     }
     assert_eq!(changes, 1);
-    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['enabled','excel_auto_disabled_at','updated_at'] from provider_accounts a where id=$1")
+    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['enabled','excel_auto_disabled_at','excel_403_warning_at','updated_at'] from provider_accounts a where id=$1")
         .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
     assert_eq!(before, after);
     let paused_at: Option<chrono::DateTime<chrono::Utc>> =
@@ -233,6 +233,13 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
             .await
             .unwrap();
     assert!(paused_at.is_some());
+    let first_warning: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("select excel_403_warning_at from provider_accounts where id=$1")
+            .bind(id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(first_warning, paused_at);
     let next_revision: i64 =
         sqlx::query_scalar("select config_revision from runtime_settings where id=1")
             .fetch_one(&database.pool)
@@ -259,6 +266,7 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
         .unwrap();
     assert!(resumed.summary.enabled);
     assert!(resumed.summary.excel_auto_disabled_at.is_none());
+    assert_eq!(resumed.summary.excel_403_warning_at, first_warning);
     assert_eq!(resumed.summary.responses_upstream, ResponsesUpstream::Excel);
     sqlx::query(
         "update provider_accounts set credential_revision=credential_revision+1 where id=$1",
@@ -285,6 +293,30 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
         .unwrap();
     assert!(repository.apply_excel_403_action(&current).await.unwrap());
     assert!(!repository.apply_excel_403_action(&current).await.unwrap());
+    let reloaded = PgProviderAccountRepository::new(database.pool.clone())
+        .load_provider_account(id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reloaded.summary.excel_403_warning_at, first_warning);
+    admin_account_store(&database.pool)
+        .recover_account(
+            &id,
+            &MutationContext {
+                actor: MutationActor::System,
+                request_id: "excel-warning-recovery".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let recovered = repository
+        .load_provider_account(id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(recovered.summary.enabled);
+    assert!(recovered.summary.excel_auto_disabled_at.is_none());
+    assert_eq!(recovered.summary.excel_403_warning_at, first_warning);
     sqlx::query("update provider_accounts set enabled=false where id=$1")
         .bind(id.as_str())
         .execute(&database.pool)
@@ -694,6 +726,10 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap()
         .unwrap();
     assert!(disabled.summary.excel_auto_disabled_at.is_some());
+    assert_eq!(
+        disabled.summary.excel_403_warning_at,
+        disabled.summary.excel_auto_disabled_at
+    );
     assert!(!disabled.summary.enabled);
     assert_eq!(
         disabled.summary.responses_upstream,
@@ -763,6 +799,10 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .unwrap()
         .unwrap();
     assert!(resumed.summary.enabled);
+    assert_eq!(
+        resumed.summary.excel_403_warning_at,
+        disabled.summary.excel_403_warning_at
+    );
     assert!(resumed.summary.excel_auto_disabled_at.is_none());
     assert_eq!(resumed.summary.responses_upstream, ResponsesUpstream::Excel);
     assert!(resumed.summary.excel_ignore_encrypted_content);
@@ -801,6 +841,16 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
             .summary
             .responses_upstream,
         ResponsesUpstream::Codex
+    );
+    assert_eq!(
+        repository
+            .load_provider_account("acct_excel")
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .excel_403_warning_at,
+        disabled.summary.excel_403_warning_at
     );
     assert!(
         repository

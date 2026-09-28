@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use gateway_admin::model::quality_ops::QualityRuleConfig;
+use gateway_admin::model::quality_ops::{QualityRuleConfig, QualityTemplateTarget};
 use serde::Deserialize;
 
 use super::{
@@ -24,6 +24,147 @@ where
         .route("/api/admin/quality-ops/run", post(enqueue::<S>))
         .route("/api/admin/quality-ops/runs", get(runs::<S>))
         .route("/api/admin/quality-ops/detail", get(detail::<S>))
+        .route("/api/admin/quality-ops/templates", get(templates::<S>))
+        .route(
+            "/api/admin/quality-ops/templates/save",
+            post(save_template::<S>),
+        )
+        .route(
+            "/api/admin/quality-ops/templates/delete",
+            post(delete_template::<S>),
+        )
+        .route(
+            "/api/admin/quality-ops/templates/apply",
+            post(apply_template::<S>),
+        )
+        .route("/api/admin/quality-ops/monitoring", post(monitoring::<S>))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveTemplate {
+    id: Option<String>,
+    revision: Option<i64>,
+    name: String,
+    config: QualityRuleConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyTemplate {
+    id: String,
+    revision: i64,
+    targets: Vec<QualityTemplateTarget>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MonitoringQuery {
+    account_ids: Vec<String>,
+}
+
+async fn templates<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .templates()
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn save_template<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(body): AdminJson<SaveTemplate>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .save_template(
+            body.id.as_deref(),
+            body.revision,
+            body.name,
+            body.config,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn delete_template<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(body): AdminJson<RuleCommand>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .quality_ops()
+        .delete_template(&body.id, body.revision, &auth.context().mutation_context())
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
+}
+
+async fn apply_template<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(body): AdminJson<ApplyTemplate>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .apply_template(
+            &body.id,
+            body.revision,
+            body.targets,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn monitoring<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(body): AdminJson<MonitoringQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .monitoring(&body.account_ids)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
 }
 
 #[derive(Deserialize)]

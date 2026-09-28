@@ -1,5 +1,30 @@
 # Quality Operations UI
 
+## Monitoring Rule Templates
+
+- Keep separate account-monitoring and rule-template tabs. Reuse the rule editor
+  with a template name and no account picker; do not duplicate prompts or defaults.
+  Existing rules can be saved as templates without changing the rule.
+- Account management's monitoring menu captures selected IDs across pages, then
+  reads `/quality-ops/monitoring` before explicit confirmation. Show new/replaced
+  counts, preserve histories, and submit exact rule/template revisions.
+- Partial success keeps completed targets; review/retry only failures with fresh
+  versions and another confirmation. An uncertain write response is never replayed
+  automatically. Catalog/read errors prevent submission and have retry controls.
+- `qualityMonitoring` comes from the existing account list refresh. Status precedence:
+  disabled -> monitoring paused, running -> detecting, pending -> queued, otherwise
+  monitoring. No rule means no badge. The badge links by accountId/ruleId to history.
+  Preserve Excel historical warnings and ordinary account status independently.
+- Template editing/deletion is not live propagation. Label source snapshots as
+  source templates, distinctly from failure-remediation account templates.
+- Cancel/fence reads on close/unmount, keep mutation baselines isolated from polling,
+  and never issue an upstream model request just to save or apply a template.
+- Regressions: `quality-monitoring.test.mjs`, `browser/quality-templates.mjs`, and
+  existing `browser/quality-ops.mjs`; verify 1440/390/320px, legacy rules, partial
+  outcomes, cancelled confirmations, failed reads, uncertain writes and deep links.
+
+## Detection Rules
+
 - New remediation uses `apply_account_template` and the shared versioned
   `AccountTemplatePicker`, with a full-settings summary. Show `enable_excel` only
   when editing that legacy action; never silently convert a saved rule.

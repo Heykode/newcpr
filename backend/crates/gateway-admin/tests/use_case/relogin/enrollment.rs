@@ -11,6 +11,41 @@ fn intent() -> ReloginEnrollment {
 
 const MATERIAL: &str = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
 
+#[test]
+fn enrollment_serializes_and_replays_all_egress_intents() {
+    use gateway_core::provider_ports::egress::EgressMode;
+    for mode in [
+        None,
+        Some(None),
+        Some(Some(EgressMode::Unchanged)),
+        Some(Some(EgressMode::FixedIpv6Reuse)),
+        Some(Some(EgressMode::RandomIpv6Reuse)),
+        Some(Some(EgressMode::FixedIpv6Fresh)),
+        Some(Some(EgressMode::RandomIpv6Fresh)),
+    ] {
+        for clear in [false, true] {
+            let mut settings = template_config().settings().unwrap();
+            settings.egress_mode = mode;
+            settings.clear_outbound_proxy = clear;
+            let intent = ReloginEnrollment::new(settings, None, context("egress-enroll")).unwrap();
+            let replay: ReloginEnrollment =
+                serde_json::from_value(serde_json::to_value(intent).unwrap()).unwrap();
+            assert_eq!(replay.settings().unwrap().egress_mode, mode);
+            assert_eq!(replay.settings().unwrap().clear_outbound_proxy, clear);
+        }
+    }
+    let mut conflicting = template_config().settings().unwrap();
+    conflicting.clear_outbound_proxy = true;
+    assert!(
+        ReloginEnrollment::new(
+            conflicting,
+            Some("proxy-fixture".into()),
+            context("conflict")
+        )
+        .is_err()
+    );
+}
+
 #[tokio::test]
 async fn enrollment_resumes_selected_workspace_and_keeps_the_import_intent() {
     let h = Harness::new(vec![]).await;

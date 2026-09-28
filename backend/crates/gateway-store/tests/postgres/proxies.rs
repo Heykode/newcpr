@@ -39,6 +39,7 @@ fn success() -> ProxyTestResult {
 
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
+        egress_mode: None,
         model_access: Default::default(),
         custom_name: None,
         account_id: account_id.to_owned(),

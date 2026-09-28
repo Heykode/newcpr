@@ -7,6 +7,7 @@ use gateway_admin::{
 use gateway_store::postgres::quality_ops::PgQualityOpsStore;
 
 mod policy;
+mod rule_templates;
 mod templates;
 
 fn context() -> MutationContext {
@@ -658,6 +659,7 @@ async fn quality_account_rename_keeps_recovery_ownership() {
     super::admin_account_store(&db.pool)
         .update_account(
             UpdateAccount {
+                egress_mode: None,
                 account_id: "acct_quality_a".into(),
                 custom_name: Some(Some("renamed account".into())),
                 enabled: false,

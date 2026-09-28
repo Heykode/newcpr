@@ -1,5 +1,62 @@
 # Scheduled Quality Checks
 
+## Monitoring Rule Templates
+
+### 1. Scope / Trigger
+- Monitoring templates reuse detection configuration, not the separate account
+  templates used by failure remediation. They never create a new request chain.
+
+### 2. Signatures
+- Migration `0053_quality_rule_templates.sql` adds `quality_rule_templates` and
+  nullable `quality_rules.source_template`; keep frozen migrations unchanged.
+- Admin routes under `/api/admin/quality-ops`: `GET templates`,
+  `POST templates/save`, `POST templates/delete`, `POST templates/apply`,
+  `POST monitoring`. All require AdminAuth and no-store responses.
+
+### 3. Contracts
+- Template `{id,revision,name,config}` uses QualityRuleConfig without accountId.
+  Real rule saves still require accountId. Applications contain a template id/revision
+  and targets `{accountId,ruleId,revision}`; new rules use null ruleId/revision.
+- Each account application is an independent transaction returning a success/error
+  result. Lock configuration first, recheck template revision and rule CAS, and use
+  the database's config/name instead of caller-supplied snapshots.
+- Keep one rule per account. Replacement preserves rule id/history and cancels old
+  leases through the existing save transaction. Template edits/deletion do not alter
+  applied rules; sourceTemplate is provenance, not a live link.
+- Account list responses include nullable qualityMonitoring with ruleId/revision,
+  enabled/running/pending, nextRunAt, lastStatus/lastRunAt/lastAction and sourceTemplate.
+  Read once for the current page; no per-account browser polling or model-path query.
+- Saving/applying schedules the next Cron occurrence without immediate execution.
+  Provider compatibility, account settings, quality ownership and probes are unchanged.
+
+### 4. Validation & Error Matrix
+- Empty/bound/invalid template -> reject. Name: 1–128 non-control characters.
+- 0, >1000, duplicate or invalid target IDs -> reject the entire application request.
+- Stale template or rule revision -> no overwrite; account-level conflicts return
+  a failed result while independent successful targets remain applied.
+- Incompatible Excel state probe -> reject via existing checks, never change route.
+- Read failure is not an empty authoritative catalog or an absent rule.
+
+### 5. Good/Base/Bad Cases
+- Good: apply a six-hour template to several accounts and preserve their exits.
+- Base: legacy rules with SQL NULL source_template remain readable and editable.
+- Bad: deleting a catalog entry cascades through active rules, or editing a template
+  silently changes active rules and historical question snapshots.
+
+### 6. Tests Required
+- `tests/postgres/quality_ops/rule_templates.rs`: CRUD/CAS, forged snapshots,
+  replacement/history, cancellation, Excel guards, account list/detail projection,
+  source deletion and unchanged account settings against isolated PostgreSQL.
+- Include the table in the exact schema snapshot; run migration/reopen validation.
+- Admin validation and API auth/no-store tests cover the new contracts.
+
+### 7. Wrong vs Correct
+- Wrong: use browser account-page data as the overwrite version, or trust a posted
+  template config. Correct: reread monitoring before confirmation and recheck all
+  versions inside each application's transaction.
+
+## Detection Execution
+
 - `AccountProbe::quality_check` is separate from diagnostic `probe`. It MUST use
   the persistent ordinary coordinator with its fixed-account quality selection. Never
   reuse `start_diagnostic`, synthesize a user API key, or call upstream HTTP directly.

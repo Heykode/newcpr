@@ -66,6 +66,7 @@ function mountEditor(t, options = {}) {
     '@/utils/async': asyncUtils,
   })
   const module = loadModule(new URL('../src/views/accounts/composables/useAccountBatchEditor.ts', import.meta.url), {
+    '@/utils/account-egress': loadModule(new URL('../src/utils/account-egress.ts', import.meta.url)),
     vue,
     '@/api': {
       batchUpdateAccounts: async (payload) => {
@@ -100,8 +101,6 @@ function mountEditor(t, options = {}) {
 }
 
 function assertNoUpdates(state) {
-  assert.equal(state.updateRequestProxySource.value, false)
-  assert.equal(state.updateEgressMode.value, false)
   for (const field of updateFields)
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
@@ -113,16 +112,16 @@ function assertNoUpdates(state) {
 test('Account exit selection is independently opted in without changing native proxy or IPv6', async (t) => {
   const { state, requests, selectedIds } = mountEditor(t)
   state.open()
-  state.requestProxySource.value = 'mihomo'
+  state.proxyMode.value = 'mihomo'
   assert.equal(state.hasUpdates.value, false)
-  state.updateRequestProxySource.value = true
+  state.updateProxy.value = true
   await state.save()
   assert.equal(requests.length, 1)
   assert.equal(requests[0].requestProxySource, 'mihomo')
   assert.deepEqual(Object.keys(requests[0]).sort(), ['accountIds', 'requestProxySource'])
   selectedIds.value = new Set(['account-a'])
   state.open()
-  assert.equal(state.updateRequestProxySource.value, false)
+  assert.equal(state.updateProxy.value, false)
 })
 
 test('Managed exits remain available for native non-OAuth OpenAI accounts', async (t) => {
@@ -131,8 +130,8 @@ test('Managed exits remain available for native non-OAuth OpenAI accounts', asyn
   state.open()
   assert.equal(state.excelAvailable.value, false)
   assert.equal(state.requestProxyAvailable.value, true)
-  state.updateRequestProxySource.value = true
-  state.requestProxySource.value = 'proxy_pool'
+  state.updateProxy.value = true
+  state.proxyMode.value = 'proxy_pool'
   assert.equal(state.hasUpdates.value, true)
   await state.save()
   assert.equal(requests[0].requestProxySource, 'proxy_pool')
@@ -144,16 +143,17 @@ test('IPv6 batch editing is opt-in, nullable and resets on reopen', async (t) =>
     const { state, requests, selectedIds } = mountEditor(t)
     state.open()
     assertNoUpdates(state)
-    assert.equal(state.egressAvailable.value, true)
+    assert.equal(state.requestProxyAvailable.value, true)
     state.egressMode.value = mode
-    state.updateEgressMode.value = true
+    state.proxyMode.value = mode === 'inherit' ? 'inherit' : mode === 'unchanged' ? 'direct' : 'ipv6'
+    state.updateProxy.value = true
     assert.equal(state.hasUpdates.value, true)
     await state.save()
-    assert.deepEqual(requests, [{ accountIds: ['account-a'], egressMode: mode === 'inherit' ? null : mode }])
+    assert.deepEqual(requests, [{ accountIds: ['account-a'], requestProxySource: 'account', outboundProxyId: '', egressMode: mode === 'inherit' ? null : mode }])
     selectedIds.value = new Set(['account-a'])
     state.open()
     assertNoUpdates(state)
-    assert.equal(state.egressMode.value, 'inherit')
+    assert.equal(state.egressMode.value, 'fixed_ipv6_reuse')
   }
 })
 
@@ -162,27 +162,37 @@ test('IPv6 omitted selection and mixed providers never change egress', async (t)
     const { state, requests } = mountEditor(t, { accounts })
     state.open()
     state.egressMode.value = 'random_ipv6_reuse'
-    state.updateEgressMode.value = accounts.length > 1
     state.updateEnabled.value = true
     await state.save()
     assert.equal('egressMode' in requests[0], false)
   }
 })
 
-test('IPv6 batch supports atomic proxy removal and blocks explicit proxy conflicts', async (t) => {
-  const { state, requests, messages } = mountEditor(t)
+test('mixed providers explicitly choose common exits without retaining OpenAI pool routes', async (t) => {
+  const { state, requests } = mountEditor(t, { accounts: [account('a', { requestProxySource: 'mihomo' }), account('b', { provider: 'xai' })] })
   state.open()
-  state.updateEgressMode.value = true
+  assert.equal(state.requestProxyAvailable.value, false)
+  state.proxyMode.value = 'direct'
+  state.updateProxy.value = true
+  await state.save()
+  assert.deepEqual(requests[0], { accountIds: ['a', 'b'], requestProxySource: 'account', egressMode: 'unchanged', outboundProxyId: '' })
+})
+
+test('IPv6 batch atomically removes proxy and proxy selection ignores hidden IPv6 drafts', async (t) => {
+  const { state, requests, selectedIds } = mountEditor(t)
+  state.open()
   state.egressMode.value = 'fixed_ipv6_reuse'
   state.updateProxy.value = true
   state.proxyMode.value = 'proxy'
   state.proxyId.value = 'proxy-a'
   await state.save()
-  assert.equal(requests.length, 0)
-  assert.match(messages.warning.at(-1), /IPv6/)
-  state.proxyMode.value = 'direct'
+  assert.deepEqual(requests[0], { accountIds: ['account-a'], requestProxySource: 'account', egressMode: 'unchanged', outboundProxyId: 'proxy-a' })
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  state.proxyMode.value = 'ipv6'
+  state.updateProxy.value = true
   await state.save()
-  assert.deepEqual(requests[0], { accountIds: ['account-a'], egressMode: 'fixed_ipv6_reuse', outboundProxyId: '' })
+  assert.deepEqual(requests[1], { accountIds: ['account-a'], requestProxySource: 'account', egressMode: 'fixed_ipv6_reuse', outboundProxyId: '' })
 })
 
 test('encrypted content omission needs fresh batch opt-in and clears when Excel is closed', async (t) => {
@@ -556,7 +566,7 @@ test('every single field and combination sends exactly the opted-in patch after 
     { concurrencyLimit: 6 },
     { weight: 23 },
     { groupIds: ['group-new', 'group-other'] },
-    { outboundProxyId: 'proxy-next' },
+    { outboundProxyId: 'proxy-next', requestProxySource: 'account', egressMode: 'unchanged' },
     { customName: null },
     { modelAccess: { mode: 'all', models: [] } },
   ]
@@ -703,8 +713,8 @@ test('valid scheduling boundaries are serialized as numbers', async (t) => {
 
 test('proxy opt-in gates validation and serializes direct, proxy and preserve modes', async (t) => {
   const cases = [
-    { updateProxy: true, mode: 'direct', id: 'stale-proxy', patch: { outboundProxyId: '' } },
-    { updateProxy: true, mode: 'proxy', id: ' \t proxy-next \n ', patch: { outboundProxyId: 'proxy-next' } },
+    { updateProxy: true, mode: 'direct', id: 'stale-proxy', patch: { outboundProxyId: '', requestProxySource: 'account', egressMode: 'unchanged' } },
+    { updateProxy: true, mode: 'proxy', id: ' \t proxy-next \n ', patch: { outboundProxyId: 'proxy-next', requestProxySource: 'account', egressMode: 'unchanged' } },
     { updateProxy: true, mode: 'preserve', id: '', patch: {} },
     { updateProxy: false, mode: 'direct', id: 'stale-proxy', patch: {} },
     { updateProxy: false, mode: 'proxy', id: '', patch: {} },
@@ -735,7 +745,7 @@ test('proxy opt-in gates validation and serializes direct, proxy and preserve mo
     state.proxyMode.value = 'direct'
     state.proxyId.value = ''
     await state.save()
-    assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], outboundProxyId: '' }])
+    assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], outboundProxyId: '', requestProxySource: 'account', egressMode: 'unchanged' }])
     assert.deepEqual(editor.messages.warning, [])
   })
 
@@ -755,7 +765,7 @@ test('proxy opt-in gates validation and serializes direct, proxy and preserve mo
     assert.equal(state.showBatchEditModal.value, true)
     state.proxyId.value = ' proxy-next '
     await state.save()
-    assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], outboundProxyId: 'proxy-next' }])
+    assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], outboundProxyId: 'proxy-next', requestProxySource: 'account', egressMode: 'unchanged' }])
     assert.equal(editor.messages.warning.length, 2)
   })
 })

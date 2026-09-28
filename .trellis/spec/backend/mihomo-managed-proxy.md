@@ -82,6 +82,28 @@ management writes, visible labels and desktop/mobile layout.
 
 ## 7. Wrong vs Correct
 
+Management display audit reference: Sub2API production `ca5dd3cf5299df8778cdfa752430253ad4e071e8`
+(v2.9.1). OpenAI/Grok quality probes intentionally omit credentials and accept HTTP
+401; this is reachability, not account/model authorization. Keep scores compatible,
+but surface failed/challenge/warn checks before the letter grade in the UI.
+
+Country admission continues to use the independent country.is observation. Node
+names and IP-API diagnostic geography must not overwrite it. An unobserved or failed
+lookup follows `allowUnknown`; a dynamic exit follows supplier-management/unknown
+policy. UI explanations must distinguish these from explicitly excluded countries,
+and default `ready` is enabled status, not proof of successful qualification.
+Keep unsaved country drafts across asynchronous mutation acknowledgements and stale
+polls; clear dirty state only when the persisted policy matches, including all flags.
+
+Node management uses 50-row pages and exact subscription-ID filtering (including
+multi-source nodes). Batch connection diagnostics use 3 workers; quality diagnostics
+use 2, sharing the existing read-only check endpoint rather than the state-changing
+`probe` command. Freeze batch targets on start: selected nodes intersect current
+filters, otherwise all filtered nodes, not just the current page. Filter changes
+clear selection and reset the page; refreshes clamp it. A failed node must not stop
+the batch. Summarize failures without per-node toasts, and stop dispatching queued
+work when the panel is disposed. Do not mutate routing or region admission here.
+
 Wrong: put `RequestProxySource` in execution ports and import it into account values.
 Correct: store the value in the account layer and re-export from the port if needed.
 

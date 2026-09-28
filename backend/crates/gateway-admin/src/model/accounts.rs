@@ -23,6 +23,7 @@ pub use gateway_core::account::{
 /// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {
+    pub clear_outbound_proxy: bool,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     pub custom_name: Option<String>,
     pub enabled: bool,
@@ -176,6 +177,8 @@ pub struct AccountRecord {
     pub excel_auto_disable_on_403: bool,
     pub excel_403_action: gateway_core::account::Excel403Action,
     pub excel_auto_disabled_at: Option<DateTime<Utc>>,
+    pub excel_403_warning_at: Option<DateTime<Utc>>,
+    pub quality_monitoring: Option<super::quality_ops::QualityMonitoring>,
     pub excel_mode_disabled_at: Option<DateTime<Utc>>,
     pub effective_excel_models: gateway_core::account::ExcelModels,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
@@ -359,6 +362,7 @@ pub struct AccountSummary {
 /// 账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccount {
+    pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     pub custom_name: Option<Option<String>>,
     pub account_id: String,
     pub enabled: bool,

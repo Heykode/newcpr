@@ -58,6 +58,10 @@ pub fn next_run(
 }
 
 fn validate(config: &QualityRuleConfig) -> Result<(), AdminError> {
+    validate_config(config, true)
+}
+
+fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<(), AdminError> {
     for (label, value, max) in [
         ("账号", config.account_id.as_str(), 128),
         ("模型", config.model.as_str(), 256),
@@ -67,6 +71,9 @@ fn validate(config: &QualityRuleConfig) -> Result<(), AdminError> {
         ("参考答案", config.reference_answer.as_str(), 32_000),
         ("判题提示词", config.judge_prompt.as_str(), 8_000),
     ] {
+        if label == "账号" && !require_account {
+            continue;
+        }
         let required = config.detection_mode == QualityDetectionMode::Answer
             || matches!(label, "账号" | "模型");
         if (required && value.trim().is_empty()) || value.len() > max || value.contains('\0') {
@@ -133,6 +140,19 @@ struct Judgment {
     reason: String,
 }
 
+fn validate_monitor_accounts(ids: &[String]) -> Result<(), AdminError> {
+    if ids.is_empty()
+        || ids.len() > 1000
+        || ids
+            .iter()
+            .any(|id| id.len() > 128 || ProviderAccountId::new(id.as_str()).is_err())
+        || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len()
+    {
+        return Err(AdminError::invalid("请选择 1–1000 个不重复的有效账号"));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum JudgeVerdict {
@@ -197,10 +217,19 @@ impl QualityOpsService {
         config: QualityRuleConfig,
         context: &MutationContext,
     ) -> Result<QualityRule, AdminError> {
-        validate(&config)?;
         if id.is_some() != revision.is_some() {
             return Err(AdminError::invalid("编辑规则必须提供版本"));
         }
+        self.validate_target(&config).await?;
+        let next = next_run(&config, Utc::now())?;
+        self.store()?
+            .save(id, revision, config, next, context)
+            .await
+            .map_err(|error| map_store_error(error, "quality rule"))
+    }
+
+    async fn validate_target(&self, config: &QualityRuleConfig) -> Result<(), AdminError> {
+        validate(config)?;
         let account = self
             .accounts
             .load_account(&config.account_id, AccountRuntimeSnapshot::default())
@@ -257,11 +286,120 @@ impl QualityOpsService {
                 .await
                 .map_err(|error| map_store_error(error, "judge group"))?;
         }
-        let next = next_run(&config, Utc::now())?;
+        Ok(())
+    }
+
+    pub async fn templates(&self) -> Result<Vec<QualityRuleTemplate>, AdminError> {
         self.store()?
-            .save(id, revision, config, next, context)
+            .templates()
             .await
-            .map_err(|error| map_store_error(error, "quality rule"))
+            .map_err(|error| map_store_error(error, "quality templates"))
+    }
+
+    pub async fn save_template(
+        &self,
+        id: Option<&str>,
+        revision: Option<i64>,
+        name: String,
+        config: QualityRuleConfig,
+        context: &MutationContext,
+    ) -> Result<QualityRuleTemplate, AdminError> {
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.chars().count() > 128 || name.chars().any(char::is_control) {
+            return Err(AdminError::invalid("模板名称必须为 1–128 个字符"));
+        }
+        if !config.account_id.is_empty() {
+            return Err(AdminError::invalid("规则模板不能绑定被测账号"));
+        }
+        if id.is_some() != revision.is_some() || revision.is_some_and(|value| value < 1) {
+            return Err(AdminError::invalid("编辑模板必须提供有效版本"));
+        }
+        validate_config(&config, false)?;
+        self.store()?
+            .save_template(id, revision, name, config, context)
+            .await
+            .map_err(|error| map_store_error(error, "quality template"))
+    }
+
+    pub async fn delete_template(
+        &self,
+        id: &str,
+        revision: i64,
+        context: &MutationContext,
+    ) -> Result<(), AdminError> {
+        self.store()?
+            .delete_template(id, revision, context)
+            .await
+            .map_err(|error| map_store_error(error, "quality template"))
+    }
+
+    pub async fn monitoring(
+        &self,
+        account_ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, QualityMonitoring>, AdminError> {
+        validate_monitor_accounts(account_ids)?;
+        self.store()?
+            .monitoring(account_ids)
+            .await
+            .map_err(|error| map_store_error(error, "quality monitoring"))
+    }
+
+    pub async fn apply_template(
+        &self,
+        id: &str,
+        revision: i64,
+        targets: Vec<QualityTemplateTarget>,
+        context: &MutationContext,
+    ) -> Result<Vec<QualityTemplateApplyResult>, AdminError> {
+        validate_monitor_accounts(
+            &targets
+                .iter()
+                .map(|target| target.account_id.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        if targets.iter().any(|target| {
+            target.rule_id.is_some() != target.revision.is_some()
+                || target.revision.is_some_and(|value| value < 1)
+        }) {
+            return Err(AdminError::invalid("目标规则版本不合法，请刷新后重试"));
+        }
+        let template = self
+            .store()?
+            .template(id)
+            .await
+            .map_err(|error| map_store_error(error, "quality template"))?
+            .ok_or_else(|| AdminError::not_found("规则模板已删除"))?;
+        if template.revision != revision {
+            return Err(AdminError::conflict("规则模板已更新，请重新选择"));
+        }
+        let mut results = Vec::with_capacity(targets.len());
+        for target in targets {
+            let mut config = template.config.clone();
+            config.account_id.clone_from(&target.account_id);
+            let result = async {
+                self.validate_target(&config).await?;
+                self.store()?
+                    .apply_template(&template, &target, next_run(&config, Utc::now())?, context)
+                    .await
+                    .map_err(|error| map_store_error(error, "quality rule"))
+            }
+            .await;
+            results.push(match result {
+                Ok(rule) => QualityTemplateApplyResult {
+                    account_id: target.account_id,
+                    rule_id: Some(rule.id),
+                    success: true,
+                    message: None,
+                },
+                Err(error) => QualityTemplateApplyResult {
+                    account_id: target.account_id,
+                    rule_id: None,
+                    success: false,
+                    message: Some(error.message().to_owned()),
+                },
+            });
+        }
+        Ok(results)
     }
 
     pub async fn delete(
@@ -839,5 +977,47 @@ mod tests {
         config.failure_template.as_mut().unwrap().revision = 1;
         config.failure_template.as_mut().unwrap().config.weight = 0;
         assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn quality_rule_template_omits_account_but_real_rules_still_require_it() {
+        let value = serde_json::json!({
+            "detectionMode": "state_probe", "model": "model",
+            "enabled": true, "cron": "0 */6 * * *", "timezone": "UTC", "repetitions": 1
+        });
+        let mut config: QualityRuleConfig = serde_json::from_value(value).unwrap();
+        assert!(config.account_id.is_empty());
+        assert!(validate_config(&config, false).is_ok());
+        assert!(validate(&config).is_err());
+        assert!(
+            serde_json::to_value(&config)
+                .unwrap()
+                .get("accountId")
+                .is_none()
+        );
+        config.account_id = "acct_quality_a".into();
+        assert!(validate(&config).is_ok());
+        config.repetitions = 9;
+        assert!(validate_config(&config, false).is_err());
+    }
+
+    #[test]
+    fn monitoring_targets_reject_duplicates_and_empty_or_oversized_batches() {
+        assert!(validate_monitor_accounts(&[]).is_err());
+        assert!(validate_monitor_accounts(&["".into()]).is_err());
+        assert!(
+            validate_monitor_accounts(&["acct_quality_a".into(), "acct_quality_a".into()]).is_err()
+        );
+        assert!(
+            validate_monitor_accounts(
+                &(0..1001)
+                    .map(|index| format!("acct_quality_{index}"))
+                    .collect::<Vec<_>>()
+            )
+            .is_err()
+        );
+        assert!(
+            validate_monitor_accounts(&["acct_quality_a".into(), "acct_quality_b".into()]).is_ok()
+        );
     }
 }

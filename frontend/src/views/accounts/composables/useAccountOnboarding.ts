@@ -222,9 +222,14 @@ export function useAccountOnboarding(options: {
 
   watch(
     () => createForm.value.provider,
-    () => {
+    (provider, previousProvider) => {
       createForm.value = {
         ...createForm.value,
+        proxyMode: provider === 'openai' && !previousProvider && createForm.value.proxyMode === 'direct'
+          ? 'inherit'
+          : provider !== 'openai' && !['direct', 'proxy'].includes(createForm.value.proxyMode)
+            ? 'direct'
+            : createForm.value.proxyMode,
         mode: createForm.value.provider === 'batch' ? 'json' : 'oauth',
         importTexts: { access_token: '', refresh_token: '', json: '', two_fa: '' },
         replaceExisting2fa: false,

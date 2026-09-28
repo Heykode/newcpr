@@ -291,6 +291,7 @@ fn credential() -> ReloginCredential {
 
 pub(super) fn template_config() -> ReloginTemplateConfig {
     ReloginTemplateConfig {
+        preserve_outbound_proxy: false,
         egress_mode: None,
         responses_upstream: None,
         excel_models: None,

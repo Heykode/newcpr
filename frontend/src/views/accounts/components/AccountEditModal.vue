@@ -3,13 +3,11 @@ import type { AccountRow } from '../constants'
 
 import type { AccountGroup, AccountModelAccess } from '@/api'
 import type { Excel403Action } from '@/utils/excel-settings'
-import { shallowRef } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import AccountEgressControl from './AccountEgressControl.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
@@ -41,7 +39,7 @@ const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', {
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
-const egressSaving = shallowRef(false)
+const egressMode = defineModel<string>('egressMode', { required: true })
 </script>
 
 <template>
@@ -50,7 +48,7 @@ const egressSaving = shallowRef(false)
     title="编辑账号"
     description="查看账号信息，并调整调度与所属分组。"
     size="md"
-    :dismissible="!saving && !egressSaving"
+    :dismissible="!saving"
   >
     <div v-if="account" class="grid gap-5">
       <div
@@ -86,6 +84,7 @@ const egressSaving = shallowRef(false)
         v-model:selected-group-ids="selectedGroupIds"
         v-model:proxy-mode="proxyMode"
         v-model:proxy-id="proxyId"
+        v-model:egress-mode="egressMode"
         encrypted-content-available
         name-available
         model-access-available
@@ -93,27 +92,20 @@ const egressSaving = shallowRef(false)
         :groups-loading="groupsLoading"
         :excel-available="account.provider === 'openai' && account.authenticationKind === 'oauth'"
         :request-proxy-available="account.provider === 'openai'"
-        :disabled="saving || egressSaving"
+        :disabled="saving"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
-      />
-      <AccountEgressControl
-        v-if="account.provider === 'openai'"
-        :key="account.id"
-        :account-id="account.id"
-        :disabled="saving"
-        @saving="egressSaving = $event"
       />
     </div>
 
     <template #footer>
-      <BaseButton variant="secondary" :disabled="saving || egressSaving" @click="open = false">
+      <BaseButton variant="secondary" :disabled="saving" @click="open = false">
         取消未保存更改
       </BaseButton>
       <BaseButton
         variant="primary"
         :loading="saving"
-        :disabled="!account || groupsLoading || egressSaving"
+        :disabled="!account || groupsLoading"
         @click="emit('save')"
       >
         保存账号设置

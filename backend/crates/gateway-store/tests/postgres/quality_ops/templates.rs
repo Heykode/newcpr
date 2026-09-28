@@ -57,6 +57,44 @@ async fn snapshot(db: &TestDatabase) -> Value {
 }
 
 #[tokio::test]
+async fn quality_template_preserves_account_outbound_when_requested() {
+    let Some(db) = TestDatabase::create("quality_template_preserve_proxy").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    sqlx::query("update provider_accounts set outbound_proxy_url='http://proxy.example:8080' where id='acct_quality_a'")
+        .execute(&db.pool).await.unwrap();
+    let mut authoritative = template(&db).await;
+    authoritative.config.preserve_outbound_proxy = true;
+    authoritative.config.egress_mode = None;
+    sqlx::query("update account_relogin_templates set config=$1 where id=$2")
+        .bind(serde_json::to_value(&authoritative.config).unwrap())
+        .bind(&authoritative.id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let before = snapshot(&db).await;
+    let rule = save(&store, &authoritative, 1).await;
+    let run = scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    assert_eq!(run.action.as_deref(), Some("template_applied"));
+    let after = snapshot(&db).await;
+    for field in [
+        "outbound_proxy_url",
+        "outbound_proxy_id",
+        "request_proxy_source",
+        "provider_credentials_json",
+        "credential_revision",
+    ] {
+        assert_eq!(
+            after["account"][field], before["account"][field],
+            "must preserve {field}"
+        );
+    }
+    assert_eq!(after["egress"], before["egress"]);
+    db.close().await;
+}
+
+#[tokio::test]
 async fn template_threshold_snapshot_and_complete_application_are_atomic() {
     use QualityVerdict::{Correct, Incorrect, RequestError, Unknown};
     let Some(db) = TestDatabase::create("quality_template_apply").await else {

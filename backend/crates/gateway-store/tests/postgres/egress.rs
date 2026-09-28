@@ -54,6 +54,144 @@ fn batch_account(id: &str) -> gateway_store::postgres::NewProviderAccount {
 }
 
 #[tokio::test]
+async fn unified_single_save_clears_proxy_atomically_and_preserves_identity() {
+    use gateway_admin::{
+        model::{accounts::UpdateAccount, proxies::AccountProxySelection},
+        ports::store::AccountStore,
+    };
+    let Some(database) = TestDatabase::create("unified_single_egress").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let egress = PgProviderEgressRepository::new(database.pool.clone());
+    let accounts = super::admin_account_store(&database.pool);
+    let mut seed = batch_account("acct_unified");
+    seed.outbound_proxy = Some(OutboundProxy::parse("http://proxy.example:8080").unwrap());
+    repository.insert_provider_account(seed).await.unwrap();
+    egress
+        .replace(
+            replace(&load(&egress).await, EgressMode::Unchanged, pool(true)),
+            &context(),
+        )
+        .await
+        .unwrap();
+    let identity = || {
+        sqlx::query_scalar::<_, serde_json::Value>(
+        "select jsonb_build_array(provider_credentials_json,credential_revision,upstream_user_id,upstream_account_id) from provider_accounts where id='acct_unified'"
+    ).fetch_one(&database.pool)
+    };
+    let before = identity().await.unwrap();
+    let bindings = load(&egress).await.fixed_bindings;
+    let mut command = UpdateAccount {
+        account_id: "acct_unified".into(),
+        egress_mode: Some(Some(EgressMode::FixedIpv6Reuse)),
+        outbound_proxy: Some(AccountProxySelection::Direct),
+        request_proxy_source: Some(gateway_core::account::RequestProxySource::Account),
+        custom_name: None,
+        enabled: true,
+        turn_state_injection_enabled: None,
+        responses_upstream: None,
+        excel_models: None,
+        excel_models_follow_global: None,
+        excel_cache_creation_as_input: None,
+        excel_ignore_encrypted_content: None,
+        excel_auto_disable_on_403: None,
+        excel_403_action: None,
+        concurrency_limit: None,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
+        model_access: None,
+        group_ids: vec![],
+    };
+    accounts
+        .update_account(command.clone(), &context())
+        .await
+        .unwrap();
+    assert_eq!(identity().await.unwrap(), before);
+    assert_eq!(load(&egress).await.fixed_bindings, bindings);
+    let proxy: Option<String> = sqlx::query_scalar(
+        "select outbound_proxy_url from provider_accounts where id='acct_unified'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(proxy.is_none());
+    let snapshot: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a where id='acct_unified'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let revision = load(&egress).await.revision;
+    command.outbound_proxy = Some(AccountProxySelection::Url(
+        OutboundProxy::parse("http://proxy.example:8080").unwrap(),
+    ));
+    command.weight = gateway_core::account::AccountWeight::new(9).unwrap();
+    assert!(accounts.update_account(command, &context()).await.is_err());
+    let after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a where id='acct_unified'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(after, snapshot);
+    assert_eq!(load(&egress).await.revision, revision);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn unified_reimport_explicitly_clears_old_proxy_but_legacy_import_does_not() {
+    use gateway_admin::model::relogin_templates::ReloginTemplateConfig;
+    use gateway_store::postgres::{
+        ImportProviderAccounts, ProviderAccountAdminRepository, ProviderAccountAdminScope,
+    };
+    let Some(database) = TestDatabase::create("unified_import_egress").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let egress = PgProviderEgressRepository::new(database.pool.clone());
+    egress
+        .replace(
+            replace(&load(&egress).await, EgressMode::Unchanged, pool(true)),
+            &context(),
+        )
+        .await
+        .unwrap();
+    let mut seed = batch_account("acct_import_proxy");
+    seed.outbound_proxy = Some(OutboundProxy::parse("http://proxy.example:8080").unwrap());
+    repository.insert_provider_account(seed).await.unwrap();
+    let config: ReloginTemplateConfig = serde_json::from_value(serde_json::json!({
+        "name": "Import", "enabled": true, "weight": 1, "groupIds": [], "preserveOutboundProxy": true
+    })).unwrap();
+    for clear in [false, true] {
+        let mut settings = config.settings().unwrap();
+        settings.clear_outbound_proxy = clear;
+        settings.egress_mode = clear.then_some(Some(EgressMode::FixedIpv6Reuse));
+        repository
+            .import_provider_accounts(ImportProviderAccounts {
+                accounts: vec![batch_account("acct_import_proxy")],
+                scope: ProviderAccountAdminScope {
+                    provider_kind: "openai".into(),
+                },
+                settings: Some(settings),
+                outbound_proxy: None,
+                audit: super::provider_accounts::audit(
+                    &format!("unified-import-{clear}"),
+                    "import",
+                    "acct_import_proxy",
+                ),
+            })
+            .await
+            .unwrap();
+        let proxy: Option<String> = sqlx::query_scalar(
+            "select outbound_proxy_url from provider_accounts where id='acct_import_proxy'",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(proxy.is_none(), clear);
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn ipv6_batch_modes_preserve_identity_and_fixed_bindings_and_support_inheritance() {
     use gateway_admin::ports::store::AccountStore;
     let Some(database) = TestDatabase::create("ipv6_batch_modes").await else {
@@ -212,6 +350,24 @@ async fn ipv6_batch_final_proxy_conflicts_and_mixed_providers_roll_back_every_ch
         );
     }
     assert_eq!(current.fixed_bindings, initial.fixed_bindings);
+    let mut common = batch(&["acct_direct", "acct_xai"]);
+    common.egress_mode = Some(Some(EgressMode::Unchanged));
+    common.request_proxy_source = Some(gateway_core::account::RequestProxySource::Account);
+    common.outbound_proxy = Some(AccountProxySelection::Direct);
+    accounts
+        .batch_update_accounts(common, &context())
+        .await
+        .unwrap();
+    let current = load(&egress).await;
+    assert_eq!(
+        current.account_overrides[&ProviderAccountId::new("acct_direct").unwrap()],
+        Some(EgressMode::Unchanged)
+    );
+    assert!(
+        !current
+            .account_overrides
+            .contains_key(&ProviderAccountId::new("acct_xai").unwrap())
+    );
     database.close().await;
 }
 
