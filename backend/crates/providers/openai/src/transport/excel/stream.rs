@@ -250,6 +250,7 @@ impl Relay {
                 protocol("Excel output violated the requested tool choice or parallel-call limit")
             })?;
             let mut completed_tools = BTreeSet::new();
+            let mut completed_item_ids = BTreeSet::new();
             for (index, item) in items.iter_mut().enumerate() {
                 if matches!(
                     item.get("type").and_then(Value::as_str),
@@ -267,6 +268,9 @@ impl Relay {
                     let converted = self.tools.convert_call(item).map_err(|_| {
                         protocol("Excel returned an undeclared or malformed tool call")
                     })?;
+                    if !completed_item_ids.insert(converted["id"].to_string()) {
+                        return Err(protocol("Excel completion duplicated a tool identity"));
+                    }
                     result.extend(tool_events(&converted, index));
                     *item = converted;
                 } else if (self.structured.is_some()
@@ -486,6 +490,144 @@ mod tests {
             prepared.completed.lock().unwrap().as_ref().unwrap()["output"][0]["name"],
             "run_officejs"
         );
+    }
+
+    #[tokio::test]
+    async fn completed_tool_batches_validate_all_identities_before_emitting_calls() {
+        for case in [
+            "valid",
+            "custom",
+            "schema",
+            "duplicate_call",
+            "duplicate_item",
+            "omitted",
+            "serial",
+        ] {
+            let mut source_body = json!({
+                "tools":[{"type":"function","name":"lookup","parameters":{
+                    "type":"object","properties":{"value":{"type":"integer"}},
+                    "required":["value"],"additionalProperties":false
+                }}],
+                "parallel_tool_calls":case != "serial",
+                "text":{"format":{"type":"json_object"}}
+            });
+            let mut calls: Vec<Value> = (0..2)
+                .map(|index| {
+                    json!({
+                        "type":"function_call","id":format!("fc_fixture_{index}"),
+                        "call_id":format!("call_fixture_{index}"),"name":"run_officejs",
+                        "arguments":json!({"code":json!({
+                            "name":"lookup","arguments":{"value":index}
+                        }).to_string()}).to_string()
+                    })
+                })
+                .collect();
+            match case {
+                "schema" => {
+                    calls[1]["arguments"] = json!({"code":json!({
+                    "name":"lookup","arguments":{"value":"invalid"}
+                }).to_string()})
+                    .to_string()
+                    .into()
+                }
+                "duplicate_call" => calls[1]["call_id"] = calls[0]["call_id"].clone(),
+                "duplicate_item" => calls[1]["id"] = calls[0]["id"].clone(),
+                "custom" => {
+                    source_body["tools"] = json!([{"type":"custom","name":"lookup"}]);
+                    for (index, call) in calls.iter_mut().enumerate() {
+                        call["id"] = "fc_shared_native_item".into();
+                        call["arguments"] = json!({"code":json!({
+                            "name":"lookup","input":format!("payload {index}")
+                        }).to_string()})
+                        .to_string()
+                        .into();
+                    }
+                }
+                _ => {}
+            }
+            let mut wire = Vec::new();
+            for (index, item) in calls.iter().enumerate() {
+                wire.extend_from_slice(&encode(
+                    "response.output_item.added",
+                    &json!({
+                        "type":"response.output_item.added","output_index":index,"item":item
+                    }),
+                ));
+            }
+            if case == "omitted" {
+                calls.pop();
+            }
+            wire.extend_from_slice(&encode(
+                "response.completed",
+                &json!({
+                    "type":"response.completed","response":{
+                        "id":"resp_batch_fixture","status":"completed","output":calls
+                    }
+                }),
+            ));
+            let prepared = ExcelPreparedRequest {
+                body: Default::default(),
+                tools: ClientTools::parse(source_body.as_object().unwrap()).unwrap(),
+                structured: StructuredOutput::parse(source_body.as_object().unwrap()).unwrap(),
+                _image_lease: None,
+                image_limits: Default::default(),
+                completed: Default::default(),
+                usage: Default::default(),
+                replay: None,
+                endpoint: super::super::RESPONSES_URL.into(),
+            };
+            let chunks = wire
+                .chunks(7)
+                .map(|part| Ok(Bytes::copy_from_slice(part)))
+                .collect::<Vec<_>>();
+            let results = transform_stream(Box::pin(futures::stream::iter(chunks)), &prepared)
+                .collect::<Vec<_>>()
+                .await;
+            if !matches!(case, "valid" | "custom") {
+                assert_eq!(
+                    results.len(),
+                    1,
+                    "{case}: no executable events before rejection"
+                );
+                assert!(
+                    matches!(results[0], Err(CodexClientError::InvalidSse(_))),
+                    "{case}"
+                );
+                assert!(prepared.completed.lock().unwrap().is_none(), "{case}");
+                continue;
+            }
+            let bytes = results
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .concat();
+            let events = SseEventDecoder::default().push(&bytes).unwrap();
+            assert_eq!(events.len(), 9);
+            for (sequence, event) in events.iter().enumerate() {
+                let value: Value = serde_json::from_str(&event.data).unwrap();
+                assert_eq!(value["sequence_number"], sequence as u64);
+            }
+            let final_event: Value = serde_json::from_str(&events.last().unwrap().data).unwrap();
+            assert_eq!(final_event["type"], "response.completed");
+            for index in 0..2 {
+                let call = &final_event["response"]["output"][index];
+                assert_eq!(call["name"], "lookup");
+                assert_eq!(call["call_id"], format!("call_fixture_{index}"));
+                if case == "custom" {
+                    assert_eq!(call["type"], "custom_tool_call");
+                    assert_eq!(call["input"], format!("payload {index}"));
+                } else {
+                    assert_eq!(
+                        serde_json::from_str::<Value>(call["arguments"].as_str().unwrap()).unwrap(),
+                        json!({"value":index})
+                    );
+                }
+            }
+            assert_ne!(
+                final_event["response"]["output"][0]["id"],
+                final_event["response"]["output"][1]["id"]
+            );
+        }
     }
 
     #[tokio::test]

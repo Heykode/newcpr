@@ -120,6 +120,25 @@ fn cases() -> Vec<(Value, Value)> {
     expected["input"][0]["role"] = json!("developer");
     expected["input"][1]["role"] = json!("developer");
     cases.push((original, expected));
+
+    // Wire isolation only: native requests must not inherit Excel admission limits.
+    let tools: Vec<_> = (0..257)
+        .map(|index| json!({"type":"function","name":format!("fixture_{index}"),"parameters":{"type":"object"}}))
+        .collect();
+    let mut content = vec![json!({"type":"input_text","text":"Inspect these images."})];
+    content.extend((0..21).map(|index| json!({
+        "type":"input_image","image_url":format!("https://images.example.invalid/fixture-{index}.png")
+    })));
+    let original = json!({
+        "model":"client-model","stream":false,"tools":tools,
+        "prompt_cache_key":"native-tool-image-isolation",
+        "input":[{"type":"message","role":"user","content":content}]
+    });
+    let mut expected = original.clone();
+    expected["model"] = json!("gpt-test");
+    expected["stream"] = json!(true);
+    expected["store"] = json!(false);
+    cases.push((original, expected));
     cases
 }
 

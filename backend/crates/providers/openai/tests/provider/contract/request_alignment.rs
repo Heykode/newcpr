@@ -246,6 +246,50 @@ fn stable_facts(capture: &Capture) -> Value {
 }
 
 #[tokio::test]
+async fn oauth_format_compatibility_preserves_http_websocket_identity_and_source() {
+    let accounts = Arc::new(MemoryAccountStore::default());
+    let id = format!("acct_compatibility_{}", uuid::Uuid::new_v4());
+    let account_id = id.as_str();
+    create_account(&accounts, account_id).await;
+    let runtime = tempfile::tempdir().unwrap();
+    for websocket in [false, true] {
+        let source = json!({"model":"gpt-5.4","session_id":"compatibility-fixture",
+            "prompt_cache_key":"fixed-cache-key","input":[
+                {"role":"user","content":"Continue the tool history."},
+                {"type":"custom_tool_call","id":"fc_old_kind","call_id":"call_fixture","name":"fixture","input":"exact input"},
+                {"type":"custom_tool_call_output","call_id":"call_fixture","output":"exact output"}],
+            "tools":[{"type":"custom","name":"fixture"}],
+            "text":{"format":{"type":"json_schema","schema":{"type":"object"}}}});
+        let mut normalized = source.clone();
+        normalized["text"]["format"]["name"] = "response".into();
+        normalized["input"][1].as_object_mut().unwrap().remove("id");
+        let repaired = capture(
+            &accounts,
+            account_id,
+            runtime.path(),
+            source.clone(),
+            websocket,
+            true,
+        )
+        .await;
+        let control = capture(
+            &accounts,
+            account_id,
+            runtime.path(),
+            normalized.clone(),
+            websocket,
+            true,
+        )
+        .await;
+        assert_eq!(repaired.body["input"], normalized["input"]);
+        assert_eq!(repaired.body["text"], normalized["text"]);
+        assert_eq!(stable_facts(&repaired), stable_facts(&control));
+        assert_eq!(source["input"][1]["id"], "fc_old_kind");
+        assert!(source["text"]["format"].get("name").is_none());
+    }
+}
+
+#[tokio::test]
 async fn excel_omission_option_does_not_change_native_http_or_websocket_wire_or_identity() {
     for websocket in [false, true] {
         for excel_account in [false, true] {
