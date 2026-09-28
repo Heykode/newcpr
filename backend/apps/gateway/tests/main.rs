@@ -195,6 +195,12 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
+        // Round-robin regressions need the private cursor and source-health clock.
+        ("crates/providers/openai", Some("transport/egress/mod.rs"), Item::Mod(module)) => {
+            module.ident == "round_robin_tests"
+                && module.content.is_none()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // Protocol authorization, bounded attachment parsing and immutable replay
         // are private implementation details, not production test APIs.
         (
@@ -406,6 +412,36 @@ fn private_test_allowlist_requires_exact_owner_name_and_test_only_gate() {
         "#[cfg(test)] #[cfg_attr(unix, path = \"other.rs\")] mod tests;",
         "#[cfg(test)] mod tests {}",
         "#[cfg(test)] fn tests() {}",
+    ] {
+        let item: Item = syn::parse_str(source).unwrap();
+        assert!(!is_audited_private_test(owner, path, &item), "{source}");
+    }
+}
+
+#[test]
+fn egress_private_tests_require_exact_owner_and_test_only_gate() {
+    let owner = "crates/providers/openai";
+    let path = Path::new("transport/egress/mod.rs");
+    let item: Item = syn::parse_str("#[cfg(test)] mod round_robin_tests;").unwrap();
+    assert!(is_audited_private_test(owner, path, &item));
+    assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+    for relative in [
+        "transport/other/mod.rs",
+        "transport/egress/round_robin_tests.rs",
+    ] {
+        assert!(!is_audited_private_test(owner, Path::new(relative), &item));
+    }
+    for source in [
+        "mod round_robin_tests;",
+        "#[cfg(test)] mod other;",
+        "#[cfg(test)] pub mod round_robin_tests;",
+        "#[cfg(test)] pub(crate) mod round_robin_tests;",
+        "#[cfg(test)] mod round_robin_tests {}",
+        "#[cfg(test)] fn round_robin_tests() {}",
+        "#[cfg(any(test, feature = \"production\"))] mod round_robin_tests;",
+        "#[cfg(test)] #[path = \"other.rs\"] mod round_robin_tests;",
+        "#[cfg(test)] #[cfg_attr(test, path = \"other.rs\")] mod round_robin_tests;",
+        "#[cfg_attr(feature = \"production\", cfg(test))] mod round_robin_tests;",
     ] {
         let item: Item = syn::parse_str(source).unwrap();
         assert!(!is_audited_private_test(owner, path, &item), "{source}");
