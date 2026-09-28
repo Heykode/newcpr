@@ -391,6 +391,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             excel_image_max_bytes: Some(8 * 1024 * 1024),
             excel_image_total_bytes: Some(16 * 1024 * 1024),
             excel_image_max_count: Some(32),
+            excel_image_limit_policy: Some(gateway_core::routing::ExcelImageLimitPolicy::Warn),
+            excel_image_warning_remaining: Some(8),
+            excel_image_compact_reserve: Some(3),
             excel_image_relay_requests: Some(128),
             excel_image_relay_downloads: Some(32),
             excel_image_relay_entries: Some(128),
@@ -467,6 +470,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["requestTuning"]["excelImageMaxBytes"] = json!(8388608);
     expected["requestTuning"]["excelImageTotalBytes"] = json!(16777216);
     expected["requestTuning"]["excelImageMaxCount"] = json!(32);
+    expected["requestTuning"]["excelImageLimitPolicy"] = json!("warn");
+    expected["requestTuning"]["excelImageWarningRemaining"] = json!(8);
+    expected["requestTuning"]["excelImageCompactReserve"] = json!(3);
     assert_eq!(value, expected);
 }
 
