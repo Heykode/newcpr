@@ -3,6 +3,33 @@ use gateway_core::routing::RequestTuning;
 use serde_json::json;
 
 #[test]
+fn excel_image_policy_defaults_and_warning_bounds_are_explicit() {
+    let default = RequestTuning::default();
+    assert_eq!(
+        default.excel_image_limit_policy,
+        gateway_core::routing::ExcelImageLimitPolicy::Off
+    );
+    assert_eq!(default.excel_image_warning_remaining, 8);
+    assert_eq!(default.excel_image_compact_reserve, 3);
+    for (warning, reserve, limit, valid) in [
+        (8, 3, 20, true),
+        (3, 3, 20, false),
+        (8, 0, 20, false),
+        (20, 3, 20, false),
+        (2, 1, 3, true),
+    ] {
+        let value: RequestTuningOverrides = serde_json::from_value(json!({"excelImageLimitPolicy":"warn","excelImageWarningRemaining":warning,"excelImageCompactReserve":reserve,"excelImageMaxCount":limit})).unwrap();
+        assert_eq!(value.validate(), valid);
+    }
+    assert!(
+        serde_json::from_value::<RequestTuningOverrides>(
+            json!({"excelImageLimitPolicy":"delete_images"})
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn excel_image_transport_validates_explicit_modes_and_origin() {
     for value in [
         json!({}),
@@ -70,6 +97,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         excel_image_max_bytes: Some(8 * 1024 * 1024),
         excel_image_total_bytes: Some(16 * 1024 * 1024),
         excel_image_max_count: Some(32),
+        excel_image_limit_policy: Some(gateway_core::routing::ExcelImageLimitPolicy::Warn),
+        excel_image_warning_remaining: Some(8),
+        excel_image_compact_reserve: Some(3),
         excel_image_relay_requests: Some(128),
         excel_image_relay_downloads: Some(32),
         excel_image_relay_entries: Some(128),
@@ -109,6 +139,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "excelImageMaxBytes": 8388608,
             "excelImageTotalBytes": 16777216,
             "excelImageMaxCount": 32,
+            "excelImageLimitPolicy": "warn",
+            "excelImageWarningRemaining": 8,
+            "excelImageCompactReserve": 3,
             "excelImageRelayRequests": 128,
             "excelImageRelayDownloads": 32,
             "excelImageRelayEntries": 128,

@@ -1,20 +1,18 @@
 <script setup lang="ts">
 import { Save } from '@lucide/vue'
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
-import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
-import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
+import ExcelSettingsCard from './components/ExcelSettingsCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import NotificationChannelsCard from './components/NotificationChannelsCard.vue'
 import OutboundUserAgentCard from './components/OutboundUserAgentCard.vue'
@@ -26,6 +24,7 @@ import { rotationOptions } from './constants'
 
 const route = useRoute()
 const router = useRouter()
+const configurationScope = ref('common')
 
 type SettingsSection = 'runtime' | 'backup'
 
@@ -47,6 +46,7 @@ const {
   saving,
   error,
   form,
+  excelImages,
   mappings,
   addMapping,
   updateMapping,
@@ -113,84 +113,88 @@ watch(
         <template #icon>
           <Save class="size-4" />
         </template>
-        {{ saving ? '保存中...' : '保存' }}
+        {{ saving ? '保存中...' : '保存全部设置' }}
       </BaseButton>
     </div>
 
     <div v-if="section === 'runtime'" class="mt-5 grid w-full gap-5">
-      <AdminPasswordCard />
-      <AdminApiKeyCard
-        :status="adminApiKeyStatus"
-        :loading="adminKeyLoading"
-        :regenerating="adminKeyRegenerating"
-        :deleting="adminKeyDeleting"
-        :generated-key="generatedAdminApiKey"
-        @regenerate="handleRegenerateAdminApiKey"
-        @request-delete="showDeleteAdminKeyModal = true"
-        @copy="copyAdminApiKey"
+      <BaseSegmented
+        v-model="configurationScope"
+        label="配置范围"
+        :options="[
+          { label: '通用与 Codex 配置', value: 'common' },
+          { label: 'Excel 配置', value: 'excel' },
+        ]"
       />
+      <div v-show="configurationScope === 'common'" class="grid min-w-0 gap-5" role="region" aria-label="通用与 Codex 配置">
+        <AdminPasswordCard />
+        <AdminApiKeyCard
+          :status="adminApiKeyStatus"
+          :loading="adminKeyLoading"
+          :regenerating="adminKeyRegenerating"
+          :deleting="adminKeyDeleting"
+          :generated-key="generatedAdminApiKey"
+          @regenerate="handleRegenerateAdminApiKey"
+          @request-delete="showDeleteAdminKeyModal = true"
+          @copy="copyAdminApiKey"
+        />
 
-      <NotificationChannelsCard />
+        <NotificationChannelsCard />
 
-      <RuntimeSettingsCard
-        v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
-        v-model:refresh-margin-seconds="refreshMarginSecondsValue"
-        v-model:refresh-concurrency="refreshConcurrencyValue"
-        v-model:request-interval-ms="requestIntervalMsValue"
-        v-model:responses-max-decompressed-body-bytes="responsesMaxDecompressedBodyBytesValue"
-        v-model:disable-fast="form.disableFast"
-        v-model:request-tuning="form.requestTuning"
-        :disabled="loading || saving"
-      />
+        <RuntimeSettingsCard
+          v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
+          v-model:refresh-margin-seconds="refreshMarginSecondsValue"
+          v-model:refresh-concurrency="refreshConcurrencyValue"
+          v-model:request-interval-ms="requestIntervalMsValue"
+          v-model:responses-max-decompressed-body-bytes="responsesMaxDecompressedBodyBytesValue"
+          v-model:disable-fast="form.disableFast"
+          v-model:request-tuning="form.requestTuning"
+          :disabled="loading || saving"
+        />
 
-      <ClientVersionSettings
-        v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
-        v-model:min-codex-cli-version="form.minCodexCliVersion"
-        :loading="loading"
-        :desktop-error="minCodexDesktopVersionError"
-        :cli-error="minCodexCliVersionError"
-      />
+        <ClientVersionSettings
+          v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
+          v-model:min-codex-cli-version="form.minCodexCliVersion"
+          :loading="loading"
+          :desktop-error="minCodexDesktopVersionError"
+          :cli-error="minCodexCliVersionError"
+        />
 
-      <OutboundUserAgentCard />
+        <OutboundUserAgentCard />
 
-      <section aria-label="Excel 默认配置" class="border-y border-cp-border py-5">
-        <h2 class="mb-4 mt-0 text-cp-lg font-medium">
-          Excel 默认配置
-        </h2>
-        <BaseFormItem label="全局 Excel 模型">
-          <BaseInput
-            v-model="form.excelDefaultModels"
-            aria-label="全局 Excel 模型"
-            :placeholder="DEFAULT_EXCEL_MODELS_INPUT"
-            :disabled="loading || saving"
-          />
-        </BaseFormItem>
-      </section>
+        <ModelAliasesCard
+          :mappings="mappings"
+          :loading="loading"
+          :error="error"
+          @add-mapping="addMapping"
+          @update-mapping="updateMapping"
+          @remove-mapping="removeMapping"
+        />
 
-      <ModelAliasesCard
-        :mappings="mappings"
-        :loading="loading"
-        :error="error"
-        @add-mapping="addMapping"
-        @update-mapping="updateMapping"
-        @remove-mapping="removeMapping"
-      />
+        <RotationStrategyCard v-model="form.rotationStrategy" v-model:smart-scheduling="form.requestTuning.smartScheduling" :options="rotationOptions" :disabled="loading || saving" />
 
-      <RotationStrategyCard v-model="form.rotationStrategy" v-model:smart-scheduling="form.requestTuning.smartScheduling" :options="rotationOptions" :disabled="loading || saving" />
-
-      <BaseConfirmModal
-        v-model="showDeleteAdminKeyModal"
-        title="删除管理员 API Key"
-        description="删除后外部系统将无法继续使用该 Key 调用管理接口"
-        destructive
-        confirm-text="确认删除"
-        :loading="adminKeyDeleting"
-        @confirm="handleDeleteAdminApiKey"
-      >
-        <p class="m-0">
-          确定要删除当前管理员 API Key 吗？此操作会立即生效
-        </p>
-      </BaseConfirmModal>
+        <BaseConfirmModal
+          v-model="showDeleteAdminKeyModal"
+          title="删除管理员 API Key"
+          description="删除后外部系统将无法继续使用该 Key 调用管理接口"
+          destructive
+          confirm-text="确认删除"
+          :loading="adminKeyDeleting"
+          @confirm="handleDeleteAdminApiKey"
+        >
+          <p class="m-0">
+            确定要删除当前管理员 API Key 吗？此操作会立即生效
+          </p>
+        </BaseConfirmModal>
+      </div>
+      <div v-show="configurationScope === 'excel'" class="min-w-0" role="region" aria-label="Excel 配置">
+        <ExcelSettingsCard
+          v-model:models="form.excelDefaultModels"
+          v-model:request-tuning="form.requestTuning"
+          :images="excelImages"
+          :disabled="loading || saving"
+        />
+      </div>
     </div>
 
     <div v-else class="mt-5">

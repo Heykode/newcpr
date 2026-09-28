@@ -15,6 +15,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Smart Scheduling Settings](../backend/upstream-hardening.md) | Shared Smart/Sticky weights, cloned defaults, save validation and reset | Local selective adaptation |
+| [Excel Settings](./excel-settings.md) | Common/Excel scopes, exact MiB conversion, draft validation and isolated browser checks | Local implementation |
 | [Account Management](./account-management.md) | Diagnostic lifetimes, opt-in batch editing, persisted preferences, table sorting and IPv6 paging | Implemented |
 | [Quality Operations](./quality-operations.md) | Scheduled test controls, safe result details and side panels | Isolated OVH verification |
 | [Usage State Diagnostics](./usage-state-diagnostics.md) | Request-local State summaries, lazy sensitive detail and dismissal lifetime | Implemented |

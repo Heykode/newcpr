@@ -12,6 +12,8 @@ mod history_messages;
 mod history_tests;
 mod image_cache;
 pub(crate) mod image_generation;
+pub(crate) mod image_policy;
+pub(crate) mod image_policy_stream;
 pub(crate) mod image_relay;
 #[cfg(test)]
 mod image_tests;
@@ -36,6 +38,7 @@ pub(crate) use tools::ClientTools;
 
 #[derive(Clone)]
 pub(crate) struct ExcelPreparedRequest {
+    pub(crate) image_policy: Option<std::sync::Arc<image_policy::ImagePolicy>>,
     pub(crate) exit_lease:
         Option<std::sync::Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
     pub(crate) body: serde_json::Map<String, serde_json::Value>,

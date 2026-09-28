@@ -368,6 +368,7 @@ pub(super) fn request(endpoint: String, input: Value) -> CodexResponsesRequest {
     request.use_websocket = true;
     let tools = ClientTools::default();
     request.excel = Some(ExcelPreparedRequest {
+        image_policy: None,
         exit_lease: None,
         body: prepare_request(request.body(), &tools, &BTreeMap::new(), None).unwrap(),
         tools,
@@ -1045,6 +1046,7 @@ async fn excel_stream_projects_effective_effort_and_plaintext_metadata_on_all_to
         "tools":[{"type":"function","name":"spawn_agent"}]});
     let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
     let prepared = ExcelPreparedRequest {
+        image_policy: None,
         exit_lease: None,
         body: prepare_request(source.as_object().unwrap(), &tools, &BTreeMap::new(), None).unwrap(),
         tools,
@@ -1402,6 +1404,7 @@ async fn transformed_fixture(
     let tools = ClientTools::parse(source.as_object().unwrap()).unwrap();
     let structured = StructuredOutput::parse(source.as_object().unwrap()).unwrap();
     let request = ExcelPreparedRequest {
+        image_policy: None,
         exit_lease: None,
         body: Default::default(),
         tools,

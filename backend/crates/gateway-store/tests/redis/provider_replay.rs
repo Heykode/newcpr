@@ -3,6 +3,89 @@ use gateway_store::redis::RedisProviderReplayRepository;
 use serde_json::json;
 
 #[tokio::test]
+async fn excel_image_policy_has_isolated_cas_and_idle_expiry() {
+    let Some(url) = crate::support::test_env("CPR_TEST_REDIS_URL") else {
+        return;
+    };
+    let mut connection = redis::Client::open(url)
+        .unwrap()
+        .get_connection_manager()
+        .await
+        .unwrap();
+    let namespace = format!("test-image-policy-{}", uuid::Uuid::new_v4());
+    let store = RedisProviderReplayRepository::new(connection.clone(), &namespace).unwrap();
+    let peer = RedisProviderReplayRepository::new(connection.clone(), &namespace).unwrap();
+    let key = format!("{:064x}", 1);
+    let first = OpaqueProviderData::new(
+        json!({"progress":{"count":3,"digest":"fixture"},"checkpoints":[],"warned":false})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let second = OpaqueProviderData::new(
+        json!({"progress":{"count":4,"digest":"next"},"checkpoints":[],"warned":true})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert!(
+        store
+            .compare_exchange_image_policy(&key, None, &first)
+            .await
+            .unwrap()
+    );
+    let (a, b) = tokio::join!(
+        store.compare_exchange_image_policy(&key, Some(&first), &second),
+        peer.compare_exchange_image_policy(&key, Some(&first), &second)
+    );
+    assert_ne!(a.unwrap(), b.unwrap());
+    assert_eq!(peer.read_image_policy(&key).await.unwrap(), Some(second));
+    assert!(store.read(&key).await.unwrap().is_none());
+    assert!(store.read_catalog(&key).await.unwrap().is_none());
+    assert!(store.read_tool(&key).await.unwrap().is_none());
+    assert!(store.read_asset(&key).await.unwrap().is_none());
+    let prefix = format!("{namespace}:{{provider-replay-v1}}:image-policy");
+    let now: (i64, i64) = redis::cmd("TIME")
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let expiry: i64 = redis::cmd("ZSCORE")
+        .arg(format!("{prefix}:expiry"))
+        .arg(&key)
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert!((now.0 + 7190..=now.0 + 7201).contains(&expiry));
+    redis::cmd("ZADD")
+        .arg(format!("{prefix}:expiry"))
+        .arg(now.0 - 1)
+        .arg(&key)
+        .query_async::<()>(&mut connection)
+        .await
+        .unwrap();
+    assert!(store.read_image_policy(&key).await.unwrap().is_none());
+    let oversized = OpaqueProviderData::new(
+        json!({"bad":"x".repeat(32769)})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert!(
+        store
+            .compare_exchange_image_policy(&key, None, &oversized)
+            .await
+            .is_err()
+    );
+    for suffix in ["data", "expiry", "sizes"] {
+        redis::cmd("DEL")
+            .arg(format!("{prefix}:{suffix}"))
+            .query_async::<()>(&mut connection)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn excel_tool_receipts_have_independent_capacity_and_idle_lru() {
     let Some(url) = crate::support::test_env("CPR_TEST_REDIS_URL") else {
         return;

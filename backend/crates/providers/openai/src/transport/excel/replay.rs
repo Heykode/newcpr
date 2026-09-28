@@ -228,6 +228,10 @@ pub(crate) async fn restore_scoped(
 }
 
 impl ReplayCapture {
+    pub(super) fn native_calls(&self) -> &BTreeMap<String, Value> {
+        &self.record.native_calls
+    }
+
     pub(crate) fn is_persisted(&self) -> bool {
         self.persisted.load(Ordering::Acquire)
     }
