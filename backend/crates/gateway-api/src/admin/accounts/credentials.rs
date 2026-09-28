@@ -55,6 +55,7 @@ impl AccountImportSettingsRequest {
         self,
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
+            egress_mode: None,
             custom_name: parse_custom_name(self.custom_name.as_deref())?,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,

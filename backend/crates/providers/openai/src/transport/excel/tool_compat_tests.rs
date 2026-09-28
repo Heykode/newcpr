@@ -3,108 +3,104 @@ use bytes::Bytes;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
-mod oauth_wire_compatibility_tests {
-    use crate::transport::request::compatibility::{
-        default_missing_format_name, normalize_custom_history_ids,
-    };
-    use serde_json::{Value, json};
+use crate::transport::request::compatibility::{
+    default_missing_format_name, normalize_custom_history_ids,
+};
 
-    #[test]
-    fn only_valid_schema_with_absent_name_gets_default() {
-        let valid = json!({"text":{"format":{"type":"json_schema","strict":true,
+#[test]
+fn only_valid_schema_with_absent_name_gets_default() {
+    let valid = json!({"text":{"format":{"type":"json_schema","strict":true,
             "schema":{"type":"object","properties":{"value":{"type":"integer"}},
                 "required":["value"],"additionalProperties":false}}}});
-        let mut body = valid.as_object().unwrap().clone();
-        default_missing_format_name(&mut body);
-        assert_eq!(body["text"]["format"]["name"], "response");
-        assert_eq!(
-            body["text"]["format"]["schema"],
-            valid["text"]["format"]["schema"]
-        );
-        for name in [json!("existing"), json!(""), Value::Null, json!(7)] {
-            let mut explicit = valid.clone();
-            explicit["text"]["format"]["name"] = name;
-            let mut copy = explicit.as_object().unwrap().clone();
-            default_missing_format_name(&mut copy);
-            assert_eq!(Value::Object(copy), explicit);
-        }
-        for patch in [
-            json!({"schema":{"type":"invalid"}}),
-            json!({"schema":null}),
-            json!({"schema":{"$ref":"https://example.invalid/schema"}}),
-            json!({"strict":"true"}),
-            json!({"description":1}),
-            json!({"type":"json_object"}),
-            json!({"unknown":true}),
-        ] {
-            let mut invalid = valid.clone();
-            invalid["text"]["format"]
-                .as_object_mut()
-                .unwrap()
-                .extend(patch.as_object().unwrap().clone());
-            let mut copy = invalid.as_object().unwrap().clone();
-            default_missing_format_name(&mut copy);
-            assert_eq!(Value::Object(copy), invalid);
-        }
+    let mut body = valid.as_object().unwrap().clone();
+    default_missing_format_name(&mut body);
+    assert_eq!(body["text"]["format"]["name"], "response");
+    assert_eq!(
+        body["text"]["format"]["schema"],
+        valid["text"]["format"]["schema"]
+    );
+    for name in [json!("existing"), json!(""), Value::Null, json!(7)] {
+        let mut explicit = valid.clone();
+        explicit["text"]["format"]["name"] = name;
+        let mut copy = explicit.as_object().unwrap().clone();
+        default_missing_format_name(&mut copy);
+        assert_eq!(Value::Object(copy), explicit);
     }
+    for patch in [
+        json!({"schema":{"type":"invalid"}}),
+        json!({"schema":null}),
+        json!({"schema":{"$ref":"https://example.invalid/schema"}}),
+        json!({"strict":"true"}),
+        json!({"description":1}),
+        json!({"type":"json_object"}),
+        json!({"unknown":true}),
+    ] {
+        let mut invalid = valid.clone();
+        invalid["text"]["format"]
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let mut copy = invalid.as_object().unwrap().clone();
+        default_missing_format_name(&mut copy);
+        assert_eq!(Value::Object(copy), invalid);
+    }
+}
 
-    fn history() -> Value {
-        json!({"prompt_cache_key":"keep-cache","input":[
+fn history() -> Value {
+    json!({"prompt_cache_key":"keep-cache","input":[
             {"type":"message","role":"user","content":"Run the fixture"},
             {"type":"custom_tool_call","id":"fc_old_wrong_kind","call_id":"call_fixture","name":"fixture","input":"exact raw input"},
             {"type":"custom_tool_call_output","call_id":"call_fixture","output":"exact result"},
             {"type":"message","id":"msg_keep","role":"user","content":"Continue"}]})
-    }
-
-    #[test]
-    fn full_plaintext_custom_history_only_loses_wrong_optional_item_id() {
-        let original = history();
-        let mut expected = original.clone();
-        expected["input"][1].as_object_mut().unwrap().remove("id");
-        let mut copy = original.as_object().unwrap().clone();
-        normalize_custom_history_ids(&mut copy);
-        assert_eq!(Value::Object(copy.clone()), expected);
-        normalize_custom_history_ids(&mut copy);
-        assert_eq!(Value::Object(copy), expected);
-        assert_eq!(original["input"][1]["id"], "fc_old_wrong_kind");
-    }
-
-    #[test]
-    fn referenced_encrypted_incomplete_or_correct_history_is_unchanged() {
-        let mut cases = vec![];
-        for field in ["previous_response_id", "conversation"] {
-            let mut body = history();
-            body[field] = "retained".into();
-            cases.push(body);
-        }
-        for extra in [
-            json!({"type":"item_reference","id":"fc_old_wrong_kind"}),
-            json!({"type":"future_item","id":"fc_old_wrong_kind"}),
-            json!({"type":"reasoning","encrypted_content":"opaque"}),
-            json!({"role":"user","content":[{"type":"encrypted_content","data":"opaque"}]}),
-            json!({"type":"custom_tool_call_output","call_id":"call_fixture","output":"duplicate"}),
-        ] {
-            let mut body = history();
-            body["input"].as_array_mut().unwrap().push(extra);
-            cases.push(body);
-        }
-        let mut incomplete = history();
-        incomplete["input"].as_array_mut().unwrap().remove(2);
-        cases.push(incomplete);
-        let mut mismatch = history();
-        mismatch["input"][2]["type"] = "function_call_output".into();
-        cases.push(mismatch);
-        let mut correct = history();
-        correct["input"][1]["id"] = "ctc_correct".into();
-        cases.push(correct);
-        for original in cases {
-            let mut copy = original.as_object().unwrap().clone();
-            normalize_custom_history_ids(&mut copy);
-            assert_eq!(Value::Object(copy), original);
-        }
-    }
 }
 
+#[test]
+fn full_plaintext_custom_history_only_loses_wrong_optional_item_id() {
+    let original = history();
+    let mut expected = original.clone();
+    expected["input"][1].as_object_mut().unwrap().remove("id");
+    let mut copy = original.as_object().unwrap().clone();
+    normalize_custom_history_ids(&mut copy);
+    assert_eq!(Value::Object(copy.clone()), expected);
+    normalize_custom_history_ids(&mut copy);
+    assert_eq!(Value::Object(copy), expected);
+    assert_eq!(original["input"][1]["id"], "fc_old_wrong_kind");
+}
+
+#[test]
+fn referenced_encrypted_incomplete_or_correct_history_is_unchanged() {
+    let mut cases = vec![];
+    for field in ["previous_response_id", "conversation"] {
+        let mut body = history();
+        body[field] = "retained".into();
+        cases.push(body);
+    }
+    for extra in [
+        json!({"type":"item_reference","id":"fc_old_wrong_kind"}),
+        json!({"type":"future_item","id":"fc_old_wrong_kind"}),
+        json!({"type":"reasoning","encrypted_content":"opaque"}),
+        json!({"role":"user","content":[{"type":"encrypted_content","data":"opaque"}]}),
+        json!({"type":"custom_tool_call_output","call_id":"call_fixture","output":"duplicate"}),
+    ] {
+        let mut body = history();
+        body["input"].as_array_mut().unwrap().push(extra);
+        cases.push(body);
+    }
+    let mut incomplete = history();
+    incomplete["input"].as_array_mut().unwrap().remove(2);
+    cases.push(incomplete);
+    let mut mismatch = history();
+    mismatch["input"][2]["type"] = "function_call_output".into();
+    cases.push(mismatch);
+    let mut correct = history();
+    correct["input"][1]["id"] = "ctc_correct".into();
+    cases.push(correct);
+    for original in cases {
+        let mut copy = original.as_object().unwrap().clone();
+        normalize_custom_history_ids(&mut copy);
+        assert_eq!(Value::Object(copy), original);
+    }
+}
 fn parse(source: Value) -> Result<ClientTools, ExcelRequestError> {
     ClientTools::parse(source.as_object().unwrap())
 }

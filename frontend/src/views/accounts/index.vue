@@ -268,6 +268,9 @@ const {
   updateWeight: batchUpdateWeight,
   updateGroups: batchUpdateGroups,
   updateProxy: batchUpdateProxy,
+  egressAvailable: batchEgressAvailable,
+  egressMode: batchEgressMode,
+  updateEgressMode: batchUpdateEgressMode,
   hasUpdates: batchHasUpdates,
   saving: savingBatchEdit,
   open: openBatchEdit,
@@ -705,6 +708,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:update-weight="batchUpdateWeight"
       v-model:update-groups="batchUpdateGroups"
       v-model:update-proxy="batchUpdateProxy"
+      v-model:egress-mode="batchEgressMode"
+      v-model:update-egress-mode="batchUpdateEgressMode"
+      :egress-available="batchEgressAvailable"
       :catalog-account-id="batchCatalogAccountId"
       :has-updates="batchHasUpdates"
       :excel-available="batchExcelAvailable"

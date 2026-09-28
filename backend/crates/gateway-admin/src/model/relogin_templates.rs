@@ -73,6 +73,12 @@ fn default_cache_creation_as_input() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReloginTemplateConfig {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_egress_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     pub name: String,
     pub enabled: bool,
     #[serde(default)]
@@ -116,8 +122,16 @@ impl ReloginTemplateConfig {
         }
         if let Some(id) = &self.outbound_proxy_id {
             validate_template_id(id)?;
+            if self
+                .egress_mode
+                .flatten()
+                .is_some_and(|mode| mode.is_active())
+            {
+                return Err(AdminError::invalid("账号代理与 IPv6 出口策略不能同时启用"));
+            }
         }
         Ok(AccountImportSettings {
+            egress_mode: self.egress_mode,
             model_access: None,
             custom_name: None,
             enabled: self.enabled,
@@ -156,6 +170,15 @@ pub struct ReloginTemplate {
     pub id: String,
     pub revision: u64,
     pub config: ReloginTemplateConfig,
+}
+
+fn deserialize_egress_mode<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<gateway_core::provider_ports::egress::EgressMode>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<gateway_core::provider_ports::egress::EgressMode>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

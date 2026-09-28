@@ -69,6 +69,24 @@ editing prior entries.
 
 ## 3. Contracts
 
+- `random_ipv6_*` wire values use one process-local round-robin cursor shared
+  across accounts, rotating modes and provider services. Advance atomically in
+  `CodexEgressRuntime::select`, not per account or client pool. Retain the last
+  source across reloads, skip disabled/cooling sources and preserve all-cooling
+  error behavior. Fixed/default modes and strict WS continuations do not advance
+  it. Existing attempt pinning and safe HTTP fallback keep their source. Excel
+  HTTP/SSE reuses the same source-bound account-isolated HTTP client cache.
+  This is not a distributed cursor or an exclusive in-flight IP lease.
+
+- Account batch and template `egressMode` distinguishes omitted (preserve), null
+  (inherit global), and the five existing EgressMode values. Old templates serialize
+  without the field. Require OpenAI accounts for explicit changes; validate final
+  proxy policy atomically after applying both settings, preserving historical
+  affinity, credentials and fingerprint. Publish only after the transaction commits.
+- Bulk/template IPv6 controls reuse the existing generation and affinity hooks, not
+  the request hot path. Normal HTTP idle timeout remains None and source-bound IPv6
+  remains 60 seconds; these are idle connection policies, not request deadlines.
+
 - Default and custom UA are explicit independent modes. A custom string equal to
   the current default is still custom. Verified release updates change only the
   default profile. Parsing custom text is not artifact or TLS verification.

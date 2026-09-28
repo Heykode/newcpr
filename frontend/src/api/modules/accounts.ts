@@ -459,6 +459,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
+  egressMode?: string | null
   customName?: string | null
   outboundProxyUrl?: string
   outboundProxyId?: string

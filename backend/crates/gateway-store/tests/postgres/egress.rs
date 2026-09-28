@@ -24,6 +24,252 @@ fn context() -> MutationContext {
     }
 }
 
+fn batch(ids: &[&str]) -> gateway_admin::model::accounts::BatchUpdateAccounts {
+    gateway_admin::model::accounts::BatchUpdateAccounts {
+        account_ids: ids.iter().map(|id| (*id).to_owned()).collect(),
+        egress_mode: None,
+        custom_name: None,
+        enabled: None,
+        turn_state_injection_enabled: None,
+        responses_upstream: None,
+        excel_models: None,
+        excel_models_follow_global: None,
+        excel_ignore_encrypted_content: None,
+        excel_cache_creation_as_input: None,
+        excel_auto_disable_on_403: None,
+        excel_403_action: None,
+        concurrency_limit: None,
+        weight: None,
+        model_access: None,
+        group_ids: None,
+        outbound_proxy: None,
+    }
+}
+
+fn batch_account(id: &str) -> gateway_store::postgres::NewProviderAccount {
+    let mut seed = account(id, id);
+    seed.upstream_account_id = Some("workspace-batch".into());
+    seed
+}
+
+#[tokio::test]
+async fn ipv6_batch_modes_preserve_identity_and_fixed_bindings_and_support_inheritance() {
+    use gateway_admin::ports::store::AccountStore;
+    let Some(database) = TestDatabase::create("ipv6_batch_modes").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let egress = PgProviderEgressRepository::new(database.pool.clone());
+    let accounts = super::admin_account_store(&database.pool);
+    for id in ["acct_a", "acct_b"] {
+        repository
+            .insert_provider_account(batch_account(id))
+            .await
+            .unwrap();
+    }
+    let initial = load(&egress).await;
+    egress
+        .replace(
+            replace(&initial, EgressMode::Unchanged, pool(true)),
+            &context(),
+        )
+        .await
+        .unwrap();
+    let initial = load(&egress).await;
+    let before: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(a)-'updated_at' from provider_accounts a order by id")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap();
+    for mode in [
+        EgressMode::Unchanged,
+        EgressMode::FixedIpv6Reuse,
+        EgressMode::RandomIpv6Reuse,
+        EgressMode::FixedIpv6Fresh,
+        EgressMode::RandomIpv6Fresh,
+    ] {
+        let mut command = batch(&["acct_a", "acct_b"]);
+        command.egress_mode = Some(Some(mode));
+        accounts
+            .batch_update_accounts(command, &context())
+            .await
+            .unwrap();
+        let current = load(&egress).await;
+        assert!(current.revision > initial.revision);
+        assert!(
+            current
+                .account_overrides
+                .values()
+                .all(|value| *value == Some(mode))
+        );
+        assert_eq!(current.fixed_bindings, initial.fixed_bindings);
+        let after: Vec<serde_json::Value> = sqlx::query_scalar(
+            "select to_jsonb(a)-'updated_at' from provider_accounts a order by id",
+        )
+        .fetch_all(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            before, after,
+            "mode selection must not change credentials, profile or scheduling"
+        );
+    }
+    let before = load(&egress).await;
+    let mut omitted = batch(&["acct_a"]);
+    omitted.enabled = Some(false);
+    accounts
+        .batch_update_accounts(omitted, &context())
+        .await
+        .unwrap();
+    assert_eq!(
+        load(&egress).await.account_overrides,
+        before.account_overrides
+    );
+    let mut inherit = batch(&["acct_a", "acct_b"]);
+    inherit.egress_mode = Some(None);
+    accounts
+        .batch_update_accounts(inherit, &context())
+        .await
+        .unwrap();
+    let current = load(&egress).await;
+    assert!(current.account_overrides.values().all(Option::is_none));
+    assert_eq!(current.fixed_bindings, initial.fixed_bindings);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn ipv6_batch_final_proxy_conflicts_and_mixed_providers_roll_back_every_change() {
+    use gateway_admin::{model::proxies::AccountProxySelection, ports::store::AccountStore};
+    let Some(database) = TestDatabase::create("ipv6_batch_conflicts").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let egress = PgProviderEgressRepository::new(database.pool.clone());
+    let accounts = super::admin_account_store(&database.pool);
+    let mut proxied = batch_account("acct_proxy");
+    proxied.outbound_proxy =
+        Some(OutboundProxy::parse("http://proxy.example.invalid:8080").unwrap());
+    repository.insert_provider_account(proxied).await.unwrap();
+    repository
+        .insert_provider_account(batch_account("acct_direct"))
+        .await
+        .unwrap();
+    let mut other = batch_account("acct_xai");
+    other.provider_kind = "xai".into();
+    repository.insert_provider_account(other).await.unwrap();
+    let initial = load(&egress).await;
+    egress
+        .replace(
+            replace(&initial, EgressMode::Unchanged, pool(true)),
+            &context(),
+        )
+        .await
+        .unwrap();
+    let initial = load(&egress).await;
+    let before: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a order by id")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap();
+    let mut conflict = batch(&["acct_direct", "acct_proxy"]);
+    conflict.egress_mode = Some(Some(EgressMode::FixedIpv6Reuse));
+    conflict.enabled = Some(false);
+    conflict.custom_name = Some(Some("must-roll-back".into()));
+    assert!(
+        accounts
+            .batch_update_accounts(conflict.clone(), &context())
+            .await
+            .is_err()
+    );
+    let after: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a order by id")
+            .fetch_all(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(initial.revision, load(&egress).await.revision);
+    let mut mixed = batch(&["acct_direct", "acct_xai"]);
+    mixed.egress_mode = Some(Some(EgressMode::Unchanged));
+    mixed.enabled = Some(false);
+    assert!(
+        accounts
+            .batch_update_accounts(mixed, &context())
+            .await
+            .is_err()
+    );
+    assert_eq!(initial.revision, load(&egress).await.revision);
+    conflict.outbound_proxy = Some(AccountProxySelection::Direct);
+    accounts
+        .batch_update_accounts(conflict, &context())
+        .await
+        .unwrap();
+    let current = load(&egress).await;
+    for id in ["acct_direct", "acct_proxy"] {
+        assert_eq!(
+            current.account_overrides[&ProviderAccountId::new(id).unwrap()],
+            Some(EgressMode::FixedIpv6Reuse)
+        );
+    }
+    assert_eq!(current.fixed_bindings, initial.fixed_bindings);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn ipv6_template_import_persists_mode_and_legacy_import_preserves_it() {
+    use gateway_admin::model::relogin_templates::ReloginTemplateConfig;
+    use gateway_store::postgres::{
+        ImportProviderAccounts, ProviderAccountAdminRepository, ProviderAccountAdminScope,
+    };
+    let Some(database) = TestDatabase::create("ipv6_template_import").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let egress = PgProviderEgressRepository::new(database.pool.clone());
+    let initial = load(&egress).await;
+    egress
+        .replace(
+            replace(&initial, EgressMode::Unchanged, pool(true)),
+            &context(),
+        )
+        .await
+        .unwrap();
+    let mut config: ReloginTemplateConfig = serde_json::from_value(serde_json::json!({
+        "name": "IPv6 template", "enabled": true, "weight": 1, "groupIds": [],
+        "egressMode": "fixed_ipv6_reuse"
+    }))
+    .unwrap();
+    for index in 0..2 {
+        repository
+            .import_provider_accounts(ImportProviderAccounts {
+                accounts: vec![batch_account("acct_import")],
+                scope: ProviderAccountAdminScope {
+                    provider_kind: "openai".into(),
+                },
+                settings: Some(config.settings().unwrap()),
+                outbound_proxy: None,
+                audit: super::provider_accounts::audit(
+                    &format!("ipv6-import-{index}"),
+                    "import",
+                    "acct_import",
+                ),
+            })
+            .await
+            .unwrap();
+        let current = load(&egress).await;
+        assert_eq!(
+            current.account_overrides[&ProviderAccountId::new("acct_import").unwrap()],
+            Some(EgressMode::FixedIpv6Reuse)
+        );
+        assert!(
+            current
+                .fixed_bindings
+                .contains_key(&ProviderAccountId::new("acct_import").unwrap())
+        );
+        config.egress_mode = None;
+    }
+    database.close().await;
+}
+
 fn pool(enabled: bool) -> Vec<ProviderEgressAddress> {
     ["2001:db8::1", "2001:db8::2"]
         .into_iter()
@@ -216,7 +462,7 @@ async fn account_inheritance_is_distinct_from_unchanged_and_proxy_conflicts_roll
     let id = ProviderAccountId::new("acct_proxy").unwrap();
     let mut seed = account(id.as_str(), "proxy-user");
     seed.upstream_account_id = Some("workspace".to_owned());
-    seed.outbound_proxy = Some(OutboundProxy::parse("http://user:secret@127.0.0.1:1080").unwrap());
+    seed.outbound_proxy = Some(OutboundProxy::parse("http://127.0.0.1:1080").unwrap());
     accounts.insert_provider_account(seed).await.unwrap();
     let initial = load(&store).await;
     assert!(
@@ -295,7 +541,7 @@ async fn account_inheritance_is_distinct_from_unchanged_and_proxy_conflicts_roll
         .fetch_one(&database.pool)
         .await
         .unwrap(),
-        "http://user:secret@127.0.0.1:1080/"
+        "http://127.0.0.1:1080/"
     );
     database.close().await;
 }

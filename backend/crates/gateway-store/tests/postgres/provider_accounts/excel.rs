@@ -190,6 +190,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         request_id: "excel-global".into(),
     };
     let patch = BatchUpdateAccounts {
+        egress_mode: None,
         account_ids: vec!["acct_excel_global".into(), "acct_excel_custom".into()],
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: None,
@@ -393,6 +394,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        egress_mode: None,
         account_ids: vec!["acct_excel".into()],
         responses_upstream: Some(ResponsesUpstream::Excel),
         excel_models_follow_global: Default::default(),

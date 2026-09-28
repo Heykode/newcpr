@@ -3,8 +3,12 @@ import type { AccountGroup, AccountModelAccess } from '@/api'
 
 import type { Excel403Action } from '@/utils/excel-settings'
 
+import { ipv6EgressModes } from '@/api/modules/ipv6-egress'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
+import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
 defineProps<{
@@ -14,6 +18,7 @@ defineProps<{
   saving: boolean
   hasUpdates: boolean
   excelAvailable: boolean
+  egressAvailable: boolean
   catalogAccountId?: string
 }>()
 
@@ -48,6 +53,9 @@ const updateConcurrencyLimit = defineModel<boolean>('updateConcurrencyLimit', { 
 const updateWeight = defineModel<boolean>('updateWeight', { required: true })
 const updateGroups = defineModel<boolean>('updateGroups', { required: true })
 const updateProxy = defineModel<boolean>('updateProxy', { required: true })
+const egressMode = defineModel<string>('egressMode', { required: true })
+const updateEgressMode = defineModel<boolean>('updateEgressMode', { required: true })
+const egressOptions = [{ value: 'inherit', label: '继承全局策略' }, ...ipv6EgressModes.map(({ value, label }) => ({ value, label }))]
 </script>
 
 <template>
@@ -95,6 +103,18 @@ const updateProxy = defineModel<boolean>('updateProxy', { required: true })
       :disabled="saving"
       batch
     />
+
+    <div class="mt-5">
+      <BaseFormItem v-if="egressAvailable" label="IPv6 出口策略">
+        <template #extra>
+          <BaseCheckbox v-model="updateEgressMode" label="更新 IPv6 出口策略" title="更新 IPv6 出口策略" :disabled="saving" />
+        </template>
+        <BaseSelect v-model="egressMode" class="w-full" :options="egressOptions" :disabled="saving || !updateEgressMode" aria-label="批量 IPv6 出口策略" />
+      </BaseFormItem>
+      <p v-else class="m-0 text-cp-xs text-cp-text-tertiary">
+        IPv6 出口策略仅支持全部选中 OpenAI 账号时批量修改。
+      </p>
+    </div>
 
     <template #footer>
       <BaseButton variant="secondary" :disabled="saving" @click="open = false">

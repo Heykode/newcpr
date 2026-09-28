@@ -18,9 +18,9 @@ export interface Ipv6EgressConfig {
 export const ipv6EgressModes = [
   { value: 'unchanged', label: '默认 IPv4', description: '直连使用 IPv4，已配置的账号代理保持不变' },
   { value: 'fixed_ipv6_reuse', label: '固定 IPv6 · 复用连接', description: '保留账号历史地址' },
-  { value: 'random_ipv6_reuse', label: '随机 IPv6 · 复用连接', description: '独立连接选址，不逐帧轮换' },
+  { value: 'random_ipv6_reuse', label: '轮询 IPv6 · 复用连接', description: '所有账号共用轮询顺序，续接保留原连接' },
   { value: 'fixed_ipv6_fresh', label: '固定 IPv6 · 新建连接', description: '保留账号历史地址' },
-  { value: 'random_ipv6_fresh', label: '随机 IPv6 · 新建连接', description: '独立连接选址，续接优先原连接' },
+  { value: 'random_ipv6_fresh', label: '轮询 IPv6 · 新建连接', description: '所有账号共用轮询顺序，续接保留原连接' },
 ]
 
 interface Ipv6EgressMutation {

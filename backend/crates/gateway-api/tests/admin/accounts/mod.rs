@@ -311,6 +311,52 @@ mod batch_update {
     use serde_json::json;
 
     #[test]
+    fn ipv6_batch_patch_preserves_absence_null_and_validates_all_modes() {
+        use gateway_core::provider_ports::egress::EgressMode;
+        let omitted: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds": ["acct_test"], "enabled": true
+        }))
+        .unwrap();
+        assert_eq!(omitted.egress_mode, None);
+        let inherit: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+            "accountIds": ["acct_test"], "egressMode": null
+        }))
+        .unwrap();
+        inherit.validate().unwrap();
+        assert_eq!(inherit.egress_mode, Some(None));
+        for mode in [
+            EgressMode::Unchanged,
+            EgressMode::FixedIpv6Reuse,
+            EgressMode::RandomIpv6Reuse,
+            EgressMode::FixedIpv6Fresh,
+            EgressMode::RandomIpv6Fresh,
+        ] {
+            let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({
+                "accountIds": ["acct_test"], "egressMode": mode.as_str()
+            }))
+            .unwrap();
+            request.validate().unwrap();
+            assert_eq!(request.egress_mode, Some(Some(mode)));
+            assert!(request.outbound_proxy_id.is_none());
+            assert!(request.enabled.is_none());
+        }
+        for value in [
+            json!("invalid"),
+            json!("inherit"),
+            json!(false),
+            json!(1),
+            json!({}),
+        ] {
+            assert!(
+                serde_json::from_value::<BatchUpdateAccountsRequest>(json!({
+                    "accountIds": ["acct_test"], "egressMode": value
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn encrypted_content_patch_accepts_only_boolean_and_preserves_omission() {
         for enabled in [false, true] {
             let request: BatchUpdateAccountsRequest = serde_json::from_value(json!({

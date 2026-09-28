@@ -48,6 +48,7 @@ async fn model_policy_patch_preserves_identity_state_groups_and_egress() {
         AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["model-a".into()]).unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        egress_mode: None,
         account_ids: vec!["acct_models".into()],
         model_access: Some(policy.clone()),
         custom_name: None,

@@ -189,6 +189,7 @@ impl ReloginEnrollment {
     ) -> Result<Self, AdminError> {
         let result = Self {
             config: super::relogin_templates::ReloginTemplateConfig {
+                egress_mode: None,
                 name: "2FA account import".to_owned(),
                 enabled: settings.enabled,
                 turn_state_injection_enabled: settings.turn_state_injection_enabled,

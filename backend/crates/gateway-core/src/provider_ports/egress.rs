@@ -7,7 +7,8 @@ use futures::future::BoxFuture;
 use crate::account::ProviderAccountId;
 
 /// How a connection chooses a local IPv6 source.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EgressMode {
     /// Do not select an IPv6 source.
     #[default]

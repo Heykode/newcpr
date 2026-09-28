@@ -291,6 +291,7 @@ fn credential() -> ReloginCredential {
 
 pub(super) fn template_config() -> ReloginTemplateConfig {
     ReloginTemplateConfig {
+        egress_mode: None,
         responses_upstream: None,
         excel_models: None,
         excel_models_follow_global: None,
@@ -313,6 +314,41 @@ pub(super) fn template_selection(template: &ReloginTemplate) -> ReloginTemplateS
         id: template.id.clone(),
         revision: template.revision,
     }
+}
+
+#[test]
+fn ipv6_template_settings_preserve_absence_and_inherit_and_reject_proxy_conflicts() {
+    use gateway_core::provider_ports::egress::EgressMode;
+    let mut value = serde_json::to_value(template_config()).unwrap();
+    assert!(value.get("egressMode").is_none());
+    let legacy: ReloginTemplateConfig = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(legacy.settings().unwrap().egress_mode, None);
+    value["outboundProxyId"] = serde_json::Value::Null;
+    for mode in [
+        None,
+        Some(EgressMode::Unchanged),
+        Some(EgressMode::FixedIpv6Reuse),
+        Some(EgressMode::RandomIpv6Reuse),
+        Some(EgressMode::FixedIpv6Fresh),
+        Some(EgressMode::RandomIpv6Fresh),
+    ] {
+        value["egressMode"] = serde_json::to_value(mode).unwrap();
+        let config: ReloginTemplateConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(config.egress_mode, Some(mode));
+        assert_eq!(config.settings().unwrap().egress_mode, Some(mode));
+        assert_eq!(
+            serde_json::to_value(&config).unwrap()["egressMode"],
+            value["egressMode"]
+        );
+    }
+    value["egressMode"] = serde_json::json!("invalid");
+    assert!(serde_json::from_value::<ReloginTemplateConfig>(value).is_err());
+    let mut config = template_config();
+    config.outbound_proxy_id = Some("proxy-test".into());
+    config.egress_mode = Some(Some(EgressMode::RandomIpv6Reuse));
+    assert!(config.settings().is_err());
+    config.egress_mode = Some(Some(EgressMode::Unchanged));
+    assert!(config.settings().is_ok());
 }
 
 #[tokio::test]
@@ -438,10 +474,15 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
     existing.email = Some("existing@example.invalid".into());
     existing.enabled = false;
     let h = Harness::new(vec![existing]).await;
+    let mut config = template_config();
+    config.egress_mode = Some(Some(
+        gateway_core::provider_ports::egress::EgressMode::FixedIpv6Reuse,
+    ));
+    config.outbound_proxy_id = None;
     let template = h
         .services
         .account_templates()
-        .save_template(None, template_config())
+        .save_template(None, config)
         .await
         .unwrap();
     let old = h.import("existing@example.invalid").await;

@@ -76,6 +76,7 @@ async fn custom_names_are_atomic_searchable_and_preserve_account_identity() {
     .unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        egress_mode: None,
         model_access: Default::default(),
         custom_name: Some(Some("  Local batch  ".into())),
         account_ids: ids.clone(),
@@ -219,6 +220,7 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
         repository
             .import_provider_accounts(ImportProviderAccounts {
                 settings: Some(AccountImportSettings {
+                    egress_mode: None,
                     model_access: Default::default(),
                     custom_name: name.map(str::to_owned),
                     enabled: true,
@@ -2195,6 +2197,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     let enabled = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 account_ids: vec!["acct_recovery".to_owned()],
@@ -2332,6 +2335,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let result = store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
@@ -2381,6 +2385,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
                 outbound_proxy: None,
@@ -2593,6 +2598,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         .commit_authorization(
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    egress_mode: None,
                     model_access: Default::default(),
                     custom_name: None,
                     enabled: false,
@@ -3130,6 +3136,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            egress_mode: None,
             explicit_scheduling_intent: true,
             model_access: Default::default(),
             custom_name: None,
@@ -3787,6 +3794,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     )
     .unwrap();
     let settings = AccountImportSettings {
+        egress_mode: None,
         model_access: Some(policy.clone()),
         custom_name: None,
         enabled: false,
@@ -3914,6 +3922,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
     .enumerate()
     {
         let settings = AccountImportSettings {
+            egress_mode: None,
             model_access: Default::default(),
             custom_name: None,
             enabled: true,

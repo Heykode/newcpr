@@ -648,6 +648,7 @@ impl AccountsService for DefaultAccountsService {
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
+                        egress_mode: None,
                         model_access: None,
                         custom_name: None,
                         account_ids: vec![account_id.to_string()],

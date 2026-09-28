@@ -3,6 +3,7 @@ import type { Excel403Action } from '@/utils/excel-settings'
 import request from '../request'
 
 export interface AccountTemplateConfig {
+  egressMode?: string | null
   name: string
   enabled: boolean
   responsesUpstream?: 'codex' | 'excel' | null
