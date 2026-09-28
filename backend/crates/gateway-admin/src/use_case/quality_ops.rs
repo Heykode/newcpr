@@ -81,8 +81,28 @@ fn validate(config: &QualityRuleConfig) -> Result<(), AdminError> {
             "状态探针每轮固定一次，两次请求串行执行",
         ));
     }
-    if config.failure_action == QualityFailureAction::EnableExcel && config.auto_restore {
-        return Err(AdminError::invalid("开启Excel模式不支持自动恢复为Codex"));
+    if matches!(
+        config.failure_action,
+        QualityFailureAction::EnableExcel | QualityFailureAction::ApplyAccountTemplate
+    ) && config.auto_restore
+    {
+        return Err(AdminError::invalid(
+            "开启Excel或应用模板不支持自动恢复账号配置",
+        ));
+    }
+    if config.failure_action == QualityFailureAction::ApplyAccountTemplate {
+        let template = config
+            .failure_template
+            .as_ref()
+            .ok_or_else(|| AdminError::invalid("请选择异常处置账号模板"))?;
+        crate::model::relogin_templates::validate_template_id(&template.id)?;
+        if template.revision == 0 || template.revision >= 9_007_199_254_740_991 {
+            return Err(AdminError::invalid("模板版本不合法，请重新选择"));
+        }
+        template.config.settings()?;
+    }
+    if !(1..=100).contains(&config.excel_failure_threshold) {
+        return Err(AdminError::invalid("连续异常阈值必须为 1–100 轮"));
     }
     let groups = config
         .failure_group_ids
@@ -697,6 +717,8 @@ mod tests {
     #[test]
     fn quality_cron_is_five_fields_and_timezone_aware() {
         let mut config = QualityRuleConfig {
+            failure_template: None,
+            excel_failure_threshold: 1,
             detection_mode: QualityDetectionMode::Answer,
             account_id: "test-account".into(),
             model: "test-model".into(),
@@ -744,6 +766,16 @@ mod tests {
         assert_eq!(config.detection_mode, QualityDetectionMode::Answer);
         assert_eq!(config.failure_action, QualityFailureAction::None);
         assert!(!config.auto_restore);
+        assert_eq!(config.excel_failure_threshold, 1);
+        for invalid in [0, 101, 255] {
+            config.excel_failure_threshold = invalid;
+            assert!(validate(&config).is_err());
+        }
+        for valid in [1, 2, 100] {
+            config.excel_failure_threshold = valid;
+            assert!(validate(&config).is_ok());
+        }
+        config.excel_failure_threshold = 1;
         assert!(validate(&config).is_ok());
         config.failure_action = QualityFailureAction::RemoveGroups;
         assert!(validate(&config).is_err());
@@ -773,6 +805,39 @@ mod tests {
         assert!(validate(&config).is_err());
         config.auto_restore = false;
         config.detection_mode = QualityDetectionMode::Answer;
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn quality_template_requires_versioned_valid_settings_and_never_auto_restores() {
+        let value = serde_json::json!({
+            "detectionMode": "state_probe", "accountId": "account", "model": "model",
+            "enabled": true, "cron": "0 */6 * * *", "timezone": "UTC", "repetitions": 1,
+            "failureAction": "apply_account_template"
+        });
+        let mut config: QualityRuleConfig = serde_json::from_value(value).unwrap();
+        assert!(validate(&config).is_err());
+        config.failure_template = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": "template-a", "revision": 1, "config": {
+                    "name": "Complete template", "enabled": true, "concurrencyLimit": 5,
+                    "weight": 10, "groupIds": [], "outboundProxyId": null,
+                    "responsesUpstream": "excel", "excelModelsFollowGlobal": true,
+                    "excelIgnoreEncryptedContent": true, "egressMode": "random_ipv6_reuse"
+                }
+            }))
+            .unwrap(),
+        );
+        assert!(validate(&config).is_ok());
+        config.auto_restore = true;
+        assert!(validate(&config).is_err());
+        config.auto_restore = false;
+        for revision in [0, 9_007_199_254_740_991, u64::MAX] {
+            config.failure_template.as_mut().unwrap().revision = revision;
+            assert!(validate(&config).is_err());
+        }
+        config.failure_template.as_mut().unwrap().revision = 1;
+        config.failure_template.as_mut().unwrap().config.weight = 0;
         assert!(validate(&config).is_err());
     }
 }

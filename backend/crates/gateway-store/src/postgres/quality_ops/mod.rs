@@ -12,6 +12,7 @@ use gateway_admin::{
 use sqlx::{PgPool, Row as _};
 
 mod policy;
+mod template_action;
 
 use crate::{
     mutation_audit,
@@ -60,6 +61,10 @@ fn rule(row: &sqlx::postgres::PgRow) -> AdminStoreResult<QualityRule> {
         last_status: row.try_get("last_status").map_err(unavailable)?,
         last_run_at: row.try_get("last_run_at").map_err(unavailable)?,
         last_action: row.try_get("last_action").map_err(unavailable)?,
+        excel_failure_streak: policy::excel_failure_streak(
+            row.try_get::<serde_json::Value, _>("recovery")
+                .map_err(unavailable)?,
+        )?,
     })
 }
 
@@ -147,6 +152,7 @@ async fn action_scope(
     // Fence the account's policy, not unrelated concurrent rule actions.
     sqlx::query_scalar(
         "select jsonb_build_array(a.enabled,a.responses_upstream,a.excel_mode_disabled_at,
+         a.upstream_user_id,a.upstream_account_id,
          a.excel_models_follow_global,
          case when a.excel_models_follow_global then s.excel_default_models else a.excel_models end,
          a.outbound_proxy_id,p.revision,a.model_access_json,u.mode,u.custom_user_agent,
@@ -216,12 +222,29 @@ impl QualityOpsStore for PgQualityOpsStore {
         &self,
         id: Option<&str>,
         revision: Option<i64>,
-        config: QualityRuleConfig,
+        mut config: QualityRuleConfig,
         next: DateTime<Utc>,
         context: &MutationContext,
     ) -> AdminStoreResult<QualityRule> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
+        if config.failure_action == QualityFailureAction::ApplyAccountTemplate {
+            let selected = config.failure_template.as_ref().ok_or_else(conflict)?;
+            let template = template_action::resolve(&mut tx, selected)
+                .await?
+                .ok_or_else(|| {
+                    AdminStoreError::new(
+                        AdminStoreErrorKind::Conflict,
+                        "quality template",
+                        "模板已删除或版本变化，请重新选择",
+                    )
+                })?;
+            template_action::validate_for_save(&mut tx, &config, &template).await?;
+            // The catalog owns the snapshot; never persist client-supplied template fields.
+            config.failure_template = Some(template);
+        } else {
+            config.failure_template = None;
+        }
         if config.detection_mode == QualityDetectionMode::StateProbe
             || config.failure_action == QualityFailureAction::EnableExcel
         {
@@ -255,6 +278,9 @@ impl QualityOpsStore for PgQualityOpsStore {
         let row = if let Some(id) = id {
             let row = sqlx::query(
                 "update quality_rules set config=$3,enabled=$4,next_run_at=$5,
+                 recovery=recovery-'excel_streak',
+                 last_action=case when last_action in ('excel_threshold_pending','excel_streak_reset')
+                    then null else last_action end,
                  last_status=case when coalesce(config->>'detectionMode','answer')<>
                     coalesce($3->>'detectionMode','answer') then null else last_status end,
                  last_run_at=case when coalesce(config->>'detectionMode','answer')<>

@@ -146,6 +146,7 @@ onScopeDispose(() => {
         v-model:excel-models="form.excelModels"
         v-model:excel-models-follow-global="form.excelModelsFollowGlobal"
         v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
+        v-model:excel-ignore-encrypted-content="form.excelIgnoreEncryptedContent"
         v-model:excel-403-action="form.excel403Action"
         v-model:concurrency-limit="form.concurrencyLimit"
         v-model:weight="form.weight"
@@ -155,6 +156,7 @@ onScopeDispose(() => {
         preserve-request-proxy-source
         request-proxy-available
         :excel-available="form.applyExcel"
+        encrypted-content-available
         :groups="groups"
         :groups-loading="groupsLoading"
         :preserve-proxy="false"

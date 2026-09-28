@@ -633,3 +633,24 @@ HTTP/WS wire identity and original-payload isolation, and #154 on/off behavior.
 Wrong: count a synthetic fixture or build as real upstream acceptance. Correct:
 report mock regressions separately from bounded isolated live requests, including
 genuine upstream rejections and any untested scenarios.
+
+## 17. Shared Retry Budgets
+
+- Excel initial HTTP failures reuse `websocketMaxRetries` as the same-account
+  retry count, plus the existing `maxAccountSwitches` and `maxRequestAttempts`
+  limits in Core. No new retry settings or provider-owned retry loop are added.
+- Apply this policy only after the actual Excel route is resolved, including
+  initial compact/image HTTP failures. Native Codex HTTP/WS policy is unchanged.
+- An explicit complete HTTP 429 rejection may supply replay proof. Keep account
+  health/cooldown isolation; never reinterpret quota, authentication, permission,
+  malformed requests or SSE error status as this endpoint-level rejection.
+- Other transient failures retain existing proof requirements. A proven NotSent
+  connection failure may retry; ambiguous sends, delivered output and tool-repair
+  failures must not gain new replay permission.
+- Use existing Core transient retry ownership and backoff. Preserve Retry-After,
+  respect cancellation/deadline and count every attempt against the total budget.
+  Zero same-account retries replaces old transient intents with account rotation;
+  hard continuation ownership and route isolation can still prohibit rotation.
+- Tests must cover zero/configured budgets, HTTP provenance, no synthetic SSE
+  proof, shared-quota isolation and the unchanged native regressions. This task's
+  verification runs on OVH with isolated resources, never production credentials.

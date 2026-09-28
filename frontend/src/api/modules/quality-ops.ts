@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import type { AccountTemplate } from './account-templates'
 import request from '../request'
 
 export interface QualityRuleConfig {
@@ -15,9 +16,11 @@ export interface QualityRuleConfig {
   judgeGroupId: string
   judgeModel: string
   judgePrompt: string
-  failureAction: 'none' | 'disable_scheduling' | 'remove_groups' | 'enable_excel'
+  failureAction: 'none' | 'disable_scheduling' | 'remove_groups' | 'enable_excel' | 'apply_account_template'
+  failureTemplate?: AccountTemplate | null
   failureGroupIds: string[]
   autoRestore: boolean
+  excelFailureThreshold: number
 }
 
 export interface QualityRule {
@@ -30,6 +33,7 @@ export interface QualityRule {
   lastStatus: string | null
   lastRunAt: string | null
   lastAction?: string | null
+  excelFailureStreak?: number
 }
 
 export interface QualityAnswer {

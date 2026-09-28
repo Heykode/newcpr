@@ -488,6 +488,44 @@ fn isolate_endpoint_rate_limit(failure: &mut MappedProviderFailure) {
     }
 }
 
+pub(super) fn apply_initial_retry_policy(failure: &mut MappedProviderFailure, max_retries: u32) {
+    if failure.error.send_state() == UpstreamSendState::Ambiguous
+        || failure.account_failure.is_some()
+    {
+        return;
+    }
+    let endpoint_rate_limit = failure.http_rejection_status == Some(429)
+        && failure.error.kind() == ProviderErrorKind::RateLimited;
+    let transient = matches!(
+        failure.error.kind(),
+        ProviderErrorKind::Transport
+            | ProviderErrorKind::Timeout
+            | ProviderErrorKind::Unavailable
+            | ProviderErrorKind::UpstreamCapacityUnavailable
+    ) && (failure.error.send_state() == UpstreamSendState::NotSent
+        || failure.error.replay_is_safe());
+    if !endpoint_rate_limit && !transient {
+        return;
+    }
+    // Initial HTTP rejection only: never grant this proof to SSE or repair failures.
+    if endpoint_rate_limit {
+        failure.error = failure.error.clone().with_replay_safe();
+    }
+    if let Some(max_retries) = std::num::NonZeroU32::new(max_retries) {
+        let delay = failure
+            .error
+            .retry_after()
+            .unwrap_or(Duration::from_millis(500));
+        failure.error = failure.error.clone().with_transient_retry(
+            max_retries,
+            delay,
+            delay.max(Duration::from_secs(8)),
+        );
+    } else {
+        failure.error = failure.error.clone().with_pre_delivery_retry();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,6 +864,8 @@ mod tests {
             server.reset().await;
             let body = if status == 200 {
                 "data: {\"type\":\"error\",\"status\":403,\"error\":{\"code\":\"forbidden\",\"message\":\"fixture\"}}\n\n"
+            } else if status == 429 {
+                "{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"fixture\"}}"
             } else {
                 "{\"error\":{\"code\":\"forbidden\",\"message\":\"fixture\"}}"
             };
@@ -887,6 +927,17 @@ mod tests {
                 isolate_http_authentication_failure(&mut failure).is_some(),
                 status == 401
             );
+            let mut failure = classify_failure(failure, true);
+            apply_initial_retry_policy(&mut failure, 2);
+            if status == 429 {
+                assert!(failure.error.replay_is_safe());
+                assert!(failure.account_failure.is_none());
+                assert!(matches!(failure.error.pre_delivery_retry(),
+                    Some(gateway_core::error::PreDeliveryRetry::SameAccountTransientRetry { max_retries, .. })
+                    if max_retries.get() == 2));
+            } else if matches!(status, 200 | 401 | 403) {
+                assert!(failure.error.pre_delivery_retry().is_none());
+            }
         }
     }
 
@@ -1079,5 +1130,134 @@ mod tests {
             classify_failure(quota, true).account_failure,
             Some(CodexAccountFailure::QuotaExhausted)
         ));
+    }
+
+    #[test]
+    fn excel_initial_http_retry_uses_configured_budget_and_preserves_retry_after() {
+        use gateway_core::error::PreDeliveryRetry;
+        for budget in [0, 1, 5, 100] {
+            let mut failure = MappedProviderFailure::plain(
+                provider_error(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+                    .with_status(429)
+                    .with_retry_after(Duration::from_secs(60)),
+            );
+            failure.http_rejection_status = Some(429);
+            let mut failure = classify_failure(failure, true);
+            assert!(!failure.error.replay_is_safe());
+            apply_initial_retry_policy(&mut failure, budget);
+            assert!(failure.account_failure.is_none());
+            assert!(failure.error.replay_is_safe());
+            assert!(!failure.websocket_transport_retryable);
+            match failure.error.pre_delivery_retry().unwrap() {
+                PreDeliveryRetry::AccountRotation => assert_eq!(budget, 0),
+                PreDeliveryRetry::SameAccountTransientRetry {
+                    max_retries,
+                    initial_delay,
+                    max_delay,
+                } => {
+                    assert_eq!(max_retries.get(), budget);
+                    assert_eq!(initial_delay, Duration::from_secs(60));
+                    assert_eq!(max_delay, Duration::from_secs(60));
+                }
+                other => panic!("unexpected retry intent: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn excel_retry_does_not_promote_sse_ambiguous_auth_permission_or_quota_failures() {
+        for (kind, state, status) in [
+            (
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+                None,
+            ),
+            (
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Ambiguous,
+                Some(429),
+            ),
+            (
+                ProviderErrorKind::Unauthorized,
+                UpstreamSendState::Sent,
+                Some(401),
+            ),
+            (
+                ProviderErrorKind::PermissionDenied,
+                UpstreamSendState::Sent,
+                Some(429),
+            ),
+            (
+                ProviderErrorKind::Unsupported,
+                UpstreamSendState::Sent,
+                Some(429),
+            ),
+            (
+                ProviderErrorKind::QuotaExhausted,
+                UpstreamSendState::Sent,
+                Some(429),
+            ),
+            (
+                ProviderErrorKind::Transport,
+                UpstreamSendState::Ambiguous,
+                None,
+            ),
+            (ProviderErrorKind::Timeout, UpstreamSendState::Sent, None),
+            (
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+                None,
+            ),
+        ] {
+            let mut failure = MappedProviderFailure::plain(provider_error(kind, state));
+            failure.http_rejection_status = status;
+            apply_initial_retry_policy(&mut failure, 5);
+            assert_eq!(failure.error.kind(), kind);
+            assert!(failure.error.pre_delivery_retry().is_none());
+            assert!(!failure.error.replay_is_safe());
+        }
+        let mut quota = MappedProviderFailure::plain(provider_error(
+            ProviderErrorKind::RateLimited,
+            UpstreamSendState::Sent,
+        ));
+        quota.http_rejection_status = Some(429);
+        quota.account_failure = Some(CodexAccountFailure::QuotaExhausted);
+        apply_initial_retry_policy(&mut quota, 5);
+        assert!(quota.error.pre_delivery_retry().is_none());
+        assert!(matches!(
+            quota.account_failure,
+            Some(CodexAccountFailure::QuotaExhausted)
+        ));
+    }
+
+    #[test]
+    fn excel_retry_zero_replaces_existing_transient_budget_without_changing_proof() {
+        use gateway_core::error::PreDeliveryRetry;
+        let mut capacity = MappedProviderFailure::plain(
+            provider_error(
+                ProviderErrorKind::UpstreamCapacityUnavailable,
+                UpstreamSendState::Sent,
+            )
+            .with_replay_safe()
+            .with_transient_retry(
+                std::num::NonZeroU32::MIN,
+                Duration::ZERO,
+                Duration::ZERO,
+            ),
+        );
+        apply_initial_retry_policy(&mut capacity, 0);
+        assert_eq!(
+            capacity.error.pre_delivery_retry(),
+            Some(PreDeliveryRetry::AccountRotation)
+        );
+        assert!(capacity.error.replay_is_safe());
+        let mut connect = MappedProviderFailure::plain(provider_error(
+            ProviderErrorKind::Transport,
+            UpstreamSendState::NotSent,
+        ));
+        apply_initial_retry_policy(&mut connect, 2);
+        assert!(matches!(connect.error.pre_delivery_retry(),
+            Some(PreDeliveryRetry::SameAccountTransientRetry { max_retries, .. }) if max_retries.get() == 2));
+        assert!(!connect.error.replay_is_safe());
     }
 }

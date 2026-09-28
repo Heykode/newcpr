@@ -21,6 +21,7 @@ pub enum QualityFailureAction {
     DisableScheduling,
     RemoveGroups,
     EnableExcel,
+    ApplyAccountTemplate,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -47,10 +48,18 @@ pub struct QualityRuleConfig {
     pub judge_prompt: String,
     #[serde(default)]
     pub failure_action: QualityFailureAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_template: Option<super::relogin_templates::ReloginTemplate>,
     #[serde(default)]
     pub failure_group_ids: Vec<String>,
     #[serde(default)]
     pub auto_restore: bool,
+    #[serde(default = "default_excel_failure_threshold")]
+    pub excel_failure_threshold: u8,
+}
+
+const fn default_excel_failure_threshold() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,6 +74,8 @@ pub struct QualityRule {
     pub last_status: Option<String>,
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_action: Option<String>,
+    #[serde(default)]
+    pub excel_failure_streak: u8,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

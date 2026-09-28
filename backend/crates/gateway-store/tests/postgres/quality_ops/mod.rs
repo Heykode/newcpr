@@ -7,6 +7,7 @@ use gateway_admin::{
 use gateway_store::postgres::quality_ops::PgQualityOpsStore;
 
 mod policy;
+mod templates;
 
 fn context() -> MutationContext {
     MutationContext {
@@ -17,6 +18,8 @@ fn context() -> MutationContext {
 
 fn config(account: &str) -> QualityRuleConfig {
     QualityRuleConfig {
+        failure_template: None,
+        excel_failure_threshold: 1,
         detection_mode: QualityDetectionMode::Answer,
         account_id: account.into(),
         model: "fixture-model".into(),

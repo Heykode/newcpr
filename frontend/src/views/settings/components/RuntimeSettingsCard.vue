@@ -323,7 +323,7 @@ const tuningValues = {
         <BaseFormItem label="Excel 图片有效期（分钟）">
           <BaseInput v-model="tuningValues.excelImageRelayTtlMinutes.value" aria-label="Excel 图片有效期" type="number" min="1" max="1440" step="1" />
         </BaseFormItem>
-        <BaseFormItem label="同账号传输失败重试次数" description="同一账号传输失败后最多重试次数，范围 0–100">
+        <BaseFormItem label="同账号传输失败重试次数" description="用于 WS 传输恢复和 Excel 可安全重试的首包前错误（含接口 429），范围 0–100；Excel 还受总路由尝试次数限制">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />
         </BaseFormItem>
         <BaseFormItem label="单个请求最多切换账号次数" description="本次请求失败后最多切换到其他账号的次数，范围 0–31">

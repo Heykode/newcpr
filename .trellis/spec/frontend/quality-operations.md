@@ -1,5 +1,19 @@
 # Quality Operations UI
 
+- New remediation uses `apply_account_template` and the shared versioned
+  `AccountTemplatePicker`, with a full-settings summary. Show `enable_excel` only
+  when editing that legacy action; never silently convert a saved rule.
+- Single/bulk edits reuse the existing threshold. `failureTemplate` is opt-in in
+  batch patches: preserve per-rule selections when unchecked, reject missing
+  templates for the selected action, and disallow automatic reverse restoration.
+- Keep historical template names/revisions from `QualityRun.config`, not today's
+  template catalog. A changed/deleted selection remains explicit until reselected;
+  catalog failure has retry and aborts on unmount.
+- Template `excelIgnoreEncryptedContent` is an explicit lossy option, default
+  false; serialize false when the template explicitly turns Excel off. Disabling
+  inclusion of Excel settings omits the entire optional group. Reuse existing
+  IPv6 fields and preserve omission versus null.
+
 - Keep a standalone sidebar route, compact overview, rule list, history table and
   editing/detail side panels. Reuse CPR controls and themes.
 - New question rules and synthetic preview share `quality-ops/presets.ts`: the exact
@@ -53,3 +67,23 @@
   persisted pause/skip reason; switching Excel off does not silently resume a rule.
 - Browser regressions cover mode switching, preserved question drafts, judge-free
   saves, Excel action, paused results and 1440/390/320px probe panels.
+
+## Selective Batch Editing
+
+- Rule selection survives search changes; select-all affects only current results.
+  Opening the bulk editor clears every field opt-in. Never patch account identity.
+- Read fresh rules before each batch and save sequentially with each rule's current
+  revision. Preserve unselected values, skip unchanged rules, and never blindly
+  retry a revision conflict. Refresh failure means no writes.
+- Keep successful and failed outcomes distinct. Remove successes from pending
+  selection so retries only save unfinished rules. Stopping or unmounting prevents
+  subsequent saves but does not claim an in-flight mutation was cancelled.
+- Question-only fields do not overwrite probe drafts. Group removal and Excel
+  thresholds apply only to the matching final action. Excel never enables automatic
+  restore even when that field is selected in a mixed batch.
+- The Excel threshold editor defaults to 1 and accepts 1–100 rounds. Show persisted
+  progress, reset-on-save semantics, normal-round reset, inconclusive-round hold,
+  and no automatic Excel shutdown. Changing frequency is separately opted in.
+- Browser regressions cover partial success/retry, failed refresh, fresh unrelated
+  values, empty field opt-ins on reopen and 1440/390/320px layouts. Interact with the
+  visible labels of shared checkbox/switch controls and assert their checked state.

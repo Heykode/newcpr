@@ -1243,6 +1243,46 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     Revision::new(to_u64(next)?)
 }
 
+/// Reuse the normal account and egress mutations inside a caller-owned transaction.
+/// The caller must fence identity/availability and publish its own audit atomically.
+pub(crate) async fn apply_account_template_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: &str,
+    config: &gateway_admin::model::relogin_templates::ReloginTemplateConfig,
+) -> StoreResult<()> {
+    let settings = config
+        .settings()
+        .map_err(|_| invalid("invalid account template"))?;
+    let proxy = match &config.outbound_proxy_id {
+        Some(id) => gateway_admin::model::proxies::AccountProxySelection::Saved(id.clone()),
+        None => gateway_admin::model::proxies::AccountProxySelection::Direct,
+    };
+    let ids = [account_id.to_owned()];
+    update_provider_accounts_scheduling_in_transaction(
+        transaction,
+        &ids,
+        AccountSchedulingPatch {
+            egress_mode: settings.egress_mode,
+            enabled: Some(settings.enabled),
+            explicit_scheduling_intent: false,
+            concurrency_limit: Some(settings.concurrency_limit),
+            weight: Some(settings.weight),
+            turn_state_injection_enabled: settings.turn_state_injection_enabled,
+            responses_upstream: settings.responses_upstream,
+            excel_models: settings.excel_models.as_ref(),
+            excel_models_follow_global: settings.excel_models_follow_global,
+            excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
+            excel_ignore_encrypted_content: settings.excel_ignore_encrypted_content,
+            excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
+            excel_403_action: settings.excel_403_action,
+            model_access: settings.model_access.as_ref(),
+            outbound_proxy: Some(&proxy),
+        },
+    )
+    .await?;
+    replace_account_group_assignments_in_transaction(transaction, &ids, &settings.group_ids).await
+}
+
 struct AccountSchedulingPatch<'a> {
     egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     enabled: Option<bool>,
