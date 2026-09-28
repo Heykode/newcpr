@@ -57,4 +57,4 @@ export type MihomoAction = 'install' | 'start' | 'stop' | 'subscription_add' | '
 export interface MihomoCommand { action: MihomoAction, target?: string, name?: string, subscriptions?: string[], dynamicProxies?: string[], countryFilter?: CountryFilter, downloadMode?: string }
 export const getMihomo = (options: RequestOptions = {}) => request<MihomoStatus>({ url: '/api/admin/proxies/mihomo', method: 'GET', ...options })
 export const updateMihomo = (data: MihomoCommand) => request<MihomoStatus>({ url: '/api/admin/proxies/mihomo', method: 'POST', data })
-export const checkMihomoNode = (node: string, quality = false) => request<NodeCheck>({ url: '/api/admin/proxies/mihomo/check', method: 'POST', data: { node, quality }, timeout: 125000 })
+export const checkMihomoNode = (node: string, quality = false, options: Pick<RequestOptions, 'silent'> = {}) => request<NodeCheck>({ url: '/api/admin/proxies/mihomo/check', method: 'POST', data: { node, quality }, timeout: 125000, ...options })
