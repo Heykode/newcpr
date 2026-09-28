@@ -125,6 +125,23 @@ impl MemoryAccountStore {
         stored.account = stored.account.clone().with_responses_upstream(upstream);
     }
 
+    pub(crate) fn set_excel_encrypted_content_policy(
+        &self,
+        id: &str,
+        enabled: bool,
+        models: Vec<String>,
+    ) {
+        let mut accounts = self.accounts.lock().expect("account store lock");
+        let stored = accounts
+            .get_mut(&ProviderAccountId::new(id).unwrap())
+            .expect("seeded account");
+        stored.account = stored
+            .account
+            .clone()
+            .with_excel_ignore_encrypted_content(enabled)
+            .with_excel_models(gateway_core::account::ExcelModels::try_from(models).unwrap());
+    }
+
     pub(crate) fn quota_reads(&self) -> usize {
         self.quota_reads.load(Ordering::SeqCst)
     }

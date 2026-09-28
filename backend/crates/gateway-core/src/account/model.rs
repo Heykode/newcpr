@@ -681,6 +681,7 @@ pub struct ProviderAccount {
     responses_upstream: super::ResponsesUpstream,
     excel_models: super::ExcelModels,
     excel_cache_creation_as_input: bool,
+    excel_ignore_encrypted_content: bool,
     excel_403_action: super::Excel403Action,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
@@ -724,6 +725,7 @@ impl ProviderAccount {
             responses_upstream: super::ResponsesUpstream::Codex,
             excel_models: super::ExcelModels::default(),
             excel_cache_creation_as_input: false,
+            excel_ignore_encrypted_content: false,
             excel_403_action: Default::default(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
@@ -861,6 +863,17 @@ impl ProviderAccount {
     #[must_use]
     pub const fn excel_cache_creation_as_input(&self) -> bool {
         self.excel_cache_creation_as_input
+    }
+
+    #[must_use]
+    pub const fn with_excel_ignore_encrypted_content(mut self, enabled: bool) -> Self {
+        self.excel_ignore_encrypted_content = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn excel_ignore_encrypted_content(&self) -> bool {
+        self.excel_ignore_encrypted_content
     }
 
     #[must_use]

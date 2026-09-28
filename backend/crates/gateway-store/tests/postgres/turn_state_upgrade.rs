@@ -91,6 +91,13 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
         after
             .as_object_mut()
             .unwrap()
+            .remove("excel_ignore_encrypted_content"),
+        Some(serde_json::json!(false))
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
             .remove("excel_auto_disable_on_403"),
         Some(serde_json::json!(false))
     );
@@ -155,7 +162,79 @@ async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics()
             .remove("excel_mode_disabled_at"),
         Some(before["excel_auto_disabled_at"].clone())
     );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("excel_ignore_encrypted_content"),
+        Some(serde_json::json!(false))
+    );
     assert_eq!(before, after);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn encrypted_omission_upgrade_defaults_off_without_changing_accounts_or_settings() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 50)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) =
+        TestDatabase::create_with_migrator("encrypted_omission_upgrade", &old).await
+    else {
+        return;
+    };
+    insert_legacy_account(&database).await;
+    sqlx::query("update provider_accounts set responses_upstream='excel', enabled=false, weight=73, concurrency_limit=7, excel_403_action='pause_account', excel_auto_disabled_at=now()")
+        .execute(&database.pool).await.unwrap();
+    let before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let settings_before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(s) from runtime_settings s")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let mut after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("excel_ignore_encrypted_content"),
+        Some(serde_json::json!(false))
+    );
+    assert_eq!(before, after);
+    let settings_after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(s) from runtime_settings s")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(settings_before, settings_after);
+    sqlx::query("update provider_accounts set excel_ignore_encrypted_content=true")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "select excel_ignore_encrypted_content from provider_accounts"
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap()
+    );
     database.close().await;
 }
 

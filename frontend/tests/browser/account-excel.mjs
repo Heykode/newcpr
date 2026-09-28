@@ -35,6 +35,7 @@ async function main() {
     }
     page.on('pageerror', error => errors.push(error.message))
     let enabled = false
+    let ignoreEncryptedContent = false
     let excelModels = ['gpt-5.6-sol']
     let followGlobal = false
     const templates = []
@@ -62,6 +63,7 @@ async function main() {
         excelModeDisabledAt: index === 2 ? '2026-09-27T00:00:00Z' : null,
         excelModels: index === 0 ? excelModels : ['gpt-5.6-sol'],
         excelModelsFollowGlobal: index === 0 ? followGlobal : true,
+        excelIgnoreEncryptedContent: index === 0 ? ignoreEncryptedContent : false,
         effectiveExcelModels: index === 0 && !followGlobal ? excelModels : ['gpt-5.6-sol', 'gpt-6-astra'],
         turnStateInjectionEnabled: false,
         turnState: null,
@@ -76,6 +78,10 @@ async function main() {
         excelModels = body.excelModels
       if (body.excelModelsFollowGlobal !== undefined)
         followGlobal = body.excelModelsFollowGlobal
+      if (body.responsesUpstream !== undefined)
+        enabled = body.responsesUpstream === 'excel'
+      if (body.excelIgnoreEncryptedContent !== undefined)
+        ignoreEncryptedContent = body.excelIgnoreEncryptedContent
       return fulfill(route, null)
     })
     await page.route('**/dev/api/admin/relogin/templates', route => fulfill(route, templates))
@@ -96,7 +102,10 @@ async function main() {
     await page.route('**/dev/api/admin/accounts/batch-update', (route) => {
       const body = route.request().postDataJSON()
       patches.push(body)
-      enabled = body.responsesUpstream === 'excel'
+      if (body.responsesUpstream !== undefined)
+        enabled = body.responsesUpstream === 'excel'
+      if (body.excelIgnoreEncryptedContent !== undefined)
+        ignoreEncryptedContent = body.excelIgnoreEncryptedContent
       return fulfill(route, null)
     })
     await page.goto(`http://127.0.0.1:${port}/accounts`)
@@ -181,9 +190,72 @@ async function main() {
     assert.equal(patches.at(-1).excelModelsFollowGlobal, true)
     assert.equal('excelModels' in patches.at(-1), false)
 
+    await dismissNotices()
+    await page.getByRole('button', { name: '编辑账号', exact: true }).first().click()
+    const encrypted = dialog.getByRole('switch', { name: '忽略历史中的加密消息内容', exact: true })
+    assert.equal(await encrypted.isChecked(), false)
+    assert.equal(await encrypted.isEnabled(), false)
+    await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
+    assert.equal(await encrypted.isEnabled(), true)
+    await encrypted.locator('..').click()
+    assert.equal(await encrypted.isChecked(), true)
+    await dialog.getByText('默认关闭。仅实际走 Excel 时', { exact: false }).waitFor()
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      await encrypted.scrollIntoViewIfNeeded()
+      assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth))
+      await page.screenshot({ path: `${output}/excel-encrypted-option-${width}.png` })
+    }
+    await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
+    await dialog.waitFor({ state: 'detached' })
+    assert.equal(patches.at(-1).excelIgnoreEncryptedContent, true)
+    assert.equal(patches.at(-1).responsesUpstream, 'excel')
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await dismissNotices()
+    await page.getByRole('button', { name: '编辑账号', exact: true }).first().click()
+    assert.equal(await encrypted.isChecked(), true)
+    await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
+    await dialog.waitFor({ state: 'detached' })
+    assert.equal('excelIgnoreEncryptedContent' in patches.at(-1), false)
+    await dismissNotices()
+    await page.getByRole('button', { name: '编辑账号', exact: true }).first().click()
+    await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
+    await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
+    await dialog.waitFor({ state: 'detached' })
+    assert.equal(patches.at(-1).responsesUpstream, 'codex')
+    assert.equal(patches.at(-1).excelIgnoreEncryptedContent, false)
+
+    await dismissNotices()
+    const selectedRow = page.locator(`tbody tr[data-row-key="${accounts[0].id}"]`)
+    await selectedRow.getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
+    await page.getByRole('button', { name: '批量编辑账号', exact: true }).click()
+    const encryptedOptIn = dialog.getByRole('checkbox', { name: '应用加密消息省略更改', exact: true })
+    assert.equal(await encryptedOptIn.isChecked(), false)
+    assert.equal(await encrypted.isEnabled(), false)
+    await encryptedOptIn.locator('..').click()
+    await encrypted.locator('..').click()
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      await encrypted.scrollIntoViewIfNeeded()
+      assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth))
+      await page.screenshot({ path: `${output}/excel-encrypted-batch-${width}.png` })
+    }
+    await dialog.getByRole('button', { name: '保存更改', exact: true }).click()
+    await dialog.waitFor({ state: 'detached' })
+    assert.deepEqual(patches.at(-1), { accountIds: [accounts[0].id], excelIgnoreEncryptedContent: true })
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await dismissNotices()
+    await selectedRow.getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
+    await page.getByRole('button', { name: '批量编辑账号', exact: true }).click()
+    assert.equal(await encryptedOptIn.isChecked(), false)
+    assert.equal(await encrypted.isChecked(), true)
+    assert.equal(await encrypted.isEnabled(), false)
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+
     await page.getByRole('button', { name: '账号模板', exact: true }).click()
     await page.getByRole('button', { name: '管理模板', exact: true }).click()
     await dialog.getByRole('button', { name: '新建模板', exact: true }).click()
+    assert.equal(await encrypted.count(), 0)
     await dialog.getByRole('textbox', { name: '模板名称', exact: true }).fill('Excel template')
     await dialog.getByRole('switch', { name: '切换 Excel 入口', exact: true }).locator('..').click()
     const policy = dialog.getByRole('combobox', { name: 'Excel遇到HTTP 403', exact: true })

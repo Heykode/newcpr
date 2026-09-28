@@ -706,3 +706,22 @@ declared/absent models and both themes at 1440/390/320px. No production requests
 
 Wrong: export the last globally cached plan catalog for a clicked account.
 Correct: pass only that row's ID and download the selected-account native result.
+
+## Excel Encrypted Message Omission
+
+`excelIgnoreEncryptedContent` is an account-level, default-off, lossy option.
+Display it only in supported OAuth account edit/batch edit dialogs. The shared
+fields component needs an explicit `encryptedContentAvailable` capability so
+import/template forms never show an unbound, unsaved switch.
+
+Single edits load missing values as false and omit unchanged values in patches.
+Batch edits use an independent `updateExcelIgnoreEncryptedContent` opt-in that
+resets each time the dialog opens or closes. An explicit route change to Codex
+clears the option; changing this option alone never switches routes. Preserve
+the saved value during unrelated edits and when old clients omit the field.
+
+Warn that only marked encrypted message parts on actual Excel requests are
+replaced by an omission notice: this is not decryption or plaintext recovery.
+Native Codex requests and plaintext-only content remain outside its scope.
+Cover save/readback, opt-in reset, disabled route behavior and 1440/390/320px
+layouts with synthetic fixtures; never enable production accounts for UI QA.

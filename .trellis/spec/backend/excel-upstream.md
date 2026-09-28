@@ -543,3 +543,39 @@ Wrong: introduce a proxy pool or fallback to native merely to match reference
 Mihomo/hosted-tool policies. Correct: preserve the single configured CPR proxy,
 send-state/error evidence and existing capability warnings; incompatible
 optional policies need separate explicit design, not hidden defaults.
+
+## 15. Optional Encrypted Message Omission
+
+Sub2API #154 (`96cb37623963d4759f3b5b09b58a3a8ee49df55b`) is adapted as
+account-level `excelIgnoreEncryptedContent`, default false. Only after an
+actual Excel route is resolved may its outgoing request copy replace
+`encrypted_content` parts in message/agent_message `content` or function/custom
+tool result `output` arrays. Replace each part in place with a fixed omission
+notice (`output_text` for assistant messages, otherwise `input_text`). Never
+decrypt, fabricate plaintext, drop neighboring parts or change call IDs.
+
+Run after scoped replay restore and before content/image validation. Do not
+mutate the incoming payload or replay capture. Reasoning/compaction encrypted
+items, tool definitions/arguments and strings are outside this option's scope.
+The default still rejects unsupported encrypted message parts before sending;
+other unsupported content must continue to fail validation. Native HTTP/WS,
+including native models on Excel-enabled accounts, must bypass this transform.
+
+Migration 0050 adds a false-default column without changing existing settings.
+Omitted API fields preserve the saved value; explicit false disables it. An
+explicit route change to Codex clears it. Credential refresh/relogin must not
+overwrite it. UI single edits send only changes; batch edits require an
+independent opt-in. Show a clear lossy warning: omitted content is unavailable
+to the model, not recovered plaintext. Never enable accounts automatically.
+
+Regression gate: default rejection vs opt-in for HTTP/downstream WS/compact;
+native wire and identity isolation; plaintext/order/tool pairing; no-op and
+idempotence; persistence/default/omission/close semantics; editor save/readback,
+batch opt-in reset and narrow viewport rendering. Use synthetic local mocks,
+not real BPS requests, for these tests.
+
+Keep pure-transform regressions in the already audited `history_tests.rs` and
+provider contracts under `tests/provider/contract/`. New production helper
+files must not add inline test modules. Run the gateway application's
+architecture suite as well as provider tests; do not broaden the architecture
+allowlist to accommodate a new helper's test placement.
