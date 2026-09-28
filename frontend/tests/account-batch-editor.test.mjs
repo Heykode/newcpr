@@ -77,6 +77,7 @@ function mountEditor(t, options = {}) {
     '@/components/base/BaseToast': { toast },
     '@/composables/useAsyncAction': asyncAction,
     '../utils/schedulingForm': schedulingForm,
+    '@/utils/excel-settings': loadModule(new URL('../src/utils/excel-settings.ts', import.meta.url), { '@/views/accounts/utils/schedulingForm': schedulingForm }),
     '../utils/modelAccess': loadModule(new URL('../src/views/accounts/utils/modelAccess.ts', import.meta.url)),
     '@/utils/account-name': loadModule(new URL('../src/utils/account-name.ts', import.meta.url)),
   })
@@ -103,21 +104,21 @@ function assertNoUpdates(state) {
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
   assert.equal(state.updateExcelCacheCreationAsInput.value, false)
-  assert.equal(state.updateExcelAutoDisableOn403.value, false)
+  assert.equal(state.updateExcel403Action.value, false)
 }
 
 test('Excel batch defaults preserve saved and empty lists and reset every opt-in on reopen', async (t) => {
   const { state, accounts, requests } = mountEditor(t, { accounts: [account('account-a', { excelModels: undefined, responsesUpstream: 'excel' })] })
   state.open()
   assert.equal(state.excelModels.value, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
-  state.excelAutoDisableOn403.value = true
-  state.updateExcelAutoDisableOn403.value = true
+  state.excel403Action.value = 'pause_account'
+  state.updateExcel403Action.value = true
   state.updateExcelModels.value = true
   state.showBatchEditModal.value = false
   await vue.nextTick()
   state.open()
   assertNoUpdates(state)
-  assert.equal(state.excelAutoDisableOn403.value, false)
+  assert.equal(state.excel403Action.value, 'none')
   accounts.value[0].excelModels = ['custom-model']
   state.open()
   assert.equal(state.excelModels.value, 'custom-model')
@@ -132,12 +133,12 @@ test('Excel batch defaults preserve saved and empty lists and reset every opt-in
 test('Excel 403 setting saves on its own only after explicit batch opt-in', async (t) => {
   const { state, requests } = mountEditor(t, { accounts: [account('account-a', { responsesUpstream: 'excel' })] })
   state.open()
-  state.excelAutoDisableOn403.value = true
+  state.excel403Action.value = 'pause_account'
   assert.equal(state.hasUpdates.value, false)
-  state.updateExcelAutoDisableOn403.value = true
+  state.updateExcel403Action.value = true
   assert.equal(state.hasUpdates.value, true)
   await state.save()
-  assert.deepEqual(requests[0], { accountIds: ['account-a'], excelAutoDisableOn403: true })
+  assert.deepEqual(requests[0], { accountIds: ['account-a'], excel403Action: 'pause_account' })
 })
 
 test('Excel cache billing is separately opted in and does not implicitly switch routes', async (t) => {

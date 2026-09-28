@@ -1,5 +1,19 @@
 # Account Relogin Contracts
 
+- Account-management 2FA enrollment is a separate explicit intent, not a change to
+  ordinary library import/manual queue semantics. Persist frozen import settings
+  and administrator context; reuse the existing worker, identity/CAS and create-only
+  import. Existing-account enrollment only rotates credentials, preserving settings.
+  New enrollment login uses the selected managed proxy; validate again before import.
+  Paused queues reject new enrollment. Active/uncertain rows cannot be replaced by it.
+  Workspace selection preserves intent; Ready enrollment resumes push after pause
+  without logging in again. Cancel, manual queue/push and successful settlement clear it.
+- Relogin export requires explicit selected IDs (at most 200), administrator auth,
+  confirmation and no-store. Export one CPR JSON bundle or one three-field text file.
+  Resolve actual pooled identity/workspace before reading credentials; reject deleted,
+  mismatched or ambiguous targets. Never log in implicitly for export. Audit ID/format
+  only; no sensitive Debug derivation, normal-list fields or credential JSON additions.
+
 - `gateway-admin/model/relogin` owns login-library facts; provider-owned JSON is opaque.
   Do not add passwords or TOTP material to managed credential documents.
 - `ReloginStore::save_batch` must be atomic. Per-row writes and deletes use revisions.

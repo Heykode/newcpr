@@ -15,6 +15,7 @@ const modeOptions = {
     { label: 'AT', value: 'access_token' },
     { label: 'RT', value: 'refresh_token' },
     { label: '账号文件', value: 'json' },
+    { label: '2FA', value: 'two_fa' },
   ],
   xai: [
     { label: 'OAuth', value: 'oauth' },
@@ -84,6 +85,8 @@ function resolveModal(
     description = '逐行粘贴 Access Token；未包含 Refresh Token 时无法自动续期'
   else if (input.form.mode === 'refresh_token')
     description = '逐行粘贴 Refresh Token，导入时将自动换取 Access Token'
+  else if (input.form.mode === 'two_fa')
+    description = '登录验证成功后自动入池，同时保存失效重登资料；已有账号仅更新凭据'
 
   return {
     title: '导入账号',
@@ -113,6 +116,9 @@ function resolveImportInput(
   form: AccountCreateForm,
   provider: AccountCreateProvider | undefined,
 ) {
+  if (form.mode === 'two_fa') {
+    return { label: '2FA 账号', placeholder: '每行一条：邮箱----密码----TOTP密钥', uploadable: false }
+  }
   if (form.mode === 'access_token') {
     return {
       label: 'Access Token',
@@ -155,6 +161,8 @@ function resolveSubmitLabel(
     return '完成重新授权'
   if (input.form.mode === 'oauth')
     return '完成导入'
+  if (input.form.mode === 'two_fa')
+    return '登录并导入'
   return '创建导入任务'
 }
 

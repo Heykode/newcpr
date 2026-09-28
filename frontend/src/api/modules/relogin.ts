@@ -25,6 +25,7 @@ export interface ReloginEntry {
   revision: number
   email: string
   hasTotp: boolean
+  enrollmentPending?: boolean
   automatic: boolean
   status: ReloginStatus
   message: string
@@ -81,6 +82,12 @@ export function getRelogin(options: RequestOptions = {}) {
 }
 export function importRelogin(text: string, replaceExisting: boolean) {
   return request<{ imported: number }>({ url: '/api/admin/relogin/import', method: 'POST', data: { text, replaceExisting } })
+}
+export function enrollRelogin(data: { text: string, replaceExisting: boolean, settings: import('./accounts').AccountImportSettings, outboundProxyId?: string }) {
+  return request<{ ids: string[] }>({ url: '/api/admin/relogin/enroll', method: 'POST', data })
+}
+export function exportRelogin(ids: string[], format: 'json' | 'two_fa') {
+  return request<{ files: { name: string, content: string }[] }>({ url: '/api/admin/relogin/export', method: 'POST', data: { ids, format, confirm: 'export_sensitive_relogin' }, timeout: 120000 })
 }
 export function queueRelogin(ids: string[], workspaceMode: ReloginWorkspaceMode = 'original') {
   return request<ReloginBatchResult[]>({ url: '/api/admin/relogin/queue', method: 'POST', data: { ids, workspaceMode } })

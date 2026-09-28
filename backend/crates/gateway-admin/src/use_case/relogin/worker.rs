@@ -170,6 +170,19 @@ impl DefaultReloginService {
                     continue;
                 }
                 if entry.status != ReloginStatus::Queued {
+                    if entry.status == ReloginStatus::Ready
+                        && entry.synced_at.is_none()
+                        && let Some(enrollment) = entry.enrollment.clone()
+                    {
+                        if let Err(error) = self.push_entry(&mut entry, &enrollment.context).await {
+                            if entry.status == ReloginStatus::Ready {
+                                entry.status = ReloginStatus::Failed;
+                            }
+                            entry.message = format!("入池未完成：{}", error.message());
+                            self.save(&mut entry).await?;
+                        }
+                        continue;
+                    }
                     if !recovery::view(&entry, &pool, &settings, Utc::now()).waiting() {
                         continue;
                     }
@@ -194,6 +207,7 @@ impl DefaultReloginService {
                     entry.workspace_choices.clear();
                     entry.selected_workspace_id = None;
                     entry.manual_push_context = None;
+                    entry.enrollment = None;
                 }
                 let target_account = entry
                     .target
@@ -248,6 +262,30 @@ impl DefaultReloginService {
                         continue;
                     }
                 }
+                let enrollment_proxy = if entry.target.is_none() {
+                    if let Some(enrollment) = &entry.enrollment {
+                        match super::super::import_proxy_binding(
+                            self.proxies.as_ref(),
+                            enrollment.config.outbound_proxy_id.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(reservation) => {
+                                reservation.map(|reservation| reservation.binding.proxy)
+                            }
+                            Err(error) => {
+                                entry.status = ReloginStatus::Failed;
+                                entry.message = error.message().to_owned();
+                                self.save(&mut entry).await?;
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let request = ReloginRequest {
                     email: entry.email.clone(),
                     password: entry.password.clone(),
@@ -268,7 +306,8 @@ impl DefaultReloginService {
                                 pool.iter().find(|account| target.matches_account(account))
                             })
                         })
-                        .and_then(|account| account.outbound_proxy.clone()),
+                        .and_then(|account| account.outbound_proxy.clone())
+                        .or(enrollment_proxy),
                 };
                 if entry.automatic_job {
                     entry.automatic_attempts += 1;
@@ -406,20 +445,29 @@ impl DefaultReloginService {
         self.save(&mut current).await?;
         if current.status == ReloginStatus::Ready
             && ((current.automatic_job && current.automatic)
-                || current.manual_push_context.is_some())
+                || current.manual_push_context.is_some()
+                || current.enrollment.is_some())
             && !shutdown.is_cancelled()
             && !self.store()?.settings().await.map_err(store_error)?.paused
         {
             let context = current
                 .manual_push_context
                 .clone()
+                .or_else(|| {
+                    current
+                        .enrollment
+                        .as_ref()
+                        .map(|enrollment| enrollment.context.clone())
+                })
                 .unwrap_or_else(|| MutationContext {
                     actor: MutationActor::System,
                     request_id: format!("relogin_{}", uuid::Uuid::now_v7()),
                 });
             if let Err(error) = self.push_entry(&mut current, &context).await {
                 current.next_attempt_at = Some(Utc::now() + retry_interval);
-                if current.status == ReloginStatus::Ready && current.manual_push_context.is_some() {
+                if current.status == ReloginStatus::Ready
+                    && (current.manual_push_context.is_some() || current.enrollment.is_some())
+                {
                     current.status = ReloginStatus::Failed;
                 }
                 current.message = format!("新凭据已保存，推送未完成：{}", error.message());

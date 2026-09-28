@@ -6,6 +6,7 @@ import { Openai, Xai } from '@boxicons/vue'
 import { Copy, LayoutGrid, Settings2 } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
@@ -151,7 +152,7 @@ function continueToImport() {
           label="账号添加方式"
           :options="view.modeOptions"
           :disabled="busy"
-          class="w-full"
+          class="w-full [&_button]:px-0 sm:[&_button]:px-3"
         />
         <AccountOAuthFields
           v-if="mode === 'oauth'"
@@ -173,6 +174,14 @@ function continueToImport() {
           :placeholder="view.importInput.placeholder"
           :uploadable="view.importInput.uploadable"
           :disabled="busy"
+        />
+        <BaseCheckbox
+          v-if="mode === 'two_fa'"
+          v-model="form.replaceExisting2fa"
+          label="确认更新已有账号的 2FA 资料"
+          show-label
+          :disabled="busy"
+          class="[&_span]:leading-5"
         />
       </template>
     </div>

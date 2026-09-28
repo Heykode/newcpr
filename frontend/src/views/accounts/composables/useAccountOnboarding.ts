@@ -6,6 +6,7 @@ import {
   createAccountImportTask,
   startAccountOAuth,
 } from '@/api'
+import { enrollRelogin } from '@/api/modules/relogin'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { isRecord } from '@/utils/object'
@@ -29,6 +30,7 @@ export function useAccountOnboarding(options: {
   onImportTaskCreated: (task: AccountImportTask) => void
 }) {
   const createModalOpen = shallowRef(false)
+  const enrollmentIds = shallowRef<string[]>([])
   const reauthorizingAccount = shallowRef<AccountRow | null>(null)
   const creatingAccountAction = useAsyncAction()
   const authorizingOAuthAction = useAsyncAction()
@@ -74,6 +76,20 @@ export function useAccountOnboarding(options: {
         const mode = createForm.value.mode
         if (mode === 'oauth')
           throw new Error('请选择凭据导入方式')
+        if (mode === 'two_fa') {
+          if (createForm.value.provider !== 'openai' || reauthorizingAccount.value)
+            throw new Error('2FA 导入仅支持新增 OpenAI 账号')
+          const result = await enrollRelogin({
+            text: createForm.value.importTexts.two_fa,
+            replaceExisting: createForm.value.replaceExisting2fa,
+            settings: accountImportSettings(createForm.value, 'openai'),
+            outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
+          })
+          enrollmentIds.value = [...new Set([...enrollmentIds.value, ...result.ids])]
+          showCreateModal.value = false
+          toast.success('2FA 登录入池任务已创建')
+          return
+        }
         const documents = createForm.value.provider === 'batch'
           ? parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
           : accountImportDocuments(requireImportProvider(createForm.value.provider), mode, createForm.value.importTexts[mode])
@@ -210,7 +226,8 @@ export function useAccountOnboarding(options: {
       createForm.value = {
         ...createForm.value,
         mode: createForm.value.provider === 'batch' ? 'json' : 'oauth',
-        importTexts: { access_token: '', refresh_token: '', json: '' },
+        importTexts: { access_token: '', refresh_token: '', json: '', two_fa: '' },
+        replaceExisting2fa: false,
         oauthFlowId: '',
         oauthAuthUrl: '',
         oauthCallback: '',
@@ -233,6 +250,7 @@ export function useAccountOnboarding(options: {
   )
 
   return {
+    enrollmentIds,
     showCreateModal,
     reauthorizingAccount,
     creatingAccount,

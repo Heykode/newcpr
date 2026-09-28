@@ -29,6 +29,7 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
+mod enrollment;
 mod recovery;
 mod workspace;
 
@@ -48,6 +49,14 @@ fn conflict() -> AdminStoreError {
 
 #[async_trait]
 impl ReloginStore for MemoryStore {
+    async fn record_export(
+        &self,
+        _: &[String],
+        _: ReloginExportFormat,
+        _: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        Ok(())
+    }
     async fn templates(&self) -> AdminStoreResult<Vec<ReloginTemplate>> {
         Ok(self.templates.lock().unwrap().values().cloned().collect())
     }
@@ -287,6 +296,7 @@ pub(super) fn template_config() -> ReloginTemplateConfig {
         excel_models_follow_global: None,
         excel_cache_creation_as_input: Default::default(),
         excel_auto_disable_on_403: Default::default(),
+        excel_403_action: Default::default(),
         name: "Team defaults".into(),
         enabled: false,
         turn_state_injection_enabled: Some(true),
@@ -517,6 +527,7 @@ async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_m
                     excel_models_follow_global: true,
                     excel_cache_creation_as_input: true,
                     excel_auto_disable_on_403: Default::default(),
+                    excel_403_action: Default::default(),
                     excel_models: None,
                 }),
             },

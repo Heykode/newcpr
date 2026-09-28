@@ -14,7 +14,7 @@ type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeD
   & Partial<Pick<AccountRow, 'provider' | 'authenticationKind'>>
   & Partial<Pick<AccountRow, 'accountId'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
-  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt'>>
+  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt' | 'excelModeDisabledAt'>>
 
 const props = withDefaults(
   defineProps<{
@@ -137,9 +137,9 @@ const avatarToneClass = computed(() => {
         Excel 403 自动暂停调度
       </div>
       <div
-        v-if="account.responsesUpstream !== 'excel' && account.excelAutoDisabledAt"
+        v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt"
         class="mt-0.5 text-cp-xs text-cp-text-secondary"
-        :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelAutoDisabledAt)}`"
+        :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelModeDisabledAt)}`"
       >
         Excel 403 自动关闭
       </div>

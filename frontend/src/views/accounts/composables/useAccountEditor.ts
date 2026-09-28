@@ -1,12 +1,14 @@
 import type { Ref } from 'vue'
 import type { AccountModelAccess, getAccounts } from '@/api'
-
+import type { Excel403Action } from '@/utils/excel-settings'
 import { computed, ref, shallowRef, watch } from 'vue'
+
 import { updateAccount } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
+import { accountExcel403Action } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
@@ -27,9 +29,9 @@ export function useAccountEditor(options: {
   const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
-  const excelAutoDisableOn403 = shallowRef(false)
+  const excel403Action = shallowRef<Excel403Action>('none')
   let initialExcelCacheCreationAsInput = false
-  let initialExcelAutoDisableOn403 = false
+  let initialExcel403Action: Excel403Action = 'none'
   let initialExcelModelsFollowGlobal = true
   let initialExcelModels = ''
   const concurrencyLimit = shallowRef('')
@@ -60,9 +62,9 @@ export function useAccountEditor(options: {
     excelModels.value = (account.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = account.excelModelsFollowGlobal ?? false
     excelCacheCreationAsInput.value = account.excelCacheCreationAsInput ?? false
-    excelAutoDisableOn403.value = account.excelAutoDisableOn403 ?? false
+    excel403Action.value = accountExcel403Action(account)
     initialExcelCacheCreationAsInput = excelCacheCreationAsInput.value
-    initialExcelAutoDisableOn403 = excelAutoDisableOn403.value
+    initialExcel403Action = excel403Action.value
     initialExcelModelsFollowGlobal = excelModelsFollowGlobal.value
     initialExcelModels = excelModels.value
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
@@ -125,9 +127,9 @@ export function useAccountEditor(options: {
           payload.excelModels = models
       }
       if (excelAvailable && excelCacheCreationAsInput.value !== initialExcelCacheCreationAsInput)
-        payload.excelCacheCreationAsInput = excelEnabled.value && excelCacheCreationAsInput.value
-      if (excelAvailable && (excelAutoDisableOn403.value !== initialExcelAutoDisableOn403 || (initialExcelEnabled && !excelEnabled.value)))
-        payload.excelAutoDisableOn403 = excelEnabled.value && excelAutoDisableOn403.value
+        payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
+      if (excelAvailable && (excel403Action.value !== initialExcel403Action || (initialExcelEnabled && !excelEnabled.value)))
+        payload.excel403Action = excelEnabled.value ? excel403Action.value : 'none'
       await updateAccount(payload)
       showEditModal.value = false
       toast.success('账号已更新')
@@ -149,9 +151,9 @@ export function useAccountEditor(options: {
     excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
     excelModelsFollowGlobal.value = true
     excelCacheCreationAsInput.value = false
-    excelAutoDisableOn403.value = false
+    excel403Action.value = 'none'
     initialExcelCacheCreationAsInput = false
-    initialExcelAutoDisableOn403 = false
+    initialExcel403Action = 'none'
     initialExcelModelsFollowGlobal = true
     initialExcelModels = ''
     concurrencyLimit.value = ''
@@ -170,7 +172,7 @@ export function useAccountEditor(options: {
     excelModels,
     excelModelsFollowGlobal,
     excelCacheCreationAsInput,
-    excelAutoDisableOn403,
+    excel403Action,
     concurrencyLimit,
     weight,
     modelAccess,

@@ -681,7 +681,7 @@ pub struct ProviderAccount {
     responses_upstream: super::ResponsesUpstream,
     excel_models: super::ExcelModels,
     excel_cache_creation_as_input: bool,
-    excel_auto_disable_on_403: bool,
+    excel_403_action: super::Excel403Action,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
     model_access: super::AccountModelAccess,
@@ -724,7 +724,7 @@ impl ProviderAccount {
             responses_upstream: super::ResponsesUpstream::Codex,
             excel_models: super::ExcelModels::default(),
             excel_cache_creation_as_input: false,
-            excel_auto_disable_on_403: Default::default(),
+            excel_403_action: Default::default(),
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),
@@ -865,13 +865,28 @@ impl ProviderAccount {
 
     #[must_use]
     pub const fn with_excel_auto_disable_on_403(mut self, enabled: bool) -> Self {
-        self.excel_auto_disable_on_403 = enabled;
+        self.excel_403_action = if enabled {
+            super::Excel403Action::PauseAccount
+        } else {
+            super::Excel403Action::None
+        };
         self
     }
 
     #[must_use]
     pub const fn excel_auto_disable_on_403(&self) -> bool {
-        self.excel_auto_disable_on_403
+        matches!(self.excel_403_action, super::Excel403Action::PauseAccount)
+    }
+
+    #[must_use]
+    pub const fn with_excel_403_action(mut self, action: super::Excel403Action) -> Self {
+        self.excel_403_action = action;
+        self
+    }
+
+    #[must_use]
+    pub const fn excel_403_action(&self) -> super::Excel403Action {
+        self.excel_403_action
     }
 
     #[must_use]

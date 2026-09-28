@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
+
 import type { AccountGroup, AccountModelAccess } from '@/api'
+import type { Excel403Action } from '@/utils/excel-settings'
 import { shallowRef } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -30,7 +32,7 @@ const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
 const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
-const excelAutoDisableOn403 = defineModel<boolean>('excelAutoDisableOn403', { default: false })
+const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
@@ -73,7 +75,7 @@ const egressSaving = shallowRef(false)
         v-model:excel-models="excelModels"
         v-model:excel-models-follow-global="excelModelsFollowGlobal"
         v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
-        v-model:excel-auto-disable-on-403="excelAutoDisableOn403"
+        v-model:excel-403-action="excel403Action"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
         v-model:model-access="modelAccess"

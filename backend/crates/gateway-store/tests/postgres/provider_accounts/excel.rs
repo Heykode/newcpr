@@ -4,6 +4,53 @@ use super::*;
 use gateway_core::account::ResponsesUpstream;
 
 #[tokio::test]
+async fn excel_disable_mode_403_keeps_identity_scheduling_and_quality_pause_owner() {
+    let Some(database) = TestDatabase::create("excel_mode_403").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_excel_mode", "fixture"))
+        .await
+        .unwrap();
+    let id = ProviderAccountId::new("acct_excel_mode").unwrap();
+    let default_billing: bool = sqlx::query_scalar(
+        "select excel_cache_creation_as_input from provider_accounts where id=$1",
+    )
+    .bind(id.as_str())
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(default_billing);
+    sqlx::query("update provider_accounts set responses_upstream='excel', excel_403_action='disable_excel' where id=$1")
+        .bind(id.as_str()).execute(&database.pool).await.unwrap();
+    let frozen = repository.get_account(&id).await.unwrap().unwrap();
+    let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['responses_upstream','excel_mode_disabled_at','updated_at'] from provider_accounts a where id=$1")
+        .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    assert!(repository.apply_excel_403_action(&frozen).await.unwrap());
+    assert!(!repository.apply_excel_403_action(&frozen).await.unwrap());
+    let after: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['responses_upstream','excel_mode_disabled_at','updated_at'] from provider_accounts a where id=$1")
+        .bind(id.as_str()).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(before, after);
+    let current = repository.get_account(&id).await.unwrap().unwrap();
+    assert_eq!(current.responses_upstream(), ResponsesUpstream::Codex);
+    sqlx::query("insert into quality_rules (id,account_id,config,enabled,next_run_at) values ('quality_fixture',$1,'{}',false,now())")
+        .bind(id.as_str()).execute(&database.pool).await.unwrap();
+    sqlx::query("update provider_accounts set responses_upstream='excel', enabled=false, quality_pause_owner='quality_fixture' where id=$1")
+        .bind(id.as_str()).execute(&database.pool).await.unwrap();
+    let paused = repository.get_account(&id).await.unwrap().unwrap();
+    assert!(repository.apply_excel_403_action(&paused).await.unwrap());
+    let state: (bool, Option<String>) =
+        sqlx::query_as("select enabled,quality_pause_owner from provider_accounts where id=$1")
+            .bind(id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(state, (false, Some("quality_fixture".into())));
+    database.close().await;
+}
+
+#[tokio::test]
 async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_fields() {
     let Some(database) = TestDatabase::create("excel_disable_403").await else {
         return;
@@ -16,13 +63,8 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
     let id = ProviderAccountId::new("acct_excel_403").unwrap();
     let initial = repository.get_account(&id).await.unwrap().unwrap();
     assert!(!initial.excel_auto_disable_on_403());
-    assert!(
-        !repository
-            .pause_account_on_excel_403(&initial)
-            .await
-            .unwrap()
-    );
-    sqlx::query("update provider_accounts set responses_upstream='excel', excel_auto_disable_on_403=true, excel_cache_creation_as_input=true where id=$1")
+    assert!(!repository.apply_excel_403_action(&initial).await.unwrap());
+    sqlx::query("update provider_accounts set responses_upstream='excel', excel_auto_disable_on_403=true, excel_403_action='pause_account', excel_cache_creation_as_input=true where id=$1")
         .bind(id.as_str()).execute(&database.pool).await.unwrap();
     let frozen = repository.get_account(&id).await.unwrap().unwrap();
     let before: serde_json::Value = sqlx::query_scalar("select to_jsonb(a)-array['enabled','excel_auto_disabled_at','updated_at'] from provider_accounts a where id=$1")
@@ -36,12 +78,7 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
     for _ in 0..16 {
         let repository = repository.clone();
         let frozen = frozen.clone();
-        tasks.spawn(async move {
-            repository
-                .pause_account_on_excel_403(&frozen)
-                .await
-                .unwrap()
-        });
+        tasks.spawn(async move { repository.apply_excel_403_action(&frozen).await.unwrap() });
     }
     let mut changes = 0;
     while let Some(result) = tasks.join_next().await {
@@ -92,61 +129,31 @@ async fn excel_auto_pause_403_is_atomic_fenced_and_preserves_other_account_field
     .execute(&database.pool)
     .await
     .unwrap();
-    assert!(
-        !repository
-            .pause_account_on_excel_403(&frozen)
-            .await
-            .unwrap()
-    );
+    assert!(!repository.apply_excel_403_action(&frozen).await.unwrap());
     let current = repository.get_account(&id).await.unwrap().unwrap();
-    sqlx::query("update provider_accounts set excel_auto_disable_on_403=false where id=$1")
+    sqlx::query("update provider_accounts set excel_auto_disable_on_403=false, excel_403_action='none' where id=$1")
         .bind(id.as_str())
         .execute(&database.pool)
         .await
         .unwrap();
-    assert!(
-        !repository
-            .pause_account_on_excel_403(&current)
-            .await
-            .unwrap()
-    );
-    sqlx::query("update provider_accounts set excel_auto_disable_on_403=true, responses_upstream='codex' where id=$1")
+    assert!(!repository.apply_excel_403_action(&current).await.unwrap());
+    sqlx::query("update provider_accounts set excel_auto_disable_on_403=true, excel_403_action='pause_account', responses_upstream='codex' where id=$1")
         .bind(id.as_str()).execute(&database.pool).await.unwrap();
-    assert!(
-        !repository
-            .pause_account_on_excel_403(&current)
-            .await
-            .unwrap()
-    );
+    assert!(!repository.apply_excel_403_action(&current).await.unwrap());
     sqlx::query("update provider_accounts set responses_upstream='excel' where id=$1")
         .bind(id.as_str())
         .execute(&database.pool)
         .await
         .unwrap();
-    assert!(
-        repository
-            .pause_account_on_excel_403(&current)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !repository
-            .pause_account_on_excel_403(&current)
-            .await
-            .unwrap()
-    );
+    assert!(repository.apply_excel_403_action(&current).await.unwrap());
+    assert!(!repository.apply_excel_403_action(&current).await.unwrap());
     sqlx::query("update provider_accounts set enabled=false where id=$1")
         .bind(id.as_str())
         .execute(&database.pool)
         .await
         .unwrap();
     repository.delete_account(&id).await.unwrap();
-    assert!(
-        !repository
-            .pause_account_on_excel_403(&current)
-            .await
-            .unwrap()
-    );
+    assert!(!repository.apply_excel_403_action(&current).await.unwrap());
     database.close().await;
 }
 
@@ -168,7 +175,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         .unwrap()
         .unwrap();
     assert!(global.summary.excel_models_follow_global);
-    assert!(!global.summary.excel_cache_creation_as_input);
+    assert!(global.summary.excel_cache_creation_as_input);
     assert_eq!(
         global.summary.effective_excel_models.as_slice(),
         ["gpt-5.6-sol", "gpt-6-astra"]
@@ -188,6 +195,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         excel_models_follow_global: None,
         excel_cache_creation_as_input: Some(true),
         excel_auto_disable_on_403: Some(true),
+        excel_403_action: Some(gateway_core::account::Excel403Action::PauseAccount),
         excel_models: None,
         model_access: None,
         custom_name: None,
@@ -260,6 +268,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 excel_models_follow_global: Some(true),
                 excel_cache_creation_as_input: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
+                excel_403_action: Default::default(),
                 excel_models: Some(
                     gateway_core::account::ExcelModels::try_from(vec!["ignored-model".into()])
                         .unwrap(),
@@ -329,6 +338,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
                 excel_models_follow_global: Some(false),
                 excel_cache_creation_as_input: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
+                excel_403_action: Default::default(),
                 excel_models: Some(
                     gateway_core::account::ExcelModels::try_from(Vec::new()).unwrap(),
                 ),
@@ -363,7 +373,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let before: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','excel_403_action','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
@@ -372,6 +382,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         excel_models_follow_global: Default::default(),
         excel_cache_creation_as_input: Some(true),
         excel_auto_disable_on_403: Some(true),
+        excel_403_action: Some(gateway_core::account::Excel403Action::PauseAccount),
         excel_models: Some(
             gateway_core::account::ExcelModels::try_from(vec![
                 "gpt-5.6-sol".into(),
@@ -397,7 +408,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         .await
         .unwrap();
     let after: serde_json::Value = sqlx::query_scalar(
-        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','updated_at'] from provider_accounts a where id='acct_excel'",
+        "select to_jsonb(a)-array['responses_upstream','excel_models','excel_models_follow_global','excel_cache_creation_as_input','excel_auto_disable_on_403','excel_403_action','updated_at'] from provider_accounts a where id='acct_excel'",
     ).fetch_one(&database.pool).await.unwrap();
     assert_eq!(before, after);
     let loaded = repository
@@ -409,6 +420,10 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     assert!(!loaded.summary.excel_models_follow_global);
     assert!(loaded.summary.excel_cache_creation_as_input);
     assert_eq!(
+        loaded.summary.excel_403_action,
+        gateway_core::account::Excel403Action::PauseAccount
+    );
+    assert_eq!(
         loaded.summary.excel_models.as_slice(),
         ["gpt-5.6-sol", "gpt-6-astra"]
     );
@@ -419,6 +434,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
+                excel_403_action: Default::default(),
                 excel_models: Default::default(),
                 weight: Some(gateway_core::account::AccountWeight::new(2).unwrap()),
                 ..command.clone()
@@ -445,7 +461,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     assert!(configured.excel_auto_disable_on_403());
     assert!(
         repository
-            .pause_account_on_excel_403(&configured)
+            .apply_excel_403_action(&configured)
             .await
             .unwrap()
     );
@@ -466,6 +482,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 responses_upstream: None,
                 excel_models: None,
                 excel_auto_disable_on_403: None,
+                excel_403_action: Default::default(),
                 excel_cache_creation_as_input: None,
                 ..command.clone()
             },
@@ -539,6 +556,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
                 excel_models_follow_global: Default::default(),
                 excel_cache_creation_as_input: Default::default(),
                 excel_auto_disable_on_403: Default::default(),
+                excel_403_action: Default::default(),
                 excel_models: Default::default(),
                 ..command
             },
@@ -557,7 +575,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
         ResponsesUpstream::Codex
     );
     assert!(
-        !repository
+        repository
             .load_provider_account("acct_excel")
             .await
             .unwrap()

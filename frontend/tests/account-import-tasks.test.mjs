@@ -109,6 +109,7 @@ function mountOnboarding(t, api = {}, globals = {}) {
   const created = []
   const oauthStarts = []
   const oauthCompletions = []
+  const enrollments = []
   let reloads = 0
   const load = loader({
     '@/api': {
@@ -126,6 +127,12 @@ function mountOnboarding(t, api = {}, globals = {}) {
       },
     },
     '@/api/request': { ApiError: class ApiError extends Error {} },
+    '@/api/modules/relogin': {
+      async enrollRelogin(input) {
+        enrollments.push(structuredClone(input))
+        return api.enroll ? api.enroll(input) : { ids: ['relogin-new'] }
+      },
+    },
     '@/components/base/BaseToast': notifications,
   }, globals)
   const scope = vue.effectScope()
@@ -142,8 +149,37 @@ function mountOnboarding(t, api = {}, globals = {}) {
     if (mode !== 'oauth')
       state.createForm.value.importTexts[mode] = value
   }
-  return { state, input, submissions, created, oauthStarts, oauthCompletions, notifications, reloads: () => reloads }
+  return { state, input, submissions, created, oauthStarts, oauthCompletions, enrollments, notifications, reloads: () => reloads }
 }
+
+test('2FA enrollment submits one durable intent and clears secrets after acceptance', async (t) => {
+  const h = mountOnboarding(t)
+  h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
+  Object.assign(h.state.createForm.value, { applyExcel: true, excelEnabled: true, excel403Action: 'disable_excel', proxyMode: 'proxy', proxyId: 'proxy-fixture', replaceExisting2fa: true })
+  await h.state.handleCreate()
+  assert.equal(h.submissions.length, 0)
+  assert.equal(h.enrollments.length, 1)
+  assert.equal(h.enrollments[0].outboundProxyId, 'proxy-fixture')
+  assert.equal(h.enrollments[0].replaceExisting, true)
+  assert.equal(h.enrollments[0].settings.excel403Action, 'disable_excel')
+  assert.equal(h.enrollments[0].settings.excelCacheCreationAsInput, true)
+  assert.deepEqual([...h.state.enrollmentIds.value], ['relogin-new'])
+  assert.equal(h.state.createForm.value.importTexts.two_fa, '')
+  assert.equal(h.state.showCreateModal.value, false)
+})
+
+test('failed enrollment preserves the form without assuming the account was created', async (t) => {
+  const h = mountOnboarding(t, {
+    enroll: async () => {
+      throw new Error('queue paused')
+    },
+  })
+  h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
+  await h.state.handleCreate()
+  assert.equal(h.state.showCreateModal.value, true)
+  assert.equal(h.state.enrollmentIds.value.length, 0)
+  assert.equal(h.reloads(), 0)
+})
 
 function mountTasks(t, api = {}) {
   const mounted = []

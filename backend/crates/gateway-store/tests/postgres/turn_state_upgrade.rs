@@ -101,6 +101,60 @@ async fn model_access_and_excel_upgrade_default_without_touching_identity_or_inh
             .remove("excel_auto_disabled_at"),
         Some(serde_json::Value::Null)
     );
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("excel_403_action"),
+        Some(serde_json::json!("none"))
+    );
+    for field in ["excel_mode_disabled_at", "quality_pause_owner"] {
+        assert_eq!(
+            after.as_object_mut().unwrap().remove(field),
+            Some(serde_json::Value::Null)
+        );
+    }
+    assert_eq!(before, after);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 49)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("excel_policy_upgrade", &old).await
+    else {
+        return;
+    };
+    insert_legacy_account(&database).await;
+    sqlx::query("update provider_accounts set responses_upstream='codex', enabled=false, excel_auto_disable_on_403=true, excel_auto_disabled_at=now(), excel_cache_creation_as_input=false")
+        .execute(&database.pool).await.unwrap();
+    let before: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let mut after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(a) from provider_accounts a")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after.as_object_mut().unwrap().remove("excel_403_action"),
+        Some(serde_json::json!("pause_account"))
+    );
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("excel_mode_disabled_at"),
+        Some(before["excel_auto_disabled_at"].clone())
+    );
     assert_eq!(before, after);
     database.close().await;
 }

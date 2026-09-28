@@ -32,6 +32,9 @@ test('a committed single-account save finishes before slow or failed list reload
   })
   const { useAccountEditor } = load('../src/views/accounts/composables/useAccountEditor.ts', {
     vue,
+    '@/utils/excel-settings': load('../src/utils/excel-settings.ts', {
+      '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
+    }),
     '@/api': { updateAccount: async payload => updates.push(structuredClone(payload)) },
     '@/components/base/BaseToast': { toast },
     '@/composables/useAsyncAction': asyncAction,

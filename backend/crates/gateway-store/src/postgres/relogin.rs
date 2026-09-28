@@ -56,6 +56,27 @@ async fn save_row(
 
 #[async_trait]
 impl ReloginStore for PgReloginStore {
+    async fn record_export(
+        &self,
+        ids: &[String],
+        format: gateway_admin::model::relogin::ReloginExportFormat,
+        context: &gateway_admin::model::MutationContext,
+    ) -> AdminStoreResult<()> {
+        let mut transaction = self.pool.begin().await.map_err(unavailable)?;
+        let action = match format {
+            gateway_admin::model::relogin::ReloginExportFormat::Json => "export_relogin_json",
+            gateway_admin::model::relogin::ReloginExportFormat::TwoFa => "export_relogin_2fa",
+        };
+        for id in ids {
+            super::admin_security_audit::insert_admin_audit_event(
+                &mut transaction,
+                crate::mutation_audit(context, action, "relogin_entry", id, Vec::new()),
+            )
+            .await
+            .map_err(unavailable)?;
+        }
+        transaction.commit().await.map_err(unavailable)
+    }
     async fn templates(&self) -> AdminStoreResult<Vec<ReloginTemplate>> {
         let rows = sqlx::query(
             "select id,revision,config from account_relogin_templates order by lower(name),id",

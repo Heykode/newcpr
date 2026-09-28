@@ -595,7 +595,7 @@ async fn quality_recovery_never_undoes_an_independent_excel_403_pause() {
         return;
     };
     let store = setup(&db).await;
-    sqlx::query("update provider_accounts set responses_upstream='excel',excel_auto_disable_on_403=true where id='acct_quality_a'")
+    sqlx::query("update provider_accounts set responses_upstream='excel',excel_auto_disable_on_403=true, excel_403_action='pause_account' where id='acct_quality_a'")
         .execute(&db.pool).await.unwrap();
     let mut config = config("acct_quality_a");
     config.failure_action = QualityFailureAction::DisableScheduling;
@@ -617,18 +617,8 @@ async fn quality_recovery_never_undoes_an_independent_excel_403_pause() {
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        repository
-            .pause_account_on_excel_403(&account)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !repository
-            .pause_account_on_excel_403(&account)
-            .await
-            .unwrap()
-    );
+    assert!(repository.apply_excel_403_action(&account).await.unwrap());
+    assert!(!repository.apply_excel_403_action(&account).await.unwrap());
     let run = scheduled_round(&store, &rule, &[Correct]).await;
     assert_eq!(run.action.as_deref(), Some("ownership_released"));
     assert!(!enabled(&db).await);
@@ -674,6 +664,7 @@ async fn quality_account_rename_keeps_recovery_ownership() {
                 excel_models_follow_global: None,
                 excel_cache_creation_as_input: None,
                 excel_auto_disable_on_403: None,
+                excel_403_action: Default::default(),
                 model_access: None,
             },
             &context(),

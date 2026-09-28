@@ -2,6 +2,54 @@
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Excel403Action {
+    #[default]
+    None,
+    PauseAccount,
+    DisableExcel,
+}
+
+impl Excel403Action {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::PauseAccount => "pause_account",
+            Self::DisableExcel => "disable_excel",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "pause_account" => Some(Self::PauseAccount),
+            "disable_excel" => Some(Self::DisableExcel),
+            _ => None,
+        }
+    }
+
+    pub fn resolve(
+        action: Option<Self>,
+        legacy: Option<bool>,
+    ) -> Result<Option<Self>, &'static str> {
+        if let (Some(action), Some(legacy)) = (action, legacy)
+            && legacy != (action == Self::PauseAccount)
+        {
+            return Err("conflicting Excel HTTP 403 settings");
+        }
+        Ok(action.or(legacy.map(|enabled| {
+            if enabled {
+                Self::PauseAccount
+            } else {
+                Self::None
+            }
+        })))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "Vec<String>", into = "Vec<String>")]
 pub struct ExcelModels(Vec<String>);

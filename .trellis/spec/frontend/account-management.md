@@ -1,5 +1,23 @@
 # Account Management Contracts
 
+## 2FA Enrollment and Excel Policy
+
+- Share the exact `Excel遇到HTTP 403` label and three options through
+  `Excel403ActionSelect`: `不自动处理`, `暂停账号调度`, `关闭Excel模式`.
+  Single edits send changed fields only, batches retain explicit opt-in, and old
+  boolean projections are readable. New billing drafts default true; old false stays false.
+- OpenAI import adds the 2FA mode, durable enrollment submission and progress display.
+  Clear password/TOTP text only after accepted submission; never persist it in browser
+  storage. Reuse the login library list for safe progress and refresh pool on settlement.
+  Cancel/stale reads on disposal, avoid overlapping polls and display read failures.
+- The replacement checkbox must use `show-label`; its `label` prop alone is accessibility
+  text. All five import modes must fit at 320px without truncation. The shared 403
+  select occupies full form width; do not modify global base controls for one form.
+- Relogin exports capture selected IDs before confirmation and require a second explicit
+  click. Cancel never reads secrets. Export one file per action, with errors surfaced.
+- Synthetic browser coverage: `browser/account-2fa-enrollment.mjs` and
+  `browser/account-excel.mjs`; live login compatibility is a separate verification.
+
 ## Excel Model Inheritance
 
 - Global `excelDefaultModels` starts with `gpt-5.6-sol` and `gpt-6-astra`.
