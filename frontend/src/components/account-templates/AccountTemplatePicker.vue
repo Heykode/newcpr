@@ -7,6 +7,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import { errorMessage } from '@/utils/async'
+import { accountExcel403Action, excel403ActionLabel } from '@/utils/excel-settings'
 
 defineProps<{ disabled: boolean }>()
 const selected = defineModel<AccountTemplate | null>({ required: true })
@@ -56,9 +57,9 @@ onScopeDispose(() => controller.abort())
       {{ error }}
     </p>
     <dl v-if="selected" class="mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-cp-sm">
-      <template v-if="selected.config.excelAutoDisableOn403 != null">
-        <dt>Excel 403 自动暂停调度</dt>
-        <dd>{{ selected.config.excelAutoDisableOn403 ? '开启' : '关闭' }}</dd>
+      <template v-if="selected.config.excel403Action != null || selected.config.excelAutoDisableOn403 != null">
+        <dt>Excel遇到HTTP 403</dt>
+        <dd>{{ excel403ActionLabel(accountExcel403Action(selected.config)) }}</dd>
       </template>
       <dt class="text-cp-text-secondary">
         调度

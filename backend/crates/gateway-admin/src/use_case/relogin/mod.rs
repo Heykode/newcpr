@@ -33,6 +33,8 @@ use serde::Serialize;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::Mutex;
 
+mod enrollment;
+mod export;
 mod recovery;
 mod worker;
 mod workspace;
@@ -47,6 +49,7 @@ pub struct ReloginView {
     pub revision: u64,
     pub email: String,
     pub has_totp: bool,
+    pub enrollment_pending: bool,
     pub automatic: bool,
     pub status: ReloginStatus,
     pub message: String,
@@ -134,6 +137,18 @@ pub trait ReloginService: Send + Sync {
         context: &MutationContext,
     ) -> Result<(), AdminError>;
     async fn import(&self, text: &str, replace: bool) -> Result<usize, AdminError>;
+    async fn enroll(
+        &self,
+        text: &str,
+        replace: bool,
+        enrollment: ReloginEnrollment,
+    ) -> Result<Vec<String>, AdminError>;
+    async fn export(
+        &self,
+        ids: &[String],
+        format: ReloginExportFormat,
+        context: &MutationContext,
+    ) -> Result<ReloginExport, AdminError>;
     async fn queue(&self, ids: &[String]) -> Result<Vec<ReloginBatchResult>, AdminError> {
         self.queue_with_workspace(ids, ReloginWorkspaceMode::Original)
             .await
@@ -190,27 +205,27 @@ pub(crate) struct DefaultReloginService {
     openai: Arc<dyn OpenAiService>,
     snapshot: Arc<dyn SnapshotControl>,
     templates: Arc<dyn super::account_templates::AccountTemplatesService>,
+    proxies: Arc<dyn crate::ports::proxy::ProxyStore>,
     gate: Mutex<Gate>,
 }
 
 impl DefaultReloginService {
     pub(crate) fn new(
-        store: Option<Arc<dyn ReloginStore>>,
-        accounts: Arc<dyn AccountStore>,
-        runtime: Arc<dyn AccountRuntimeStore>,
+        stores: &crate::ports::store::AdminStorePorts,
         provider: Arc<dyn ProviderAdmin>,
         openai: Arc<dyn OpenAiService>,
         snapshot: Arc<dyn SnapshotControl>,
         templates: Arc<dyn super::account_templates::AccountTemplatesService>,
     ) -> Self {
         Self {
-            store,
-            accounts,
-            runtime,
+            store: stores.relogin(),
+            accounts: stores.accounts(),
+            runtime: stores.account_runtime(),
             provider,
             openai,
             snapshot,
             templates,
+            proxies: stores.proxies(),
             gate: Mutex::new(Gate::default()),
         }
     }
@@ -256,6 +271,7 @@ impl DefaultReloginService {
 
     fn stop(gate: &Gate, entry: &mut ReloginEntry) {
         entry.manual_push_context = None;
+        entry.enrollment = None;
         if let Some(active) = gate.active.get(&entry.email) {
             active.cancellation.cancel();
         }
@@ -527,7 +543,15 @@ impl DefaultReloginService {
                 entry.preferred_workspace_id = Some(credential.workspace_id.clone());
             }
         } else {
-            let mut settings = template.map(ReloginTemplateConfig::settings).transpose()?;
+            let mut settings = if let Some(enrollment) = &entry.enrollment {
+                self.store()?
+                    .validate_template_references(&enrollment.config)
+                    .await
+                    .map_err(super::account_templates::template_error)?;
+                Some(enrollment.settings()?)
+            } else {
+                template.map(ReloginTemplateConfig::settings).transpose()?
+            };
             if custom_name.is_some() || new_account_excel.is_some() {
                 let settings =
                     settings.get_or_insert_with(|| crate::model::accounts::AccountImportSettings {
@@ -540,6 +564,7 @@ impl DefaultReloginService {
                         excel_models_follow_global: None,
                         excel_cache_creation_as_input: Default::default(),
                         excel_auto_disable_on_403: Default::default(),
+                        excel_403_action: Default::default(),
                         concurrency_limit: None,
                         weight: crate::model::accounts::AccountWeight::DEFAULT,
                         group_ids: Vec::new(),
@@ -561,7 +586,11 @@ impl DefaultReloginService {
             let result = self
                 .openai
                 .import_new_document(ImportCredentials {
-                    outbound_proxy_id: template.and_then(|config| config.outbound_proxy_id.clone()),
+                    outbound_proxy_id: entry
+                        .enrollment
+                        .as_ref()
+                        .and_then(|enrollment| enrollment.config.outbound_proxy_id.clone())
+                        .or_else(|| template.and_then(|config| config.outbound_proxy_id.clone())),
                     settings,
                     context: context.clone(),
                     document,
@@ -580,6 +609,7 @@ impl DefaultReloginService {
             entry.target = Some(ReloginTarget::from_account(&current.credential)?);
         }
         entry.synced_at = Some(Utc::now());
+        entry.enrollment = None;
         entry.next_attempt_at = None;
         entry.automatic_attempts = 0;
         entry.stop_reason = None;
@@ -775,6 +805,7 @@ impl ReloginService for DefaultReloginService {
         entry.selected_workspace_id = None;
         entry.automatic_job = false;
         entry.manual_push_context = Some(context.clone());
+        entry.enrollment = None;
         entry.credential = None;
         entry.synced_at = None;
         entry.status = ReloginStatus::Queued;
@@ -839,6 +870,7 @@ impl ReloginService for DefaultReloginService {
                     revision: entry.revision,
                     email: entry.email,
                     has_totp,
+                    enrollment_pending: entry.enrollment.is_some(),
                     automatic: entry.automatic && has_totp,
                     status: if material_error.is_some() && !uncertain {
                         ReloginStatus::Failed
@@ -917,93 +949,35 @@ impl ReloginService for DefaultReloginService {
     }
 
     async fn import(&self, text: &str, replace: bool) -> Result<usize, AdminError> {
-        let inputs = parse_relogin_import(text)?;
-        let gate = self.gate.lock().await;
-        let entries = self.entries().await?;
-        let existing: BTreeMap<_, _> = entries
-            .into_iter()
-            .map(|entry| (entry.email.clone(), entry))
-            .collect();
-        if !replace
-            && inputs
-                .iter()
-                .any(|input| existing.contains_key(&input.email))
-        {
-            return Err(AdminError::conflict("存在重复邮箱，请勾选确认更新已有资料"));
-        }
-        if existing.len()
-            + inputs
-                .iter()
-                .filter(|input| !existing.contains_key(&input.email))
-                .count()
-            > MAX_ENTRIES
-        {
-            return Err(AdminError::invalid("资料库最多保存 10000 个账号"));
-        }
-        let count = inputs.len();
-        let mut changes = Vec::with_capacity(count);
-        for input in inputs {
-            if let Some(old) = existing.get(&input.email) {
-                let mut entry = old.clone();
-                Self::stop(&gate, &mut entry);
-                entry.password = input.password;
-                entry.mfa_secret = input.mfa_secret;
-                entry.automatic_attempts = 0;
-                entry.stop_reason = None;
-                entry.next_attempt_at = None;
-                entry.status = ReloginStatus::Pending;
-                entry.credential = None;
-                entry.synced_at = None;
-                entry.target = None;
-                entry.workspace_mode = ReloginWorkspaceMode::Original;
-                entry.workspace_targets.clear();
-                entry.workspace_choices.clear();
-                entry.selected_workspace_id = None;
-                entry.message = "资料已更新，等待处理".to_owned();
-                let expected = entry.revision;
-                entry.revision = expected
-                    .checked_add(1)
-                    .filter(|revision| *revision <= i64::MAX as u64)
-                    .ok_or_else(|| AdminError::internal("重登资料版本超出范围"))?;
-                entry.updated_at = Utc::now();
-                entry.imported_at = Some(entry.updated_at);
-                changes.push((entry, Some(expected)));
-            } else {
-                let entry = ReloginEntry {
-                    id: format!("relogin_{}", uuid::Uuid::now_v7().simple()),
-                    revision: 1,
-                    email: input.email,
-                    password: input.password,
-                    mfa_secret: input.mfa_secret,
-                    automatic: true,
-                    preferred_workspace_id: None,
-                    status: ReloginStatus::Pending,
-                    message: String::new(),
-                    credential: None,
-                    target: None,
-                    automatic_job: false,
-                    workspace_mode: ReloginWorkspaceMode::Original,
-                    workspace_targets: Vec::new(),
-                    workspace_choices: Vec::new(),
-                    selected_workspace_id: None,
-                    manual_push_context: None,
-                    automatic_attempts: 0,
-                    stop_reason: None,
-                    automatic_started_at: Vec::new(),
-                    attempted_target: None,
-                    next_attempt_at: None,
-                    synced_at: None,
-                    imported_at: Some(Utc::now()),
-                    updated_at: Utc::now(),
-                };
-                changes.push((entry, None));
-            }
-        }
+        Ok(self.import_entries(text, replace, None).await?.len())
+    }
+
+    async fn enroll(
+        &self,
+        text: &str,
+        replace: bool,
+        enrollment: ReloginEnrollment,
+    ) -> Result<Vec<String>, AdminError> {
+        enrollment.settings()?;
         self.store()?
-            .save_batch(&changes)
+            .validate_template_references(&enrollment.config)
             .await
-            .map_err(store_error)?;
-        Ok(count)
+            .map_err(super::account_templates::template_error)?;
+        let _proxy = super::import_proxy_binding(
+            self.proxies.as_ref(),
+            enrollment.config.outbound_proxy_id.as_deref(),
+        )
+        .await?;
+        self.import_entries(text, replace, Some(enrollment)).await
+    }
+
+    async fn export(
+        &self,
+        ids: &[String],
+        format: ReloginExportFormat,
+        context: &MutationContext,
+    ) -> Result<ReloginExport, AdminError> {
+        self.export_selected(ids, format, context).await
     }
 
     async fn queue_with_workspace(
@@ -1030,6 +1004,7 @@ impl ReloginService for DefaultReloginService {
                 workspace::prepare_queue(&mut entry, &pool, mode)?;
                 entry.automatic_job = false;
                 entry.manual_push_context = None;
+                entry.enrollment = None;
                 entry.status = ReloginStatus::Queued;
                 entry.message = "等待重登".to_owned();
                 self.save(&mut entry).await
@@ -1103,6 +1078,10 @@ impl ReloginService for DefaultReloginService {
                     let mut entry = entry.clone();
                     match workspace::confirm_target(&mut entry, selections.get(id)) {
                         Ok(()) => {
+                            // A new explicit push supersedes the original import settings.
+                            if entry.enrollment.take().is_some() {
+                                self.save(&mut entry).await?;
+                            }
                             self.push_entry_with_template(
                                 &mut entry,
                                 template.as_ref().map(|template| &template.config),

@@ -117,7 +117,9 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         excel_models_follow_global: account.excel_models_follow_global,
         excel_cache_creation_as_input: account.excel_cache_creation_as_input,
         excel_auto_disable_on_403: account.excel_auto_disable_on_403,
+        excel_403_action: account.excel_403_action,
         excel_auto_disabled_at: account.excel_auto_disabled_at,
+        excel_mode_disabled_at: account.excel_mode_disabled_at,
         effective_excel_models: account.effective_excel_models,
         turn_state: turn_state.map(|status| {
             let gateway_admin::model::accounts::AccountTurnStateStatus {

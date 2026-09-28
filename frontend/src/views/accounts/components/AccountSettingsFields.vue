@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { AccountGroup, AccountModelAccess } from '@/api'
+
+import type { Excel403Action } from '@/utils/excel-settings'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import AccountModelAccessField from './AccountModelAccessField.vue'
@@ -32,9 +35,9 @@ const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
 const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
-const excelAutoDisableOn403 = defineModel<boolean>('excelAutoDisableOn403', { default: false })
+const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
-const updateExcelAutoDisableOn403 = defineModel<boolean>('updateExcelAutoDisableOn403', { default: false })
+const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { default: false })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -129,19 +132,17 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       />
     </BaseFormItem>
 
-    <BaseFormItem v-if="excelAvailable" label="Excel 遇到 HTTP 403 自动暂停此账号调度">
+    <BaseFormItem v-if="excelAvailable" label="Excel遇到HTTP 403">
       <template v-if="batch" #extra>
         <BaseCheckbox
-          v-model="updateExcelAutoDisableOn403"
-          label="应用 Excel 403 自动暂停调度更改"
+          v-model="updateExcel403Action"
+          label="应用 Excel 403 处理方式更改"
           :disabled="disabled"
         />
       </template>
-      <BaseSwitch
-        v-model="excelAutoDisableOn403"
-        label="Excel 遇到 HTTP 403 自动暂停此账号调度"
-        title="仅 Excel 上游 HTTP 403 触发，模型权限变更除外；暂停整个账号调度，保留 Excel 设置，不回退 Codex；处理后手动启用账号调度"
-        :disabled="disabled || (batch ? !updateExcelAutoDisableOn403 : !excelEnabled)"
+      <Excel403ActionSelect
+        v-model="excel403Action"
+        :disabled="disabled || (batch ? !updateExcel403Action : !excelEnabled)"
       />
     </BaseFormItem>
 

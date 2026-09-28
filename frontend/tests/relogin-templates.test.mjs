@@ -37,8 +37,8 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
     enabled: true,
     responsesUpstream: 'codex',
     excelModelsFollowGlobal: true,
-    excelCacheCreationAsInput: false,
-    excelAutoDisableOn403: false,
+    excelCacheCreationAsInput: true,
+    excel403Action: 'none',
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
@@ -56,16 +56,16 @@ test('Excel templates preserve legacy omission and roundtrip global/custom/empty
   assert.equal(templateConfig(form).responsesUpstream, 'excel')
   assert.equal(templateConfig(form).excelModelsFollowGlobal, true)
   assert.equal('excelModels' in templateConfig(form), false)
-  assert.equal(templateConfig(form).excelCacheCreationAsInput, false)
+  assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
   form.excelCacheCreationAsInput = true
   assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
-  assert.equal(templateConfig(form).excelAutoDisableOn403, false)
-  form.excelAutoDisableOn403 = true
-  assert.equal(templateConfig(form).excelAutoDisableOn403, true)
-  assert.equal(templateForm(templateConfig(form)).excelAutoDisableOn403, true)
+  assert.equal(templateConfig(form).excel403Action, 'none')
+  form.excel403Action = 'pause_account'
+  assert.equal(templateConfig(form).excel403Action, 'pause_account')
+  assert.equal(templateForm(templateConfig(form)).excel403Action, 'pause_account')
   form.excelEnabled = false
-  assert.equal(templateConfig(form).excelAutoDisableOn403, false)
-  assert.equal(templateConfig(form).excelCacheCreationAsInput, false)
+  assert.equal(templateConfig(form).excel403Action, 'none')
+  assert.equal(templateConfig(form).excelCacheCreationAsInput, true)
   form.excelEnabled = true
   form.excelModelsFollowGlobal = false
   form.excelModels = 'gpt-6-astra, gpt-6-astra'

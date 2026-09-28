@@ -1,4 +1,5 @@
 import type { AccountModelAccess } from '@/api'
+import type { Excel403Action } from '@/utils/excel-settings'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelSettings } from '@/utils/excel-settings'
@@ -6,7 +7,7 @@ import { accountModelAccessError } from '../../utils/modelAccess'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 
 export type AccountCreateProvider = 'batch' | 'openai' | 'xai'
-export type AccountImportMode = 'oauth' | 'access_token' | 'refresh_token' | 'json'
+export type AccountImportMode = 'oauth' | 'access_token' | 'refresh_token' | 'json' | 'two_fa'
 export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
@@ -17,7 +18,7 @@ export interface AccountCreateForm {
   excelEnabled: boolean
   excelModelsFollowGlobal: boolean
   excelCacheCreationAsInput: boolean
-  excelAutoDisableOn403: boolean
+  excel403Action: Excel403Action
   excelModels: string
   concurrencyLimit: string
   weight: string
@@ -26,6 +27,7 @@ export interface AccountCreateForm {
   step: 'settings' | 'import'
   mode: AccountImportMode
   importTexts: Record<AccountImportInputMode, string>
+  replaceExisting2fa: boolean
   oauthFlowId: string
   oauthAuthUrl: string
   oauthCallback: string
@@ -41,15 +43,16 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     applyExcel: false,
     excelEnabled: false,
     excelModelsFollowGlobal: true,
-    excelCacheCreationAsInput: false,
-    excelAutoDisableOn403: false,
+    excelCacheCreationAsInput: true,
+    excel403Action: 'none',
     excelModels: DEFAULT_EXCEL_MODELS_INPUT,
     concurrencyLimit: '',
     weight: '1',
     groupIds: [],
     step: 'settings',
     mode: 'oauth',
-    importTexts: { access_token: '', refresh_token: '', json: '' },
+    importTexts: { access_token: '', refresh_token: '', json: '', two_fa: '' },
+    replaceExisting2fa: false,
     oauthFlowId: '',
     oauthAuthUrl: '',
     oauthCallback: '',
@@ -77,7 +80,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
   return {
     ...(customName ? { customName } : {}),
     enabled: form.enabled,
-    ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excelAutoDisableOn403) : {}),
+    ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action) : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),

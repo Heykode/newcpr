@@ -1,6 +1,7 @@
 import type { AccountTemplateConfig } from '@/api/modules/account-templates'
+import type { Excel403Action } from '@/utils/excel-settings'
 import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
-import { excelSettings } from '@/utils/excel-settings'
+import { accountExcel403Action, excelSettings } from '@/utils/excel-settings'
 import { parseAccountSchedulingForm } from '@/views/accounts/utils/schedulingForm'
 
 export function templateForm(config?: AccountTemplateConfig) {
@@ -9,8 +10,8 @@ export function templateForm(config?: AccountTemplateConfig) {
     enabled: config?.enabled ?? true,
     applyExcel: config === undefined || config.responsesUpstream != null || config.excelModelsFollowGlobal != null || config.excelModels != null,
     excelEnabled: config?.responsesUpstream === 'excel',
-    excelCacheCreationAsInput: config?.excelCacheCreationAsInput ?? false,
-    excelAutoDisableOn403: config?.excelAutoDisableOn403 ?? false,
+    excelCacheCreationAsInput: config ? config.excelCacheCreationAsInput ?? false : true,
+    excel403Action: config ? accountExcel403Action(config) : 'none' as Excel403Action,
     excelModelsFollowGlobal: config?.excelModelsFollowGlobal ?? config?.excelModels == null,
     excelModels: (config?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', '),
     concurrencyLimit: config?.concurrencyLimit == null ? '' : String(config.concurrencyLimit),
@@ -33,7 +34,7 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
   return {
     name,
     enabled: form.enabled,
-    ...(form.applyExcel ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excelAutoDisableOn403) : {}),
+    ...(form.applyExcel ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action) : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     outboundProxyId: form.proxyMode === 'proxy' ? form.proxyId : null,

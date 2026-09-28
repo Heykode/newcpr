@@ -40,6 +40,11 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
     for (path, body) in [
         ("/api/admin/relogin", None),
         ("/api/admin/relogin/templates", None),
+        (
+            "/api/admin/relogin/enroll",
+            Some(json!({"text":"test-only-private-material"})),
+        ),
+        ("/api/admin/relogin/export", Some(json!({}))),
         ("/api/admin/relogin/templates/save", Some(json!({}))),
         ("/api/admin/relogin/templates/delete", Some(json!({}))),
         (
@@ -78,6 +83,21 @@ async fn relogin_every_endpoint_requires_admin_auth_before_reading_material() {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
         assert!(!body.contains("test-only-private-material"));
     }
+}
+
+#[tokio::test]
+async fn relogin_sensitive_export_requires_explicit_confirmation() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let (status, body) = request(
+        &fixture,
+        "/api/admin/relogin/export",
+        Some(json!({"ids":["relogin_fixture"],"format":"two_fa","confirm":"wrong"})),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!body.contains("mfa_secret"));
 }
 
 #[tokio::test]

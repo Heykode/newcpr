@@ -76,6 +76,7 @@ test('single editing only sends a changed policy and does not mutate the account
   })
   const { useAccountEditor } = load('../src/views/accounts/composables/useAccountEditor.ts', {
     vue,
+    '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': scheduling }),
     '@/api': { updateAccount: async payload => requests.push(structuredClone(payload)) },
     '@/components/base/BaseToast': { toast },
     '@/composables/useAsyncAction': asyncAction,

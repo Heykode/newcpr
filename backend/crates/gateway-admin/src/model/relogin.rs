@@ -10,6 +10,26 @@ pub const MAX_ENTRIES: usize = 10_000;
 pub const MAX_BATCH: usize = 500;
 pub const MAX_IMPORT_BYTES: usize = 512 * 1024;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloginExportFormat {
+    Json,
+    TwoFa,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginExport {
+    pub files: Vec<ReloginExportFile>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloginExportFile {
+    pub name: String,
+    pub content: String,
+}
+
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReloginWorkspaceMode {
@@ -154,6 +174,61 @@ impl ReloginTarget {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct ReloginEnrollment {
+    pub config: super::relogin_templates::ReloginTemplateConfig,
+    pub custom_name: Option<String>,
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
+    pub context: super::MutationContext,
+}
+
+impl ReloginEnrollment {
+    pub fn new(
+        settings: super::accounts::AccountImportSettings,
+        outbound_proxy_id: Option<String>,
+        context: super::MutationContext,
+    ) -> Result<Self, AdminError> {
+        let result = Self {
+            config: super::relogin_templates::ReloginTemplateConfig {
+                name: "2FA account import".to_owned(),
+                enabled: settings.enabled,
+                turn_state_injection_enabled: settings.turn_state_injection_enabled,
+                responses_upstream: settings.responses_upstream,
+                excel_models: settings.excel_models,
+                excel_models_follow_global: settings.excel_models_follow_global,
+                excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
+                excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
+                excel_403_action: settings.excel_403_action,
+                concurrency_limit: settings.concurrency_limit.map(|limit| limit.get()),
+                weight: settings.weight.get(),
+                group_ids: settings
+                    .group_ids
+                    .iter()
+                    .map(|id| id.as_str().to_owned())
+                    .collect(),
+                outbound_proxy_id,
+            },
+            custom_name: super::accounts::normalize_custom_name(settings.custom_name.as_deref())?,
+            model_access: settings.model_access,
+            context,
+        };
+        result.settings()?;
+        Ok(result)
+    }
+
+    pub fn settings(&self) -> Result<super::accounts::AccountImportSettings, AdminError> {
+        let mut settings = self.config.settings()?;
+        gateway_core::account::Excel403Action::resolve(
+            settings.excel_403_action,
+            settings.excel_auto_disable_on_403,
+        )
+        .map_err(AdminError::invalid)?;
+        settings.custom_name = self.custom_name.clone();
+        settings.model_access = self.model_access.clone();
+        Ok(settings)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ReloginEntry {
     pub id: String,
     pub revision: u64,
@@ -180,6 +255,9 @@ pub struct ReloginEntry {
     /// Explicit account-menu confirmation; absent on legacy and library-only jobs.
     #[serde(default)]
     pub manual_push_context: Option<super::MutationContext>,
+    /// Account import explicitly requested acquisition followed by a fenced pool write.
+    #[serde(default)]
+    pub enrollment: Option<ReloginEnrollment>,
     pub automatic_attempts: u32,
     #[serde(default)]
     pub stop_reason: Option<ReloginStopReason>,

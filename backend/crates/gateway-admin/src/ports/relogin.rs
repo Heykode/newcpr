@@ -7,6 +7,12 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait ReloginStore: Send + Sync {
+    async fn record_export(
+        &self,
+        ids: &[String],
+        format: crate::model::relogin::ReloginExportFormat,
+        context: &crate::model::MutationContext,
+    ) -> AdminStoreResult<()>;
     async fn entries(&self) -> AdminStoreResult<Vec<ReloginEntry>>;
     /// None creates a row; Some requires exactly that revision.
     async fn save(&self, entry: &ReloginEntry, expected: Option<u64>) -> AdminStoreResult<()>;

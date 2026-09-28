@@ -1,13 +1,15 @@
 import type { Ref } from 'vue'
 import type { AccountModelAccess, getAccounts } from '@/api'
 import type { RequestOptions } from '@/api/request'
-
+import type { Excel403Action } from '@/utils/excel-settings'
 import { computed, ref, shallowRef, watch } from 'vue'
+
 import { batchUpdateAccounts } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
+import { accountExcel403Action } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
@@ -29,9 +31,9 @@ export function useAccountBatchEditor(options: {
   const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
   const excelModelsFollowGlobal = shallowRef(true)
   const excelCacheCreationAsInput = shallowRef(false)
-  const excelAutoDisableOn403 = shallowRef(false)
+  const excel403Action = shallowRef<Excel403Action>('none')
   const updateExcelCacheCreationAsInput = ref(false)
-  const updateExcelAutoDisableOn403 = ref(false)
+  const updateExcel403Action = ref(false)
   const updateExcelModels = ref(false)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
@@ -53,7 +55,7 @@ export function useAccountBatchEditor(options: {
     || (excelAvailable.value && updateExcelEnabled.value)
     || (excelAvailable.value && updateExcelModels.value)
     || (excelAvailable.value && updateExcelCacheCreationAsInput.value)
-    || (excelAvailable.value && updateExcelAutoDisableOn403.value)
+    || (excelAvailable.value && updateExcel403Action.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
     || updateModelAccess.value
@@ -69,7 +71,7 @@ export function useAccountBatchEditor(options: {
     updateExcelEnabled.value = false
     updateExcelModels.value = false
     updateExcelCacheCreationAsInput.value = false
-    updateExcelAutoDisableOn403.value = false
+    updateExcel403Action.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
     updateModelAccess.value = false
@@ -90,7 +92,7 @@ export function useAccountBatchEditor(options: {
     excelModels.value = (accounts[0]?.excelModels ?? DEFAULT_EXCEL_MODELS).join(', ')
     excelModelsFollowGlobal.value = accounts.every(account => account.excelModelsFollowGlobal ?? false)
     excelCacheCreationAsInput.value = accounts.every(account => account.excelCacheCreationAsInput ?? false)
-    excelAutoDisableOn403.value = accounts.every(account => account.excelAutoDisableOn403 ?? false)
+    excel403Action.value = accounts[0] ? accountExcel403Action(accounts[0]) : 'none'
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -145,8 +147,8 @@ export function useAccountBatchEditor(options: {
         payload.responsesUpstream = excelEnabled.value ? 'excel' : 'codex'
       if (excelAvailable.value && updateExcelCacheCreationAsInput.value)
         payload.excelCacheCreationAsInput = excelCacheCreationAsInput.value
-      if (excelAvailable.value && updateExcelAutoDisableOn403.value)
-        payload.excelAutoDisableOn403 = excelAutoDisableOn403.value
+      if (excelAvailable.value && updateExcel403Action.value)
+        payload.excel403Action = excel403Action.value
       if (excelAvailable.value && updateExcelModels.value && models !== null) {
         payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
         if (!excelModelsFollowGlobal.value)
@@ -222,9 +224,9 @@ export function useAccountBatchEditor(options: {
     excelModels,
     excelModelsFollowGlobal,
     excelCacheCreationAsInput,
-    excelAutoDisableOn403,
+    excel403Action,
     updateExcelCacheCreationAsInput,
-    updateExcelAutoDisableOn403,
+    updateExcel403Action,
     updateExcelModels,
     concurrencyLimit,
     weight,

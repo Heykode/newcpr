@@ -281,7 +281,7 @@ pub(super) fn failed_repair_metering(request: &CodexResponsesRequest) -> Vec<Pro
 
 fn should_pause_on_403(account: &ProviderAccount, failure: &MappedProviderFailure) -> bool {
     let error = &failure.error;
-    account.excel_auto_disable_on_403()
+    account.excel_403_action() != gateway_core::account::Excel403Action::None
         && account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel
         && failure.http_rejection_status == Some(403)
         && !error.upstream_code().is_some_and(|code| {
@@ -325,10 +325,10 @@ pub(super) async fn observe_http_rejection(
     let account = account.clone();
     // Cancellation may drop the waiter, but the already-confirmed write stays bounded.
     let _ = tokio::spawn(async move {
-        match tokio::time::timeout(Duration::from_secs(2), selector.pause_account_on_excel_403(&account)).await {
-            Ok(Ok(true)) => tracing::info!(account_id = %account.id(), "Account scheduling paused after Excel upstream HTTP 403; Excel route preserved; request not replayed"),
+        match tokio::time::timeout(Duration::from_secs(2), selector.apply_excel_403_action(&account)).await {
+            Ok(Ok(true)) => tracing::info!(account_id = %account.id(), action = account.excel_403_action().as_str(), "Excel HTTP 403 policy applied; request not replayed"),
             Ok(Ok(false)) => {},
-            _ => tracing::warn!(account_id = %account.id(), "Excel HTTP 403 account scheduling pause did not complete"),
+            _ => tracing::warn!(account_id = %account.id(), "Excel HTTP 403 policy did not complete"),
         }
     }).await;
 }
@@ -741,9 +741,14 @@ mod tests {
         assert!(!should_pause_on_403(&account, &failure));
         let account = account.with_excel_auto_disable_on_403(true);
         assert!(should_pause_on_403(&account, &failure));
+        let disable = account
+            .clone()
+            .with_excel_403_action(gateway_core::account::Excel403Action::DisableExcel);
+        assert!(should_pause_on_403(&disable, &failure));
         for status in [None, Some(200), Some(401), Some(429), Some(500)] {
             failure.http_rejection_status = status;
             assert!(!should_pause_on_403(&account, &failure));
+            assert!(!should_pause_on_403(&disable, &failure));
         }
         failure.http_rejection_status = Some(403);
         let codex = account
@@ -757,6 +762,7 @@ mod tests {
             let mut excluded = rejection(code);
             excluded.http_rejection_status = Some(403);
             assert!(!should_pause_on_403(&account, &excluded));
+            assert!(!should_pause_on_403(&disable, &excluded));
         }
         failure.error = failure
             .error

@@ -516,11 +516,11 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         require_core_update(updated)
     }
 
-    async fn pause_account_on_excel_403(
+    async fn apply_excel_403_action(
         &self,
         account: &CoreProviderAccount,
     ) -> Result<bool, CoreStoreError> {
-        if !account.excel_auto_disable_on_403()
+        if account.excel_403_action() == gateway_core::account::Excel403Action::None
             || account.responses_upstream() != gateway_core::account::ResponsesUpstream::Excel
         {
             return Ok(false);
@@ -537,15 +537,19 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
         let changed = sqlx::query(
             "update provider_accounts
-             set enabled = false, excel_auto_disabled_at = now(),
+             set enabled = case when $3 = 'pause_account' then false else enabled end,
+                 responses_upstream = case when $3 = 'disable_excel' then 'codex' else responses_upstream end,
+                 excel_auto_disabled_at = case when $3 = 'pause_account' then now() else excel_auto_disabled_at end,
+                 excel_mode_disabled_at = case when $3 = 'disable_excel' then now() else excel_mode_disabled_at end,
                  updated_at = greatest(now(), updated_at)
              where id = $1 and credential_revision = $2
                and provider_kind = 'openai' and authentication_kind = 'oauth'
-               and responses_upstream = 'excel' and excel_auto_disable_on_403
+               and responses_upstream = 'excel' and excel_403_action = $3
                and (enabled or quality_pause_owner is not null)",
         )
         .bind(account.id().as_str())
         .bind(to_i64(account.revision().get()).map_err(core_store_error)?)
+        .bind(account.excel_403_action().as_str())
         .execute(&mut *transaction)
         .await
         .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?

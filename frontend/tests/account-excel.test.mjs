@@ -33,6 +33,7 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
     '@/composables/useAsyncAction': asyncAction,
     '@/utils/account-name': load('../src/utils/account-name.ts'),
     '../utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
+    '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts') }),
     '../utils/modelAccess': load('../src/views/accounts/utils/modelAccess.ts'),
   })
   const accounts = vue.ref([{
@@ -108,18 +109,27 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   assert.equal(updates[9].excelCacheCreationAsInput, true)
   assert.equal(updates[9].responsesUpstream, 'excel')
   state.open(accounts.value[0])
-  assert.equal(state.excelAutoDisableOn403.value, false)
+  assert.equal(state.excel403Action.value, 'none')
   state.excelEnabled.value = true
-  state.excelAutoDisableOn403.value = true
+  state.excel403Action.value = 'pause_account'
   await state.save()
-  assert.equal(updates[10].excelAutoDisableOn403, true)
+  assert.equal(updates[10].excel403Action, 'pause_account')
   accounts.value[0].responsesUpstream = 'excel'
-  accounts.value[0].excelAutoDisableOn403 = true
+  accounts.value[0].excel403Action = 'pause_account'
   state.open(accounts.value[0])
   state.excelEnabled.value = false
   await state.save()
   assert.equal(updates[11].responsesUpstream, 'codex')
-  assert.equal(updates[11].excelAutoDisableOn403, false)
+  assert.equal(updates[11].excel403Action, 'none')
+  state.open(accounts.value[0])
+  state.excelCacheCreationAsInput.value = true
+  state.excelEnabled.value = false
+  await state.save()
+  assert.equal(updates[12].excelCacheCreationAsInput, true)
+  state.open(accounts.value[0])
+  state.excel403Action.value = 'disable_excel'
+  await state.save()
+  assert.equal(updates[13].excel403Action, 'disable_excel')
 })
 
 test('Excel import defaults preserve, explicit global follows, mixed providers stay isolated', () => {
@@ -141,10 +151,10 @@ test('Excel import defaults preserve, explicit global follows, mixed providers s
   assert.equal(settings.excelModelsFollowGlobal, true)
   assert.equal(settings.responsesUpstream, 'excel')
   assert.equal('excelModels' in settings, false)
-  assert.equal(settings.excelCacheCreationAsInput, false)
-  assert.equal(settings.excelAutoDisableOn403, false)
-  form.excelAutoDisableOn403 = true
-  assert.equal(creation.accountImportSettings(form).excelAutoDisableOn403, true)
+  assert.equal(settings.excelCacheCreationAsInput, true)
+  assert.equal(settings.excel403Action, 'none')
+  form.excel403Action = 'pause_account'
+  assert.equal(creation.accountImportSettings(form).excel403Action, 'pause_account')
   form.excelCacheCreationAsInput = true
   assert.equal(creation.accountImportSettings(form).excelCacheCreationAsInput, true)
   assert.equal('responsesUpstream' in creation.accountImportSettings(form, 'xai'), false)
@@ -152,4 +162,6 @@ test('Excel import defaults preserve, explicit global follows, mixed providers s
   form.excelModels = 'gpt-5.6-sol, gpt-6-astra'
   settings = creation.accountImportSettings(form)
   assert.equal(JSON.stringify(settings.excelModels), '["gpt-5.6-sol","gpt-6-astra"]')
+  form.excelEnabled = false
+  assert.equal(creation.accountImportSettings(form).excelCacheCreationAsInput, true)
 })

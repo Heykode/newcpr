@@ -269,9 +269,20 @@ budget defaults to 1024 MiB and cache entries to 512; these are limits, not eage
 allocations. Saved runtime overrides win. The separate transient decode/download
 memory budget remains 1024 MiB even when disk capacity increases.
 
-## Optional HTTP 403 Account Scheduling Pause
+## Account HTTP 403 Policy
 
-`excelAutoDisableOn403` defaults off and is OpenAI OAuth/account scoped.
+`excel403Action` is the canonical enum: `none`, `pause_account`, `disable_excel`.
+Legacy true means pause, false means none; reject conflicting dual-field updates.
+Omitted values preserve settings. Migration 0049 backfills legacy policy and stores
+mode-disable diagnostics separately from pause diagnostics. Never modify frozen migrations.
+Disable-mode changes only the subsequent route to Codex, preserving enabled,
+quality pause ownership, credential/identity and billing preferences. It never replays
+the failed request. Pause-mode retains the existing behavior described below.
+New database rows and new template/import forms default cache-write billing on;
+existing values and historical usage are untouched. Routing off must not clear that
+preference, and only actual Excel execution reads it. Ordinary edits must not reset it.
+
+The default action is none and is OpenAI OAuth/account scoped.
 Only the real HTTP handshake rejection can trigger it, including compact's
 HTTP stage; a 403 encoded in an HTTP200 SSE payload cannot. Exclude
 `basispoints_model_access_changed`. Clear retry/account-failure intents only

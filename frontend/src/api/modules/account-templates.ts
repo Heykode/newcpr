@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import type { Excel403Action } from '@/utils/excel-settings'
 import request from '../request'
 
 export interface AccountTemplateConfig {
@@ -8,6 +9,7 @@ export interface AccountTemplateConfig {
   excelModelsFollowGlobal?: boolean | null
   excelCacheCreationAsInput?: boolean | null
   excelAutoDisableOn403?: boolean | null
+  excel403Action?: Excel403Action
   excelModels?: string[] | null
   turnStateInjectionEnabled?: boolean | null
   concurrencyLimit: number | null

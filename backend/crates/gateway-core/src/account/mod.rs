@@ -8,7 +8,7 @@ pub use model_access::{
     AccountModelAccess, AccountModelAccessMode, InvalidAccountModelAccess,
     MAX_ACCOUNT_ACCESS_MODELS,
 };
-pub use responses_upstream::{ExcelModels, ResponsesUpstream};
+pub use responses_upstream::{Excel403Action, ExcelModels, ResponsesUpstream};
 mod proxy;
 pub use proxy::{InvalidOutboundProxy, OutboundProxy};
 pub mod scope;

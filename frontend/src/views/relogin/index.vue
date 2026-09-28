@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import type { AccountTemplate } from '@/api/modules/account-templates'
 import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWorkspaceMode } from '@/api/modules/relogin'
-import { CheckCheck, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
+import type { Excel403Action } from '@/utils/excel-settings'
+import { CheckCheck, Download, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
+
 import { useNow } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   configureRelogin,
   deleteRelogin,
+  exportRelogin,
   getRelogin,
   importRelogin,
   pushRelogin,
@@ -31,8 +34,10 @@ import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
+import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
+import { useDownload } from '@/composables/useDownload'
 import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
@@ -48,6 +53,32 @@ const busy = shallowRef(false)
 const failure = shallowRef('')
 const loadFailure = shallowRef('')
 const selected = ref(new Set<string>())
+const exportOpen = shallowRef(false)
+const exportFormat = shallowRef<'json' | 'two_fa'>('json')
+const exportIds = shallowRef<string[]>([])
+const { downloadText } = useDownload()
+
+function confirmExport(format: 'json' | 'two_fa') {
+  exportIds.value = [...selected.value]
+  exportFormat.value = format
+  exportOpen.value = exportIds.value.length > 0 && exportIds.value.length <= 200
+}
+
+async function executeExport() {
+  if (busy.value)
+    return
+  busy.value = true
+  try {
+    const result = await exportRelogin(exportIds.value, exportFormat.value)
+    for (const file of result.files)
+      await downloadText(file.content, file.name, exportFormat.value === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8')
+    exportOpen.value = false
+    exportIds.value = []
+    toast.success('资料已导出')
+  }
+  catch (error) { toast.error(errorMessage(error, '导出失败')) }
+  finally { busy.value = false }
+}
 const search = shallowRef('')
 const plan = shallowRef('')
 const status = shallowRef('')
@@ -304,8 +335,8 @@ const selectedTemplate = shallowRef<AccountTemplate | null>(null)
 const batchCustomName = shallowRef('')
 const applyExcel = shallowRef(false)
 const excelEnabled = shallowRef(false)
-const excelCacheCreationAsInput = shallowRef(false)
-const excelAutoDisableOn403 = shallowRef(false)
+const excelCacheCreationAsInput = shallowRef(true)
+const excel403Action = shallowRef<Excel403Action>('none')
 const excelModelsFollowGlobal = shallowRef(true)
 const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
 const confirmMode = shallowRef<'push' | 'delete'>('push')
@@ -317,8 +348,8 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   batchCustomName.value = ''
   applyExcel.value = false
   excelEnabled.value = false
-  excelCacheCreationAsInput.value = false
-  excelAutoDisableOn403.value = false
+  excelCacheCreationAsInput.value = true
+  excel403Action.value = 'none'
   excelModelsFollowGlobal.value = true
   excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
   confirmMode.value = mode
@@ -365,7 +396,7 @@ function executeConfirmed() {
           selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
       }
       const newAccountExcel = newPushCount.value > 0 && applyExcel.value
-        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value, excelAutoDisableOn403.value)
+        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value, excel403Action.value)
         : undefined
       batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, newAccountExcel))
     }
@@ -509,6 +540,16 @@ onBeforeUnmount(() => {
       <BaseIconButton label="批量开启自动重登" :disabled="busy || !selected.size || selected.size > 500" @click="changeAutomatic([...selected], true)">
         <CheckCheck class="size-4 text-cp-success" />
       </BaseIconButton>
+      <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="confirmExport('json')">
+        <template #icon>
+          <Download class="size-4" />
+        </template>导出JSON
+      </BaseButton>
+      <BaseButton :disabled="busy || !selected.size || selected.size > 200" @click="confirmExport('two_fa')">
+        <template #icon>
+          <Download class="size-4" />
+        </template>导出2FA
+      </BaseButton>
       <BaseIconButton label="批量关闭自动重登" :disabled="busy || !selected.size || selected.size > 500" @click="changeAutomatic([...selected], false)">
         <Pause class="size-4" />
       </BaseIconButton>
@@ -651,6 +692,11 @@ onBeforeUnmount(() => {
         </BaseButton>
       </template>
     </BaseModal>
+    <BaseConfirmModal v-model="exportOpen" :title="exportFormat === 'json' ? '导出JSON' : '导出2FA'" :loading="busy" @confirm="executeExport">
+      <p class="m-0 text-cp-sm">
+        将导出所选 {{ exportIds.length }} 条资料，文件包含{{ exportFormat === 'json' ? '访问凭据' : '邮箱、密码和2FA密钥' }}，请妥善保管。
+      </p>
+    </BaseConfirmModal>
     <BaseConfirmModal v-model="queueOpen" title="确认重登" :loading="busy" @confirm="executeQueue">
       <BaseFormItem label="本次登录工作区">
         <BaseSelect v-model="queueMode" :options="queueOptions" aria-label="本次登录工作区" :disabled="busy" />
@@ -683,8 +729,8 @@ onBeforeUnmount(() => {
           <BaseFormItem label="缓存写入按普通输入计费">
             <BaseSwitch v-model="excelCacheCreationAsInput" label="新账号缓存写入按普通输入计费" :disabled="busy || !excelEnabled" />
           </BaseFormItem>
-          <BaseFormItem label="Excel 遇到 HTTP 403 自动暂停此账号调度">
-            <BaseSwitch v-model="excelAutoDisableOn403" label="新账号 Excel 遇到 HTTP 403 自动暂停此账号调度" :disabled="busy || !excelEnabled" />
+          <BaseFormItem label="Excel遇到HTTP 403">
+            <Excel403ActionSelect v-model="excel403Action" :disabled="busy || !excelEnabled" />
           </BaseFormItem>
         </template>
       </div>

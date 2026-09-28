@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { AccountGroup, AccountModelAccess } from '@/api'
 
+import type { Excel403Action } from '@/utils/excel-settings'
+
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
@@ -27,9 +29,9 @@ const excelEnabled = defineModel<boolean>('excelEnabled', { required: true })
 const excelModels = defineModel<string>('excelModels', { required: true })
 const excelModelsFollowGlobal = defineModel<boolean>('excelModelsFollowGlobal', { default: true })
 const excelCacheCreationAsInput = defineModel<boolean>('excelCacheCreationAsInput', { default: false })
-const excelAutoDisableOn403 = defineModel<boolean>('excelAutoDisableOn403', { default: false })
+const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
-const updateExcelAutoDisableOn403 = defineModel<boolean>('updateExcelAutoDisableOn403', { default: false })
+const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -62,9 +64,9 @@ const updateProxy = defineModel<boolean>('updateProxy', { required: true })
       v-model:excel-models="excelModels"
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
-      v-model:excel-auto-disable-on-403="excelAutoDisableOn403"
+      v-model:excel-403-action="excel403Action"
       v-model:update-excel-cache-creation-as-input="updateExcelCacheCreationAsInput"
-      v-model:update-excel-auto-disable-on-403="updateExcelAutoDisableOn403"
+      v-model:update-excel-403-action="updateExcel403Action"
       v-model:update-excel-models="updateExcelModels"
       v-model:concurrency-limit="concurrencyLimit"
       v-model:weight="weight"

@@ -23,6 +23,7 @@ import AccountCapacityCell from './components/AccountCapacityCell.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal/index.vue'
 import AccountEditModal from './components/AccountEditModal.vue'
+import AccountEnrollmentProgress from './components/AccountEnrollmentProgress.vue'
 import AccountFilters from './components/AccountFilters.vue'
 import AccountHealthTimeline from './components/AccountHealthTimeline.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
@@ -177,6 +178,7 @@ const {
   exportingModelCatalogIds,
   reauthorizingAccount,
   createForm,
+  enrollmentIds,
   handleCreate,
   handleAuthorizeOAuth,
   openCreateAccount,
@@ -246,9 +248,9 @@ const {
   excelModels: batchExcelModels,
   excelModelsFollowGlobal: batchExcelModelsFollowGlobal,
   excelCacheCreationAsInput: batchExcelCacheCreationAsInput,
-  excelAutoDisableOn403: batchExcelAutoDisableOn403,
+  excel403Action: batchExcel403Action,
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
-  updateExcelAutoDisableOn403: batchUpdateExcelAutoDisableOn403,
+  updateExcel403Action: batchUpdateExcel403Action,
   updateExcelModels: batchUpdateExcelModels,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
@@ -284,7 +286,7 @@ const {
   excelModels,
   excelModelsFollowGlobal,
   excelCacheCreationAsInput,
-  excelAutoDisableOn403,
+  excel403Action,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -620,6 +622,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @test="handleTestConnection()"
     />
 
+    <AccountEnrollmentProgress :ids="enrollmentIds" @completed="refreshAccountsSilently" @dismiss="enrollmentIds = []" />
     <AccountImportTasks
       v-model="importTasksOpen"
       :tasks="importTasks"
@@ -656,7 +659,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-models="excelModels"
       v-model:excel-models-follow-global="excelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="excelCacheCreationAsInput"
-      v-model:excel-auto-disable-on-403="excelAutoDisableOn403"
+      v-model:excel-403-action="excel403Action"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -679,9 +682,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-models="batchExcelModels"
       v-model:excel-models-follow-global="batchExcelModelsFollowGlobal"
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
-      v-model:excel-auto-disable-on-403="batchExcelAutoDisableOn403"
+      v-model:excel-403-action="batchExcel403Action"
       v-model:update-excel-cache-creation-as-input="batchUpdateExcelCacheCreationAsInput"
-      v-model:update-excel-auto-disable-on-403="batchUpdateExcelAutoDisableOn403"
+      v-model:update-excel-403-action="batchUpdateExcel403Action"
       v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"

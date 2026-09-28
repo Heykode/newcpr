@@ -72,6 +72,7 @@ test('single editor only submits a changed name and preserves concurrent externa
   })
   const { useAccountEditor } = load('../src/views/accounts/composables/useAccountEditor.ts', {
     vue,
+    '@/utils/excel-settings': load('../src/utils/excel-settings.ts', { '@/views/accounts/utils/schedulingForm': scheduling }),
     '@/api': { updateAccount: async payload => requests.push(structuredClone(payload)) },
     '@/components/base/BaseToast': { toast: { warning() {}, success() {} } },
     '@/composables/useAsyncAction': asyncAction,

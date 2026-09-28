@@ -23,6 +23,24 @@ struct ImportRequest {
     replace_existing: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EnrollRequest {
+    text: String,
+    #[serde(default)]
+    replace_existing: bool,
+    settings: super::accounts::AccountImportSettingsRequest,
+    outbound_proxy_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExportRequest {
+    ids: Vec<String>,
+    format: gateway_admin::model::relogin::ReloginExportFormat,
+    confirm: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BatchRequest {
@@ -93,6 +111,8 @@ where
     Router::new()
         .route("/api/admin/relogin", get(list::<S>))
         .route("/api/admin/relogin/import", post(import::<S>))
+        .route("/api/admin/relogin/enroll", post(enroll::<S>))
+        .route("/api/admin/relogin/export", post(export::<S>))
         .route("/api/admin/relogin/queue", post(queue::<S>))
         .route("/api/admin/relogin/push", post(push::<S>))
         .route("/api/admin/relogin/delete", post(delete::<S>))
@@ -120,6 +140,68 @@ where
             "/api/admin/relogin/accounts/queue",
             post(queue_account::<S>),
         )
+}
+
+async fn enroll<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<EnrollRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let settings = request
+        .settings
+        .into_settings()
+        .map_err(|_| AdminError::invalid_request(StatusCode::BAD_REQUEST, "账号导入设置不合法"))?;
+    let enrollment = gateway_admin::model::relogin::ReloginEnrollment::new(
+        settings,
+        request.outbound_proxy_id,
+        auth.context().mutation_context(),
+    )
+    .map_err(map_admin_service_error)?;
+    let ids = state
+        .admin_services()
+        .relogin()
+        .enroll(&request.text, request.replace_existing, enrollment)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::ACCEPTED,
+        AdminEnvelope::ok(serde_json::json!({"ids": ids})),
+    ))
+}
+
+async fn export<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<ExportRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    if request.confirm != "export_sensitive_relogin" {
+        return Err(AdminError::invalid_request(
+            StatusCode::BAD_REQUEST,
+            "请先确认导出敏感资料",
+        ));
+    }
+    let data = state
+        .admin_services()
+        .relogin()
+        .export(
+            &request.ids,
+            request.format,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    let mut response = AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn account_actions<S>(

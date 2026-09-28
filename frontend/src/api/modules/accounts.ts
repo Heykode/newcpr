@@ -1,5 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
+import type { Excel403Action } from '@/utils/excel-settings'
 import request from '../request'
 
 export type AccountStatus
@@ -164,7 +165,9 @@ export interface Account {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelAutoDisableOn403?: boolean
+  excel403Action?: Excel403Action
   excelAutoDisabledAt?: string | null
+  excelModeDisabledAt?: string | null
   effectiveExcelModels?: string[]
   turnState?: {
     enabled?: boolean
@@ -446,6 +449,7 @@ interface AccountUpdateParam {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelAutoDisableOn403?: boolean
+  excel403Action?: Excel403Action
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
@@ -464,6 +468,7 @@ interface AccountBatchUpdateParam {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelAutoDisableOn403?: boolean
+  excel403Action?: Excel403Action
   concurrencyLimit?: number | null
   weight?: number
   modelAccess?: AccountModelAccess
@@ -475,7 +480,7 @@ interface AccountDeleteParams {
   accountIds: string[]
 }
 
-interface AccountImportSettings {
+export interface AccountImportSettings {
   customName?: string
   enabled: boolean
   turnStateInjectionEnabled?: boolean
@@ -484,6 +489,7 @@ interface AccountImportSettings {
   excelModelsFollowGlobal?: boolean
   excelCacheCreationAsInput?: boolean
   excelAutoDisableOn403?: boolean
+  excel403Action?: Excel403Action
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
