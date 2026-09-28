@@ -84,6 +84,9 @@ fn validate(config: &QualityRuleConfig) -> Result<(), AdminError> {
     if config.failure_action == QualityFailureAction::EnableExcel && config.auto_restore {
         return Err(AdminError::invalid("开启Excel模式不支持自动恢复为Codex"));
     }
+    if !(1..=100).contains(&config.excel_failure_threshold) {
+        return Err(AdminError::invalid("连续异常阈值必须为 1–100 轮"));
+    }
     let groups = config
         .failure_group_ids
         .iter()
@@ -697,6 +700,7 @@ mod tests {
     #[test]
     fn quality_cron_is_five_fields_and_timezone_aware() {
         let mut config = QualityRuleConfig {
+            excel_failure_threshold: 1,
             detection_mode: QualityDetectionMode::Answer,
             account_id: "test-account".into(),
             model: "test-model".into(),
@@ -744,6 +748,16 @@ mod tests {
         assert_eq!(config.detection_mode, QualityDetectionMode::Answer);
         assert_eq!(config.failure_action, QualityFailureAction::None);
         assert!(!config.auto_restore);
+        assert_eq!(config.excel_failure_threshold, 1);
+        for invalid in [0, 101, 255] {
+            config.excel_failure_threshold = invalid;
+            assert!(validate(&config).is_err());
+        }
+        for valid in [1, 2, 100] {
+            config.excel_failure_threshold = valid;
+            assert!(validate(&config).is_ok());
+        }
+        config.excel_failure_threshold = 1;
         assert!(validate(&config).is_ok());
         config.failure_action = QualityFailureAction::RemoveGroups;
         assert!(validate(&config).is_err());

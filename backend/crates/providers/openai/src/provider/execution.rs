@@ -573,6 +573,11 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                     request.excel.is_some(), allows_account_state_mutation,
                     failure_context.is_diagnostic,
                 ).await;
+                if request.excel.is_some() || request.excel_image.is_some() {
+                    super::excel::apply_initial_retry_policy(
+                        &mut failure, request.context.request_tuning().websocket_max_retries,
+                    );
+                }
                 if let Some(observation) = failure.observation.take() {
                     yield ProviderEvent::observation(response_route_observation(observation, request.excel.is_some()));
                 }
@@ -805,6 +810,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     request.excel.is_some(), allows_account_state_mutation,
                     failure_context.is_diagnostic,
                 ).await;
+                if request.excel.is_some() {
+                    super::excel::apply_initial_retry_policy(&mut failure, stream_max_retries);
+                }
                 if let Some(policy) = websocket_failure_policy {
                     apply_websocket_recovery_policy(
                         &mut failure,

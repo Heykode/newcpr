@@ -103,3 +103,20 @@
   auto-restore-to-Codex policy.
 - Changing detection mode clears the latest rule verdict but retains mode snapshots
   in historical runs. Keep existing owned scheduling/group recovery behavior intact.
+
+## Excel Failure Threshold
+
+- `excelFailureThreshold` defaults to 1 for legacy configs and accepts 1–100.
+  Count definite incorrect rounds, never individual parallel samples. A correct
+  round resets progress; unknown/request errors neither increment nor reset it.
+- Persist progress in `quality_rules.recovery.excel_streak`, retaining unrelated
+  recovery ownership. Count only after existing lease/revision fences within the
+  finish transaction. Duplicate or stale completion cannot add evidence.
+- Evidence is scoped to account identity and the existing outbound/policy action
+  scope. A changed identity, UA, proxy or egress policy cannot inherit old progress.
+  Saving any rule clears progress without queueing an immediate detection.
+- Reaching the threshold calls the existing Excel enable policy, including its
+  403 veto, model/account guards, audit and probe pause. This feature never turns
+  Excel off automatically and does not alter normal routing or retry decisions.
+- No migration is required for the JSON addition, but old strict-config binaries
+  still require stored-config reconciliation before a downgrade.

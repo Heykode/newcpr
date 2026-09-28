@@ -6,6 +6,7 @@ import { getAccountGroups } from '@/api/modules/account-groups'
 import { getAccounts } from '@/api/modules/accounts'
 import { deleteQualityRule, getQualityDetail, getQualityRules, getQualityRuns, runQualityRule, saveQualityRule } from '@/api/modules/quality-ops'
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import FormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -17,6 +18,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { formatDateTime } from '@/utils/date'
 import { CANDY_PROMPT, CANDY_REFERENCE_ANSWER, DEFAULT_JUDGE_PROMPT } from './presets'
+import QualityBulkEditor from './QualityBulkEditor.vue'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
 import QualitySchedule from './QualitySchedule.vue'
@@ -33,6 +35,8 @@ const error = ref('')
 const historyError = ref('')
 const editorError = ref('')
 const editorOpen = ref(false)
+const bulkOpen = ref(false)
+const batchSelection = ref<string[]>([])
 const editing = ref<QualityRule | null>(null)
 const selectedAccounts = ref<string[]>([])
 const actions: Record<string, string> = {
@@ -52,6 +56,8 @@ const actions: Record<string, string> = {
   excel_blocked_403: 'Excel 曾因 HTTP 403 关闭，未自动重开',
   excel_blocked_model: '检测模型未配置为 Excel 模型，未改动账号',
   excel_blocked_account: '账号当前不可用，未开启 Excel',
+  excel_threshold_pending: '连续异常尚未达到阈值，未开启 Excel',
+  excel_streak_reset: '本轮正常，连续异常计数已清零',
 }
 const deleteTarget = ref<QualityRule | null>(null)
 const deleteOpen = ref(false)
@@ -70,6 +76,19 @@ const labels: Record<string, string> = {
   cancelled: '已取消',
 }
 const visibleRules = computed(() => rules.value.filter(rule => `${names.value[rule.config.accountId] ?? ''} ${rule.config.accountId} ${rule.config.model}`.toLowerCase().includes(filter.value.toLowerCase())))
+const allVisibleSelected = computed({
+  get: () => visibleRules.value.length > 0 && visibleRules.value.every(rule => batchSelection.value.includes(rule.id)),
+  set: (checked: boolean) => {
+    const visible = new Set(visibleRules.value.map(rule => rule.id))
+    batchSelection.value = checked
+      ? [...new Set([...batchSelection.value, ...visible])]
+      : batchSelection.value.filter(id => !visible.has(id))
+  },
+})
+const someVisibleSelected = computed(() => visibleRules.value.some(rule => batchSelection.value.includes(rule.id)))
+function selectBatchRule(id: string, checked: boolean) {
+  batchSelection.value = checked ? [...new Set([...batchSelection.value, id])] : batchSelection.value.filter(value => value !== id)
+}
 const counts = computed(() => ({
   enabled: rules.value.filter(rule => rule.config.enabled).length,
   running: rules.value.filter(rule => rule.running).length,
@@ -94,6 +113,7 @@ function defaults(): QualityRuleConfig {
     failureAction: 'none',
     failureGroupIds: [],
     autoRestore: false,
+    excelFailureThreshold: 1,
   }
 }
 const draft = ref(defaults())
@@ -153,6 +173,7 @@ async function load() {
     if (!alive || controller.signal.aborted || version !== listVersion)
       return
     rules.value = result
+    batchSelection.value = batchSelection.value.filter(id => result.some(rule => rule.id === id))
     error.value = ''
     if (!result.some(rule => rule.id === selectedId.value))
       selectedId.value = result[0]?.id ?? ''
@@ -408,16 +429,24 @@ onBeforeUnmount(() => {
           <span class="text-cp-sm tabular-nums text-cp-text-secondary">{{ rules.length }}</span>
         </div>
         <BaseInput v-model="filter" aria-label="筛选规则" placeholder="搜索账号或模型" />
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-cp-sm">
+          <BaseCheckbox v-model="allVisibleSelected" label="全选搜索结果" :indeterminate="someVisibleSelected && !allVisibleSelected" :disabled="busy || !visibleRules.length" show-label />
+          <BaseButton :disabled="busy || !batchSelection.length" @click="bulkOpen = true">
+            <Pencil class="size-4" />批量编辑（{{ batchSelection.length }}）
+          </BaseButton>
+        </div>
         <div class="mt-3 max-h-[65vh] space-y-1 overflow-y-auto pr-1">
           <div v-for="rule in visibleRules" :key="rule.id" class="quality-rule rounded-lg border py-3 transition-colors" :class="selectedId === rule.id ? 'quality-rule-selected border-cp-border bg-cp-bg-container' : 'border-transparent hover:bg-cp-bg-container'">
             <button type="button" class="grid w-full min-w-0 gap-1 px-3 text-left text-cp-text outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline" :aria-pressed="selectedId === rule.id" @click="selectedId = rule.id">
               <span class="truncate font-semibold" :title="accountName(rule.config.accountId)">{{ accountName(rule.config.accountId) }}</span>
               <span class="truncate font-mono text-cp-sm text-cp-text-secondary" :title="rule.config.model">{{ rule.config.model }}</span>
               <span class="text-xs text-cp-text-secondary">{{ modeLabel(rule.config.detectionMode) }}</span>
+              <span v-if="rule.config.failureAction === 'enable_excel'" class="text-xs tabular-nums text-cp-text-secondary">连续异常 {{ rule.excelFailureStreak ?? 0 }}/{{ rule.config.excelFailureThreshold ?? 1 }} 轮</span>
               <span class="mt-1 flex items-center gap-1.5 text-xs" :class="ruleStatusColor(rule)"><span class="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />{{ rule.running ? '检测中' : rule.pending ? '已排队' : !rule.config.enabled ? '已暂停' : verdictLabel(rule.lastStatus, rule.config.detectionMode) }}</span>
               <span class="text-xs text-cp-text-secondary">下次 {{ rule.config.enabled ? formatDateTime(rule.nextRunAt) : '—' }}</span>
             </button>
             <div class="mt-2 flex gap-1 px-2">
+              <BaseCheckbox :model-value="batchSelection.includes(rule.id)" :label="`选择规则 ${accountName(rule.config.accountId)}`" :disabled="busy" class="mx-1" @update:model-value="selectBatchRule(rule.id, $event)" />
               <BaseIconButton label="立即检测" :disabled="busy || !rule.config.enabled || rule.running || rule.pending" @click="mutate(() => runQualityRule({ id: rule.id, revision: rule.revision }))">
                 <Play class="size-4" />
               </BaseIconButton>
@@ -651,6 +680,13 @@ onBeforeUnmount(() => {
             <BaseSelect v-model="draft.failureAction" :options="[{ value: 'none', label: '仅记录结果' }, { value: 'disable_scheduling', label: '暂停此账号调度' }, { value: 'remove_groups', label: '移出指定分组' }, { value: 'enable_excel', label: '开启Excel模式' }]" />
           </FormItem>
           <QualityCatalogPicker v-if="draft.failureAction === 'remove_groups'" v-model:selected-values="draft.failureGroupIds" multiple label="处置分组" :load-page="actionGroupPage" />
+          <div v-if="draft.failureAction === 'enable_excel'" class="grid gap-2 text-cp-sm">
+            <span>连续异常多少轮后开启 Excel</span>
+            <BaseNumberInput v-model="draft.excelFailureThreshold" label="连续异常阈值" :min="1" :max="100" />
+            <p class="text-xs text-cp-text-secondary">
+              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。开启后不自动关闭 Excel。
+            </p>
+          </div>
           <BaseSwitch v-if="draft.failureAction !== 'enable_excel'" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
           <p class="text-xs text-cp-text-secondary">
             {{ isProbe ? '无法判断时不执行处置。换票结果仅表示探针观察，不等于模型能力的完整评估。' : '仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。' }}
@@ -666,6 +702,7 @@ onBeforeUnmount(() => {
         </BaseButton>
       </template>
     </QualityDrawer>
+    <QualityBulkEditor v-model="bulkOpen" :rules="rules" :selected-ids="batchSelection" :default-config="defaults()" :account-name="accountName" :group-page="groupPage" :action-group-page="actionGroupPage" @busy="busy = $event" @saved="selectBatchRule($event, false)" @finished="load" />
     <QualityDrawer v-model="detailOpen" title="检测详情">
       <p v-if="detailError" role="alert" class="text-cp-error">
         {{ detailError }}
