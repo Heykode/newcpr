@@ -25,7 +25,8 @@ pub struct ExcelImportSettings {
     #[serde(default)]
     pub excel_ignore_encrypted_content: bool,
     #[serde(default)]
-    pub request_proxy_source: gateway_core::provider_ports::session_proxy::RequestProxySource,
+    pub request_proxy_source:
+        Option<gateway_core::provider_ports::session_proxy::RequestProxySource>,
     #[serde(default)]
     pub excel_auto_disable_on_403: Option<bool>,
     pub excel_403_action: Option<gateway_core::account::Excel403Action>,
@@ -49,7 +50,9 @@ impl ExcelImportSettings {
         settings.responses_upstream = Some(self.responses_upstream);
         settings.excel_cache_creation_as_input = Some(self.excel_cache_creation_as_input);
         settings.excel_ignore_encrypted_content = Some(self.excel_ignore_encrypted_content);
-        settings.request_proxy_source = Some(self.request_proxy_source);
+        if let Some(source) = self.request_proxy_source {
+            settings.request_proxy_source = Some(source);
+        }
         let action =
             self.excel_403_action
                 .unwrap_or(if self.excel_auto_disable_on_403.unwrap_or(false) {

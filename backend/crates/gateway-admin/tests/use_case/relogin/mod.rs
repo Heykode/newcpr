@@ -545,6 +545,7 @@ async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_m
     let h = Harness::new(Vec::new()).await;
     let mut config = template_config();
     config.responses_upstream = Some(ResponsesUpstream::Codex);
+    config.request_proxy_source = Some(gateway_core::account::RequestProxySource::Mihomo);
     config.excel_models_follow_global = Some(false);
     config.excel_models = Some(ExcelModels::try_from(vec!["template-model".into()]).unwrap());
     let template = h
@@ -590,6 +591,33 @@ async fn relogin_excel_override_applies_to_new_accounts_and_overrides_template_m
     expected.excel_auto_disable_on_403 = Some(false);
     expected.excel_models = None;
     assert_eq!(h.accounts.import_settings(), vec![Some(expected)]);
+}
+
+#[test]
+fn relogin_excel_options_preserve_exit_unless_explicitly_overridden() {
+    use gateway_admin::model::relogin_templates::ExcelImportSettings;
+    use gateway_core::account::RequestProxySource;
+    for mode in ["codex", "excel"] {
+        for (source, expected) in [
+            (None, RequestProxySource::Mihomo),
+            (Some("account"), RequestProxySource::Account),
+            (Some("proxy_pool"), RequestProxySource::ProxyPool),
+        ] {
+            let mut value = serde_json::json!({
+                "responsesUpstream": mode,
+                "excelModelsFollowGlobal": true
+            });
+            if let Some(source) = source {
+                value["requestProxySource"] = serde_json::json!(source);
+            }
+            let options: ExcelImportSettings = serde_json::from_value(value).unwrap();
+            let mut config = template_config();
+            config.request_proxy_source = Some(RequestProxySource::Mihomo);
+            let mut settings = config.settings().unwrap();
+            options.apply(&mut settings);
+            assert_eq!(settings.request_proxy_source, Some(expected));
+        }
+    }
 }
 
 #[tokio::test]
