@@ -26,6 +26,7 @@ pub(super) fn endpoint_requested_model(
 /// 每次原始 SSE/WS 事件推进状态后重新生成不可变 observation，Core 只负责携带、
 /// 持久化和展示这份安全快照，不解释任何 OpenAI 协议字段。
 pub(super) struct OpenAiResponseObservationState {
+    quality_probe: bool,
     transport: CodexBackendTransport,
     excel: bool,
     excel_usage: Option<crate::transport::excel::usage::ExcelUsagePolicy>,
@@ -81,7 +82,14 @@ impl OpenAiResponseObservationState {
         request: &CodexResponsesRequest,
         trace: &gateway_core::diagnostics::TraceContext,
     ) -> Self {
+        let mut response_metadata = response.response_metadata.clone();
+        if request.quality_probe.is_some() {
+            response_metadata
+                .client_headers
+                .retain(|(name, _)| name != "x-codex-turn-state");
+        }
         Self {
+            quality_probe: request.quality_probe.is_some(),
             transport: response.transport,
             excel: request.excel.is_some(),
             excel_usage: request
@@ -89,7 +97,7 @@ impl OpenAiResponseObservationState {
                 .as_ref()
                 .map(|prepared| prepared.usage.clone()),
             diagnostics: response.diagnostics.clone(),
-            response_metadata: response.response_metadata.clone(),
+            response_metadata,
             metrics: response.transport_metrics.clone(),
             websocket_pool_decision: response.websocket_pool_decision,
             request_summary: openai_response_request_summary(request, response.transport, trace),
@@ -216,6 +224,9 @@ impl OpenAiResponseObservationState {
     }
 
     pub(super) fn merge_client_header(&mut self, name: &str, value: &str) -> bool {
+        if self.quality_probe && name.eq_ignore_ascii_case("x-codex-turn-state") {
+            return false;
+        }
         let value = Bytes::copy_from_slice(value.as_bytes());
         if let Some((_, existing)) = self
             .response_metadata

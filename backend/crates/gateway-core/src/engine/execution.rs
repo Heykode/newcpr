@@ -763,6 +763,8 @@ impl DefaultExecutionService {
         request: AccountProbeRequest,
         cancellation: CancellationToken,
     ) -> Result<AccountProbeResult, AccountProbeError> {
+        let state_probe = matches!(&request.operation, Operation::Generate(generate) if generate.quality_probe().is_some());
+        let timeout_duration = std::time::Duration::from_secs(if state_probe { 45 } else { 120 });
         let snapshot = self.snapshots.acquire().map_err(|_| {
             GatewayError::new(
                 GatewayErrorKind::Internal,
@@ -783,7 +785,7 @@ impl DefaultExecutionService {
             )
             .map_err(map_routing_error)?;
         let started_at = SystemTime::now();
-        let deadline_at = started_at + std::time::Duration::from_secs(120);
+        let deadline_at = started_at + timeout_duration;
         let actor = ClientApiKeyId::new("admin_quality_check")
             .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "invalid actor"))?;
         let new_request = NewModelRequest {
@@ -857,7 +859,7 @@ impl DefaultExecutionService {
                 Ok((text, complete))
             }
             .fuse();
-            let timeout = Delay::new(std::time::Duration::from_secs(120)).fuse();
+            let timeout = Delay::new(timeout_duration).fuse();
             pin_mut!(collect, timeout);
             futures::select! {
                 result = collect => Some(result),
@@ -1269,6 +1271,60 @@ impl ExecutionService for DefaultExecutionService {
 }
 
 impl AccountProbe for DefaultExecutionService {
+    fn state_probe(
+        &self,
+        request: AccountProbeRequest,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, crate::operation::quality_probe::StateProbeReport> {
+        use crate::operation::quality_probe::{
+            QualityProbeExchange, StateProbeReason, StateProbeVerdict,
+        };
+        Box::pin(async move {
+            let exchange = QualityProbeExchange::default();
+            let Operation::Generate(generate) = &request.operation else {
+                return exchange.report();
+            };
+            for continuation in [false, true] {
+                if cancellation.is_cancelled() {
+                    let mut report = exchange.report();
+                    report.verdict = StateProbeVerdict::Inconclusive;
+                    report.reason = StateProbeReason::Cancelled;
+                    return report;
+                }
+                let mut shot = request.clone();
+                shot.operation = Operation::Generate(
+                    generate
+                        .clone()
+                        .with_quality_probe(exchange.step(continuation)),
+                );
+                if self
+                    .quality_check_inner(shot, cancellation.clone())
+                    .await
+                    .is_err()
+                {
+                    let mut report = exchange.report();
+                    report.verdict = StateProbeVerdict::Inconclusive;
+                    if matches!(
+                        report.reason,
+                        StateProbeReason::MissingEvidence
+                            | StateProbeReason::Unchanged
+                            | StateProbeReason::Changed
+                    ) {
+                        report.reason = StateProbeReason::RequestFailed;
+                    }
+                    return report;
+                }
+                let report = exchange.report();
+                if report.shots.iter().any(|shot| shot.reason.is_some())
+                    || (!continuation && report.shots.is_empty())
+                {
+                    return report;
+                }
+            }
+            exchange.report()
+        })
+    }
+
     fn quality_check(
         &self,
         request: AccountProbeRequest,

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
+import { CANDY_PROMPT, CANDY_REFERENCE_ANSWER, DEFAULT_JUDGE_PROMPT } from '../src/views/quality-ops/presets.ts'
 
 const config = {
   accountId: 'preview-account',
@@ -12,12 +13,12 @@ const config = {
   cron: '0 */6 * * *',
   timezone: 'Asia/Shanghai',
   repetitions: 1,
-  prompt: '这是界面预览用题目。',
-  referenceAnswer: '示例参考答案',
+  prompt: CANDY_PROMPT,
+  referenceAnswer: CANDY_REFERENCE_ANSWER,
   reasoningEffort: null,
   judgeGroupId: 'preview-group',
   judgeModel: 'example-judge',
-  judgePrompt: '比较实际答案与参考答案。',
+  judgePrompt: DEFAULT_JUDGE_PROMPT,
   failureAction: 'none',
   failureGroupIds: [],
   autoRestore: false,

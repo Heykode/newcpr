@@ -99,6 +99,7 @@ mod excel;
 mod execution;
 mod failure;
 mod observation;
+mod quality_probe;
 mod workers;
 
 use excel::prepare_excel;
@@ -463,6 +464,12 @@ impl Provider for CodexProvider {
         let mut upstream_request =
             encode_generate_request(generate, upstream_model.as_str(), location)
                 .map_err(map_request_error)?;
+        upstream_request.quality_probe = generate.quality_probe().cloned();
+        quality_probe::initialize(
+            &mut upstream_request,
+            context.is_quality_check(),
+            context.request_id().as_str(),
+        )?;
         // 编码已生成独立请求；HTTP、WS 与重试在头部和计量之前共用此策略。
         upstream_request.apply_fast_policy(context.disable_fast());
         let client_key_id = context.client_api_key_ref().as_str();
@@ -678,6 +685,7 @@ impl Provider for CodexProvider {
                 location,
             );
         }
+        quality_probe::prepare(&mut upstream_request, &context, lease.account())?;
         if excel {
             prepare_excel(
                 &mut upstream_request,
@@ -718,18 +726,19 @@ impl Provider for CodexProvider {
             lease.capacity_snapshot(),
         ));
         let response_store = upstream_request.store();
-        let session_capture =
-            (!continuation_requested || previous_session.is_some()).then(|| OpenAiSessionCapture {
-                responses_upstream,
-                account_id: lease.account_id().as_str().to_owned(),
-                conversation_id: upstream_request.local_conversation_id.clone(),
-                turn_state: upstream_request.turn_state.clone(),
-                client_turn_id: upstream_request.client_turn_id.clone(),
-                response_store,
-                continuation_scope: None,
-                client_api_key_id: upstream_request.client_api_key_id.clone(),
-                identity_seed: upstream_request.identity_seed.clone(),
-            });
+        let session_capture = (upstream_request.quality_probe.is_none()
+            && (!continuation_requested || previous_session.is_some()))
+        .then(|| OpenAiSessionCapture {
+            responses_upstream,
+            account_id: lease.account_id().as_str().to_owned(),
+            conversation_id: upstream_request.local_conversation_id.clone(),
+            turn_state: upstream_request.turn_state.clone(),
+            client_turn_id: upstream_request.client_turn_id.clone(),
+            response_store,
+            continuation_scope: None,
+            client_api_key_id: upstream_request.client_api_key_id.clone(),
+            identity_seed: upstream_request.identity_seed.clone(),
+        });
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let session_affinity_key_hash = session_affinity
             .as_ref()

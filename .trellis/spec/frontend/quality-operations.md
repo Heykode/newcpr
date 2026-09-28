@@ -2,6 +2,10 @@
 
 - Keep a standalone sidebar route, compact overview, rule list, history table and
   editing/detail side panels. Reuse CPR controls and themes.
+- New question rules and synthetic preview share `quality-ops/presets.ts`: the exact
+  candy question, reference `21` and Chinese judge prompt from Sub2API `bf782999`,
+  with the user's explicit no-search/tool instruction prefixed to the question.
+  Preserve saved/custom text when editing; do not migrate or overwrite existing rules.
 - Do not place existing `BaseSelect` inside native modal `dialog`: its body-
   teleported listbox is below the browser top layer and cannot be selected.
   Use a conventional overlay with focus handling and shared body scroll locks.
@@ -39,3 +43,13 @@
   and retries without duplicating completed rules. Failure-action groups are separate
   from the judge group and may include disabled groups. Optional auto_restore is off
   by default. Show persisted action/recovery outcomes, not inferred status changes.
+- Detection mode is a dropdown: question or state probe. Probe mode hides judge,
+  question, effort and sample-count fields without deleting the question draft.
+  Serialize one probe round and no effort; do not require a judge group to save it.
+- Render probe normal/suspect/inconclusive labels from the persisted run mode,
+  with transport/status/length evidence and a clear heuristic limitation. Never
+  render raw State or Cookie. Cancelled or paused states remain neutral.
+- `enable_excel` is available in both modes and disables auto-restore. Display the
+  persisted pause/skip reason; switching Excel off does not silently resume a rule.
+- Browser regressions cover mode switching, preserved question drafts, judge-free
+  saves, Excel action, paused results and 1440/390/320px probe panels.

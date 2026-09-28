@@ -19,6 +19,10 @@
 - Judge only reference/actual answer data, not the original question; exclude the
   tested account and use an enabled configured group. Parse strict JSON with
   duplicate/unknown/trailing fields rejected. Network errors are never incorrect.
+- Reference judge presets name `candidate_answer`; send that field when the saved
+  instructions name it, otherwise preserve the legacy `actual_answer` field. Send
+  exactly two escaped values with `reference_answer`, never duplicate the answer
+  or include the original question. Do not rewrite saved custom instructions.
 - PostgreSQL owns global ten-job admission, five-minute renewable leases and
   rule revision fences. Five-second worker checks cancel changed/deleted rules;
   updates atomically invalidate old results. Do not schedule from browser polling.
@@ -57,3 +61,45 @@
 - New failure-policy config fields are backward-compatible on upgrade, but older
   binaries using strict config deserialization cannot read them. Do not promise a
   binary-only downgrade; reconcile stored configs and owned account mutations first.
+
+## State Probe Mode
+
+- `detectionMode` defaults to `answer` for legacy rules. `state_probe` is one round
+  of at most two serial quality requests, 45 seconds per request, with no judge.
+  It uses the ordinary coordinator, fixed account, credentials, transport selector,
+  request identity, quota and concurrency gates. No direct upstream client or
+  diagnostic availability bypass is allowed.
+- `GenerateRequest::quality_probe` is trusted in-process context, never populated
+  from client JSON. OpenAI also requires `AttemptContext::is_quality_check`.
+  Each step sends at most once; ordinary retries invalidate the comparison instead
+  of turning it into a State collector.
+- Compare complete successful HTTP responses only: first State required; a nonempty
+  different second State is suspect, equal/absent second State means no observed
+  replacement. This follows reference PR 132, not a proven model-capability test.
+  Do not add assumptions about State length or mandatory route cookies.
+- First request has no State or account cookies; second carries only the transient
+  State and optional `__cflb` / `__oailb` from the first response. Account Cookie
+  persistence and ordinary session capture are disabled only for these requests.
+  Stored results contain status, transport, length and comparison, never raw values.
+- Each probe shot has a distinct session anchor before normal account identity and
+  affinity derivation. Keep QX account-scoped projection; do not let identical probe
+  prompts derive the same session or change ordinary client sessions. Probe payloads
+  include the reference instructions, parallel-tool setting and encrypted-reasoning
+  include field without modifying normal question or user requests.
+- Preserve configured proxies and identity. Known random IPv6 modes and unverified
+  WS response evidence produce inconclusive results, never a forced transport/exit
+  change. A proxy URL cannot prove that its public IP remained stable.
+- Only definite incorrect/degraded results invoke `enable_excel`; inconclusive,
+  request errors and cancelled rounds never invoke quality policy. Existing auth
+  and quota feedback still applies through the normal request chain.
+- Enabling Excel validates current identity, OAuth type, model allowlist, credentials,
+  quota and scheduling, and fences relevant account/proxy/UA/egress policy changes.
+  Do not use the global config revision as a fence: independent concurrent account
+  actions must not invalidate each other. A 403-disabled Excel marker vetoes auto-enable.
+- Account route mutation, audit/config publication, rule pause, queue/lease cleanup
+  and result commit are transactional. Answer rules remain enabled; probe rules
+  pause. Already-Excel probes pause on claim/enqueue/heartbeat/finalization.
+  Later Excel switch-off never resumes a rule automatically. EnableExcel has no
+  auto-restore-to-Codex policy.
+- Changing detection mode clears the latest rule verdict but retains mode snapshots
+  in historical runs. Keep existing owned scheduling/group recovery behavior intact.

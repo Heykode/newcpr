@@ -51,6 +51,13 @@ pub(super) async fn apply(
         return Ok(None);
     }
     let config = &claim.rule.config;
+    if config.failure_action == QualityFailureAction::EnableExcel {
+        return if status == "incorrect" {
+            enable_excel(tx, claim).await.map(Some)
+        } else {
+            Ok(None)
+        };
+    }
     let value: serde_json::Value =
         sqlx::query_scalar("select recovery from quality_rules where id=$1")
             .bind(&claim.rule.id)
@@ -137,6 +144,7 @@ pub(super) async fn apply(
                     "no_change"
                 };
             }
+            QualityFailureAction::EnableExcel => unreachable!("handled before recovery"),
         }
     } else {
         let credential: String = row.try_get("credential_state").map_err(unavailable)?;
@@ -236,4 +244,112 @@ pub(super) async fn apply(
         .map_err(unavailable)?;
     }
     Ok(Some(action))
+}
+
+async fn enable_excel(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    claim: &QualityClaim,
+) -> AdminStoreResult<&'static str> {
+    if action_scope(tx, &claim.rule.config.account_id).await? != claim.action_scope {
+        return Ok("excel_blocked_configuration_changed");
+    }
+    let account = &claim.rule.config.account_id;
+    let row = sqlx::query(
+        "select provider_kind,authentication_kind,enabled,credential_state,quota_access_state,
+         access_token_expires_at,upstream_user_id,upstream_account_id,responses_upstream,
+         excel_mode_disabled_at,
+         case when excel_models_follow_global then
+           (select excel_default_models from runtime_settings where id=1) else excel_models end as models
+         from provider_accounts where id=$1 for update")
+        .bind(account).fetch_optional(&mut **tx).await.map_err(unavailable)?;
+    let Some(row) = row else {
+        return Ok("identity_changed");
+    };
+    let identity = (
+        row.try_get::<Option<String>, _>("upstream_user_id")
+            .map_err(unavailable)?,
+        row.try_get::<Option<String>, _>("upstream_account_id")
+            .map_err(unavailable)?,
+    );
+    if identity != claim.account_identity {
+        return Ok("identity_changed");
+    }
+    if row
+        .try_get::<String, _>("responses_upstream")
+        .map_err(unavailable)?
+        == "excel"
+    {
+        return Ok("excel_already_enabled");
+    }
+    if row
+        .try_get::<Option<DateTime<Utc>>, _>("excel_mode_disabled_at")
+        .map_err(unavailable)?
+        .is_some()
+    {
+        return Ok("excel_blocked_403");
+    }
+    let models: Vec<String> = row.try_get("models").map_err(unavailable)?;
+    if !models.contains(&claim.rule.config.model) {
+        return Ok("excel_blocked_model");
+    }
+    if row
+        .try_get::<String, _>("provider_kind")
+        .map_err(unavailable)?
+        != "openai"
+        || row
+            .try_get::<String, _>("authentication_kind")
+            .map_err(unavailable)?
+            != "oauth"
+        || !row.try_get::<bool, _>("enabled").map_err(unavailable)?
+        || row
+            .try_get::<String, _>("credential_state")
+            .map_err(unavailable)?
+            != "ready"
+        || row
+            .try_get::<String, _>("quota_access_state")
+            .map_err(unavailable)?
+            == "exhausted"
+        || row
+            .try_get::<Option<DateTime<Utc>>, _>("access_token_expires_at")
+            .map_err(unavailable)?
+            .is_some_and(|expiry| expiry <= Utc::now())
+    {
+        return Ok("excel_blocked_account");
+    }
+    sqlx::query(
+        "update provider_accounts set responses_upstream='excel',
+        updated_at=greatest(now(),updated_at) where id=$1",
+    )
+    .bind(account)
+    .execute(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    let action = if claim.rule.config.detection_mode == QualityDetectionMode::StateProbe {
+        sqlx::query("update quality_rules set enabled=false,config=jsonb_set(config,'{enabled}','false'),
+            revision=revision+1,pending=false,lease_token=null,lease_until=null,updated_at=now() where id=$1")
+            .bind(&claim.rule.id).execute(&mut **tx).await.map_err(unavailable)?;
+        "excel_enabled_probe_paused"
+    } else {
+        "excel_enabled"
+    };
+    let revision = bump_config_revision_in_transaction(tx)
+        .await
+        .map_err(unavailable)?;
+    append_admin_audit_event_in_transaction(
+        tx,
+        mutation_audit(
+            &MutationContext {
+                actor: MutationActor::System,
+                request_id: claim.run_id.clone(),
+            },
+            "quality_rule.account_action",
+            "provider_account",
+            account,
+            vec![action.into()],
+        ),
+        revision,
+    )
+    .await
+    .map_err(unavailable)?;
+    Ok(action)
 }

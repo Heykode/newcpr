@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
+import { CANDY_PROMPT, CANDY_REFERENCE_ANSWER, DEFAULT_JUDGE_PROMPT } from '../../src/views/quality-ops/presets.ts'
 
 async function main() {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE
@@ -97,10 +98,20 @@ async function main() {
         return fulfill(route, [run])
       if (url.pathname.endsWith('/detail')) {
         return fulfill(route, { ...run, answers: [{
+          ...(run.detectionMode === 'state_probe'
+            ? { probe: {
+                verdict: 'degraded',
+                reason: 'changed',
+                shots: [
+                  { transport: 'http_sse', status: 200, ticketLength: 332, changed: null, reason: null },
+                  { transport: 'http_sse', status: 200, ticketLength: 332, changed: true, reason: null },
+                ],
+              } }
+            : {}),
           index: 1,
           answer: '<script>window.__qualityExecuted = true</script>',
-          verdict: 'correct',
-          reason: 'fixture comparison',
+          verdict: run.detectionMode === 'state_probe' ? 'incorrect' : 'correct',
+          reason: run.detectionMode === 'state_probe' ? '观察到异常换票' : 'fixture comparison',
           elapsedMs: 1350,
           returnedModel: 'fixture-model',
           judgeAccountId: 'judge-account',
@@ -148,6 +159,9 @@ async function main() {
     await page.getByRole('button', { name: '编辑规则', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '编辑检测规则' })
     await editor.waitFor()
+    assert.equal(await editor.getByRole('textbox', { name: /^题目/ }).inputValue(), config.prompt)
+    assert.equal(await editor.getByRole('textbox', { name: /^参考答案/ }).inputValue(), config.referenceAnswer)
+    assert.equal(await editor.getByRole('textbox', { name: /^判题提示词/ }).inputValue(), config.judgePrompt)
     await editor.getByText('每天 00:00、06:00、12:00、18:00（所选时区）', { exact: true }).waitFor()
     await editor.getByRole('combobox', { name: /^检测频率/ }).click()
     await page.getByRole('option', { name: '自定义 Cron（高级）', exact: true }).click()
@@ -210,6 +224,9 @@ async function main() {
     failGroups = true
     await page.getByRole('button', { name: '新建规则', exact: true }).click()
     const creation = page.getByRole('dialog', { name: '新建检测规则' })
+    assert.equal(await creation.getByRole('textbox', { name: /^题目/ }).inputValue(), CANDY_PROMPT)
+    assert.equal(await creation.getByRole('textbox', { name: /^参考答案/ }).inputValue(), CANDY_REFERENCE_ANSWER)
+    assert.equal(await creation.getByRole('textbox', { name: /^判题提示词/ }).inputValue(), DEFAULT_JUDGE_PROMPT)
     const accountPicker = creation.getByRole('group', { name: /^被测账号/ })
     await accountPicker.getByRole('checkbox', { name: 'fixture-quality-account@example.test', exact: true }).check()
     await creation.getByText('fixture groups unavailable', { exact: true }).waitFor()
@@ -283,8 +300,51 @@ async function main() {
     await accountPicker.getByRole('checkbox', { name: 'fixture-quality-account@example.test', exact: true }).waitFor()
     assert.equal(await search.inputValue(), '')
     await creation.getByRole('button', { name: '取消', exact: true }).click()
+    await page.getByRole('button', { name: '新建规则', exact: true }).click()
+    await creation.getByRole('textbox', { name: /^题目/ }).fill('Preserved question')
+    await creation.getByRole('combobox', { name: /^检测模式/ }).click()
+    await page.getByRole('option', { name: '状态探针', exact: true }).click()
+    assert.equal(await creation.getByRole('textbox', { name: /^题目/ }).count(), 0)
+    assert.equal(await creation.getByRole('textbox', { name: /^判题模型/ }).count(), 0)
+    assert.equal(await creation.getByRole('spinbutton', { name: '每轮并行答题次数' }).count(), 0)
+    await creation.getByRole('combobox', { name: /^检测模式/ }).click()
+    await page.getByRole('option', { name: '题目检测', exact: true }).click()
+    assert.equal(await creation.getByRole('textbox', { name: /^题目/ }).inputValue(), 'Preserved question')
+    await creation.getByRole('combobox', { name: /^检测模式/ }).click()
+    await page.getByRole('option', { name: '状态探针', exact: true }).click()
+    await accountPicker.getByRole('checkbox', { name: 'sample-02@example.test', exact: true }).check()
+    await creation.getByRole('textbox', { name: /^检测模型/ }).fill('fixture-model')
+    await creation.getByRole('combobox', { name: '处理方式', exact: true }).click()
+    await page.getByRole('option', { name: '开启Excel模式', exact: true }).click()
+    assert.equal(await creation.getByRole('switch', { name: '后续整轮通过后自动恢复', exact: true }).count(), 0)
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 })
+      assert.ok(await creation.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      await page.screenshot({ path: `${output}/quality-probe-editor-${width}.png`, fullPage: true, animations: 'disabled' })
+    }
+    await creation.getByRole('button', { name: '保存', exact: true }).click()
+    await creation.waitFor({ state: 'hidden' })
+    assert.equal(rules[2].config.detectionMode, 'state_probe')
+    assert.equal(rules[2].config.repetitions, 1)
+    assert.equal(rules[2].config.failureAction, 'enable_excel')
+    assert.equal(rules[2].config.autoRestore, false)
+    Object.assign(run, { detectionMode: 'state_probe', status: 'incorrect', correct: 0, incorrect: 1, action: 'excel_enabled_probe_paused' })
+    rules[2].config.enabled = false
+    rules[2].lastAction = 'excel_enabled_probe_paused'
+    await page.getByRole('button', { name: '刷新', exact: true }).click()
+    await page.getByText('已开启 Excel 模式，探针规则已暂停', { exact: true }).waitFor()
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 })
+      await page.getByRole('button', { name: '查看结果', exact: true }).click()
+      const drawer = page.getByRole('dialog', { name: '检测详情' })
+      await drawer.getByText('票据已变化', { exact: true }).waitFor()
+      assert.equal(await drawer.getByText('智商异常', { exact: true }).count(), 2)
+      assert.ok(await drawer.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      await page.screenshot({ path: `${output}/quality-probe-result-${width}.png`, fullPage: true, animations: 'disabled' })
+      await drawer.getByRole('button', { name: '关闭', exact: true }).click()
+    }
     assert.deepEqual(errors, [])
-    process.stdout.write('Quality UI: multi-account partial retry, failure policies, disabled trigger, searchable catalogs, daily/custom schedules and 1440/390/320px layouts passed.\n')
+    process.stdout.write('Quality UI: legacy rules, probe mode switching, judge-free saves, Excel actions, paused results, catalogs, schedules and 1440/390/320px layouts passed.\n')
   }
   finally {
     await browser?.close()

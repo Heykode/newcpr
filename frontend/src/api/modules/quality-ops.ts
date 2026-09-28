@@ -2,6 +2,7 @@ import type { RequestOptions } from '../request'
 import request from '../request'
 
 export interface QualityRuleConfig {
+  detectionMode: 'answer' | 'state_probe'
   accountId: string
   model: string
   enabled: boolean
@@ -14,7 +15,7 @@ export interface QualityRuleConfig {
   judgeGroupId: string
   judgeModel: string
   judgePrompt: string
-  failureAction: 'none' | 'disable_scheduling' | 'remove_groups'
+  failureAction: 'none' | 'disable_scheduling' | 'remove_groups' | 'enable_excel'
   failureGroupIds: string[]
   autoRestore: boolean
 }
@@ -39,9 +40,15 @@ export interface QualityAnswer {
   elapsedMs: number
   returnedModel: string | null
   judgeAccountId: string | null
+  probe?: {
+    verdict: 'healthy' | 'degraded' | 'inconclusive'
+    reason: string
+    shots: { transport: string | null, status: number | null, ticketLength: number, changed: boolean | null, reason: string | null }[]
+  } | null
 }
 
 export interface QualityRun {
+  detectionMode?: QualityRuleConfig['detectionMode']
   id: string
   ruleId: string
   accountId: string
