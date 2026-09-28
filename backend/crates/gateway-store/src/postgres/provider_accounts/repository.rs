@@ -1273,6 +1273,7 @@ pub(crate) async fn apply_account_template_in_transaction(
             excel_models_follow_global: settings.excel_models_follow_global,
             excel_cache_creation_as_input: settings.excel_cache_creation_as_input,
             excel_ignore_encrypted_content: settings.excel_ignore_encrypted_content,
+            request_proxy_source: settings.request_proxy_source,
             excel_auto_disable_on_403: settings.excel_auto_disable_on_403,
             excel_403_action: settings.excel_403_action,
             model_access: settings.model_access.as_ref(),
