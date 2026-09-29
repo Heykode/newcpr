@@ -29,6 +29,40 @@ async fn accounts_snapshot(db: &TestDatabase) -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn seconds_templates_round_trip_without_changing_legacy_schedules() {
+    let Some(db) = TestDatabase::create("quality_seconds").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let legacy = catalog(&store).await;
+    let mut seconds = config("");
+    seconds.interval_seconds = Some(17);
+    let template = store
+        .save_template(None, None, "Seconds".into(), seconds, &context())
+        .await
+        .unwrap();
+    let next = Utc::now() + Duration::seconds(17);
+    let rule = store
+        .apply_template(&template, &target("acct_quality_a", None), next, &context())
+        .await
+        .unwrap();
+    assert_eq!(rule.config.interval_seconds, Some(17));
+    assert!(!rule.pending);
+    let loaded = store.rules().await.unwrap();
+    assert_eq!(loaded[0].config.interval_seconds, Some(17));
+    assert_eq!(
+        loaded[0].next_run_at.timestamp_millis(),
+        next.timestamp_millis()
+    );
+    let templates = store.templates().await.unwrap();
+    let old = templates.iter().find(|item| item.id == legacy.id).unwrap();
+    assert_eq!(old.config.interval_seconds, None);
+    assert_eq!(old.config.cron, legacy.config.cron);
+    assert_eq!(old.config.timezone, legacy.config.timezone);
+    db.close().await;
+}
+
+#[tokio::test]
 async fn monitoring_is_projected_in_account_list_and_detail_without_changing_account_settings() {
     use gateway_admin::{
         model::{

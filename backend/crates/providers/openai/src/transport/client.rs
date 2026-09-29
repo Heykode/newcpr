@@ -748,8 +748,8 @@ impl CodexBackendClient {
         account: &gateway_core::account::ProviderAccount,
     ) -> Result<serde_json::Value, gateway_core::operation::quality_probe::StateProbeReason> {
         use gateway_core::operation::quality_probe::StateProbeReason;
-        // Keep the configured proxy. Only a known, per-request IPv6 rotation makes
-        // the two-shot comparison unsuitable; do not force a different exit.
+        // Keep the configured proxy and IPv6 policy. Rotating modes intentionally
+        // select each probe request through the account's ordinary egress policy.
         let egress = if let Some(runtime) = &self.egress_runtime
             && account.outbound_proxy().is_none()
         {
@@ -762,9 +762,6 @@ impl CodexBackendClient {
                 .copied()
                 .flatten()
                 .unwrap_or(state.default_mode);
-            if mode.is_random() {
-                return Err(StateProbeReason::UnverifiedEgress);
-            }
             serde_json::json!({
                 "mode": mode.as_str(),
                 "binding": state.fixed_bindings.get(account.id()).map(ToString::to_string),

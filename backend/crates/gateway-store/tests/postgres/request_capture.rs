@@ -463,14 +463,24 @@ async fn request_capture_disk_quota_stops_capture_without_indexing_partial_files
     );
     request.record("attempt.failed", json!({"kind":"upstream_rejected"}));
     drop(request);
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while manager.status().await.unwrap().skipped == 0 {
+    // The skip counter precedes the asynchronous task stop and buffer release.
+    let status = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let status = manager.status().await.unwrap();
+            if status.skipped > 0
+                && status
+                    .tasks
+                    .iter()
+                    .all(|task| task.status == CaptureTaskStatus::Stopped)
+                && status.buffered_bytes == 0
+            {
+                break status;
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
     .unwrap();
-    let status = manager.status().await.unwrap();
     assert!(status.records.is_empty());
     assert!(
         status

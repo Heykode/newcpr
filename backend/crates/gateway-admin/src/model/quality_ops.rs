@@ -33,6 +33,8 @@ pub struct QualityRuleConfig {
     pub account_id: String,
     pub model: String,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_seconds: Option<u32>,
     pub cron: String,
     pub timezone: String,
     pub repetitions: u8,
