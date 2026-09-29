@@ -29,9 +29,32 @@ pub(super) enum ForwardOutcome {
 pub(super) struct ConnectionReplaySnapshot {
     last_response_id: Option<String>,
     provider_state: Option<ProviderSessionState>,
+    last_window_id: Option<String>,
+    pending_window_id: Option<String>,
+    seen_request: bool,
 }
 
 impl ConnectionReplaySnapshot {
+    pub(super) fn decode(
+        &mut self,
+        payload: &str,
+        headers: &super::super::request::OpenAiRequestHeaders,
+    ) -> Result<DecodedResponsesRequest, super::protocol::ResponseCreateFrameError> {
+        let (request, window_id, rollover) = super::protocol::decode_response_create_for_window(
+            payload,
+            headers,
+            self.last_window_id.as_deref(),
+            !self.seen_request,
+        )?;
+        self.seen_request = true;
+        self.pending_window_id = window_id;
+        if rollover {
+            self.last_response_id = None;
+            self.provider_state = None;
+        }
+        Ok(self.prepare(request))
+    }
+
     pub(super) fn prepare(&self, request: DecodedResponsesRequest) -> DecodedResponsesRequest {
         match (
             request.metadata().continuation().previous_response_id(),
@@ -48,6 +71,9 @@ impl ConnectionReplaySnapshot {
     fn commit(&mut self, response_id: String, provider_state: Option<ProviderSessionState>) {
         self.last_response_id = Some(response_id);
         self.provider_state = provider_state;
+        if let Some(window_id) = self.pending_window_id.take() {
+            self.last_window_id = Some(window_id);
+        }
     }
 }
 

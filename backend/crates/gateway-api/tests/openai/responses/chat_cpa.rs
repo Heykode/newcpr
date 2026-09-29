@@ -1382,12 +1382,8 @@ async fn buffered_recovery_delivers_raw_done_items_without_changing_streaming() 
 #[tokio::test]
 async fn buffered_recovery_delivers_deltas_but_keeps_a_nonempty_terminal_authoritative() {
     for native in [false, true] {
-        for authoritative in [false, true] {
-            let output = if authoritative {
-                json!([message("terminal")])
-            } else {
-                json!([])
-            };
+        for terminal_text in [None, Some("terminal"), Some(""), Some("   ")] {
+            let output = terminal_text.map_or_else(|| json!([]), |text| json!([message(text)]));
             let events = vec![
                 created(),
                 text_delta("hello"),
@@ -1406,7 +1402,7 @@ async fn buffered_recovery_delivers_deltas_but_keeps_a_nonempty_terminal_authori
             };
             assert_eq!(
                 text,
-                if authoritative {
+                if terminal_text.is_some_and(|text| !text.trim().is_empty()) {
                     "terminal"
                 } else {
                     "hello world"

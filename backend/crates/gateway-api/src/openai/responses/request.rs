@@ -54,6 +54,10 @@ pub struct OpenAiRequestHeaders {
 }
 
 impl OpenAiRequestHeaders {
+    pub(super) fn opening_turn_metadata(&self) -> Option<&str> {
+        self.turn_metadata.as_deref()
+    }
+
     /// 提取 OpenAI/Codex 连接级请求头上下文。
     #[must_use]
     pub fn from_headers(headers: &HeaderMap) -> Self {

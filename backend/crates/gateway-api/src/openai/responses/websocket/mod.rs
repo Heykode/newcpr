@@ -183,7 +183,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         }
         request_count = request_count.saturating_add(1);
         let correlation_id = Arc::<str>::from(service.next_request_id());
-        let decoded = match decode_response_create_with_context(&payload, &request_headers) {
+        let decoded = match replay.decode(&payload, &request_headers) {
             Ok(decoded) => decoded.with_client_context(client_ip, user_agent.clone()),
             Err(error) => {
                 trace_rejected_request(
@@ -207,7 +207,6 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
                 continue;
             }
         };
-        let decoded = replay.prepare(decoded);
         // deadline 与 Text 可能同时就绪；在任何上游执行开始前再次封住该竞争窗口。
         if connection.is_expired() {
             trace_rejected_request(
