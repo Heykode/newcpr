@@ -2,6 +2,7 @@
 import type { AccountRow } from '../constants'
 
 import type { AccountGroup, AccountModelAccess } from '@/api'
+import type { AccountEgressReadState } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -17,6 +18,7 @@ defineProps<{
   groups: AccountGroup[]
   groupsLoading: boolean
   saving: boolean
+  egressReadState: AccountEgressReadState
 }>()
 
 const emit = defineEmits<{
@@ -92,6 +94,8 @@ const egressMode = defineModel<string>('egressMode', { required: true })
         :groups-loading="groupsLoading"
         :excel-available="account.provider === 'openai' && account.authenticationKind === 'oauth'"
         :request-proxy-available="account.provider === 'openai'"
+        :preserve-proxy="false"
+        :egress-read-state="egressReadState"
         :disabled="saving"
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
