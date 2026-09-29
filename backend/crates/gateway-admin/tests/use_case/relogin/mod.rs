@@ -291,6 +291,7 @@ fn credential() -> ReloginCredential {
 
 pub(super) fn template_config() -> ReloginTemplateConfig {
     ReloginTemplateConfig {
+        model_access: None,
         preserve_outbound_proxy: false,
         egress_mode: None,
         responses_upstream: None,
@@ -477,6 +478,12 @@ async fn relogin_template_mixed_batch_only_configures_new_accounts() {
     existing.enabled = false;
     let h = Harness::new(vec![existing]).await;
     let mut config = template_config();
+    config.model_access = Some(
+        serde_json::from_value(serde_json::json!({
+            "mode": "allowlist", "models": ["model-template"]
+        }))
+        .unwrap(),
+    );
     config.egress_mode = Some(Some(
         gateway_core::provider_ports::egress::EgressMode::FixedIpv6Reuse,
     ));

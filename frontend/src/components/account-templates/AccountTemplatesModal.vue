@@ -133,6 +133,7 @@ onScopeDispose(() => {
       </BaseFormItem>
       <AccountSettingsFields
         v-model:enabled="form.enabled"
+        v-model:model-access="form.modelAccess"
         v-model:excel-enabled="form.excelEnabled"
         v-model:request-proxy-source="form.requestProxySource"
         v-model:excel-models="form.excelModels"
@@ -147,6 +148,8 @@ onScopeDispose(() => {
         v-model:proxy-id="form.proxyId"
         v-model:egress-mode="form.egressMode"
         request-proxy-available
+        model-access-available
+        preserve-model-access
         :excel-available="form.applyExcel"
         encrypted-content-available
         :groups="groups"

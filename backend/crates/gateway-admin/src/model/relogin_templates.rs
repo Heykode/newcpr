@@ -79,6 +79,8 @@ fn default_cache_creation_as_input() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReloginTemplateConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_access: Option<gateway_core::account::AccountModelAccess>,
     #[serde(
         default,
         deserialize_with = "deserialize_egress_mode",
@@ -146,7 +148,7 @@ impl ReloginTemplateConfig {
         Ok(AccountImportSettings {
             clear_outbound_proxy: !self.preserve_outbound_proxy && self.outbound_proxy_id.is_none(),
             egress_mode: self.egress_mode,
-            model_access: None,
+            model_access: self.model_access.clone(),
             custom_name: None,
             enabled: self.enabled,
             turn_state_injection_enabled: self.turn_state_injection_enabled,

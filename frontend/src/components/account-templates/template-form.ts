@@ -3,6 +3,7 @@ import type { Excel403Action } from '@/utils/excel-settings'
 import { accountEgressPatch, accountIpv6Modes } from '@/utils/account-egress'
 import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { accountExcel403Action, excelSettings } from '@/utils/excel-settings'
+import { accountModelAccessError } from '@/views/accounts/utils/modelAccess'
 import { parseAccountSchedulingForm } from '@/views/accounts/utils/schedulingForm'
 
 export function templateForm(config?: AccountTemplateConfig) {
@@ -32,6 +33,7 @@ export function templateForm(config?: AccountTemplateConfig) {
         }
       : undefined,
     name: config?.name ?? '',
+    modelAccess: config?.modelAccess ? { ...config.modelAccess, models: [...config.modelAccess.models] } : undefined,
     enabled: config?.enabled ?? true,
     applyExcel: config === undefined || config.responsesUpstream != null || config.excelModelsFollowGlobal != null || config.excelModels != null,
     excelEnabled: config?.responsesUpstream === 'excel',
@@ -57,6 +59,9 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
     throw new Error(scheduling.message)
+  const modelError = accountModelAccessError(form.modelAccess)
+  if (modelError)
+    throw new Error(modelError)
   const unchangedEgress = form.originalEgress && form.initialEgress === JSON.stringify([form.proxyMode, form.proxyId, form.egressMode]) ? form.originalEgress : undefined
   const patch = unchangedEgress ? {} : accountEgressPatch(form, true)
   const egress = unchangedEgress ?? {
@@ -66,6 +71,7 @@ export function templateConfig(form: ReturnType<typeof templateForm>): AccountTe
   }
   return {
     name,
+    ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),
     enabled: form.enabled,
     ...(form.applyExcel
       ? {

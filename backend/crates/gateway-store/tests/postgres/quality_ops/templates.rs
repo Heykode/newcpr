@@ -57,6 +57,63 @@ async fn snapshot(db: &TestDatabase) -> Value {
 }
 
 #[tokio::test]
+async fn template_model_access_preserves_omission_and_applies_explicit_policy() {
+    for policy in [
+        None,
+        Some(json!({"mode":"all","models":[]})),
+        Some(json!({"mode":"allowlist","models":["fixture-model","model-a"]})),
+        Some(json!({"mode":"denylist","models":["model-a"]})),
+    ] {
+        let Some(db) = TestDatabase::create("quality_template_model_access").await else {
+            return;
+        };
+        let store = setup(&db).await;
+        let original = json!({"mode":"denylist","models":["model-original"]});
+        sqlx::query("update provider_accounts set model_access_json=$1 where id='acct_quality_a'")
+            .bind(&original)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let mut authoritative = template(&db).await;
+        authoritative.config.model_access = policy
+            .clone()
+            .map(|value| serde_json::from_value(value).unwrap());
+        sqlx::query("update account_relogin_templates set config=$1 where id=$2")
+            .bind(serde_json::to_value(&authoritative.config).unwrap())
+            .bind(&authoritative.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let before = snapshot(&db).await;
+        let rule = save(&store, &authoritative, 1).await;
+        assert_eq!(
+            snapshot(&db).await,
+            before,
+            "saving a rule does not mutate accounts"
+        );
+        let run = scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+        assert_eq!(run.action.as_deref(), Some("template_applied"));
+        let after = snapshot(&db).await;
+        assert_eq!(
+            after["account"]["model_access_json"],
+            policy.unwrap_or(original)
+        );
+        for field in [
+            "provider_credentials_json",
+            "credential_revision",
+            "upstream_user_id",
+            "upstream_account_id",
+        ] {
+            assert_eq!(
+                after["account"][field], before["account"][field],
+                "preserve {field}"
+            );
+        }
+        db.close().await;
+    }
+}
+
+#[tokio::test]
 async fn quality_template_preserves_account_outbound_when_requested() {
     let Some(db) = TestDatabase::create("quality_template_preserve_proxy").await else {
         return;

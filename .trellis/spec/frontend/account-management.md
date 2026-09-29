@@ -73,8 +73,12 @@
 ## Account Model Access
 
 - Follow the shared contract in `../backend/account-model-access.md`.
-- Enable `AccountSettingsFields.modelAccessAvailable` only for account single/batch
-  editing and imports. Templates remain unchanged and omit the policy.
+- Enable `AccountSettingsFields.modelAccessAvailable` for account single/batch
+  editing, imports and shared account templates. Templates default to preserve;
+  omission/null never clears a target account's policy. Explicit all clears it.
+- Template form initialization and serialization clone model arrays independently.
+  Reuse the exact-ID validator and field, including manual IDs without an account
+  catalog. Saving a template does not mutate accounts; application uses its revision.
 - Import defaults to preserve; single edit defaults old responses to all and only
   submits changed policies. Clone the model array so editing does not mutate rows
   or pending payloads. Batch `updateModelAccess` is unchecked and reset every open.
