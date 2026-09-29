@@ -774,7 +774,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <BaseConfirmModal
       v-model="showDeleteModal"
       title="确认删除"
-      description="删除后该账号将不再参与调度，此操作不可撤销"
+      description="删除后账号不再参与调度，对应质量检测规则和历史也将删除，此操作不可撤销"
       destructive
       confirm-text="确认删除"
       :loading="batchDeleting"
@@ -788,7 +788,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
       title="删除账号"
-      description="删除后该账号将不再参与调度，此操作不可撤销"
+      description="删除后账号不再参与调度，对应质量检测规则和历史也将删除，此操作不可撤销"
       destructive
       confirm-text="确认删除"
       :loading="deletingAccount"

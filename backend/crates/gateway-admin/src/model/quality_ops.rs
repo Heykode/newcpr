@@ -5,6 +5,43 @@ use serde::{Deserialize, Serialize};
 
 pub const QUALITY_MAX_WORKERS: i64 = 10;
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QualityGroupFilter {
+    #[serde(default)]
+    pub group: String,
+    #[serde(default)]
+    pub statuses: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityGroupRule {
+    pub id: String,
+    pub revision: i64,
+    pub name: String,
+    pub filter: QualityGroupFilter,
+    pub config: QualityRuleConfig,
+    pub rule_count: i64,
+    pub excluded_count: i64,
+    pub last_synced_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityGroupSync {
+    pub created: usize,
+    pub updated: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityGroupUpdate {
+    pub group: QualityGroupRule,
+    pub sync: QualityGroupSync,
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum QualityDetectionMode {

@@ -11,6 +11,7 @@ use gateway_admin::{
 };
 use sqlx::{PgPool, Row as _};
 
+mod group_rules;
 mod policy;
 mod rule_templates;
 mod template_action;
@@ -22,6 +23,12 @@ use crate::{
 
 pub struct PgQualityOpsStore {
     pool: PgPool,
+}
+
+enum RuleSource<'a> {
+    Independent,
+    Template(&'a QualityRuleTemplate),
+    Group(&'a QualityGroupRule),
 }
 
 impl PgQualityOpsStore {
@@ -222,11 +229,20 @@ impl PgQualityOpsStore {
         mut config: QualityRuleConfig,
         next: DateTime<Utc>,
         context: &MutationContext,
-        source: Option<&QualityRuleTemplate>,
+        source: RuleSource<'_>,
     ) -> AdminStoreResult<QualityRule> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
-        let source = if let Some(expected) = source {
+        let group = if let RuleSource::Group(expected) = &source {
+            group_rules::check_application(&mut tx, expected, id, &config.account_id).await?;
+            let account_id = config.account_id;
+            config = expected.config.clone();
+            config.account_id = account_id;
+            Some((expected.id.clone(), expected.revision))
+        } else {
+            None
+        };
+        let source = if let RuleSource::Template(expected) = source {
             let current = rule_templates::load_locked(&mut tx, &expected.id)
                 .await?
                 .ok_or_else(conflict)?;
@@ -336,6 +352,13 @@ impl PgQualityOpsStore {
             .ok_or_else(conflict)?
         };
         let result = rule(&row)?;
+        if let Some((group_id, revision)) = group {
+            sqlx::query("insert into quality_group_members(group_rule_id,account_id,rule_id,applied_revision)
+                values($1,$2,$3,$4) on conflict(group_rule_id,account_id)
+                do update set applied_revision=excluded.applied_revision")
+                .bind(group_id).bind(&result.config.account_id).bind(&result.id).bind(revision)
+                .execute(&mut *tx).await.map_err(unavailable)?;
+        }
         audit(&mut tx, context, "quality_rule.save", &result.id).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
@@ -344,6 +367,78 @@ impl PgQualityOpsStore {
 
 #[async_trait]
 impl QualityOpsStore for PgQualityOpsStore {
+    async fn group_rules(&self) -> AdminStoreResult<Vec<QualityGroupRule>> {
+        self.list_group_rules().await
+    }
+    async fn save_group_rule(
+        &self,
+        id: Option<&str>,
+        revision: Option<i64>,
+        name: String,
+        filter: QualityGroupFilter,
+        config: QualityRuleConfig,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityGroupRule> {
+        self.save_group(id, revision, name, filter, config, context)
+            .await
+    }
+    async fn delete_group_rule(
+        &self,
+        id: &str,
+        revision: i64,
+        delete_rules: bool,
+        context: &MutationContext,
+    ) -> AdminStoreResult<()> {
+        self.delete_group(id, revision, delete_rules, context).await
+    }
+    async fn group_targets(
+        &self,
+        id: &str,
+        after: &str,
+    ) -> AdminStoreResult<Vec<QualityTemplateTarget>> {
+        self.list_group_targets(id, after).await
+    }
+    async fn apply_group_rule(
+        &self,
+        group: &QualityGroupRule,
+        target: &QualityTemplateTarget,
+        next: DateTime<Utc>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<bool> {
+        let mut config = group.config.clone();
+        config.account_id.clone_from(&target.account_id);
+        match self
+            .save_checked(
+                target.rule_id.as_deref(),
+                target.revision,
+                config,
+                next,
+                context,
+                RuleSource::Group(group),
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(error)
+                if error.kind() == AdminStoreErrorKind::Conflict
+                    && self.group_application_superseded(group, target).await? =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    async fn mark_group_synced(&self, id: &str, revision: i64) -> AdminStoreResult<()> {
+        sqlx::query(
+            "update quality_group_rules set last_synced_at=now() where id=$1 and revision=$2",
+        )
+        .bind(id)
+        .bind(revision)
+        .execute(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        Ok(())
+    }
     async fn templates(&self) -> AdminStoreResult<Vec<QualityRuleTemplate>> {
         self.list_rule_templates().await
     }
@@ -384,7 +479,7 @@ impl QualityOpsStore for PgQualityOpsStore {
             config,
             next,
             context,
-            Some(template),
+            RuleSource::Template(template),
         )
         .await
     }
@@ -411,7 +506,7 @@ impl QualityOpsStore for PgQualityOpsStore {
         next: DateTime<Utc>,
         context: &MutationContext,
     ) -> AdminStoreResult<QualityRule> {
-        self.save_checked(id, revision, config, next, context, None)
+        self.save_checked(id, revision, config, next, context, RuleSource::Independent)
             .await
     }
 

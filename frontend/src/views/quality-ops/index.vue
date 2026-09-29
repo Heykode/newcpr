@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { QualityRule, QualityRuleConfig, QualityRuleTemplate, QualityRun } from '@/api/modules/quality-ops'
+import type { QualityGroupFilter, QualityGroupRule, QualityRule, QualityRuleConfig, QualityRuleTemplate, QualityRun } from '@/api/modules/quality-ops'
 import { ClipboardCheck, Copy, Eye, Pause, Pencil, Play, Plus, RefreshCw, Save, Trash2 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getAccountGroups } from '@/api/modules/account-groups'
 import { getAccounts } from '@/api/modules/accounts'
-import { deleteQualityRule, deleteQualityTemplate, getQualityDetail, getQualityRules, getQualityRuns, getQualityTemplates, runQualityRule, saveQualityRule, saveQualityTemplate } from '@/api/modules/quality-ops'
+import { deleteQualityGroup, deleteQualityRule, deleteQualityTemplate, getQualityDetail, getQualityGroups, getQualityRules, getQualityRuns, getQualityTemplates, runQualityRule, saveQualityGroup, saveQualityRule, saveQualityTemplate } from '@/api/modules/quality-ops'
 import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
@@ -29,7 +29,33 @@ import QualityTemplateCatalog from './QualityTemplateCatalog.vue'
 import { DEFAULT_QUALITY_INTERVAL_SECONDS, qualityScheduleSummary } from './schedule'
 
 const route = useRoute()
-const activeTab = ref<'rules' | 'templates'>(route.query.tab === 'templates' ? 'templates' : 'rules')
+const activeTab = ref<'rules' | 'templates' | 'groups'>(route.query.tab === 'groups' ? 'groups' : route.query.tab === 'templates' ? 'templates' : 'rules')
+const groups = ref<QualityGroupRule[]>([])
+const groupsLoading = ref(false)
+const groupsError = ref('')
+const groupSyncMessage = ref('')
+const groupMode = ref(false)
+const editingGroup = ref<QualityGroupRule | null>(null)
+const groupName = ref('')
+const groupFilter = ref<QualityGroupFilter>({ group: '', statuses: [] })
+const selectedGroup = computed({
+  get: () => groupFilter.value.group || 'all',
+  set: (value: string) => { groupFilter.value.group = value === 'all' ? '' : value },
+})
+const deleteGroupTarget = ref<QualityGroupRule | null>(null)
+const deleteGroupOpen = ref(false)
+const deleteManagedRules = ref(false)
+const scopeMode = computed({
+  get: () => groupMode.value ? 'group' : 'accounts',
+  set: (value: string) => { groupMode.value = value === 'group' },
+})
+const statusOptions = [
+  { value: 'normal', label: '正常' },
+  { value: 'disabled', label: '已停用' },
+  { value: 'error', label: '凭据异常' },
+  { value: 'quota_exhausted', label: '额度耗尽' },
+  { value: 'rate_limited', label: '限流中' },
+]
 const templates = ref<QualityRuleTemplate[]>([])
 const templatesLoading = ref(false)
 const templatesError = ref('')
@@ -52,6 +78,9 @@ const editorError = ref('')
 const editorOpen = ref(false)
 const bulkOpen = ref(false)
 const batchSelection = ref<string[]>([])
+const batchDeleteOpen = ref(false)
+const batchDeleteTargets = ref<QualityRule[]>([])
+const batchDeleteError = ref('')
 const editing = ref<QualityRule | null>(null)
 const selectedAccounts = ref<string[]>([])
 const actions: Record<string, string> = {
@@ -173,7 +202,9 @@ let historyController: AbortController | undefined
 let detailController: AbortController | undefined
 let catalogController: AbortController | undefined
 let templatesController: AbortController | undefined
+let groupsController: AbortController | undefined
 let listVersion = 0
+let handledAccountLink = ''
 
 function message(cause: unknown) {
   return cause instanceof Error ? cause.message : '操作失败，请重试'
@@ -205,6 +236,18 @@ async function load() {
     error.value = ''
     if (!result.some(rule => rule.id === selectedId.value))
       selectedId.value = linkedRuleId() || result[0]?.id || ''
+    if (route.query.create === '1' && typeof route.query.accountId === 'string'
+      && handledAccountLink !== route.query.accountId) {
+      handledAccountLink = route.query.accountId
+      const linked = linkedRuleId()
+      if (linked) {
+        selectedId.value = linked
+      }
+      else {
+        edit(null)
+        selectedAccounts.value = [route.query.accountId]
+      }
+    }
   }
   catch (cause) {
     if (alive && !controller.signal.aborted)
@@ -287,12 +330,61 @@ async function poll() {
     timer = setTimeout(poll, 10000)
 }
 async function refresh() {
+  if (activeTab.value === 'groups') {
+    await loadGroups()
+    return
+  }
   if (activeTab.value === 'templates') {
     await loadTemplates()
     return
   }
   await load()
   await history()
+}
+async function loadGroups() {
+  groupsController?.abort()
+  const controller = new AbortController()
+  groupsController = controller
+  groupsLoading.value = true
+  try {
+    const result = await getQualityGroups({ signal: controller.signal, silent: true })
+    if (alive && !controller.signal.aborted) {
+      groups.value = result
+      groupsError.value = ''
+    }
+  }
+  catch (cause) {
+    if (alive && !controller.signal.aborted)
+      groupsError.value = message(cause)
+  }
+  finally {
+    if (alive && !controller.signal.aborted)
+      groupsLoading.value = false
+  }
+}
+watch(activeTab, (tab) => {
+  if (tab === 'groups')
+    void loadGroups()
+})
+watch(() => [route.query.accountId, route.query.create], () => {
+  handledAccountLink = ''
+  activeTab.value = 'rules'
+  void load()
+})
+async function testedGroupPage(page: number, search: string, signal: AbortSignal) {
+  const result = await actionGroupPage(page, search, signal)
+  return { ...result, total: result.total + (search ? 0 : 2), items: page === 1 && !search
+    ? [
+        { value: 'all', label: '全部分组', description: 'OpenAI OAuth 账号' },
+        { value: 'ungrouped', label: '未分组', description: 'OpenAI OAuth 账号' },
+        ...result.items,
+      ]
+    : result.items }
+}
+function selectGroupStatus(value: string, checked: boolean) {
+  groupFilter.value.statuses = checked
+    ? [...new Set([...groupFilter.value.statuses, value])]
+    : groupFilter.value.statuses.filter(status => status !== value)
 }
 async function accountPage(page: number, search: string, signal: AbortSignal) {
   const result = await getAccounts({ page, pageSize: 50, search: search || undefined }, { signal, silent: true })
@@ -334,6 +426,10 @@ async function loadAccountNames() {
   }
 }
 function edit(rule: QualityRule | null) {
+  groupMode.value = false
+  editingGroup.value = null
+  groupName.value = ''
+  groupFilter.value = { group: '', statuses: [] }
   templateMode.value = false
   editing.value = rule ? { ...rule, config: { ...rule.config } } : null
   draft.value = rule ? { ...defaults(), ...rule.config, intervalSeconds: rule.config.intervalSeconds ?? null, failureGroupIds: [...(rule.config.failureGroupIds ?? [])] } : defaults()
@@ -342,6 +438,8 @@ function edit(rule: QualityRule | null) {
   editorOpen.value = true
 }
 function editTemplate(template: QualityRuleTemplate | null, rule?: QualityRule) {
+  groupMode.value = false
+  editingGroup.value = null
   templateMode.value = true
   editing.value = null
   editingTemplate.value = template ? { ...template } : null
@@ -351,6 +449,57 @@ function editTemplate(template: QualityRuleTemplate | null, rule?: QualityRule) 
   selectedAccounts.value = []
   editorError.value = ''
   editorOpen.value = true
+}
+function editGroup(group: QualityGroupRule | null) {
+  edit(null)
+  groupMode.value = true
+  editingGroup.value = group ? structuredClone(toRaw(group)) : null
+  groupName.value = group?.name ?? ''
+  groupFilter.value = group ? structuredClone(toRaw(group.filter)) : { group: '', statuses: [] }
+  if (group)
+    draft.value = { ...defaults(), ...structuredClone(toRaw(group.config)), accountId: '', intervalSeconds: group.config.intervalSeconds ?? null }
+}
+async function toggleGroup(group: QualityGroupRule) {
+  if (busy.value)
+    return
+  busy.value = true
+  try {
+    const result = await saveQualityGroup({ id: group.id, revision: group.revision, name: group.name, filter: group.filter, config: { ...group.config, enabled: !group.config.enabled } })
+    if (alive) {
+      groupSyncMessage.value = `新建 ${result.sync.created}，更新 ${result.sync.updated}，待重试 ${result.sync.failed}`
+      await loadGroups()
+      await load()
+    }
+  }
+  catch (cause) {
+    if (alive)
+      groupsError.value = message(cause)
+  }
+  finally { busy.value = false }
+}
+async function confirmDeleteGroup() {
+  if (busy.value || !deleteGroupTarget.value)
+    return
+  busy.value = true
+  try {
+    await deleteQualityGroup({ id: deleteGroupTarget.value.id, revision: deleteGroupTarget.value.revision, deleteRules: deleteManagedRules.value })
+    if (alive) {
+      deleteGroupOpen.value = false
+      deleteGroupTarget.value = null
+      await loadGroups()
+      await load()
+    }
+  }
+  catch (cause) {
+    if (alive)
+      groupsError.value = message(cause)
+  }
+  finally { busy.value = false }
+}
+function prepareDeleteGroup(group: QualityGroupRule) {
+  deleteGroupTarget.value = structuredClone(toRaw(group))
+  deleteManagedRules.value = false
+  deleteGroupOpen.value = true
 }
 async function save() {
   if (busy.value)
@@ -368,6 +517,18 @@ async function save() {
   const accountIds = editing.value ? [config.accountId] : [...selectedAccounts.value]
   const failures: string[] = []
   try {
+    if (groupMode.value) {
+      const { accountId: _accountId, ...groupConfig } = config
+      const result = await saveQualityGroup({ id: editingGroup.value?.id ?? null, revision: editingGroup.value?.revision ?? null, name: groupName.value.trim(), filter: structuredClone(toRaw(groupFilter.value)), config: groupConfig })
+      if (alive) {
+        groupSyncMessage.value = `已保存。新建 ${result.sync.created}，更新 ${result.sync.updated}，待重试 ${result.sync.failed}`
+        editorOpen.value = false
+        activeTab.value = 'groups'
+        await loadGroups()
+        await load()
+      }
+      return
+    }
     if (templateMode.value) {
       const { accountId: _accountId, ...templateConfig } = config
       await saveQualityTemplate({ id: editingTemplate.value?.id ?? null, revision: editingTemplate.value?.revision ?? null, name: templateName.value.trim(), config: templateConfig })
@@ -453,6 +614,53 @@ function confirmDelete() {
   if (rule)
     void mutate(() => deleteQualityRule({ id: rule.id, revision: rule.revision }))
 }
+async function prepareBatchDelete() {
+  if (busy.value)
+    return
+  busy.value = true
+  batchDeleteError.value = ''
+  try {
+    const fresh = await getQualityRules({ silent: true })
+    if (!alive)
+      return
+    batchDeleteTargets.value = fresh.filter(rule => batchSelection.value.includes(rule.id))
+    batchDeleteOpen.value = batchDeleteTargets.value.length > 0
+  }
+  catch (cause) {
+    if (alive)
+      batchDeleteError.value = message(cause)
+  }
+  finally { busy.value = false }
+}
+async function confirmBatchDelete() {
+  if (busy.value)
+    return
+  busy.value = true
+  const failures: string[] = []
+  const targets = [...batchDeleteTargets.value]
+  batchDeleteError.value = ''
+  try {
+    for (const rule of targets) {
+      if (!alive)
+        break
+      try {
+        await deleteQualityRule({ id: rule.id, revision: rule.revision })
+        batchSelection.value = batchSelection.value.filter(id => id !== rule.id)
+      }
+      catch (cause) {
+        failures.push(`${accountName(rule.config.accountId)}：${message(cause)}`)
+      }
+    }
+    if (alive) {
+      batchDeleteOpen.value = false
+      batchDeleteTargets.value = []
+      batchDeleteError.value = failures.length ? `${failures.length} 项删除未确认，成功项已保留。请刷新并重新确认失败项。${failures.slice(0, 5).join('；')}` : ''
+      await load()
+      await history()
+    }
+  }
+  finally { busy.value = false }
+}
 async function show(run: QualityRun) {
   detailController?.abort()
   const controller = new AbortController()
@@ -479,12 +687,14 @@ watch(detailOpen, (open) => {
 onMounted(() => {
   void loadAccountNames()
   void loadTemplates()
+  if (activeTab.value === 'groups')
+    void loadGroups()
   void poll()
 })
 onBeforeUnmount(() => {
   alive = false
   clearTimeout(timer)
-  for (const controller of [listController, historyController, detailController, catalogController, templatesController])
+  for (const controller of [listController, historyController, detailController, catalogController, templatesController, groupsController])
     controller?.abort()
 })
 </script>
@@ -505,10 +715,59 @@ onBeforeUnmount(() => {
       {{ error }}
     </p>
     <nav class="flex gap-5 border-b border-cp-border" aria-label="质量运维视图">
-      <button v-for="tab in [{ value: 'rules' as const, label: '账号监测' }, { value: 'templates' as const, label: '规则模板' }]" :key="tab.value" type="button" class="border-b-2 px-1 py-3 text-cp-sm font-semibold" :class="activeTab === tab.value ? 'border-cp-primary text-cp-primary' : 'border-transparent text-cp-text-secondary'" :aria-pressed="activeTab === tab.value" @click="activeTab = tab.value">
+      <button v-for="tab in [{ value: 'rules' as const, label: '账号监测' }, { value: 'groups' as const, label: '分组规则' }, { value: 'templates' as const, label: '规则模板' }]" :key="tab.value" type="button" class="border-b-2 px-1 py-3 text-cp-sm font-semibold" :class="activeTab === tab.value ? 'border-cp-primary text-cp-primary' : 'border-transparent text-cp-text-secondary'" :aria-pressed="activeTab === tab.value" @click="activeTab = tab.value">
         {{ tab.label }}
       </button>
     </nav>
+    <section v-if="activeTab === 'groups'" class="min-w-0">
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <h2 class="text-base font-semibold">
+          分组规则
+        </h2>
+        <BaseButton :disabled="busy" @click="editGroup(null)">
+          <Plus class="size-4" />新建分组规则
+        </BaseButton>
+      </div>
+      <p v-if="groupsLoading" class="text-cp-sm text-cp-text-secondary">
+        加载中…
+      </p>
+      <p v-if="groupsError" role="alert" class="text-cp-sm text-cp-error">
+        {{ groupsError }}
+      </p>
+      <p v-if="groupSyncMessage" role="status" class="py-2 text-cp-sm">
+        {{ groupSyncMessage }}
+      </p>
+      <p v-if="!groupsLoading && !groupsError && !groups.length" class="py-4 text-cp-text-secondary">
+        暂无分组规则
+      </p>
+      <div v-for="group in groups" :key="group.id" class="flex min-w-0 flex-wrap items-center gap-3 border-b border-cp-border py-3">
+        <div class="min-w-0 flex-1 basis-48">
+          <h3 class="break-words text-cp-sm font-semibold">
+            {{ group.name }}
+          </h3>
+          <p class="text-cp-xs text-cp-text-secondary">
+            {{ group.config.enabled ? '启用' : '暂停' }} · 已纳入 {{ group.ruleCount }} · 手动排除 {{ group.excludedCount }}
+          </p>
+          <p class="break-words text-cp-xs text-cp-text-secondary">
+            {{ group.config.model }} · {{ qualityScheduleSummary(group.config) }}
+          </p>
+          <p class="text-cp-xs text-cp-text-secondary">
+            最近同步：{{ group.lastSyncedAt ? formatDateTime(group.lastSyncedAt) : '尚未同步' }}
+          </p>
+        </div>
+        <div class="flex shrink-0 gap-1">
+          <BaseIconButton :label="group.config.enabled ? '暂停分组规则' : '恢复分组规则'" :disabled="busy" @click="toggleGroup(group)">
+            <Pause v-if="group.config.enabled" class="size-4" /><Play v-else class="size-4" />
+          </BaseIconButton>
+          <BaseIconButton label="编辑分组规则" :disabled="busy" @click="editGroup(group)">
+            <Pencil class="size-4" />
+          </BaseIconButton>
+          <BaseIconButton label="删除分组规则" :disabled="busy" @click="prepareDeleteGroup(group)">
+            <Trash2 class="size-4" />
+          </BaseIconButton>
+        </div>
+      </div>
+    </section>
     <QualityTemplateCatalog v-if="activeTab === 'templates'" :templates="templates" :loading="templatesLoading" :busy="busy" :error="templatesError" @create="editTemplate(null)" @edit="editTemplate($event)" @remove="deleteTemplateTarget = $event; deleteTemplateOpen = true" @refresh="loadTemplates" />
     <div v-if="activeTab === 'rules'" class="grid grid-cols-2 border-y border-cp-border sm:grid-cols-4">
       <div class="border-b border-cp-border px-4 py-3 sm:border-b-0 sm:border-r">
@@ -550,7 +809,13 @@ onBeforeUnmount(() => {
           <BaseButton :disabled="busy || !batchSelection.length" @click="bulkOpen = true">
             <Pencil class="size-4" />批量编辑（{{ batchSelection.length }}）
           </BaseButton>
+          <BaseButton :disabled="busy || !batchSelection.length" @click="prepareBatchDelete">
+            <Trash2 class="size-4" />批量删除
+          </BaseButton>
         </div>
+        <p v-if="batchDeleteError" role="alert" class="mt-2 text-cp-sm break-words text-cp-error">
+          {{ batchDeleteError }}
+        </p>
         <div class="mt-3 max-h-[65vh] space-y-1 overflow-y-auto pr-1">
           <div v-for="rule in visibleRules" :key="rule.id" class="quality-rule rounded-lg border py-3 transition-colors" :class="selectedId === rule.id ? 'quality-rule-selected border-cp-border bg-cp-bg-container' : 'border-transparent hover:bg-cp-bg-container'">
             <button type="button" class="grid w-full min-w-0 gap-1 px-3 text-left text-cp-text outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline" :aria-pressed="selectedId === rule.id" @click="selectedId = rule.id">
@@ -732,7 +997,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
-    <QualityDrawer v-model="editorOpen" :title="templateMode ? (editingTemplate ? '编辑规则模板' : '新建规则模板') : editing ? '编辑检测规则' : '新建检测规则'" :busy="busy">
+    <QualityDrawer v-model="editorOpen" :title="groupMode ? (editingGroup ? '编辑分组规则' : '新建分组规则') : templateMode ? (editingTemplate ? '编辑规则模板' : '新建规则模板') : editing ? '编辑检测规则' : '新建检测规则'" :busy="busy">
       <form id="quality-rule-form" class="grid min-w-0 gap-4" @submit.prevent="save">
         <p v-if="editorError" role="alert" class="text-cp-error">
           {{ editorError }}
@@ -740,14 +1005,29 @@ onBeforeUnmount(() => {
         <FormItem v-if="templateMode" label="模板名称" required>
           <BaseInput v-model="templateName" maxlength="128" placeholder="模板名称" />
         </FormItem>
+        <FormItem v-if="!templateMode && !editing && !editingGroup" label="检测范围">
+          <BaseSelect v-model="scopeMode" :options="[{ value: 'accounts', label: '手动选择账号' }, { value: 'group', label: '按分组自动纳入' }]" />
+        </FormItem>
+        <template v-if="groupMode">
+          <FormItem label="分组规则名称" required>
+            <BaseInput v-model="groupName" maxlength="128" />
+          </FormItem>
+          <QualityCatalogPicker v-model="selectedGroup" label="被测分组" :load-page="testedGroupPage" />
+          <fieldset class="flex flex-wrap gap-3">
+            <legend class="mb-2 text-cp-sm">
+              账号状态（不选为全部）
+            </legend>
+            <BaseCheckbox v-for="status in statusOptions" :key="status.value" :model-value="groupFilter.statuses.includes(status.value)" :label="status.label" show-label @update:model-value="selectGroupStatus(status.value, $event)" />
+          </fieldset>
+        </template>
         <FormItem label="检测模式" required>
           <BaseSelect v-model="draft.detectionMode" :options="[{ value: 'answer', label: '题目检测' }, { value: 'state_probe', label: '状态探针' }]" />
         </FormItem>
-        <div v-if="!templateMode && editing" class="grid gap-1 text-cp-sm">
+        <div v-if="!templateMode && !groupMode && editing" class="grid gap-1 text-cp-sm">
           <span class="font-medium">被测账号</span>
           <span class="break-all text-cp-text-secondary">{{ accountName(draft.accountId) }}</span>
         </div>
-        <div v-else-if="!templateMode" class="grid gap-2">
+        <div v-else-if="!templateMode && !groupMode" class="grid gap-2">
           <QualityCatalogPicker v-model:selected-values="selectedAccounts" multiple label="被测账号" search-placeholder="搜索账号名称或邮箱" :load-page="accountPage" />
           <p class="text-xs text-cp-text-secondary">
             每个账号单独建立一条规则，已有规则的账号不会被覆盖。
@@ -767,7 +1047,7 @@ onBeforeUnmount(() => {
           </div>
           <BaseSwitch v-model="draft.enabled" label="启用定时检测" show-label />
           <p class="text-xs text-cp-text-secondary sm:col-span-2">
-            关闭后不会定时或手动检测；保存规则不会立即消耗额度。
+            {{ groupMode ? '暂停后停止自动纳入并暂停所属规则；保存不会立即消耗额度。' : '关闭后停止定时检测，仍可手动立即检测；保存规则不会立即消耗额度。' }}
           </p>
         </div>
         <FormItem v-if="!isProbe" label="题目" required>
@@ -822,7 +1102,7 @@ onBeforeUnmount(() => {
         <BaseButton :disabled="busy" @click="editorOpen = false">
           取消
         </BaseButton>
-        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (templateMode ? !templateName.trim() : editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length) || (draft.failureAction === 'apply_account_template' && !draft.failureTemplate)">
+        <BaseButton form="quality-rule-form" type="submit" :disabled="busy || (groupMode ? !groupName.trim() : templateMode ? !templateName.trim() : editing ? !draft.accountId : !selectedAccounts.length) || (!isProbe && !draft.judgeGroupId) || (draft.failureAction === 'remove_groups' && !draft.failureGroupIds.length) || (draft.failureAction === 'apply_account_template' && !draft.failureTemplate)">
           <Save class="size-4" />保存
         </BaseButton>
       </template>
@@ -893,6 +1173,13 @@ onBeforeUnmount(() => {
         </section>
       </div>
     </QualityDrawer>
+    <BaseConfirmModal v-model="deleteGroupOpen" title="删除分组规则" destructive :loading="busy" @confirm="confirmDeleteGroup">
+      <p>删除「{{ deleteGroupTarget?.name }}」？未勾选时，所属账号规则保留为独立规则。</p>
+      <BaseCheckbox v-model="deleteManagedRules" label="同时删除所属规则及检测历史" show-label />
+    </BaseConfirmModal>
+    <BaseConfirmModal v-model="batchDeleteOpen" title="批量删除检测规则" destructive :loading="busy" @confirm="confirmBatchDelete">
+      删除已确认的 {{ batchDeleteTargets.length }} 条规则及检测历史？账号及已执行的处置不变，进行中的检测将取消。
+    </BaseConfirmModal>
     <BaseConfirmModal v-model="deleteOpen" title="删除检测规则" destructive :loading="busy" @confirm="confirmDelete">
       删除此账号的检测规则及其历史记录？此前暂停的调度或移出的分组不会自动恢复。
     </BaseConfirmModal>

@@ -17,12 +17,13 @@ pub(crate) fn transform_stream(
     source: CodexBackendSseStream,
     prepared: &ExcelPreparedRequest,
 ) -> CodexBackendSseStream {
-    transform_stream_with_repair(source, prepared, None)
+    transform_stream_with_repair(source, prepared, true, None)
 }
 
 pub(crate) fn transform_stream_with_repair(
     source: CodexBackendSseStream,
     prepared: &ExcelPreparedRequest,
+    client_stream: bool,
     mut sender: Option<super::repair::Sender>,
 ) -> CodexBackendSseStream {
     let replay = prepared.replay.clone();
@@ -41,6 +42,8 @@ pub(crate) fn transform_stream_with_repair(
         effort: prepared.body.get("reasoning_effort").cloned(),
         allow_unknown_repair: super::repair::no_tool_history(&prepared.body),
         regenerated_from: None,
+        visible_output: false,
+        client_stream,
     };
     Box::pin(async_stream::try_stream! {
         let mut source = Some(source);
@@ -156,6 +159,8 @@ struct Relay {
     effort: Option<Value>,
     allow_unknown_repair: bool,
     regenerated_from: Option<usize>,
+    visible_output: bool,
+    client_stream: bool,
 }
 
 impl Relay {
@@ -174,8 +179,9 @@ impl Relay {
         {
             return None;
         }
-        let unknown =
-            self.allow_unknown_repair && super::repair::unknown_eligible(&self.tools, response);
+        let unknown = self.allow_unknown_repair
+            && !(self.client_stream && self.visible_output)
+            && super::repair::unknown_eligible(&self.tools, response);
         (unknown || self.structured.is_none() && super::repair::eligible(&self.tools, response))
             .then(|| (response.clone(), unknown))
     }
@@ -316,7 +322,7 @@ impl Relay {
             self.terminal = true;
         } else if matches!(
             kind.as_str(),
-            "response.failed" | "response.incomplete" | "error"
+            "response.failed" | "response.cancelled" | "response.incomplete" | "error"
         ) {
             self.terminal = true;
         }
@@ -336,8 +342,18 @@ impl Relay {
             }
         }
         self.usage.normalize(&mut data);
-        data["type"] = kind.into();
+        super::failure::normalize(&kind, &mut data);
+        if kind == "response.cancelled" {
+            // The ordinary decoder's error contract is response.failed. Keep cancellation
+            // provenance inside this Excel projection instead of changing native Codex.
+            data["type"] = "response.failed".into();
+            data["upstream_event"] = kind.into();
+            data["response"]["status"] = "cancelled".into();
+        } else {
+            data["type"] = kind.into();
+        }
         result.push(data);
+        self.visible_output |= result.iter().any(visible_content);
         Ok(result
             .into_iter()
             .map(|mut value| {
@@ -347,6 +363,47 @@ impl Relay {
             })
             .collect())
     }
+}
+
+fn visible_content(value: &Value) -> bool {
+    let text = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+    };
+    match value["type"].as_str().unwrap_or_default() {
+        "response.output_text.delta"
+        | "response.reasoning_summary_text.delta"
+        | "response.reasoning_text.delta"
+        | "response.refusal.delta" => text("delta"),
+        "response.output_text.done"
+        | "response.reasoning_summary_text.done"
+        | "response.reasoning_text.done" => text("text"),
+        "response.refusal.done" => text("refusal"),
+        "response.content_part.added"
+        | "response.content_part.done"
+        | "response.reasoning_summary_part.added"
+        | "response.reasoning_summary_part.done" => visible_part(&value["part"]),
+        "response.output_item.added" | "response.output_item.done" => {
+            let item = &value["item"];
+            ["content", "summary"].iter().any(|field| {
+                item[*field]
+                    .as_array()
+                    .is_some_and(|parts| parts.iter().any(visible_part))
+            })
+        }
+        _ => false,
+    }
+}
+
+fn visible_part(value: &Value) -> bool {
+    let field = match value["type"].as_str() {
+        Some("output_text" | "text" | "summary_text" | "reasoning_text") => "text",
+        Some("refusal") => "refusal",
+        _ => return false,
+    };
+    value[field].as_str().is_some_and(|s| !s.is_empty())
 }
 
 fn protocol(message: &str) -> CodexClientError {
@@ -381,6 +438,120 @@ fn tool_events(item: &Value, index: usize) -> Vec<Value> {
 mod tests {
     use super::*;
     use futures::TryStreamExt;
+
+    #[tokio::test]
+    async fn unknown_regeneration_respects_visible_delivery_not_empty_lifecycle_events() {
+        for visible in [
+            json!({"type":"response.output_text.delta","delta":"hello"}),
+            json!({"type":"response.output_text.done","text":"hello"}),
+            json!({"type":"response.reasoning_summary_text.delta","delta":"thinking"}),
+            json!({"type":"response.refusal.done","refusal":"no"}),
+            json!({"type":"response.content_part.done","part":{"type":"output_text","text":"hello"}}),
+            json!({"type":"response.output_item.done","item":{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}}),
+            json!({"type":"response.output_text.delta","delta":""}),
+            json!({"type":"response.output_item.added","item":{"type":"reasoning","encrypted_content":"opaque","summary":[]}}),
+        ] {
+            for client_stream in [false, true] {
+                let tools = ClientTools::parse(
+                    json!({"tools":[{"type":"function","name":"read"}]})
+                        .as_object()
+                        .unwrap(),
+                )
+                .unwrap();
+                let unknown = json!({"type":"function_call","id":"fc_bad","call_id":"call_bad","name":"run_officejs",
+                    "arguments":json!({"code":json!({"name":"absent","arguments":{}}).to_string()}).to_string()});
+                let mut prepared =
+                    super::super::tests::request("https://example.invalid".into(), json!("hello"))
+                        .excel
+                        .unwrap();
+                prepared.tools = tools;
+                let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let flag = called.clone();
+                let sender: super::super::repair::Sender = Box::new(move |_| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Box::pin(async { Err(protocol("stopped test correction")) })
+                });
+                let wire = [
+                    encode(visible["type"].as_str().unwrap(), &visible),
+                    encode(
+                        "response.completed",
+                        &json!({"type":"response.completed","response":{
+                        "id":"resp_fixture","status":"completed","output":[unknown]}}),
+                    ),
+                ];
+                let result = transform_stream_with_repair(
+                    Box::pin(futures::stream::iter(wire.map(Ok))),
+                    &prepared,
+                    client_stream,
+                    Some(sender),
+                )
+                .try_collect::<Vec<_>>()
+                .await;
+                assert!(result.is_err());
+                assert_eq!(
+                    called.load(std::sync::atomic::Ordering::SeqCst),
+                    !(client_stream && visible_content(&visible)),
+                    "{visible}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failures_are_sanitized_terminal_and_keep_identity_and_usage() {
+        for kind in ["error", "response.failed", "response.cancelled"] {
+            for (detail, expected) in [
+                (
+                    json!({"code":"rate_limit_exceeded","message":"private text"}),
+                    429,
+                ),
+                (
+                    json!({"code":"unknown_private_identifier","type":"permission_error"}),
+                    403,
+                ),
+                (json!({"code":"invalid_request","status_code":503}), 503),
+                (json!({"code":"unknown_private_identifier"}), 502),
+            ] {
+                let prepared =
+                    super::super::tests::request("https://example.invalid".into(), json!("hello"))
+                        .excel
+                        .unwrap();
+                let value = json!({"type":kind,"error":detail,"response":{"id":"resp_fixture",
+                    "status":"failed","error":detail,"output":[],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}});
+                let source = futures::stream::once(async move { Ok(encode(kind, &value)) })
+                    .chain(futures::stream::pending());
+                let chunks = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    transform_stream(Box::pin(source), &prepared).try_collect::<Vec<_>>(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let output = chunks.concat();
+                let mut decoder = SseEventDecoder::default();
+                let events = decoder.push(&output).unwrap();
+                assert_eq!(events.len(), 1);
+                let data: Value = serde_json::from_str(&events[0].data).unwrap();
+                assert_eq!(
+                    data["type"],
+                    if kind == "response.cancelled" {
+                        "response.failed"
+                    } else {
+                        kind
+                    }
+                );
+                if kind == "response.cancelled" {
+                    assert_eq!(data["upstream_event"], kind);
+                    assert_eq!(data["response"]["status"], "cancelled");
+                }
+                assert_eq!(data["status"], expected);
+                assert_eq!(data["response"]["id"], "resp_fixture");
+                assert_eq!(data["response"]["usage"]["total_tokens"], 12);
+                assert!(!events[0].data.contains("private"));
+                assert!(prepared.completed.lock().unwrap().is_none());
+            }
+        }
+    }
 
     #[tokio::test]
     async fn billing_policy_is_identical_for_stream_usage_and_compact_projection() {

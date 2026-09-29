@@ -1143,7 +1143,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 );
                 let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
                 (
-                    super::excel::classify_failure(map_canonical_error(
+                    super::excel::classify_stream_failure(map_canonical_error(
                         error,
                         &failure_diagnostics,
                         &failure_set_cookie_headers,
@@ -1151,7 +1151,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             semantic_output_seen || pre_commit_events.is_committed()
                                 || request.excel.as_ref().is_some_and(|prepared| prepared.usage.repair_started()),
                         ),
-                    ), request.excel.is_some()),
+                    ), request.excel.is_some(), atomic_upstream_failure),
                     atomic_upstream_failure,
                 )
             });
@@ -1279,14 +1279,14 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             );
             let atomic_upstream_failure = matches!(&error, CodexCanonicalError::Upstream(_));
             (
-                super::excel::classify_failure(map_canonical_error(
+                super::excel::classify_stream_failure(map_canonical_error(
                     error,
                     &failure_diagnostics,
                     &failure_set_cookie_headers,
                     ReplayBoundary::from_semantic_output(
                         semantic_output_seen || pre_commit_events.is_committed(),
                     ),
-                ), request.excel.is_some()),
+                ), request.excel.is_some(), atomic_upstream_failure),
                 atomic_upstream_failure,
             )
         });

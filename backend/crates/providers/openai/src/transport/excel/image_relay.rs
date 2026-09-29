@@ -371,7 +371,11 @@ impl ImageRelay {
         )
         .ok_or(ExcelRequestError::ImageRelay)?;
         let ttl = Duration::from_secs(
-            u64::from(limits.excel_image_relay_ttl_minutes.clamp(1, 1440)) * 60,
+            u64::from(
+                limits
+                    .excel_image_relay_ttl_minutes
+                    .clamp(1, gateway_core::routing::EXCEL_IMAGE_MAX_TTL_MINUTES),
+            ) * 60,
         );
         // Write all new files before publishing any links; a failed batch owns no entries.
         let mut staged = BTreeMap::new();

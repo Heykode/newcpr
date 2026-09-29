@@ -4,7 +4,11 @@ mod catalog;
 mod excel_images;
 pub mod snapshot;
 
-pub use excel_images::{ExcelImageLimitPolicy, ExcelImageTransport};
+pub use excel_images::{
+    EXCEL_IMAGE_MAX_BYTES, EXCEL_IMAGE_MAX_COUNT, EXCEL_IMAGE_MAX_STORAGE_BYTES,
+    EXCEL_IMAGE_MAX_STORAGE_ENTRIES, EXCEL_IMAGE_MAX_TTL_MINUTES, ExcelImageLimitPolicy,
+    ExcelImageTransport,
+};
 
 pub use crate::account::scope::{
     AccountGroupId, AccountRoutingScopeKind, AccountRoutingSnapshot, ClientRoutingScope,

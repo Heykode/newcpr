@@ -21,6 +21,9 @@ async fn quality_routes_require_auth_and_disable_caching() {
         ("POST", "templates/delete"),
         ("POST", "templates/apply"),
         ("POST", "monitoring"),
+        ("GET", "groups"),
+        ("POST", "groups/save"),
+        ("POST", "groups/delete"),
     ] {
         let response = app
             .clone()

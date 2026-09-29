@@ -429,6 +429,7 @@ pub async fn initialize(
         store.quality_ops(),
         store.accounts(),
         store.account_groups(),
+        store.account_runtime(),
         registry.clone(),
         probe,
     ));

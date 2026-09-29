@@ -465,6 +465,52 @@ async fn image_policy_generation_rejection_retains_compaction_usage_and_no_compl
 }
 
 #[tokio::test]
+async fn image_policy_cancelled_compaction_is_terminal_without_generation_or_completion() {
+    let server = MockServer::start().await;
+    uploader(&server, "id", 1).await;
+    let failure = json!({"type":"response.cancelled","response":{
+        "id":"resp_cancelled","status":"cancelled","output":[],
+        "usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12},
+        "error":{"code":"permission_denied","message":"private upstream text"}}});
+    Mock::given(path(RESPONSES_PATH))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("data: {failure}\n\n"), "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let req = auto_request(&server).await;
+    let chunks = client(&server.uri())
+        .create_response_stream_with_pool_account(
+            &req,
+            CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+            Some("account"),
+        )
+        .await
+        .unwrap()
+        .body
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let output = String::from_utf8(chunks.concat()).unwrap();
+    assert!(output.contains("response.failed"));
+    assert!(output.contains("response.cancelled"));
+    assert!(output.contains("\"total_tokens\":12"));
+    assert!(!output.contains("private upstream text"));
+    assert!(!output.contains("response.completed"));
+    assert!(
+        req.excel
+            .as_ref()
+            .unwrap()
+            .completed
+            .lock()
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn image_policy_dropping_stream_cannot_start_background_generation() {
     let server = MockServer::start().await;
     uploader(&server, "id", 1).await;
@@ -685,7 +731,10 @@ async fn image_policy_failed_compaction_does_not_generate_or_lose_usage() {
     let events = decoder.push(&chunks.concat()).unwrap();
     let failed: Value = serde_json::from_str(&events.last().unwrap().data).unwrap();
     assert_eq!(failed["type"], "response.failed");
-    assert_eq!(failed["response"]["error"]["code"], "upstream_failed");
+    assert_eq!(
+        failed["response"]["error"]["code"],
+        "basispoints_upstream_error"
+    );
     assert_eq!(failed["response"]["usage"]["input_tokens"], 7);
     assert!(
         req.excel
@@ -1201,7 +1250,10 @@ async fn excel_user_attachment_preserves_mixed_tool_images_and_original_history(
     let reference_message = items.last().unwrap();
     assert_eq!(reference_message["role"], "user");
     assert_eq!(reference_message["content"][2], input[2]["output"][1]);
-    assert_eq!(reference_message["content"][4], input[2]["output"][2]);
+    assert_eq!(
+        reference_message["content"][4],
+        json!({"type":"input_image","file_id":"file-existing"})
+    );
     for call in &calls {
         assert_eq!(call.headers["authorization"], "Bearer fixture");
         assert_eq!(call.headers["chatgpt-account-id"], "workspace");
@@ -1242,7 +1294,9 @@ async fn excel_tool_inline_and_user_file_id_pass_without_attachment_calls() {
         run(&server, &req).await.unwrap();
         let calls = server.received_requests().await.unwrap();
         let wire: Value = calls.last().unwrap().body_json().unwrap();
-        assert_eq!(wire["input"], input);
+        let mut expected = body(input);
+        super::images::normalize_message_attachments(&mut expected);
+        assert_eq!(wire["input"], expected["input"]);
         assert_eq!(
             calls.last().unwrap().headers["copilot-vision-request"],
             "true"
@@ -1490,4 +1544,34 @@ fn configured_image_limits_cover_references_and_inline_content() {
     assert!(images::validate_with_limits(inline.as_object().unwrap(), false, tiny_total).is_err());
     // Raising byte limits does not skip validation of actual image content.
     assert!(images::validate_with_limits(inline.as_object().unwrap(), true, larger).is_err());
+}
+#[test]
+fn excel_attachment_wire_projection_preserves_source_https_and_tool_payloads() {
+    let source = serde_json::json!({"input":[
+        {"role":"user","content":[{"type":"input_image","file_id":"file-fixture","detail":"high","extra":true},
+            {"type":"input_image","image_url":"https://example.com/image.png?signature=fixture","detail":"original"}]},
+        {"type":"function_call","arguments":{"type":"input_image","file_id":"file-argument","detail":"keep"}},
+        {"type":"function_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,fixture","detail":"high"}]}
+    ]});
+    let mut body = source.as_object().unwrap().clone();
+    super::images::normalize_message_attachments(&mut body);
+    assert_eq!(
+        body["input"][0]["content"][0],
+        serde_json::json!({"type":"input_image","file_id":"file-fixture"})
+    );
+    assert_eq!(
+        body["input"][0]["content"][1],
+        source["input"][0]["content"][1]
+    );
+    assert_eq!(body["input"][1], source["input"][1]);
+    assert_eq!(body["input"][2], source["input"][2]);
+    assert_eq!(source["input"][0]["content"][0]["detail"], "high");
+    for part in [
+        serde_json::json!({"type":"input_image","file_id":"file-fixture","detail":"bad"}),
+        serde_json::json!({"type":"input_image","file_id":"file-fixture","image_url":"https://example.com/image.png"}),
+        serde_json::json!({"type":"input_image","file_id":3}),
+    ] {
+        let body = serde_json::json!({"input":[{"role":"user","content":[part]}]});
+        assert!(super::images::validate(body.as_object().unwrap()).is_err());
+    }
 }

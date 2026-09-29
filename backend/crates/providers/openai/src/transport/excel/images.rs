@@ -39,9 +39,16 @@ impl Default for ImageLimits {
 impl From<gateway_core::routing::RequestTuning> for ImageLimits {
     fn from(value: gateway_core::routing::RequestTuning) -> Self {
         Self {
-            single: value.excel_image_max_bytes.clamp(1, 128 * 1024 * 1024) as usize,
-            total: value.excel_image_total_bytes.clamp(1, 128 * 1024 * 1024) as usize,
-            count: value.excel_image_max_count.clamp(1, 4096) as usize,
+            single: value
+                .excel_image_max_bytes
+                .clamp(1, gateway_core::routing::EXCEL_IMAGE_MAX_BYTES)
+                as usize,
+            total: value
+                .excel_image_total_bytes
+                .clamp(1, gateway_core::routing::EXCEL_IMAGE_MAX_BYTES) as usize,
+            count: value
+                .excel_image_max_count
+                .clamp(1, gateway_core::routing::EXCEL_IMAGE_MAX_COUNT) as usize,
         }
     }
 }
@@ -711,12 +718,41 @@ fn rewrite_user_images(value: &mut Value, replacements: &BTreeMap<String, String
                     .and_then(|url| replacements.get(url))
             {
                 let id = id.clone();
-                object.remove("image_url");
-                object.insert("file_id".into(), id.into());
-                object.entry("detail").or_insert("auto".into());
+                *object = serde_json::json!({"type":"input_image","file_id":id})
+                    .as_object()
+                    .expect("image object")
+                    .clone();
             }
         }
         _ => {}
+    }
+}
+
+/// Only the validated Excel wire copy is narrowed; replay and tool JSON stay intact.
+pub(crate) fn normalize_message_attachments(body: &mut Map<String, Value>) {
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in input {
+        if !matches!(
+            item.get("type").and_then(Value::as_str),
+            None | Some("message")
+        ) || !matches!(
+            item.get("role").and_then(Value::as_str),
+            Some("user" | "assistant")
+        ) {
+            continue;
+        }
+        let Some(parts) = item.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for part in parts {
+            if part["type"] == "input_image"
+                && let Some(id) = part.get("file_id").and_then(Value::as_str)
+            {
+                *part = serde_json::json!({"type":"input_image","file_id":id});
+            }
+        }
     }
 }
 

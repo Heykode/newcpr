@@ -222,16 +222,16 @@ fn excel_image_limits_validate_inheritance_bounds_and_integer_types() {
     for (field, maximum) in [
         ("excelImageRelayRequests", 512),
         ("excelImageRelayDownloads", 128),
-        ("excelImageRelayEntries", 65536),
-        ("excelImageRelayTtlMinutes", 1440),
-        ("excelImageMaxBytes", 128 * 1024 * 1024),
-        ("excelImageTotalBytes", 128 * 1024 * 1024),
-        ("excelImageMaxCount", 4096),
+        ("excelImageRelayEntries", 1_048_576),
+        ("excelImageRelayTtlMinutes", 10080),
+        ("excelImageMaxBytes", 512 * 1024 * 1024),
+        ("excelImageTotalBytes", 512 * 1024 * 1024),
+        ("excelImageMaxCount", 65536),
     ] {
         for value in [json!(null), json!(1), json!(maximum)] {
             let mut values = json!({
                 "excelImageMaxBytes":1,
-                "excelImageTotalBytes":134217728,
+                "excelImageTotalBytes":536870912,
                 "excelImageMaxCount":1,
                 "excelImageRelayEntries":65536
             });
@@ -250,6 +250,29 @@ fn excel_image_limits_validate_inheritance_bounds_and_integer_types() {
                 "{field}"
             );
         }
+    }
+}
+
+#[test]
+fn excel_image_storage_capacity_retains_defaults_and_accepts_reference_boundary() {
+    let defaults = RequestTuning::default();
+    assert_eq!(defaults.excel_image_max_bytes, 20 * 1024 * 1024);
+    assert_eq!(defaults.excel_image_total_bytes, 32 * 1024 * 1024);
+    assert_eq!(defaults.excel_image_max_count, 20);
+    assert_eq!(defaults.excel_image_relay_bytes, 1024 * 1024 * 1024);
+    assert_eq!(defaults.excel_image_relay_entries, 512);
+    assert_eq!(defaults.excel_image_relay_ttl_minutes, 30);
+    let maximum = 262_144_u64 * 1024 * 1024;
+    for bytes in [1024 * 1024, maximum, maximum + 1, 1024 * 1024 - 1, 0] {
+        let overrides: RequestTuningOverrides = serde_json::from_value(json!({
+            "excelImageMaxBytes":1, "excelImageTotalBytes":1,
+            "excelImageRelayBytes": bytes
+        }))
+        .unwrap();
+        assert_eq!(
+            overrides.validate(),
+            (1024 * 1024..=maximum).contains(&bytes)
+        );
     }
 }
 

@@ -1,5 +1,7 @@
 //! Scheduled answer checks through current account transport, with opt-in quality policy.
 
+mod groups;
+
 use std::{
     str::FromStr as _,
     sync::Arc,
@@ -27,7 +29,7 @@ use crate::{
     ports::{
         provider::ProviderAdminRegistry,
         quality_ops::QualityOpsStore,
-        store::{AccountGroupStore, AccountStore},
+        store::{AccountGroupStore, AccountRuntimeStore, AccountStore},
     },
 };
 
@@ -35,6 +37,7 @@ pub struct QualityOpsService {
     store: Option<Arc<dyn QualityOpsStore>>,
     accounts: Arc<dyn AccountStore>,
     groups: Arc<dyn AccountGroupStore>,
+    runtime: Arc<dyn AccountRuntimeStore>,
     providers: ProviderAdminRegistry,
     probe: Arc<dyn AccountProbe>,
 }
@@ -193,6 +196,7 @@ impl QualityOpsService {
         store: Option<Arc<dyn QualityOpsStore>>,
         accounts: Arc<dyn AccountStore>,
         groups: Arc<dyn AccountGroupStore>,
+        runtime: Arc<dyn AccountRuntimeStore>,
         providers: ProviderAdminRegistry,
         probe: Arc<dyn AccountProbe>,
     ) -> Self {
@@ -200,6 +204,7 @@ impl QualityOpsService {
             store,
             accounts,
             groups,
+            runtime,
             providers,
             probe,
         }

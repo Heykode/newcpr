@@ -1,5 +1,11 @@
 //! Explicit Excel image transport settings; never participate in account selection.
 
+pub const EXCEL_IMAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+pub const EXCEL_IMAGE_MAX_COUNT: u32 = 65_536;
+pub const EXCEL_IMAGE_MAX_STORAGE_BYTES: u64 = 262_144 * 1024 * 1024;
+pub const EXCEL_IMAGE_MAX_STORAGE_ENTRIES: u32 = 1_048_576;
+pub const EXCEL_IMAGE_MAX_TTL_MINUTES: u32 = 10_080;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExcelImageLimitPolicy {

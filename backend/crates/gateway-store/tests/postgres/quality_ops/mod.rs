@@ -6,6 +6,8 @@ use gateway_admin::{
 };
 use gateway_store::postgres::quality_ops::PgQualityOpsStore;
 
+mod group_safety;
+mod groups;
 mod policy;
 mod rule_templates;
 mod templates;

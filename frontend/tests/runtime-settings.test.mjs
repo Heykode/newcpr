@@ -482,21 +482,21 @@ test('Excel image budgets roundtrip independently and reject invalid limits', as
     assert.equal(query.requests[0].maxConcurrentPerAccount, 5)
     for (const [field, invalid] of [
       ['excelImageRelayBytes', 1024],
-      ['excelImageRelayBytes', 16384 * 1024 * 1024 + 1],
+      ['excelImageRelayBytes', 262144 * 1024 * 1024 + 1],
       ['excelImageRelayDownloads', 0],
       ['excelImageRelayDownloads', 129],
       ['excelImageRelayRequests', 0],
       ['excelImageRelayRequests', 513],
       ['excelImageRelayEntries', 0],
-      ['excelImageRelayEntries', 65537],
+      ['excelImageRelayEntries', 1048577],
       ['excelImageRelayTtlMinutes', 0],
-      ['excelImageRelayTtlMinutes', 1441],
+      ['excelImageRelayTtlMinutes', 10081],
       ['excelImageMaxBytes', 0],
-      ['excelImageMaxBytes', 128 * 1024 * 1024 + 1],
+      ['excelImageMaxBytes', 512 * 1024 * 1024 + 1],
       ['excelImageTotalBytes', 0],
-      ['excelImageTotalBytes', 128 * 1024 * 1024 + 1],
+      ['excelImageTotalBytes', 512 * 1024 * 1024 + 1],
       ['excelImageMaxCount', 0],
-      ['excelImageMaxCount', 4097],
+      ['excelImageMaxCount', 65537],
     ]) {
       const before = query.state.form.requestTuning[field]
       query.state.form.requestTuning[field] = invalid
@@ -841,7 +841,7 @@ test('invalid Excel display drafts block stale-value saves and recover after cor
     await query.state.loadSettings()
     const field = query.state.excelImages.fields.find(field => field.key === 'excelImageMaxBytes')
     const initial = query.state.form.requestTuning.excelImageMaxBytes
-    const invalid = ['', ' ', '0', '-1', '129', 'Infinity', 'NaN', '0.00000001']
+    const invalid = ['', ' ', '0', '-1', '513', 'Infinity', 'NaN', '0.00000001']
     for (const raw of invalid) {
       field.input.value = raw
       assert.ok(field.error.value, raw)
@@ -854,6 +854,31 @@ test('invalid Excel display drafts block stale-value saves and recover after cor
     assert.equal(field.error.value, '')
     await query.state.saveSettings()
     assert.equal(query.requests[0].requestTuning.excelImageMaxBytes, 8 * 1024 * 1024)
+  }
+  finally { query.stop() }
+})
+
+test('Excel reference maxima save and reload without changing shared retry controls', async () => {
+  const query = mountSettings(settings())
+  try {
+    await query.state.loadSettings()
+    const before = query.state.form.requestTuning.websocketMaxRetries
+    const limits = {
+      excelImageMaxBytes: 512 * 1024 * 1024,
+      excelImageTotalBytes: 512 * 1024 * 1024,
+      excelImageMaxCount: 65536,
+      excelImageRelayBytes: 262144 * 1024 * 1024,
+      excelImageRelayEntries: 1048576,
+      excelImageRelayTtlMinutes: 10080,
+    }
+    Object.assign(query.state.form.requestTuning, limits)
+    await query.state.saveSettings()
+    assert.equal(query.requests.length, 1)
+    for (const [key, maximum] of Object.entries(limits)) {
+      assert.equal(query.requests[0].requestTuning[key], maximum)
+      assert.equal(query.state.form.requestTuning[key], maximum)
+    }
+    assert.equal(query.requests[0].requestTuning.websocketMaxRetries, before)
   }
   finally { query.stop() }
 })
