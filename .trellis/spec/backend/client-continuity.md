@@ -96,6 +96,17 @@ editing prior entries.
 - Default and custom UA are explicit independent modes. A custom string equal to
   the current default is still custom. Verified release updates change only the
   default profile. Parsing custom text is not artifact or TLS verification.
+- Desktop artifact scanning follows official CPR `d83d3eb8`: only the nested
+  `/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` binary is Core.
+  The legacy `/Contents/Resources/codex` path and `codex-cli/bin/codex` launcher
+  are not candidates. Keep unique-entry, range, size, deflate, Mach-O and version
+  validation; appcast selects the artifact without an old-package fallback.
+- OpenAI dashboard `attributes` reports the explicit selection as
+  `版本策略: 固定自定义` or `版本策略: 跟随官方`, following the upstream convention.
+  Its `release` still describes the default Desktop profile, not a custom UA.
+  Show custom identity as active independently, retaining default-check errors
+  in a separate diagnostic area. A release failure preserves both the previous
+  valid default profile and the custom selection; it never disables scheduling.
 - Freeze one effective profile for a prepared request and its permitted fallback.
   Do not mix a newly published version header with an older opening UA.
 - The coordinator captures the optional provider-owned public profile once on
@@ -223,6 +234,9 @@ editing prior entries.
 | Same email, different principal | Never share a device based on email |
 | Token refresh succeeds, runtime reload fails | Keep successful token; fence routes |
 | Custom UA with invalid/control characters | Reject before persistence |
+| Custom UA selected, default Desktop release check fails | Custom remains active; show default-check error separately |
+| ZIP contains only the old Core path or launcher | MissingCore; retain the last valid profile without old-package download |
+| ZIP contains duplicate nested Core entries | MissingCore; never select an arbitrary entry |
 | Same revision becomes readable after a revision-query failure | Recompile and clear suspension before grace expires |
 | Older/conflicting publication is rejected | Retain the latest snapshot only within the original grace period |
 | A replacement is waiting while an owner is closing | Keep other idle continuations when pending retirement supplies capacity |
@@ -256,6 +270,12 @@ editing prior entries.
   bounded close/shutdown, exact-owner preservation and eviction tombstones.
 - Frontend typecheck/lint/build; never treat a missing database environment as
   evidence of successful persistence integration tests.
+- Artifact/identity diagnostics: `transport::profile::desktop_artifact`,
+  `artifact_failure_and_recovery_never_replace_custom_identity`,
+  `admin_user_agent::dashboard_reports_explicit_custom_selection_even_when_equal_to_default`,
+  and frontend `wire-profile-card.test.mjs`. Cover each release status for
+  Default/Custom, legacy responses and xAI; run the isolated browser fixture
+  in light/dark and desktop/narrow layouts without a production backend.
 - Recovery tests must execute the reconciliation worker, including unchanged
   revisions, rejected publications and repeated failures. Assert that recovery
   clears suspension and that rejection starts, but never extends, the grace.
@@ -287,6 +307,11 @@ editing prior entries.
   where stored `updated_at > created_at > importing transaction time`.
 
 ## 7. Wrong vs Correct
+
+Wrong: a default Desktop release check failure means a custom CLI UA is broken.
+
+Correct: report the explicit custom selection independently, and retain the
+default release diagnostic with its own scope. Do not change request settings.
 
 Wrong: "fresh" always means a different physical socket, including a continuation
 whose previous response exists only on the original connection.

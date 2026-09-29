@@ -100,6 +100,51 @@ async fn initializer_rejects_invalid_persisted_ua_instead_of_silent_default() {
 }
 
 #[tokio::test]
+async fn dashboard_reports_explicit_custom_selection_even_when_equal_to_default() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        ports(ProviderUserAgentOverride::Default),
+    )
+    .await
+    .unwrap();
+    let provider = bundle.admin_provider();
+    let default = provider.dashboard_wire_profile().unwrap();
+    let policy = |profile: &gateway_admin::model::observability::DashboardWireProfile| {
+        profile
+            .attributes
+            .iter()
+            .find(|attribute| attribute.label == "版本策略")
+            .unwrap()
+            .value
+            .clone()
+    };
+    assert_eq!(policy(&default), "跟随官方");
+    for user_agent in [
+        default.user_agent.clone(),
+        "codex_exec/0.156.1 (Mac OS 15.7.9; arm64) xterm-256color (codex_exec; 0.156.1)".to_owned(),
+    ] {
+        provider
+            .apply_outbound_user_agent(ProviderUserAgentOverride::Custom {
+                user_agent: user_agent.clone(),
+            })
+            .unwrap();
+        let custom = provider.dashboard_wire_profile().unwrap();
+        assert_eq!(policy(&custom), "固定自定义");
+        assert_eq!(custom.user_agent, user_agent);
+        assert!(custom.verified_at.is_none());
+        assert_eq!(
+            custom.release, default.release,
+            "retain default diagnostics"
+        );
+    }
+    provider
+        .apply_outbound_user_agent(ProviderUserAgentOverride::Default)
+        .unwrap();
+    assert_eq!(provider.dashboard_wire_profile().unwrap(), default);
+}
+
+#[tokio::test]
 async fn qx_initializer_preview_and_apply_preserve_explicit_selection_without_verification_claims()
 {
     use provider_openai::transport::profile::qx;

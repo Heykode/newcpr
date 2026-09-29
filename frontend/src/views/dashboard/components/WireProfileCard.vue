@@ -50,6 +50,11 @@ const profile = computed(
   () => props.profiles.find(item => item.provider === activeProvider.value) ?? props.profiles[0] ?? null,
 )
 
+const isCustomProfile = computed(() =>
+  profile.value?.provider === 'openai'
+  && profile.value.attributes.some(item => item.label === '版本策略' && item.value === '固定自定义'),
+)
+
 const versionParts = computed(() => {
   const version = profile.value?.version ?? ''
   const separator = version.indexOf('-')
@@ -113,13 +118,34 @@ const releaseStatus = computed(() => {
   }
 })
 
+const identityStatus = computed(() => isCustomProfile.value
+  ? {
+      label: '自定义 UA 生效',
+      title: '当前使用固定自定义 UA；默认 Desktop 画像更新不会覆盖此设置',
+      tone: 'bg-cp-info-container text-cp-info-on-container',
+      icon: ShieldCheck,
+    }
+  : releaseStatus.value)
+
+const defaultReleaseStatus = computed(() => {
+  if (!isCustomProfile.value || !profile.value?.release)
+    return null
+  return {
+    ...releaseStatus.value,
+    label: `默认画像${releaseStatus.value.label}`,
+    title: profile.value.release.status === 'aligned'
+      ? '默认 Desktop 画像与官方最新发布一致，不代表自定义 UA 已核验'
+      : `默认 Desktop 画像：${releaseStatus.value.title}`,
+  }
+})
+
 const verifiedLabel = computed(() =>
   profile.value?.verifiedAt ? `画像核验 ${formatDateTime(profile.value.verifiedAt)}` : undefined,
 )
 
 const checkedLabel = computed(() => {
   const checkedAt = profile.value?.release?.checkedAt
-  return checkedAt ? `发布检查 ${formatDateTime(checkedAt)}` : undefined
+  return checkedAt ? `${isCustomProfile.value ? '默认画像检查' : '发布检查'} ${formatDateTime(checkedAt)}` : undefined
 })
 
 function toPascalCase(value: string) {
@@ -195,12 +221,12 @@ function providerLabel(provider: string) {
           aria-label="请求身份组成"
           class="grid min-w-0 flex-1 content-between gap-6 rounded-cp-lg bg-cp-fill-alter/70 px-5 py-5.5 sm:px-6 sm:py-5"
           :class="
-            verifiedLabel || checkedLabel
+            verifiedLabel || checkedLabel || defaultReleaseStatus
               ? 'sm:grid-rows-[auto_minmax(0,1fr)_auto_auto]'
               : 'sm:grid-rows-[auto_minmax(0,1fr)_auto]'
           "
         >
-          <div class="flex min-w-0 items-center justify-between gap-3">
+          <div class="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-2 text-cp-text">
               <span class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-cp-fill-tertiary">
                 <Box class="size-3.75 text-cp-text-secondary" />
@@ -209,11 +235,11 @@ function providerLabel(provider: string) {
             </div>
             <span
               class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-cp-sm leading-none font-bold"
-              :class="releaseStatus.tone"
-              :title="releaseStatus.title"
+              :class="identityStatus.tone"
+              :title="identityStatus.title"
             >
-              <component :is="releaseStatus.icon" class="size-3.5" />
-              {{ releaseStatus.label }}
+              <component :is="identityStatus.icon" class="size-3.5" />
+              {{ identityStatus.label }}
             </span>
           </div>
 
@@ -288,9 +314,20 @@ function providerLabel(provider: string) {
           </dl>
 
           <footer
-            v-if="verifiedLabel || checkedLabel"
-            class="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] leading-none font-emphasis text-cp-text-quaternary"
+            v-if="verifiedLabel || checkedLabel || defaultReleaseStatus"
+            class="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 text-[10px] leading-snug font-emphasis text-cp-text-quaternary"
           >
+            <div v-if="defaultReleaseStatus" class="grid w-full min-w-0 gap-1.5" aria-label="默认 Desktop 画像更新">
+              <span
+                class="inline-flex w-fit max-w-full items-center gap-1.5 rounded-lg px-2 py-1 text-cp-xs font-bold"
+                :class="defaultReleaseStatus.tone"
+                :title="defaultReleaseStatus.title"
+              >
+                <component :is="defaultReleaseStatus.icon" class="size-3.5 shrink-0" />
+                {{ defaultReleaseStatus.label }}
+              </span>
+              <span v-if="profile.release?.error" class="wrap-anywhere text-cp-text-secondary">{{ profile.release.error }}</span>
+            </div>
             <span v-if="verifiedLabel" :title="profile.userAgent">{{ verifiedLabel }}</span>
             <span v-if="checkedLabel">{{ checkedLabel }}</span>
           </footer>

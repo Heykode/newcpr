@@ -6,13 +6,14 @@ use chrono::{TimeZone, Utc};
 use futures::future::BoxFuture;
 use gateway_core::provider_ports::{
     ProviderArtifactProfile, ProviderArtifactProfileCachePort, ProviderStoreError,
-    ProviderStoreErrorKind,
+    ProviderStoreErrorKind, ProviderUserAgentOverride,
 };
 use gateway_core::routing::ProviderKind;
+use provider_openai::transport::profile::desktop_artifact::CodexDesktopArtifactError;
 use provider_openai::transport::profile::{
     CodexArtifactProfileCache, CodexBundledReleaseProfile, CodexDesktopRelease,
     CodexDesktopReleaseError, CodexDesktopReleaseService, CodexDesktopReleaseTransport,
-    CodexWireProfile, CodexWireProfileState, parse_desktop_release,
+    CodexWireProfile, CodexWireProfileOverride, CodexWireProfileState, parse_desktop_release,
 };
 
 mod desktop_artifact;
@@ -324,6 +325,52 @@ async fn cache_failure_should_not_publish_a_partially_verified_profile() {
 
     assert_eq!(state.snapshot(), original);
     assert!(service.status().snapshot().latest.is_none());
+}
+
+#[tokio::test]
+async fn artifact_failure_and_recovery_never_replace_custom_identity() {
+    let state = CodexWireProfileState::new(wire_profile());
+    let original_default = state.default_snapshot();
+    let custom = ProviderUserAgentOverride::Custom {
+        user_agent:
+            "codex_exec/0.156.1 (Mac OS 15.7.9; arm64) xterm-256color (codex_exec; 0.156.1)"
+                .to_owned(),
+    };
+    state.apply_user_agent_override(&custom).unwrap();
+    let frozen = state.snapshot();
+    let transport = Arc::new(ReleaseTransport::new(
+        [
+            Ok(release("26.810.41047", "6570")),
+            Ok(release("26.810.41047", "6570")),
+        ],
+        [
+            Err(CodexDesktopArtifactError::MissingCore.into()),
+            Ok("0.148.0-alpha.9".to_owned()),
+        ],
+    ));
+    let service = service(
+        state.clone(),
+        transport,
+        Arc::new(ArtifactProfiles::default()),
+        None,
+    );
+    service.refresh().await.expect_err("missing Core");
+    assert_eq!(state.snapshot(), frozen);
+    assert_eq!(state.default_snapshot(), original_default);
+    assert!(service.status().snapshot().last_error.is_some());
+    service.refresh().await.expect("recovered Core path");
+    assert_eq!(state.snapshot(), frozen);
+    assert_eq!(state.default_snapshot().codex_version, "0.148.0-alpha.9");
+    assert!(service.status().snapshot().last_error.is_none());
+    assert!(matches!(
+        state.settings_snapshot().mode,
+        CodexWireProfileOverride::Custom(_)
+    ));
+    state
+        .apply_user_agent_override(&ProviderUserAgentOverride::Default)
+        .unwrap();
+    assert_eq!(state.snapshot().codex_version, "0.148.0-alpha.9");
+    assert_eq!(frozen.codex_version, "0.156.1");
 }
 
 fn service(
