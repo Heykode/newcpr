@@ -1,0 +1,11 @@
+{
+  "from_version": "3.19.0",
+  "to_version": "3.19.1",
+  "from_migrations_tree": "f3ef8c966352c93206fb81da1a698075c30432e3",
+  "to_migrations_tree": "bac942105dc8e3418979dfb6e043147990bbbf48",
+  "added": [
+    "0052_excel_403_warning_history.sql",
+    "0053_quality_rule_templates.sql"
+  ],
+  "recovery": "manual"
+}
