@@ -1,5 +1,19 @@
 # Proxy and Responses Delivery Contracts
 
+## WebSocket Context Window Boundaries
+
+- Read window identity from the original `response.create` frame before provider
+  identity projection: nonempty `client_metadata.x-codex-window-id` takes priority
+  over the JSON string `x-codex-turn-metadata.window_id`. Only the first accepted
+  frame may inherit an opening turn-metadata window when its own is absent.
+- When both the last successful window and the new explicit window are known and
+  differ, remove `previous_response_id` before shared request decoding and retire
+  the connection-local response/private replay snapshot, even without an anchor.
+- Commit the observed window only after successful execution finalization.
+  Missing or malformed window hints do not imply a rollover. Later omissions
+  never fall back to opening metadata. Preserve input/tool items, cache keys,
+  scheduling, account identity, HTTP ingress and all transport retry policies.
+
 ## 1. Scope / Trigger
 
 Apply when changing proxy import, account mutation, transport selection or
@@ -39,6 +53,15 @@ profiles or random fingerprint generation.
   false or non-boolean values.
 - Never mutate the original request's `stream` or copy downstream credentials
   into the selected account's identity. Reuse existing transport projection.
+- Buffered Responses and Chat share `recover_response_output`. Following
+  Sub2API `7ee00e1897`, a nonempty terminal output with no non-whitespace message
+  text is supplemented from received `response.output_text.delta` events: fill
+  the first empty message text part, add a part if needed, or append a message
+  when none exists. Nonempty terminal text wins, and no received text means no
+  synthesized reply. Preserve existing items, metadata, usage, terminal status,
+  error/cancellation guards and call-identity-based tool argument recovery.
+  This must not emit additional streaming events or alter transport, scheduling,
+  headers, affinity or retries.
 - Generate normalizes string `input` and the exact `fast` tier alias only in
   outbound copies. HTTP adds `store=false` only when absent. Preserve explicit
   values, `context_management`, local continuation intent and WS store policy;
