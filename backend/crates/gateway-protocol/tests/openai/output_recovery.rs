@@ -41,6 +41,105 @@ fn recover(response: &mut Value, events: &[Value]) {
 }
 
 #[test]
+fn buffered_recovery_restores_streamed_text_when_terminal_message_is_empty() {
+    let events = [
+        json!({"type":"response.output_text.delta","delta":"Hello, "}),
+        json!({"type":"response.output_text.delta","delta":"world"}),
+    ];
+    for content in [json!([]), json!([{"type":"output_text","text":"   "}])] {
+        let mut response = terminal(json!([{
+            "type":"message","id":"m","role":"assistant","content":content,
+            "phase":"final_answer","future_message":true
+        }]));
+        let original_usage = response["usage"].clone();
+        recover(&mut response, &events);
+        assert_eq!(response["output"].as_array().unwrap().len(), 1);
+        assert_eq!(response["output"][0]["content"][0]["text"], "Hello, world");
+        assert_eq!(response["output"][0]["id"], "m");
+        assert_eq!(response["output"][0]["phase"], "final_answer");
+        assert_eq!(response["output"][0]["future_message"], true);
+        assert_eq!(response["usage"], original_usage);
+    }
+}
+
+#[test]
+fn buffered_recovery_appends_missing_message_without_replacing_tools() {
+    let tool = function("f", "call-a", "lookup", "{\"q\":1}");
+    let mut response = terminal(json!([tool]));
+    recover(
+        &mut response,
+        &[json!({"type":"response.output_text.delta","delta":"only in the stream"})],
+    );
+    assert_eq!(response["output"].as_array().unwrap().len(), 2);
+    assert_eq!(response["output"][0], tool);
+    assert_eq!(response["output"][1]["type"], "message");
+    assert_eq!(response["output"][1]["role"], "assistant");
+    assert_eq!(
+        response["output"][1]["content"][0]["text"],
+        "only in the stream"
+    );
+}
+
+#[test]
+fn buffered_recovery_never_overwrites_usable_terminal_text() {
+    let mut response = terminal(json!([message("m", "from the terminal event")]));
+    let original = response.clone();
+    recover(
+        &mut response,
+        &[json!({"type":"response.output_text.delta","delta":"from the stream"})],
+    );
+    assert_eq!(response, original);
+}
+
+#[test]
+fn buffered_recovery_does_not_fill_empty_message_without_streamed_text() {
+    let mut response = terminal(json!([message("m", "")]));
+    let original = response.clone();
+    recover(&mut response, &[]);
+    assert_eq!(response, original);
+}
+
+#[test]
+fn buffered_recovery_missing_text_preserves_failure_and_cancellation() {
+    let delta = json!({"type":"response.output_text.delta","delta":"partial"});
+    for status in ["failed", "cancelled", "in_progress"] {
+        let mut response = terminal(json!([message("m", "")]));
+        response["status"] = json!(status);
+        let original = response.clone();
+        recover(&mut response, std::slice::from_ref(&delta));
+        assert_eq!(response, original);
+    }
+    for kind in ["error", "response.failed", "response.cancelled"] {
+        let mut response = terminal(json!([message("m", "")]));
+        let original = response.clone();
+        recover(&mut response, &[delta.clone(), json!({"type":kind})]);
+        assert_eq!(response, original);
+    }
+}
+
+#[test]
+fn buffered_chat_restores_empty_terminal_text_without_repeating_stream_deltas() {
+    let events = [
+        json!({"type":"response.created","response":{"id":"resp_recovery","model":"model-a"}}),
+        json!({"type":"response.output_text.delta","delta":"Hello, "}),
+        json!({"type":"response.output_text.delta","delta":"world"}),
+        json!({"type":"response.completed","response":terminal(json!([message("m", "")]))}),
+    ];
+    let response = chat_response_from_events(events.iter().map(|event| (None, event))).unwrap();
+    assert_eq!(response["choices"][0]["message"]["content"], "Hello, world");
+    let mut encoder = ChatStreamEncoder::new(true);
+    let mut text = String::new();
+    for event in &events {
+        for chunk in encoder.push(None, event).unwrap() {
+            if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
+                text.push_str(delta);
+            }
+        }
+    }
+    assert_eq!(text, "Hello, world");
+}
+
+#[test]
 fn buffered_recovery_keeps_raw_done_items_sorted_with_unindexed_fallback() {
     let items = [
         json!({"type":"reasoning","id":"r","encrypted_content":"opaque","summary":[]}),

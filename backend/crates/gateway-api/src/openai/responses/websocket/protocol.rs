@@ -25,7 +25,8 @@ pub fn decode_response_create_with_context(
     payload: &str,
     request_headers: &OpenAiRequestHeaders,
 ) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {
-    decode_response_create_inner(payload, request_headers)
+    decode_response_create_for_window(payload, request_headers, None, false)
+        .map(|(request, _, _)| request)
 }
 
 pub(super) fn decode_response_interrupt(
@@ -64,10 +65,12 @@ pub(super) fn decode_response_interrupt(
     Ok(Some(id.to_owned()))
 }
 
-fn decode_response_create_inner(
+pub(super) fn decode_response_create_for_window(
     payload: &str,
     request_headers: &OpenAiRequestHeaders,
-) -> Result<DecodedResponsesRequest, ResponseCreateFrameError> {
+    last_window_id: Option<&str>,
+    first_request: bool,
+) -> Result<(DecodedResponsesRequest, Option<String>, bool), ResponseCreateFrameError> {
     let Value::Object(mut body) = serde_json::from_str::<Value>(payload)
         .map_err(|_| ResponseCreateFrameError::InvalidJson)?
     else {
@@ -80,12 +83,54 @@ fn decode_response_create_inner(
     if matches!(body.get("stream"), Some(value) if value.as_bool() != Some(true)) {
         return Err(ResponseCreateFrameError::StreamingRequired);
     }
-    super::super::request::decode_request_object(
+    // Read the original frame before account identity projection can replace it.
+    // Opening metadata only supplies the initial window, never later omissions.
+    let window_id = frame_window_id(&body).or_else(|| {
+        first_request
+            .then(|| {
+                request_headers
+                    .opening_turn_metadata()
+                    .and_then(turn_window_id)
+            })
+            .flatten()
+    });
+    let rollover = matches!(
+        (last_window_id, window_id.as_deref()),
+        (Some(previous), Some(current)) if previous != current
+    );
+    if rollover {
+        body.remove("previous_response_id");
+    }
+    let request = super::super::request::decode_request_object(
         body,
         request_headers,
         RequestDecodeSource::WebSocketFrame,
     )
-    .map_err(ResponseCreateFrameError::Request)
+    .map_err(ResponseCreateFrameError::Request)?;
+    Ok((request, window_id, rollover))
+}
+
+fn frame_window_id(body: &Map<String, Value>) -> Option<String> {
+    let metadata = body.get("client_metadata")?.as_object()?;
+    metadata
+        .get("x-codex-window-id")
+        .and_then(nonempty_window_id)
+        .or_else(|| {
+            metadata
+                .get("x-codex-turn-metadata")?
+                .as_str()
+                .and_then(turn_window_id)
+        })
+}
+
+fn turn_window_id(raw: &str) -> Option<String> {
+    let metadata: Value = serde_json::from_str(raw).ok()?;
+    metadata.get("window_id").and_then(nonempty_window_id)
+}
+
+fn nonempty_window_id(value: &Value) -> Option<String> {
+    let value = value.as_str()?.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 /// `response.create` 帧的稳定安全错误。

@@ -4,8 +4,9 @@ use serde_json::{Value, json};
 
 /// Supplements a terminal response without changing its status or envelope.
 ///
-/// Nonempty terminal output is authoritative; only empty tool input may be filled
-/// from the same call. Otherwise raw done items win over delta reconstruction.
+/// Nonempty terminal text is authoritative; missing text may be recovered from
+/// received deltas and empty tool input from the same call. Otherwise raw done
+/// items win over delta reconstruction.
 /// The caller still owns terminal/failure classification and execution finalization.
 pub fn recover_response_output<'a>(
     response: &mut Value,
@@ -22,7 +23,9 @@ pub fn recover_response_output<'a>(
     let authoritative = response["output"]
         .as_array()
         .is_some_and(|output| !output.is_empty());
+    let needs_text = authoritative && !output_has_text(&response["output"]);
     if authoritative
+        && !needs_text
         && !response["output"]
             .as_array()
             .into_iter()
@@ -33,6 +36,7 @@ pub fn recover_response_output<'a>(
     }
 
     let mut items = Vec::<Item<'_>>::new();
+    let mut streamed_text = String::new();
     for (kind, event) in events {
         if matches!(kind, "error" | "response.failed" | "response.cancelled")
             || matches!(
@@ -42,10 +46,19 @@ pub fn recover_response_output<'a>(
         {
             return;
         }
+        if needs_text
+            && kind == "response.output_text.delta"
+            && let Some(delta) = event["delta"].as_str()
+        {
+            streamed_text.push_str(delta);
+        }
         observe(&mut items, kind, event);
     }
 
     if authoritative {
+        if !streamed_text.is_empty() {
+            fill_output_text(&mut response["output"], streamed_text);
+        }
         for (index, output) in response["output"]
             .as_array_mut()
             .into_iter()
@@ -92,6 +105,52 @@ pub fn recover_response_output<'a>(
     if !output.is_empty() {
         response["output"] = Value::Array(output);
     }
+}
+
+fn output_has_text(output: &Value) -> bool {
+    output.as_array().into_iter().flatten().any(|item| {
+        item["type"] == "message"
+            && item["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|part| {
+                    part["type"] == "output_text"
+                        && part["text"]
+                            .as_str()
+                            .is_some_and(|text| !text.trim().is_empty())
+                })
+    })
+}
+
+fn fill_output_text(output: &mut Value, text: String) {
+    let Some(items) = output.as_array_mut() else {
+        return;
+    };
+    for item in items.iter_mut().filter(|item| item["type"] == "message") {
+        if item.get("content").is_none_or(Value::is_null) {
+            item["content"] = json!([]);
+        }
+        let Some(parts) = item["content"].as_array_mut() else {
+            continue;
+        };
+        for part in parts.iter_mut() {
+            if part["type"] == "output_text"
+                && part["text"]
+                    .as_str()
+                    .is_none_or(|text| text.trim().is_empty())
+            {
+                part["text"] = json!(text);
+                return;
+            }
+        }
+        parts.push(json!({"type":"output_text","text":text}));
+        return;
+    }
+    items.push(json!({
+        "type":"message","role":"assistant",
+        "content":[{"type":"output_text","text":text}]
+    }));
 }
 
 #[derive(Clone, Copy, Default)]
