@@ -107,6 +107,58 @@ class DeployTests(unittest.TestCase):
         with patch.object(images, "git", return_value="b" * 40), self.assertRaises(images.Unavailable):
             deploy.validate_upgrade(labels, proof)
 
+    def test_quality_group_upgrade_keeps_same_version_but_requires_exact_schema(self):
+        plan = json.loads((deploy.ROOT / "deploy/upgrades/v3.19.1.json").read_text())
+        self.assertEqual(plan["from_version"], "3.19.1")
+        self.assertEqual(plan["to_version"], "3.19.1")
+        self.assertNotEqual(plan["from_migrations_tree"], plan["to_migrations_tree"])
+        self.assertEqual(plan["added"], [
+            "0054_request_capture_lookup.sql", "0055_quality_group_rules.sql",
+        ])
+        self.assertEqual(plan["recovery"], "manual")
+        target = "e" * 40
+        labels = {
+            "org.opencontainers.image.revision": SOURCE,
+            "org.opencontainers.image.version": plan["from_version"],
+        }
+        _, proof, _ = fixtures()
+        proof = {**proof, "version": plan["to_version"],
+                 "migrations_tree": plan["to_migrations_tree"]}
+        source_tree = plan["from_migrations_tree"]
+
+        def git(*args):
+            if args[0] == "show":
+                return json.dumps(plan)
+            if args[0] == "rev-parse":
+                return source_tree
+            if args[0] == "diff":
+                return "\n".join([
+                    "M\tbackend/migrations/.frozen-sha256",
+                    *("A\tbackend/migrations/" + name for name in plan["added"]),
+                ])
+            paths = ["backend/migrations/0001_example.sql"]
+            if args[3] == target:
+                paths.extend("backend/migrations/" + name for name in plan["added"])
+            return "\n".join(paths)
+
+        with patch.object(images, "git", side_effect=git), \
+                patch.object(deploy.subprocess, "check_output", return_value=b"select 1;\n"):
+            result = deploy.reviewed_upgrade("v3.19.1", labels, proof, target)
+            self.assertEqual(set(result["before"]), {"1"})
+            self.assertEqual(set(result["after"]), {"1", "54", "55"})
+            self.assertEqual(result["before"]["1"], result["after"]["1"])
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("v3.19.1", {
+                    **labels, "org.opencontainers.image.version": "3.19.0",
+                }, proof, target)
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("v3.19.1", labels, {
+                    **proof, "migrations_tree": source_tree,
+                }, target)
+            source_tree = "f" * 40
+            with self.assertRaises(images.Unavailable):
+                deploy.reviewed_upgrade("v3.19.1", labels, proof, target)
+
     def test_latest_main_ci_required(self):
         run, _, _ = fixtures()
         run["event"] = "push"
