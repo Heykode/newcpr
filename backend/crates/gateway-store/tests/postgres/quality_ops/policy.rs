@@ -136,6 +136,75 @@ async fn quality_probe_unknown_and_errors_never_change_route_or_pause_rule() {
 }
 
 #[tokio::test]
+async fn quality_paused_manual_probes_keep_excel_route_guards() {
+    let Some(db) = TestDatabase::create("quality_manual_probe").await else {
+        return;
+    };
+    let store = probe_setup(&db).await;
+    // Exercise rejection before enqueue, before claim, and after acquiring a lease.
+    for stage in 0..3 {
+        sqlx::query(
+            "update provider_accounts set responses_upstream='codex' where id='acct_quality_a'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let mut config = probe_config("acct_quality_a");
+        config.enabled = false;
+        let rule = store
+            .save(None, None, config, Utc::now(), &context())
+            .await
+            .unwrap();
+        if stage > 0 {
+            store
+                .enqueue(&rule.id, rule.revision, &context())
+                .await
+                .unwrap();
+        }
+        let claim = if stage == 2 {
+            Some(store.claim().await.unwrap().unwrap())
+        } else {
+            None
+        };
+        sqlx::query(
+            "update provider_accounts set responses_upstream='excel' where id='acct_quality_a'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        if let Some(claim) = &claim {
+            assert!(!store.current(claim).await.unwrap());
+            store
+                .finish(claim, Utc::now(), vec![answer(QualityVerdict::Incorrect)])
+                .await
+                .unwrap();
+            assert_eq!(
+                store.detail(&claim.run_id).await.unwrap().unwrap().status,
+                "cancelled"
+            );
+        }
+        assert!(store.claim().await.unwrap().is_none());
+        let paused = store.rules().await.unwrap().remove(0);
+        assert!(!paused.config.enabled);
+        assert!(!paused.pending);
+        assert!(!paused.running);
+        assert!(
+            store
+                .enqueue(&paused.id, paused.revision, &context())
+                .await
+                .is_err()
+        );
+        // Guard checks must not repeatedly change the revision of an idle paused rule.
+        assert_eq!(store.rules().await.unwrap()[0].revision, paused.revision);
+        store
+            .delete(&paused.id, paused.revision, &context())
+            .await
+            .unwrap();
+    }
+    db.close().await;
+}
+
+#[tokio::test]
 async fn quality_excel_actions_respect_policy_changes_identity_and_current_availability() {
     let Some(db) = TestDatabase::create("quality_excel_guards").await else {
         return;

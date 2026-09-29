@@ -187,7 +187,8 @@ async fn pause_excel_probes(
         "update quality_rules q set enabled=false,config=jsonb_set(config,'{enabled}','false'),
          pending=false,revision=revision+1,lease_token=null,lease_until=null,
          last_action='probe_paused_excel',updated_at=now()
-         where enabled and config->>'detectionMode'='state_probe'
+         where (enabled or pending or lease_token is not null)
+         and config->>'detectionMode'='state_probe'
          and ($1::text is null or q.id=$1) and exists(
            select 1 from provider_accounts a where a.id=q.account_id and a.responses_upstream='excel')
          returning id",
@@ -445,20 +446,22 @@ impl QualityOpsStore for PgQualityOpsStore {
         lock_configuration(&mut tx).await?;
         pause_excel_probes(&mut tx, Some(id)).await?;
         // Commit the automatic pause even when a manual run is now inapplicable.
-        let enabled: bool = sqlx::query_scalar(
-            "select exists(select 1 from quality_rules where id=$1 and enabled)",
+        let applicable: bool = sqlx::query_scalar(
+            "select exists(select 1 from quality_rules q where q.id=$1 and not exists(
+               select 1 from provider_accounts a where a.id=q.account_id
+               and a.responses_upstream='excel' and q.config->>'detectionMode'='state_probe'))",
         )
         .bind(id)
         .fetch_one(&mut *tx)
         .await
         .map_err(unavailable)?;
-        if !enabled {
+        if !applicable {
             tx.commit().await.map_err(unavailable)?;
             return Err(conflict());
         }
         let result = sqlx::query(
             "update quality_rules set pending=true where id=$1 and revision=$2
-             and enabled and not pending and (lease_until is null or lease_until<now())",
+             and not pending and (lease_until is null or lease_until<now())",
         )
         .bind(id)
         .bind(revision)
@@ -499,7 +502,7 @@ impl QualityOpsStore for PgQualityOpsStore {
             return Ok(None);
         }
         let row = sqlx::query(
-            "select * from quality_rules where enabled and (pending or next_run_at<=now())
+            "select * from quality_rules where (pending or (enabled and next_run_at<=now()))
              and (lease_until is null or lease_until<now())
              order by pending desc,next_run_at,id limit 1 for update skip locked",
         )

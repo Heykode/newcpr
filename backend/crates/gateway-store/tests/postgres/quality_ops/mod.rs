@@ -164,22 +164,10 @@ async fn quality_pause_fences_late_completion_and_manual_run_is_deduplicated() {
     assert!(store.claim().await.unwrap().is_none());
     assert!(
         store
-            .enqueue(&updated.id, updated.revision, &context())
+            .enqueue(&updated.id, original.revision, &context())
             .await
             .is_err()
     );
-    let mut enabled = updated.config.clone();
-    enabled.enabled = true;
-    let updated = store
-        .save(
-            Some(&updated.id),
-            Some(updated.revision),
-            enabled,
-            Utc::now() + Duration::hours(1),
-            &context(),
-        )
-        .await
-        .unwrap();
     store
         .enqueue(&updated.id, updated.revision, &context())
         .await
@@ -191,7 +179,14 @@ async fn quality_pause_fences_late_completion_and_manual_run_is_deduplicated() {
             .is_err()
     );
     let manual = store.claim().await.unwrap().unwrap();
+    assert!(!manual.rule.config.enabled);
     assert!(store.current(&manual).await.unwrap());
+    assert!(
+        store
+            .enqueue(&updated.id, updated.revision, &context())
+            .await
+            .is_err()
+    );
     assert!(
         store
             .delete(&updated.id, original.revision, &context())
@@ -204,6 +199,60 @@ async fn quality_pause_fences_late_completion_and_manual_run_is_deduplicated() {
         .unwrap();
     assert!(!store.current(&manual).await.unwrap());
     assert!(store.detail(&manual.run_id).await.unwrap().is_none());
+    db.close().await;
+}
+
+#[tokio::test]
+async fn quality_paused_manual_completion_does_not_resume_schedule() {
+    let Some(db) = TestDatabase::create("quality_manual_once").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let mut config = config("acct_quality_a");
+    config.enabled = false;
+    let rule = store
+        .save(None, None, config, Utc::now(), &context())
+        .await
+        .unwrap();
+    assert!(store.claim().await.unwrap().is_none());
+    store
+        .enqueue(&rule.id, rule.revision, &context())
+        .await
+        .unwrap();
+    let queued = &store.rules().await.unwrap()[0];
+    assert!(!queued.config.enabled);
+    assert!(queued.pending);
+    assert!(!queued.running);
+
+    let claim = store.claim().await.unwrap().unwrap();
+    assert!(!claim.rule.config.enabled);
+    assert!(store.current(&claim).await.unwrap());
+    let running = &store.rules().await.unwrap()[0];
+    assert!(!running.config.enabled);
+    assert!(!running.pending);
+    assert!(running.running);
+    // Even a due next occurrence cannot resume the paused schedule after completion.
+    store
+        .finish(&claim, Utc::now(), vec![answer(QualityVerdict::Correct)])
+        .await
+        .unwrap();
+    let finished = &store.rules().await.unwrap()[0];
+    assert!(!finished.config.enabled);
+    assert!(!finished.pending);
+    assert!(!finished.running);
+    assert_eq!(finished.revision, rule.revision);
+    assert_eq!(finished.last_status.as_deref(), Some("correct"));
+    assert_eq!(
+        store.detail(&claim.run_id).await.unwrap().unwrap().correct,
+        1
+    );
+    assert!(store.claim().await.unwrap().is_none());
+    // A later explicit click can request a second one-shot run.
+    store
+        .enqueue(&rule.id, rule.revision, &context())
+        .await
+        .unwrap();
+    assert!(store.claim().await.unwrap().is_some());
     db.close().await;
 }
 

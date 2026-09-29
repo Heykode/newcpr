@@ -563,7 +563,7 @@ onBeforeUnmount(() => {
             </button>
             <div class="mt-2 flex gap-1 px-2">
               <BaseCheckbox :model-value="batchSelection.includes(rule.id)" :label="`选择规则 ${accountName(rule.config.accountId)}`" :disabled="busy" class="mx-1" @update:model-value="selectBatchRule(rule.id, $event)" />
-              <BaseIconButton label="立即检测" :disabled="busy || !rule.config.enabled || rule.running || rule.pending" @click="mutate(() => runQualityRule({ id: rule.id, revision: rule.revision }))">
+              <BaseIconButton label="立即检测" :disabled="busy || rule.running || rule.pending" @click="mutate(() => runQualityRule({ id: rule.id, revision: rule.revision }))">
                 <Play class="size-4" />
               </BaseIconButton>
               <BaseIconButton :label="rule.config.enabled ? '暂停定时检测' : '启用定时检测'" :disabled="busy" @click="toggle(rule)">

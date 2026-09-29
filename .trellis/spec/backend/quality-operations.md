@@ -91,8 +91,9 @@
   updates atomically invalidate old results. Do not schedule from browser polling.
 - A round has 1–8 concurrent answer/judge samples. Cancellation waits for all active
   requests to finalize and never publishes a partial cancelled round as a verdict.
-- One rule per account; enabled is required for scheduled and manual runs. Saving
-  never queues an immediate run. Reference: ranxi2001/sub2api f80611d6; unlike its
+- One rule per account; enabled is required only for scheduled runs. Manual runs
+  use a one-shot pending flag and never enable the schedule. Saving never queues
+  an immediate run. Reference: ranxi2001/sub2api f80611d6; unlike its
   per-scan worker cap, CPR keeps a database-wide admission bound.
 - Quality-owned scheduling pauses have a separate owner marker. Fixed-account quality
   tests may ignore only that verified pause and their explicit local model-policy
@@ -125,6 +126,42 @@
 - New failure-policy config fields are backward-compatible on upgrade, but older
   binaries using strict config deserialization cannot read them. Do not promise a
   binary-only downgrade; reconcile stored configs and owned account mutations first.
+
+## Manual Checks While Paused
+
+### 1. Scope / Trigger
+- Pausing a schedule must not prevent an explicit one-shot check.
+
+### 2. Signatures
+- `POST /api/admin/quality-ops/run` retains `{id, revision}` and AdminAuth.
+- `QualityOpsStore::enqueue` sets pending; `claim` consumes it under the existing lease.
+
+### 3. Contracts
+- Claim eligibility is `pending or (enabled and next_run_at<=now())`, plus the
+  existing global admission and lease guards. Completion does not enable a rule.
+- Paused manual runs retain configured verdict actions, current configuration
+  fences and account checks. No new request route or schema is introduced.
+
+### 4. Validation & Error Matrix
+- Pending, live lease, stale revision or missing rule -> existing conflict.
+- An Excel account's state probe -> reject, even when its rule is already paused.
+- Switching to Excel invalidates enabled, queued or leased state probes; an idle
+  paused probe is not repeatedly revised. Commit automatic pause before rejection.
+
+### 5. Good / Base / Bad Cases
+- Good: pause, request one manual run, store its result and remain paused.
+- Base: enabled rules still run on Cron and support a deduplicated manual run.
+- Bad: a due Cron time causes a paused rule to run again after manual completion.
+
+### 6. Tests Required
+- Isolated PostgreSQL tests cover due-but-paused rules, single-run completion,
+  duplicate enqueue, old completion fencing, deletion and Excel route changes
+  before enqueue, while queued and while leased. Browser tests cover the same
+  paused/queued/running button states without changing the enabled flag.
+
+### 7. Wrong vs Correct
+- Wrong: remove only the disabled button condition, or enable the rule temporarily.
+- Correct: separate scheduled eligibility from explicit pending work at the store.
 
 ## State Probe Mode
 

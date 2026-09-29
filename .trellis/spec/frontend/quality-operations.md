@@ -76,8 +76,10 @@
   default stays `0 */6 * * *`, evaluated in the chosen timezone; daily time is
   minute-precise. Preserve arbitrary existing Cron expressions in advanced mode
   without rewriting them on open. Repetitions are 1–8 parallel answers per round,
-  bounded by normal account concurrency and interval. Disabled rules cannot trigger
-  manually and saving a rule does not immediately run it.
+  bounded by normal account concurrency and interval. Paused schedules still allow
+  one manual check; disable the button only during mutation, pending or running.
+  A manual check must not save or enable the rule. Show queued/running status while
+  active and paused again on completion; saving a rule does not immediately run it.
 - Failed batch creation preserves successes, leaves only failed accounts selected,
   and retries without duplicating completed rules. Failure-action groups are separate
   from the judge group and may include disabled groups. Optional auto_restore is off
