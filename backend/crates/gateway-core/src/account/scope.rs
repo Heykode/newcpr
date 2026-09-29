@@ -250,6 +250,7 @@ pub struct FrozenAccountScope {
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
     disable_fast: bool,
+    quality_model_account: Option<ProviderAccountId>,
 }
 
 impl FrozenAccountScope {
@@ -262,6 +263,7 @@ impl FrozenAccountScope {
             directory,
             client_scope,
             disable_fast: false,
+            quality_model_account: None,
         }
     }
 
@@ -274,6 +276,14 @@ impl FrozenAccountScope {
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
         self.disable_fast
+    }
+
+    /// Only the trusted fixed-account quality entry may ignore local model policy.
+    /// The account must still exist in the original scope; directory policy is unchanged.
+    pub(crate) fn for_quality_check(&self, account_id: ProviderAccountId) -> Self {
+        let mut scope = self.clone();
+        scope.quality_model_account = Some(account_id);
+        scope
     }
 
     #[must_use]
@@ -295,10 +305,11 @@ impl FrozenAccountScope {
     #[must_use]
     pub fn allows_model(&self, account_id: &ProviderAccountId, upstream_model: &str) -> bool {
         self.allows(account_id)
-            && self
-                .directory
-                .account(account_id)
-                .is_some_and(|account| account.model_access.allows(upstream_model))
+            && (self.quality_model_account.as_ref() == Some(account_id)
+                || self
+                    .directory
+                    .account(account_id)
+                    .is_some_and(|account| account.model_access.allows(upstream_model)))
     }
 
     /// 目录按整个授权账号池过滤，不能只看用于获取元数据的账号政策。

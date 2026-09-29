@@ -1216,6 +1216,8 @@ fn account_probe_should_not_write_to_the_persistent_execution_store() {
 
 #[test]
 fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges() {
+    use gateway_core::account::{AccountModelAccess, AccountModelAccessMode};
+
     struct QualityProvider {
         complete: bool,
         probe: bool,
@@ -1241,6 +1243,15 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             assert!(!context.is_diagnostic_required_account());
             assert!(context.is_quality_check());
             assert_eq!(context.required_account().unwrap().as_str(), "acct_start");
+            let scope = context.account_scope().expect("quality account scope");
+            assert!(scope.allows_model(context.required_account().unwrap(), "gpt-start"));
+            assert!(
+                !scope.allows_model(&ProviderAccountId::new("acct_other").unwrap(), "gpt-start",)
+            );
+            assert!(!scope.allows_model(
+                &ProviderAccountId::new("acct_missing").unwrap(),
+                "gpt-start",
+            ));
             if self.probe {
                 let Operation::Generate(generate) = request.operation() else {
                     panic!("generate");
@@ -1296,19 +1307,59 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             ))
         }
     }
-    for (complete, probe) in [(true, false), (false, false), (true, true), (false, true)] {
+    let cases = [(true, false), (false, false), (true, true), (false, true)]
+        .into_iter()
+        .flat_map(|(complete, probe)| {
+            [
+                AccountModelAccess::all(),
+                AccountModelAccess::new(
+                    AccountModelAccessMode::Allowlist,
+                    vec!["gpt-other".into()],
+                )
+                .unwrap(),
+                AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["gpt-start".into()])
+                    .unwrap(),
+            ]
+            .map(|policy| (complete, probe, policy))
+        });
+    for (complete, probe, model_access) in cases {
         let store = Arc::new(TrackingExecutionStore::default());
         let providers = ProviderRegistry::new([
             Arc::new(QualityProvider { complete, probe }) as Arc<dyn Provider>
         ])
         .unwrap();
+        let target = ProviderAccountId::new("acct_start").unwrap();
+        let ordinary_allowed = model_access.allows("gpt-start");
+        let snapshot = start_snapshot().with_account_directory(Arc::new(
+            RuntimeAccountDirectory::new(BTreeMap::from([
+                (
+                    target.clone(),
+                    RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new())
+                        .with_model_access(model_access.clone()),
+                ),
+                (
+                    ProviderAccountId::new("acct_other").unwrap(),
+                    RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new())
+                        .with_model_access(
+                            AccountModelAccess::new(
+                                AccountModelAccessMode::Denylist,
+                                vec!["gpt-start".into()],
+                            )
+                            .unwrap(),
+                        ),
+                ),
+            ])),
+        ));
+        let ordinary_scope = snapshot.all_account_scope();
+        assert_eq!(
+            snapshot.contains_public_model_for_scope(
+                &PublicModelId::new("gpt-start").unwrap(),
+                &ordinary_scope,
+            ),
+            ordinary_allowed,
+        );
         let service = DefaultExecutionService::new(
-            RuntimeSnapshotHandle::new(start_snapshot().with_account_directory(Arc::new(
-                RuntimeAccountDirectory::new(BTreeMap::from([(
-                    ProviderAccountId::new("acct_start").unwrap(),
-                    RuntimeAccount::new(ProviderKind::new("openai").unwrap(), BTreeSet::new()),
-                )])),
-            ))),
+            RuntimeSnapshotHandle::new(snapshot),
             store.clone(),
             providers,
             Arc::new(UnusedAdmissions),
@@ -1356,6 +1407,18 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             Some("account_quality_check")
         );
         assert_eq!(store.finalizations.lock().unwrap().len(), expected);
+        assert_eq!(
+            ordinary_scope.allows_model(&target, "gpt-start"),
+            ordinary_allowed
+        );
+        assert_eq!(
+            ordinary_scope
+                .directory()
+                .account(&target)
+                .unwrap()
+                .model_access(),
+            &model_access,
+        );
     }
 }
 

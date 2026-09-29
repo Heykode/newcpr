@@ -147,7 +147,9 @@ async function main() {
       }
       if (url.pathname.endsWith('/run')) {
         enqueues++
-        assert.deepEqual(route.request().postDataJSON(), { id: 'quality-rule', revision: 1 })
+        assert.deepEqual(route.request().postDataJSON(), { id: rules[0].id, revision: rules[0].revision })
+        assert.equal(rules[0].pending, false)
+        assert.equal(rules[0].running, false)
         rules[0].pending = true
         return fulfill(route, null)
       }
@@ -186,9 +188,25 @@ async function main() {
     assert.equal(enqueues, 1)
     await page.getByRole('button', { name: '暂停定时检测', exact: true }).click()
     await page.getByRole('button', { name: '启用定时检测', exact: true }).waitFor()
-    assert.equal(await page.getByRole('button', { name: '立即检测', exact: true }).isDisabled(), true)
+    assert.equal(await page.getByRole('button', { name: '立即检测', exact: true }).isDisabled(), false)
     assert.equal(saves, 1)
     assert.match(await page.locator('.quality-rule').getByText('已暂停', { exact: true }).getAttribute('class'), /text-cp-text-secondary/)
+    await page.getByRole('button', { name: '立即检测', exact: true }).dblclick()
+    await page.locator('.quality-rule').getByText('已排队', { exact: true }).waitFor()
+    assert.equal(enqueues, 2)
+    assert.equal(saves, 1)
+    assert.equal(rules[0].config.enabled, false)
+    assert.equal(await page.getByRole('button', { name: '立即检测', exact: true }).isDisabled(), true)
+    rules[0].pending = false
+    rules[0].running = true
+    await page.reload()
+    await page.locator('.quality-rule').getByText('检测中', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: '立即检测', exact: true }).isDisabled(), true)
+    rules[0].running = false
+    await page.reload()
+    await page.locator('.quality-rule').getByText('已暂停', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: '立即检测', exact: true }).isDisabled(), false)
+    assert.equal(saves, 1)
     await page.getByRole('button', { name: '编辑规则', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '编辑检测规则' })
     await editor.waitFor()
