@@ -53,6 +53,7 @@ fn source_tree_should_match_frozen_machine_manifest() {
         "src/admin/observability/presenter.rs",
         "src/admin/observability/query.rs",
         "src/admin/observability/routes.rs",
+        "src/admin/observability/search.rs",
         "src/admin/observability/wire.rs",
         "src/admin/outbound_user_agent.rs",
         "src/admin/presenter.rs",
