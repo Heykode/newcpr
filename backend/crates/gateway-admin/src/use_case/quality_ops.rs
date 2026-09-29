@@ -43,6 +43,14 @@ pub fn next_run(
     config: &QualityRuleConfig,
     now: DateTime<Utc>,
 ) -> Result<DateTime<Utc>, AdminError> {
+    if let Some(seconds) = config.interval_seconds {
+        if !(5..=31_536_000).contains(&seconds) {
+            return Err(AdminError::invalid("检测间隔必须为 5 至 31536000 秒的整数"));
+        }
+        return now
+            .checked_add_signed(chrono::Duration::seconds(i64::from(seconds)))
+            .ok_or_else(|| AdminError::invalid("下次检测时间超出范围"));
+    }
     if config.cron.split_whitespace().count() != 5 {
         return Err(AdminError::invalid("Cron 必须为五段：分 时 日 月 周"));
     }
@@ -861,6 +869,7 @@ mod tests {
             account_id: "test-account".into(),
             model: "test-model".into(),
             enabled: true,
+            interval_seconds: None,
             cron: "0 8 * * *".into(),
             timezone: "Asia/Shanghai".into(),
             repetitions: 1,
@@ -887,6 +896,25 @@ mod tests {
         config.timezone = "invalid".into();
         assert!(next_run(&config, now).is_err());
         config.timezone = "UTC".into();
+        for seconds in [5, 17, 60, 90, 31_536_000] {
+            config.interval_seconds = Some(seconds);
+            assert_eq!(
+                next_run(&config, now).unwrap(),
+                now + chrono::Duration::seconds(i64::from(seconds))
+            );
+        }
+        for seconds in [0, 4, 31_536_001, u32::MAX] {
+            config.interval_seconds = Some(seconds);
+            assert!(next_run(&config, now).is_err());
+        }
+        config.interval_seconds = Some(60);
+        config.cron.clear();
+        config.timezone = "unused-for-interval".into();
+        assert_eq!(
+            next_run(&config, now).unwrap(),
+            now + chrono::Duration::seconds(60)
+        );
+        assert!(next_run(&config, DateTime::<Utc>::MAX_UTC).is_err());
         config.repetitions = 9;
         assert!(validate(&config).is_err());
     }
@@ -901,6 +929,13 @@ mod tests {
             "judgePrompt": "compare"
         });
         let mut config: QualityRuleConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(config.interval_seconds, None);
+        assert!(
+            serde_json::to_value(&config)
+                .unwrap()
+                .get("intervalSeconds")
+                .is_none()
+        );
         assert_eq!(config.detection_mode, QualityDetectionMode::Answer);
         assert_eq!(config.failure_action, QualityFailureAction::None);
         assert!(!config.auto_restore);

@@ -26,7 +26,7 @@
 - Account list responses include nullable qualityMonitoring with ruleId/revision,
   enabled/running/pending, nextRunAt, lastStatus/lastRunAt/lastAction and sourceTemplate.
   Read once for the current page; no per-account browser polling or model-path query.
-- Saving/applying schedules the next Cron occurrence without immediate execution.
+- Saving/applying schedules the next configured occurrence without immediate execution.
   Provider compatibility, account settings, quality ownership and probes are unchanged.
 
 ### 4. Validation & Error Matrix
@@ -56,6 +56,16 @@
   versions inside each application's transaction.
 
 ## Detection Execution
+
+- Optional `intervalSeconds` in persisted rule/template JSON selects fixed delays of
+  5–31536000 integer seconds. New UI defaults to 60; absent/null retains the exact
+  legacy five-field Cron and timezone contract, never silently migrate old rules.
+  Seconds take precedence over retained Cron fields. `next_run` is shared by save,
+  template application and completion; checked timestamp addition rejects overflow.
+  Delay begins at save/completion, not at the previous start. Keep five-second worker
+  scans, global admission, no-overlap and revision fences unchanged; actual starts
+  may be later. Old strict-deserialization binaries cannot read seconds configs;
+  reconcile configs before downgrade. No schema migration is required.
 
 - `AccountProbe::quality_check` is separate from diagnostic `probe`. It MUST use
   the persistent ordinary coordinator with its fixed-account quality selection. Never

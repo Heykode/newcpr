@@ -10,36 +10,24 @@ const { outputText } = ts.transpileModule(readFileSync(new URL('../src/views/qua
 })
 const exports = {}
 runInNewContext(outputText, { exports })
-const { readSchedule, writeSchedule, scheduleSummary } = exports
+const { qualityScheduleSummary, DEFAULT_QUALITY_INTERVAL_SECONDS, MIN_QUALITY_INTERVAL_SECONDS, MAX_QUALITY_INTERVAL_SECONDS } = exports
 
-test('quality scheduling preserves the existing six-hour default and hourly presets', () => {
-  for (const interval of ['1', '3', '6', '12']) {
-    const cron = writeSchedule(interval, '09:00')
-    assert.equal(readSchedule(cron).frequency, interval)
-  }
-  assert.equal(writeSchedule('6', '09:00'), '0 */6 * * *')
-  assert.equal(readSchedule('0 */1 * * *').frequency, '1')
-  assert.equal(scheduleSummary('6', ''), '每天 00:00、06:00、12:00、18:00')
+test('new quality intervals default to sixty seconds with bounded integer input', () => {
+  assert.equal(DEFAULT_QUALITY_INTERVAL_SECONDS, 60)
+  assert.equal(MIN_QUALITY_INTERVAL_SECONDS, 5)
+  assert.equal(MAX_QUALITY_INTERVAL_SECONDS, 31_536_000)
 })
 
-test('daily schedules round-trip midnight, minute precision and end of day', () => {
-  for (const time of ['00:00', '00:05', '08:30', '23:59']) {
-    const cron = writeSchedule('daily', time)
-    assert.equal(readSchedule(cron).frequency, 'daily')
-    assert.equal(readSchedule(cron).time, time)
-  }
-  assert.equal(writeSchedule('daily', '08:30'), '30 8 * * *')
-  assert.equal(scheduleSummary('daily', '08:30'), '每天 08:30')
+test('seconds take precedence without cron approximation or timezone dependence', () => {
+  for (const intervalSeconds of [5, 17, 60, 90, 31_536_000])
+    assert.equal(qualityScheduleSummary({ intervalSeconds, cron: '0 */6 * * *', timezone: 'UTC' }), `每 ${intervalSeconds} 秒`)
 })
 
-test('custom expressions are not coerced into a simpler and different schedule', () => {
-  for (const cron of ['15 9 * * 1-5', '0 */2 * * *', '0 0 1 * *', '*/30 * * * *', '0 0 9 * * *', '0 24 * * *', '60 9 * * *', '']) {
-    assert.equal(readSchedule(cron).frequency, 'custom', cron)
+test('legacy schedules retain original expression and timezone without conversion', () => {
+  for (const cron of ['15 9 * * 1-5', '0 */6 * * *', '30 8 * * *', '0 0 1 * *']) {
+    const config = { cron, timezone: 'Asia/Shanghai' }
+    assert.equal(qualityScheduleSummary(config), `原定时：${cron}（Asia/Shanghai）`)
+    assert.equal(qualityScheduleSummary({ ...config, intervalSeconds: null }), qualityScheduleSummary(config))
+    assert.equal(config.intervalSeconds, undefined)
   }
-  assert.equal(writeSchedule('custom', '08:30'), null)
-})
-
-test('invalid or incomplete daily times cannot replace the saved cron expression', () => {
-  for (const time of ['', '08:', '24:00', '12:60', '9:30', '-1:00', '08:30:01'])
-    assert.equal(writeSchedule('daily', time), null)
 })

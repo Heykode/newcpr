@@ -41,10 +41,12 @@ function base(overrides = {}) {
 const rule = (id, config = base()) => ({ id, revision: 8, config })
 
 test('only checked fields are included and account identity cannot be patched', () => {
-  const draft = base({ cron: '0 */12 * * *', model: 'another-model' })
-  const patch = buildQualityPatch(['cron'], draft)
-  assert.deepEqual(plain(patch), { cron: draft.cron })
-  assert.deepEqual(plain(applyQualityPatch(base(), patch)), { ...base(), cron: draft.cron })
+  const draft = base({ intervalSeconds: 75, model: 'another-model' })
+  const patch = buildQualityPatch(['intervalSeconds'], draft)
+  assert.deepEqual(plain(patch), { intervalSeconds: 75 })
+  assert.deepEqual(plain(applyQualityPatch(base(), patch)), { ...base(), intervalSeconds: 75 })
+  assert.equal(applyQualityPatch(base(), { model: 'changed' }).intervalSeconds, undefined)
+  assert.equal(applyQualityPatch(base({ intervalSeconds: 90 }), { model: 'changed' }).intervalSeconds, 90)
   assert.equal(applyQualityPatch(base(), { accountId: 'must-not-change' }).accountId, 'account-a')
   assert.deepEqual(plain(buildQualityPatch([], draft)), {})
 })
@@ -118,7 +120,7 @@ test('batch refreshes revisions, preserves fresh unrelated values and retries fa
     stopped: () => false,
     onResult: result => results.push(plain(result)),
   }
-  await saveQualityBatch(['a', 'b', 'a'], { cron: '15 9 * * *' }, ports)
+  await saveQualityBatch(['a', 'b', 'a'], { intervalSeconds: 75 }, ports)
   assert.deepEqual(calls.map(value => value.id), ['a', 'b'])
   assert.equal(calls[1].revision, 8)
   assert.equal(calls[1].config.judgePrompt, 'fresh-prompt')
@@ -127,7 +129,7 @@ test('batch refreshes revisions, preserves fresh unrelated values and retries fa
   results = []
   fail = false
   current[1] = { ...current[1], revision: 20, config: { ...current[1].config, judgePrompt: 'changed-again' } }
-  await saveQualityBatch(retryIds, { cron: '15 9 * * *' }, ports)
+  await saveQualityBatch(retryIds, { intervalSeconds: 75 }, ports)
   assert.deepEqual(calls.map(value => value.id), ['a', 'b', 'b'])
   assert.equal(calls[2].revision, 20)
   assert.equal(calls[2].config.judgePrompt, 'changed-again')
@@ -149,8 +151,8 @@ test('failed refresh and empty selection do not write any rule', async () => {
 test('deleted rules fail explicitly and unchanged rules are not saved', async () => {
   let writes = 0
   const results = []
-  await saveQualityBatch(['gone', 'a'], { cron: base().cron }, {
-    read: async () => [rule('a')],
+  await saveQualityBatch(['gone', 'a'], { intervalSeconds: 60 }, {
+    read: async () => [rule('a', base({ intervalSeconds: 60 }))],
     save: async () => { writes++ },
     stopped: () => false,
     onResult: value => results.push(plain(value)),
