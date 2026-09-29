@@ -185,6 +185,11 @@ impl CaptureManager {
         if !storage_fault && manager.cleanup().await.is_err() {
             manager.fault();
         }
+        if !manager.shared.fault.load(Ordering::Acquire)
+            && manager.restore_global_capture().await.is_err()
+        {
+            manager.fault();
+        }
         Ok((
             manager.clone(),
             CaptureWriter {
@@ -207,6 +212,47 @@ impl CaptureManager {
         Ok(self.directory.join(format!("{}.jsonl", uuid(id)?)))
     }
 
+    fn global_task(config: &RequestCaptureConfig) -> CaptureTask {
+        CaptureTask {
+            id: Uuid::new_v4().to_string(),
+            scope: CaptureScope::Global,
+            target_id: String::new(),
+            include_media: config.include_media,
+            started_at: Utc::now(),
+            // Global collection ends on an explicit stop, not a per-account timer.
+            // Record retention below is independent of this task's lifetime.
+            expires_at: chrono::DateTime::from_timestamp(253_402_300_799, 0).unwrap(),
+            status: CaptureTaskStatus::Running,
+        }
+    }
+
+    async fn restore_global_capture(&self) -> AdminStoreResult<()> {
+        let config = self
+            .shared
+            .control
+            .read()
+            .map_err(unavailable)?
+            .config
+            .clone();
+        if !config.enabled || !config.global_errors {
+            return Ok(());
+        }
+        let task = Self::global_task(&config);
+        sqlx::query("insert into request_capture_tasks(id,instance_id,task,expires_at) values($1::text::uuid,$2::text::uuid,$3,$4)")
+            .bind(&task.id).bind(&self.instance_id).bind(serde_json::to_value(&task).map_err(unavailable)?)
+            .bind(task.expires_at).execute(&self.pool).await.map_err(unavailable)?;
+        self.shared
+            .control
+            .write()
+            .map_err(unavailable)?
+            .tasks
+            .push(Arc::new(ActiveTask {
+                task,
+                stopped: AtomicBool::new(false),
+            }));
+        Ok(())
+    }
+
     async fn tasks(&self) -> AdminStoreResult<Vec<CaptureTask>> {
         let rows: Vec<Value> = sqlx::query_scalar("select task from request_capture_tasks where instance_id::text=$1 order by expires_at desc limit 100")
             .bind(&self.instance_id).fetch_all(&self.pool).await.map_err(unavailable)?;
@@ -227,6 +273,8 @@ impl CaptureManager {
             .map_err(unavailable)?
             .config
             .retention_days;
+        sqlx::query("delete from request_capture_records r using request_capture_tasks t where r.task_id=t.id and t.instance_id::text=$1 and t.task->>'scope'='global' and r.created_at < now() - ($2::int * interval '1 day')")
+            .bind(&self.instance_id).bind(i32::from(days)).execute(&self.pool).await.map_err(unavailable)?;
         sqlx::query("delete from request_capture_tasks where instance_id::text=$1 and expires_at < now() - ($2::int * interval '1 day')")
             .bind(&self.instance_id).bind(i32::from(days)).execute(&self.pool).await.map_err(unavailable)?;
         sqlx::query("update request_capture_tasks set task=jsonb_set(task,'{status}','\"expired\"') where instance_id::text=$1 and expires_at<=now() and task->>'status'='running'")

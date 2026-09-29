@@ -60,6 +60,33 @@ impl CaptureManager {
 
 #[async_trait]
 impl RequestCaptureStore for CaptureManager {
+    async fn settings(&self) -> AdminStoreResult<RequestCaptureSettings> {
+        let control = self.shared.control.read().map_err(unavailable)?;
+        let storage_fault = self.shared.fault.load(Ordering::Acquire);
+        Ok(RequestCaptureSettings {
+            config: control.config.clone(),
+            global_active: !storage_fault
+                && control.config.enabled
+                && control.config.global_errors
+                && control
+                    .tasks
+                    .iter()
+                    .any(|task| task.task.scope == CaptureScope::Global && task.accepts()),
+            storage_fault,
+            skipped: self.shared.skipped.load(Ordering::Acquire),
+        })
+    }
+
+    async fn for_request(&self, request_id: &str) -> AdminStoreResult<Vec<CaptureRecord>> {
+        let records: Vec<Value> = sqlx::query_scalar(
+            "select r.record from request_capture_records r join request_capture_tasks t on t.id=r.task_id where t.instance_id::text=$1 and r.record->>'requestId'=$2 order by r.created_at desc limit 32"
+        ).bind(&self.instance_id).bind(request_id).fetch_all(&self.pool).await.map_err(unavailable)?;
+        records
+            .into_iter()
+            .map(|row| serde_json::from_value(row).map_err(unavailable))
+            .collect()
+    }
+
     async fn status(&self) -> AdminStoreResult<RequestCaptureStatus> {
         let records: Vec<Value> = sqlx::query_scalar(
             "select r.record from request_capture_records r join request_capture_tasks t on t.id=r.task_id where t.instance_id::text=$1 order by r.created_at desc limit 200"
@@ -93,15 +120,36 @@ impl RequestCaptureStore for CaptureManager {
     ) -> AdminStoreResult<()> {
         config.validate().map_err(unavailable)?;
         let _io = self.io.lock().await;
+        let reset = {
+            let control = self.shared.control.read().map_err(unavailable)?;
+            !config.enabled
+                || config.global_errors != control.config.global_errors
+                || config.global_errors && config.include_media != control.config.include_media
+                || config.global_errors
+                    && !control
+                        .tasks
+                        .iter()
+                        .any(|task| task.task.scope == CaptureScope::Global && task.accepts())
+        };
+        let global = (reset
+            && config.enabled
+            && config.global_errors
+            && !self.shared.fault.load(Ordering::Acquire))
+        .then(|| Self::global_task(&config));
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         sqlx::query("update request_capture_config set config=$1 where singleton")
             .bind(serde_json::to_value(&config).map_err(unavailable)?)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
-        if !config.enabled {
+        if reset {
             sqlx::query("update request_capture_tasks set task=jsonb_set(jsonb_set(task,'{status}','\"stopped\"'),'{expiresAt}',to_jsonb(least(expires_at,now()))), expires_at=least(expires_at,now()) where instance_id::text=$1 and task->>'status'='running'")
                 .bind(&self.instance_id).execute(&mut *tx).await.map_err(unavailable)?;
+        }
+        if let Some(task) = &global {
+            sqlx::query("insert into request_capture_tasks(id,instance_id,task,expires_at) values($1::text::uuid,$2::text::uuid,$3,$4)")
+                .bind(&task.id).bind(&self.instance_id).bind(serde_json::to_value(task).map_err(unavailable)?)
+                .bind(task.expires_at).execute(&mut *tx).await.map_err(unavailable)?;
         }
         crate::postgres::insert_admin_audit_event(
             &mut tx,
@@ -117,11 +165,17 @@ impl RequestCaptureStore for CaptureManager {
         .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         let mut control = self.shared.control.write().map_err(unavailable)?;
-        if !config.enabled {
+        if reset {
             for task in &control.tasks {
                 task.stopped.store(true, Ordering::Release);
             }
             control.tasks.clear();
+        }
+        if let Some(task) = global {
+            control.tasks.push(Arc::new(ActiveTask {
+                task,
+                stopped: AtomicBool::new(false),
+            }));
         }
         control.config = config;
         Ok(())
@@ -140,6 +194,16 @@ impl RequestCaptureStore for CaptureManager {
             .control
             .read()
             .map_err(unavailable)?
+            .config
+            .global_errors
+        {
+            return Err(conflict());
+        }
+        if self
+            .shared
+            .control
+            .read()
+            .map_err(unavailable)?
             .tasks
             .iter()
             .filter(|task| {
@@ -151,6 +215,7 @@ impl RequestCaptureStore for CaptureManager {
             return Err(conflict());
         }
         let query = match input.scope {
+            CaptureScope::Global => return Err(conflict()),
             CaptureScope::Account => "select exists(select 1 from provider_accounts where id=$1)",
             CaptureScope::Group => "select exists(select 1 from account_groups where id=$1)",
             CaptureScope::Key => "select exists(select 1 from client_api_keys where id=$1)",
@@ -285,7 +350,6 @@ impl RequestCaptureStore for CaptureManager {
         context: &MutationContext,
     ) -> AdminStoreResult<CapturePage> {
         let _io = self.io.lock().await;
-        self.enabled()?;
         let mut file = self.record_file(id).await?;
         self.audit("request_capture.read", id, context).await?;
         let size = file.metadata().await.map_err(unavailable)?.len();
@@ -316,7 +380,6 @@ impl RequestCaptureStore for CaptureManager {
 
     async fn export(&self, id: &str, context: &MutationContext) -> AdminStoreResult<CaptureExport> {
         let _io = self.io.lock().await;
-        self.enabled()?;
         let permit = self
             .exports
             .clone()
@@ -343,7 +406,6 @@ impl RequestCaptureStore for CaptureManager {
     ) -> AdminStoreResult<CaptureExport> {
         let id = uuid(id)?;
         let _io = self.io.lock().await;
-        self.enabled()?;
         let permit = self
             .exports
             .clone()

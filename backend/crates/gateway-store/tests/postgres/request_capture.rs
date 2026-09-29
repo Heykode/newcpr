@@ -355,7 +355,7 @@ async fn request_capture_stopping_disabling_and_restarting_never_resume_tasks() 
         .configure(RequestCaptureConfig::default(), &context())
         .await
         .unwrap();
-    assert!(manager.read(id, 0, &context()).await.is_err());
+    assert!(manager.read(id, 0, &context()).await.is_ok());
     let disabled = manager
         .status()
         .await
@@ -450,6 +450,7 @@ async fn request_capture_disk_quota_stops_capture_without_indexing_partial_files
                 enabled: true,
                 quota_mib: 1,
                 retention_days: 7,
+                ..Default::default()
             },
             &context(),
         )
@@ -490,6 +491,283 @@ async fn request_capture_disk_quota_stops_capture_without_indexing_partial_files
     );
     assert_eq!(status.buffered_bytes, 0);
     assert!(!status.storage_fault);
+    cancel.cancel();
+    worker.await.unwrap();
+    drop(manager);
+    database.close().await;
+}
+
+#[test]
+fn request_capture_legacy_config_does_not_enable_global_collection() {
+    let config: RequestCaptureConfig = serde_json::from_value(json!({
+        "enabled": true, "quotaMib": 1024, "retentionDays": 7
+    }))
+    .unwrap();
+    assert!(!config.global_errors);
+    assert!(!config.include_media);
+    assert!(
+        CreateCaptureTask {
+            scope: CaptureScope::Global,
+            target_id: "fixture".into(),
+            minutes: 10,
+            include_media: false,
+        }
+        .validate()
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn request_capture_global_is_opt_in_request_scoped_and_readable_after_disable() {
+    let Some(database) = TestDatabase::create("capture_global").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&database, directory.path()).await;
+    let old_task = enable(&manager).await;
+    assert!(!manager.settings().await.unwrap().global_active);
+    let config = RequestCaptureConfig {
+        enabled: true,
+        global_errors: true,
+        quota_mib: 8,
+        retention_days: 2,
+        ..Default::default()
+    };
+    manager.configure(config.clone(), &context()).await.unwrap();
+    assert!(manager.settings().await.unwrap().global_active);
+    let status = manager.status().await.unwrap();
+    assert_eq!(
+        status
+            .tasks
+            .iter()
+            .find(|task| task.id == old_task.id)
+            .unwrap()
+            .status,
+        CaptureTaskStatus::Stopped
+    );
+    assert_eq!(
+        status
+            .tasks
+            .iter()
+            .filter(|task| task.status == CaptureTaskStatus::Running)
+            .count(),
+        1
+    );
+
+    // No account has been selected: a local adaptation failure still has evidence.
+    let request = trace(&manager, "req_local_failure");
+    request.capture(
+        "client.request.body",
+        br#"{"input":"local fixture","access_token":"private-fixture"}"#,
+    );
+    request.record("downstream.status", json!({"status":400}));
+    request.record("request.finished", json!({"outcome":"Failed"}));
+    drop(request);
+    wait_records(&manager, 1).await;
+
+    let request = trace(&manager, "req_other_account");
+    select(&request, "another-fixture-account");
+    request.capture(
+        "upstream.error.body",
+        br#"{"error":{"message":"another fixture"}}"#,
+    );
+    request.record("attempt.failed", json!({"kind":"upstream_rejected"}));
+    request.record("request.finished", json!({"outcome":"Failed"}));
+    drop(request);
+    wait_records(&manager, 2).await;
+
+    let success = trace(&manager, "req_success_global");
+    success.capture(
+        "client.request.body",
+        br#"{"input":"success is not retained"}"#,
+    );
+    success.record("request.finished", json!({"outcome":"Succeeded"}));
+    drop(success);
+    assert!(
+        manager
+            .for_request("req_success_global")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let records = manager.for_request("req_local_failure").await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].request_id, "req_local_failure");
+    assert!(manager.for_request("req_unknown").await.unwrap().is_empty());
+    let id = &records[0].id;
+    let body = manager.read(id, 0, &context()).await.unwrap().text;
+    assert!(body.contains("local fixture"));
+    assert!(!body.contains("private-fixture"));
+    assert!(!body.contains("another fixture"));
+
+    let mut disabled = config.clone();
+    disabled.enabled = false;
+    disabled.global_errors = false;
+    manager.configure(disabled, &context()).await.unwrap();
+    assert!(manager.start("req_disabled", "any-key", &[]).is_none());
+    assert!(!manager.settings().await.unwrap().global_active);
+    assert_eq!(manager.read(id, 0, &context()).await.unwrap().text, body);
+    assert_eq!(
+        manager
+            .for_request("req_local_failure")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let exported = manager
+        .export(id, &context())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(exported.iter().all(Result::is_ok));
+
+    manager.configure(config, &context()).await.unwrap();
+    cancel.cancel();
+    worker.await.unwrap();
+    drop(manager);
+    let (manager, _) = CaptureManager::open(database.pool.clone(), directory.path().into())
+        .await
+        .unwrap();
+    assert!(manager.settings().await.unwrap().global_active);
+    assert!(
+        manager
+            .start("req_restart", "different-key", &["different-group"])
+            .is_some()
+    );
+    assert_eq!(manager.settings().await.unwrap().config.quota_mib, 8);
+    assert_eq!(manager.settings().await.unwrap().config.retention_days, 2);
+    drop(manager);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn request_capture_global_retention_is_per_record_not_running_task() {
+    let Some(database) = TestDatabase::create("capture_global_retention").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&database, directory.path()).await;
+    manager
+        .configure(
+            RequestCaptureConfig {
+                enabled: true,
+                global_errors: true,
+                retention_days: 1,
+                ..Default::default()
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    for id in ["req_old_global", "req_recent_global"] {
+        let request = trace(&manager, id);
+        request.capture("client.request.body", br#"{"input":"retention fixture"}"#);
+        request.record("request.finished", json!({"outcome":"Failed"}));
+        drop(request);
+    }
+    wait_records(&manager, 2).await;
+    let old = manager
+        .for_request("req_old_global")
+        .await
+        .unwrap()
+        .remove(0);
+    sqlx::query(
+        "update request_capture_records set created_at=now()-interval '2 days' where id::text=$1",
+    )
+    .bind(&old.id)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    cancel.cancel();
+    worker.await.unwrap();
+    drop(manager);
+    let (manager, _) = CaptureManager::open(database.pool.clone(), directory.path().into())
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .for_request("req_old_global")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!directory.path().join(format!("{}.jsonl", old.id)).exists());
+    assert_eq!(
+        manager
+            .for_request("req_recent_global")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(manager.settings().await.unwrap().global_active);
+    drop(manager);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn request_capture_global_quota_pauses_without_affecting_delivery_and_can_resume() {
+    let Some(database) = TestDatabase::create("capture_global_quota").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&database, directory.path()).await;
+    let mut config = RequestCaptureConfig {
+        enabled: true,
+        global_errors: true,
+        quota_mib: 1,
+        ..Default::default()
+    };
+    manager.configure(config.clone(), &context()).await.unwrap();
+    let body = serde_json::to_vec(&json!({"input":"x".repeat(600 * 1024)})).unwrap();
+    for (index, id) in ["req_quota_first", "req_quota_overflow"]
+        .into_iter()
+        .enumerate()
+    {
+        let request = trace(&manager, id);
+        request.capture("client.request.body", &body);
+        request.record("request.finished", json!({"outcome":"Failed"}));
+        drop(request);
+        if index == 0 {
+            wait_records(&manager, 1).await;
+        }
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if !manager.settings().await.unwrap().global_active {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let settings = manager.settings().await.unwrap();
+    assert!(!settings.storage_fault);
+    assert!(settings.config.enabled);
+    assert!(settings.skipped > 0);
+    assert!(manager.start("req_paused", "any-key", &[]).is_none());
+    assert!(
+        manager
+            .for_request("req_quota_overflow")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        manager.for_request("req_quota_first").await.unwrap().len(),
+        1
+    );
+    config.quota_mib = 2;
+    manager.configure(config, &context()).await.unwrap();
+    assert!(manager.settings().await.unwrap().global_active);
+    let request = trace(&manager, "req_quota_resumed");
+    request.capture("client.request.body", &body);
+    request.record("request.finished", json!({"outcome":"Failed"}));
+    drop(request);
+    wait_records(&manager, 2).await;
     cancel.cancel();
     worker.await.unwrap();
     drop(manager);

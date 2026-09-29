@@ -1,4 +1,4 @@
-//! Administrator-only, scoped and time-limited error capture.
+//! Administrator-only, opt-in global or scoped error capture.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,10 @@ use super::AdminError;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestCaptureConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub global_errors: bool,
+    #[serde(default)]
+    pub include_media: bool,
     pub quota_mib: u32,
     pub retention_days: u16,
 }
@@ -17,6 +21,8 @@ impl Default for RequestCaptureConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            global_errors: false,
+            include_media: false,
             quota_mib: 1024,
             retention_days: 7,
         }
@@ -35,6 +41,7 @@ impl RequestCaptureConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureScope {
+    Global,
     Key,
     Account,
     Group,
@@ -53,6 +60,7 @@ pub struct CreateCaptureTask {
 impl CreateCaptureTask {
     pub fn validate(&self) -> Result<(), AdminError> {
         if !(1..=1440).contains(&self.minutes)
+            || self.scope == CaptureScope::Global
             || self.target_id.is_empty()
             || self.target_id.len() > 128
             || self.target_id.chars().any(char::is_control)
@@ -106,6 +114,15 @@ pub struct RequestCaptureStatus {
     pub active_sessions: usize,
     pub buffered_bytes: usize,
     pub storage_fault: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestCaptureSettings {
+    pub config: RequestCaptureConfig,
+    pub global_active: bool,
+    pub storage_fault: bool,
+    pub skipped: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

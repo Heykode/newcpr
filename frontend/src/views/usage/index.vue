@@ -13,6 +13,7 @@ import BaseTableColumnSettings from '@/components/base/BaseTable/BaseTableColumn
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
+import DetailedCaptureControl from './components/DetailedCaptureControl.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
@@ -130,7 +131,10 @@ watch(timeRange, () => {
               成功请求与失败请求明细
             </p>
           </div>
-          <BaseSegmented v-model="recordView" label="请求明细类型" :options="recordViewOptions" class="w-52" />
+          <div class="flex min-w-0 flex-wrap items-center gap-3">
+            <BaseSegmented v-model="recordView" label="请求明细类型" :options="recordViewOptions" class="w-52" />
+            <DetailedCaptureControl />
+          </div>
         </div>
       </template>
 
