@@ -10,13 +10,14 @@ import * as vue from 'vue'
 const require = createRequire(import.meta.url)
 
 function load(path, dependencies = {}) {
+  dependencies['@/api/modules/ipv6-egress'] ??= { getIpv6Egress: async () => ({ accountOverrides: {} }) }
   if (path !== '../src/utils/account-egress.ts')
     dependencies['@/utils/account-egress'] = load('../src/utils/account-egress.ts')
   const exports = {}
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
-  runInNewContext(outputText, { exports, TextEncoder, require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
+  runInNewContext(outputText, { exports, TextEncoder, AbortController, require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
   return exports
 }
 

@@ -310,10 +310,21 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 terminal: profile.terminal,
             },
             user_agent,
-            attributes: vec![DashboardWireAttribute {
-                label: "客户端标识".to_owned(),
-                value: client_identity,
-            }],
+            attributes: vec![
+                DashboardWireAttribute {
+                    label: "客户端标识".to_owned(),
+                    value: client_identity,
+                },
+                DashboardWireAttribute {
+                    label: "版本策略".to_owned(),
+                    value: if verified {
+                        "跟随官方"
+                    } else {
+                        "固定自定义"
+                    }
+                    .to_owned(),
+                },
+            ],
             verified_at: verified.then_some(profile.verified_at),
             release: Some(release),
         })

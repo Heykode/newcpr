@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AccountGroup, AccountModelAccess } from '@/api'
+import type { AccountEgressReadState } from '@/utils/account-egress'
 
 import type { Excel403Action } from '@/utils/excel-settings'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
@@ -21,6 +22,7 @@ withDefaults(defineProps<{
   endpoint?: string | null
   accountId?: string
   preserveProxy?: boolean
+  egressReadState?: AccountEgressReadState
   requestProxyAvailable?: boolean
   proxyError?: string
   excelAvailable?: boolean
@@ -246,6 +248,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       :openai="requestProxyAvailable"
       :current-source="requestProxySource"
       :preserve="preserveProxy"
+      :egress-read-state="egressReadState"
       :error="proxyError"
       :endpoint="endpoint"
       :account-id="accountId"

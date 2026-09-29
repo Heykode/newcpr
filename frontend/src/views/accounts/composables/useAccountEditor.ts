@@ -1,12 +1,14 @@
 import type { Ref } from 'vue'
 import type { AccountModelAccess, getAccounts } from '@/api'
+import type { AccountEgressDraft, AccountEgressReadState } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 
 import { updateAccount } from '@/api'
+import { getIpv6Egress } from '@/api/modules/ipv6-egress'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
-import { accountEgressPatch } from '@/utils/account-egress'
+import { accountEgressFromAccount, accountEgressPatch, sameAccountEgress } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountExcel403Action } from '@/utils/excel-settings'
@@ -42,9 +44,12 @@ export function useAccountEditor(options: {
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
   let initialModelAccess = ''
-  const proxyMode = shallowRef('preserve')
+  const proxyMode = shallowRef('')
   const proxyId = shallowRef('')
   const egressMode = shallowRef('fixed_ipv6_reuse')
+  const egressReadState = shallowRef<AccountEgressReadState>({ loading: false, error: false })
+  let initialEgress: AccountEgressDraft | undefined
+  let egressController: AbortController | undefined
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -55,13 +60,46 @@ export function useAccountEditor(options: {
       : null
   })
 
+  function applyInitialEgress(draft: AccountEgressDraft | undefined) {
+    initialEgress = draft
+    proxyMode.value = draft?.proxyMode ?? ''
+    proxyId.value = draft?.proxyId ?? ''
+    egressMode.value = draft?.egressMode ?? 'fixed_ipv6_reuse'
+  }
+
+  async function loadEgress(account: AccountRow) {
+    egressController?.abort()
+    applyInitialEgress(accountEgressFromAccount(account))
+    egressReadState.value = { loading: account.provider === 'openai', error: false }
+    if (account.provider !== 'openai')
+      return
+    const owner = new AbortController()
+    egressController = owner
+    try {
+      const config = await getIpv6Egress({ silent: true, signal: owner.signal })
+      if (owner.signal.aborted || !showEditModal.value || editingAccountId.value !== account.id)
+        return
+      const draft = accountEgressFromAccount(account, config)
+      egressReadState.value = { config, loading: false, error: !draft }
+      if (!initialEgress && proxyMode.value === '')
+        applyInitialEgress(draft)
+    }
+    catch {
+      if (!owner.signal.aborted)
+        egressReadState.value = { loading: false, error: true }
+    }
+  }
+
+  watch(showEditModal, (open) => {
+    if (!open)
+      egressController?.abort()
+  }, { flush: 'sync' })
+  onScopeDispose(() => egressController?.abort())
+
   function open(account: AccountRow) {
     editingAccountId.value = account.id
     customName.value = account.customName ?? ''
     initialCustomName = customName.value
-    proxyMode.value = 'preserve'
-    proxyId.value = ''
-    egressMode.value = 'fixed_ipv6_reuse'
     schedulingEnabled.value = account.enabled
     excelEnabled.value = account.responsesUpstream === 'excel'
     initialExcelEnabled = excelEnabled.value
@@ -84,6 +122,7 @@ export function useAccountEditor(options: {
     initialModelAccess = JSON.stringify(modelAccess.value)
     selectedGroupIds.value = account.groups.map(group => group.id)
     showEditModal.value = true
+    void loadEgress({ ...account })
   }
 
   async function save() {
@@ -108,9 +147,14 @@ export function useAccountEditor(options: {
     }
 
     await saveAction.run(async () => {
+      const egress = { proxyMode: proxyMode.value, proxyId: proxyId.value, egressMode: egressMode.value }
+      if (!initialEgress && egress.proxyMode !== '')
+        throw new Error('出口配置尚未读取成功，请关闭后重新打开编辑')
       const payload: Parameters<typeof updateAccount>[0] = {
         accountId,
-        ...accountEgressPatch({ proxyMode: proxyMode.value, proxyId: proxyId.value, egressMode: egressMode.value }, editingAccount.value?.provider === 'openai'),
+        ...(initialEgress && !sameAccountEgress(initialEgress, egress)
+          ? accountEgressPatch(egress, editingAccount.value?.provider === 'openai')
+          : {}),
         enabled: schedulingEnabled.value,
         concurrencyLimit: scheduling.values.concurrencyLimit,
         weight: scheduling.values.weight,
@@ -150,8 +194,8 @@ export function useAccountEditor(options: {
     editingAccountId.value = null
     customName.value = ''
     initialCustomName = ''
-    proxyMode.value = 'preserve'
-    proxyId.value = ''
+    applyInitialEgress(undefined)
+    egressReadState.value = { loading: false, error: false }
     schedulingEnabled.value = true
     excelEnabled.value = false
     initialExcelEnabled = false
@@ -191,6 +235,7 @@ export function useAccountEditor(options: {
     proxyMode,
     proxyId,
     egressMode,
+    egressReadState,
     selectedGroupIds,
     saving,
     open,

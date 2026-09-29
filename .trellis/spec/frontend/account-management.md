@@ -23,8 +23,28 @@
   `preserveOutboundProxy`; missing means the old direct selection. Unchanged legacy
   partial configurations roundtrip exactly. Ambiguous old selections display as keeping
   the template's existing configuration, not as global inheritance.
-- Egress configuration reads abort on account change/unmount and never populate or
-  overwrite unsaved drafts. Failed status reads do not invent a current exit.
+- Single-account editing opts out of `preserveProxy` and owns one cancellable
+  configuration read per open. `accountEgressFromAccount` initializes the saved
+  selection once: managed pool, account proxy, then explicit IPv6/direct override
+  or global inheritance. Never materialize a global policy as an account override.
+  `AccountOutboundField.egressReadState` reuses that read; its other consumers keep
+  status-only reads that do not populate drafts. Cancel, account change and disposal
+  abort reads, and late results cannot overwrite a user-edited selection.
+- The editor compares against its opening baseline using `sameAccountEgress`,
+  ignoring inactive proxy/IPv6 drafts. Unchanged or reverted selections omit all
+  three egress fields on save. Unknown/loading/failed selections stay blank and
+  disabled; unrelated edits remain saveable without an egress patch. No read,
+  cancellation or retry publishes a runtime configuration change.
+- Account list endpoints are redacted and expose no saved proxy ID. Display an
+  existing active proxy as a disabled bound-proxy option with an empty ID; an
+  unchanged save omits the proxy patch. Never infer IDs from endpoints (two proxy
+  credentials may share one endpoint) or submit that endpoint as a URL. Explicit
+  replacement uses the existing tested-proxy catalog. Dormant proxies under a
+  managed pool are not presented as the newly selected account route.
+- Regression coverage in `account-egress.test.mjs` and `browser/account-egress.mjs`
+  exercises every saved mode, save/reopen, cancellation, stale reads, failure,
+  same-endpoint proxies, one GET per editor open, and unchanged template/batch
+  opt-ins at desktop and narrow widths.
 
 ## 2FA Enrollment and Excel Policy
 

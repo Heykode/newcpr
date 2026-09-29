@@ -302,6 +302,7 @@ const {
   proxyMode: editingProxyMode,
   proxyId: editingProxyId,
   egressMode: editingEgressMode,
+  egressReadState: editingEgressReadState,
   selectedGroupIds: editingGroupIds,
   saving: savingAccountEdit,
   open: openAccountEdit,
@@ -684,6 +685,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :groups="groups"
       :groups-loading="groupsLoading"
       :saving="savingAccountEdit"
+      :egress-read-state="editingEgressReadState"
       @save="saveAccountEdit"
     />
 
