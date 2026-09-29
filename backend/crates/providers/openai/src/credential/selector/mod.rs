@@ -1718,9 +1718,45 @@ fn quality_concurrency_limit(ordinary: NonZeroU32, quality: bool) -> NonZeroU32 
     if quality { NonZeroU32::MAX } else { ordinary }
 }
 
+fn quality_interval_delay(
+    quality: bool,
+    interval_deadline: Option<SystemTime>,
+    now: SystemTime,
+) -> Option<Duration> {
+    if !quality {
+        return None;
+    }
+    interval_deadline.map(|deadline| {
+        deadline
+            .duration_since(now)
+            .unwrap_or_default()
+            .max(Duration::from_millis(1))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_interval_wait_is_scoped_and_handles_clock_boundaries() {
+        let now = SystemTime::now();
+        let deadline = now + Duration::from_millis(250);
+        assert_eq!(quality_interval_delay(false, Some(deadline), now), None);
+        assert_eq!(quality_interval_delay(true, None, now), None);
+        assert_eq!(
+            quality_interval_delay(true, Some(deadline), now),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            quality_interval_delay(true, Some(now), now),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(
+            quality_interval_delay(true, Some(now - Duration::from_millis(1)), now),
+            Some(Duration::from_millis(1))
+        );
+    }
 
     #[test]
     fn quality_selection_bypasses_only_business_concurrency() {

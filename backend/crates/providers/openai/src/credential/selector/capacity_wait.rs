@@ -114,7 +114,7 @@ enum WaitOutcome {
     Skipped,
 }
 
-// Interval waiting is a soft-affinity exception, not execution-capacity Busy.
+// An interval-only blocker can wait without being classified as capacity Busy.
 fn sole_interval_deadline(
     candidate: &AccountCandidate,
     context: &AccountSelectionContext,
@@ -388,8 +388,35 @@ impl CodexCredentialSelector {
             loop {
                 let mut context = state.context.clone();
                 context.now = SystemTime::now();
-                context.excluded_accounts.extend(raced.iter().cloned());
                 let limits = self.wait_limits()?;
+                if request.attempt.is_quality_check()
+                    && let Some((id, delay)) = candidates.iter().find_map(|candidate| {
+                        quality_interval_delay(
+                            request.attempt.is_quality_check(),
+                            sole_interval_deadline(candidate, &context, &limits),
+                            context.now,
+                        )
+                        .map(|delay| (candidate.account.id().clone(), delay))
+                    })
+                {
+                    // Quality work is fixed-account administration, not soft affinity.
+                    // Wait for the real interval without consuming a business queue slot.
+                    control
+                        .run(async {
+                            tokio::time::sleep(delay).await;
+                            Ok(())
+                        })
+                        .await?;
+                    candidates = control
+                        .run(self.reload_wait_pool(request, &state.universe))
+                        .await?;
+                    if let Some(pin) = &state.pinned {
+                        candidates.retain(|candidate| candidate.account.id() == pin);
+                    }
+                    raced.remove(&id);
+                    continue;
+                }
+                context.excluded_accounts.extend(raced.iter().cloned());
                 let selection =
                     AccountSelector.select_with_live_capacity(&candidates, &context, &limits);
                 request.attempt.trace().account_selection(
@@ -450,6 +477,32 @@ impl CodexCredentialSelector {
                         continue 'rescan;
                     }
                     ProviderLeaseAcquisition::Busy { .. } => {
+                        if request.attempt.is_quality_check()
+                            && let Some(current) =
+                                control.run(self.reload_wait_target(&id, request)).await?
+                        {
+                            state.context.now = SystemTime::now();
+                            if AccountSelector.availability(&current, &state.context, &limits)
+                                == AccountSchedulingAvailability::Ready
+                                || sole_interval_deadline(&current, &state.context, &limits)
+                                    .is_some()
+                            {
+                                if let Some(old) =
+                                    candidates.iter_mut().find(|old| old.account.id() == &id)
+                                {
+                                    *old = current;
+                                }
+                                // Redis is authoritative; a concurrent start or clock
+                                // boundary must not turn a quality interval into failure.
+                                control
+                                    .run(async {
+                                        tokio::time::sleep(Duration::from_millis(10)).await;
+                                        Ok(())
+                                    })
+                                    .await?;
+                                continue;
+                            }
+                        }
                         raced.insert(id.clone());
                         if original.as_ref() == Some(&id) && sticky_tried.insert(id.clone()) {
                             match self

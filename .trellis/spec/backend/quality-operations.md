@@ -69,6 +69,11 @@
 - Provider transport, model-specific Excel policy, credentials, fingerprint,
   egress, request interval and availability remain authoritative. Quality checks bypass
   only the target account's business concurrency cap and local user-facing model policy.
+  A fixed quality account blocked only by its request interval waits within the original
+  request deadline and cancellation scope, then reloads live safety facts. It does not
+  consume a business wait-queue slot, switch accounts or inherit the ordinary hard-pin
+  interval rejection. Redis lease races recheck the same account and interval; they
+  must not turn a just-started parallel sample into `NoEligibleCredential`.
   Only explicitly configured
   quality failure actions may pause scheduling or remove selected group memberships.
   Legacy configs default to `none`; auto_restore defaults false. Explicit wrong answers
