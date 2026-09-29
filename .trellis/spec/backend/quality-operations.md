@@ -60,6 +60,12 @@
 - `AccountProbe::quality_check` is separate from diagnostic `probe`. It MUST use
   the persistent ordinary coordinator with its fixed-account quality selection. Never
   reuse `start_diagnostic`, synthesize a user API key, or call upstream HTTP directly.
+- Fixed-account quality requests ignore only the target account's local model
+  allowlist/denylist through a Core-only, request-local FrozenAccountScope override.
+  Apply it before routing and pass the same scope to normal/queued selection. The
+  original directory, other accounts, ordinary requests and client catalogs retain
+  their policies; missing/out-of-scope accounts cannot gain access. This does not
+  grant upstream model entitlement or bypass model-specific Excel routing policy.
 - Provider transport, model-specific Excel policy, credentials, fingerprint,
   egress, concurrency and availability remain authoritative. Only explicitly configured
   quality failure actions may pause scheduling or remove selected group memberships.
@@ -89,8 +95,9 @@
   never queues an immediate run. Reference: ranxi2001/sub2api f80611d6; unlike its
   per-scan worker cap, CPR keeps a database-wide admission bound.
 - Quality-owned scheduling pauses have a separate owner marker. Fixed-account quality
-  tests may ignore only that verified pause, never credentials, quotas, cooldown,
-  model access, concurrency or request interval. Revalidate ownership after lease
+  tests may ignore only that verified pause and their explicit local model-policy
+  exception, never credentials, quotas, cooldown, concurrency or request interval.
+  Revalidate ownership after lease
   acquisition. Ordinary traffic cannot request this override or select paused accounts.
 - Store action, recovery ownership, config revision and audit commit together. Lock
   runtime configuration before rule/account mutations. Rule/lease/identity fences

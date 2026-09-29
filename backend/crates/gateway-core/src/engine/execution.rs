@@ -773,11 +773,16 @@ impl DefaultExecutionService {
         })?;
         let public_model = PublicModelId::new(request.upstream_model.as_str().to_owned())
             .map_err(|_| GatewayError::new(GatewayErrorKind::Unsupported, "invalid model"))?;
+        let account_scope = Arc::new(
+            snapshot
+                .all_account_scope()
+                .for_quality_check(request.account_id.clone()),
+        );
         let plan = snapshot
             .plan(
                 &public_model,
                 &request.operation,
-                snapshot.all_account_scope(),
+                account_scope,
                 &RoutingContext {
                     required_provider: Some(request.provider_kind),
                     ..RoutingContext::default()
