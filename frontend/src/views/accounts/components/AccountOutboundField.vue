@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Ipv6EgressConfig } from '@/api/modules/ipv6-egress'
 import type { MihomoStatus } from '@/api/modules/mihomo'
+import type { AccountEgressReadState } from '@/utils/account-egress'
 import type { RequestProxySource } from '@/utils/request-proxy-source'
 import { computed, onScopeDispose, shallowRef, watch } from 'vue'
 import { getIpv6Egress, ipv6EgressModes } from '@/api/modules/ipv6-egress'
@@ -17,13 +18,18 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   preserve?: boolean
   error?: string
+  egressReadState?: AccountEgressReadState
 }>(), { preserve: true })
 const mode = defineModel<string>('mode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
 const egressMode = defineModel<string>('egressMode', { required: true })
 const { proxies, loading } = useProxyCatalog()
-const config = shallowRef<Ipv6EgressConfig>()
-const configError = shallowRef(false)
+const localConfig = shallowRef<Ipv6EgressConfig>()
+const localConfigError = shallowRef(false)
+const config = computed(() => props.egressReadState ? props.egressReadState.config : localConfig.value)
+const configError = computed(() => props.egressReadState ? props.egressReadState.error : localConfigError.value)
+const unresolved = computed(() => props.egressReadState !== undefined && !mode.value)
+const fieldDisabled = computed(() => props.disabled || unresolved.value)
 const mihomo = shallowRef<MihomoStatus>()
 const mihomoError = shallowRef(false)
 let mihomoController: AbortController | undefined
@@ -43,12 +49,17 @@ const options = computed(() => [
       ]
     : []),
 ])
-const proxyOptions = computed(() => proxies.value.map(proxy => ({
-  value: proxy.id,
-  label: `${proxy.name}${proxy.lastTest?.success ? '' : proxy.lastTest ? '（测试失败）' : '（未测试）'}`,
-  description: proxy.endpoint,
-  disabled: proxy.lastTest?.success !== true,
-})))
+const proxyOptions = computed(() => [
+  ...(props.egressReadState && props.endpoint && (!props.currentSource || props.currentSource === 'account') && !proxyId.value
+    ? [{ value: '', label: `已绑定代理 · ${props.endpoint}`, disabled: true }]
+    : []),
+  ...proxies.value.map(proxy => ({
+    value: proxy.id,
+    label: `${proxy.name}${proxy.lastTest?.success ? '' : proxy.lastTest ? '（测试失败）' : '（未测试）'}`,
+    description: proxy.endpoint,
+    disabled: proxy.lastTest?.success !== true,
+  })),
+])
 const globalLabel = computed(() => ipv6EgressModes.find(item => item.value === config.value?.defaultMode)?.label)
 const currentLabel = computed(() => {
   if (props.currentSource === 'mihomo')
@@ -65,22 +76,22 @@ const currentLabel = computed(() => {
 const fixed = computed(() => props.accountId && config.value?.fixedBindings[props.accountId])
 const fixedUnavailable = computed(() => fixed.value && !config.value?.addresses.some(item => item.address === fixed.value && item.enabled))
 
-watch([() => props.openai, () => props.accountId], async ([openai]) => {
+watch([() => props.openai, () => props.accountId, () => props.egressReadState !== undefined], async ([openai, , external]) => {
   controller?.abort()
-  config.value = undefined
-  configError.value = false
-  if (!openai)
+  localConfig.value = undefined
+  localConfigError.value = false
+  if (!openai || external)
     return
   const owner = new AbortController()
   controller = owner
   try {
     const loaded = await getIpv6Egress({ silent: true, signal: owner.signal })
     if (!owner.signal.aborted)
-      config.value = loaded
+      localConfig.value = loaded
   }
   catch {
     if (!owner.signal.aborted)
-      configError.value = true
+      localConfigError.value = true
   }
 }, { immediate: true })
 watch([mode, () => props.openai], async ([selection, openai]) => {
@@ -119,8 +130,20 @@ function selectMode(value: string) {
       <template v-if="$slots.extra" #extra>
         <slot name="extra" />
       </template>
-      <BaseSelect :key="disabled ? 'disabled' : 'enabled'" class="w-full" :model-value="mode" :options="options" :disabled="disabled" aria-label="出站隧道" @update:model-value="selectMode" />
+      <BaseSelect
+        :key="fieldDisabled ? 'disabled' : 'enabled'"
+        class="w-full"
+        :model-value="mode"
+        :options="options"
+        :disabled="fieldDisabled"
+        :placeholder="unresolved ? (egressReadState?.loading ? '正在读取出口…' : '出口读取失败') : '请选择'"
+        aria-label="出站隧道"
+        @update:model-value="selectMode"
+      />
     </BaseFormItem>
+    <p v-if="unresolved && configError" role="alert" class="m-0 text-cp-xs text-cp-error-text">
+      出口配置读取失败，请关闭后重新打开。保存其他设置不会修改出口。
+    </p>
     <BaseFormItem v-if="mode === 'proxy'" label="指定代理">
       <BaseSelect v-model="proxyId" class="w-full" :options="proxyOptions" :disabled="disabled || loading" placeholder="选择已保存的代理" aria-label="指定代理" />
     </BaseFormItem>
