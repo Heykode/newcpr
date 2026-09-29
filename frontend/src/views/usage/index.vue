@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import type { UsageTimeRange } from './composables/useUsageTimeRange'
+import type { UsageFilterParams } from '@/api'
 import { Eye } from '@lucide/vue'
-import { computed, shallowRef, watch } from 'vue'
 
+import { computed, watch } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
@@ -15,22 +17,32 @@ import DetailedCaptureControl from './components/DetailedCaptureControl.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
+import UsageQueryFilters from './components/UsageQueryFilters.vue'
 import UsageRecordDetailModal from './components/UsageRecordDetailModal.vue'
 import UsageRecordsTable from './components/UsageRecordsTable.vue'
 import UsageSummaryCards from './components/UsageSummaryCards.vue'
+import { useUsageFilters } from './composables/useUsageFilters'
 import { useUsageRecordDetail } from './composables/useUsageRecordDetail'
 import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
 import { usageRecordColumns, usageTimeRangeOptions } from './constants'
 
 const { visibleColumns, columnOptions, setColumnVisible, resetColumns } = useTableColumns(usageRecordColumns, 'usage-records')
-const recordView = shallowRef('success')
+const { draft, error: filterError, filters, errorFilters } = useUsageFilters()
+const recordView = computed({
+  get: () => draft.value.view === 'errors' ? 'errors' : 'success',
+  set: value => draft.value = { ...draft.value, view: value },
+})
+const provider = computed({
+  get: () => draft.value.provider || '',
+  set: value => draft.value = { ...draft.value, provider: value },
+})
 const recordViewOptions = [
   { label: '成功记录', value: 'success' },
   { label: '错误排查', value: 'errors' },
 ]
 const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams }
-  = useUsageTimeRange()
+  = useUsageTimeRange((draft.value.timeRange || 'today') as UsageTimeRange)
 
 const {
   currentPage,
@@ -40,6 +52,7 @@ const {
   loading,
   analyticsLoading,
   diagnosticLoading,
+  error: tableError,
   records,
   summary,
   insights,
@@ -54,11 +67,25 @@ const {
   timeRangeParams,
   latestTimeRangeParams,
   active: computed(() => recordView.value === 'success'),
+  filters,
+  provider,
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
 
+function applyFilter(value: UsageFilterParams) {
+  draft.value = {
+    ...draft.value,
+    ...(value.accountIds ? { accountId: '', accountSearch: '' } : {}),
+    ...Object.fromEntries(Object.entries(value).map(([key, value]) => [key, String(value ?? '')])),
+  }
+}
+watch(() => draft.value.timeRange, (value) => {
+  timeRange.value = value === '7d' || value === '30d' ? value : 'today'
+})
 watch(timeRange, () => {
+  if ((draft.value.timeRange || 'today') !== timeRange.value)
+    draft.value = { ...draft.value, timeRange: timeRange.value, startTime: '', endTime: '' }
   refreshTimeRangeEnd()
   currentPage.value = 1
   void loadUsageRecords()
@@ -78,6 +105,7 @@ watch(timeRange, () => {
       </template>
     </BasePageHeader>
 
+    <UsageQueryFilters v-model="draft" :range="timeRangeParams" :errors="recordView === 'errors'" :error="filterError" />
     <UsageSummaryCards :summary="summary" />
     <UsageInsightsGrid
       v-model:diagnostic-dimension="diagnosticDimension"
@@ -117,6 +145,7 @@ watch(timeRange, () => {
         >
           <UsageFilters
             v-model:search="searchQuery"
+            hide-search
             :loading="loading"
             :refreshing="refreshingList"
             @refresh="refreshUsageRecords"
@@ -132,12 +161,16 @@ watch(timeRange, () => {
           </UsageFilters>
 
           <div class="flex min-h-0 min-w-0 flex-col">
+            <p v-if="tableError" role="alert" class="text-cp-sm text-cp-error-text">
+              {{ tableError }}
+            </p>
             <UsageRecordsTable
               class="min-h-0 flex-1"
               :columns="visibleColumns"
               :rows="records"
               :loading="loading"
               empty-text="暂无使用记录"
+              @filter="applyFilter"
             >
               <template #actions="{ row }">
                 <div class="flex items-center justify-start">
@@ -167,6 +200,8 @@ watch(timeRange, () => {
             :latest-time-range-params="latestTimeRangeParams"
             :provider="providerQuery"
             :active="recordView === 'errors'"
+            :filters="errorFilters"
+            @filter="applyFilter"
           />
         </div>
       </template>

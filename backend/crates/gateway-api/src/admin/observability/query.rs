@@ -27,6 +27,8 @@ impl DashboardQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageQuery {
+    #[serde(flatten)]
+    pub details: RequestSearchQuery,
     pub current_page: Option<u32>,
     pub page_size: Option<u16>,
     pub kind: Option<String>,
@@ -80,6 +82,15 @@ impl DetailQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsQuery {
+    #[serde(flatten)]
+    pub details: RequestSearchQuery,
+    pub account_id: Option<String>,
+    pub client_api_key_id: Option<String>,
+    pub request_id: Option<String>,
+    pub route: Option<String>,
+    pub transport: Option<String>,
+    pub response_id: Option<String>,
+    pub upstream_request_id: Option<String>,
     pub dimension: Option<String>,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
@@ -127,17 +138,18 @@ impl DiagnosticsQuery {
 #[derive(Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpsQuery {
+    #[serde(flatten)]
+    pub details: RequestSearchQuery,
     pub current_page: Option<u32>,
     pub page_size: Option<u16>,
     pub kind: Option<String>,
+    pub route: Option<String>,
     pub client_api_key_id: Option<String>,
     pub provider: Option<String>,
     pub request_id: Option<String>,
     pub account_id: Option<String>,
     pub model: Option<String>,
     pub status_code: Option<i64>,
-    pub client_status_code: Option<i64>,
-    pub upstream_status_code: Option<i64>,
     pub transport: Option<String>,
     pub attempt_index: Option<i64>,
     pub response_id: Option<String>,
@@ -335,6 +347,7 @@ pub(crate) fn usage_filter(query: &UsageQuery) -> Result<domain::UsageFilter, Wi
         })
     });
     Ok(domain::UsageFilter {
+        details: query.details.filter()?,
         client_api_key_ref: non_empty(query.client_api_key_id.clone()),
         request_id: non_empty(query.request_id.clone()),
         provider_account_ref: non_empty(query.account_id.clone()),
@@ -367,20 +380,16 @@ pub(crate) fn ops_command(query: &OpsQuery) -> Result<domain::OpsErrorQuery, Wir
     let (current_page, page_size) = query.validate_pagination()?;
     let page_size_value =
         DomainPageSize::new(page_size).map_err(|_| WireValidationError::new("pageSize"))?;
-    let status_code = parse_status(
-        query
-            .upstream_status_code
-            .or(query.client_status_code)
-            .or(query.status_code),
-    )?;
+    let status_code = parse_status(query.status_code)?;
     Ok(domain::OpsErrorQuery {
         range: usage_range(query.start_time.as_deref(), query.end_time.as_deref())?,
         filter: domain::OpsErrorFilter {
+            details: query.details.filter()?,
             client_api_key_ref: non_empty(query.client_api_key_id.clone()),
             request_id: non_empty(query.request_id.clone()),
             provider_kind: non_empty(query.provider.clone()),
             provider_account_ref: non_empty(query.account_id.clone()),
-            operation: non_empty(query.kind.clone()),
+            operation: non_empty(query.route.clone()).or_else(|| non_empty(query.kind.clone())),
             model: non_empty(query.model.clone()),
             transport: non_empty(query.transport.clone()),
             attempt_index: parse_attempt_index(query.attempt_index)?,

@@ -11,6 +11,10 @@ where
         .route("/api/admin/dashboard/trend", get(dashboard_trend::<S>))
         .route("/api/admin/usage/records", get(usage_records::<S>))
         .route(
+            "/api/admin/usage/account-options",
+            get(account_options::<S>),
+        )
+        .route(
             "/api/admin/usage/records/detail",
             get(usage_record_detail::<S>),
         )
@@ -27,6 +31,57 @@ where
             get(usage_insights_diagnostics::<S>),
         )
         .route("/api/admin/operations/errors", get(ops_errors::<S>))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountOptionsQuery {
+    start_time: Option<String>,
+    end_time: Option<String>,
+    search: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountOptionView {
+    id: String,
+    email: Option<String>,
+    name: Option<String>,
+    custom_name: Option<String>,
+    deleted: bool,
+}
+
+async fn account_options<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AccountOptionsQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
+        .map_err(map_wire_error)?;
+    let search = query.search.unwrap_or_default();
+    if search.len() > 256 || search.chars().any(char::is_control) {
+        return Err(map_wire_error(WireValidationError::new("search")));
+    }
+    let options = state
+        .admin_services()
+        .observability()
+        .account_filter_options(range, search.trim())
+        .await
+        .map_err(map_service_error)?;
+    let items: Vec<_> = options
+        .into_iter()
+        .map(|option| AccountOptionView {
+            id: option.id,
+            email: option.email,
+            name: option.name,
+            custom_name: option.custom_name,
+            deleted: option.deleted,
+        })
+        .collect();
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(items)))
 }
 
 pub(crate) async fn dashboard_summary<S>(
@@ -175,6 +230,14 @@ where
     let range = usage_range(query.start_time.as_deref(), query.end_time.as_deref())
         .map_err(map_wire_error)?;
     let filter = domain::UsageFilter {
+        details: query.details.filter().map_err(map_wire_error)?,
+        provider_account_ref: non_empty(query.account_id),
+        client_api_key_ref: non_empty(query.client_api_key_id),
+        request_id: non_empty(query.request_id),
+        operation: non_empty(query.route),
+        transport: non_empty(query.transport),
+        response_id: non_empty(query.response_id),
+        upstream_request_id: non_empty(query.upstream_request_id),
         provider_kind: non_empty(query.provider),
         model: non_empty(query.model),
         status_code: parse_status(query.status_code).map_err(map_wire_error)?,

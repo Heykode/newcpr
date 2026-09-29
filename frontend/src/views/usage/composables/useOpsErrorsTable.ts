@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
+import type { UsageFilterParams } from '@/api'
 import { watchDebounced } from '@vueuse/core'
 
 import { computed, onScopeDispose, shallowRef, watch } from 'vue'
@@ -13,6 +14,7 @@ interface UseOpsErrorsTableOptions {
   latestTimeRangeParams: () => UsageTimeRangeParams
   provider: Readonly<Ref<string>>
   active: Readonly<Ref<boolean>>
+  filters?: Readonly<Ref<UsageFilterParams | undefined>>
 }
 
 export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
@@ -22,12 +24,15 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
   let disposed = false
   // 时间、平台和搜索共同构成分页快照，避免翻页混入另一组筛选结果。
   let tableParams = snapshot()
+  const filterKey = () => JSON.stringify([search.value, options.filters?.value])
+  let tableFilterKey = filterKey()
 
   function snapshot() {
     return {
       ...options.latestTimeRangeParams(),
       provider: options.provider.value || undefined,
       search: search.value,
+      ...options.filters?.value,
     }
   }
 
@@ -46,7 +51,7 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
   }))
 
   function handlePageChange(nextPage: number) {
-    if (tableParams.search !== search.value) {
+    if (tableFilterKey !== filterKey()) {
       void reloadLatest()
       return
     }
@@ -55,7 +60,7 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
 
   function handlePageSizeChange(nextPageSize: number) {
     query.pageSize.value = nextPageSize
-    if (tableParams.search !== search.value)
+    if (tableFilterKey !== filterKey())
       void reloadLatest()
     else
       void query.reloadFromStart()
@@ -63,6 +68,7 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
 
   function reloadLatest() {
     tableParams = snapshot()
+    tableFilterKey = filterKey()
     // 筛选失败不能继续展示上一范围的数据，错误态由面板单独呈现。
     query.items.value = []
     return query.reloadFromStart()
@@ -81,13 +87,18 @@ export function useOpsErrorsTable(options: UseOpsErrorsTableOptions) {
   }
 
   watchDebounced(
-    search,
+    filterKey,
     () => {
-      if (!disposed && options.active.value && tableParams.search !== search.value)
+      if (!disposed && options.active.value && tableFilterKey !== filterKey())
         void reloadLatest()
     },
     { debounce: 250 },
   )
+
+  watch(filterKey, () => {
+    query.invalidate()
+    query.items.value = []
+  }, { flush: 'sync' })
 
   watch([options.timeRangeParams, options.provider, options.active], () => {
     if (options.active.value)

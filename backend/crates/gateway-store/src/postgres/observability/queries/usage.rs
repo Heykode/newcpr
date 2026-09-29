@@ -12,6 +12,7 @@ pub(crate) fn push_usage_filter(
     filter: &UsageRecordFilter,
     alias: &str,
 ) {
+    push_request_search(query, &filter.details, alias, None);
     if let Some(value) = &filter.client_api_key_ref {
         query.push(format!(" and {alias}.client_api_key_ref = "));
         query.push_bind(value.clone());
@@ -25,7 +26,12 @@ pub(crate) fn push_usage_filter(
         query.push_bind(value.clone());
     }
     if let Some(value) = &filter.operation {
-        query.push(format!(" and {alias}.operation = "));
+        let column = if value.starts_with('/') {
+            "endpoint"
+        } else {
+            "operation"
+        };
+        query.push(format!(" and {alias}.{column} = "));
         query.push_bind(value.clone());
     }
     if let Some(value) = &filter.provider_kind {
@@ -80,8 +86,8 @@ pub(crate) fn push_usage_filter(
         query.push_bind(value.clone());
     }
     if let Some(value) = &filter.search {
-        let pattern = literal_prefix_pattern(value);
-        query.push(format!(" and ({alias}.id like "));
+        let pattern = format!("%{}", literal_prefix_pattern(value));
+        query.push(format!(" and ({alias}.id ilike "));
         query.push_bind(pattern.clone());
         for column in [
             "client_api_key_ref",
@@ -91,8 +97,10 @@ pub(crate) fn push_usage_filter(
             "requested_model_id",
             "upstream_model_id",
             "upstream_request_id",
+            "provider_error_code",
+            "error_message",
         ] {
-            query.push(format!(" escape '\\' or {alias}.{column} like "));
+            query.push(format!(" escape '\\' or {alias}.{column} ilike "));
             query.push_bind(pattern.clone());
         }
         if value.starts_with("sk_") {
@@ -102,11 +110,15 @@ pub(crate) fn push_usage_filter(
                     where searched_client_key.id = {alias}.client_api_key_ref
                       and searched_client_key.key like "
             ));
-            query.push_bind(pattern);
+            query.push_bind(literal_prefix_pattern(value));
             query.push(" escape '\\')");
         } else {
             query.push(" escape '\\'");
         }
+        query.push(format!(" or exists (select 1 from provider_accounts searched_account where searched_account.id = {alias}.provider_account_ref and concat_ws(' ', searched_account.name, searched_account.email, searched_account.custom_name) ilike "));
+        query.push_bind(pattern.clone()).push(" escape '\\')");
+        query.push(format!(" or exists (select 1 from client_api_keys searched_key where searched_key.id = {alias}.client_api_key_ref and searched_key.name ilike "));
+        query.push_bind(pattern).push(" escape '\\')");
         query.push(")");
     }
 }

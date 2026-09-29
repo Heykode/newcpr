@@ -51,8 +51,43 @@ fn ops_query_should_reject_page_size_above_terminal_limit() {
 
 #[test]
 fn ops_query_should_reject_removed_filters() {
-    assert!(serde_json::from_value::<OpsQuery>(json!({"route": "/v1/responses"})).is_err());
     assert!(serde_json::from_value::<OpsQuery>(json!({"failureClass": "rate_limited"})).is_err());
+}
+
+#[test]
+fn observability_query_shared_filters_parse_real_url_parameters() {
+    use axum::extract::Query;
+    for suffix in [
+        "accountIds=acct_a%2Cacct_b&accountSearch=team&clientStatusCode=502&upstreamStatusCode=403&minLatencyMs=100&upstreamMode=excel",
+        "route=responses&requestedModel=model-a&errorScope=events&errorPhase=read_body",
+    ] {
+        let uri = format!("/?{suffix}").parse().unwrap();
+        let usage = Query::<UsageQuery>::try_from_uri(&uri).expect("usage URL query");
+        usage.details.filter().expect("valid usage details");
+        let errors = Query::<OpsQuery>::try_from_uri(&uri).expect("ops URL query");
+        errors.details.filter().expect("valid error details");
+        let diagnostics =
+            Query::<DiagnosticsQuery>::try_from_uri(&uri).expect("diagnostics URL query");
+        diagnostics
+            .details
+            .filter()
+            .expect("valid diagnostics details");
+    }
+}
+
+#[test]
+fn observability_query_shared_filters_reject_invalid_ranges() {
+    for value in [
+        json!({"minLatencyMs": 2, "maxLatencyMs": 1}),
+        json!({"clientStatusCode": 99}),
+        json!({"upstreamStatusCode": 600}),
+        json!({"upstreamMode": "guessed"}),
+        json!({"clientIp": "not-an-ip"}),
+        json!({"accountIds": vec!["a"; 51].join(",")}),
+    ] {
+        let query: UsageQuery = serde_json::from_value(value).unwrap();
+        assert!(query.details.filter().is_err());
+    }
 }
 
 #[test]

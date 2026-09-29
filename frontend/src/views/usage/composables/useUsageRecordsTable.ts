@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import type { UsageDisplayRecord } from '../utils/records'
 import type { UsageTimeRangeParams } from './useUsageTimeRange'
+import type { UsageFilterParams } from '@/api'
 import { watchDebounced } from '@vueuse/core'
 
 import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
@@ -17,6 +18,8 @@ interface UseUsageRecordsTableOptions {
   timeRangeParams: Readonly<Ref<UsageTimeRangeParams>>
   latestTimeRangeParams: () => UsageTimeRangeParams
   active: Readonly<Ref<boolean>>
+  filters?: Readonly<Ref<UsageFilterParams>>
+  provider?: Ref<string>
 }
 
 type UsageLoadScope = 'all' | 'table'
@@ -30,6 +33,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const loading = shallowRef(true)
   const analyticsLoading = shallowRef(true)
   const diagnosticLoading = shallowRef(true)
+  const error = shallowRef('')
   const diagnosticPage = shallowRef(1)
   const records = shallowRef<UsageDisplayRecord[]>([])
   const summary = shallowRef(emptySummary())
@@ -39,7 +43,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   const totalRecords = shallowRef(0)
   const searchQuery = shallowRef('')
   const search = computed(() => usageSearchParam(searchQuery.value))
-  const providerQuery = shallowRef('')
+  const providerQuery = options.provider ?? shallowRef('')
   let tableParams = snapshot()
   const refreshingList = shallowRef(false)
   const diagnosticDimension = shallowRef('model')
@@ -51,10 +55,14 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   let analyticsController: AbortController | undefined
   let diagnosticController: AbortController | undefined
   let disposed = false
-  const scopedParams = () => ({
+  const filterKey = () => JSON.stringify({
     ...options.timeRangeParams.value,
-    ...(providerQuery.value ? { provider: providerQuery.value } : {}),
+    provider: providerQuery.value || undefined,
+    search: search.value,
+    ...options.filters?.value,
   })
+  let tableFilterKey = filterKey()
+  const scopedParams = () => tableParams
   const usagePagination = computed(() => ({
     currentPage: currentPage.value,
     pageSize: pageSize.value,
@@ -66,6 +74,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       ...options.latestTimeRangeParams(),
       provider: providerQuery.value || undefined,
       search: search.value,
+      ...options.filters?.value,
     }
   }
 
@@ -76,16 +85,19 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   async function loadUsageRecords(loadOptions: UsageLoadOptions = {}) {
     const { scope = 'all', background = false } = loadOptions
-    const globalParams = scopedParams()
     if (scope === 'all') {
       resetPagination()
       diagnosticPage.value = 1
       tableParams = snapshot()
+      tableFilterKey = filterKey()
+      records.value = []
+      summary.value = emptySummary()
+      insights.value = emptyInsights()
     }
 
     await Promise.all([
       ...(options.active.value ? [loadUsagePage(background)] : []),
-      ...(scope === 'all' ? [loadUsageAnalytics(globalParams, background)] : []),
+      ...(scope === 'all' ? [loadUsageAnalytics(tableParams, background)] : []),
     ])
   }
 
@@ -93,6 +105,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     const requestId = ++tableRequestId
     tableController?.abort()
     tableController = new AbortController()
+    error.value = ''
     loading.value = !background
     try {
       const result = await getUsageRecords({
@@ -108,7 +121,10 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
       totalRecords.value = result.total
       currentPage.value = result.currentPage
     }
-    catch {}
+    catch {
+      if (requestId === tableRequestId)
+        error.value = '请求明细加载失败，请重试'
+    }
     finally {
       if (requestId === tableRequestId) {
         loading.value = false
@@ -209,6 +225,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   function handleDiagnosticPageChange(nextPage: number) {
     if (diagnosticLoading.value || diagnosticDimension.value !== 'keyModel'
+      || tableFilterKey !== filterKey()
       || diagnosticFilterKey !== JSON.stringify(scopedParams())
       || !Number.isInteger(nextPage) || nextPage < 1) {
       return
@@ -236,13 +253,11 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   }
 
   function reloadLatestTable() {
-    tableParams = snapshot()
-    resetPagination()
-    return loadUsageRecords({ scope: 'table' })
+    return loadUsageRecords()
   }
 
   function handlePageChange(nextPage: number) {
-    if (tableParams.search !== search.value) {
+    if (tableFilterKey !== filterKey()) {
       void reloadLatestTable()
       return
     }
@@ -252,7 +267,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   function handlePageSizeChange(nextPageSize: number) {
     pageSize.value = nextPageSize
-    if (tableParams.search !== search.value) {
+    if (tableFilterKey !== filterKey()) {
       void reloadLatestTable()
       return
     }
@@ -275,7 +290,10 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
 
   watch(options.active, (active) => {
     if (active) {
-      void reloadLatestTable()
+      if (tableFilterKey !== filterKey())
+        void reloadLatestTable()
+      else
+        void loadUsageRecords({ scope: 'table' })
     }
     else {
       tableRequestId += 1
@@ -284,13 +302,26 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   })
 
   watchDebounced(
-    search,
+    () => JSON.stringify([search.value, options.filters?.value]),
     () => {
-      if (!disposed && options.active.value && tableParams.search !== search.value)
+      if (!disposed && tableFilterKey !== filterKey())
         void reloadLatestTable()
     },
     { debounce: 250 },
   )
+
+  watch(() => JSON.stringify([search.value, options.filters?.value]), () => {
+    ++tableRequestId
+    ++analyticsRequestId
+    ++diagnosticRequestId
+    tableController?.abort()
+    analyticsController?.abort()
+    diagnosticController?.abort()
+    records.value = []
+    summary.value = emptySummary()
+    insights.value = emptyInsights()
+    loading.value = true
+  }, { flush: 'sync' })
 
   onScopeDispose(() => {
     disposed = true
@@ -311,6 +342,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     loading,
     analyticsLoading,
     diagnosticLoading,
+    error,
     records,
     summary,
     insights,

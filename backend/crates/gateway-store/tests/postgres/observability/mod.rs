@@ -24,6 +24,7 @@ use gateway_store::postgres::{
     ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
+mod search;
 
 use super::{
     TestDatabase, admin_account_store, admin_observability_store, observability_query_budget,
@@ -284,7 +285,7 @@ async fn usage_list_should_resolve_current_custom_names_by_account_id() {
 }
 
 #[tokio::test]
-async fn usage_search_should_match_literal_prefix_instead_of_substring() {
+async fn usage_search_should_match_literal_substring() {
     let Some(database) = TestDatabase::create("usage_literal_prefix_search").await else {
         return;
     };
@@ -308,12 +309,12 @@ async fn usage_search_should_match_literal_prefix_instead_of_substring() {
         .await
         .expect("usage substring search");
 
-    assert_eq!(page.total, 0);
+    assert_eq!(page.total, 1);
     database.close().await;
 }
 
 #[tokio::test]
-async fn usage_search_should_match_account_email_and_name_prefixes() {
+async fn usage_search_should_match_account_email_and_name_substrings() {
     let Some(database) = TestDatabase::create("usage_account_prefix").await else {
         return;
     };
@@ -324,10 +325,17 @@ async fn usage_search_should_match_account_email_and_name_prefixes() {
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
 
-    for search in ["account@example.invalid", "account@", "primary", "pri"] {
+    for search in [
+        "account@example.invalid",
+        "account@",
+        "primary",
+        "pri",
+        "count@example.invalid",
+        "rimary",
+    ] {
         assert_usage_search_ids(&database.pool, range, search, &["req_observe_success"]).await;
     }
-    for search in ["count@example.invalid", "rimary", "missing@example.invalid"] {
+    for search in ["missing@example.invalid"] {
         assert_usage_search_ids(&database.pool, range, search, &[]).await;
     }
 
@@ -336,7 +344,7 @@ async fn usage_search_should_match_account_email_and_name_prefixes() {
         .await
         .expect("clear account email snapshots");
     assert_usage_search_ids(&database.pool, range, "primary", &["req_observe_success"]).await;
-    assert_usage_search_ids(&database.pool, range, "account@", &[]).await;
+    assert_usage_search_ids(&database.pool, range, "account@", &["req_observe_success"]).await;
 
     sqlx::query("update model_requests set provider_account_name_snapshot = null")
         .execute(&database.pool)
@@ -364,12 +372,15 @@ async fn usage_search_should_preserve_account_snapshots_after_account_changes() 
     let range = ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
         .expect("observability range");
 
-    // 搜索与列表都使用请求发生时的快照，不能随当前账号资料变化或删除而改变。
-    for mutation in [
+    // 历史快照始终可查；账号尚在时也支持当前邮箱/名称，不改写列表快照。
+    for (index, mutation) in [
         "update provider_accounts set name = 'renamed', email = 'renamed@example.invalid'
          where id = 'acct_observe'",
         "delete from provider_accounts where id = 'acct_observe'",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         sqlx::query(mutation)
             .execute(&database.pool)
             .await
@@ -378,7 +389,12 @@ async fn usage_search_should_preserve_account_snapshots_after_account_changes() 
             assert_usage_search_ids(&database.pool, range, search, &["req_observe_success"]).await;
         }
         for search in ["renamed@example.invalid", "renamed"] {
-            assert_usage_search_ids(&database.pool, range, search, &[]).await;
+            let expected: &[&str] = if index == 0 {
+                &["req_observe_success"]
+            } else {
+                &[]
+            };
+            assert_usage_search_ids(&database.pool, range, search, expected).await;
         }
     }
     database.close().await;
@@ -1391,6 +1407,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
                 response_id: Some("resp_observe_success".to_owned()),
                 upstream_request_id: Some("upstream_req_success".to_owned()),
                 search: Some("req_observe_success".to_owned()),
+                details: Default::default(),
             },
             current_page: 1,
             page_size: PageSize::new(10).expect("page size"),

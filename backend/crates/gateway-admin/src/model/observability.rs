@@ -102,7 +102,42 @@ impl OtherRequestOutcome {
 
 /// 用量记录过滤条件。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestSearchFilter {
+    pub account_ids: Vec<String>,
+    pub account_search: Option<String>,
+    pub group_id: Option<String>,
+    pub requested_model: Option<String>,
+    pub upstream_model: Option<String>,
+    pub upstream_mode: Option<String>,
+    pub client_transport: Option<String>,
+    pub upstream_transport: Option<String>,
+    pub client_status_code: Option<u16>,
+    pub upstream_status_code: Option<u16>,
+    pub client_ip: Option<String>,
+    pub min_latency_ms: Option<u64>,
+    pub max_latency_ms: Option<u64>,
+    pub min_first_token_ms: Option<u64>,
+    pub max_first_token_ms: Option<u64>,
+    pub cache_match: Option<String>,
+    pub failure_kind: Option<String>,
+    pub error_code: Option<String>,
+    pub error_phase: Option<String>,
+    pub recovery: Option<String>,
+    pub error_scope: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountFilterOption {
+    pub id: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub custom_name: Option<String>,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UsageFilter {
+    pub details: RequestSearchFilter,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -130,6 +165,7 @@ pub struct UsageQuery {
 /// 运维错误过滤条件。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OpsErrorFilter {
+    pub details: RequestSearchFilter,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_kind: Option<String>,

@@ -3,9 +3,11 @@
 mod accounts;
 mod dashboard;
 mod ops;
+mod search;
 mod usage;
 
 pub(crate) use accounts::*;
 pub(crate) use dashboard::*;
 pub(crate) use ops::*;
+pub(crate) use search::*;
 pub(crate) use usage::*;

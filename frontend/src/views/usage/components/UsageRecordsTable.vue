@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { UsageDisplayRecord } from '../utils/records'
+import type { UsageFilterParams } from '@/api'
 import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 import { Minimize2 } from '@lucide/vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
@@ -31,6 +32,8 @@ withDefaults(
     emptyText: '暂无使用记录',
   },
 )
+
+const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
 </script>
 
 <template>
@@ -48,12 +51,15 @@ withDefaults(
     </template>
 
     <template #accountEmail="{ row }">
-      <span
-        class="block max-w-full truncate font-mono text-cp-sm leading-none font-bold text-cp-text"
+      <button
+        type="button"
+        :disabled="!row.accountId"
+        class="block max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left font-mono text-cp-sm leading-none font-bold text-cp-text hover:underline"
         :title="usageAccountText(row)"
+        @click="emit('filter', { accountIds: row.accountId || undefined })"
       >
         {{ usageAccountText(row) }}
-      </span>
+      </button>
       <span
         v-if="row.accountCustomName?.trim()"
         class="mt-1 block max-w-full truncate text-cp-xs font-emphasis text-cp-text-quaternary"
@@ -80,7 +86,9 @@ withDefaults(
     </template>
 
     <template #model="{ row }">
-      <UsageModelCell :record="row" />
+      <button type="button" :disabled="!row.requestedModel" class="max-w-full cursor-pointer border-0 bg-transparent p-0 text-left hover:underline" @click="emit('filter', { requestedModel: row.requestedModel || undefined })">
+        <UsageModelCell :record="row" />
+      </button>
     </template>
 
     <template #reasoningEffort="{ row }">

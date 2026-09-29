@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { UsageTimeRangeParams } from '../composables/useUsageTimeRange'
-import type { OpsError } from '@/api'
+import type { OpsError, UsageFilterParams } from '@/api'
 
 import { Eye, RefreshCw, Search } from '@lucide/vue'
 import { shallowRef, toRef } from 'vue'
@@ -23,7 +23,9 @@ const props = defineProps<{
   latestTimeRangeParams: () => UsageTimeRangeParams
   provider: string
   active: boolean
+  filters?: UsageFilterParams
 }>()
+const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
 
 const {
   loading,
@@ -40,6 +42,7 @@ const {
   latestTimeRangeParams: () => props.latestTimeRangeParams(),
   provider: toRef(props, 'provider'),
   active: toRef(props, 'active'),
+  filters: toRef(props, 'filters'),
 })
 
 const selectedRecord = shallowRef<OpsError | null>(null)
@@ -91,7 +94,7 @@ function upstreamSendStateText(value: string | null | undefined) {
       role="group"
       aria-label="错误筛选与操作"
     >
-      <div class="min-w-0 flex-1">
+      <div v-if="!filters" class="min-w-0 flex-1">
         <BaseInput
           v-model="searchQuery"
           placeholder="请求 ID、Key ID / 可见前缀或账号"
@@ -181,20 +184,26 @@ function upstreamSendStateText(value: string | null | undefined) {
         </template>
 
         <template #accountId="{ row }">
-          <span
-            class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-text"
+          <button
+            type="button"
+            :disabled="!row.accountId"
+            class="block max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left font-mono text-cp-sm font-bold text-cp-text hover:underline"
             :title="accountText(row)"
+            @click="emit('filter', { accountIds: row.accountId || undefined })"
           >
             {{ accountText(row) }}
-          </span>
+          </button>
         </template>
         <template #model="{ row }">
-          <span
-            class="block max-w-full truncate font-mono text-cp-sm font-bold text-cp-text"
+          <button
+            type="button"
+            :disabled="!row.requestedModel"
+            class="block max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left font-mono text-cp-sm font-bold text-cp-text hover:underline"
             :title="modelTitle(row)"
+            @click="emit('filter', { requestedModel: row.requestedModel || undefined })"
           >
             {{ modelText(row) }}
-          </span>
+          </button>
         </template>
         <template #clientIp="{ row }">
           <UsageClientIpCell :record="row" />

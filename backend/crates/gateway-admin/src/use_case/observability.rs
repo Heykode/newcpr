@@ -97,6 +97,11 @@ impl DashboardQueryCache {
 /// API 消费的观测控制面服务。
 #[async_trait]
 pub trait ObservabilityService: Send + Sync {
+    async fn account_filter_options(
+        &self,
+        range: TimeRange,
+        search: &str,
+    ) -> Result<Vec<crate::model::observability::AccountFilterOption>, AdminError>;
     async fn dashboard_summary(
         &self,
         range: TimeRange,
@@ -233,6 +238,16 @@ impl DefaultObservabilityService {
 
 #[async_trait]
 impl ObservabilityService for DefaultObservabilityService {
+    async fn account_filter_options(
+        &self,
+        range: TimeRange,
+        search: &str,
+    ) -> Result<Vec<crate::model::observability::AccountFilterOption>, AdminError> {
+        self.store
+            .account_filter_options(range, search)
+            .await
+            .map_err(|error| map_store_error(error, "account filter options"))
+    }
     async fn dashboard_summary(
         &self,
         range: TimeRange,
