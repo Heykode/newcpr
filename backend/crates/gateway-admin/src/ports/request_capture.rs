@@ -9,6 +9,8 @@ pub type CaptureExport = Pin<Box<dyn Stream<Item = AdminStoreResult<Vec<u8>>> + 
 
 #[async_trait]
 pub trait RequestCaptureStore: Send + Sync {
+    async fn settings(&self) -> AdminStoreResult<RequestCaptureSettings>;
+    async fn for_request(&self, request_id: &str) -> AdminStoreResult<Vec<CaptureRecord>>;
     async fn status(&self) -> AdminStoreResult<RequestCaptureStatus>;
     async fn configure(
         &self,

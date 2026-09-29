@@ -4,12 +4,14 @@ import request from '../request'
 
 export interface CaptureConfig {
   enabled: boolean
+  globalErrors: boolean
+  includeMedia: boolean
   quotaMib: number
   retentionDays: number
 }
 export interface CaptureTask {
   id: string
-  scope: 'key' | 'account' | 'group'
+  scope: 'key' | 'account' | 'group' | 'global'
   targetId: string
   includeMedia: boolean
   startedAt: string
@@ -35,6 +37,18 @@ export interface CaptureStatus {
   storageFault: boolean
 }
 export interface CapturePage { text: string, nextOffset: number | null }
+export interface CaptureSettings {
+  config: CaptureConfig
+  globalActive: boolean
+  storageFault: boolean
+  skipped: number
+}
+export function getCaptureSettings(options: RequestOptions = {}) {
+  return request<CaptureSettings>({ url: '/api/admin/request-captures/config', method: 'GET', ...options })
+}
+export function getCapturesForRequest(requestId: string, options: RequestOptions = {}) {
+  return request<CaptureRecord[]>({ url: '/api/admin/request-captures/by-request', method: 'GET', params: { requestId }, ...options })
+}
 export function getRequestCaptures(options: RequestOptions = {}) {
   return request<CaptureStatus>({ url: '/api/admin/request-captures', method: 'GET', ...options })
 }

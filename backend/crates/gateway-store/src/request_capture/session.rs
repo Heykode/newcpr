@@ -25,7 +25,7 @@ pub(super) struct ActiveTask {
     pub stopped: AtomicBool,
 }
 impl ActiveTask {
-    fn accepts(&self) -> bool {
+    pub(super) fn accepts(&self) -> bool {
         !self.stopped.load(Ordering::Acquire) && self.task.expires_at > Utc::now()
     }
 }
@@ -114,6 +114,7 @@ impl RequestCaptureFactory for CaptureManager {
             .filter(|task| {
                 task.accepts()
                     && match task.task.scope {
+                        CaptureScope::Global => true,
                         CaptureScope::Key => task.task.target_id == key_id,
                         CaptureScope::Group => groups.contains(&task.task.target_id.as_str()),
                         CaptureScope::Account => true,

@@ -8,6 +8,7 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
 import { useRequestDiagnostics } from '../composables/useRequestDiagnostics'
 import { requestDiagnosticsBundle } from '../utils/diagnosticsBundle'
+import RequestCaptureDetails from './RequestCaptureDetails.vue'
 import RequestTransportFailure from './RequestTransportFailure.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
 
@@ -119,5 +120,6 @@ function download() {
         </p>
       </template>
     </template>
+    <RequestCaptureDetails :request-id="selectedId" />
   </section>
 </template>

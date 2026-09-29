@@ -23,7 +23,14 @@ where
             "/api/admin/request-captures",
             get(status::<S>).post(create::<S>),
         )
-        .route("/api/admin/request-captures/config", post(configure::<S>))
+        .route(
+            "/api/admin/request-captures/config",
+            get(settings::<S>).post(configure::<S>),
+        )
+        .route(
+            "/api/admin/request-captures/by-request",
+            get(for_request::<S>),
+        )
         .route("/api/admin/request-captures/stop", post(stop::<S>))
         .route("/api/admin/request-captures/export", get(export_task::<S>))
         .route("/api/admin/request-captures/delete", post(delete::<S>))
@@ -32,6 +39,48 @@ where
             "/api/admin/request-captures/records/export",
             get(export::<S>),
         )
+}
+
+async fn settings<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .request_capture()
+        .settings()
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RequestQuery {
+    request_id: String,
+}
+
+async fn for_request<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<RequestQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let records = state
+        .admin_services()
+        .request_capture()
+        .for_request(&query.request_id)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(records),
+    ))
 }
 
 async fn status<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>

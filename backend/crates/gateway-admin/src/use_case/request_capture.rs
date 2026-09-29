@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 #[async_trait]
 pub trait RequestCaptureService: Send + Sync {
+    async fn settings(&self) -> Result<RequestCaptureSettings, AdminError>;
+    async fn for_request(&self, request_id: &str) -> Result<Vec<CaptureRecord>, AdminError>;
     async fn status(&self) -> Result<RequestCaptureStatus, AdminError>;
     async fn configure(
         &self,
@@ -56,6 +58,25 @@ fn validate_id(id: &str) -> Result<(), AdminError> {
 
 #[async_trait]
 impl RequestCaptureService for DefaultRequestCaptureService {
+    async fn settings(&self) -> Result<RequestCaptureSettings, AdminError> {
+        self.store()?
+            .settings()
+            .await
+            .map_err(|e| map_store_error(e, "request capture"))
+    }
+
+    async fn for_request(&self, request_id: &str) -> Result<Vec<CaptureRecord>, AdminError> {
+        if request_id.trim().is_empty()
+            || request_id.len() > 256
+            || request_id.chars().any(char::is_control)
+        {
+            return Err(AdminError::invalid("请求标识不合法"));
+        }
+        self.store()?
+            .for_request(request_id)
+            .await
+            .map_err(|e| map_store_error(e, "request capture"))
+    }
     async fn status(&self) -> Result<RequestCaptureStatus, AdminError> {
         self.store()?
             .status()
