@@ -99,7 +99,7 @@ fn reqwest_clients() -> &'static Mutex<ReqwestClientCache> {
     REQWEST_CLIENTS.get_or_init(|| Mutex::new(ReqwestClientCache::default()))
 }
 
-/// 构建带缓存、自动协商 HTTP/2 的 reqwest Client。
+/// 构建复用连接池的 Codex HTTP 客户端。
 pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
     build_account_http_client("", None, "")
 }
@@ -122,16 +122,12 @@ pub fn build_account_http_client(
         return Ok(client);
     }
 
+    // a5a844a: 普通 HTTP 的连接池与 TCP/H2 保活沿用 reqwest 默认值。
+    // 保留账号出口、TLS、重定向与连接超时策略；源绑定 IPv6 独立管理连接池。
     let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .pool_max_idle_per_host(4)
-        .pool_idle_timeout(None::<Duration>)
-        .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
-        .tcp_keepalive(Duration::from_secs(30))
-        .http2_keep_alive_interval(Duration::from_secs(30))
-        .http2_keep_alive_timeout(Duration::from_secs(5))
-        .http2_keep_alive_while_idle(true);
+        .connect_timeout(UPSTREAM_CONNECT_TIMEOUT);
     if let Some(proxy) = proxy {
         builder = builder.proxy(
             reqwest::Proxy::all(proxy.expose_url())

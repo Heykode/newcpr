@@ -119,6 +119,9 @@ pub struct RequestTuning {
     pub websocket_http_fallback_enabled: bool,
     #[serde(default = "default_websocket_large_request_threshold_bytes")]
     pub websocket_large_request_threshold_bytes: u64,
+    /// 提交前原始上游字节缓冲阈值；零关闭额外缓冲，不限制请求大小。
+    #[serde(default = "default_stream_prefetch_bytes")]
+    pub stream_prefetch_bytes: u64,
     pub websocket_max_age_ms: u64,
     pub websocket_stream_idle_timeout_ms: u64,
     pub websocket_failure_threshold: u32,
@@ -167,6 +170,10 @@ pub struct RequestTuning {
 
 const fn default_websocket_large_request_threshold_bytes() -> u64 {
     15 * 1024 * 1024
+}
+
+const fn default_stream_prefetch_bytes() -> u64 {
+    128 * 1024
 }
 
 const fn default_excel_image_relay_bytes() -> u64 {
@@ -239,6 +246,7 @@ impl RequestTuning {
             websocket_http_fallback_enabled: true,
             websocket_large_request_threshold_bytes:
                 default_websocket_large_request_threshold_bytes(),
+            stream_prefetch_bytes: default_stream_prefetch_bytes(),
             websocket_max_age_ms: 55 * 60 * 1_000,
             websocket_stream_idle_timeout_ms: 300_000,
             websocket_failure_threshold: 3,

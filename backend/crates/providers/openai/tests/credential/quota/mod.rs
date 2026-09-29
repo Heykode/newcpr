@@ -654,6 +654,55 @@ async fn quota_endpoint_auth_rejections_do_not_reclassify_credentials_or_quota()
 }
 
 #[tokio::test]
+async fn quota_rejection_preserves_status_and_bounded_codes_without_touching_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_quota_rejection_detail";
+    create_account(&store, account_id).await;
+    let before = store.account(account_id).unwrap();
+    let server = MockServer::start().await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        server.uri(),
+    );
+    for (body, expected) in [
+        (
+            json!({"error":{"code":"token_revoked"}}),
+            Some("token_revoked"),
+        ),
+        (json!({"code":"outer_code"}), Some("outer_code")),
+        (
+            json!({"error":{"code":"  token_revoked "},"code":"outer"}),
+            Some("token_revoked"),
+        ),
+        (json!({"error":{"code":"raw free text"}}), None),
+        (json!({"error":{"code":"x".repeat(65)}}), None),
+        (json!({"error":{"code":"错误码"}}), None),
+        (json!({"error":{"code":123}}), None),
+    ] {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/codex/usage"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(body))
+            .mount(&server)
+            .await;
+        match service.refresh_account(before.id()).await {
+            Err(CodexCredentialQuotaError::Upstream { status, code, .. }) => {
+                assert_eq!(status, Some(401));
+                assert_eq!(code.as_deref(), expected);
+            }
+            other => panic!("expected upstream rejection: {other:?}"),
+        }
+        assert_eq!(store.account(account_id).unwrap(), before);
+        store
+            .repository()
+            .load_runtime_credential(&before)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn payment_required_is_authoritative_quota_exhaustion_without_fabricated_usage() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_payment_required";

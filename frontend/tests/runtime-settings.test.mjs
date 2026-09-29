@@ -246,6 +246,46 @@ test('location remains opt-in and custom location round trips without changing o
   }
 })
 
+test('stream prefetch inherits defaults and round trips zero and exact custom bytes', async () => {
+  for (const [overrides, defaults, expected] of [
+    [{}, {}, 128 * 1024],
+    [{ streamPrefetchBytes: null }, { streamPrefetchBytes: 256 * 1024 }, 256 * 1024],
+    [{ streamPrefetchBytes: 0 }, { streamPrefetchBytes: 256 * 1024 }, 0],
+  ]) {
+    const query = mountSettings({ ...settings(), requestTuning: overrides, requestTuningDefaults: defaults })
+    try {
+      await query.state.loadSettings()
+      assert.equal(query.state.form.requestTuning.streamPrefetchBytes, expected)
+      for (const value of [expected, 0, 1, 512, 262144, 128 * 1024 * 1024, Number.MAX_SAFE_INTEGER]) {
+        query.state.form.requestTuning.streamPrefetchBytes = value
+        await query.state.saveSettings()
+        assert.equal(query.requests.at(-1).requestTuning.streamPrefetchBytes, value)
+        await query.state.loadSettings()
+        assert.equal(query.state.form.requestTuning.streamPrefetchBytes, value)
+      }
+    }
+    finally { query.stop() }
+  }
+})
+
+test('stream prefetch rejects only invalid or inexact byte numbers before saving', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), message => warnings.push(message))
+  try {
+    await query.state.loadSettings()
+    for (const value of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      query.state.form.requestTuning.streamPrefetchBytes = value
+      await query.state.saveSettings()
+    }
+    assert.equal(query.requests.length, 0)
+    assert.equal(warnings.length, 5)
+    const component = readFileSync(new URL('../src/views/settings/components/RuntimeSettingsCard.vue', import.meta.url), 'utf8')
+    assert.match(component, /tuningNumber\('streamPrefetchBytes', 1024\)/)
+    assert.match(component, /v-model="tuningValues\.streamPrefetchKiB\.value"[^>]+step="any"/)
+  }
+  finally { query.stop() }
+})
+
 test('large request threshold inherits defaults and round trips zero and custom bytes', async () => {
   for (const [overrides, defaults, expected] of [
     [{}, {}, 15 * 1024 * 1024],
@@ -376,6 +416,7 @@ test('inherited runtime defaults never add the removed global WS opening limit',
       websocketMaxRetries: 5,
       websocketHttpFallbackEnabled: true,
       websocketLargeRequestThresholdBytes: 15 * 1024 * 1024,
+      streamPrefetchBytes: 128 * 1024,
       websocketMaxAgeMs: 55 * 60 * 1_000,
       websocketStreamIdleTimeoutMs: 300_000,
       websocketFailureThreshold: 3,

@@ -45,10 +45,10 @@ export function useDashboard() {
   )
 
   async function loadDashboardData(silent = false) {
-    if (loading.value || refreshing.value)
+    if (summaryController || refreshing.value)
       return
     try {
-      loading.value = true
+      loading.value = !silent
       await loadDashboardSnapshot(silent)
     }
     catch {
@@ -60,7 +60,7 @@ export function useDashboard() {
   }
 
   async function refreshDashboardData() {
-    if (loading.value || refreshing.value)
+    if (summaryController || refreshing.value)
       return
     refreshing.value = true
     try {
@@ -100,11 +100,13 @@ export function useDashboard() {
   async function loadDashboardSnapshot(silent = false) {
     const trendKind = activeTrendKind.value
     const requestId = ++trendRequestId
-    summaryController?.abort()
     trendController?.abort()
     summaryController = new AbortController()
-    trendLoading.value = true
-    trendError.value = ''
+    // 自动刷新保留当前内容和错误，等待成功快照后再更新。
+    if (!silent) {
+      trendLoading.value = true
+      trendError.value = ''
+    }
     try {
       const summary = await getDashboardSummary({ kind: trendKind }, { silent, signal: summaryController.signal })
       if (disposed)
@@ -113,14 +115,16 @@ export function useDashboard() {
       lastRefreshedAt.value = formatDateTime()
       if (isCurrentTrendRequest(requestId, trendKind)) {
         trend.value = summary.trend
+        trendError.value = ''
       }
     }
     catch (error: unknown) {
-      if (isCurrentTrendRequest(requestId, trendKind))
+      if (!silent && isCurrentTrendRequest(requestId, trendKind))
         trendError.value = errorMessage(error)
       throw error
     }
     finally {
+      summaryController = undefined
       if (isCurrentTrendRequest(requestId, trendKind))
         trendLoading.value = false
     }

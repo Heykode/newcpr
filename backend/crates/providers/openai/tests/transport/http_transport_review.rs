@@ -32,9 +32,7 @@ use tokio::{
 
 use super::native_tls::{accept, acceptor, ca_identity, identity_signed_by};
 
-const CONCURRENCY: usize = 4;
 const WAVES: usize = 4;
-const REQUESTS: usize = 2 + CONCURRENCY * WAVES;
 
 async fn exchange(
     client: &reqwest::Client,
@@ -76,7 +74,8 @@ async fn exchange(
     (first, started.elapsed().as_micros(), connection)
 }
 
-async fn review(mode: &str) {
+async fn review(mode: &str, concurrency: usize) {
+    let requests = 2 + concurrency * WAVES;
     let root = ca_identity();
     let identity = identity_signed_by(&root);
     let mut trust = X509StoreBuilder::new().unwrap();
@@ -109,20 +108,51 @@ async fn review(mode: &str) {
         Version::HTTP_11
     };
     let acceptor = acceptor(&identity, h2);
-    let client = build_reqwest_native_client_with_custom_ca(
-        reqwest::Client::builder()
-            .no_proxy()
-            .tcp_nodelay(true)
-            .pool_max_idle_per_host(CONCURRENCY)
-            .timeout(Duration::from_secs(10)),
-    )
-    .unwrap();
+    let client = if mode.ends_with("-current") {
+        provider_openai::transport::build_reqwest_client().unwrap()
+    } else if mode.ends_with("-legacy") {
+        // Preserve the pre-a5a844a settings as a negative control after alignment.
+        build_reqwest_native_client_with_custom_ca(
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(15))
+                .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(None::<Duration>)
+                .tcp_keepalive(Duration::from_secs(30))
+                .http2_keep_alive_interval(Duration::from_secs(30))
+                .http2_keep_alive_timeout(Duration::from_secs(5))
+                .http2_keep_alive_while_idle(true),
+        )
+        .unwrap()
+    } else if mode.ends_with("-upstream") {
+        // a5a844a removes explicit pooling and keepalive overrides. Preserve
+        // New CPR's native TLS, IPv4 and redirect policy in this test candidate.
+        build_reqwest_native_client_with_custom_ca(
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(15))
+                .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+        )
+        .unwrap()
+    } else {
+        build_reqwest_native_client_with_custom_ca(
+            reqwest::Client::builder()
+                .no_proxy()
+                .tcp_nodelay(true)
+                .pool_max_idle_per_host(concurrency)
+                .timeout(Duration::from_secs(10)),
+        )
+        .unwrap()
+    };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("https://{}", listener.local_addr().unwrap());
     let connections = Arc::new(AtomicUsize::new(0));
     let accepted = Arc::clone(&connections);
     let releases = Arc::new(
-        (0..REQUESTS)
+        (0..requests)
             .map(|_| Arc::new(Notify::new()))
             .collect::<Vec<_>>(),
     );
@@ -195,13 +225,13 @@ async fn review(mode: &str) {
     let started = Instant::now();
     let mut samples = Vec::new();
     for wave in 0..WAVES {
-        let barrier = Barrier::new(CONCURRENCY);
+        let barrier = Barrier::new(concurrency);
         samples.extend(
-            join_all((0..CONCURRENCY).map(|index| {
+            join_all((0..concurrency).map(|index| {
                 exchange(
                     &client,
                     &url,
-                    2 + wave * CONCURRENCY + index,
+                    2 + wave * concurrency + index,
                     &releases,
                     expected,
                     Some(&barrier),
@@ -222,11 +252,11 @@ async fn review(mode: &str) {
         );
     } else {
         let mut previous_wave = BTreeSet::from([cold.2]);
-        for wave in samples.chunks(CONCURRENCY) {
+        for wave in samples.chunks(concurrency) {
             let connections = wave.iter().map(|value| value.2).collect::<BTreeSet<_>>();
             assert_eq!(
                 connections.len(),
-                CONCURRENCY,
+                concurrency,
                 "HTTP/1 streaming requests must progress concurrently"
             );
             assert!(
@@ -242,7 +272,7 @@ async fn review(mode: &str) {
         "LOOPBACK_REVIEW {}",
         serde_json::json!({
             "mode": mode, "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-            "http": format!("{expected:?}"), "requests": REQUESTS, "concurrency": CONCURRENCY,
+            "http": format!("{expected:?}"), "requests": requests, "concurrency": concurrency,
             "accepted_tcp_connections": connections.load(Ordering::SeqCst),
             "used_connections": used_connections.len(),
             "cold_first_event_us": cold.0, "warm_first_event_us": warm.0,
@@ -254,6 +284,68 @@ async fn review(mode: &str) {
     );
     stop.send(()).unwrap();
     server.await.unwrap();
+}
+
+#[test]
+fn compare_legacy_and_upstream_connection_defaults() {
+    const CASE: &str = "CPR_TEST_A5A844A_COMPARISON";
+    if let Ok(mode) = std::env::var(CASE) {
+        assert!(matches!(
+            mode.as_str(),
+            "native-h1-current"
+                | "native-h1-legacy"
+                | "native-h1-upstream"
+                | "native-h2-current"
+                | "native-h2-legacy"
+                | "native-h2-upstream"
+        ));
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                timeout(Duration::from_secs(20), review(&mode, 8))
+                    .await
+                    .expect("bounded A/B comparison");
+            });
+        return;
+    }
+    for mode in [
+        "native-h1-current",
+        "native-h1-legacy",
+        "native-h1-upstream",
+        "native-h2-current",
+        "native-h2-legacy",
+        "native-h2-upstream",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "transport::http_transport_review::compare_legacy_and_upstream_connection_defaults",
+                "--nocapture",
+            ])
+            .env(CASE, mode)
+            .env(CODEX_CA_CERT_ENV, directory.path().join("ca.pem"))
+            .env_remove(SSL_CERT_FILE_ENV)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{mode}\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            stdout
+                .lines()
+                .filter(|line| line.starts_with("LOOPBACK_REVIEW "))
+                .count(),
+            1
+        );
+        print!("{stdout}");
+    }
 }
 
 #[test]
@@ -270,7 +362,7 @@ fn unified_transport_streams_and_reuses_h2_and_h1() {
             .build()
             .unwrap()
             .block_on(async {
-                timeout(Duration::from_secs(20), review(&mode))
+                timeout(Duration::from_secs(20), review(&mode, 4))
                     .await
                     .expect("bounded loopback review");
             });
