@@ -19,10 +19,47 @@ function load(path, dependencies = {}) {
   return exports
 }
 const { templateForm, templateConfig } = load('../src/components/account-templates/template-form.ts', {
+  '@/views/accounts/utils/modelAccess': load('../src/views/accounts/utils/modelAccess.ts'),
   '@/utils/excel-settings': load('../src/utils/excel-settings.ts', {
     '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
   }),
   '@/views/accounts/utils/schedulingForm': load('../src/views/accounts/utils/schedulingForm.ts'),
+})
+
+test('template policies preserve omission and null but roundtrip explicit model restrictions', () => {
+  for (const value of [undefined, null]) {
+    const form = templateForm({ name: 'Legacy policy', modelAccess: value })
+    assert.equal(form.modelAccess, undefined)
+    assert.equal('modelAccess' in templateConfig(form), false)
+  }
+  assert.equal(templateForm().modelAccess, undefined)
+  for (const mode of ['all', 'allowlist', 'denylist']) {
+    const policy = { mode, models: mode === 'all' ? [] : ['model-a', 'model-b'] }
+    const expected = JSON.stringify(policy)
+    const stored = { name: 'Model policy', modelAccess: policy }
+    const form = templateForm(stored)
+    const saved = templateConfig(form)
+    assert.equal(JSON.stringify(saved.modelAccess), expected)
+    form.modelAccess.models.push('model-c')
+    assert.equal(JSON.stringify(stored.modelAccess), expected)
+    assert.equal(JSON.stringify(saved.modelAccess), expected)
+    const reopened = templateForm(saved)
+    assert.equal(JSON.stringify(reopened.modelAccess), expected)
+    reopened.modelAccess = undefined
+    assert.equal('modelAccess' in templateConfig(reopened), false)
+    assert.equal(JSON.stringify(saved.modelAccess), expected)
+  }
+})
+
+test('template model restrictions reuse exact ID and nonempty-list validation', () => {
+  for (const mode of ['allowlist', 'denylist']) {
+    for (const models of [[], ['model-*'], ['__reserved'], ['bad\nmodel'], [' model-a '], ['x'.repeat(257)], Array.from({ length: 257 }, (_, i) => `model-${i}`)]) {
+      const form = { ...templateForm(), name: 'Invalid policy', modelAccess: { mode, models } }
+      assert.throws(() => templateConfig(form))
+    }
+  }
+  const form = { ...templateForm(), name: 'Remove restrictions', modelAccess: { mode: 'all', models: [] } }
+  assert.equal(JSON.stringify(templateConfig(form).modelAccess), '{"mode":"all","models":[]}')
 })
 
 test('managed exit templates do not require or toggle Excel', () => {

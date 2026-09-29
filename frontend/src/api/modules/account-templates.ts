@@ -1,8 +1,10 @@
 import type { RequestOptions } from '../request'
+import type { AccountModelAccess } from './accounts'
 import type { Excel403Action } from '@/utils/excel-settings'
 import request from '../request'
 
 export interface AccountTemplateConfig {
+  modelAccess?: AccountModelAccess | null
   preserveOutboundProxy?: boolean
   requestProxySource?: import('@/utils/request-proxy-source').RequestProxySource
   egressMode?: string | null

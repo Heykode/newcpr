@@ -284,6 +284,12 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
         id: "template-one".into(),
         revision: 1,
         config: ReloginTemplateConfig {
+            model_access: Some(
+                serde_json::from_value(serde_json::json!({
+                    "mode": "denylist", "models": ["model-template"]
+                }))
+                .unwrap(),
+            ),
             preserve_outbound_proxy: false,
             egress_mode: None,
             responses_upstream: None,

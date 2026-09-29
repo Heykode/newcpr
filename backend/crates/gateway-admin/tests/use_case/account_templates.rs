@@ -6,6 +6,88 @@ use gateway_admin::model::{
     AdminErrorKind, proxies::AccountProxySelection, relogin_templates::ReloginTemplateConfig,
 };
 
+#[test]
+fn template_model_access_preserves_legacy_values_and_rejects_invalid_policies() {
+    let legacy = serde_json::to_value(template_config()).unwrap();
+    assert!(legacy.get("modelAccess").is_none());
+    for policy in [None, Some(serde_json::Value::Null)] {
+        let mut value = legacy.clone();
+        if let Some(policy) = policy {
+            value["modelAccess"] = policy;
+        }
+        let config: ReloginTemplateConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(config.model_access, None);
+        assert_eq!(config.settings().unwrap().model_access, None);
+        assert!(
+            serde_json::to_value(config)
+                .unwrap()
+                .get("modelAccess")
+                .is_none()
+        );
+    }
+    for policy in [
+        serde_json::json!({"mode":"allowlist","models":[]}),
+        serde_json::json!({"mode":"denylist","models":["model-*"]}),
+        serde_json::json!({"mode":"unknown","models":["model-a"]}),
+    ] {
+        let mut value = legacy.clone();
+        value["modelAccess"] = policy;
+        assert!(serde_json::from_value::<ReloginTemplateConfig>(value).is_err());
+    }
+}
+
+#[tokio::test]
+async fn template_model_access_roundtrips_and_applies_to_single_and_multiple_accounts() {
+    let first = account_record("openai");
+    let mut second = first.clone();
+    second.id = "acct_second".into();
+    let h = Harness::new(vec![first.clone(), second.clone()]).await;
+    let service = h.services.account_templates();
+    for mode in ["all", "allowlist", "denylist"] {
+        let models = if mode == "all" {
+            vec![]
+        } else {
+            vec!["model-a", "model-b"]
+        };
+        let policy =
+            serde_json::from_value(serde_json::json!({"mode":mode,"models":models})).unwrap();
+        let mut config = template_config();
+        config.name = format!("Policy {mode}");
+        config.model_access = Some(policy);
+        let template = service.save_template(None, config.clone()).await.unwrap();
+        assert_eq!(template.config.model_access, config.model_access);
+        assert_eq!(
+            service
+                .resolve(template_selection(&template))
+                .await
+                .unwrap()
+                .config,
+            config
+        );
+        for ids in [
+            vec![first.id.clone()],
+            vec![first.id.clone(), second.id.clone()],
+        ] {
+            let before = h.accounts.batch_updates.lock().unwrap().len();
+            service
+                .apply(
+                    ids.clone(),
+                    template_selection(&template),
+                    &context("template-model-access"),
+                )
+                .await
+                .unwrap();
+            let updates = h.accounts.batch_updates.lock().unwrap();
+            assert_eq!(updates.len(), before + 1);
+            assert_eq!(updates.last().unwrap().account_ids, ids);
+            assert_eq!(updates.last().unwrap().model_access, config.model_access);
+            assert_eq!(updates.last().unwrap().custom_name, None);
+        }
+    }
+    assert!(h.accounts.rotation_attempts.lock().unwrap().is_empty());
+    assert!(h.accounts.import_settings().is_empty());
+}
+
 #[tokio::test]
 async fn template_preserve_outbound_is_explicit_and_legacy_null_still_means_direct() {
     let account = account_record("openai");
