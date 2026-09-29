@@ -26,6 +26,7 @@ import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
 import QualitySchedule from './QualitySchedule.vue'
 import QualityTemplateCatalog from './QualityTemplateCatalog.vue'
+import { DEFAULT_QUALITY_INTERVAL_SECONDS, qualityScheduleSummary } from './schedule'
 
 const route = useRoute()
 const activeTab = ref<'rules' | 'templates'>(route.query.tab === 'templates' ? 'templates' : 'rules')
@@ -121,7 +122,8 @@ function defaults(): QualityRuleConfig {
     accountId: '',
     model: '',
     enabled: true,
-    cron: '0 */6 * * *',
+    intervalSeconds: DEFAULT_QUALITY_INTERVAL_SECONDS,
+    cron: '',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     repetitions: 1,
     prompt: CANDY_PROMPT,
@@ -334,7 +336,7 @@ async function loadAccountNames() {
 function edit(rule: QualityRule | null) {
   templateMode.value = false
   editing.value = rule ? { ...rule, config: { ...rule.config } } : null
-  draft.value = rule ? { ...defaults(), ...rule.config, failureGroupIds: [...(rule.config.failureGroupIds ?? [])] } : defaults()
+  draft.value = rule ? { ...defaults(), ...rule.config, intervalSeconds: rule.config.intervalSeconds ?? null, failureGroupIds: [...(rule.config.failureGroupIds ?? [])] } : defaults()
   selectedAccounts.value = rule ? [rule.config.accountId] : []
   editorError.value = ''
   editorOpen.value = true
@@ -345,7 +347,7 @@ function editTemplate(template: QualityRuleTemplate | null, rule?: QualityRule) 
   editingTemplate.value = template ? { ...template } : null
   templateName.value = template?.name ?? ''
   const config = template?.config ?? rule?.config
-  draft.value = config ? { ...defaults(), ...structuredClone(toRaw(config)), accountId: '' } : defaults()
+  draft.value = config ? { ...defaults(), ...structuredClone(toRaw(config)), intervalSeconds: config.intervalSeconds ?? null, accountId: '' } : defaults()
   selectedAccounts.value = []
   editorError.value = ''
   editorOpen.value = true
@@ -609,8 +611,8 @@ onBeforeUnmount(() => {
               <dt class="text-cp-text-secondary">
                 定时计划
               </dt>
-              <dd class="mt-1 break-words font-mono" :title="selected.config.timezone">
-                {{ selected.config.cron }}
+              <dd class="mt-1 break-words">
+                {{ qualityScheduleSummary(selected.config) }}
               </dd>
             </div>
             <div class="col-span-2 min-w-0 sm:col-span-1">
@@ -758,13 +760,10 @@ onBeforeUnmount(() => {
           <FormItem v-if="!isProbe" label="推理强度">
             <BaseSelect v-model="effort" :options="[{ value: '', label: '按默认' }, ...efforts]" />
           </FormItem>
-          <QualitySchedule v-model="draft.cron" />
-          <FormItem label="时区" required>
-            <BaseInput v-model="draft.timezone" />
-          </FormItem>
+          <QualitySchedule v-model="draft.intervalSeconds" :cron="draft.cron" :timezone="draft.timezone" />
           <div v-if="!isProbe" class="grid gap-2 text-cp-sm">
             <span>每轮并行答题次数</span><BaseNumberInput v-model="draft.repetitions" label="每轮并行答题次数" :min="1" :max="8" />
-            <span class="text-xs text-cp-text-secondary">每轮并行检测 {{ draft.repetitions }} 次，仍遵守账号并发及请求间隔。</span>
+            <span class="text-xs text-cp-text-secondary">每轮并行检测 {{ draft.repetitions }} 次，不受业务并发上限限制，仍遵守账号请求间隔及安全策略。</span>
           </div>
           <BaseSwitch v-model="draft.enabled" label="启用定时检测" show-label />
           <p class="text-xs text-cp-text-secondary sm:col-span-2">

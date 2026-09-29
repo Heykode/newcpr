@@ -3,6 +3,7 @@ import type { QualityRuleTemplate } from '@/api/modules/quality-ops'
 import { Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
+import { qualityScheduleSummary } from './schedule'
 
 defineProps<{ templates: QualityRuleTemplate[], loading: boolean, busy: boolean, error: string }>()
 defineEmits<{ create: [], edit: [template: QualityRuleTemplate], remove: [template: QualityRuleTemplate], refresh: [] }>()
@@ -36,7 +37,7 @@ defineEmits<{ create: [], edit: [template: QualityRuleTemplate], remove: [templa
             {{ template.config.detectionMode === 'state_probe' ? '状态探针' : '题目检测' }} · {{ template.config.model }}
           </p>
           <p class="mt-1 break-words text-xs text-cp-text-secondary">
-            {{ template.config.enabled ? '定时开启' : '监测暂停' }} · {{ template.config.cron }} · {{ template.config.timezone }} · 版本 {{ template.revision }}
+            {{ template.config.enabled ? '定时开启' : '监测暂停' }} · {{ qualityScheduleSummary(template.config) }} · 版本 {{ template.revision }}
           </p>
         </div>
         <div class="flex shrink-0 gap-1">

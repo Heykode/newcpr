@@ -74,6 +74,10 @@ pub(super) fn prepare(
 }
 
 fn prepare_payload(request: &mut CodexResponsesRequest) {
+    // State evidence is response-local HTTP metadata. Do not open a WebSocket
+    // only to fall back; keep the account identity and egress preparation intact.
+    request.use_websocket = false;
+    request.force_http_sse = true;
     let body = request.body_mut();
     body.insert("instructions".to_owned(), json!("Reply with OK."));
     body.insert("parallel_tool_calls".to_owned(), json!(true));
@@ -279,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn quality_probe_payload_matches_reference_without_changing_transport_or_identity() {
+    fn quality_probe_payload_matches_reference_and_forces_http_without_changing_identity() {
         let body = json!({
             "model": "probe-model",
             "input": [{
@@ -300,8 +304,8 @@ mod tests {
         expected["parallel_tool_calls"] = json!(true);
         expected["include"] = json!(["reasoning.encrypted_content"]);
         assert_eq!(serde_json::to_value(&request).unwrap(), expected);
-        assert!(request.use_websocket);
-        assert!(!request.force_http_sse);
+        assert!(!request.use_websocket);
+        assert!(request.force_http_sse);
         assert_eq!(
             request.client_session_id.as_deref(),
             Some("account-scoped-session")

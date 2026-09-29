@@ -18,6 +18,7 @@ import { failureActionOptions } from './failure-actions'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
 import QualitySchedule from './QualitySchedule.vue'
+import { DEFAULT_QUALITY_INTERVAL_SECONDS } from './schedule'
 
 type CatalogLoader = (page: number, search: string, signal: AbortSignal) => Promise<{
   items: { value: string, label: string, description?: string }[]
@@ -40,8 +41,7 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ default: false })
 const labels: Record<QualityEditableField, string> = {
   enabled: '启用定时检测',
-  cron: '检测频率',
-  timezone: '时区',
+  intervalSeconds: '检测频率',
   detectionMode: '检测模式',
   model: '检测模型',
   reasoningEffort: '推理强度（仅题目检测）',
@@ -82,7 +82,7 @@ watch(open, (value) => {
   if (!value)
     return
   const first = props.rules.find(rule => props.selectedIds.includes(rule.id))?.config ?? props.defaultConfig
-  draft.value = { ...props.defaultConfig, ...first, failureGroupIds: [...first.failureGroupIds] }
+  draft.value = { ...props.defaultConfig, ...first, intervalSeconds: first.intervalSeconds ?? DEFAULT_QUALITY_INTERVAL_SECONDS, failureGroupIds: [...first.failureGroupIds] }
   fields.value = []
   pending.value = [...props.selectedIds]
   names.value = Object.fromEntries(props.rules.map(rule => [rule.id, props.accountName(rule.config.accountId)]))
@@ -163,7 +163,7 @@ onBeforeUnmount(() => {
         <BaseCheckbox :model-value="fields.includes(field)" :label="`修改${labels[field]}`" show-label @update:model-value="selectField(field, $event)" />
         <template v-if="fields.includes(field)">
           <BaseSwitch v-if="field === 'enabled' || field === 'autoRestore'" v-model="draft[field]" :label="labels[field]" show-label />
-          <QualitySchedule v-else-if="field === 'cron'" v-model="draft.cron" />
+          <QualitySchedule v-else-if="field === 'intervalSeconds'" v-model="draft.intervalSeconds" />
           <BaseNumberInput v-else-if="field === 'repetitions' || field === 'excelFailureThreshold'" v-model="draft[field]" :label="labels[field]" :min="1" :max="field === 'repetitions' ? 8 : 100" />
           <QualityCatalogPicker v-else-if="field === 'judgeGroupId'" v-model="draft.judgeGroupId" label="判题分组" :load-page="groupPage" />
           <QualityCatalogPicker v-else-if="field === 'failureGroupIds'" v-model:selected-values="draft.failureGroupIds" label="处置分组" multiple :load-page="actionGroupPage" />
@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
             <BaseSelect v-else-if="field === 'failureAction'" v-model="draft.failureAction" :options="failureActionOptions(draft.failureAction)" />
             <BaseSelect v-else-if="field === 'reasoningEffort'" v-model="effort" :options="[{ value: '', label: '按默认' }, ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ value, label: value }))]" />
             <BaseTextarea v-else-if="field === 'prompt' || field === 'referenceAnswer' || field === 'judgePrompt'" v-model="draft[field]" :rows="3" />
-            <BaseInput v-else-if="field === 'timezone' || field === 'model' || field === 'judgeModel'" v-model="draft[field]" />
+            <BaseInput v-else-if="field === 'model' || field === 'judgeModel'" v-model="draft[field]" />
           </FormItem>
         </template>
       </div>

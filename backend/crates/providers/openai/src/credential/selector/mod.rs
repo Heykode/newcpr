@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
+use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -415,7 +416,10 @@ impl CodexCredentialSelector {
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
-        if request.attempt.request_tuning().account_busy_wait_enabled && !diagnostic {
+        if (request.attempt.request_tuning().account_busy_wait_enabled
+            || request.attempt.is_quality_check())
+            && !diagnostic
+        {
             return self
                 .select_with_capacity_wait(request, cyber_policy_session_key)
                 .await;
@@ -454,6 +458,7 @@ impl CodexCredentialSelector {
         universe: &mut Option<BTreeSet<ProviderAccountId>>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let diagnostic = request.attempt.is_diagnostic_required_account();
+        let quality = request.attempt.is_quality_check();
         let mut accounts = self.repository.list_for_provider().await?;
         let quality_recovery = if request.attempt.is_quality_check()
             && let Some(required) = request.attempt.required_account()
@@ -540,6 +545,7 @@ impl CodexCredentialSelector {
                     .with_provider_quota(self.quota.scheduling_signals(&account))
                     .with_rate_limit(rate_limits.get(account.id()).copied().flatten())
                     .with_runtime_health(health.0, health.1);
+                let signals = quality_selection_signals(signals, quality);
                 AccountCandidate { account, signals }
             })
             .collect::<Vec<_>>();
@@ -690,7 +696,10 @@ impl CodexCredentialSelector {
                         self.provider_kind.clone(),
                         account.id().clone(),
                         account.revision(),
-                        account.effective_concurrency(policy.max_concurrent_per_account()),
+                        quality_concurrency_limit(
+                            account.effective_concurrency(policy.max_concurrent_per_account()),
+                            quality,
+                        ),
                         policy.request_interval(),
                         request.attempt.deadline(),
                     ),
@@ -1690,5 +1699,88 @@ fn minimum_duration(current: Option<Duration>, candidate: Option<Duration>) -> O
         (Some(current), Some(candidate)) => Some(current.min(candidate)),
         (Some(current), None) => Some(current),
         (None, candidate) => candidate,
+    }
+}
+
+fn quality_selection_signals(
+    mut signals: AccountRuntimeSignals,
+    quality: bool,
+) -> AccountRuntimeSignals {
+    if quality {
+        // Admin quality work must not be rejected because ordinary traffic
+        // already filled the account's business concurrency.
+        signals.in_flight = 0;
+    }
+    signals
+}
+
+fn quality_concurrency_limit(ordinary: NonZeroU32, quality: bool) -> NonZeroU32 {
+    if quality { NonZeroU32::MAX } else { ordinary }
+}
+
+fn quality_interval_delay(
+    quality: bool,
+    interval_deadline: Option<SystemTime>,
+    now: SystemTime,
+) -> Option<Duration> {
+    if !quality {
+        return None;
+    }
+    interval_deadline.map(|deadline| {
+        deadline
+            .duration_since(now)
+            .unwrap_or_default()
+            .max(Duration::from_millis(1))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quality_interval_wait_is_scoped_and_handles_clock_boundaries() {
+        let now = SystemTime::now();
+        let deadline = now + Duration::from_millis(250);
+        assert_eq!(quality_interval_delay(false, Some(deadline), now), None);
+        assert_eq!(quality_interval_delay(true, None, now), None);
+        assert_eq!(
+            quality_interval_delay(true, Some(deadline), now),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            quality_interval_delay(true, Some(now), now),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(
+            quality_interval_delay(true, Some(now - Duration::from_millis(1)), now),
+            Some(Duration::from_millis(1))
+        );
+    }
+
+    #[test]
+    fn quality_selection_bypasses_only_business_concurrency() {
+        let last_started_at = SystemTime::now();
+        let ordinary = AccountRuntimeSignals {
+            in_flight: 7,
+            last_started_at: Some(last_started_at),
+            quota_reset_at: None,
+            quota_remaining_rank: None,
+            rate_limited_until: None,
+            failure_rate_basis_points: None,
+            first_output_latency_ms: None,
+        };
+        let quality = quality_selection_signals(ordinary.clone(), true);
+        assert_eq!(quality.in_flight, 0);
+        assert_eq!(quality.last_started_at, Some(last_started_at));
+        assert_eq!(
+            quality_concurrency_limit(NonZeroU32::new(2).unwrap(), true),
+            NonZeroU32::MAX
+        );
+        assert_eq!(quality_selection_signals(ordinary.clone(), false), ordinary);
+        assert_eq!(
+            quality_concurrency_limit(NonZeroU32::new(2).unwrap(), false).get(),
+            2
+        );
     }
 }

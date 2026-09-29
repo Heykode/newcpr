@@ -26,7 +26,7 @@
 - Account list responses include nullable qualityMonitoring with ruleId/revision,
   enabled/running/pending, nextRunAt, lastStatus/lastRunAt/lastAction and sourceTemplate.
   Read once for the current page; no per-account browser polling or model-path query.
-- Saving/applying schedules the next Cron occurrence without immediate execution.
+- Saving/applying schedules the next configured occurrence without immediate execution.
   Provider compatibility, account settings, quality ownership and probes are unchanged.
 
 ### 4. Validation & Error Matrix
@@ -57,6 +57,16 @@
 
 ## Detection Execution
 
+- Optional `intervalSeconds` in persisted rule/template JSON selects fixed delays of
+  5–31536000 integer seconds. New UI defaults to 60; absent/null retains the exact
+  legacy five-field Cron and timezone contract, never silently migrate old rules.
+  Seconds take precedence over retained Cron fields. `next_run` is shared by save,
+  template application and completion; checked timestamp addition rejects overflow.
+  Delay begins at save/completion, not at the previous start. Keep five-second worker
+  scans, global admission, no-overlap and revision fences unchanged; actual starts
+  may be later. Old strict-deserialization binaries cannot read seconds configs;
+  reconcile configs before downgrade. No schema migration is required.
+
 - `AccountProbe::quality_check` is separate from diagnostic `probe`. It MUST use
   the persistent ordinary coordinator with its fixed-account quality selection. Never
   reuse `start_diagnostic`, synthesize a user API key, or call upstream HTTP directly.
@@ -67,7 +77,14 @@
   their policies; missing/out-of-scope accounts cannot gain access. This does not
   grant upstream model entitlement or bypass model-specific Excel routing policy.
 - Provider transport, model-specific Excel policy, credentials, fingerprint,
-  egress, concurrency and availability remain authoritative. Only explicitly configured
+  egress, request interval and availability remain authoritative. Quality checks bypass
+  only the target account's business concurrency cap and local user-facing model policy.
+  A fixed quality account blocked only by its request interval waits within the original
+  request deadline and cancellation scope, then reloads live safety facts. It does not
+  consume a business wait-queue slot, switch accounts or inherit the ordinary hard-pin
+  interval rejection. Redis lease races recheck the same account and interval; they
+  must not turn a just-started parallel sample into `NoEligibleCredential`.
+  Only explicitly configured
   quality failure actions may pause scheduling or remove selected group memberships.
   Legacy configs default to `none`; auto_restore defaults false. Explicit wrong answers
   trigger actions even when another sample failed; errors alone are inconclusive.
@@ -96,8 +113,9 @@
   an immediate run. Reference: ranxi2001/sub2api f80611d6; unlike its
   per-scan worker cap, CPR keeps a database-wide admission bound.
 - Quality-owned scheduling pauses have a separate owner marker. Fixed-account quality
-  tests may ignore only that verified pause and their explicit local model-policy
-  exception, never credentials, quotas, cooldown, concurrency or request interval.
+  tests may ignore only that verified pause, the business concurrency cap and their
+  explicit local model-policy exception, never credentials, quotas, cooldown or
+  request interval.
   Revalidate ownership after lease
   acquisition. Ordinary traffic cannot request this override or select paused accounts.
 - Store action, recovery ownership, config revision and audit commit together. Lock
@@ -166,9 +184,10 @@
 ## State Probe Mode
 
 - `detectionMode` defaults to `answer` for legacy rules. `state_probe` is one round
-  of at most two serial quality requests, 45 seconds per request, with no judge.
-  It uses the ordinary coordinator, fixed account, credentials, transport selector,
-  request identity, quota and concurrency gates. No direct upstream client or
+  of at most two serial HTTP SSE quality requests, 45 seconds per request, with no judge.
+  It uses the ordinary coordinator, fixed account, credentials, request identity, quota,
+  request interval and safety gates while bypassing the business concurrency cap.
+  No direct upstream client or
   diagnostic availability bypass is allowed.
 - `GenerateRequest::quality_probe` is trusted in-process context, never populated
   from client JSON. OpenAI also requires `AttemptContext::is_quality_check`.
@@ -187,9 +206,10 @@
   prompts derive the same session or change ordinary client sessions. Probe payloads
   include the reference instructions, parallel-tool setting and encrypted-reasoning
   include field without modifying normal question or user requests.
-- Preserve configured proxies and identity. Known random IPv6 modes and unverified
-  WS response evidence produce inconclusive results, never a forced transport/exit
-  change. A proxy URL cannot prove that its public IP remained stable.
+- Preserve configured proxies, UA, fingerprint, identity and IPv6 selection policy.
+  Each shot independently follows random/round-robin egress; the probe never pins an IP.
+  State probes force HTTP because WS opening metadata is not response-local evidence.
+  A proxy URL cannot prove that its public IP remained stable.
 - Only definite incorrect/degraded results invoke `enable_excel`; inconclusive,
   request errors and cancelled rounds never invoke quality policy. Existing auth
   and quota feedback still applies through the normal request chain.

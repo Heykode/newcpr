@@ -7,6 +7,7 @@ export interface QualityRuleConfig {
   accountId: string
   model: string
   enabled: boolean
+  intervalSeconds?: number | null
   cron: string
   timezone: string
   repetitions: number

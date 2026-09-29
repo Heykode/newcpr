@@ -3,8 +3,7 @@ import { usesFailureThreshold } from './failure-actions'
 
 export const qualityEditableFields = [
   'enabled',
-  'cron',
-  'timezone',
+  'intervalSeconds',
   'detectionMode',
   'model',
   'reasoningEffort',

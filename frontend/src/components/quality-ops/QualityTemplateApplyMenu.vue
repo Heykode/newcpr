@@ -10,6 +10,7 @@ import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { errorMessage } from '@/utils/async'
 import QualityDrawer from '@/views/quality-ops/QualityDrawer.vue'
+import { qualityScheduleSummary } from '@/views/quality-ops/schedule'
 import { qualityTemplateTargets } from './monitoring'
 
 const props = defineProps<{ accountIds: string[], disabled?: boolean }>()
@@ -190,7 +191,7 @@ onScopeDispose(() => {
         {{ chosen.name }}
       </h3>
       <p class="break-all text-cp-text-secondary">
-        {{ chosen.config.model }} · {{ chosen.config.enabled ? '启用定时检测' : '保存为暂停状态' }} · {{ chosen.config.cron }} · {{ chosen.config.timezone }}
+        {{ chosen.config.model }} · {{ chosen.config.enabled ? '启用定时检测' : '保存为暂停状态' }} · {{ qualityScheduleSummary(chosen.config) }}
       </p>
       <p v-if="preparing" role="status">
         正在读取所选账号的监测规则…
