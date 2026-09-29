@@ -213,8 +213,8 @@ export function useSettingsForm() {
     }
     const tuning = form.requestTuning
     if (!['off', 'auto_compact', 'warn'].includes(tuning.excelImageLimitPolicy)
-      || !Number.isInteger(tuning.excelImageWarningRemaining) || tuning.excelImageWarningRemaining < 1 || tuning.excelImageWarningRemaining > 4096
-      || !Number.isInteger(tuning.excelImageCompactReserve) || tuning.excelImageCompactReserve < 1 || tuning.excelImageCompactReserve > 4096
+      || !Number.isInteger(tuning.excelImageWarningRemaining) || tuning.excelImageWarningRemaining < 1 || tuning.excelImageWarningRemaining > 65536
+      || !Number.isInteger(tuning.excelImageCompactReserve) || tuning.excelImageCompactReserve < 1 || tuning.excelImageCompactReserve > 65536
       || (tuning.excelImageLimitPolicy === 'warn'
         && !(tuning.excelImageCompactReserve < tuning.excelImageWarningRemaining && tuning.excelImageWarningRemaining < tuning.excelImageMaxCount))) {
       toast.warning('Excel 图片预警需要：1 ≤ 压缩预留 < 预警余量 < 图片数量上限')
@@ -257,18 +257,18 @@ export function useSettingsForm() {
       toast.warning('智能调度权重须为 0–10，最多一位小数，且不能全部为 0')
       return
     }
-    if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 128 * 1024 * 1024
-      || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 128 * 1024 * 1024
-      || !Number.isInteger(tuning.excelImageMaxCount) || tuning.excelImageMaxCount < 1 || tuning.excelImageMaxCount > 4096) {
-      toast.warning('单张图片和每请求图片总大小须为 1 字节至 128 MiB，图片数量须为 1–4096 张')
+    if (!Number.isInteger(tuning.excelImageMaxBytes) || tuning.excelImageMaxBytes < 1 || tuning.excelImageMaxBytes > 512 * 1024 * 1024
+      || !Number.isInteger(tuning.excelImageTotalBytes) || tuning.excelImageTotalBytes < 1 || tuning.excelImageTotalBytes > 512 * 1024 * 1024
+      || !Number.isInteger(tuning.excelImageMaxCount) || tuning.excelImageMaxCount < 1 || tuning.excelImageMaxCount > 65536) {
+      toast.warning('单张图片和每请求图片总大小须为 1 字节至 512 MiB，图片数量须为 1–65536 张')
       return
     }
-    if (!Number.isInteger(tuning.excelImageRelayBytes) || tuning.excelImageRelayBytes < 1024 * 1024 || tuning.excelImageRelayBytes > 16384 * 1024 * 1024
+    if (!Number.isInteger(tuning.excelImageRelayBytes) || tuning.excelImageRelayBytes < 1024 * 1024 || tuning.excelImageRelayBytes > 262144 * 1024 * 1024
       || !Number.isInteger(tuning.excelImageRelayRequests) || tuning.excelImageRelayRequests < 1 || tuning.excelImageRelayRequests > 512
       || !Number.isInteger(tuning.excelImageRelayDownloads) || tuning.excelImageRelayDownloads < 1 || tuning.excelImageRelayDownloads > 128
-      || !Number.isInteger(tuning.excelImageRelayEntries) || tuning.excelImageRelayEntries < 1 || tuning.excelImageRelayEntries > 65536
-      || !Number.isInteger(tuning.excelImageRelayTtlMinutes) || tuning.excelImageRelayTtlMinutes < 1 || tuning.excelImageRelayTtlMinutes > 1440) {
-      toast.warning('暂存容量须为 1–16384 MiB，在途请求数须为 1–512，下载并发须为 1–128，暂存图片数须为 1–65536，链接有效期须为 1–1440 分钟')
+      || !Number.isInteger(tuning.excelImageRelayEntries) || tuning.excelImageRelayEntries < 1 || tuning.excelImageRelayEntries > 1048576
+      || !Number.isInteger(tuning.excelImageRelayTtlMinutes) || tuning.excelImageRelayTtlMinutes < 1 || tuning.excelImageRelayTtlMinutes > 10080) {
+      toast.warning('暂存容量须为 1–262144 MiB，在途请求数须为 1–512，下载并发须为 1–128，暂存图片数须为 1–1048576，链接有效期须为 1–10080 分钟')
       return
     }
     if (tuning.excelImageTotalBytes < tuning.excelImageMaxBytes

@@ -263,6 +263,7 @@ impl CodexBackendClient {
         response.body = super::excel::transform_stream_with_repair(
             response.body,
             prepared,
+            request.stream(),
             Some(Box::new(move |body| {
                 let client = client.clone();
                 let mut request = request.clone();
@@ -327,7 +328,15 @@ impl CodexBackendClient {
         // 再由 API 层收集 canonical events 并返回完整 JSON。不能把下游的传输偏好
         // 直接透传给 Codex，否则上游会以 400 拒绝非流式请求。
         let upstream_body = if let Some(prepared) = excel {
-            prepared.body.clone()
+            let mut body = prepared.body.clone();
+            super::excel::images::validate_with_limits(&body, true, prepared.image_limits)
+                .map_err(|error| {
+                    CodexClientError::InvalidSse(
+                        gateway_protocol::openai::sse::SseError::ParseError(error.to_string()),
+                    )
+                })?;
+            super::excel::images::normalize_message_attachments(&mut body);
+            body
         } else {
             let mut body = upstream_request.body().clone();
             super::qx_application::project_response_body(&mut body, upstream_request, context);

@@ -5,7 +5,9 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use gateway_admin::model::quality_ops::{QualityRuleConfig, QualityTemplateTarget};
+use gateway_admin::model::quality_ops::{
+    QualityGroupFilter, QualityRuleConfig, QualityTemplateTarget,
+};
 use serde::Deserialize;
 
 use super::{
@@ -18,6 +20,12 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/api/admin/quality-ops/groups", get(groups::<S>))
+        .route("/api/admin/quality-ops/groups/save", post(save_group::<S>))
+        .route(
+            "/api/admin/quality-ops/groups/delete",
+            post(delete_group::<S>),
+        )
         .route("/api/admin/quality-ops/rules", get(rules::<S>))
         .route("/api/admin/quality-ops/save", post(save::<S>))
         .route("/api/admin/quality-ops/delete", post(delete::<S>))
@@ -38,6 +46,89 @@ where
             post(apply_template::<S>),
         )
         .route("/api/admin/quality-ops/monitoring", post(monitoring::<S>))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveGroup {
+    id: Option<String>,
+    revision: Option<i64>,
+    name: String,
+    filter: QualityGroupFilter,
+    config: QualityRuleConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteGroup {
+    id: String,
+    revision: i64,
+    delete_rules: bool,
+}
+
+async fn groups<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .group_rules()
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn save_group<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(body): AdminJson<SaveGroup>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .save_group_rule(
+            body.id.as_deref(),
+            body.revision,
+            body.name,
+            body.filter,
+            body.config,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+async fn delete_group<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(body): AdminJson<DeleteGroup>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    state
+        .admin_services()
+        .quality_ops()
+        .delete_group_rule(
+            &body.id,
+            body.revision,
+            body.delete_rules,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
 }
 
 #[derive(Deserialize)]

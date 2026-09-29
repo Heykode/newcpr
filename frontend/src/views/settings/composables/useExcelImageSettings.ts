@@ -5,16 +5,16 @@ import { computed, reactive, ref } from 'vue'
 const MiB = 1024 * 1024
 
 export const excelImageFields = [
-  { key: 'excelImageMaxBytes', section: 'limits', label: '单张图片上限', unit: 'MiB', scale: MiB, min: 1, max: 128 * MiB },
-  { key: 'excelImageTotalBytes', section: 'limits', label: '每请求图片总大小', unit: 'MiB', scale: MiB, min: 1, max: 128 * MiB },
-  { key: 'excelImageMaxCount', section: 'limits', label: '每请求图片数上限', unit: '张', scale: 1, min: 1, max: 4096 },
-  { key: 'excelImageWarningRemaining', section: 'warn', label: '剩余多少张时预警', unit: '张', scale: 1, min: 1, max: 4096 },
-  { key: 'excelImageCompactReserve', section: 'warn', label: '压缩预留图片数', unit: '张', scale: 1, min: 1, max: 4096 },
-  { key: 'excelImageRelayBytes', section: 'relay', label: '进程暂存容量', unit: 'MiB', scale: MiB, min: MiB, max: 16384 * MiB },
-  { key: 'excelImageRelayEntries', section: 'relay', label: '进程暂存图片数', unit: '张', scale: 1, min: 1, max: 65536 },
+  { key: 'excelImageMaxBytes', section: 'limits', label: '单张图片上限', unit: 'MiB', scale: MiB, min: 1, max: 512 * MiB },
+  { key: 'excelImageTotalBytes', section: 'limits', label: '每请求图片总大小', unit: 'MiB', scale: MiB, min: 1, max: 512 * MiB },
+  { key: 'excelImageMaxCount', section: 'limits', label: '每请求图片数上限', unit: '张', scale: 1, min: 1, max: 65536 },
+  { key: 'excelImageWarningRemaining', section: 'warn', label: '剩余多少张时预警', unit: '张', scale: 1, min: 1, max: 65536 },
+  { key: 'excelImageCompactReserve', section: 'warn', label: '压缩预留图片数', unit: '张', scale: 1, min: 1, max: 65536 },
+  { key: 'excelImageRelayBytes', section: 'relay', label: '进程暂存容量', unit: 'MiB', scale: MiB, min: MiB, max: 262144 * MiB },
+  { key: 'excelImageRelayEntries', section: 'relay', label: '进程暂存图片数', unit: '张', scale: 1, min: 1, max: 1048576 },
   { key: 'excelImageRelayRequests', section: 'relay', label: '最大在途中转请求数', unit: '个', scale: 1, min: 1, max: 512 },
   { key: 'excelImageRelayDownloads', section: 'relay', label: '中转下载并发上限', unit: '个', scale: 1, min: 1, max: 128 },
-  { key: 'excelImageRelayTtlMinutes', section: 'relay', label: '链接有效期', unit: '分钟', scale: 1, min: 1, max: 1440 },
+  { key: 'excelImageRelayTtlMinutes', section: 'relay', label: '链接有效期', unit: '分钟', scale: 1, min: 1, max: 10080 },
 ] as const
 
 type ImageField = typeof excelImageFields[number]

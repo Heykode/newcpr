@@ -272,6 +272,8 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "provider_egress_settings",
             "provider_outbound_user_agents",
             "provider_turn_states",
+            "quality_group_members",
+            "quality_group_rules",
             "quality_rule_templates",
             "quality_rules",
             "quality_runs",

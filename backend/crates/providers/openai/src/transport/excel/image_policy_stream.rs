@@ -221,7 +221,7 @@ pub(crate) async fn start(
                 let kind = value["type"].as_str().or(event.event.as_deref()).unwrap_or("");
                 observe_usage(&mut compact_usage, value.pointer("/response/usage").or_else(|| value.get("usage")).unwrap_or(&Value::Null));
                 prepared.usage.record_repair_usage(&value["response"], &compact_usage);
-                if matches!(kind, "response.completed" | "response.failed" | "response.incomplete" | "error") {
+                if matches!(kind, "response.completed" | "response.failed" | "response.cancelled" | "response.incomplete" | "error") {
                     saw_terminal = true;
                     if kind == "response.completed" { complete = Some(value["response"].clone()); }
                     else { failure = Some((kind.to_owned(), value)); }
@@ -301,7 +301,7 @@ pub(crate) async fn start(
                 observe_usage(&mut progressive, value.pointer("/response/usage").or_else(|| value.get("usage")).unwrap_or(&Value::Null));
                 let mut observed = progressive.clone(); merge_usage(&mut observed, &compact_usage);
                 prepared.usage.record_repair_usage(&value["response"], &observed);
-                terminal = matches!(kind.as_str(), "response.completed" | "response.failed" | "response.incomplete" | "error");
+                terminal = matches!(kind.as_str(), "response.completed" | "response.failed" | "response.cancelled" | "response.incomplete" | "error");
                 if terminal && value["response"].is_object() {
                     observed = terminal_usage(&value["response"]["usage"], &progressive);
                     merge_usage(&mut observed, &compact_usage);

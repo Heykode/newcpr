@@ -227,10 +227,11 @@ pub(super) fn correct_unknown<'a>(
         add_usage(&mut usage, &corrected["usage"])?;
         usage_policy.record_repair_usage(original, &usage);
         yield None;
-        if matches!(event["type"].as_str(), Some("response.failed" | "error")) {
+        if matches!(event["type"].as_str(), Some("response.failed" | "response.cancelled" | "error")) {
             if event["response"].is_object() {
                 event["response"]["id"] = original["id"].clone();
-                event["response"]["output"] = json!([]);
+                event["response"]["output"] = original["output"].as_array().expect("validated output")
+                    .iter().filter(|item| !is_tool(item)).cloned().collect::<Vec<_>>().into();
                 event["response"]["usage"] = usage;
             }
             yield Some(event);
@@ -287,11 +288,12 @@ pub(super) fn correct<'a>(
         add_usage(&mut usage, &corrected["usage"])?;
         usage_policy.record_repair_usage(original, &usage);
         yield None;
-        if matches!(event["type"].as_str(), Some("response.failed" | "error")) {
+        if matches!(event["type"].as_str(), Some("response.failed" | "response.cancelled" | "error")) {
             // Preserve SSE rejection identity; it is not an HTTP handshake rejection.
             if event["response"].is_object() {
                 event["response"]["id"] = original["id"].clone();
-                event["response"]["output"] = json!([]);
+                event["response"]["output"] = original["output"].as_array().expect("validated output")
+                    .iter().filter(|item| !is_tool(item)).cloned().collect::<Vec<_>>().into();
                 event["response"]["usage"] = usage;
             }
             yield Some(event);
@@ -580,7 +582,7 @@ fn read_response<'a>(
             }
             if matches!(
                 kind.as_str(),
-                "response.completed" | "response.failed" | "response.incomplete" | "error"
+                "response.completed" | "response.failed" | "response.cancelled" | "response.incomplete" | "error"
             ) {
                 value["type"] = kind.clone().into();
                 if !value["response"]["usage"].is_object() && observed_usage != json!({}) {

@@ -68,7 +68,25 @@ impl DaemonTask for QualityWorker {
             let lanes = futures::future::join_all(
                 (0..crate::model::quality_ops::QUALITY_MAX_WORKERS).map(|_| lane()),
             );
-            tokio::join!(lanes, cleanup);
+            let groups = async {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        biased;
+                        () = cancellation.cancelled() => break,
+                        _ = interval.tick() => {}
+                    }
+                    tokio::select! {
+                        biased;
+                        () = cancellation.cancelled() => break,
+                        result = self.service.sync_groups() => {
+                            if result.is_err() { tracing::warn!("quality group sync failed"); }
+                        }
+                    }
+                }
+            };
+            tokio::join!(lanes, cleanup, groups);
             Ok(())
         })
     }

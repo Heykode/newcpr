@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { AccountRow } from '../constants'
 import type { AccountReloginAction } from '@/api/modules/relogin'
-import { Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
+import { ClipboardCheck, Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
+import { useRouter } from 'vue-router'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
@@ -18,7 +19,6 @@ defineProps<{
   relogin?: AccountReloginAction
   reloginUnavailable?: boolean
 }>()
-
 const emit = defineEmits<{
   edit: [account: AccountRow]
   delete: [account: AccountRow]
@@ -30,6 +30,7 @@ const emit = defineEmits<{
   relogin: [account: AccountRow]
   exportModelCatalog: [account: AccountRow]
 }>()
+const router = useRouter()
 </script>
 
 <template>
@@ -62,6 +63,12 @@ const emit = defineEmits<{
 
       <template #default="{ close }">
         <div role="group" aria-label="账号操作" class="w-40 p-1.5">
+          <BaseMenuItem @click.stop="(close(), router.push({ path: '/quality-ops', query: { accountId: account.id, create: '1' } }))">
+            <template #icon>
+              <ClipboardCheck class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            质量检测
+          </BaseMenuItem>
           <BaseMenuItem
             :loading="testing"
             :disabled="testing"

@@ -48,6 +48,25 @@ export interface QualityRuleTemplate extends QualityRuleTemplateRef {
   config: Omit<QualityRuleConfig, 'accountId'>
 }
 
+export interface QualityGroupFilter {
+  group: string
+  statuses: string[]
+}
+export interface QualityGroupRule {
+  id: string
+  revision: number
+  name: string
+  filter: QualityGroupFilter
+  config: Omit<QualityRuleConfig, 'accountId'>
+  ruleCount: number
+  excludedCount: number
+  lastSyncedAt: string | null
+}
+export interface QualityGroupUpdate {
+  group: QualityGroupRule
+  sync: { created: number, updated: number, failed: number }
+}
+
 export interface QualityMonitoring {
   ruleId: string
   revision: number
@@ -108,6 +127,15 @@ export interface QualityRun {
 }
 
 const base = '/api/admin/quality-ops'
+export function getQualityGroups(options: RequestOptions = {}) {
+  return request<QualityGroupRule[]>({ url: `${base}/groups`, method: 'GET', ...options })
+}
+export function saveQualityGroup(data: { id: string | null, revision: number | null, name: string, filter: QualityGroupFilter, config: QualityGroupRule['config'] }) {
+  return request<QualityGroupUpdate>({ url: `${base}/groups/save`, method: 'POST', data })
+}
+export function deleteQualityGroup(data: { id: string, revision: number, deleteRules: boolean }) {
+  return request<void>({ url: `${base}/groups/delete`, method: 'POST', data })
+}
 export function getQualityRules(options: RequestOptions = {}) {
   return request<QualityRule[]>({ url: `${base}/rules`, method: 'GET', ...options })
 }

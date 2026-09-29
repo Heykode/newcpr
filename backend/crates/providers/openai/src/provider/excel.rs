@@ -476,6 +476,35 @@ fn suppress_recovery_with_kind(failure: &mut MappedProviderFailure, kind: Provid
     failure.capture_response_cookies = false;
 }
 
+pub(super) fn classify_stream_failure(
+    failure: MappedProviderFailure,
+    excel: bool,
+    semantic_failure: bool,
+) -> MappedProviderFailure {
+    if !excel || !semantic_failure {
+        return classify_failure(failure, excel);
+    }
+    let continuation = failure.error.continuation_failure();
+    let disposition = failure.error.continuation_recovery_disposition();
+    let reason = failure.error.continuation_unavailable_reason();
+    let mut failure = classify_failure(failure, excel);
+    // A semantic status inside HTTP 200 cannot revoke an account or prove replay safety.
+    let kind = failure.error.kind();
+    suppress_recovery_with_kind(&mut failure, kind);
+    if let Some(continuation) = continuation {
+        failure.error = failure.error.with_continuation_failure(continuation);
+    }
+    if let Some(disposition) = disposition {
+        failure.error = failure
+            .error
+            .with_continuation_recovery_disposition(disposition);
+    }
+    if let Some(reason) = reason {
+        failure.error = failure.error.with_continuation_unavailable_reason(reason);
+    }
+    failure
+}
+
 pub(super) fn classify_failure(
     mut failure: MappedProviderFailure,
     excel: bool,
@@ -1191,6 +1220,52 @@ mod tests {
                 )
             ));
         }
+    }
+
+    #[test]
+    fn excel_semantic_stream_errors_keep_evidence_without_account_mutation_or_replay() {
+        for code in [
+            "token_expired",
+            "token_revoked",
+            "permission_denied",
+            "usage_limit_reached",
+        ] {
+            let failure = classify_stream_failure(rejection(code), true, true);
+            assert!(failure.account_failure.is_none());
+            assert!(!failure.error.replay_is_safe());
+            assert!(!failure.error.requires_credential_recovery());
+            assert!(failure.error.pre_delivery_retry().is_none());
+            assert!(failure.error.client_visible_upstream_error().is_some());
+        }
+        let original = rejection("token_expired");
+        let expected = original.error.kind();
+        let native = classify_stream_failure(original, false, true);
+        assert_eq!(native.error.kind(), expected);
+        assert!(native.error.pre_delivery_retry().is_some());
+        let failure = classify_stream_failure(
+            MappedProviderFailure::plain(
+                super::super::failure::continuation_replay_required_error("upstream_rejected"),
+            ),
+            true,
+            true,
+        );
+        assert_eq!(
+            failure.error.continuation_recovery_disposition(),
+            Some(gateway_core::error::ContinuationRecoveryDisposition::ClientReplayRequired)
+        );
+        assert_eq!(
+            failure.error.continuation_unavailable_reason(),
+            Some("upstream_rejected")
+        );
+        let transport = MappedProviderFailure::plain(
+            provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                .with_replay_safe(),
+        );
+        assert!(
+            classify_stream_failure(transport, true, false)
+                .error
+                .replay_is_safe()
+        );
     }
 
     #[test]

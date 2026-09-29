@@ -1,5 +1,19 @@
 # Quality Operations UI
 
+## Group Enrollment And Deletion
+
+- Keep account-monitoring, group-rule and template views distinct. Reuse the existing
+  editor for group scopes, with independent tested-group and judge-group pickers.
+  UI `all` maps to wire empty group; display it as selected, not an absent selection.
+- Group saving returns committed parent state and separate created/updated/failed
+  counters. Never claim rollback or replay the POST automatically after uncertainty.
+- Batch delete rereads rule versions before confirmation, freezes those targets,
+  removes confirmed successes from selection, and preserves failures for fresh review.
+- Account More -> quality check links by stable accountId; select an existing rule
+  or open a preselected editor. Pagination and missing list items never imply deletion.
+- Browser fixtures cover group tabs, status filters, pause/resume, retained children,
+  failed reads, partial deletion and account links at 1440/390/320px.
+
 ## Monitoring Rule Templates
 
 - Keep separate account-monitoring and rule-template tabs. Reuse the rule editor

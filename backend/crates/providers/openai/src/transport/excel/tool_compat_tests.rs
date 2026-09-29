@@ -539,7 +539,7 @@ async fn excel_correction_releases_old_stream_and_cancels_without_background_wor
                 futures::future::pending().await
             })
         });
-        let mut stream = super::transform_stream_with_repair(source, &prepared, Some(sender));
+        let mut stream = super::transform_stream_with_repair(source, &prepared, true, Some(sender));
         assert!(stream.next().await.unwrap().is_ok());
         assert!(stream.next().await.unwrap().unwrap().is_empty());
         let known_usage = prepared.usage.take_failed_repair_usage().unwrap();
@@ -560,7 +560,7 @@ async fn excel_correction_releases_old_stream_and_cancels_without_background_wor
 async fn excel_correction_preserves_sse_error_without_retry_or_completion() {
     use wiremock::ResponseTemplate;
     for unknown in [false, true] {
-        for kind in ["response.failed", "error"] {
+        for kind in ["response.failed", "response.cancelled", "error"] {
             let failure = json!({"type":kind,"error":{"code":"token_expired","message":"fixture","status":401},
             "response":{"id":"resp_hidden","status":"failed","output":[],
                 "error":{"code":"token_expired","message":"fixture"},
@@ -591,6 +591,11 @@ async fn excel_correction_preserves_sse_error_without_retry_or_completion() {
             assert!(!text.contains("resp_hidden"));
             assert!(!text.contains("response.completed"));
             assert!(!text.contains("response.output_item.done"));
+            if kind == "response.cancelled" {
+                assert!(text.contains("\"upstream_event\":\"response.cancelled\""));
+                assert!(text.contains("\"status\":\"cancelled\""));
+                assert!(text.contains("\"type\":\"response.failed\""));
+            }
             assert_eq!(
                 usage.take_failed_repair_usage().unwrap()["usage"]["total_tokens"],
                 15
@@ -938,7 +943,7 @@ async fn excel_unknown_regeneration_blocks_expanded_tool_history_and_keeps_compa
         let source = Box::pin(futures::stream::iter([Ok(Bytes::from(repair_wire(
             repair_response("original", vec![native("absent", json!({}))]),
         )))]));
-        let result = super::transform_stream_with_repair(source, &prepared, Some(sender))
+        let result = super::transform_stream_with_repair(source, &prepared, true, Some(sender))
             .try_collect::<Vec<_>>()
             .await;
         assert_eq!(result.is_ok(), !history);
@@ -1267,7 +1272,7 @@ async fn excel_correction_cache_contains_only_the_actual_delivered_payload() {
                 Ok(stream)
             })
         });
-        let result = super::transform_stream_with_repair(source, &prepared, Some(sender))
+        let result = super::transform_stream_with_repair(source, &prepared, true, Some(sender))
             .try_collect::<Vec<_>>()
             .await;
         assert_eq!(result.is_ok(), succeeds);
@@ -1315,7 +1320,7 @@ async fn excel_structured_output_never_starts_tool_correction() {
         Box::pin(futures::stream::iter(vec![Ok(Bytes::from(repair_wire(
             repair_response("resp_first", vec![repair_call("bad", "Run", "text(1)")]),
         )))]));
-    let mut stream = super::transform_stream_with_repair(source, &prepared, Some(sender));
+    let mut stream = super::transform_stream_with_repair(source, &prepared, true, Some(sender));
     let mut failed = false;
     while let Some(chunk) = stream.next().await {
         if chunk.is_err() {

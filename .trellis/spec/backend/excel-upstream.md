@@ -674,3 +674,49 @@ genuine upstream rejections and any untested scenarios.
 - Tests must cover zero/configured budgets, HTTP provenance, no synthetic SSE
   proof, shared-quota isolation and the unchanged native regressions. This task's
   verification runs on OVH with isolated resources, never production credentials.
+# Excel Compatibility: Attachments And Failure Terminals
+
+## 1. Scope / Trigger
+- Reference #220/#216/#221 at Sub2API production `7dd10bfe4b635f226f0ddfa52cc65797697272d8`.
+  This is an Excel-only adapter update, not a native Codex transport change.
+
+## 2. Signatures
+- `normalize_message_attachments` runs on the validated Excel wire clone.
+- `transform_stream_with_repair` receives the original client's `stream` preference.
+- `classify_stream_failure(failure, excel, semantic_failure)` distinguishes in-band
+  failures from transport/protocol failures before applying recovery restrictions.
+
+## 3. Contracts
+- Narrow message image attachments to type/file_id after validation. Keep HTTPS URLs,
+  tool inline images, business arguments and source/replay history intact.
+- Visible text, reasoning summary or refusal blocks unknown-tool whole-answer
+  regeneration for streaming clients. Empty lifecycle events do not. Keep known-target
+  correction and buffered non-streaming behavior.
+- Excel cancellation projects to response.failed with upstream_event=response.cancelled
+  and response.status=cancelled. Preserve identity, filtered output and metering, and
+  terminate without waiting for EOF or publishing completion.
+- Explicit valid 400-599 semantic status beats identifier mapping. Unknown identifiers
+  and free-form error messages are sanitized. Semantic 401/403/429 never become HTTP
+  handshake evidence, account mutation, or replay proof. Preserve continuation boundaries.
+- Genuine HTTP failures and existing transport recovery retain their original policy.
+
+## 4. Validation & Error Matrix
+- Invalid image/detail/carrier -> reject before normalization; do not make it valid by
+  deleting fields. File-ID normalization must not recurse through arbitrary tool JSON.
+- Failed/cancelled correction or compaction -> preserve spent usage, no next generation.
+- Native Codex -> unchanged wire body and error classification.
+
+## 5. Good / Base / Bad Cases
+- Good: reused file attachments omit unsupported detail while original history retains it.
+- Base: HTTPS image detail and tool arguments keep their original values.
+- Bad: treat an HTTP-200 cancellation as success, or suppress every transport retry.
+
+## 6. Tests Required
+- Provider tests cover visibility, buffered mode, failure sanitization, terminal-without-
+  EOF, correction cancellation, compaction cancellation, metering and native isolation.
+- Run all Provider library tests, Admin/API tests, all-target Clippy and architecture checks.
+
+## 7. Wrong vs Correct
+- Wrong: teach the shared native decoder new Excel-specific semantics or reset account
+  credentials from an error's embedded status. Correct: normalize at the Excel boundary
+  and explicitly preserve HTTP-versus-semantic provenance.

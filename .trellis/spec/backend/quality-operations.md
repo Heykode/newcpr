@@ -1,5 +1,56 @@
 # Scheduled Quality Checks
 
+## Dynamic Group Rules
+
+### 1. Scope / Trigger
+- Group enrollment is administrative background work, never part of user scheduling.
+  It reuses the existing fixed-account executor and database-wide admission.
+
+### 2. Signatures
+- Migration `0055_quality_group_rules.sql`: `quality_group_rules`, `quality_group_members`.
+- AdminAuth/no-store routes: `GET groups`, `POST groups/save`, `POST groups/delete`
+  under `/api/admin/quality-ops`.
+- Save accepts `{id?,revision?,name,filter:{group,statuses},config}` with no accountId.
+  Response is `{group,sync:{created,updated,failed}}`; the parent has already committed
+  even when child synchronization fails. Delete accepts `{id,revision,deleteRules}`.
+
+### 3. Contracts
+- Empty group means all, `ungrouped` means no group, otherwise use a real group ID.
+  Reuse account-list status semantics and active runtime cooldowns. OAuth/OpenAI only.
+- One-minute reconciliation pages account candidates and owned updates by 100, without
+  model requests. New rules start at the next configured occurrence, not immediately.
+- Shared configuration lock + parent config/filter/revision check + child CAS prevent
+  stale propagation. Existing independent/other-group rules are not adopted.
+- Deleting a child leaves a NULL-rule membership tombstone; deleting the actual account
+  cascades the membership. Leaving a group retains the established child rule.
+- Pause cancels owned leases/pending runs atomically. An unchanged pause must still work
+  after its remediation template or selected account group disappears. Resumption needs
+  valid references. Disabled parents synchronize edits but never enroll new accounts.
+- Parent deletion either detaches children or deletes them, per explicit administrator
+  choice. It never reverses account remediation already performed.
+
+### 4. Validation & Error Matrix
+- Invalid filter/status, bound accountId, duplicate statuses, bad config -> reject save.
+- Stale parent/rule -> no overwrite. Expected ownership/tombstone races are no-ops;
+  a still-pending target with invalid references is a failure, not successful sync.
+- Account-list errors are not authoritative emptiness and never cause deletions.
+
+### 5. Good / Base / Bad Cases
+- Good: new matching account gets its own rule within the next reconciliation cycle.
+- Base: manual rules, templates and global ten-job / per-round 1-8 bounds are unchanged.
+- Bad: group pause unpauses an account, or a deleted account is recreated by late finish.
+
+### 6. Tests Required
+- Store `groups.rs` and `group_safety.rs`: ownership races, tombstones, CAS, stale
+  templates, pause/resume, detach/delete, account cascade, 100+ pagination, no account edits.
+- Keep frozen migration checksum and exact-schema/reopen integration test in sync.
+- Browser `quality-groups.mjs`: filters, pause/resume, detach, partial batch deletion,
+  fresh versions, account menu, 1440/390/320px; no external requests.
+
+### 7. Wrong vs Correct
+- Wrong: overwrite every matching account or report all conflicts as success.
+- Correct: only own explicitly linked rules, and retain failed pending propagation.
+
 ## Monitoring Rule Templates
 
 ### 1. Scope / Trigger

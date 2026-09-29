@@ -165,6 +165,10 @@ impl RequestTuningOverrides {
     pub const MAX_ACCOUNT_BUSY_WAIT_TIMEOUT_SECONDS: u64 = 600;
 
     pub fn validate(&self) -> bool {
+        use gateway_core::routing::{
+            EXCEL_IMAGE_MAX_BYTES, EXCEL_IMAGE_MAX_COUNT, EXCEL_IMAGE_MAX_STORAGE_BYTES,
+            EXCEL_IMAGE_MAX_STORAGE_ENTRIES, EXCEL_IMAGE_MAX_TTL_MINUTES,
+        };
         let defaults = gateway_core::routing::RequestTuning::default();
         let image_single = self
             .excel_image_max_bytes
@@ -190,23 +194,23 @@ impl RequestTuningOverrides {
         self.excel_image_transport
             .as_ref()
             .is_none_or(|value| value.validate())
-            && (1..=4096).contains(&warning)
-            && (1..=4096).contains(&reserve)
+            && (1..=EXCEL_IMAGE_MAX_COUNT).contains(&warning)
+            && (1..=EXCEL_IMAGE_MAX_COUNT).contains(&reserve)
             && (self.excel_image_limit_policy
                 != Some(gateway_core::routing::ExcelImageLimitPolicy::Warn)
                 || (reserve < warning && warning < image_count))
             && self
                 .excel_image_max_bytes
-                .is_none_or(|value| (1..=128 * 1024 * 1024).contains(&value))
+                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_BYTES).contains(&value))
             && self
                 .excel_image_total_bytes
-                .is_none_or(|value| (1..=128 * 1024 * 1024).contains(&value))
+                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_BYTES).contains(&value))
             && self
                 .excel_image_max_count
-                .is_none_or(|value| (1..=4096).contains(&value))
+                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_COUNT).contains(&value))
             && self
                 .excel_image_relay_bytes
-                .is_none_or(|value| (1024 * 1024..=16384 * 1024 * 1024).contains(&value))
+                .is_none_or(|value| (1024 * 1024..=EXCEL_IMAGE_MAX_STORAGE_BYTES).contains(&value))
             && self
                 .excel_image_relay_requests
                 .is_none_or(|value| (1..=512).contains(&value))
@@ -215,10 +219,10 @@ impl RequestTuningOverrides {
                 .is_none_or(|value| (1..=128).contains(&value))
             && self
                 .excel_image_relay_entries
-                .is_none_or(|value| (1..=65536).contains(&value))
+                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_STORAGE_ENTRIES).contains(&value))
             && self
                 .excel_image_relay_ttl_minutes
-                .is_none_or(|value| (1..=1440).contains(&value))
+                .is_none_or(|value| (1..=EXCEL_IMAGE_MAX_TTL_MINUTES).contains(&value))
             && image_single <= image_total
             && image_total <= image_storage
             && image_count <= image_entries

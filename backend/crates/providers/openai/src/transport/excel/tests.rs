@@ -167,10 +167,16 @@ async fn excel_encrypted_recovery_reuses_wire_identity_and_preserves_normal_ciph
         encrypted_run(&server, original.clone()).await.unwrap();
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), if rejection.is_some() { 2 } else { 1 });
-        assert_eq!(requests[0].body_json::<Value>().unwrap(), original);
+        let mut wire_original = original.as_object().unwrap().clone();
+        images::normalize_message_attachments(&mut wire_original);
+        assert_eq!(
+            requests[0].body_json::<Value>().unwrap(),
+            Value::Object(wire_original)
+        );
         if rejection.is_some() {
-            let expected =
+            let mut expected =
                 encrypted::retry_body(original.as_object().unwrap(), CIPHER_REJECTION).unwrap();
+            images::normalize_message_attachments(&mut expected);
             assert_eq!(
                 requests[1].body_json::<Value>().unwrap(),
                 Value::Object(expected)
