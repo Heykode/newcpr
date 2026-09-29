@@ -59,6 +59,7 @@ pub(crate) fn observability_page_offset(
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UsageRecordFilter {
+    pub details: admin_observability::RequestSearchFilter,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -76,6 +77,7 @@ pub struct UsageRecordFilter {
 
 impl UsageRecordFilter {
     pub fn validate(&self) -> StoreResult<()> {
+        validate_search_details(&self.details)?;
         for (value, field) in [
             (self.client_api_key_ref.as_deref(), "client API key filter"),
             (self.request_id.as_deref(), "request ID filter"),
@@ -122,6 +124,7 @@ pub struct UsageRecordQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OpsErrorFilter {
+    pub details: admin_observability::RequestSearchFilter,
     pub client_api_key_ref: Option<String>,
     pub request_id: Option<String>,
     pub provider_account_ref: Option<String>,
@@ -138,6 +141,7 @@ pub struct OpsErrorFilter {
 
 impl OpsErrorFilter {
     pub fn validate(&self) -> StoreResult<()> {
+        validate_search_details(&self.details)?;
         for (value, field) in [
             (self.client_api_key_ref.as_deref(), "client API key filter"),
             (self.request_id.as_deref(), "request ID filter"),

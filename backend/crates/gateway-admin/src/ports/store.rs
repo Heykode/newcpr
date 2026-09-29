@@ -511,6 +511,18 @@ pub type UsageCalculatedBillingStream<'a> =
 /// 用量、趋势、诊断与运维错误的只读能力。
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
+    async fn account_filter_options(
+        &self,
+        range: TimeRange,
+        search: &str,
+    ) -> AdminStoreResult<Vec<crate::model::observability::AccountFilterOption>> {
+        let _ = (range, search);
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "observability",
+            "account filter options unavailable",
+        ))
+    }
     /// 返回历史统计区间和指定观测时刻下的实时账号状态。
     async fn dashboard_summary(
         &self,

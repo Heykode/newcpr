@@ -289,6 +289,20 @@ impl ObservabilityRepository for PgObservabilityRepository {
 
 #[async_trait]
 impl AdminObservabilityStore for PgAdminObservabilityStore {
+    async fn account_filter_options(
+        &self,
+        range: admin_observability::TimeRange,
+        search: &str,
+    ) -> AdminStoreResult<Vec<admin_observability::AccountFilterOption>> {
+        self.repository
+            .query_budget
+            .run(
+                "account filter options",
+                account_filter_options(&self.repository.pool, store_range(range)?, search),
+            )
+            .await
+            .map_err(observability_error)
+    }
     async fn dashboard_summary(
         &self,
         range: admin_observability::TimeRange,

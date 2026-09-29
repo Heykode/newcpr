@@ -132,6 +132,10 @@ fn push_request_error_predicates(
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) {
+    if filter.details.error_scope.as_deref() == Some("events") {
+        statement.push(" and false");
+    }
+    push_request_search(statement, &filter.details, "mr", None);
     // 错误事实独立于请求结束状态；主动取消不属于需要排查的错误。
     // 列表和总数共用此条件，避免流式响应中的错误因 outcome 被漏掉。
     statement.push(" and mr.error_kind is not null and mr.error_kind <> 'cancelled'");
@@ -141,12 +145,12 @@ fn push_request_error_predicates(
         ("mr.id", &filter.request_id),
         ("mr.provider_account_ref", &filter.provider_account_ref),
         ("mr.provider_kind", &filter.provider_kind),
-        ("mr.operation", &filter.operation),
         ("mr.upstream_transport", &filter.transport),
         ("mr.upstream_request_id", &filter.upstream_request_id),
     ] {
         push_text_equality(statement, column, value);
     }
+    push_operation_filter(statement, filter, "mr");
     push_response_id_filter(statement, "mr.client_response_id", filter);
     push_text_equality(statement, "mr.upstream_model_id", &filter.model);
     if let Some(index) = filter.attempt_index {
@@ -158,7 +162,7 @@ fn push_request_error_predicates(
         statement.push_bind(i32::from(status));
     }
     if let Some(search) = &filter.search {
-        push_prefix_search(
+        push_error_search(
             statement,
             &[
                 "mr.id",
@@ -166,8 +170,13 @@ fn push_request_error_predicates(
                 "mr.provider_account_ref",
                 "mr.upstream_request_id",
                 "mr.provider_error_code",
+                "mr.provider_account_email_snapshot",
+                "mr.provider_account_name_snapshot",
+                "mr.error_message",
+                "mr.error_kind",
             ],
             search,
+            "mr",
         );
     }
 }
@@ -177,17 +186,21 @@ fn push_ops_event_predicates(
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) {
+    if filter.details.error_scope.as_deref() == Some("requests") {
+        statement.push(" and false");
+    }
+    push_request_search(statement, &filter.details, "mr", Some("oe"));
     push_range(statement, "oe.created_at", range);
     for (column, value) in [
         ("mr.client_api_key_ref", &filter.client_api_key_ref),
         ("oe.model_request_id", &filter.request_id),
         ("oe.provider_account_ref", &filter.provider_account_ref),
         ("oe.provider_kind", &filter.provider_kind),
-        ("oe.operation", &filter.operation),
         ("oe.upstream_request_id", &filter.upstream_request_id),
     ] {
         push_text_equality(statement, column, value);
     }
+    push_operation_filter(statement, filter, "oe");
     // Ops events do not persist upstream transport. A transport filter therefore
     // intentionally excludes this source instead of matching an unrelated request fact.
     if filter.transport.is_some() {
@@ -204,7 +217,7 @@ fn push_ops_event_predicates(
         statement.push_bind(i32::from(status));
     }
     if let Some(search) = &filter.search {
-        push_prefix_search(
+        push_error_search(
             statement,
             &[
                 "oe.id",
@@ -213,8 +226,13 @@ fn push_ops_event_predicates(
                 "oe.provider_account_ref",
                 "oe.upstream_request_id",
                 "oe.provider_error_code",
+                "oe.provider_account_email_snapshot",
+                "oe.provider_account_name_snapshot",
+                "oe.message",
+                "oe.failure_kind",
             ],
             search,
+            "oe",
         );
     }
 }
@@ -224,6 +242,21 @@ fn push_range(statement: &mut QueryBuilder<Postgres>, column: &str, range: Obser
     statement.push_bind(range.start);
     statement.push(format!(" and {column} < "));
     statement.push_bind(range.end);
+}
+
+fn push_operation_filter(
+    statement: &mut QueryBuilder<Postgres>,
+    filter: &OpsErrorFilter,
+    owner: &str,
+) {
+    if let Some(value) = &filter.operation {
+        let column = if value.starts_with('/') {
+            "mr.endpoint".to_owned()
+        } else {
+            format!("{owner}.operation")
+        };
+        push_text_equality(statement, &column, &filter.operation);
+    }
 }
 
 fn push_text_equality(
@@ -248,16 +281,27 @@ fn push_response_id_filter(
     }
 }
 
-fn push_prefix_search(statement: &mut QueryBuilder<Postgres>, columns: &[&str], value: &str) {
-    let pattern = literal_prefix_pattern(value);
+fn push_error_search(
+    statement: &mut QueryBuilder<Postgres>,
+    columns: &[&str],
+    value: &str,
+    owner: &str,
+) {
+    let pattern = format!("%{}", literal_prefix_pattern(value));
     statement.push(" and (");
     for (index, column) in columns.iter().enumerate() {
         if index > 0 {
             statement.push(" or ");
         }
-        statement.push(format!("{column} like "));
+        statement.push(format!("{column} ilike "));
         statement.push_bind(pattern.clone());
         statement.push(" escape '\\'");
     }
-    statement.push(")");
+    statement.push(format!(" or exists (select 1 from provider_accounts pa where pa.id = {owner}.provider_account_ref and concat_ws(' ', pa.name, pa.email, pa.custom_name) ilike "));
+    statement.push_bind(pattern.clone()).push(" escape '\\')");
+    statement.push(" or exists (select 1 from client_api_keys ck where ck.id = mr.client_api_key_ref and (ck.name ilike ");
+    statement
+        .push_bind(pattern.clone())
+        .push(" escape '\\' or left(ck.key, 10) ilike ");
+    statement.push_bind(pattern).push(" escape '\\')))");
 }

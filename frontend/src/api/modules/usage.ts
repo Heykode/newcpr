@@ -472,13 +472,64 @@ export interface UsageDiagnosticsResponse {
 }
 
 // 请求参数类型：仅定义 API 边界的形状，调用方不依赖显式声明。
-interface UsageRangeQuery {
+export interface UsageFilterParams {
+  provider?: string
+  accountId?: string
+  accountIds?: string
+  accountSearch?: string
+  clientApiKeyId?: string
+  groupId?: string
+  requestId?: string
+  responseId?: string
+  upstreamRequestId?: string
+  requestedModel?: string
+  upstreamModel?: string
+  upstreamMode?: string
+  clientTransport?: string
+  upstreamTransport?: string
+  clientStatusCode?: number
+  upstreamStatusCode?: number
+  clientIp?: string
+  minLatencyMs?: number
+  maxLatencyMs?: number
+  minFirstTokenMs?: number
+  maxFirstTokenMs?: number
+  cacheMatch?: string
+  failureKind?: string
+  errorCode?: string
+  errorPhase?: string
+  recovery?: string
+  errorScope?: string
+  route?: string
+  search?: string
+  startTime?: string
+  endTime?: string
+}
+
+interface UsageRangeQuery extends UsageFilterParams {
   startTime: string
   endTime: string
   provider?: string
   model?: string
   statusCode?: number
   search?: string
+}
+
+export interface UsageAccountOption {
+  id: string
+  email: string | null
+  name: string | null
+  customName: string | null
+  deleted: boolean
+}
+
+export function getUsageAccountOptions(data: { startTime: string, endTime: string, search?: string }, options: RequestOptions = {}) {
+  return request<UsageAccountOption[]>({
+    url: '/api/admin/usage/account-options',
+    method: 'GET',
+    params: data,
+    ...options,
+  })
 }
 
 interface PageQuery {

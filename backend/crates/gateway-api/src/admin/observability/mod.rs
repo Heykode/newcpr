@@ -17,9 +17,11 @@ use super::{
 mod presenter;
 mod query;
 mod routes;
+mod search;
 mod wire;
 
 pub(crate) use presenter::*;
 pub use query::*;
 pub use routes::*;
+pub use search::*;
 pub use wire::*;
