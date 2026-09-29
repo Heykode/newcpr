@@ -169,15 +169,7 @@ impl CodexCredentialSelector {
         cyber_policy_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let mut control = WaitControl::new(request.attempt)?;
-        let accounts = control
-            .run(async {
-                self.repository
-                    .list_for_provider()
-                    .await
-                    .map_err(Into::into)
-            })
-            .await?;
-        self.retain_excel_auth_blocks(&accounts);
+        let (accounts, quality_recovery) = control.run(self.wait_accounts(request)).await?;
         let ids = accounts
             .iter()
             .map(|account| account.id().clone())
@@ -286,7 +278,11 @@ impl CodexCredentialSelector {
                         .account_selection_policy()
                         .preferred_account_overrides_weight(),
                 round_robin_cursor: scheduling.round_robin_cursor(),
-                eligibility: AccountEligibilityPolicy::Enforce,
+                eligibility: if quality_recovery {
+                    AccountEligibilityPolicy::IgnoreQualityPause
+                } else {
+                    AccountEligibilityPolicy::Enforce
+                },
                 account_scope: request.attempt.account_scope().cloned(),
             },
             pinned,
@@ -588,6 +584,38 @@ impl CodexCredentialSelector {
             .ok_or(CredentialSelectionError::Coordinator)
     }
 
+    async fn wait_accounts(
+        &self,
+        request: &CredentialSelectionInput<'_>,
+    ) -> Result<(Vec<ProviderAccount>, bool), CredentialSelectionError> {
+        let mut accounts = self.repository.list_for_provider().await?;
+        let quality_recovery = if request.attempt.is_quality_check()
+            && let Some(required) = request.attempt.required_account()
+        {
+            self.repository
+                .store()
+                .quality_pause_is_owned(required)
+                .await
+                .map_err(|_| CredentialSelectionError::Store)?
+        } else {
+            false
+        };
+        if quality_recovery
+            && let Some(required) = request.attempt.required_account()
+            && !accounts.iter().any(|account| account.id() == required)
+            && let Some(account) = self
+                .repository
+                .store()
+                .get_account(required)
+                .await
+                .map_err(|_| CredentialSelectionError::Store)?
+        {
+            accounts.push(account);
+        }
+        self.retain_excel_auth_blocks(&accounts);
+        Ok((accounts, quality_recovery))
+    }
+
     async fn reload_wait_exclusions(
         &self,
         state: &mut WaitingSelection,
@@ -641,6 +669,7 @@ impl CodexCredentialSelector {
                 .with_provider_quota(self.quota.scheduling_signals(&account))
                 .with_rate_limit(cooldown)
                 .with_runtime_health(health.0, health.1);
+            let signals = quality_selection_signals(signals, request.attempt.is_quality_check());
             candidates.push(AccountCandidate { account, signals });
         }
         Ok(candidates)
@@ -652,9 +681,9 @@ impl CodexCredentialSelector {
         universe: &BTreeSet<ProviderAccountId>,
     ) -> Result<Vec<AccountCandidate>, CredentialSelectionError> {
         let accounts = self
-            .repository
-            .list_for_provider()
+            .wait_accounts(request)
             .await?
+            .0
             .into_iter()
             .filter(|account| universe.contains(account.id()))
             .collect::<Vec<_>>();
@@ -700,9 +729,12 @@ impl CodexCredentialSelector {
             self.provider_kind.clone(),
             account.id().clone(),
             account.revision(),
-            limits
-                .limit_for(account.id().as_str())
-                .ok_or(CredentialSelectionError::NoEligibleCredential)?,
+            quality_concurrency_limit(
+                limits
+                    .limit_for(account.id().as_str())
+                    .ok_or(CredentialSelectionError::NoEligibleCredential)?,
+                attempt.is_quality_check(),
+            ),
             attempt.account_selection_policy().request_interval(),
             attempt.deadline(),
         ))
