@@ -11,6 +11,12 @@ async fn capture_routes_require_admin_auth_before_reading_or_mutating() {
     let app = gateway_api::admin::router::<AdminTestState>().with_state(fixture.state());
     for (method, path, body) in [
         ("GET", "/api/admin/request-captures", ""),
+        ("GET", "/api/admin/request-captures/config", ""),
+        (
+            "GET",
+            "/api/admin/request-captures/by-request?requestId=fixture",
+            "",
+        ),
         ("POST", "/api/admin/request-captures", "{}"),
         ("POST", "/api/admin/request-captures/config", "{}"),
         ("POST", "/api/admin/request-captures/stop", "{}"),
