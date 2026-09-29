@@ -9,6 +9,33 @@ pub const PROVIDER_REPLAY_TTL_SECONDS: u64 = 3600;
 pub const PROVIDER_TOOL_REPLAY_IDLE_SECONDS: u64 = 2 * 3600;
 
 pub trait ProviderReplayPort: Send + Sync {
+    /// Optional image-policy digests, never conversation content or account state.
+    fn read_image_policy<'a>(
+        &'a self,
+        _key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async {
+            Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::Unavailable,
+                "image policy persistence unsupported",
+            ))
+        })
+    }
+
+    fn compare_exchange_image_policy<'a>(
+        &'a self,
+        _key: &'a str,
+        _expected: Option<&'a OpaqueProviderData>,
+        _payload: &'a OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async {
+            Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::Unavailable,
+                "image policy persistence unsupported",
+            ))
+        })
+    }
+
     /// Small tool receipts must not compete with complete response snapshots.
     fn read_tool<'a>(
         &'a self,

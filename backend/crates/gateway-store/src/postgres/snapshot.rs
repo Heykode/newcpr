@@ -254,6 +254,9 @@ fn to_core_request_tuning(
         websocket_large_request_threshold_bytes: overrides
             .websocket_large_request_threshold_bytes
             .unwrap_or(defaults.websocket_large_request_threshold_bytes),
+        stream_prefetch_bytes: overrides
+            .stream_prefetch_bytes
+            .unwrap_or(defaults.stream_prefetch_bytes),
         smart_scheduling: overrides
             .smart_scheduling
             .unwrap_or(defaults.smart_scheduling),
@@ -287,6 +290,15 @@ fn to_core_request_tuning(
         excel_image_max_count: overrides
             .excel_image_max_count
             .unwrap_or(defaults.excel_image_max_count),
+        excel_image_limit_policy: overrides
+            .excel_image_limit_policy
+            .unwrap_or(defaults.excel_image_limit_policy),
+        excel_image_warning_remaining: overrides
+            .excel_image_warning_remaining
+            .unwrap_or(defaults.excel_image_warning_remaining),
+        excel_image_compact_reserve: overrides
+            .excel_image_compact_reserve
+            .unwrap_or(defaults.excel_image_compact_reserve),
         excel_image_relay_downloads: overrides
             .excel_image_relay_downloads
             .unwrap_or(defaults.excel_image_relay_downloads),

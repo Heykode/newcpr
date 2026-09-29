@@ -204,6 +204,7 @@ test('runtime save keeps custom parameters and silently rereads server state aft
     requestTuning: { maxRequestAttempts: 24, websocketHttpFallbackEnabled: false },
   }
   const settings = load('views/settings/composables/useSettingsForm.ts', {
+    './useExcelImageSettings': load('views/settings/composables/useExcelImageSettings.ts', { vue }),
     '@/api/modules/settings': load('api/modules/settings.ts', { '../request': () => {} }),
     '@/views/accounts/utils/schedulingForm': load('views/accounts/utils/schedulingForm.ts'),
     vue,

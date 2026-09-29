@@ -63,14 +63,15 @@ pub(super) async fn prepare_excel(
         .local_conversation_id
         .as_deref()
         .or_else(|| source.get("prompt_cache_key").and_then(Value::as_str))
-        .or_else(|| source.get("session_id").and_then(Value::as_str));
+        .or_else(|| source.get("session_id").and_then(Value::as_str))
+        .map(str::to_owned);
     let restored = crate::transport::excel::replay::restore_scoped(
-        replay,
+        replay.clone(),
         owner.clone(),
         cache_anchor,
         request.previous_response_id(),
         &source,
-        trusted_session,
+        trusted_session.as_deref(),
     )
     .await
     .map_err(request_error)?;
@@ -91,9 +92,31 @@ pub(super) async fn prepare_excel(
     let tools = restored.tools;
     let structured = StructuredOutput::parse(&source).map_err(request_error)?;
     let image_tuning = image_relay.request_tuning();
-    let image_limits = image_tuning.into();
+    let image_limits = crate::transport::excel::images::ImageLimits::from(image_tuning);
+    let image_policy = crate::transport::excel::image_policy::prepare(
+        replay,
+        &owner,
+        trusted_session.as_deref(),
+        request.client_user_agent.as_deref(),
+        &mut source,
+        image_tuning,
+        Arc::clone(image_relay),
+    )
+    .await
+    .map_err(request_error)?;
+    let auto_compact = image_policy
+        .as_ref()
+        .is_some_and(|policy| policy.split.is_some());
+    let validation_limits = if auto_compact {
+        crate::transport::excel::images::ImageLimits {
+            count: usize::MAX,
+            ..image_limits
+        }
+    } else {
+        image_limits
+    };
     // Validate carriers in their original positions before #139 moves tool references.
-    crate::transport::excel::images::validate_with_limits(&source, false, image_limits)
+    crate::transport::excel::images::validate_with_limits(&source, false, validation_limits)
         .map_err(request_error)?;
     let mut body = prepare_request(&source, &tools, &restored.native_calls, structured.as_ref())
         .map_err(request_error)?;
@@ -111,8 +134,8 @@ pub(super) async fn prepare_excel(
         );
     }
     let relay_origin = image_relay.relay_origin();
-    let image_lease = if let Some(origin) =
-        relay_origin.filter(|_| crate::transport::excel::images::has_user_inline(&body))
+    let image_lease = if let Some(origin) = relay_origin
+        .filter(|_| !auto_compact && crate::transport::excel::images::has_user_inline(&body))
     {
         let relay = Arc::clone(image_relay);
         let image_scope = format!("{owner}/{}", restored.conversation);
@@ -128,12 +151,13 @@ pub(super) async fn prepare_excel(
     } else {
         None
     };
-    crate::transport::excel::images::validate_with_limits(&body, true, image_limits)
+    crate::transport::excel::images::validate_with_limits(&body, true, validation_limits)
         .map_err(request_error)?;
     crate::transport::request::clear_turn_state(request);
     request.force_http_sse = true;
     request.use_websocket = false;
     request.excel = Some(ExcelPreparedRequest {
+        image_policy,
         exit_lease: None,
         body,
         tools,
@@ -151,6 +175,55 @@ pub(super) async fn prepare_excel(
 }
 
 pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
+    if matches!(
+        error,
+        ExcelRequestError::ImagePolicy(_) | ExcelRequestError::ImageWarning { .. }
+    ) {
+        let (status, code, kind) = match error {
+            ExcelRequestError::ImagePolicy("state_unavailable" | "invalid_checkpoint") => (
+                503,
+                "excel_image_policy_state_unavailable",
+                ProviderErrorKind::Unavailable,
+            ),
+            ExcelRequestError::ImagePolicy("state_conflict") => (
+                409,
+                "excel_image_policy_state_conflict",
+                ProviderErrorKind::InvalidRequest,
+            ),
+            ExcelRequestError::ImageWarning { .. } => (
+                400,
+                "excel_image_compact_recommended",
+                ProviderErrorKind::InvalidRequest,
+            ),
+            ExcelRequestError::ImagePolicy("limit_reached") => (
+                400,
+                "excel_image_limit_reached",
+                ProviderErrorKind::InvalidRequest,
+            ),
+            ExcelRequestError::ImagePolicy("new_batch_too_large") => (
+                400,
+                "excel_image_batch_too_large",
+                ProviderErrorKind::InvalidRequest,
+            ),
+            _ => (
+                400,
+                "excel_image_policy_invalid",
+                ProviderErrorKind::InvalidRequest,
+            ),
+        };
+        return provider_error(kind, UpstreamSendState::NotSent)
+            .with_status(status)
+            .with_upstream_code(OpaqueUpstreamValue::new(code))
+            .with_client_visible_upstream_error(
+                gateway_core::error::ClientVisibleUpstreamError::new(
+                    error.to_string(),
+                    Some(code.into()),
+                    Some("invalid_request_error".into()),
+                )
+                .with_param("input"),
+            )
+            .with_diagnostic(ProviderDiagnostic::new(error.to_string()));
+    }
     if error == ExcelRequestError::CatalogConflict {
         return provider_error(
             ProviderErrorKind::InvalidRequest,
@@ -166,18 +239,27 @@ pub(super) fn request_error(error: ExcelRequestError) -> ProviderError {
             ),
         );
     }
-    if let ExcelRequestError::ImageInput(message) = error {
+    if matches!(
+        error,
+        ExcelRequestError::ImageInput(_)
+            | ExcelRequestError::ImageAt { .. }
+            | ExcelRequestError::ImageLimit { .. }
+    ) {
+        let mut visible = gateway_core::error::ClientVisibleUpstreamError::new(
+            error.to_string(),
+            Some("excel_image_input_invalid".into()),
+            Some("invalid_request_error".into()),
+        );
+        if let Some(param) = error.content_param() {
+            visible = visible.with_param(param);
+        }
         return provider_error(
             ProviderErrorKind::InvalidRequest,
             UpstreamSendState::NotSent,
         )
         .with_status(400)
         .with_upstream_code(OpaqueUpstreamValue::new("excel_image_input_invalid"))
-        .with_client_visible_upstream_error(gateway_core::error::ClientVisibleUpstreamError::new(
-            message,
-            Some("excel_image_input_invalid".into()),
-            Some("invalid_request_error".into()),
-        ))
+        .with_client_visible_upstream_error(visible)
         .with_diagnostic(ProviderDiagnostic::new(error.to_string()));
     }
     if error == ExcelRequestError::ImageRelay {
@@ -566,6 +648,7 @@ mod tests {
             );
             let tools = ClientTools::parse(request.body()).unwrap();
             request.excel = Some(ExcelPreparedRequest {
+                image_policy: None,
                 exit_lease: None,
                 body: prepare_request(request.body(), &tools, &Default::default(), None).unwrap(),
                 tools,
@@ -889,6 +972,7 @@ mod tests {
                     .clone(),
             );
             request.excel = Some(ExcelPreparedRequest {
+                image_policy: None,
                 exit_lease: None,
                 body: request.body().clone(),
                 tools: ClientTools::default(),
@@ -981,6 +1065,7 @@ mod tests {
                     .clone(),
             );
             request.excel = Some(ExcelPreparedRequest {
+                image_policy: None,
                 exit_lease: None,
                 body: request.body().clone(),
                 tools: ClientTools::default(),

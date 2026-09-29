@@ -26,6 +26,7 @@ pub(crate) fn transform_stream_with_repair(
     mut sender: Option<super::repair::Sender>,
 ) -> CodexBackendSseStream {
     let replay = prepared.replay.clone();
+    let image_policy = prepared.image_policy.clone();
     let exit_lease = prepared.exit_lease.clone();
     let request_body = sender.as_ref().map(|_| prepared.body.clone());
     let mut transform = Relay {
@@ -87,6 +88,16 @@ pub(crate) fn transform_stream_with_repair(
                     transform.pending_tools.clear();
                 }
                 let events = transform.event(event)?;
+                if transform.terminal && !recorded
+                    && let Some(policy) = &image_policy {
+                    let completed = transform.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+                    if let Some(completed) = completed {
+                        if policy.explicit_compact {
+                            super::image_policy::compact_window(&completed).map_err(|error| CodexClientError::InvalidSse(SseError::ParseError(error.to_string())))?;
+                        }
+                        policy.finish().await;
+                    }
+                }
                 persist_completion(&transform, replay.as_ref(), &mut recorded).await?;
                 // A consumer may stop polling as soon as it receives completion.
                 // Observe the successful upstream before yielding that last frame.
@@ -378,6 +389,7 @@ mod tests {
                 "usage":{"input_tokens":1000,"output_tokens":50,"total_tokens":1050,
                     "input_tokens_details":{"cached_tokens":100},"cache_creation_input_tokens":200}});
             let prepared = ExcelPreparedRequest {
+                image_policy: None,
                 exit_lease: None,
                 body: Default::default(),
                 tools: ClientTools::default(),
@@ -432,6 +444,7 @@ mod tests {
             b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
         ))]);
         let prepared = ExcelPreparedRequest {
+            image_policy: None,
             exit_lease: None,
             body: Default::default(),
             tools: ClientTools::default(),
@@ -471,6 +484,7 @@ mod tests {
             }}),
         ));
         let prepared = ExcelPreparedRequest {
+            image_policy: None,
             exit_lease: None,
             body: Default::default(),
             tools: ClientTools::parse(source_body.as_object().unwrap()).unwrap(),
@@ -584,6 +598,7 @@ mod tests {
                 }),
             ));
             let prepared = ExcelPreparedRequest {
+                image_policy: None,
                 exit_lease: None,
                 body: Default::default(),
                 tools: ClientTools::parse(source_body.as_object().unwrap()).unwrap(),
@@ -663,6 +678,7 @@ mod tests {
         .unwrap();
         let capture = restored.capture.clone();
         let prepared = ExcelPreparedRequest {
+            image_policy: None,
             exit_lease: None,
             body: Default::default(),
             tools: restored.tools,

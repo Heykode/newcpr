@@ -183,6 +183,9 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         excel_image_max_bytes: 8 * 1024 * 1024,
         excel_image_total_bytes: 16 * 1024 * 1024,
         excel_image_max_count: 32,
+        excel_image_limit_policy: gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
+        excel_image_warning_remaining: 9,
+        excel_image_compact_reserve: 4,
         excel_image_relay_requests: 128,
         excel_image_relay_downloads: 3,
         excel_image_relay_entries: 25,
@@ -194,6 +197,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         max_request_attempts: 8,
         websocket_http_fallback_enabled: false,
         websocket_large_request_threshold_bytes: 4096,
+        stream_prefetch_bytes: 256 * 1024,
         ..RequestTuning::default()
     };
     let overrides = RequestTuningOverrides {
@@ -204,6 +208,9 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         excel_image_max_bytes: Some(expected.excel_image_max_bytes),
         excel_image_total_bytes: Some(expected.excel_image_total_bytes),
         excel_image_max_count: Some(expected.excel_image_max_count),
+        excel_image_limit_policy: Some(expected.excel_image_limit_policy),
+        excel_image_warning_remaining: Some(expected.excel_image_warning_remaining),
+        excel_image_compact_reserve: Some(expected.excel_image_compact_reserve),
         excel_image_relay_requests: Some(expected.excel_image_relay_requests),
         excel_image_relay_downloads: Some(expected.excel_image_relay_downloads),
         excel_image_relay_entries: Some(expected.excel_image_relay_entries),
@@ -224,6 +231,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         websocket_large_request_threshold_bytes: Some(
             expected.websocket_large_request_threshold_bytes,
         ),
+        stream_prefetch_bytes: Some(expected.stream_prefetch_bytes),
         ..Default::default()
     };
     sqlx::query(
@@ -252,6 +260,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         openai_request_location: None,
         account_busy_wait_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(0),
+        stream_prefetch_bytes: Some(0),
         ..overrides
     }))
     .execute(&database.pool)
@@ -266,6 +275,7 @@ async fn runtime_snapshot_compiles_account_busy_wait_defaults_overrides_and_froz
         RequestTuning {
             account_busy_wait_enabled: false,
             websocket_large_request_threshold_bytes: 0,
+            stream_prefetch_bytes: 0,
             ..expected
         }
     );

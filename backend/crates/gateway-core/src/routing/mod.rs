@@ -4,7 +4,7 @@ mod catalog;
 mod excel_images;
 pub mod snapshot;
 
-pub use excel_images::ExcelImageTransport;
+pub use excel_images::{ExcelImageLimitPolicy, ExcelImageTransport};
 
 pub use crate::account::scope::{
     AccountGroupId, AccountRoutingScopeKind, AccountRoutingSnapshot, ClientRoutingScope,
@@ -119,6 +119,9 @@ pub struct RequestTuning {
     pub websocket_http_fallback_enabled: bool,
     #[serde(default = "default_websocket_large_request_threshold_bytes")]
     pub websocket_large_request_threshold_bytes: u64,
+    /// 提交前原始上游字节缓冲阈值；零关闭额外缓冲，不限制请求大小。
+    #[serde(default = "default_stream_prefetch_bytes")]
+    pub stream_prefetch_bytes: u64,
     pub websocket_max_age_ms: u64,
     pub websocket_stream_idle_timeout_ms: u64,
     pub websocket_failure_threshold: u32,
@@ -133,6 +136,12 @@ pub struct RequestTuning {
     pub excel_image_total_bytes: u64,
     #[serde(default = "default_excel_image_max_count")]
     pub excel_image_max_count: u32,
+    #[serde(default)]
+    pub excel_image_limit_policy: ExcelImageLimitPolicy,
+    #[serde(default = "default_excel_image_warning_remaining")]
+    pub excel_image_warning_remaining: u32,
+    #[serde(default = "default_excel_image_compact_reserve")]
+    pub excel_image_compact_reserve: u32,
     #[serde(default = "default_excel_image_relay_requests")]
     pub excel_image_relay_requests: u32,
     #[serde(default = "default_excel_image_relay_downloads")]
@@ -163,6 +172,10 @@ const fn default_websocket_large_request_threshold_bytes() -> u64 {
     15 * 1024 * 1024
 }
 
+const fn default_stream_prefetch_bytes() -> u64 {
+    128 * 1024
+}
+
 const fn default_excel_image_relay_bytes() -> u64 {
     1024 * 1024 * 1024
 }
@@ -175,6 +188,13 @@ const fn default_excel_image_total_bytes() -> u64 {
 }
 const fn default_excel_image_max_count() -> u32 {
     20
+}
+
+const fn default_excel_image_warning_remaining() -> u32 {
+    8
+}
+const fn default_excel_image_compact_reserve() -> u32 {
+    3
 }
 
 const fn default_excel_image_relay_downloads() -> u32 {
@@ -226,6 +246,7 @@ impl RequestTuning {
             websocket_http_fallback_enabled: true,
             websocket_large_request_threshold_bytes:
                 default_websocket_large_request_threshold_bytes(),
+            stream_prefetch_bytes: default_stream_prefetch_bytes(),
             websocket_max_age_ms: 55 * 60 * 1_000,
             websocket_stream_idle_timeout_ms: 300_000,
             websocket_failure_threshold: 3,
@@ -236,6 +257,9 @@ impl RequestTuning {
             excel_image_max_bytes: default_excel_image_max_bytes(),
             excel_image_total_bytes: default_excel_image_total_bytes(),
             excel_image_max_count: default_excel_image_max_count(),
+            excel_image_limit_policy: ExcelImageLimitPolicy::Off,
+            excel_image_warning_remaining: default_excel_image_warning_remaining(),
+            excel_image_compact_reserve: default_excel_image_compact_reserve(),
             excel_image_relay_requests: default_excel_image_relay_requests(),
             excel_image_relay_downloads: default_excel_image_relay_downloads(),
             excel_image_relay_entries: default_excel_image_relay_entries(),

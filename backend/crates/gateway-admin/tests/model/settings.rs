@@ -3,6 +3,64 @@ use gateway_core::routing::RequestTuning;
 use serde_json::json;
 
 #[test]
+fn excel_image_policy_defaults_and_warning_bounds_are_explicit() {
+    let default = RequestTuning::default();
+    assert_eq!(
+        default.excel_image_limit_policy,
+        gateway_core::routing::ExcelImageLimitPolicy::Off
+    );
+    assert_eq!(default.excel_image_warning_remaining, 8);
+    assert_eq!(default.excel_image_compact_reserve, 3);
+    for (warning, reserve, limit, valid) in [
+        (8, 3, 20, true),
+        (3, 3, 20, false),
+        (8, 0, 20, false),
+        (20, 3, 20, false),
+        (2, 1, 3, true),
+    ] {
+        let value: RequestTuningOverrides = serde_json::from_value(json!({"excelImageLimitPolicy":"warn","excelImageWarningRemaining":warning,"excelImageCompactReserve":reserve,"excelImageMaxCount":limit})).unwrap();
+        assert_eq!(value.validate(), valid);
+    }
+    assert!(
+        serde_json::from_value::<RequestTuningOverrides>(
+            json!({"excelImageLimitPolicy":"delete_images"})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn stream_prefetch_settings_preserve_zero_custom_values_and_legacy_defaults() {
+    for bytes in [0, 1, 128 * 1024, 256 * 1024, u64::MAX] {
+        let overrides: RequestTuningOverrides =
+            serde_json::from_value(json!({"streamPrefetchBytes": bytes})).unwrap();
+        assert!(overrides.validate());
+        assert_eq!(overrides.stream_prefetch_bytes, Some(bytes));
+        assert_eq!(
+            serde_json::to_value(overrides).unwrap()["streamPrefetchBytes"],
+            bytes
+        );
+    }
+    for value in [json!({}), json!({"streamPrefetchBytes": null})] {
+        let overrides: RequestTuningOverrides = serde_json::from_value(value).unwrap();
+        assert_eq!(overrides.stream_prefetch_bytes, None);
+    }
+    for value in [json!(-1), json!(0.5), json!("128")] {
+        assert!(
+            serde_json::from_value::<RequestTuningOverrides>(json!({"streamPrefetchBytes": value}))
+                .is_err()
+        );
+    }
+    let mut legacy = serde_json::to_value(RequestTuning::defaults()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("streamPrefetchBytes");
+    let tuning: RequestTuning = serde_json::from_value(legacy).unwrap();
+    assert_eq!(tuning.stream_prefetch_bytes, 128 * 1024);
+}
+
+#[test]
 fn excel_image_transport_validates_explicit_modes_and_origin() {
     for value in [
         json!({}),
@@ -60,6 +118,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         websocket_max_retries: Some(9),
         websocket_http_fallback_enabled: Some(false),
         websocket_large_request_threshold_bytes: Some(4096),
+        stream_prefetch_bytes: Some(256 * 1024),
         websocket_max_age_ms: Some(60_000),
         websocket_stream_idle_timeout_ms: Some(120_000),
         websocket_failure_threshold: Some(3),
@@ -70,6 +129,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
         excel_image_max_bytes: Some(8 * 1024 * 1024),
         excel_image_total_bytes: Some(16 * 1024 * 1024),
         excel_image_max_count: Some(32),
+        excel_image_limit_policy: Some(gateway_core::routing::ExcelImageLimitPolicy::Warn),
+        excel_image_warning_remaining: Some(8),
+        excel_image_compact_reserve: Some(3),
         excel_image_relay_requests: Some(128),
         excel_image_relay_downloads: Some(32),
         excel_image_relay_entries: Some(128),
@@ -99,6 +161,7 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "websocketMaxRetries": 9,
             "websocketHttpFallbackEnabled": false,
             "websocketLargeRequestThresholdBytes": 4096,
+            "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
             "websocketFailureThreshold": 3,
@@ -109,6 +172,9 @@ fn request_tuning_overrides_round_trip_all_live_fields() {
             "excelImageMaxBytes": 8388608,
             "excelImageTotalBytes": 16777216,
             "excelImageMaxCount": 32,
+            "excelImageLimitPolicy": "warn",
+            "excelImageWarningRemaining": 8,
+            "excelImageCompactReserve": 3,
             "excelImageRelayRequests": 128,
             "excelImageRelayDownloads": 32,
             "excelImageRelayEntries": 128,

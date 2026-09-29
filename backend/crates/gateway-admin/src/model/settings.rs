@@ -27,6 +27,7 @@ pub struct RequestTuningOverrides {
     pub websocket_max_retries: Option<u32>,
     pub websocket_http_fallback_enabled: Option<bool>,
     pub websocket_large_request_threshold_bytes: Option<u64>,
+    pub stream_prefetch_bytes: Option<u64>,
     pub websocket_max_age_ms: Option<u64>,
     pub websocket_stream_idle_timeout_ms: Option<u64>,
     pub websocket_failure_threshold: Option<u32>,
@@ -37,6 +38,12 @@ pub struct RequestTuningOverrides {
     pub excel_image_max_bytes: Option<u64>,
     pub excel_image_total_bytes: Option<u64>,
     pub excel_image_max_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excel_image_limit_policy: Option<gateway_core::routing::ExcelImageLimitPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excel_image_warning_remaining: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excel_image_compact_reserve: Option<u32>,
     pub excel_image_relay_requests: Option<u32>,
     pub excel_image_relay_downloads: Option<u32>,
     pub excel_image_relay_entries: Option<u32>,
@@ -69,6 +76,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_max_retries: Option<u32>,
             websocket_http_fallback_enabled: Option<bool>,
             websocket_large_request_threshold_bytes: Option<u64>,
+            stream_prefetch_bytes: Option<u64>,
             websocket_max_age_ms: Option<u64>,
             // Old API clients and persisted settings may carry this removed limit.
             #[serde(rename = "websocketMaxConnecting")]
@@ -82,6 +90,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             excel_image_max_bytes: Option<u64>,
             excel_image_total_bytes: Option<u64>,
             excel_image_max_count: Option<u32>,
+            excel_image_limit_policy: Option<gateway_core::routing::ExcelImageLimitPolicy>,
+            excel_image_warning_remaining: Option<u32>,
+            excel_image_compact_reserve: Option<u32>,
             excel_image_relay_requests: Option<u32>,
             excel_image_relay_downloads: Option<u32>,
             excel_image_relay_entries: Option<u32>,
@@ -106,6 +117,7 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             websocket_max_retries: wire.websocket_max_retries,
             websocket_http_fallback_enabled: wire.websocket_http_fallback_enabled,
             websocket_large_request_threshold_bytes: wire.websocket_large_request_threshold_bytes,
+            stream_prefetch_bytes: wire.stream_prefetch_bytes,
             websocket_max_age_ms: wire.websocket_max_age_ms,
             websocket_stream_idle_timeout_ms: wire.websocket_stream_idle_timeout_ms,
             websocket_failure_threshold: wire.websocket_failure_threshold,
@@ -116,6 +128,9 @@ impl<'de> Deserialize<'de> for RequestTuningOverrides {
             excel_image_max_bytes: wire.excel_image_max_bytes,
             excel_image_total_bytes: wire.excel_image_total_bytes,
             excel_image_max_count: wire.excel_image_max_count,
+            excel_image_limit_policy: wire.excel_image_limit_policy,
+            excel_image_warning_remaining: wire.excel_image_warning_remaining,
+            excel_image_compact_reserve: wire.excel_image_compact_reserve,
             excel_image_relay_requests: wire.excel_image_relay_requests,
             excel_image_relay_downloads: wire.excel_image_relay_downloads,
             excel_image_relay_entries: wire.excel_image_relay_entries,
@@ -166,9 +181,20 @@ impl RequestTuningOverrides {
         let image_entries = self
             .excel_image_relay_entries
             .unwrap_or(defaults.excel_image_relay_entries);
+        let warning = self
+            .excel_image_warning_remaining
+            .unwrap_or(defaults.excel_image_warning_remaining);
+        let reserve = self
+            .excel_image_compact_reserve
+            .unwrap_or(defaults.excel_image_compact_reserve);
         self.excel_image_transport
             .as_ref()
             .is_none_or(|value| value.validate())
+            && (1..=4096).contains(&warning)
+            && (1..=4096).contains(&reserve)
+            && (self.excel_image_limit_policy
+                != Some(gateway_core::routing::ExcelImageLimitPolicy::Warn)
+                || (reserve < warning && warning < image_count))
             && self
                 .excel_image_max_bytes
                 .is_none_or(|value| (1..=128 * 1024 * 1024).contains(&value))

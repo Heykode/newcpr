@@ -28,6 +28,676 @@ fn image() -> Value {
     json!({"type":"input_image","image_url":PNG,"detail":"high"})
 }
 
+fn image_message(n: usize) -> Value {
+    json!({"role":"user","content": vec![image(); n]})
+}
+
+fn policy_history(old: usize, new: usize) -> Value {
+    json!([image_message(old), {"role":"assistant","content":"inspected"}, image_message(new)])
+}
+
+async fn policy(
+    store: Arc<dyn ProviderReplayPort>,
+    owner: &str,
+    session: Option<&str>,
+    mode: gateway_core::routing::ExcelImageLimitPolicy,
+    input: Value,
+) -> Result<Option<Arc<super::image_policy::ImagePolicy>>, super::ExcelRequestError> {
+    let mut source = body(input);
+    source.insert("model".into(), VERIFIED_MODEL.into());
+    super::image_policy::prepare(
+        store,
+        owner,
+        session,
+        Some("codex_cli_rs/0.100.0"),
+        &mut source,
+        gateway_core::routing::RequestTuning {
+            excel_image_limit_policy: mode,
+            ..Default::default()
+        },
+        Arc::new(ImageRelay::new(None)),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn image_policy_off_does_not_read_state_or_transform_history() {
+    let store = Arc::new(gateway_core::provider_ports::UnavailableProviderReplay);
+    let mut source = body(policy_history(19, 2));
+    let before = source.clone();
+    assert!(
+        super::image_policy::prepare(
+            store,
+            "owner",
+            None,
+            None,
+            &mut source,
+            Default::default(),
+            Arc::new(ImageRelay::new(None))
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(source, before);
+}
+
+#[tokio::test]
+async fn image_policy_warn_thresholds_warn_once_and_allow_explicit_compact() {
+    use super::ExcelRequestError;
+    use gateway_core::routing::ExcelImageLimitPolicy::Warn;
+    for n in [11, 12, 17, 18, 20, 21] {
+        let store = Arc::new(Assets::default());
+        let input = json!([image_message(n)]);
+        let first = policy(store.clone(), "owner", Some("session"), Warn, input.clone()).await;
+        match n {
+            11 => assert!(first.is_ok()),
+            12 | 17 => {
+                assert!(
+                    matches!(first, Err(ExcelRequestError::ImageWarning { remaining }) if remaining == 17 - n)
+                );
+                assert!(
+                    policy(store.clone(), "owner", Some("session"), Warn, input.clone())
+                        .await
+                        .is_ok()
+                );
+            }
+            _ => assert!(matches!(
+                first,
+                Err(ExcelRequestError::ImagePolicy("limit_reached"))
+            )),
+        }
+        let mut compact = input;
+        compact
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"compaction_trigger"}));
+        let explicit = policy(store.clone(), "owner", Some("session"), Warn, compact)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(explicit.explicit_compact);
+        let validation = images::validate_with_limits(&explicit.source, true, Default::default());
+        assert_eq!(validation.is_ok(), n <= 20);
+        if n <= 20 {
+            explicit.finish().await;
+            if (12..=17).contains(&n) {
+                assert!(matches!(
+                    policy(
+                        store,
+                        "owner",
+                        Some("session"),
+                        Warn,
+                        json!([image_message(n)])
+                    )
+                    .await,
+                    Err(ExcelRequestError::ImageWarning { .. })
+                ));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn image_policy_concurrent_warning_is_claimed_once_and_scope_isolated() {
+    use gateway_core::routing::ExcelImageLimitPolicy::Warn;
+    let store = Arc::new(Assets::default());
+    let input = json!([image_message(12)]);
+    let (a, b) = tokio::join!(
+        policy(
+            store.clone(),
+            "key-account-model-a",
+            Some("thread"),
+            Warn,
+            input.clone()
+        ),
+        policy(
+            store.clone(),
+            "key-account-model-a",
+            Some("thread"),
+            Warn,
+            input.clone()
+        )
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    for (owner, session) in [
+        ("key-account-model-b", "thread"),
+        ("key-account-model-a", "other-thread"),
+    ] {
+        assert!(matches!(
+            policy(store.clone(), owner, Some(session), Warn, input.clone()).await,
+            Err(super::ExcelRequestError::ImageWarning { .. })
+        ));
+    }
+    let data = store.policies.lock().unwrap();
+    assert_eq!(data.len(), 3);
+    assert!(!format!("{data:?}").contains(PNG));
+}
+
+#[tokio::test]
+async fn image_policy_auto_preserves_new_batch_and_authenticates_echoed_window() {
+    use gateway_core::routing::ExcelImageLimitPolicy::AutoCompact;
+    let store = Arc::new(Assets::default());
+    let input = policy_history(19, 2);
+    let first = policy(
+        store.clone(),
+        "owner",
+        Some("session"),
+        AutoCompact,
+        input.clone(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(first.split, Some(2));
+    let window = vec![json!({"type":"compaction","encrypted_content":"synthetic-window"})];
+    first.checkpoint(&window).await.unwrap();
+    assert!(matches!(
+        first.checkpoint(&window).await,
+        Err(super::ExcelRequestError::ImagePolicy("state_conflict"))
+    ));
+    let mut echoed = input.clone();
+    echoed.as_array_mut().unwrap().extend(window.clone());
+    echoed
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"role":"user","content":"continue"}));
+    let next = policy(
+        store.clone(),
+        "owner",
+        Some("session"),
+        AutoCompact,
+        echoed.clone(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(next.split.is_none());
+    assert_eq!(
+        next.input(),
+        &[
+            window[0].clone(),
+            image_message(2),
+            json!({"role":"user","content":"continue"})
+        ]
+    );
+    echoed[3]["encrypted_content"] = "changed-window".into();
+    assert!(matches!(
+        policy(store, "owner", Some("session"), AutoCompact, echoed).await,
+        Err(super::ExcelRequestError::ImagePolicy(
+            "history_window_mismatch"
+        ))
+    ));
+    for (old, new, reason) in [
+        (19, 21, "new_batch_too_large"),
+        (21, 1, "history_too_large"),
+    ] {
+        assert!(
+            matches!(policy(Arc::new(Assets::default()), "owner", Some("thread"), AutoCompact, policy_history(old, new)).await,
+            Err(super::ExcelRequestError::ImagePolicy(actual)) if actual == reason)
+        );
+    }
+    assert!(matches!(
+        policy(
+            Arc::new(Assets::default()),
+            "owner",
+            None,
+            AutoCompact,
+            input
+        )
+        .await,
+        Err(super::ExcelRequestError::ImagePolicy("state_unavailable"))
+    ));
+}
+
+#[tokio::test]
+async fn image_policy_complete_tool_batch_is_never_split() {
+    use gateway_core::routing::ExcelImageLimitPolicy::AutoCompact;
+    let input = json!([
+        image_message(19), {"role":"assistant","content":"inspected"},
+        {"type":"function_call","call_id":"call_a","name":"capture","arguments":"{}"},
+        {"type":"function_call","call_id":"call_b","name":"capture","arguments":"{}"},
+        {"type":"function_call_output","call_id":"call_a","output":[image()]},
+        {"type":"function_call_output","call_id":"call_b","output":[image()]}
+    ]);
+    let state = policy(
+        Arc::new(Assets::default()),
+        "owner",
+        Some("thread"),
+        AutoCompact,
+        input.clone(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(state.split, Some(2));
+    assert_eq!(&state.input()[2..], &input.as_array().unwrap()[2..]);
+    let mut incomplete = input;
+    incomplete.as_array_mut().unwrap().remove(3);
+    assert!(
+        policy(
+            Arc::new(Assets::default()),
+            "owner",
+            Some("thread"),
+            AutoCompact,
+            incomplete
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[test]
+fn image_errors_explain_cause_without_exposing_image_data() {
+    for (url, reason) in [
+        ("data:image/png;base64", "malformed"),
+        ("data:image/png;base64,", "empty"),
+        ("data:image/png;base64,not-base64!", "base64"),
+        ("data:image/jpeg;base64,aGVsbG8=", "image"),
+    ] {
+        let err = images::validate(&body(
+            json!([{"role":"user","content":[{"type":"input_image","image_url":url}]}]),
+        ))
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.to_lowercase().contains(reason), "{message}");
+        assert!(message.contains("input[0].content[0]"), "{message}");
+        assert!(!message.contains(url));
+    }
+    let err = images::validate(&body(json!([image_message(21)]))).unwrap_err();
+    assert!(matches!(
+        err,
+        super::ExcelRequestError::ImageLimit {
+            kind: "count",
+            actual: 21,
+            limit: 20
+        }
+    ));
+}
+
+fn sse_response(value: Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string(format!(
+            "event: response.completed\ndata: {}\n\n",
+            json!({"type":"response.completed","response":value})
+        ))
+}
+
+#[tokio::test]
+async fn image_policy_supported_clients_follow_reference_not_loose_codex_substrings() {
+    for (ua, accepted) in [
+        ("codex_cli_rs/0.100.0", true),
+        ("Codex Desktop/1.0", true),
+        ("codex-tui/0.100.0", true),
+        ("codex_vscode_copilot/1.0", true),
+        ("override/1.0 (macOS; arm64) (codex-tui; 1.0)", true),
+        ("Mozilla/5.0 codex_cli_rs/0.100.0", false),
+        ("Codex/1.0", false),
+        ("not-codex/1.0", false),
+    ] {
+        let mut source = body(policy_history(19, 2));
+        let result = super::image_policy::prepare(
+            Arc::new(Assets::default()),
+            "owner",
+            Some("session"),
+            Some(ua),
+            &mut source,
+            gateway_core::routing::RequestTuning {
+                excel_image_limit_policy: gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
+                ..Default::default()
+            },
+            Arc::new(ImageRelay::new(None)),
+        )
+        .await;
+        assert_eq!(result.is_ok(), accepted, "{ua}");
+    }
+}
+
+#[tokio::test]
+async fn native_codex_does_not_enter_excel_image_policy_or_apply_excel_limits() {
+    let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(completed())
+        .expect(1)
+        .mount(&server)
+        .await;
+    let input = json!([image_message(21)]);
+    let req = CodexResponsesRequest::from_body(
+        json!({"model":VERIFIED_MODEL,"input":input,"stream":true})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    let client = client(&server.uri()).with_request_tuning(
+        gateway_core::runtime::RequestTuningHandle::new(gateway_core::routing::RequestTuning {
+            excel_image_limit_policy: gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
+            excel_image_max_count: 1,
+            excel_image_max_bytes: 1,
+            excel_image_total_bytes: 1,
+            ..Default::default()
+        }),
+    );
+    client
+        .create_response_stream_http_sse(
+            &req,
+            CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+        )
+        .await
+        .unwrap()
+        .body
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let native_body = if requests[0]
+        .headers
+        .get("content-encoding")
+        .is_some_and(|value| value == "zstd")
+    {
+        zstd::stream::decode_all(requests[0].body.as_slice()).unwrap()
+    } else {
+        requests[0].body.clone()
+    };
+    assert_eq!(
+        serde_json::from_slice::<Value>(&native_body).unwrap()["input"],
+        input
+    );
+    assert!(!requests[0].url.path().contains("basispoints"));
+}
+
+#[tokio::test]
+async fn image_policy_raw_budget_cannot_be_bypassed_with_duplicate_or_checkpoint_images() {
+    let mut source = body(policy_history(19, 2));
+    let tuning = gateway_core::routing::RequestTuning {
+        excel_image_limit_policy: gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
+        excel_image_max_bytes: 100,
+        excel_image_total_bytes: 200,
+        ..Default::default()
+    };
+    assert!(matches!(
+        super::image_policy::prepare(
+            Arc::new(Assets::default()),
+            "owner",
+            Some("session"),
+            Some("codex_cli_rs/1.0"),
+            &mut source,
+            tuning,
+            Arc::new(ImageRelay::new(None))
+        )
+        .await,
+        Err(super::ExcelRequestError::ImageLimit {
+            kind: "raw total decoded bytes",
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn image_policy_raw_format_failure_retains_original_position() {
+    let result = policy(Arc::new(Assets::default()), "owner", Some("session"),
+        gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
+        json!([{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64"}]}])).await;
+    assert_eq!(
+        result.err().unwrap().content_param(),
+        Some("input[0].content[0]".into())
+    );
+}
+
+#[tokio::test]
+async fn image_policy_generation_rejection_retains_compaction_usage_and_no_completion() {
+    let server = MockServer::start().await;
+    uploader(&server, "id", 2).await;
+    Mock::given(path(RESPONSES_PATH)).respond_with(|request: &wiremock::Request| {
+        if request.body_json::<Value>().unwrap()["input"].as_array().unwrap().iter().any(|v| v["type"] == "compaction_trigger") {
+            sse_response(json!({"id":"resp_compact","status":"completed","output":[{"type":"compaction","encrypted_content":"synthetic-window"}],
+                "usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105}}))
+        } else { ResponseTemplate::new(403).set_body_json(json!({"error":{"code":"permission_denied"}})) }
+    }).expect(2).mount(&server).await;
+    let req = auto_request(&server).await;
+    assert!(run(&server, &req).await.is_err());
+    let excel = req.excel.as_ref().unwrap();
+    assert_eq!(
+        excel.usage.take_failed_repair_usage().unwrap()["usage"]["input_tokens"],
+        100
+    );
+    assert!(excel.completed.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn image_policy_dropping_stream_cannot_start_background_generation() {
+    let server = MockServer::start().await;
+    uploader(&server, "id", 1).await;
+    Mock::given(path(RESPONSES_PATH)).respond_with(sse_response(json!({"id":"resp_compact","status":"completed",
+        "output":[{"type":"compaction","encrypted_content":"synthetic-window"}],"usage":{"input_tokens":100}})))
+        .expect(1).mount(&server).await;
+    let req = auto_request(&server).await;
+    let response = client(&server.uri())
+        .create_response_stream_http_sse(
+            &req,
+            CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+        )
+        .await
+        .unwrap();
+    drop(response);
+    tokio::task::yield_now().await;
+    assert!(
+        req.excel
+            .as_ref()
+            .unwrap()
+            .completed
+            .lock()
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|v| v.url.path() == RESPONSES_PATH)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn image_policy_relay_capacity_is_held_until_compact_stream_is_dropped() {
+    let server = MockServer::start().await;
+    Mock::given(path(RESPONSES_PATH))
+        .respond_with(sse_response(
+            json!({"id":"resp_compact","status":"completed",
+        "output":[{"type":"compaction","encrypted_content":"synthetic-window"}]}),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tuning = gateway_core::routing::RequestTuning {
+        excel_image_limit_policy: gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
+        excel_image_relay_requests: 1,
+        ..Default::default()
+    };
+    let relay = Arc::new(
+        ImageRelay::new(Some("https://images.example.com".into()))
+            .with_request_tuning(gateway_core::runtime::RequestTuningHandle::new(tuning)),
+    );
+    let input = policy_history(19, 2);
+    let mut req = request(format!("{}{RESPONSES_PATH}", server.uri()), input.clone());
+    let mut source = req.body().clone();
+    req.excel.as_mut().unwrap().image_policy = super::image_policy::prepare(
+        Arc::new(Assets::default()),
+        "owner",
+        Some("thread"),
+        Some("codex_cli_rs/1.0"),
+        &mut source,
+        tuning,
+        relay.clone(),
+    )
+    .await
+    .unwrap();
+    let response = client(&server.uri())
+        .create_response_stream_http_sse(
+            &req,
+            CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+        )
+        .await
+        .unwrap();
+    let mut competing = body(json!([image_message(1)]));
+    assert!(matches!(
+        relay.stage_with_origin(
+            &mut competing,
+            tuning,
+            "other",
+            "https://images.example.com"
+        ),
+        Err(super::ExcelRequestError::ImageRelay)
+    ));
+    drop(response);
+    assert!(
+        relay
+            .stage_with_origin(
+                &mut competing,
+                tuning,
+                "other",
+                "https://images.example.com"
+            )
+            .unwrap()
+            .is_some()
+    );
+}
+
+async fn auto_request(server: &MockServer) -> CodexResponsesRequest {
+    let input = policy_history(19, 2);
+    let mut req = request(format!("{}{RESPONSES_PATH}", server.uri()), input.clone());
+    req.excel.as_mut().unwrap().image_policy = policy(
+        Arc::new(Assets::default()),
+        "owner",
+        Some("thread"),
+        gateway_core::routing::ExcelImageLimitPolicy::AutoCompact,
+        input,
+    )
+    .await
+    .unwrap();
+    req
+}
+
+#[tokio::test]
+async fn image_policy_stream_compacts_then_generates_same_account_with_combined_usage() {
+    let server = MockServer::start().await;
+    uploader(&server, "id", 2).await;
+    Mock::given(path(RESPONSES_PATH)).respond_with(|request: &wiremock::Request| {
+        let body: Value = request.body_json().unwrap();
+        if body["input"].as_array().unwrap().iter().any(|v| v["type"] == "compaction_trigger") {
+            sse_response(json!({"id":"resp_compact","status":"completed","output":[{"type":"compaction","encrypted_content":"synthetic-window"}],
+                "usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":40,"cache_write_tokens":10}}}))
+        } else {
+            sse_response(json!({"id":"resp_generate","status":"completed","output":[{"id":"msg_final","type":"message","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}],
+                "usage":{"input_tokens":20,"output_tokens":3,"total_tokens":23,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}))
+        }
+    }).expect(2).mount(&server).await;
+    let req = auto_request(&server).await;
+    let response = client(&server.uri())
+        .create_response_stream_with_pool_account(
+            &req,
+            CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+            Some("account"),
+        )
+        .await
+        .unwrap();
+    let chunks: Vec<_> = response.body.try_collect().await.unwrap();
+    let text = String::from_utf8(chunks.concat()).unwrap();
+    let mut decoder = gateway_protocol::openai::sse::SseEventDecoder::default();
+    let events: Vec<Value> = decoder
+        .push(text.as_bytes())
+        .unwrap()
+        .into_iter()
+        .filter(|v| v.data != "[DONE]")
+        .map(|v| serde_json::from_str(&v.data).unwrap())
+        .collect();
+    for (n, event) in events.iter().enumerate() {
+        assert_eq!(event["sequence_number"], n as u64);
+    }
+    let completion = events
+        .iter()
+        .find(|v| v["type"] == "response.completed")
+        .unwrap();
+    assert_eq!(completion["response"]["usage"]["input_tokens"], 120);
+    assert_eq!(completion["response"]["usage"]["output_tokens"], 8);
+    assert_eq!(completion["response"]["usage"]["total_tokens"], 128);
+    assert_eq!(completion["response"]["output"][0]["type"], "compaction");
+    assert_eq!(completion["response"]["output"][1]["id"], "msg_final");
+    let requests = server.received_requests().await.unwrap();
+    let phases: Vec<_> = requests
+        .iter()
+        .filter(|v| v.url.path() == RESPONSES_PATH)
+        .collect();
+    for header in [
+        "authorization",
+        "chatgpt-account-id",
+        "x-openai-account-id",
+        "user-agent",
+    ] {
+        assert_eq!(
+            phases[0].headers.get(header),
+            phases[1].headers.get(header),
+            "{header}"
+        );
+    }
+    let old: Value = phases[0].body_json().unwrap();
+    let new: Value = phases[1].body_json().unwrap();
+    assert_eq!(
+        super::image_policy::count(old["input"].as_array().unwrap()),
+        19
+    );
+    assert_eq!(
+        super::image_policy::count(new["input"].as_array().unwrap()),
+        2
+    );
+    assert!(
+        new["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["type"] == "compaction")
+    );
+    assert!(!text.contains("resp_compact"));
+}
+
+#[tokio::test]
+async fn image_policy_failed_compaction_does_not_generate_or_lose_usage() {
+    let server = MockServer::start().await;
+    uploader(&server, "id", 1).await;
+    Mock::given(path(RESPONSES_PATH)).respond_with(ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"usage\":{\"input_tokens\":7},\"error\":{\"code\":\"upstream_failed\"}}}\n\n"))
+        .expect(1).mount(&server).await;
+    let req = auto_request(&server).await;
+    let response = client(&server.uri())
+        .create_response_stream_http_sse(
+            &req,
+            CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+        )
+        .await
+        .unwrap();
+    let chunks: Vec<_> = response.body.try_collect().await.unwrap();
+    let mut decoder = gateway_protocol::openai::sse::SseEventDecoder::default();
+    let events = decoder.push(&chunks.concat()).unwrap();
+    let failed: Value = serde_json::from_str(&events.last().unwrap().data).unwrap();
+    assert_eq!(failed["type"], "response.failed");
+    assert_eq!(failed["response"]["error"]["code"], "upstream_failed");
+    assert_eq!(failed["response"]["usage"]["input_tokens"], 7);
+    assert!(
+        req.excel
+            .as_ref()
+            .unwrap()
+            .completed
+            .lock()
+            .unwrap()
+            .is_none()
+    );
+}
+
 fn body(input: Value) -> Map<String, Value> {
     json!({"input":input}).as_object().unwrap().clone()
 }
@@ -36,9 +706,31 @@ fn body(input: Value) -> Map<String, Value> {
 struct Assets {
     replay: MemoryReplay,
     entries: Mutex<BTreeMap<String, OpaqueProviderData>>,
+    policies: Mutex<BTreeMap<String, OpaqueProviderData>>,
 }
 
 impl ProviderReplayPort for Assets {
+    fn read_image_policy<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> BoxFuture<'a, Result<Option<OpaqueProviderData>, ProviderStoreError>> {
+        Box::pin(async move { Ok(self.policies.lock().unwrap().get(key).cloned()) })
+    }
+    fn compare_exchange_image_policy<'a>(
+        &'a self,
+        key: &'a str,
+        expected: Option<&'a OpaqueProviderData>,
+        value: &'a OpaqueProviderData,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let mut policies = self.policies.lock().unwrap();
+            if policies.get(key) != expected {
+                return Ok(false);
+            }
+            policies.insert(key.into(), value.clone());
+            Ok(true)
+        })
+    }
     fn read<'a>(
         &'a self,
         key: &'a str,

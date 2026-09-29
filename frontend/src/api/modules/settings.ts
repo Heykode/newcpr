@@ -35,6 +35,7 @@ export interface RequestTuning {
   websocketMaxRetries: number
   websocketHttpFallbackEnabled: boolean
   websocketLargeRequestThresholdBytes: number
+  streamPrefetchBytes: number
   websocketMaxAgeMs: number
   websocketStreamIdleTimeoutMs: number
   websocketFailureThreshold: number
@@ -45,6 +46,9 @@ export interface RequestTuning {
   excelImageMaxBytes: number
   excelImageTotalBytes: number
   excelImageMaxCount: number
+  excelImageLimitPolicy: 'off' | 'auto_compact' | 'warn'
+  excelImageWarningRemaining: number
+  excelImageCompactReserve: number
   excelImageRelayRequests: number
   excelImageRelayDownloads: number
   excelImageRelayEntries: number

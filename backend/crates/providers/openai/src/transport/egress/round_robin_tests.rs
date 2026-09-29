@@ -344,6 +344,7 @@ async fn excel_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
         request.use_websocket = true;
         let tools = ClientTools::default();
         request.excel = Some(ExcelPreparedRequest {
+            image_policy: None,
             exit_lease: None,
             body: prepare_request(request.body(), &tools, &BTreeMap::new(), None).unwrap(),
             tools,

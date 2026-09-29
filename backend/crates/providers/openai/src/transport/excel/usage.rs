@@ -39,6 +39,10 @@ pub(crate) struct ExcelUsagePolicy {
 }
 
 impl ExcelUsagePolicy {
+    pub(super) fn detached(&self) -> Self {
+        Self::new(self.as_input)
+    }
+
     pub(super) fn clear_repair_usage(&self) {
         self.repairing.store(false, Ordering::Relaxed);
         self.repair_failure

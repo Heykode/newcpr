@@ -64,6 +64,7 @@ fn update_body() -> Value {
             "websocketMaxRetries": 9,
             "websocketHttpFallbackEnabled": false,
             "websocketLargeRequestThresholdBytes": 4096,
+            "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
             "websocketFailureThreshold": 3,
@@ -381,6 +382,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             websocket_max_retries: Some(9),
             websocket_http_fallback_enabled: Some(false),
             websocket_large_request_threshold_bytes: Some(4096),
+            stream_prefetch_bytes: Some(256 * 1024),
             websocket_max_age_ms: Some(60_000),
             websocket_stream_idle_timeout_ms: Some(120_000),
             websocket_failure_threshold: Some(3),
@@ -391,6 +393,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             excel_image_max_bytes: Some(8 * 1024 * 1024),
             excel_image_total_bytes: Some(16 * 1024 * 1024),
             excel_image_max_count: Some(32),
+            excel_image_limit_policy: Some(gateway_core::routing::ExcelImageLimitPolicy::Warn),
+            excel_image_warning_remaining: Some(8),
+            excel_image_compact_reserve: Some(3),
             excel_image_relay_requests: Some(128),
             excel_image_relay_downloads: Some(32),
             excel_image_relay_entries: Some(128),
@@ -439,6 +444,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "websocketMaxRetries": 9,
             "websocketHttpFallbackEnabled": false,
             "websocketLargeRequestThresholdBytes": 4096,
+            "streamPrefetchBytes": 262144,
             "websocketMaxAgeMs": 60000,
             "websocketStreamIdleTimeoutMs": 120000,
             "websocketFailureThreshold": 3,
@@ -467,6 +473,9 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     expected["requestTuning"]["excelImageMaxBytes"] = json!(8388608);
     expected["requestTuning"]["excelImageTotalBytes"] = json!(16777216);
     expected["requestTuning"]["excelImageMaxCount"] = json!(32);
+    expected["requestTuning"]["excelImageLimitPolicy"] = json!("warn");
+    expected["requestTuning"]["excelImageWarningRemaining"] = json!(8);
+    expected["requestTuning"]["excelImageCompactReserve"] = json!(3);
     assert_eq!(value, expected);
 }
 
