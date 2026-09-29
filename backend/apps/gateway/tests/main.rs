@@ -176,6 +176,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         // Judge parsing/Cron calculation and SQL usage predicates stay private;
         // only their owner-local regression modules may access these details.
         ("crates/gateway-admin", Some("use_case/quality_ops.rs"), Item::Mod(module))
+        | ("crates/providers/openai", Some("credential/selector/mod.rs"), Item::Mod(module))
         | ("crates/providers/openai", Some("provider/quality_probe.rs"), Item::Mod(module))
         | ("crates/gateway-store", Some("postgres/usage_facts.rs"), Item::Mod(module)) => {
             module.ident == "tests"
@@ -457,6 +458,7 @@ fn egress_private_tests_require_exact_owner_and_test_only_gate() {
 fn quality_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     for (owner, relative) in [
         ("crates/gateway-admin", "use_case/quality_ops.rs"),
+        ("crates/providers/openai", "credential/selector/mod.rs"),
         ("crates/providers/openai", "provider/quality_probe.rs"),
         ("crates/gateway-store", "postgres/usage_facts.rs"),
     ] {

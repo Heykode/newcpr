@@ -818,6 +818,9 @@ impl DefaultExecutionService {
             deadline_at,
         };
         // The real coordinator owns account leases, observations and usage settlement.
+        // A request-local token lets finalization cancel this attempt without
+        // cancelling the whole quality round that owns `cancellation`.
+        let attempt_cancellation = CancellationToken::new();
         let mut session = self
             .coordinator
             .start_quality(
@@ -825,7 +828,7 @@ impl DefaultExecutionService {
                 request.operation,
                 plan,
                 request.account_id,
-                cancellation,
+                attempt_cancellation.clone(),
             )
             .await
             .map_err(|error| AccountProbeError::from(gateway_error_from_engine(&error)))?;
@@ -865,26 +868,33 @@ impl DefaultExecutionService {
             }
             .fuse();
             let timeout = Delay::new(timeout_duration).fuse();
-            pin_mut!(collect, timeout);
+            let cancelled = cancellation.cancelled().fuse();
+            pin_mut!(collect, timeout, cancelled);
             futures::select! {
-                result = collect => Some(result),
-                () = timeout => None,
+                result = collect => Ok(Some(result)),
+                () = timeout => Ok(None),
+                () = cancelled => Err(()),
             }
         };
         let result = match result {
-            Some(Ok((text, true))) => Ok(AccountProbeResult {
+            Ok(Some(Ok((text, true)))) => Ok(AccountProbeResult {
                 text,
                 upstream_response_model: session.upstream_response_model().map(str::to_owned),
             }),
-            Some(Ok((_, false))) => Err(GatewayError::new(
+            Ok(Some(Ok((_, false)))) => Err(GatewayError::new(
                 GatewayErrorKind::UpstreamUnavailable,
                 "quality response did not complete normally",
             )
             .into()),
-            Some(Err(error)) => Err(AccountProbeError::from(gateway_error_from_engine(&error))),
-            None => {
+            Ok(Some(Err(error))) => Err(AccountProbeError::from(gateway_error_from_engine(&error))),
+            Ok(None) => {
                 Err(GatewayError::new(GatewayErrorKind::Timeout, "quality check timed out").into())
             }
+            Err(()) => Err(GatewayError::new(
+                GatewayErrorKind::Cancelled,
+                "quality check cancelled",
+            )
+            .into()),
         };
         if result.is_err() {
             let _ = session.cancel_and_finalize().await;

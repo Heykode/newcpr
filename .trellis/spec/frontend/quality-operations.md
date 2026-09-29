@@ -72,11 +72,15 @@
 - Account and enabled judge-group catalogs have independent requests/errors;
   searching or failing one must not clear or cancel the other. Editing a rule
   keeps its account immutable. Do not place a whole picker inside one FormItem.
-- Scheduling presets serialize to the existing five-field Cron contract. The
-  default stays `0 */6 * * *`, evaluated in the chosen timezone; daily time is
-  minute-precise. Preserve arbitrary existing Cron expressions in advanced mode
-  without rewriting them on open. Repetitions are 1–8 parallel answers per round,
-  bounded by normal account concurrency and interval. Paused schedules still allow
+- New rules/templates use integer `intervalSeconds`, default 60, range 5–31536000,
+  with a seconds input instead of Cron/timezone controls. Summaries and selective
+  batch edits use the same field. The next due time is measured from save or round
+  completion; five-second worker scans and capacity may delay actual start.
+  Missing/null interval preserves legacy Cron/timezone, including on unrelated edits
+  and saving a rule as a template. Only an explicit switch enables seconds scheduling;
+  spreading defaults must not silently convert legacy configs. Repetitions are 1–8
+  parallel answers per round, exempt from business concurrency but respecting the
+  account request interval and safety gates. Paused schedules still allow
   one manual check; disable the button only during mutation, pending or running.
   A manual check must not save or enable the rule. Show queued/running status while
   active and paused again on completion; saving a rule does not immediately run it.

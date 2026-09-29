@@ -25,6 +25,7 @@ fn config(account: &str) -> QualityRuleConfig {
         account_id: account.into(),
         model: "fixture-model".into(),
         enabled: true,
+        interval_seconds: None,
         cron: "0 */6 * * *".into(),
         timezone: "UTC".into(),
         repetitions: 1,
