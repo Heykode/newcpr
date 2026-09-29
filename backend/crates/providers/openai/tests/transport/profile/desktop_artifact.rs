@@ -1,6 +1,11 @@
 use provider_openai::transport::profile::desktop_artifact::{
-    CoreVersionScanner, find_core_entry, parse_content_range,
+    CodexDesktopArtifactError, CoreVersionScanner, find_core_entry, parse_content_range,
 };
+
+const LEGACY_CORE: &[u8] = b"ChatGPT.app/Contents/Resources/codex";
+const NESTED_CORE: &[u8] =
+    b"ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+const WRAPPER: &[u8] = b"ChatGPT.app/Contents/Resources/codex-cli/bin/codex";
 
 #[test]
 fn scanner_accepts_stable_and_multi_part_alpha_versions_across_chunks() {
@@ -52,7 +57,15 @@ fn scanner_skips_an_invalid_marker_before_the_bundled_version() {
 
 #[test]
 fn central_directory_requires_one_deflated_core_entry() {
-    let name = b"ChatGPT.app/Contents/Resources/codex";
+    let central = central_entry(NESTED_CORE);
+    let entry = find_core_entry(&central, 1).expect("core entry");
+    assert_eq!(entry.name, NESTED_CORE);
+    assert_eq!(entry.compressed_size, 100);
+    assert_eq!(entry.uncompressed_size, 200);
+    assert_eq!(entry.local_header_offset, 50);
+}
+
+fn central_entry(name: &[u8]) -> Vec<u8> {
     let mut central = vec![0_u8; 46 + name.len()];
     central[..4].copy_from_slice(b"PK\x01\x02");
     central[10..12].copy_from_slice(&8_u16.to_le_bytes());
@@ -66,11 +79,68 @@ fn central_directory_requires_one_deflated_core_entry() {
     central[42..46].copy_from_slice(&50_u32.to_le_bytes());
     central[46..].copy_from_slice(name);
 
-    let entry = find_core_entry(&central, 1).expect("core entry");
-    assert_eq!(entry.name, name);
-    assert_eq!(entry.compressed_size, 100);
-    assert_eq!(entry.uncompressed_size, 200);
-    assert_eq!(entry.local_header_offset, 50);
+    central
+}
+
+#[test]
+fn central_directory_ignores_launcher_and_legacy_path() {
+    for ignored in [WRAPPER, LEGACY_CORE] {
+        let ignored = central_entry(ignored);
+        assert!(matches!(
+            find_core_entry(&ignored, 1),
+            Err(CodexDesktopArtifactError::MissingCore)
+        ));
+        for entries in [
+            [ignored.clone(), central_entry(NESTED_CORE)],
+            [central_entry(NESTED_CORE), ignored],
+        ] {
+            assert_eq!(
+                find_core_entry(&entries.concat(), 2)
+                    .expect("nested core")
+                    .name,
+                NESTED_CORE
+            );
+        }
+    }
+    assert!(matches!(
+        find_core_entry(&[], 0),
+        Err(CodexDesktopArtifactError::MissingCore)
+    ));
+}
+
+#[test]
+fn central_directory_rejects_duplicate_nested_cores() {
+    let central = [central_entry(NESTED_CORE), central_entry(NESTED_CORE)].concat();
+    assert!(matches!(
+        find_core_entry(&central, 2),
+        Err(CodexDesktopArtifactError::MissingCore)
+    ));
+}
+
+#[test]
+fn nested_core_preserves_format_size_and_metadata_validation() {
+    for (offset, bytes) in [
+        (8, 1_u16.to_le_bytes().to_vec()),
+        (10, 0_u16.to_le_bytes().to_vec()),
+        (20, 0_u32.to_le_bytes().to_vec()),
+        (20, (256_u32 * 1024 * 1024 + 1).to_le_bytes().to_vec()),
+        (24, 0_u32.to_le_bytes().to_vec()),
+        (24, (512_u32 * 1024 * 1024 + 1).to_le_bytes().to_vec()),
+        (42, u32::MAX.to_le_bytes().to_vec()),
+    ] {
+        let mut central = central_entry(NESTED_CORE);
+        central[offset..offset + bytes.len()].copy_from_slice(&bytes);
+        assert!(matches!(
+            find_core_entry(&central, 1),
+            Err(CodexDesktopArtifactError::UnsupportedCore)
+        ));
+    }
+    let mut central = central_entry(NESTED_CORE);
+    central.pop();
+    assert!(matches!(
+        find_core_entry(&central, 1),
+        Err(CodexDesktopArtifactError::InvalidArchive)
+    ));
 }
 
 #[test]
