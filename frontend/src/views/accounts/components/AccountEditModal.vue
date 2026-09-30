@@ -11,6 +11,7 @@ import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
+import AccountPurchaseFields from './AccountPurchaseFields.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
 defineProps<{
@@ -27,6 +28,8 @@ const emit = defineEmits<{
 
 const open = defineModel<boolean>({ required: true })
 const customName = defineModel<string>('customName', { required: true })
+const purchaseAmount = defineModel<string>('purchaseAmount', { default: '' })
+const purchaseCycleStart = defineModel<string>('purchaseCycleStart', { default: '' })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { default: false })
 const excelModels = defineModel<string>('excelModels', { default: DEFAULT_EXCEL_MODELS_INPUT })
@@ -100,6 +103,7 @@ const egressMode = defineModel<string>('egressMode', { required: true })
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
       />
+      <AccountPurchaseFields v-model:amount="purchaseAmount" v-model:cycle-start="purchaseCycleStart" :disabled="saving || !account.purchaseCost" />
     </div>
 
     <template #footer>

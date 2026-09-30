@@ -48,6 +48,7 @@ export const accountColumns = defineTableColumns<AccountRow>([
     size: 'sm',
     align: 'center',
   },
+  { key: 'purchaseCost', label: '保本价', kind: 'custom', size: 'md', align: 'center' },
   {
     key: 'reloginCount',
     label: '重登次数',
@@ -86,7 +87,7 @@ export function readAccountColumnKeys(raw: string): string[] {
     const version = stored && typeof stored === 'object' && 'version' in stored ? stored.version : null
     const keys: unknown = legacy
       ? stored
-      : stored && typeof stored === 'object' && (version === 2 || version === 3) && 'keys' in stored
+      : stored && typeof stored === 'object' && (version === 2 || version === 3 || version === 4) && 'keys' in stored
         ? stored.keys
         : null
     if (!Array.isArray(keys))
@@ -98,6 +99,8 @@ export function readAccountColumnKeys(raw: string): string[] {
       selected.push('weight')
     if (legacy && !selected.includes('reloginCount'))
       selected.push('reloginCount')
+    if (version !== 4 && !selected.includes('purchaseCost'))
+      selected.push('purchaseCost')
     return selected
   }
   catch {
@@ -106,7 +109,7 @@ export function readAccountColumnKeys(raw: string): string[] {
 }
 
 export function writeAccountColumnKeys(keys: string[]): string {
-  return JSON.stringify({ version: 3, keys })
+  return JSON.stringify({ version: 4, keys })
 }
 
 export const statusLabels: Record<AccountStatus, string> = {

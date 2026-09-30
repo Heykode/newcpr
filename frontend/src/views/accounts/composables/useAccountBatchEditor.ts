@@ -12,6 +12,7 @@ import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountExcel403Action } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
+import { purchaseCostPatch } from '../utils/purchaseCost'
 import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -25,6 +26,9 @@ export function useAccountBatchEditor(options: {
   const selectedAccountsById = new Map<string, AccountRow>()
   const showBatchEditModal = shallowRef(false)
   const customName = shallowRef('')
+  const purchaseAmount = shallowRef('')
+  const purchaseCycleStart = shallowRef('')
+  const updatePurchaseCost = ref(false)
   const updateCustomName = ref(false)
   const excelAvailable = shallowRef(false)
   const requestProxyAvailable = shallowRef(false)
@@ -57,6 +61,7 @@ export function useAccountBatchEditor(options: {
   const egressMode = shallowRef('fixed_ipv6_reuse')
   const hasUpdates = computed(() =>
     updateCustomName.value
+    || updatePurchaseCost.value
     || updateEnabled.value
     || (excelAvailable.value && updateExcelEnabled.value)
     || (excelAvailable.value && updateExcelModels.value)
@@ -73,6 +78,9 @@ export function useAccountBatchEditor(options: {
   const saving = saveAction.loading
 
   function resetUpdateSelection() {
+    updatePurchaseCost.value = false
+    purchaseAmount.value = ''
+    purchaseCycleStart.value = ''
     updateCustomName.value = false
     updateEnabled.value = false
     updateExcelEnabled.value = false
@@ -153,6 +161,8 @@ export function useAccountBatchEditor(options: {
       }
       if (updateCustomName.value)
         payload.customName = normalizeAccountName(customName.value)
+      if (updatePurchaseCost.value)
+        payload.purchaseCost = purchaseCostPatch(purchaseAmount.value, purchaseCycleStart.value)
       if (updateEnabled.value)
         payload.enabled = schedulingEnabled.value
       if (excelAvailable.value && updateExcelEnabled.value)
@@ -235,6 +245,9 @@ export function useAccountBatchEditor(options: {
   })
 
   return {
+    purchaseAmount,
+    purchaseCycleStart,
+    updatePurchaseCost,
     customName,
     updateCustomName,
     showBatchEditModal,

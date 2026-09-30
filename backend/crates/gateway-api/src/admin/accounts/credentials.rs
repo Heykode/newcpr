@@ -22,6 +22,8 @@ impl AccountProvider {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_outbound_proxy: bool,
     #[serde(
@@ -54,6 +56,10 @@ pub struct AccountImportSettingsRequest {
 
 impl AccountImportSettingsRequest {
     fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(cost) = &self.purchase_cost {
+            cost.validate()
+                .map_err(|_| WireValidationError::new("purchaseCost"))?;
+        }
         parse_custom_name(self.custom_name.as_deref())?;
         parse_concurrency_limit(self.concurrency_limit)?;
         parse_account_weight(self.weight)?;
@@ -65,6 +71,7 @@ impl AccountImportSettingsRequest {
         self,
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
+            purchase_cost: self.purchase_cost,
             clear_outbound_proxy: self.clear_outbound_proxy,
             egress_mode: self.egress_mode,
             custom_name: parse_custom_name(self.custom_name.as_deref())?,
@@ -251,6 +258,7 @@ impl CompleteAccountAuthorizationRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateAccountRequest {
+    pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(
         default,
         deserialize_with = "super::wire::deserialize_optional_nullable"
@@ -284,6 +292,10 @@ pub struct UpdateAccountRequest {
 
 impl UpdateAccountRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(cost) = &self.purchase_cost {
+            cost.validate()
+                .map_err(|_| WireValidationError::new("purchaseCost"))?;
+        }
         if let Some(value) = &self.custom_name {
             parse_custom_name(value.as_deref())?;
         }
@@ -297,6 +309,7 @@ impl UpdateAccountRequest {
     pub(super) fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
         Ok(UpdateAccount {
+            purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,
             custom_name: self
                 .custom_name

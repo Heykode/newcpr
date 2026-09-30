@@ -5,6 +5,7 @@ import type { Excel403Action } from '@/utils/excel-settings'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import AccountPurchaseFields from './AccountPurchaseFields.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
 defineProps<{
@@ -24,6 +25,9 @@ const emit = defineEmits<{
 
 const open = defineModel<boolean>({ required: true })
 const customName = defineModel<string>('customName', { required: true })
+const purchaseAmount = defineModel<string>('purchaseAmount', { default: '' })
+const purchaseCycleStart = defineModel<string>('purchaseCycleStart', { default: '' })
+const updatePurchaseCost = defineModel<boolean>('updatePurchaseCost', { default: false })
 const updateCustomName = defineModel<boolean>('updateCustomName', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const excelEnabled = defineModel<boolean>('excelEnabled', { required: true })
@@ -101,6 +105,8 @@ const egressMode = defineModel<string>('egressMode', { required: true })
       :disabled="saving"
       batch
     />
+
+    <AccountPurchaseFields v-model:amount="purchaseAmount" v-model:cycle-start="purchaseCycleStart" v-model:apply="updatePurchaseCost" class="mt-5" batch :disabled="saving" />
 
     <template #footer>
       <BaseButton variant="secondary" :disabled="saving" @click="open = false">

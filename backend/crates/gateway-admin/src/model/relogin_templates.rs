@@ -146,6 +146,7 @@ impl ReloginTemplateConfig {
             }
         }
         Ok(AccountImportSettings {
+            purchase_cost: None,
             clear_outbound_proxy: !self.preserve_outbound_proxy && self.outbound_proxy_id.is_none(),
             egress_mode: self.egress_mode,
             model_access: self.model_access.clone(),

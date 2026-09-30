@@ -1158,6 +1158,7 @@ pub struct AccountDirectoryItem {
     pub in_flight: Option<u64>,
     pub health_timeline: Vec<super::accounts::AccountRequestBucket>,
     pub cumulative_costs: Vec<super::accounts::AccountCumulativeCost>,
+    pub purchase_cost: Option<super::account_purchase::AccountPurchaseView>,
     /// Provider 提供的套餐展示名称；未识别到套餐时为空。
     pub plan_type_display: Option<String>,
     pub projection: gateway_core::account::AccountStatusProjection,

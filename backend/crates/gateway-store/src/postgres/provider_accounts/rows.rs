@@ -378,6 +378,7 @@ impl fmt::Debug for RotateProviderAccount {
 
 #[derive(Debug, Clone)]
 pub struct BatchUpdateProviderAccountsAdmin {
+    pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     /// Full edit forms echo enabled; only explicit commands own an unchanged pause.
     pub explicit_scheduling_intent: bool,
