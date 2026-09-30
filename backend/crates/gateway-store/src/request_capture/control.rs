@@ -61,10 +61,18 @@ impl CaptureManager {
 #[async_trait]
 impl RequestCaptureStore for CaptureManager {
     async fn settings(&self) -> AdminStoreResult<RequestCaptureSettings> {
+        let days: i32 = sqlx::query_scalar(
+            "select (config->>'retentionDays')::int from request_capture_config where singleton",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(unavailable)?;
         let control = self.shared.control.read().map_err(unavailable)?;
+        let mut config = control.config.clone();
+        config.retention_days = u16::try_from(days).map_err(unavailable)?;
         let storage_fault = self.shared.fault.load(Ordering::Acquire);
         Ok(RequestCaptureSettings {
-            config: control.config.clone(),
+            config,
             global_active: !storage_fault
                 && control.config.enabled
                 && control.config.global_errors
@@ -91,13 +99,20 @@ impl RequestCaptureStore for CaptureManager {
         let records: Vec<Value> = sqlx::query_scalar(
             "select r.record from request_capture_records r join request_capture_tasks t on t.id=r.task_id where t.instance_id::text=$1 order by r.created_at desc limit 200"
         ).bind(&self.instance_id).fetch_all(&self.pool).await.map_err(unavailable)?;
-        let config = self
+        let mut config = self
             .shared
             .control
             .read()
             .map_err(unavailable)?
             .config
             .clone();
+        let days: i32 = sqlx::query_scalar(
+            "select (config->>'retentionDays')::int from request_capture_config where singleton",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        config.retention_days = u16::try_from(days).map_err(unavailable)?;
         Ok(RequestCaptureStatus {
             config,
             instance_id: self.instance_id.clone(),

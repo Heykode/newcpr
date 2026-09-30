@@ -10,6 +10,7 @@ pub mod client_keys;
 pub mod egress;
 pub mod group_monitor;
 pub mod import_tasks;
+pub mod log_cleanup;
 pub mod notifications;
 pub mod observability;
 pub mod openai;

@@ -2,6 +2,7 @@
 
 pub mod backup;
 pub mod client_distribution;
+pub mod log_cleanup;
 pub mod mihomo;
 pub mod notification;
 pub mod provider;

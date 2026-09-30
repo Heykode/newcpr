@@ -11,8 +11,15 @@ use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::Subscriber
 
 use crate::config::LoggingConfig;
 
+mod maintenance;
 mod sink;
 mod writer;
+
+pub(crate) fn file_maintenance(
+    config: &LoggingConfig,
+) -> Arc<dyn gateway_admin::ports::log_cleanup::LogFileMaintenance> {
+    Arc::new(maintenance::FileMaintenance(config.file.directory.clone()))
+}
 
 use sink::{FileLogGuard, FileLogSink, LogHealth};
 use writer::RotatingLogWriter;
@@ -209,7 +216,7 @@ impl LogGuard {
 
 fn create_file_writer(
     config: &LoggingConfig,
-    retention_days: usize,
+    _retention_days: usize,
     prefix: &'static str,
     thread_name: &'static str,
     health: Arc<LogHealth>,
@@ -223,7 +230,7 @@ fn create_file_writer(
         config.file.directory.clone(),
         prefix,
         maximum_bytes,
-        retention_days,
+        0,
         Arc::clone(&health),
     )?;
     Ok(FileLogSink::spawn(writer, thread_name, health)?)

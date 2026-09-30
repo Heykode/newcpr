@@ -27,6 +27,8 @@ pub struct StoreConfig {
     pub(crate) pool: StorePoolConfig,
     #[serde(skip)]
     backup_staging_dir: PathBuf,
+    #[serde(skip)]
+    pub(crate) log_files: Option<Arc<dyn gateway_admin::ports::log_cleanup::LogFileMaintenance>>,
 }
 
 /// PostgreSQL 连接池预算；acquire 超时决定池耗尽时快速失败而非排队积压。
@@ -71,6 +73,14 @@ impl StorePoolConfig {
 }
 
 impl StoreConfig {
+    #[must_use]
+    pub fn with_log_files(
+        mut self,
+        files: Arc<dyn gateway_admin::ports::log_cleanup::LogFileMaintenance>,
+    ) -> Self {
+        self.log_files = Some(files);
+        self
+    }
     pub fn resolve_and_validate(&mut self, runtime_data_dir: &Path) -> StoreResult<()> {
         if runtime_data_dir.as_os_str().is_empty() {
             return Err(StoreError::InvalidData {

@@ -75,7 +75,8 @@ pub async fn run() -> Result<(), BootstrapError> {
     )
     .await?;
     host.report_startup_ready("Host");
-    let mut store = gateway_store::initialize(store).await?;
+    let mut store =
+        gateway_store::initialize(store.with_log_files(host.log_file_maintenance())).await?;
     host.report_startup_ready("Store");
     let request_tuning = RequestTuningHandle::default();
     let provider_ports = store

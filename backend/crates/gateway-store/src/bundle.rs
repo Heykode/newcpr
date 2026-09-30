@@ -112,6 +112,11 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     })
     .ok();
 
+    let log_cleanup = Arc::new(postgres::PgLogCleanupStore::new(
+        pool.clone(),
+        config.log_files.clone(),
+        capture.as_ref().map(|(manager, _)| manager.clone()),
+    ));
     let mut admin_ports = AdminStorePorts::new(
         AdminAccountStorePorts::new(
             Arc::new(postgres::PgAdminAccountStore::with_repository(
@@ -145,6 +150,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         }),
         backup_ports(pool.clone(), &config)?,
     )
+    .with_log_cleanup(log_cleanup.clone())
     .with_quality_ops(Arc::new(postgres::quality_ops::PgQualityOpsStore::new(
         pool.clone(),
     )))
@@ -162,7 +168,6 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let execution = Arc::new(execution);
     let (client_key_usage, client_key_usage_writer) =
         postgres::PgClientApiKeyUsageSink::new(pool.clone());
-    let retention = Arc::new(postgres::PgRetentionRepository::new(pool.clone()));
     let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> =
         Arc::new(client_admissions);
     let circuits: Arc<dyn gateway_core::engine::execution::ProviderCircuitPort> =
@@ -248,7 +253,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         admission_release_writer,
         circuit_feedback_writer,
         capacity_wait_cleanup_writer,
-        retention,
+        log_cleanup,
     )?;
     if let Some((_, capture_writer)) = capture {
         worker_contributions.push(WorkerContribution::Registration(

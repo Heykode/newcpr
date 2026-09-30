@@ -11,6 +11,7 @@ import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
+import SettingsCleanupSection from './components/cleanup/SettingsCleanupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
 import ExcelSettingsCard from './components/ExcelSettingsCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
@@ -26,18 +27,19 @@ const route = useRoute()
 const router = useRouter()
 const configurationScope = ref('common')
 
-type SettingsSection = 'runtime' | 'backup'
+type SettingsSection = 'runtime' | 'backup' | 'cleanup'
 
 const section = computed<SettingsSection>(() =>
-  route.name === 'settings-backup' ? 'backup' : 'runtime',
+  route.name === 'settings-cleanup' ? 'cleanup' : route.name === 'settings-backup' ? 'backup' : 'runtime',
 )
 
 function switchSection(value: string): void {
   const paths: Record<SettingsSection, string> = {
     runtime: '/settings',
     backup: '/settings/backup',
+    cleanup: '/settings/cleanup',
   }
-  const nextSection: SettingsSection = value === 'backup' ? 'backup' : 'runtime'
+  const nextSection: SettingsSection = value === 'cleanup' ? 'cleanup' : value === 'backup' ? 'backup' : 'runtime'
   void router.push(paths[nextSection])
 }
 
@@ -100,6 +102,7 @@ watch(
         :options="[
           { label: '运行设置', value: 'runtime' },
           { label: '备份', value: 'backup' },
+          { label: '日志清理', value: 'cleanup' },
         ]"
         @update:model-value="switchSection"
       />
@@ -197,6 +200,9 @@ watch(
       </div>
     </div>
 
+    <div v-else-if="section === 'cleanup'" class="mt-5">
+      <SettingsCleanupSection />
+    </div>
     <div v-else class="mt-5">
       <SettingsBackupSection :active="section === 'backup'" />
     </div>

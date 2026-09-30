@@ -165,6 +165,7 @@ pub struct AdminServices {
     group_monitor: Arc<dyn GroupMonitorService>,
     relogin: Arc<dyn ReloginService>,
     request_capture: Arc<dyn RequestCaptureService>,
+    log_cleanup: Arc<use_case::log_cleanup::LogCleanupService>,
     outbound_user_agent: Arc<dyn OutboundUserAgentService>,
     proxies: Arc<dyn ProxiesService>,
     egress: Arc<dyn ProviderEgressService>,
@@ -184,6 +185,10 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn log_cleanup(&self) -> &use_case::log_cleanup::LogCleanupService {
+        &self.log_cleanup
+    }
     #[must_use]
     pub fn mihomo(&self) -> Option<&dyn ports::mihomo::MihomoManagement> {
         self.mihomo.as_deref()
@@ -441,6 +446,9 @@ pub async fn initialize(
         relogin: relogin.clone(),
         request_capture: Arc::new(use_case::request_capture::DefaultRequestCaptureService(
             store.request_capture(),
+        )),
+        log_cleanup: Arc::new(use_case::log_cleanup::LogCleanupService(
+            store.log_cleanup(),
         )),
         outbound_user_agent: outbound_user_agent.clone(),
         egress: Arc::new(DefaultProviderEgressService::new(

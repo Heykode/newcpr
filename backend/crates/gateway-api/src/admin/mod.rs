@@ -16,6 +16,7 @@ pub mod client_keys;
 pub mod egress;
 mod extract;
 pub mod group_monitor;
+pub mod log_cleanup;
 pub mod mihomo;
 pub mod notifications;
 pub mod observability;
@@ -44,6 +45,7 @@ where
     Router::new()
         .merge(account_groups::router::<S>())
         .merge(group_monitor::router::<S>())
+        .merge(log_cleanup::router::<S>())
         .merge(proxies::router::<S>())
         .merge(mihomo::router::<S>())
         .merge(relogin::router::<S>())
