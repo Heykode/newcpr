@@ -84,6 +84,12 @@ pub async fn initialize_with_proxy_client_builder<E>(
 
 impl HostBundle {
     #[must_use]
+    pub fn log_file_maintenance(
+        &self,
+    ) -> Arc<dyn gateway_admin::ports::log_cleanup::LogFileMaintenance> {
+        logging::file_maintenance(&self.config.logging)
+    }
+    #[must_use]
     pub fn mihomo_management(&self) -> Arc<dyn gateway_admin::ports::mihomo::MihomoManagement> {
         self.mihomo.clone()
     }

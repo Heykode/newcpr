@@ -84,6 +84,7 @@ mod auth;
 mod client_keys;
 mod egress;
 mod errors;
+mod log_cleanup;
 mod notifications;
 mod observability;
 mod outbound_user_agent;

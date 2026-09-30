@@ -2,6 +2,7 @@
 
 mod control;
 mod filter;
+mod maintenance;
 mod session;
 
 use chrono::Utc;
@@ -266,17 +267,7 @@ impl CaptureManager {
             return Ok(());
         }
         let _io = self.io.lock().await;
-        let days = self
-            .shared
-            .control
-            .read()
-            .map_err(unavailable)?
-            .config
-            .retention_days;
-        sqlx::query("delete from request_capture_records r using request_capture_tasks t where r.task_id=t.id and t.instance_id::text=$1 and t.task->>'scope'='global' and r.created_at < now() - ($2::int * interval '1 day')")
-            .bind(&self.instance_id).bind(i32::from(days)).execute(&self.pool).await.map_err(unavailable)?;
-        sqlx::query("delete from request_capture_tasks where instance_id::text=$1 and expires_at < now() - ($2::int * interval '1 day')")
-            .bind(&self.instance_id).bind(i32::from(days)).execute(&self.pool).await.map_err(unavailable)?;
+        // Retention is owned by log cleanup. Expiry still stops capture sessions.
         sqlx::query("update request_capture_tasks set task=jsonb_set(task,'{status}','\"expired\"') where instance_id::text=$1 and expires_at<=now() and task->>'status'='running'")
             .bind(&self.instance_id).execute(&self.pool).await.map_err(unavailable)?;
         let keep: Vec<String> = sqlx::query_scalar(
@@ -288,7 +279,12 @@ impl CaptureManager {
             .map_err(unavailable)?;
         while let Some(entry) = entries.next_entry().await.map_err(unavailable)? {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".jsonl") && !keep.contains(&name) {
+            if name
+                .strip_suffix(".jsonl")
+                .is_some_and(|id| Uuid::parse_str(id).is_ok())
+                && entry.file_type().await.map_err(unavailable)?.is_file()
+                && !keep.contains(&name)
+            {
                 tokio::fs::remove_file(entry.path())
                     .await
                     .map_err(unavailable)?;
