@@ -288,10 +288,14 @@ where
         AdminEnvelope::ok(AdminLoginData::new(session.expires_at.to_rfc3339())),
     )
     .into_response();
+    let max_age = (session.expires_at - chrono::Utc::now())
+        .num_seconds()
+        .max(0);
     let cookie = format!(
-        "{ADMIN_SESSION_COOKIE}={}; {}",
+        "{ADMIN_SESSION_COOKIE}={}; {}; Max-Age={max_age}; Expires={}",
         session.session_id,
-        admin_session_cookie_attrs(&headers)
+        admin_session_cookie_attrs(&headers),
+        session.expires_at.format("%a, %d %b %Y %H:%M:%S GMT")
     );
     response.headers_mut().insert(
         SET_COOKIE,
