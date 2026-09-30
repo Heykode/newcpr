@@ -1,10 +1,17 @@
 import type { RouteRecordRaw } from 'vue-router'
 
+import SessionRecoveryView from '@/views/session-recovery/index.vue'
+
 export const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'login',
     component: () => import('@/views/login/index.vue'),
+  },
+  {
+    path: '/session-recovery',
+    name: 'session-recovery',
+    component: SessionRecoveryView,
   },
   {
     path: '/',

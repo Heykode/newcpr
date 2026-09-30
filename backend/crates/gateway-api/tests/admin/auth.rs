@@ -220,3 +220,116 @@ async fn change_password_route_requires_session_and_revokes_it_after_commit() {
             .expect("API key unchanged")
     );
 }
+
+#[tokio::test]
+async fn login_cookie_should_persist_until_server_expiry_and_remain_revocable() {
+    use super::AdminTestState;
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::{DateTime, Utc};
+    use tower::ServiceExt as _;
+
+    let fixture = AdminTestFixture::new().await;
+    let app = gateway_api::admin::auth::router::<AdminTestState>()
+        .with_state(AdminTestState(fixture.services.clone()));
+    for (origin, secure) in [
+        (Some("https://admin.example.invalid"), true),
+        (Some("http://localhost"), false),
+        (Some("null"), true),
+        (None, true),
+    ] {
+        let mut login = Request::builder()
+            .method("POST")
+            .uri("/api/admin/auth/login")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(origin) = origin {
+            login = login.header(header::ORIGIN, origin);
+        }
+        let before = Utc::now();
+        let response = app
+            .clone()
+            .oneshot(
+                login
+                    .body(Body::from(
+                        json!({ "password": "strong-admin-password" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let after = Utc::now();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let parts: Vec<_> = cookie.split(';').map(str::trim).collect();
+        assert!(parts.contains(&"Path=/"));
+        assert!(parts.contains(&"HttpOnly"));
+        assert!(parts.contains(&"SameSite=Lax"));
+        assert_eq!(parts.contains(&"Secure"), secure);
+        assert!(!parts.iter().any(|part| part.starts_with("Domain=")));
+        let max_age: i64 = parts
+            .iter()
+            .find_map(|part| part.strip_prefix("Max-Age="))
+            .expect("persistent cookie lifetime")
+            .parse()
+            .unwrap();
+        let cookie_expiry = DateTime::parse_from_rfc2822(
+            parts
+                .iter()
+                .find_map(|part| part.strip_prefix("Expires="))
+                .expect("persistent cookie expiry"),
+        )
+        .unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        let expiry = DateTime::parse_from_rfc3339(body["data"]["expiresAt"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(cookie_expiry.timestamp(), expiry.timestamp());
+        assert!(max_age > 0);
+        assert!(max_age >= (expiry - after).num_seconds());
+        assert!(max_age <= (expiry - before).num_seconds());
+
+        let cookie_pair = parts[0];
+        let status_request = || {
+            Request::builder()
+                .uri("/api/admin/auth/status")
+                .header(header::COOKIE, cookie_pair)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let status = app.clone().oneshot(status_request()).await.unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        assert!(!status.headers().contains_key(header::SET_COOKIE));
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(status.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["data"]["authenticated"], true);
+
+        let logout = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/auth/logout")
+                    .header(header::COOKIE, cookie_pair)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            logout.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        let status = app.clone().oneshot(status_request()).await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(status.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["data"]["authenticated"], false);
+    }
+}

@@ -12,6 +12,9 @@ export const router = createRouter({
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
 
+  if (to.name === 'session-recovery')
+    return
+
   // 登录页面不需要认证
   if (to.path === '/login') {
     // 如果已登录，重定向到首页
@@ -24,8 +27,11 @@ router.beforeEach(async (to) => {
   // 其他页面需要认证
   if (!authStore.isAuthenticated && !authStore.sessionChecked) {
     // 尝试检查认证状态
-    const isAuth = await authStore.checkAuth()
-    if (!isAuth) {
+    const result = await authStore.checkAuth()
+    if (result === 'unavailable') {
+      return { name: 'session-recovery', query: { redirect: to.fullPath } }
+    }
+    if (result === 'unauthenticated') {
       // 未认证，跳转到登录页
       return '/login'
     }
