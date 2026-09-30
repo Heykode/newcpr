@@ -7,9 +7,11 @@ use wiremock::{
 };
 
 use super::{
-    RESPONSES_PATH,
-    recovery::{MAX_BODY_BYTES, MAX_LINE_BYTES, verify_stream},
-    tests::{client, request},
+    super::{
+        RESPONSES_PATH,
+        recovery::{MAX_BODY_BYTES, MAX_LINE_BYTES, verify_stream},
+    },
+    client, request,
 };
 use crate::transport::{
     CodexBackendSseStream, CodexClientError, CodexRequestContext,
