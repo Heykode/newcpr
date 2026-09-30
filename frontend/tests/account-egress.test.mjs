@@ -18,7 +18,7 @@ function load(path, dependencies = {}) {
     exports,
     TextEncoder,
     AbortController,
-    require: name => dependencies[name] ?? (name.startsWith('@/utils/') ? load(`../src/utils/${name.slice('@/utils/'.length)}.ts`, dependencies) : require(name)),
+    require: name => dependencies[name] ?? (name.endsWith('/utils/purchaseCost') ? load('../src/views/accounts/utils/purchaseCost.ts') : name.startsWith('@/utils/') ? load(`../src/utils/${name.slice('@/utils/'.length)}.ts`, dependencies) : require(name)),
   })
   return exports
 }

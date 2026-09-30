@@ -668,6 +668,9 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>();
+                if let Some(cost) = &settings.purchase_cost {
+                    super::purchase_costs::update(&mut transaction, &unique_ids, cost).await?;
+                }
                 update_provider_accounts_scheduling_in_transaction(
                     &mut transaction,
                     &unique_ids,
@@ -928,6 +931,9 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                     group_ids,
                 )
                 .await?;
+            }
+            if let Some(cost) = &command.purchase_cost {
+                super::purchase_costs::update(&mut transaction, &command.account_ids, cost).await?;
             }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;

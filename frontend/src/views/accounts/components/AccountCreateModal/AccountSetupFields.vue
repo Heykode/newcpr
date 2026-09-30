@@ -2,6 +2,7 @@
 import type { AccountCreateForm } from './model'
 import type { AccountGroup } from '@/api'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
+import AccountPurchaseFields from '../AccountPurchaseFields.vue'
 import AccountSettingsFields from '../AccountSettingsFields.vue'
 import AccountProviderChooser from './AccountProviderChooser.vue'
 
@@ -56,5 +57,6 @@ const form = defineModel<AccountCreateForm>({ required: true })
       :disabled="disabled"
       :proxy-error="proxyError"
     />
+    <AccountPurchaseFields v-model:amount="form.purchaseAmount" v-model:cycle-start="form.purchaseCycleStart" importing :disabled="disabled" />
   </div>
 </template>

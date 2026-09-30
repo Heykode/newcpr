@@ -16,7 +16,7 @@ function load(path, dependencies = {}) {
   const { outputText } = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
   })
-  runInNewContext(outputText, { exports, TextEncoder, AbortController, require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
+  runInNewContext(outputText, { exports, TextEncoder, AbortController, require: name => dependencies[name] ?? (name.endsWith('/utils/purchaseCost') ? load('../src/views/accounts/utils/purchaseCost.ts') : name === '@/utils/excel-defaults' ? load('../src/utils/excel-defaults.ts') : require(name)) })
   return exports
 }
 const names = load('../src/utils/account-name.ts')

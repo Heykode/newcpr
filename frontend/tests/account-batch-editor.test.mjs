@@ -80,6 +80,7 @@ function mountEditor(t, options = {}) {
     '../utils/schedulingForm': schedulingForm,
     '@/utils/excel-settings': loadModule(new URL('../src/utils/excel-settings.ts', import.meta.url), { '@/views/accounts/utils/schedulingForm': schedulingForm }),
     '../utils/modelAccess': loadModule(new URL('../src/views/accounts/utils/modelAccess.ts', import.meta.url)),
+    '../utils/purchaseCost': loadModule(new URL('../src/views/accounts/utils/purchaseCost.ts', import.meta.url)),
     '@/utils/account-name': loadModule(new URL('../src/utils/account-name.ts', import.meta.url)),
   })
   const scope = vue.effectScope()
@@ -101,6 +102,7 @@ function mountEditor(t, options = {}) {
 }
 
 function assertNoUpdates(state) {
+  assert.equal(state.updatePurchaseCost.value, false)
   for (const field of updateFields)
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
   assert.equal(state.hasUpdates.value, false)
@@ -108,6 +110,31 @@ function assertNoUpdates(state) {
   assert.equal(state.updateExcel403Action.value, false)
   assert.equal(state.updateExcelIgnoreEncryptedContent.value, false)
 }
+
+test('purchase cost is opt-in, per account, preserves other settings and resets on reopen', async (t) => {
+  const { state, requests, selectedIds } = mountEditor(t)
+  state.open()
+  state.purchaseAmount.value = '50.125'
+  state.purchaseCycleStart.value = '2026-01-31'
+  assert.equal(state.hasUpdates.value, false)
+  state.updatePurchaseCost.value = true
+  await state.save()
+  assert.deepEqual(requests, [{ accountIds: ['account-a'], purchaseCost: { amountCny: '50.125', cycleStart: '2026-01-31' } }])
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  assertNoUpdates(state)
+  assert.equal(state.purchaseAmount.value, '')
+  assert.equal(state.purchaseCycleStart.value, '')
+  state.updatePurchaseCost.value = true
+  await state.save()
+  assert.deepEqual(requests[1], { accountIds: ['account-a'], purchaseCost: { amountCny: null } })
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  state.updatePurchaseCost.value = true
+  state.purchaseAmount.value = '-1'
+  await state.save()
+  assert.equal(requests.length, 2)
+})
 
 test('Account exit selection is independently opted in without changing native proxy or IPv6', async (t) => {
   const { state, requests, selectedIds } = mountEditor(t)

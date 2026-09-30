@@ -45,6 +45,22 @@ export interface AccountCurrencyCost {
   estimatedAmountDisplay: string
 }
 
+export interface AccountPurchaseUpdate {
+  amountCny: string | null
+  cycleStart?: string | null
+}
+
+export interface AccountPurchaseCost {
+  amountCny: string | null
+  cycleAnchor: string | null
+  periodStart: string | null
+  periodEnd: string | null
+  usageUsd: string
+  breakevenCnyPerUsd: string | null
+  historyComplete: boolean
+  historyCompleteFrom: string | null
+}
+
 export interface AccountModelUsage {
   model: string
   requestCount: number
@@ -211,6 +227,7 @@ export interface Account {
   usage: AccountUsage
   // 兼容尚未提供累计消费的旧后端。
   cumulativeCosts?: AccountCurrencyCost[]
+  purchaseCost?: AccountPurchaseCost | null
   healthTimeline: AccountHealthBucket[]
   groups: AccountGroupRef[]
 }
@@ -443,6 +460,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 }
 
 interface AccountUpdateParam {
+  purchaseCost?: AccountPurchaseUpdate
   egressMode?: string | null
   customName?: string | null
   outboundProxyUrl?: string
@@ -465,6 +483,7 @@ interface AccountUpdateParam {
 }
 
 interface AccountBatchUpdateParam {
+  purchaseCost?: AccountPurchaseUpdate
   egressMode?: string | null
   customName?: string | null
   outboundProxyUrl?: string
@@ -492,6 +511,7 @@ interface AccountDeleteParams {
 }
 
 export interface AccountImportSettings {
+  purchaseCost?: AccountPurchaseUpdate
   clearOutboundProxy?: boolean
   egressMode?: string | null
   customName?: string

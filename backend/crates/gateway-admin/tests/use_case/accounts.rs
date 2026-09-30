@@ -650,6 +650,8 @@ pub(super) struct FakeAccountStore {
     quota_learning_estimates: Mutex<Vec<QuotaLearningEstimate>>,
     quota_learning_failure: Mutex<bool>,
     cumulative_costs: Mutex<BTreeMap<String, Vec<AccountCumulativeCost>>>,
+    purchase_costs:
+        Mutex<BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>>,
     cumulative_cost_queries: Mutex<Vec<Vec<String>>>,
     turn_states: Mutex<BTreeMap<String, gateway_admin::model::accounts::AccountTurnStateStatus>>,
     projection_override: Mutex<Option<gateway_core::account::AccountStatus>>,
@@ -679,6 +681,7 @@ impl FakeAccountStore {
             quota_learning_estimates: Mutex::new(Vec::new()),
             quota_learning_failure: Mutex::new(false),
             cumulative_costs: Mutex::new(BTreeMap::new()),
+            purchase_costs: Mutex::new(BTreeMap::new()),
             cumulative_cost_queries: Mutex::new(Vec::new()),
             turn_states: Mutex::default(),
             projection_override: Mutex::default(),
@@ -868,6 +871,19 @@ impl AccountStore for FakeAccountStore {
         Ok(account_ids
             .iter()
             .filter_map(|id| costs.get(id).map(|costs| (id.clone(), costs.clone())))
+            .collect())
+    }
+
+    async fn load_account_purchase_costs(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<
+        BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>,
+    > {
+        let costs = self.purchase_costs.lock().unwrap();
+        Ok(account_ids
+            .iter()
+            .filter_map(|id| costs.get(id).cloned().map(|cost| (id.clone(), cost)))
             .collect())
     }
 
@@ -1804,6 +1820,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
@@ -1853,6 +1870,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
@@ -1907,6 +1925,7 @@ async fn accounts_batch_update_should_commit_once_and_notify_each_provider() {
         .batch_update(
             &context("batch-update-request"),
             BatchUpdateAccounts {
+                purchase_cost: None,
                 egress_mode: None,
                 model_access: Default::default(),
                 custom_name: None,
@@ -2207,6 +2226,21 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
 async fn account_cumulative_costs_should_remain_independent_of_window_usage() {
     let provider = FakeProviderAdmin::new("openai", events());
     let store = FakeAccountStore::new("openai", events());
+    let purchase = gateway_admin::model::account_purchase::AccountPurchaseView {
+        amount_cny: Some("50".into()),
+        cycle_anchor: chrono::NaiveDate::from_ymd_opt(2026, 1, 31),
+        period_start: chrono::NaiveDate::from_ymd_opt(2026, 9, 30),
+        period_end: chrono::NaiveDate::from_ymd_opt(2026, 10, 31),
+        usage_usd: "200".into(),
+        breakeven_cny_per_usd: Some("0.25".into()),
+        history_complete: true,
+        history_complete_from: None,
+    };
+    store
+        .purchase_costs
+        .lock()
+        .unwrap()
+        .insert("acct_test".into(), purchase.clone());
     let reset_at = Utc::now() + TimeDelta::hours(1);
     let mut window_usage = quota_local_usage("acct_test", 4_330_000);
     window_usage.costs = vec![account_cost("USD", "5")];
@@ -2249,6 +2283,7 @@ async fn account_cumulative_costs_should_remain_independent_of_window_usage() {
             .expect("account directory");
         let item = &page.items[0];
         assert_eq!(item.cumulative_costs, costs);
+        assert_eq!(item.purchase_cost, Some(purchase.clone()));
         assert!(item.usage.is_none());
         assert_eq!(
             item.quota.windows[0].local_usage.as_ref(),
@@ -2264,6 +2299,7 @@ async fn account_cumulative_costs_should_remain_independent_of_window_usage() {
                 .await
                 .expect("account quota detail");
             assert_eq!(detail.cumulative_costs, costs);
+            assert_eq!(detail.purchase_cost, Some(purchase.clone()));
             assert!(detail.usage.is_none());
             assert_eq!(detail.quota, item.quota);
         }
@@ -3905,6 +3941,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        purchase_cost: None,
         clear_outbound_proxy: false,
         egress_mode: None,
         model_access: Default::default(),

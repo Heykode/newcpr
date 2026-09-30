@@ -63,6 +63,7 @@ mod admin_queries;
 mod core_adapter;
 mod devices;
 mod mapping;
+mod purchase_costs;
 mod quota_forecast;
 mod quota_learning;
 mod repository;

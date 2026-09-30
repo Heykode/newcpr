@@ -145,6 +145,15 @@ pub trait AccountStore: Send + Sync {
         account_ids: &[String],
     ) -> AdminStoreResult<BTreeMap<String, Vec<AccountCumulativeCost>>>;
 
+    /// Read optional stable-principal monthly costs, independently of provider quota.
+    async fn load_account_purchase_costs(
+        &self,
+        _account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, crate::model::account_purchase::AccountPurchaseView>>
+    {
+        Ok(BTreeMap::new())
+    }
+
     /// Load the short health timeline using five-minute request buckets.
     ///
     /// Stores that do not provide a specialized projection fall back to the

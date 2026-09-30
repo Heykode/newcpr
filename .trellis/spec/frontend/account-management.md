@@ -1,5 +1,20 @@
 # Account Management Contracts
 
+## Monthly Purchase Cost
+
+The `purchaseCost` column follows priority; column preferences migrate from v3 to v4
+once and respect later hiding. Shared fields serve import, single and opt-in batch
+edits. Blank import cost preserves existing metadata; explicit edit clearing sends
+`amountCny: null`. Reopening batch edit resets the opt-in and drafts. Single editing
+compares against the opened snapshot and omits unchanged cost settings.
+
+Use server decimal strings for calculation results. The unit is CNY per USD usage,
+not a dimensionless markup. Unknown cost or no usage displays a dash; known zero
+cost with usage displays zero. Keep the cell numeric-only (or a dash); put cost,
+usage, units, the Shanghai anniversary period and incomplete-history warnings in
+the tooltip. Reuse normal account-list refreshes.
+Never infer principal identity from email or erase usage while editing a price.
+
 ## Unified Account Egress
 
 - `AccountOutboundField` is shared by editing, bulk editing, onboarding and templates.
