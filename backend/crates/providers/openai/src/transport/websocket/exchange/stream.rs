@@ -19,7 +19,9 @@ use super::super::{
     },
 };
 use super::io::{next_websocket_message, reused_stream_receive_error};
-use super::reducer::{ExchangeAction, WebSocketTerminalKind, reduce_websocket_event};
+use super::reducer::{
+    ExchangeAction, WebSocketTerminalKind, parse_websocket_event_documents, reduce_websocket_event,
+};
 use super::{
     CodexWebSocketExchangeError, CodexWebSocketRateLimitUpdates,
     CodexWebSocketResponseMetadataUpdate, CodexWebSocketResponseMetadataUpdates,
@@ -39,6 +41,7 @@ enum StreamWebSocketDiscardReason {
     IncompleteResponse,
     FailedResponse,
     UnexpectedBinaryEvent,
+    TerminalMessageTail,
     PoolShutdown,
     UpstreamClosed,
     UpstreamReceiveFailed,
@@ -52,6 +55,7 @@ impl StreamWebSocketDiscardReason {
             Self::IncompleteResponse => "incomplete_response",
             Self::FailedResponse => "failed_response",
             Self::UnexpectedBinaryEvent => "unexpected_binary_event",
+            Self::TerminalMessageTail => "terminal_message_tail",
             Self::PoolShutdown => "pool_shutdown",
             Self::UpstreamClosed => "upstream_closed",
             Self::UpstreamReceiveFailed => "upstream_receive_failed",
@@ -309,74 +313,55 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             _ => continue,
         };
         trace.capture("upstream.event", raw.as_bytes());
-        let reduced = match reduce_websocket_event(&raw, &mut metadata, &mut continuation) {
-            Ok(reduced) => reduced,
+        let documents = match parse_websocket_event_documents(&raw) {
+            Ok(documents) => documents,
             Err(error) => {
                 drop(active_interrupt.take());
-                let observation =
-                    (!matches!(error.classified(), CodexWebSocketExchangeError::Upstream(_)))
-                        .then(|| connection_observation(&websocket, &error));
+                let observation = connection_observation(&websocket, &error);
+                trace.record(
+                    "upstream.read.failed",
+                    json!({"failureReason": "invalid_event_json"}),
+                );
                 discard_stream_websocket(
                     websocket,
                     pool_return,
                     StreamWebSocketDiscardReason::UpstreamReceiveFailed,
                 )
                 .await;
-                let error = match observation {
-                    Some(observation) => error.with_connection_observation(observation),
-                    None => error,
-                };
-                let _ = tx.send(Err(error)).await;
-                return;
-            }
-        };
-        let observed_at = std::time::SystemTime::now();
-        if let Some(rate_limits) = reduced.error_rate_limits {
-            rate_limit_updates
-                .lock()
-                .await
-                .push(crate::transport::CodexRateLimitObservation {
-                    rate_limits,
-                    observed_at,
-                });
-        }
-        if let Some(event_type) = reduced.diagnostic_event_type {
-            last_event_type = Some(event_type);
-        }
-        if active_interrupt.is_none()
-            && let (Some(control), Some(response_id)) =
-                (&response_control, reduced.created_response_id)
-        {
-            active_interrupt = control.activate(response_id);
-            if let Some(active) = &active_interrupt {
-                interrupt_requested = Box::pin(active.requested());
-            } else {
-                discard_stream_websocket(
-                    websocket,
-                    pool_return,
-                    StreamWebSocketDiscardReason::FailedResponse,
-                )
-                .await;
                 let _ = tx
-                    .send(Err(CodexWebSocketExchangeError::PostSendAmbiguous {
-                        message: "response control already has an active owner".to_owned(),
-                        source: None,
-                    }))
+                    .send(Err(error.with_connection_observation(observation)))
                     .await;
                 return;
             }
-        }
-        if let Some(turn_state) = reduced.turn_state_update {
-            let mut pending = response_metadata_updates.lock().await;
-            if pending.turn_state.is_none() {
-                pending.turn_state = Some(turn_state);
-            }
-        }
-        if let Some(model) = metadata.response_metadata.effective_model.as_deref() {
-            response_metadata_updates.lock().await.reported_model = Some(model.to_owned());
-        }
-        let (frame, terminal) = match reduced.action {
-            ExchangeAction::RateLimits(rate_limits) => {
+        };
+        let mut documents = documents.peekable();
+        while let Some((raw, value)) = documents.next() {
+            let reduced =
+                match reduce_websocket_event(raw, &value, &mut metadata, &mut continuation) {
+                    Ok(reduced) => reduced,
+                    Err(error) => {
+                        drop(active_interrupt.take());
+                        let observation = (!matches!(
+                            error.classified(),
+                            CodexWebSocketExchangeError::Upstream(_)
+                        ))
+                        .then(|| connection_observation(&websocket, &error));
+                        discard_stream_websocket(
+                            websocket,
+                            pool_return,
+                            StreamWebSocketDiscardReason::UpstreamReceiveFailed,
+                        )
+                        .await;
+                        let error = match observation {
+                            Some(observation) => error.with_connection_observation(observation),
+                            None => error,
+                        };
+                        let _ = tx.send(Err(error)).await;
+                        return;
+                    }
+                };
+            let observed_at = std::time::SystemTime::now();
+            if let Some(rate_limits) = reduced.error_rate_limits {
                 rate_limit_updates
                     .lock()
                     .await
@@ -384,57 +369,116 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                         rate_limits,
                         observed_at,
                     });
-                continue;
             }
-            ExchangeAction::Forward { frame, terminal } => (frame, terminal),
-            ExchangeAction::Ignore => continue,
-        };
-        if terminal.is_some() {
-            drop(active_interrupt.take());
-        }
-        if tx.send(Ok(Bytes::from(frame))).await.is_err() {
-            drop(active_interrupt.take());
-            trace.record(
-                "upstream.forward.failed",
-                json!({"reason": "receiver_dropped"}),
-            );
-            discard_stream_websocket(
-                websocket,
-                pool_return,
-                StreamWebSocketDiscardReason::DownstreamSendFailed,
-            )
-            .await;
-            return;
-        }
-        if let Some(terminal) = terminal {
-            trace.record(
-                "upstream.terminal",
-                json!({"kind": format!("{terminal:?}")}),
-            );
-            match terminal {
-                WebSocketTerminalKind::Completed | WebSocketTerminalKind::Interrupted => {
-                    metadata.response_metadata = opening_response_metadata;
-                    finish_stream_websocket(websocket, metadata, continuation, pool_return.take())
-                        .await;
-                }
-                WebSocketTerminalKind::Incomplete => {
-                    discard_stream_websocket(
-                        websocket,
-                        pool_return,
-                        StreamWebSocketDiscardReason::IncompleteResponse,
-                    )
-                    .await;
-                }
-                WebSocketTerminalKind::Failed => {
+            if let Some(event_type) = reduced.diagnostic_event_type {
+                last_event_type = Some(event_type);
+            }
+            if active_interrupt.is_none()
+                && let (Some(control), Some(response_id)) =
+                    (&response_control, reduced.created_response_id)
+            {
+                active_interrupt = control.activate(response_id);
+                if let Some(active) = &active_interrupt {
+                    interrupt_requested = Box::pin(active.requested());
+                } else {
                     discard_stream_websocket(
                         websocket,
                         pool_return,
                         StreamWebSocketDiscardReason::FailedResponse,
                     )
                     .await;
+                    let _ = tx
+                        .send(Err(CodexWebSocketExchangeError::PostSendAmbiguous {
+                            message: "response control already has an active owner".to_owned(),
+                            source: None,
+                        }))
+                        .await;
+                    return;
                 }
             }
-            return;
+            if let Some(turn_state) = reduced.turn_state_update {
+                let mut pending = response_metadata_updates.lock().await;
+                if pending.turn_state.is_none() {
+                    pending.turn_state = Some(turn_state);
+                }
+            }
+            if let Some(model) = metadata.response_metadata.effective_model.as_deref() {
+                response_metadata_updates.lock().await.reported_model = Some(model.to_owned());
+            }
+            let (frame, terminal) = match reduced.action {
+                ExchangeAction::RateLimits(rate_limits) => {
+                    rate_limit_updates.lock().await.push(
+                        crate::transport::CodexRateLimitObservation {
+                            rate_limits,
+                            observed_at,
+                        },
+                    );
+                    continue;
+                }
+                ExchangeAction::Forward { frame, terminal } => (frame, terminal),
+                ExchangeAction::Ignore => continue,
+            };
+            if terminal.is_some() {
+                drop(active_interrupt.take());
+            }
+            if tx.send(Ok(Bytes::from(frame))).await.is_err() {
+                drop(active_interrupt.take());
+                trace.record(
+                    "upstream.forward.failed",
+                    json!({"reason": "receiver_dropped"}),
+                );
+                discard_stream_websocket(
+                    websocket,
+                    pool_return,
+                    StreamWebSocketDiscardReason::DownstreamSendFailed,
+                )
+                .await;
+                return;
+            }
+            if let Some(terminal) = terminal {
+                trace.record(
+                    "upstream.terminal",
+                    json!({"kind": format!("{terminal:?}")}),
+                );
+                if documents.peek().is_some() {
+                    discard_stream_websocket(
+                        websocket,
+                        pool_return,
+                        StreamWebSocketDiscardReason::TerminalMessageTail,
+                    )
+                    .await;
+                    return;
+                }
+                match terminal {
+                    WebSocketTerminalKind::Completed | WebSocketTerminalKind::Interrupted => {
+                        metadata.response_metadata = opening_response_metadata;
+                        finish_stream_websocket(
+                            websocket,
+                            metadata,
+                            continuation,
+                            pool_return.take(),
+                        )
+                        .await;
+                    }
+                    WebSocketTerminalKind::Incomplete => {
+                        discard_stream_websocket(
+                            websocket,
+                            pool_return,
+                            StreamWebSocketDiscardReason::IncompleteResponse,
+                        )
+                        .await;
+                    }
+                    WebSocketTerminalKind::Failed => {
+                        discard_stream_websocket(
+                            websocket,
+                            pool_return,
+                            StreamWebSocketDiscardReason::FailedResponse,
+                        )
+                        .await;
+                    }
+                }
+                return;
+            }
         }
     }
 
@@ -575,6 +619,7 @@ fn exchange_exit_reason(error: &CodexWebSocketExchangeError) -> &'static str {
         CodexWebSocketExchangeError::StreamEndedBeforeTerminal { reason, .. } => reason,
         CodexWebSocketExchangeError::ReceiveIdleTimeout { .. } => "receive_idle_timeout",
         CodexWebSocketExchangeError::UnexpectedBinaryEvent => "unexpected_binary_event",
+        CodexWebSocketExchangeError::InvalidEventJson => "invalid_event_json",
         _ => "exchange_failure",
     }
 }

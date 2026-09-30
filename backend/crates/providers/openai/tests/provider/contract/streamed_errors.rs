@@ -67,11 +67,23 @@ async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_heal
                 event.unwrap();
             }
         }
+        // This test advances 56 seconds of keepalive time. Its request deadline
+        // must not race the Pong timeout whose classification is under test.
+        let keepalive_context = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_pong_exit").unwrap(),
+                ClientApiKeyId::new("key_openai_contract").unwrap(),
+            ),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(120),
+            account_policy(),
+            AccountAttemptContext::new(BTreeSet::new(), None, None)
+                .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        );
         let mut stream = provider
-            .execute(
-                planned_request("openai", operation),
-                context("req_pong_exit", CancellationToken::new()),
-            )
+            .execute(planned_request("openai", operation), keepalive_context)
             .await
             .unwrap();
         let mut pool_kind = None;
@@ -112,7 +124,13 @@ async fn websocket_pong_exit_diagnosis_preserves_ambiguous_send_and_account_heal
         tokio::time::resume();
         server.abort();
         let _ = server.await;
-        assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
+        assert_eq!(
+            error.send_state(),
+            UpstreamSendState::Ambiguous,
+            "reuse={reuse}; kind={:?}; diagnostic={:?}",
+            error.kind(),
+            error.diagnostic(),
+        );
         assert!(!error.replay_is_safe());
         assert_eq!(error.pre_delivery_retry(), None);
         assert_eq!(error.kind(), ProviderErrorKind::Transport);

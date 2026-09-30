@@ -255,6 +255,7 @@ async fn collect_backend_response(
 ) -> CodexClientResult<CollectedBackendResponse> {
     let CodexBackendStreamingResponse {
         mut body,
+        precommit_started_at: _,
         transport,
         websocket_connection_id: _,
         mut turn_state,

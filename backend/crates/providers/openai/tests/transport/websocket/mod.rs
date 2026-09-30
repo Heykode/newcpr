@@ -4,6 +4,7 @@ use provider_openai::transport::{
     websocket::write_websocket_audit_artifact_for_dir,
 };
 
+mod compatibility;
 mod diagnostics;
 mod fingerprint;
 mod fixture;
