@@ -374,8 +374,15 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
             .unwrap();
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-    let after: Value =
-        sqlx::query_scalar("select to_jsonb(mr) - 'billing_snapshot_json' from model_requests mr")
+    let after: Value = sqlx::query_scalar(
+        "select to_jsonb(mr) - 'billing_snapshot_json' - 'purchase_identity_id'
+         from model_requests mr",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    let purchase_identity_id: Option<i64> =
+        sqlx::query_scalar("select purchase_identity_id from model_requests")
             .fetch_one(&database.pool)
             .await
             .unwrap();
@@ -391,6 +398,10 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
             .unwrap();
     assert_eq!(before, after);
     assert_eq!(costs_before, costs_after);
+    assert!(
+        purchase_identity_id.is_none(),
+        "legacy records without an account identity must not gain a purchase identity"
+    );
     assert!(
         snapshot.is_none(),
         "legacy records must not fabricate a pricing flag"
