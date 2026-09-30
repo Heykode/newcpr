@@ -43,13 +43,14 @@ test('unresolved workspace is unknown rather than a misleading zero', async () =
   assert.match(html, /未确定对应号池账号/)
 })
 
-test('account count column is sortable and follows last use and priority', () => {
+test('account count column is sortable and follows last use, priority and breakeven cost', () => {
   const columns = load(new URL('../src/views/accounts/constants.ts', import.meta.url), {
     '@/components/base/BaseTable/columns': { defineTableColumns: value => value },
   }).accountColumns
   const index = columns.findIndex(column => column.key === 'reloginCount')
-  assert.equal(columns[index - 2].key, 'lastUsedAt')
-  assert.equal(columns[index - 1].key, 'weight')
+  assert.equal(columns[index - 3].key, 'lastUsedAt')
+  assert.equal(columns[index - 2].key, 'weight')
+  assert.equal(columns[index - 1].key, 'purchaseCost')
   assert.equal(columns[index + 1].key, 'addedAt')
   assert.equal(columns[index].sortable, true)
 })
