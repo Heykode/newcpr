@@ -23,6 +23,7 @@ pub use gateway_core::account::{
 /// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {
+    pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub clear_outbound_proxy: bool,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     pub custom_name: Option<String>,
@@ -362,6 +363,7 @@ pub struct AccountSummary {
 /// 账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccount {
+    pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     pub custom_name: Option<Option<String>>,
     pub account_id: String,
@@ -393,6 +395,7 @@ pub struct AccountUpdateResult {
 /// 一批账号可编辑事实的一次性替换命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchUpdateAccounts {
+    pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     pub custom_name: Option<Option<String>>,
     pub account_ids: Vec<String>,

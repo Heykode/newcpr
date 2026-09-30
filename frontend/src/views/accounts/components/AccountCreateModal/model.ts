@@ -6,6 +6,7 @@ import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelSettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../../utils/modelAccess'
+import { purchaseCostPatch } from '../../utils/purchaseCost'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
 
 export type AccountCreateProvider = 'batch' | 'openai' | 'xai'
@@ -13,6 +14,8 @@ export type AccountImportMode = 'oauth' | 'access_token' | 'refresh_token' | 'js
 export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
+  purchaseAmount: string
+  purchaseCycleStart: string
   customName: string
   provider: AccountCreateProvider | ''
   enabled: boolean
@@ -41,6 +44,8 @@ export interface AccountCreateForm {
 
 export function emptyAccountCreateForm(): AccountCreateForm {
   return {
+    purchaseAmount: '',
+    purchaseCycleStart: '',
     customName: '',
     provider: '',
     enabled: true,
@@ -88,6 +93,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
   const { requestProxySource, egressMode, outboundProxyId } = accountEgressPatch(form, provider === 'openai')
   return {
     ...(outboundProxyId === '' ? { clearOutboundProxy: true } : {}),
+    ...(form.purchaseAmount.trim() ? { purchaseCost: purchaseCostPatch(form.purchaseAmount, form.purchaseCycleStart) } : {}),
     ...(customName ? { customName } : {}),
     enabled: form.enabled,
     ...(requestProxySource === undefined ? {} : { requestProxySource }),

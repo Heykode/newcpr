@@ -13,6 +13,7 @@ import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { accountExcel403Action } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
+import { purchaseCostPatch, trimAmount } from '../utils/purchaseCost'
 import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
@@ -25,6 +26,9 @@ export function useAccountEditor(options: {
   const showEditModal = shallowRef(false)
   const editingAccountId = shallowRef<string | null>(null)
   const customName = shallowRef('')
+  const purchaseAmount = shallowRef('')
+  const purchaseCycleStart = shallowRef('')
+  let initialPurchase = ''
   let initialCustomName = ''
   const schedulingEnabled = shallowRef(true)
   const excelEnabled = shallowRef(false)
@@ -97,6 +101,9 @@ export function useAccountEditor(options: {
   onScopeDispose(() => egressController?.abort())
 
   function open(account: AccountRow) {
+    purchaseAmount.value = trimAmount(account.purchaseCost?.amountCny ?? '')
+    purchaseCycleStart.value = account.purchaseCost?.cycleAnchor ?? ''
+    initialPurchase = JSON.stringify([purchaseAmount.value, purchaseCycleStart.value])
     editingAccountId.value = account.id
     customName.value = account.customName ?? ''
     initialCustomName = customName.value
@@ -161,6 +168,8 @@ export function useAccountEditor(options: {
         groupIds: [...new Set(selectedGroupIds.value)],
       }
       const name = normalizeAccountName(customName.value)
+      if (JSON.stringify([purchaseAmount.value, purchaseCycleStart.value]) !== initialPurchase)
+        payload.purchaseCost = purchaseCostPatch(purchaseAmount.value, purchaseCycleStart.value)
       if (name !== normalizeAccountName(initialCustomName))
         payload.customName = name
       if (modelAccess.value && JSON.stringify(modelAccess.value) !== initialModelAccess)
@@ -218,6 +227,8 @@ export function useAccountEditor(options: {
   })
 
   return {
+    purchaseAmount,
+    purchaseCycleStart,
     customName,
     showEditModal,
     editingAccount,

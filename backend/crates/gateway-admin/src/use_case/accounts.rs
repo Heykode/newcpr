@@ -350,11 +350,12 @@ impl DefaultAccountsService {
             end: now,
         };
         let ids = vec![account.id.clone()];
-        let (rolling_usage, health_usage, mut cumulative_costs) = futures::try_join!(
+        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) = futures::try_join!(
             self.accounts.load_account_usage(rolling_range, &ids),
             self.accounts
                 .load_account_health_timeline(account_health_range(now), &ids),
             self.accounts.load_account_cumulative_costs(&ids),
+            self.accounts.load_account_purchase_costs(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
         let rolling_usage = rolling_usage.into_iter().next();
@@ -387,6 +388,7 @@ impl DefaultAccountsService {
             .and_then(|(window, _)| window.local_usage.clone());
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
+            purchase_cost: purchase_costs.remove(account_id.as_str()),
             turn_state: None,
             effective_concurrency_limit: stored
                 .account
@@ -448,11 +450,12 @@ impl AccountsService for DefaultAccountsService {
             .iter()
             .map(|item| item.account.id.clone())
             .collect::<Vec<_>>();
-        let (rolling_usage, health_usage, mut cumulative_costs) = futures::try_join!(
+        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) = futures::try_join!(
             self.accounts.load_account_usage(rolling_range, &ids),
             self.accounts
                 .load_account_health_timeline(account_health_range(now), &ids),
             self.accounts.load_account_cumulative_costs(&ids),
+            self.accounts.load_account_purchase_costs(&ids),
         )
         .map_err(|error| map_store_error(error, "account usage"))?;
         let rolling_usage = rolling_usage
@@ -518,6 +521,7 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
+                    purchase_cost: purchase_costs.remove(&item.account.id),
                     turn_state: None,
                     effective_concurrency_limit: item
                         .account
@@ -648,6 +652,7 @@ impl AccountsService for DefaultAccountsService {
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
+                        purchase_cost: None,
                         egress_mode: None,
                         model_access: None,
                         custom_name: None,

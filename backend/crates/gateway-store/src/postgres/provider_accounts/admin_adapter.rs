@@ -287,6 +287,9 @@ impl PgAdminAccountStore {
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut changed_fields = vec!["credentials".to_owned()];
         if let Some(settings) = &settings {
+            if settings.purchase_cost.is_some() {
+                changed_fields.push("purchase_cost".to_owned());
+            }
             if settings.clear_outbound_proxy {
                 changed_fields.push("outbound_proxy".to_owned());
             }
@@ -769,6 +772,21 @@ impl AccountStore for PgAdminAccountStore {
         Ok(costs)
     }
 
+    async fn load_account_purchase_costs(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<std::collections::BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>> {
+        let mut costs = BTreeMap::new();
+        for ids in account_ids.chunks(ADMIN_USAGE_CHUNK_SIZE) {
+            validate_admin_account_ids(ids).map_err(|error| admin_store_error(ENTITY, error))?;
+            costs.extend(self.query_budget.run(
+                "load account purchase costs",
+                super::purchase_costs::load(&self.pool, ids),
+            ).await.map_err(|error| admin_store_error(ENTITY, error))?);
+        }
+        Ok(costs)
+    }
+
     async fn load_account_usage_by_windows(
         &self,
         windows: &[AccountUsageWindowQuery],
@@ -1137,12 +1155,16 @@ impl AccountStore for PgAdminAccountStore {
         if command.custom_name.is_some() {
             changed_fields.push("custom_name".to_owned());
         }
+        if command.purchase_cost.is_some() {
+            changed_fields.push("purchase_cost".to_owned());
+        }
         if command.model_access.is_some() {
             changed_fields.push("model_access".to_owned());
         }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,
                 custom_name: command.custom_name,
                 account_ids: vec![command.account_id.clone()],
@@ -1239,6 +1261,7 @@ impl AccountStore for PgAdminAccountStore {
         };
         let mut changed_fields = Vec::new();
         for (changed, field) in [
+            (command.purchase_cost.is_some(), "purchase_cost"),
             (
                 command.request_proxy_source.is_some(),
                 "request_proxy_source",
@@ -1288,6 +1311,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,
                 custom_name: command.custom_name,
                 account_ids: command.account_ids,

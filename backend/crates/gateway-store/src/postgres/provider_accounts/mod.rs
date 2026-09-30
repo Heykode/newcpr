@@ -60,6 +60,7 @@ use super::{
 
 mod admin_adapter;
 mod admin_queries;
+mod purchase_costs;
 mod core_adapter;
 mod devices;
 mod mapping;

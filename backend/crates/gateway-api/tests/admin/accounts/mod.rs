@@ -2,6 +2,8 @@ mod handlers;
 mod import_tasks;
 mod presenter;
 
+mod purchase_costs;
+
 mod personal_info {
     use chrono::{TimeZone as _, Utc};
     use gateway_admin::model::{
@@ -1700,6 +1702,7 @@ mod response {
         let now = Utc::now();
         let quota = QuotaState::allowed(now.into());
         AccountDirectoryItem {
+            purchase_cost: None,
             turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {

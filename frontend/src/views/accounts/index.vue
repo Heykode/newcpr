@@ -31,6 +31,7 @@ import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountImportTasks from './components/AccountImportTasks/index.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
+import AccountPurchaseCell from './components/AccountPurchaseCell.vue'
 import AccountQuotaForecastModal from './components/AccountQuotaForecastModal/index.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
@@ -243,6 +244,9 @@ const {
 const {
   showBatchEditModal,
   customName: batchCustomName,
+  purchaseAmount: batchPurchaseAmount,
+  purchaseCycleStart: batchPurchaseCycleStart,
+  updatePurchaseCost: batchUpdatePurchaseCost,
   updateCustomName: batchUpdateCustomName,
   excelAvailable: batchExcelAvailable,
   requestProxyAvailable: batchRequestProxyAvailable,
@@ -287,6 +291,8 @@ const {
 const {
   showEditModal,
   customName: editingCustomName,
+  purchaseAmount: editingPurchaseAmount,
+  purchaseCycleStart: editingPurchaseCycleStart,
   editingAccount,
   schedulingEnabled,
   excelEnabled,
@@ -547,6 +553,10 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
               <ReloginCountCell :count="row.reloginCount" :last-relogin-at="row.lastReloginAt" />
             </template>
 
+            <template #purchaseCost="{ row }">
+              <AccountPurchaseCell :cost="row.purchaseCost" />
+            </template>
+
             <template #actions="{ row }">
               <AccountTableActions
                 :account="row"
@@ -664,6 +674,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     />
 
     <AccountEditModal
+      v-model:purchase-amount="editingPurchaseAmount"
+      v-model:purchase-cycle-start="editingPurchaseCycleStart"
       v-model:custom-name="editingCustomName"
       v-model="showEditModal"
       v-model:enabled="schedulingEnabled"
@@ -690,6 +702,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     />
 
     <AccountBatchEditModal
+      v-model:purchase-amount="batchPurchaseAmount"
+      v-model:purchase-cycle-start="batchPurchaseCycleStart"
+      v-model:update-purchase-cost="batchUpdatePurchaseCost"
       v-model:custom-name="batchCustomName"
       v-model:update-custom-name="batchUpdateCustomName"
       v-model="showBatchEditModal"

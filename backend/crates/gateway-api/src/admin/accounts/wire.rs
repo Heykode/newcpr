@@ -69,6 +69,7 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
@@ -126,6 +127,9 @@ impl From<AccountsUpdateResult> for BatchUpdatedAccountsData {
 
 impl BatchUpdateAccountsRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if let Some(cost) = &self.purchase_cost {
+            cost.validate().map_err(|_| WireValidationError::new("purchaseCost"))?;
+        }
         if let Some(value) = &self.custom_name {
             super::credentials::parse_custom_name(value.as_deref())?;
         }
@@ -152,7 +156,8 @@ impl BatchUpdateAccountsRequest {
             self.outbound_proxy_id.clone(),
             self.outbound_proxy_url.clone(),
         )?;
-        if self.custom_name.is_none()
+        if self.purchase_cost.is_none()
+            && self.custom_name.is_none()
             && self.egress_mode.is_none()
             && self.enabled.is_none()
             && self.turn_state_injection_enabled.is_none()
@@ -179,6 +184,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,
             custom_name: self
                 .custom_name
@@ -393,6 +399,7 @@ pub struct AccountView {
     pub quota: AccountQuotaView,
     pub usage: AccountUsageView,
     pub cumulative_costs: Vec<CurrencyCostView>,
+    pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
