@@ -32,6 +32,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
         request_id: "excel-exit-regression".into(),
     };
     let patch = BatchUpdateAccounts {
+        excel_recovery: None,
         purchase_cost: None,
         account_ids: vec![id.as_str().into()],
         request_proxy_source: Some(RequestProxySource::Mihomo),
@@ -68,6 +69,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 responses_upstream: Some(ResponsesUpstream::Excel),
                 request_proxy_source: None,
@@ -99,6 +101,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 responses_upstream: Some(ResponsesUpstream::Codex),
                 request_proxy_source: None,
@@ -117,6 +120,7 @@ async fn request_proxy_source_roundtrip_preserves_native_egress_and_identity() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 responses_upstream: None,
                 request_proxy_source: Some(RequestProxySource::ProxyPool),
@@ -364,6 +368,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
         request_id: "excel-global".into(),
     };
     let patch = BatchUpdateAccounts {
+        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         account_ids: vec!["acct_excel_global".into(), "acct_excel_custom".into()],
@@ -391,6 +396,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models: Some(
@@ -443,6 +449,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(true),
@@ -516,6 +523,7 @@ async fn excel_global_models_resolve_without_rewriting_credentials_or_custom_lis
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 account_ids: vec!["acct_excel_custom".into()],
                 excel_models_follow_global: Some(false),
@@ -575,6 +583,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     ).fetch_one(&database.pool).await.unwrap();
     let store = admin_account_store(&database.pool);
     let command = BatchUpdateAccounts {
+        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         account_ids: vec!["acct_excel".into()],
@@ -667,6 +676,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 responses_upstream: None,
                 excel_ignore_encrypted_content: Some(false),
@@ -692,6 +702,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 responses_upstream: None,
                 excel_models_follow_global: Default::default(),
@@ -749,6 +760,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 responses_upstream: None,
                 excel_models: None,
@@ -798,6 +810,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 enabled: Some(true),
                 ..command.clone()
@@ -831,6 +844,7 @@ async fn excel_patch_is_account_local_preserves_credentials_and_omission() {
     store
         .batch_update_accounts(
             BatchUpdateAccounts {
+                excel_recovery: None,
                 purchase_cost: None,
                 responses_upstream: Some(ResponsesUpstream::Codex),
                 excel_models_follow_global: Default::default(),

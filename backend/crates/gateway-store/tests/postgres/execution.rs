@@ -374,7 +374,7 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
             .unwrap();
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
-    let after: Value =
+    let mut after: Value =
         sqlx::query_scalar("select to_jsonb(mr) - 'billing_snapshot_json' from model_requests mr")
             .fetch_one(&database.pool)
             .await
@@ -389,6 +389,14 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
             .fetch_one(&database.pool)
             .await
             .unwrap();
+    assert_eq!(
+        after
+            .as_object_mut()
+            .unwrap()
+            .remove("purchase_identity_id"),
+        Some(Value::Null),
+        "unbound legacy requests must not acquire a purchase identity"
+    );
     assert_eq!(before, after);
     assert_eq!(costs_before, costs_after);
     assert!(

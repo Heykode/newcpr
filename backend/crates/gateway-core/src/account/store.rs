@@ -117,6 +117,14 @@ pub trait ProviderAccountStore: Send + Sync {
         Ok(false)
     }
 
+    async fn apply_excel_403_action_for_model(
+        &self,
+        account: &ProviderAccount,
+        _model: &str,
+    ) -> Result<bool, StoreError> {
+        self.apply_excel_403_action(account).await
+    }
+
     async fn set_enabled(
         &self,
         account: &ProviderAccountId,

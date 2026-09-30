@@ -489,6 +489,7 @@ mod provider {
             last_error_message: None,
         };
         AccountDirectoryItem {
+            excel_recovery: None,
             purchase_cost: None,
             turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),

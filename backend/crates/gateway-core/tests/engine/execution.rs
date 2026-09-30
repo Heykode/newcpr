@@ -1222,6 +1222,7 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
         complete: bool,
         probe: bool,
         retest: bool,
+        recovery: bool,
     }
     #[async_trait]
     impl Provider for QualityProvider {
@@ -1243,7 +1244,21 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
         ) -> Result<ProviderStream, ProviderError> {
             assert!(!context.is_diagnostic_required_account());
             assert!(context.is_quality_check());
-            assert_eq!(context.is_quality_retest(), self.retest || self.probe);
+            assert_eq!(
+                context.is_quality_retest(),
+                self.retest || self.probe || self.recovery
+            );
+            assert_eq!(
+                context.excel_recovery_revision(),
+                self.recovery.then_some(7)
+            );
+            let Operation::Generate(generate) = request.operation() else {
+                panic!("generate");
+            };
+            assert_eq!(
+                generate.excel_recovery_nonce(),
+                self.recovery.then_some("fixture answer")
+            );
             assert_eq!(context.is_native_quality_probe(), self.probe);
             assert_eq!(context.required_account().unwrap().as_str(), "acct_start");
             let scope = context.account_scope().expect("quality account scope");
@@ -1311,15 +1326,17 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
         }
     }
     let cases = [
-        (true, false, false),
-        (false, false, false),
-        (true, false, true),
-        (false, false, true),
-        (true, true, true),
-        (false, true, true),
+        (true, false, false, false),
+        (false, false, false, false),
+        (true, false, true, false),
+        (false, false, true, false),
+        (true, true, true, false),
+        (false, true, true, false),
+        (true, false, true, true),
+        (false, false, true, true),
     ]
     .into_iter()
-    .flat_map(|(complete, probe, retest)| {
+    .flat_map(|(complete, probe, retest, recovery)| {
         [
             AccountModelAccess::all(),
             AccountModelAccess::new(AccountModelAccessMode::Allowlist, vec!["gpt-other".into()])
@@ -1327,14 +1344,15 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["gpt-start".into()])
                 .unwrap(),
         ]
-        .map(|policy| (complete, probe, retest, policy))
+        .map(|policy| (complete, probe, retest, recovery, policy))
     });
-    for (complete, probe, retest, model_access) in cases {
+    for (complete, probe, retest, recovery, model_access) in cases {
         let store = Arc::new(TrackingExecutionStore::default());
         let providers = ProviderRegistry::new([Arc::new(QualityProvider {
             complete,
             probe,
             retest,
+            recovery,
         }) as Arc<dyn Provider>])
         .unwrap();
         let target = ProviderAccountId::new("acct_start").unwrap();
@@ -1396,7 +1414,9 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             );
         } else {
             let cancellation = gateway_core::lifecycle::CancellationToken::new();
-            let result = block_on(if retest {
+            let result = block_on(if recovery {
+                service.excel_recovery(request, 7, 1, "fixture answer".into(), cancellation)
+            } else if retest {
                 service.quality_retest(request, cancellation)
             } else {
                 service.quality_check(request, cancellation)

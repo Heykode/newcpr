@@ -1,6 +1,6 @@
 import type { QualityRuleConfig } from '@/api/modules/quality-ops'
 
-export const DEFAULT_QUALITY_INTERVAL_SECONDS = 60
+export const DEFAULT_QUALITY_INTERVAL_SECONDS = 120
 export const MIN_QUALITY_INTERVAL_SECONDS = 5
 export const MAX_QUALITY_INTERVAL_SECONDS = 31_536_000
 

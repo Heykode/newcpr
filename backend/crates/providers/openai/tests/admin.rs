@@ -700,6 +700,38 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
             .and_then(Value::as_bool),
         Some(false)
     );
+    let recovery_operation = admin
+        .excel_recovery_operation(
+            &UpstreamModelId::new("gpt-5.4").expect("upstream model"),
+            "Reply with exactly this nonce and nothing else: fixture",
+        )
+        .expect("Excel recovery operation");
+    let Operation::Generate(recovery_request) = recovery_operation else {
+        panic!("Excel recovery must be a generate operation");
+    };
+    let recovery_encoded =
+        provider_openai::encode_generate_request(&recovery_request, "gpt-5.4", &Default::default())
+            .expect("Excel recovery request");
+    assert_eq!(
+        recovery_encoded
+            .body()
+            .get("reasoning")
+            .and_then(|value| value.get("effort"))
+            .and_then(Value::as_str),
+        Some("low")
+    );
+    assert!(
+        !non_stream_request
+            .protocol_payload()
+            .body()
+            .contains_key("reasoning")
+    );
+    assert!(
+        !non_stream_request
+            .protocol_payload()
+            .body()
+            .contains_key("reasoning_effort")
+    );
     let completions_error = admin
         .connection_test_operation_with_options(
             &UpstreamModelId::new("gpt-5.4").expect("upstream model"),

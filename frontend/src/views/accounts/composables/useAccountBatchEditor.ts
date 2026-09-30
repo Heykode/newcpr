@@ -10,7 +10,7 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { accountEgressPatch } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS, DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { accountExcel403Action } from '@/utils/excel-settings'
+import { accountExcel403Action, excelRecoverySettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../utils/modelAccess'
 import { purchaseCostPatch } from '../utils/purchaseCost'
 import { concurrencyLimitInput, parseAccountSchedulingForm, parseExcelModels } from '../utils/schedulingForm'
@@ -40,6 +40,9 @@ export function useAccountBatchEditor(options: {
   const excelIgnoreEncryptedContent = shallowRef(false)
   const requestProxySource = shallowRef<import('@/utils/request-proxy-source').RequestProxySource>('account')
   const excel403Action = shallowRef<Excel403Action>('none')
+  const excelRecoveryEnabled = shallowRef(false)
+  const excelRecoveryInterval = shallowRef('60')
+  const updateExcelRecovery = ref(false)
   const updateExcelCacheCreationAsInput = ref(false)
   const updateExcelIgnoreEncryptedContent = ref(false)
   const updateExcel403Action = ref(false)
@@ -68,6 +71,7 @@ export function useAccountBatchEditor(options: {
     || (excelAvailable.value && updateExcelCacheCreationAsInput.value)
     || (excelAvailable.value && updateExcelIgnoreEncryptedContent.value)
     || (excelAvailable.value && updateExcel403Action.value)
+    || (excelAvailable.value && updateExcelRecovery.value)
     || updateConcurrencyLimit.value
     || updateWeight.value
     || updateModelAccess.value
@@ -88,6 +92,7 @@ export function useAccountBatchEditor(options: {
     updateExcelCacheCreationAsInput.value = false
     updateExcelIgnoreEncryptedContent.value = false
     updateExcel403Action.value = false
+    updateExcelRecovery.value = false
     updateConcurrencyLimit.value = false
     updateWeight.value = false
     updateModelAccess.value = false
@@ -113,6 +118,8 @@ export function useAccountBatchEditor(options: {
     excelIgnoreEncryptedContent.value = accounts.every(account => account.excelIgnoreEncryptedContent ?? false)
     requestProxySource.value = accounts[0]?.requestProxySource ?? 'account'
     excel403Action.value = accounts[0] ? accountExcel403Action(accounts[0]) : 'none'
+    excelRecoveryEnabled.value = accounts.every(account => account.excelRecovery?.enabled ?? false)
+    excelRecoveryInterval.value = String(accounts[0]?.excelRecovery?.intervalMinutes ?? 60)
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -173,6 +180,8 @@ export function useAccountBatchEditor(options: {
         payload.excelIgnoreEncryptedContent = !(updateExcelEnabled.value && !excelEnabled.value) && excelIgnoreEncryptedContent.value
       if (excelAvailable.value && updateExcel403Action.value)
         payload.excel403Action = excel403Action.value
+      if (excelAvailable.value && updateExcelRecovery.value)
+        payload.excelRecovery = excelRecoverySettings(excelRecoveryEnabled.value, excelRecoveryInterval.value)
       if (excelAvailable.value && updateExcelModels.value && models !== null) {
         payload.excelModelsFollowGlobal = excelModelsFollowGlobal.value
         if (!excelModelsFollowGlobal.value)
@@ -261,6 +270,9 @@ export function useAccountBatchEditor(options: {
     excelIgnoreEncryptedContent,
     requestProxySource,
     excel403Action,
+    excelRecoveryEnabled,
+    excelRecoveryInterval,
+    updateExcelRecovery,
     updateExcelCacheCreationAsInput,
     updateExcelIgnoreEncryptedContent,
     updateExcel403Action,

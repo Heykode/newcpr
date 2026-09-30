@@ -69,6 +69,7 @@ pub(super) struct ApplyAccountTemplateRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchUpdateAccountsRequest {
+    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(default, deserialize_with = "deserialize_optional_nullable")]
     pub egress_mode: Option<Option<gateway_core::provider_ports::egress::EgressMode>>,
@@ -157,7 +158,8 @@ impl BatchUpdateAccountsRequest {
             self.outbound_proxy_id.clone(),
             self.outbound_proxy_url.clone(),
         )?;
-        if self.purchase_cost.is_none()
+        if self.excel_recovery.is_none()
+            && self.purchase_cost.is_none()
             && self.custom_name.is_none()
             && self.egress_mode.is_none()
             && self.enabled.is_none()
@@ -185,6 +187,7 @@ impl BatchUpdateAccountsRequest {
     pub(super) fn into_command(self) -> Result<BatchUpdateAccounts, WireValidationError> {
         self.validate()?;
         Ok(BatchUpdateAccounts {
+            excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,
             custom_name: self
@@ -400,6 +403,7 @@ pub struct AccountView {
     pub quota: AccountQuotaView,
     pub usage: AccountUsageView,
     pub cumulative_costs: Vec<CurrencyCostView>,
+    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryView>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseView>,
 }
 

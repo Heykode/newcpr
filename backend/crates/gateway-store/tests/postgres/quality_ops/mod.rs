@@ -24,6 +24,7 @@ fn config(account: &str) -> QualityRuleConfig {
     QualityRuleConfig {
         failure_template: None,
         excel_failure_threshold: 1,
+        excel_recovery_threshold: None,
         detection_mode: QualityDetectionMode::Answer,
         account_id: account.into(),
         model: "fixture-model".into(),
@@ -713,6 +714,7 @@ async fn quality_account_rename_keeps_recovery_ownership() {
     super::admin_account_store(&db.pool)
         .update_account(
             UpdateAccount {
+                excel_recovery: None,
                 purchase_cost: None,
                 egress_mode: None,
                 account_id: "acct_quality_a".into(),

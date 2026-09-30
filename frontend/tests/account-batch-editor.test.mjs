@@ -102,6 +102,7 @@ function mountEditor(t, options = {}) {
 }
 
 function assertNoUpdates(state) {
+  assert.equal(state.updateExcelRecovery.value, false)
   assert.equal(state.updatePurchaseCost.value, false)
   for (const field of updateFields)
     assert.equal(state[field].value, false, `${field} must require a fresh opt-in`)
@@ -110,6 +111,28 @@ function assertNoUpdates(state) {
   assert.equal(state.updateExcel403Action.value, false)
   assert.equal(state.updateExcelIgnoreEncryptedContent.value, false)
 }
+
+test('Excel recovery batch requires an explicit fresh opt-in and never changes scheduling or route', async (t) => {
+  const { state, requests, selectedIds } = mountEditor(t)
+  state.open()
+  state.excelRecoveryEnabled.value = true
+  state.excelRecoveryInterval.value = '5'
+  assert.equal(state.hasUpdates.value, false)
+  state.updateExcelRecovery.value = true
+  await state.save()
+  assert.deepEqual(requests, [{ accountIds: ['account-a'], excelRecovery: { enabled: true, intervalMinutes: 5 } }])
+  selectedIds.value = new Set(['account-a'])
+  state.open()
+  assertNoUpdates(state)
+  state.updateExcelRecovery.value = true
+  state.excelRecoveryInterval.value = '0'
+  await state.save()
+  assert.equal(requests.length, 1)
+  state.excelRecoveryInterval.value = '10080'
+  state.excelRecoveryEnabled.value = false
+  await state.save()
+  assert.deepEqual(requests[1].excelRecovery, { enabled: false, intervalMinutes: 10080 })
+})
 
 test('purchase cost is opt-in, per account, preserves other settings and resets on reopen', async (t) => {
   const { state, requests, selectedIds } = mountEditor(t)

@@ -92,6 +92,7 @@ test('templates roundtrip scheduling, groups and proxy without sharing mutable a
     excelCacheCreationAsInput: true,
     excelIgnoreEncryptedContent: false,
     excel403Action: 'none',
+    excelRecovery: { enabled: false, intervalMinutes: 60 },
     concurrencyLimit: null,
     weight: 1,
     groupIds: [],
@@ -118,6 +119,19 @@ test('IPv6 templates distinguish preserve, inherit and all existing modes', () =
   assert.equal(inherit.requestProxySource, 'account')
   assert.equal(inherit.preserveOutboundProxy, false)
   assert.equal(inherit.outboundProxyId, null)
+})
+
+test('recovery templates preserve legacy omissions and explicitly roundtrip enabled or disabled', () => {
+  const legacy = templateForm({ name: 'Legacy Excel', responsesUpstream: 'excel' })
+  assert.equal('excelRecovery' in templateConfig(legacy), false)
+  for (const enabled of [true, false]) {
+    const form = templateForm({ name: 'Recovery', responsesUpstream: 'excel', excelRecovery: { enabled, intervalMinutes: 17 } })
+    assert.deepEqual(structuredClone(templateConfig(form).excelRecovery), { enabled, intervalMinutes: 17 })
+    form.applyExcel = false
+    assert.equal('excelRecovery' in templateConfig(form), false)
+  }
+  legacy.preserveExcelRecovery = false
+  assert.deepEqual(structuredClone(templateConfig(legacy).excelRecovery), { enabled: false, intervalMinutes: 60 })
 })
 
 test('Excel templates preserve legacy omission and roundtrip global/custom/empty lists', () => {

@@ -1,5 +1,32 @@
 # Scheduled Quality Checks
 
+## Excel Paused Recovery
+
+- `ExcelRecoveryConfig` is default-off, account-scoped, and separate from native quality rules.
+  Preserve omission in imports, old templates and selective bulk patches. Validate 1–10080 minutes.
+- Use the trusted fixed-account `AccountProbe::excel_recovery`, never a synthetic user key or
+  direct HTTP probe. Require published snapshot/credential versions, actual Excel routing, a
+  complete successful terminal and exact random nonce text. Never rotate accounts/models or
+  fall back to Codex. Ordinary requests cannot set the marker via JSON.
+- Recovery alone explicitly requests `reasoning.effort=low`; normal connection tests and
+  native quality/Codex defaults must not change. Carry expected nonce as trusted internal
+  operation metadata, not protocol JSON or prompt-string inference.
+- In the OpenAI provider, validate raw HTTP 200 SSE to EOF before Excel transformation:
+  2 MiB total, 1 MiB per line, exactly one completed terminal, final assistant/output_text
+  only (ignore reasoning), and exact trimmed nonce. Reject duplicate terminals, failed/
+  incomplete events, malformed data and transport errors even after completion. Never
+  buffer ordinary Excel streams or move wire protocol parsing into Core.
+- Durable PostgreSQL slots bound global probes to three. Request deadline is 45 seconds;
+  cancellation drains coordinator finalization before releasing the two-minute crash lease.
+  Generation, lease, identity, configuration, egress and credential fences are rechecked at commit.
+- Real runtime setting changes invalidate claims; config revision bumps from another account's
+  recovery must not cancel parallel work. Lock runtime settings before account/recovery mutation.
+- Restore only opted-in Excel manual/403 pauses with ready credentials; preserve independent
+  quality-owned pauses and quota/auth protections. Keep historic 403 evidence, clear verified
+  recovery on later pauses, and never present manual resume as a successful BPS test.
+- Tests: Admin worker nonce/failure/cancel cases, Core trusted marker/completion cases, Store
+  real migrations/admission/fences/parallel success, and frontend synthetic mobile/desktop flows.
+
 ## Dynamic Group Rules
 
 ### 1. Scope / Trigger
@@ -109,7 +136,7 @@
 ## Detection Execution
 
 - Optional `intervalSeconds` in persisted rule/template JSON selects fixed delays of
-  5–31536000 integer seconds. New UI defaults to 60; absent/null retains the exact
+  5–31536000 integer seconds. New UI defaults to 120; absent/null retains the exact
   legacy five-field Cron and timezone contract, never silently migrate old rules.
   Seconds take precedence over retained Cron fields. `next_run` is shared by save,
   template application and completion; checked timestamp addition rejects overflow.
@@ -285,7 +312,8 @@
   Only Core's trusted probe operation can set `native_quality_probe`; selector
   route freeze and actual execution both use Codex. Client JSON, judges and answer
   checks cannot acquire this override.
-- `disableExcelOnNativeRecovery` defaults false and is valid only for state probes
+- `disableExcelOnNativeRecovery` defaults false when absent from persisted config;
+  new applicable UI drafts explicitly enable it. It is valid only for state probes
   using enable_excel or apply_account_template. Persist `recovery.excel_owner`
   only when this rule switches Codex to Excel, after its audit/config publication.
   Record account identity, model and relevant policy scope, including account audit
@@ -301,6 +329,7 @@
 ## Excel Failure Threshold
 
 - `excelFailureThreshold` defaults to 1 for legacy configs and accepts 1–100.
+  New UI drafts explicitly set it to 2 without migrating saved rules/templates.
   Count definite incorrect rounds, never individual parallel samples. A correct
   round resets progress; unknown/request errors neither increment nor reset it.
 - Persist progress in `quality_rules.recovery.excel_streak`, retaining unrelated
@@ -314,6 +343,22 @@
   explicit native-recovery option may reverse their owned Excel route.
 - No migration is required for the JSON addition, but old strict-config binaries
   still require stored-config reconciliation before a downgrade.
+
+## Native Recovery Threshold
+
+- Optional `excelRecoveryThreshold` accepts 1–100; missing/null keeps the legacy
+  single-success behavior and is omitted on serialization. New UI drafts set 2.
+- Count correct native rounds in `quality_rules.recovery.excel_pass_streak` only
+  after existing lease/revision/identity/model/Excel-owner guards. An incorrect
+  round resets the count; unknown/request errors neither increment nor reset it.
+- Before the threshold, persist `excel_recovery_counted`; at the threshold, reuse
+  existing fenced Excel close/audit logic. Never close a manually enabled route,
+  clear an independent 403 pause or restore the rest of a remediation template.
+- Rule saves and ownership record/release clear the healthy count. Threshold-only
+  edits preserve valid route ownership while invalidating previous-round evidence.
+  Count survives store restarts; no schema migration or probe-wire change is needed.
+- Regressions cover old-rule single-success behavior, two normal rounds, unknown/error
+  holds, incorrect resets, persistence, threshold edits and stale-result fencing.
 
 ## Account Template Remediation
 

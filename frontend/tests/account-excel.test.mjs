@@ -62,6 +62,7 @@ test('Excel editor preserves omitted values and sends only an explicit route cha
   assert.equal(state.excelModels.value, 'gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra')
   await state.save()
   assert.equal(Object.hasOwn(updates[0], 'responsesUpstream'), false)
+  assert.equal(Object.hasOwn(updates[0], 'excelRecovery'), false)
   state.open(accounts.value[0])
   state.excelEnabled.value = false
   await state.save()

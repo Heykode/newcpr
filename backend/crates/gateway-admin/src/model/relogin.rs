@@ -192,6 +192,7 @@ impl ReloginEnrollment {
         }
         let result = Self {
             config: super::relogin_templates::ReloginTemplateConfig {
+                excel_recovery: settings.excel_recovery,
                 model_access: None,
                 egress_mode: settings.egress_mode,
                 name: "2FA account import".to_owned(),

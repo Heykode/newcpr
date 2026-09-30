@@ -12,8 +12,8 @@ const exports = {}
 runInNewContext(outputText, { exports })
 const { qualityScheduleSummary, DEFAULT_QUALITY_INTERVAL_SECONDS, MIN_QUALITY_INTERVAL_SECONDS, MAX_QUALITY_INTERVAL_SECONDS } = exports
 
-test('new quality intervals default to sixty seconds with bounded integer input', () => {
-  assert.equal(DEFAULT_QUALITY_INTERVAL_SECONDS, 60)
+test('new quality intervals default to two minutes with bounded integer input', () => {
+  assert.equal(DEFAULT_QUALITY_INTERVAL_SECONDS, 120)
   assert.equal(MIN_QUALITY_INTERVAL_SECONDS, 5)
   assert.equal(MAX_QUALITY_INTERVAL_SECONDS, 31_536_000)
 })

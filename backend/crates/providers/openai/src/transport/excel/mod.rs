@@ -19,6 +19,9 @@ pub(crate) mod image_relay;
 #[cfg(test)]
 mod image_tests;
 pub(crate) mod images;
+pub(super) mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 mod repair;
 pub(crate) mod replay;
 mod request;

@@ -26,6 +26,7 @@ fn context() -> MutationContext {
 
 fn batch(ids: &[&str]) -> gateway_admin::model::accounts::BatchUpdateAccounts {
     gateway_admin::model::accounts::BatchUpdateAccounts {
+        excel_recovery: None,
         purchase_cost: None,
         account_ids: ids.iter().map(|id| (*id).to_owned()).collect(),
         egress_mode: None,
@@ -84,6 +85,7 @@ async fn unified_single_save_clears_proxy_atomically_and_preserves_identity() {
     let before = identity().await.unwrap();
     let bindings = load(&egress).await.fixed_bindings;
     let mut command = UpdateAccount {
+        excel_recovery: None,
         purchase_cost: None,
         account_id: "acct_unified".into(),
         egress_mode: Some(Some(EgressMode::FixedIpv6Reuse)),

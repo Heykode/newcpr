@@ -580,6 +580,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                     &request.selector, &active_account, &mut failure,
                     request.excel.is_some(), allows_account_state_mutation,
                     failure_context.is_diagnostic,
+                    request.upstream_model.as_ref().map(UpstreamModelId::as_str),
                 ).await;
                 if request.excel.is_some() || request.excel_image.is_some() {
                     super::excel::apply_initial_retry_policy(
@@ -821,6 +822,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     &selector, &active_account, &mut failure,
                     request.excel.is_some(), allows_account_state_mutation,
                     failure_context.is_diagnostic,
+                    Some(upstream_model.as_str()),
                 ).await;
                 if request.excel.is_some() {
                     super::excel::apply_initial_retry_policy(&mut failure, stream_max_retries);
@@ -1022,6 +1024,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         &selector, &active_account, &mut failure,
                         request.excel.is_some(), allows_account_state_mutation,
                         failure_context.is_diagnostic,
+                        Some(upstream_model.as_str()),
                     ).await;
                     for event in super::excel::failed_repair_metering(&request) {
                         yield event;

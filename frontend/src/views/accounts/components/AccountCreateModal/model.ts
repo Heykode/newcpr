@@ -4,7 +4,7 @@ import type { RequestProxySource } from '@/utils/request-proxy-source'
 import { accountEgressPatch } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { excelSettings } from '@/utils/excel-settings'
+import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
 import { accountModelAccessError } from '../../utils/modelAccess'
 import { purchaseCostPatch } from '../../utils/purchaseCost'
 import { parseAccountSchedulingForm } from '../../utils/schedulingForm'
@@ -25,6 +25,8 @@ export interface AccountCreateForm {
   excelModelsFollowGlobal: boolean
   excelCacheCreationAsInput: boolean
   excel403Action: Excel403Action
+  excelRecoveryEnabled: boolean
+  excelRecoveryInterval: string
   excelModels: string
   concurrencyLimit: string
   weight: string
@@ -55,6 +57,8 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     excelModelsFollowGlobal: true,
     excelCacheCreationAsInput: true,
     excel403Action: 'none',
+    excelRecoveryEnabled: false,
+    excelRecoveryInterval: '60',
     excelModels: DEFAULT_EXCEL_MODELS_INPUT,
     concurrencyLimit: '',
     weight: '1',
@@ -98,7 +102,12 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
     enabled: form.enabled,
     ...(requestProxySource === undefined ? {} : { requestProxySource }),
     ...(egressMode === undefined ? {} : { egressMode }),
-    ...(form.applyExcel && provider === 'openai' ? excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action) : {}),
+    ...(form.applyExcel && provider === 'openai'
+      ? {
+          ...excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action),
+          excelRecovery: excelRecoverySettings(form.excelRecoveryEnabled, form.excelRecoveryInterval),
+        }
+      : {}),
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),

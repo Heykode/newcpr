@@ -284,6 +284,7 @@ async fn relogin_templates_persist_fence_versions_and_revalidate_references() {
         id: "template-one".into(),
         revision: 1,
         config: ReloginTemplateConfig {
+            excel_recovery: None,
             model_access: Some(
                 serde_json::from_value(serde_json::json!({
                     "mode": "denylist", "models": ["model-template"]

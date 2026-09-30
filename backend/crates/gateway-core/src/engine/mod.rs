@@ -165,6 +165,7 @@ pub struct AccountAttemptContext {
     quality_check: bool,
     quality_retest: bool,
     native_quality_probe: bool,
+    excel_recovery_revision: Option<u64>,
     account_scope: Option<Arc<crate::account::scope::FrozenAccountScope>>,
 }
 
@@ -184,6 +185,7 @@ impl AccountAttemptContext {
             quality_check: false,
             quality_retest: false,
             native_quality_probe: false,
+            excel_recovery_revision: None,
             account_scope: None,
         }
     }
@@ -206,6 +208,7 @@ impl AccountAttemptContext {
             quality_check: false,
             quality_retest: false,
             native_quality_probe: false,
+            excel_recovery_revision: None,
             account_scope: None,
         }
     }
@@ -265,6 +268,11 @@ impl AccountAttemptContext {
 
     pub(crate) const fn with_native_quality_probe(mut self, native: bool) -> Self {
         self.native_quality_probe = native;
+        self
+    }
+
+    pub(crate) const fn with_excel_recovery(mut self, revision: Option<u64>) -> Self {
+        self.excel_recovery_revision = revision;
         self
     }
 
@@ -648,6 +656,13 @@ impl AttemptContext {
     #[must_use]
     pub fn is_native_quality_probe(&self) -> bool {
         self.is_quality_retest() && self.account.native_quality_probe
+    }
+
+    #[must_use]
+    pub fn excel_recovery_revision(&self) -> Option<u64> {
+        self.is_quality_retest()
+            .then_some(self.account.excel_recovery_revision)
+            .flatten()
     }
 
     /// 普通请求认证时冻结的账号范围；管理端诊断为 `None`。

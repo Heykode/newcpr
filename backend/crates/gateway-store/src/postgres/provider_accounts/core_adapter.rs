@@ -520,6 +520,14 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         &self,
         account: &CoreProviderAccount,
     ) -> Result<bool, CoreStoreError> {
+        self.apply_excel_403_action_for_model(account, "").await
+    }
+
+    async fn apply_excel_403_action_for_model(
+        &self,
+        account: &CoreProviderAccount,
+        model: &str,
+    ) -> Result<bool, CoreStoreError> {
         if account.excel_403_action() == gateway_core::account::Excel403Action::None
             || account.responses_upstream() != gateway_core::account::ResponsesUpstream::Excel
         {
@@ -557,6 +565,19 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .rows_affected()
             > 0;
         if changed {
+            if !model.is_empty()
+                && account.excel_403_action() == gateway_core::account::Excel403Action::PauseAccount
+            {
+                sqlx::query(
+                    "insert into account_excel_recovery(account_id,failed_model) values($1,$2)
+                    on conflict(account_id) do update set failed_model=excluded.failed_model",
+                )
+                .bind(account.id().as_str())
+                .bind(model)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+            }
             bump_config_revision_in_transaction(&mut transaction)
                 .await
                 .map_err(core_store_error)?;

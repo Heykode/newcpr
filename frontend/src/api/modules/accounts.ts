@@ -1,7 +1,7 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
 import type { QualityMonitoring } from './quality-ops'
-import type { Excel403Action } from '@/utils/excel-settings'
+import type { Excel403Action, ExcelRecoveryConfig, ExcelRecoveryView } from '@/utils/excel-settings'
 import request from '../request'
 
 export type AccountStatus
@@ -187,6 +187,7 @@ export interface Account {
   excel403Action?: Excel403Action
   excelAutoDisabledAt?: string | null
   excel403WarningAt?: string | null
+  excelRecovery?: ExcelRecoveryView | null
   qualityMonitoring?: QualityMonitoring | null
   excelModeDisabledAt?: string | null
   effectiveExcelModels?: string[]
@@ -461,6 +462,7 @@ interface AccountResetCreditConsumeParam extends AccountIdParam {
 
 interface AccountUpdateParam {
   purchaseCost?: AccountPurchaseUpdate
+  excelRecovery?: ExcelRecoveryConfig
   egressMode?: string | null
   customName?: string | null
   outboundProxyUrl?: string
@@ -484,6 +486,7 @@ interface AccountUpdateParam {
 
 interface AccountBatchUpdateParam {
   purchaseCost?: AccountPurchaseUpdate
+  excelRecovery?: ExcelRecoveryConfig
   egressMode?: string | null
   customName?: string | null
   outboundProxyUrl?: string
@@ -512,6 +515,7 @@ interface AccountDeleteParams {
 
 export interface AccountImportSettings {
   purchaseCost?: AccountPurchaseUpdate
+  excelRecovery?: ExcelRecoveryConfig
   clearOutboundProxy?: boolean
   egressMode?: string | null
   customName?: string
