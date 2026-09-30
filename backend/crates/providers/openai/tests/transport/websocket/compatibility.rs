@@ -198,9 +198,17 @@ async fn exact_continuation_retains_owner_after_beta_and_window_change() {
     .await;
 }
 
-async fn receive_messages(
+fn receive_messages(
     messages: Vec<String>,
     streaming: bool,
+) -> impl std::future::Future<Output = Result<String, CodexClientError>> {
+    receive_messages_with_timeout(messages, streaming, Duration::from_secs(3))
+}
+
+async fn receive_messages_with_timeout(
+    messages: Vec<String>,
+    streaming: bool,
+    deadline: Duration,
 ) -> Result<String, CodexClientError> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend = backend(listener.local_addr().unwrap());
@@ -214,7 +222,7 @@ async fn receive_messages(
             }
         }
     });
-    let result = timeout(Duration::from_secs(3), async {
+    let result = timeout(deadline, async {
         if streaming {
             let mut response = backend
                 .create_response_stream(
@@ -241,6 +249,80 @@ async fn receive_messages(
     .unwrap();
     server.await.unwrap();
     result
+}
+
+#[tokio::test]
+async fn ordinary_large_single_event_keeps_the_existing_uncapped_path() {
+    let payload = json!({
+        "type": "response.output_text.delta",
+        "delta": "x".repeat(16 * 1024 * 1024),
+    })
+    .to_string();
+    let terminal = completed_websocket_response("resp_large_compat", 2, 1);
+    let body = receive_messages_with_timeout(
+        vec![payload.clone(), terminal.clone()],
+        true,
+        Duration::from_secs(15),
+    )
+    .await
+    .unwrap();
+    assert_eq!(body.matches(payload.as_str()).count(), 1);
+    assert!(body.contains(&terminal));
+}
+
+#[tokio::test]
+async fn recovery_size_budget_accepts_the_boundary_and_rejects_larger_messages() {
+    let created = r#"{"type":"response.created","response":{"id":"resp_size_compat"}}"#;
+    let terminal = completed_websocket_response("resp_size_compat", 2, 1);
+    let mut payload = format!("{created}{terminal}");
+    payload.extend(std::iter::repeat_n(' ', 16 * 1024 * 1024 - payload.len()));
+    for streaming in [false, true] {
+        let body = receive_messages_with_timeout(
+            vec![payload.clone()],
+            streaming,
+            Duration::from_secs(15),
+        )
+        .await
+        .unwrap();
+        assert_eq!(body.matches(created).count(), 1);
+        assert_eq!(body.matches(terminal.as_str()).count(), 1);
+        assert!(body.find(created).unwrap() < body.find(&terminal).unwrap());
+        let error = receive_messages_with_timeout(
+            vec![format!("{payload} ")],
+            streaming,
+            Duration::from_secs(15),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid event JSON"));
+    }
+}
+
+#[tokio::test]
+async fn ordinary_unknown_json_keeps_existing_reducer_compatibility() {
+    let terminal = completed_websocket_response("resp_unknown_compat", 2, 1);
+    for streaming in [false, true] {
+        for raw in [
+            r#"{"type":"future.event","opaque":true}"#,
+            r#"{"unknown":"metadata"}"#,
+            "null",
+        ] {
+            let body = receive_messages(vec![raw.to_owned(), terminal.clone()], streaming)
+                .await
+                .unwrap();
+            assert!(body.contains(&terminal));
+            let forwarded = raw.contains("future.event");
+            if forwarded {
+                assert_eq!(body.matches(raw).count(), 1);
+            }
+            assert_eq!(
+                body.lines()
+                    .filter(|line| line.starts_with("event:"))
+                    .count(),
+                if forwarded { 2 } else { 1 }
+            );
+        }
+    }
 }
 
 #[tokio::test]

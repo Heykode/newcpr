@@ -205,6 +205,12 @@ profiles or random fingerprint generation.
 
 ## 6. Tests Required
 
+- Keep WS parser boundary tests in the existing transport integration modules;
+  do not add unaudited `#[cfg(test)]` modules or test-only public APIs to
+  production parser files. Exercise the 16 MiB recovery boundary, larger valid
+  single events and unknown JSON through real loopback WS messages. Run the
+  full App test target, not only its `architecture::` filter: root-level
+  production-hook checks are part of the same gate.
 - Decode matrix: stream true/false x transport absent/true/false; local override
   stays out of wire body, previous-response ID survives.
 - Actual loopback HTTP and WS: upstream stream true, original false, account,
