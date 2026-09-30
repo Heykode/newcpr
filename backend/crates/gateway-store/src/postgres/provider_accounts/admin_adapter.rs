@@ -775,14 +775,24 @@ impl AccountStore for PgAdminAccountStore {
     async fn load_account_purchase_costs(
         &self,
         account_ids: &[String],
-    ) -> AdminStoreResult<std::collections::BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>> {
+    ) -> AdminStoreResult<
+        std::collections::BTreeMap<
+            String,
+            gateway_admin::model::account_purchase::AccountPurchaseView,
+        >,
+    > {
         let mut costs = BTreeMap::new();
         for ids in account_ids.chunks(ADMIN_USAGE_CHUNK_SIZE) {
             validate_admin_account_ids(ids).map_err(|error| admin_store_error(ENTITY, error))?;
-            costs.extend(self.query_budget.run(
-                "load account purchase costs",
-                super::purchase_costs::load(&self.pool, ids),
-            ).await.map_err(|error| admin_store_error(ENTITY, error))?);
+            costs.extend(
+                self.query_budget
+                    .run(
+                        "load account purchase costs",
+                        super::purchase_costs::load(&self.pool, ids),
+                    )
+                    .await
+                    .map_err(|error| admin_store_error(ENTITY, error))?,
+            );
         }
         Ok(costs)
     }

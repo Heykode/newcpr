@@ -650,7 +650,8 @@ pub(super) struct FakeAccountStore {
     quota_learning_estimates: Mutex<Vec<QuotaLearningEstimate>>,
     quota_learning_failure: Mutex<bool>,
     cumulative_costs: Mutex<BTreeMap<String, Vec<AccountCumulativeCost>>>,
-    purchase_costs: Mutex<BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>>,
+    purchase_costs:
+        Mutex<BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>>,
     cumulative_cost_queries: Mutex<Vec<Vec<String>>>,
     turn_states: Mutex<BTreeMap<String, gateway_admin::model::accounts::AccountTurnStateStatus>>,
     projection_override: Mutex<Option<gateway_core::account::AccountStatus>>,
@@ -876,9 +877,14 @@ impl AccountStore for FakeAccountStore {
     async fn load_account_purchase_costs(
         &self,
         account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>> {
+    ) -> AdminStoreResult<
+        BTreeMap<String, gateway_admin::model::account_purchase::AccountPurchaseView>,
+    > {
         let costs = self.purchase_costs.lock().unwrap();
-        Ok(account_ids.iter().filter_map(|id| costs.get(id).cloned().map(|cost| (id.clone(), cost))).collect())
+        Ok(account_ids
+            .iter()
+            .filter_map(|id| costs.get(id).cloned().map(|cost| (id.clone(), cost)))
+            .collect())
     }
 
     async fn load_account_usage_by_windows(
@@ -2230,7 +2236,11 @@ async fn account_cumulative_costs_should_remain_independent_of_window_usage() {
         history_complete: true,
         history_complete_from: None,
     };
-    store.purchase_costs.lock().unwrap().insert("acct_test".into(), purchase.clone());
+    store
+        .purchase_costs
+        .lock()
+        .unwrap()
+        .insert("acct_test".into(), purchase.clone());
     let reset_at = Utc::now() + TimeDelta::hours(1);
     let mut window_usage = quota_local_usage("acct_test", 4_330_000);
     window_usage.costs = vec![account_cost("USD", "5")];

@@ -350,14 +350,15 @@ impl DefaultAccountsService {
             end: now,
         };
         let ids = vec![account.id.clone()];
-        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) = futures::try_join!(
-            self.accounts.load_account_usage(rolling_range, &ids),
-            self.accounts
-                .load_account_health_timeline(account_health_range(now), &ids),
-            self.accounts.load_account_cumulative_costs(&ids),
-            self.accounts.load_account_purchase_costs(&ids),
-        )
-        .map_err(|error| map_store_error(error, "account usage"))?;
+        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) =
+            futures::try_join!(
+                self.accounts.load_account_usage(rolling_range, &ids),
+                self.accounts
+                    .load_account_health_timeline(account_health_range(now), &ids),
+                self.accounts.load_account_cumulative_costs(&ids),
+                self.accounts.load_account_purchase_costs(&ids),
+            )
+            .map_err(|error| map_store_error(error, "account usage"))?;
         let rolling_usage = rolling_usage.into_iter().next();
         let health_timeline = health_usage
             .into_iter()
@@ -450,14 +451,15 @@ impl AccountsService for DefaultAccountsService {
             .iter()
             .map(|item| item.account.id.clone())
             .collect::<Vec<_>>();
-        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) = futures::try_join!(
-            self.accounts.load_account_usage(rolling_range, &ids),
-            self.accounts
-                .load_account_health_timeline(account_health_range(now), &ids),
-            self.accounts.load_account_cumulative_costs(&ids),
-            self.accounts.load_account_purchase_costs(&ids),
-        )
-        .map_err(|error| map_store_error(error, "account usage"))?;
+        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) =
+            futures::try_join!(
+                self.accounts.load_account_usage(rolling_range, &ids),
+                self.accounts
+                    .load_account_health_timeline(account_health_range(now), &ids),
+                self.accounts.load_account_cumulative_costs(&ids),
+                self.accounts.load_account_purchase_costs(&ids),
+            )
+            .map_err(|error| map_store_error(error, "account usage"))?;
         let rolling_usage = rolling_usage
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))

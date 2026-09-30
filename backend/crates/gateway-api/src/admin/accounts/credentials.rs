@@ -57,7 +57,8 @@ pub struct AccountImportSettingsRequest {
 impl AccountImportSettingsRequest {
     fn validate(&self) -> Result<(), WireValidationError> {
         if let Some(cost) = &self.purchase_cost {
-            cost.validate().map_err(|_| WireValidationError::new("purchaseCost"))?;
+            cost.validate()
+                .map_err(|_| WireValidationError::new("purchaseCost"))?;
         }
         parse_custom_name(self.custom_name.as_deref())?;
         parse_concurrency_limit(self.concurrency_limit)?;
@@ -292,7 +293,8 @@ pub struct UpdateAccountRequest {
 impl UpdateAccountRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         if let Some(cost) = &self.purchase_cost {
-            cost.validate().map_err(|_| WireValidationError::new("purchaseCost"))?;
+            cost.validate()
+                .map_err(|_| WireValidationError::new("purchaseCost"))?;
         }
         if let Some(value) = &self.custom_name {
             parse_custom_name(value.as_deref())?;

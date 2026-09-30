@@ -60,10 +60,10 @@ use super::{
 
 mod admin_adapter;
 mod admin_queries;
-mod purchase_costs;
 mod core_adapter;
 mod devices;
 mod mapping;
+mod purchase_costs;
 mod quota_forecast;
 mod quota_learning;
 mod repository;

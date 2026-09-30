@@ -149,7 +149,8 @@ pub trait AccountStore: Send + Sync {
     async fn load_account_purchase_costs(
         &self,
         _account_ids: &[String],
-    ) -> AdminStoreResult<BTreeMap<String, crate::model::account_purchase::AccountPurchaseView>> {
+    ) -> AdminStoreResult<BTreeMap<String, crate::model::account_purchase::AccountPurchaseView>>
+    {
         Ok(BTreeMap::new())
     }
 

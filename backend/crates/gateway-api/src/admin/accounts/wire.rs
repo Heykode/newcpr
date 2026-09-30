@@ -128,7 +128,8 @@ impl From<AccountsUpdateResult> for BatchUpdatedAccountsData {
 impl BatchUpdateAccountsRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
         if let Some(cost) = &self.purchase_cost {
-            cost.validate().map_err(|_| WireValidationError::new("purchaseCost"))?;
+            cost.validate()
+                .map_err(|_| WireValidationError::new("purchaseCost"))?;
         }
         if let Some(value) = &self.custom_name {
             super::credentials::parse_custom_name(value.as_deref())?;
