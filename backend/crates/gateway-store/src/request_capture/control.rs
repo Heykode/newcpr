@@ -67,6 +67,7 @@ impl RequestCaptureStore for CaptureManager {
         .fetch_one(&self.pool)
         .await
         .map_err(unavailable)?;
+        let (stored_bytes, record_count) = self.stored_totals().await?;
         let control = self.shared.control.read().map_err(unavailable)?;
         let mut config = control.config.clone();
         config.retention_days = u16::try_from(days).map_err(unavailable)?;
@@ -82,7 +83,17 @@ impl RequestCaptureStore for CaptureManager {
                     .any(|task| task.task.scope == CaptureScope::Global && task.accepts()),
             storage_fault,
             skipped: self.shared.skipped.load(Ordering::Acquire),
+            stored_bytes,
+            record_count,
         })
+    }
+
+    async fn clear(
+        &self,
+        input: ClearCaptures,
+        context: &MutationContext,
+    ) -> AdminStoreResult<CaptureClearResult> {
+        self.clear_stored(input, context).await
     }
 
     async fn for_request(&self, request_id: &str) -> AdminStoreResult<Vec<CaptureRecord>> {

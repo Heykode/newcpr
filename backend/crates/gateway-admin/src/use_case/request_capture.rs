@@ -23,6 +23,11 @@ pub trait RequestCaptureService: Send + Sync {
     ) -> Result<CaptureTask, AdminError>;
     async fn stop(&self, id: &str, context: &MutationContext) -> Result<(), AdminError>;
     async fn delete(&self, id: &str, context: &MutationContext) -> Result<(), AdminError>;
+    async fn clear(
+        &self,
+        input: ClearCaptures,
+        context: &MutationContext,
+    ) -> Result<CaptureClearResult, AdminError>;
     async fn read(
         &self,
         id: &str,
@@ -116,6 +121,17 @@ impl RequestCaptureService for DefaultRequestCaptureService {
         validate_id(id)?;
         self.store()?
             .delete(id, context)
+            .await
+            .map_err(|e| map_store_error(e, "request capture"))
+    }
+    async fn clear(
+        &self,
+        input: ClearCaptures,
+        context: &MutationContext,
+    ) -> Result<CaptureClearResult, AdminError> {
+        input.validate()?;
+        self.store()?
+            .clear(input, context)
             .await
             .map_err(|e| map_store_error(e, "request capture"))
     }

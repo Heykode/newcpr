@@ -24,6 +24,11 @@ pub trait RequestCaptureStore: Send + Sync {
     ) -> AdminStoreResult<CaptureTask>;
     async fn stop(&self, id: &str, context: &MutationContext) -> AdminStoreResult<()>;
     async fn delete(&self, id: &str, context: &MutationContext) -> AdminStoreResult<()>;
+    async fn clear(
+        &self,
+        input: ClearCaptures,
+        context: &MutationContext,
+    ) -> AdminStoreResult<CaptureClearResult>;
     async fn read(
         &self,
         id: &str,

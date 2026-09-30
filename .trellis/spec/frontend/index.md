@@ -20,6 +20,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Account Management](./account-management.md) | Diagnostic lifetimes, opt-in batch editing, persisted preferences, table sorting and IPv6 paging | Implemented |
 | [Quality Operations](./quality-operations.md) | Scheduled test controls, safe result details and side panels | Isolated OVH verification |
 | [Usage State Diagnostics](./usage-state-diagnostics.md) | Request-local State summaries, lazy sensitive detail and dismissal lifetime | Implemented |
+| [Detailed Error Capture](./detailed-error-capture.md) | Capacity policy, capture-only cleanup and lazy error materials | Local verification |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
