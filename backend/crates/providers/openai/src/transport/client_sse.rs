@@ -26,7 +26,8 @@ use crate::transport::{
     profile::CodexWireProfileState,
     protocol::{
         responses::{
-            CodexResponsesRequest, ResponsesSseFailure, TransportRequirement, transport_requirement,
+            CodexResponsesRequest, ResponsesSseFailure, STREAM_REPLAY_GRACE, TransportRequirement,
+            transport_requirement,
         },
         websocket::{
             websocket_audit_artifact_from_attempt, websocket_connection_limit_failure,
@@ -512,6 +513,7 @@ impl CodexBackendClient {
         let body = http_sse_stream(response, Arc::clone(&rate_limit_updates), trace);
         Ok(CodexBackendStreamingResponse {
             body,
+            precommit_started_at: None,
             transport: CodexBackendTransport::HttpSse,
             websocket_connection_id: None,
             turn_state,
@@ -532,17 +534,39 @@ impl CodexBackendClient {
         })
     }
 
-    pub async fn create_response_stream_with_pool_account(
+    pub fn create_response_stream_with_pool_account<'a>(
+        &'a self,
+        request: &'a CodexResponsesRequest,
+        context: CodexRequestContext<'a>,
+        pool_account_id: Option<&'a str>,
+    ) -> impl std::future::Future<Output = CodexClientResult<CodexBackendStreamingResponse>> + 'a
+    {
+        // Return the shared future directly, without another large async state.
+        self.create_response_stream_with_prefetch(
+            request,
+            context,
+            pool_account_id,
+            self.request_tuning().stream_prefetch_bytes,
+        )
+    }
+
+    pub(crate) async fn create_response_stream_with_prefetch(
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
+        stream_prefetch_bytes: u64,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let prepared = self
             .prepare_response_transport_with_pool_account(request, context, pool_account_id)
             .await;
-        self.create_response_stream_with_prepared(request, context, prepared?)
-            .await
+        self.create_response_stream_with_prepared(
+            request,
+            context,
+            prepared?,
+            stream_prefetch_bytes,
+        )
+        .await
     }
 
     /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening。
@@ -884,6 +908,7 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         prepared: PreparedResponseTransport,
+        stream_prefetch_bytes: u64,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let PreparedResponseTransport {
             requirement,
@@ -938,10 +963,17 @@ impl CodexBackendClient {
                 )
                 .await
                 .map_err(websocket_exchange_error_to_client_error)?;
+                let mut precommit_started_at = None;
                 if requirement.allows_connection_restart() {
-                    match await_websocket_delivery_boundary(&mut exchange).await {
-                        Ok(DeliveryBoundary::Ready) => {}
-                        Ok(DeliveryBoundary::ConnectionLimitReached(failure)) => {
+                    // Zero releases the first complete event, but an immediate
+                    // connection-limit rejection still precedes delivery.
+                    match await_websocket_delivery_boundary(&mut exchange, stream_prefetch_bytes)
+                        .await
+                    {
+                        Ok((DeliveryBoundary::Ready, started_at)) => {
+                            precommit_started_at = started_at
+                        }
+                        Ok((DeliveryBoundary::ConnectionLimitReached(failure), _)) => {
                             return Err(CodexClientError::WebSocket(
                                 CodexWebSocketExchangeError::ConnectionLimitReached(failure),
                             ));
@@ -960,6 +992,7 @@ impl CodexBackendClient {
                             .map_err(post_send_ambiguous)
                             .map_err(websocket_exchange_error_to_client_error),
                     ),
+                    precommit_started_at,
                     transport: CodexBackendTransport::WebSocket,
                     websocket_connection_id: Some(exchange.websocket_connection_id),
                     turn_state: exchange.turn_state,
@@ -1063,23 +1096,43 @@ enum DeliveryBoundary {
 
 async fn await_websocket_delivery_boundary(
     exchange: &mut CodexWebSocketStreamingExchange,
-) -> Result<DeliveryBoundary, CodexWebSocketExchangeError> {
+    max_prefetch_bytes: u64,
+) -> Result<(DeliveryBoundary, Option<Instant>), CodexWebSocketExchangeError> {
     let mut prelude = Vec::new();
-    loop {
-        match exchange.body.next().await {
-            Some(Ok(frame)) if is_websocket_lifecycle_prelude(&frame) => prelude.push(frame),
+    let mut prefetched_bytes = 0_u64;
+    let mut started_at: Option<Instant> = None;
+    let boundary = loop {
+        let next = if let Some(started_at) = started_at {
+            if started_at.elapsed() >= STREAM_REPLAY_GRACE {
+                break DeliveryBoundary::Ready;
+            }
+            let deadline = tokio::time::Instant::from_std(started_at + STREAM_REPLAY_GRACE);
+            match tokio::time::timeout_at(deadline, exchange.body.next()).await {
+                Ok(next) => next,
+                Err(_) => break DeliveryBoundary::Ready,
+            }
+        } else {
+            exchange.body.next().await
+        };
+        match next {
             Some(Ok(frame)) => {
-                let connection_limit_failure = websocket_connection_limit_failure(&frame);
-                prelude.push(frame);
-                let remaining =
-                    std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
-                exchange.body =
-                    Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
-                return Ok(if let Some(failure) = connection_limit_failure {
-                    DeliveryBoundary::ConnectionLimitReached(Box::new(failure))
+                let lifecycle = is_websocket_lifecycle_prelude(&frame);
+                let connection_limit_failure = if lifecycle {
+                    None
                 } else {
-                    DeliveryBoundary::Ready
-                });
+                    websocket_connection_limit_failure(&frame)
+                };
+                prefetched_bytes = prefetched_bytes.saturating_add(frame.len() as u64);
+                prelude.push(frame);
+                if let Some(failure) = connection_limit_failure {
+                    break DeliveryBoundary::ConnectionLimitReached(Box::new(failure));
+                }
+                if lifecycle && max_prefetch_bytes != 0 {
+                    started_at.get_or_insert_with(Instant::now);
+                }
+                if !lifecycle || max_prefetch_bytes == 0 || prefetched_bytes > max_prefetch_bytes {
+                    break DeliveryBoundary::Ready;
+                }
             }
             Some(Err(error)) => return Err(error),
             None => {
@@ -1090,7 +1143,10 @@ async fn await_websocket_delivery_boundary(
                 });
             }
         }
-    }
+    };
+    let remaining = std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
+    exchange.body = Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
+    Ok((boundary, started_at))
 }
 
 fn is_websocket_lifecycle_prelude(frame: &[u8]) -> bool {
@@ -1147,8 +1203,30 @@ fn websocket_connection_profile(headers: &HeaderMap) -> String {
         auth.update((value.len() as u64).to_be_bytes());
         auth.update(value);
     }
-    let auth = hex::encode(auth.finalize());
-    format!("qx-session-v1\0{identity}\0{session}\0{thread}\0{auth}")
+    let beta = headers
+        .get_all("x-codex-beta-features")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|feature| !feature.is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",");
+    let window = headers
+        .get("x-codex-window-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .trim();
+    // Do not retain the new opening attributes in the pool key's Debug output.
+    for value in [beta.as_bytes(), window.as_bytes()] {
+        auth.update((value.len() as u64).to_be_bytes());
+        auth.update(value);
+    }
+    let opening = hex::encode(auth.finalize());
+    // Only new-chain reuse uses this profile; exact continuations keep their owner.
+    format!("qx-session-v2\0{identity}\0{session}\0{thread}\0{opening}")
 }
 
 fn http_sse_stream(

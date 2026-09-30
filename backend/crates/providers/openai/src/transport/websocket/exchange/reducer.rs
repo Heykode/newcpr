@@ -13,6 +13,41 @@ use crate::transport::response_meta;
 use super::super::pool::{CodexWebSocketConnectionMetadata, WebSocketContinuationState};
 use super::CodexWebSocketExchangeError;
 
+const MAX_CONCATENATED_EVENT_DOCUMENTS: usize = 16;
+const MAX_CONCATENATED_EVENT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Preserve the single-parse fast path; validate a complete repair before delivery.
+pub(super) fn parse_websocket_event_documents(
+    raw: &str,
+) -> Result<impl Iterator<Item = (&str, Value)>, CodexWebSocketExchangeError> {
+    let (single, recovered) = if let Ok(value) = serde_json::from_str::<Value>(raw) {
+        (Some((raw, value)), Vec::new())
+    } else {
+        if raw.len() > MAX_CONCATENATED_EVENT_BYTES {
+            return Err(CodexWebSocketExchangeError::InvalidEventJson);
+        }
+        let mut decoder = serde_json::Deserializer::from_str(raw).into_iter::<Value>();
+        let mut recovered = Vec::new();
+        loop {
+            let start = decoder.byte_offset();
+            let Some(value) = decoder.next() else { break };
+            let value = value.map_err(|_| CodexWebSocketExchangeError::InvalidEventJson)?;
+            let event_type = value.get("type").and_then(Value::as_str).map(str::trim);
+            if recovered.len() == MAX_CONCATENATED_EVENT_DOCUMENTS
+                || !event_type.is_some_and(|kind| !kind.is_empty() && !kind.contains(['\r', '\n']))
+            {
+                return Err(CodexWebSocketExchangeError::InvalidEventJson);
+            }
+            recovered.push((raw[start..decoder.byte_offset()].trim(), value));
+        }
+        if recovered.len() < 2 {
+            return Err(CodexWebSocketExchangeError::InvalidEventJson);
+        }
+        (None, recovered)
+    };
+    Ok(single.into_iter().chain(recovered))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::transport::websocket) enum WebSocketTerminalKind {
     Completed,
@@ -40,22 +75,12 @@ pub(super) struct ReducedWebSocketEvent {
 
 pub(super) fn reduce_websocket_event(
     raw: &str,
+    value: &Value,
     metadata: &mut CodexWebSocketConnectionMetadata,
     continuation: &mut WebSocketContinuationState,
 ) -> Result<ReducedWebSocketEvent, CodexWebSocketExchangeError> {
-    // 每帧只解析一次 JSON，后续提取全部复用同一 Value；
-    // 不可解析的帧不承载可路由的事件类型，忽略。
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return Ok(ReducedWebSocketEvent {
-            created_response_id: None,
-            action: ExchangeAction::Ignore,
-            diagnostic_event_type: None,
-            turn_state_update: None,
-            error_rate_limits: None,
-        });
-    };
-    let diagnostic_event_type = diagnostic_event_type(websocket_event_type(&value));
-    if let Some(parsed) = events::parse_rate_limits_event(&value) {
+    let diagnostic_event_type = diagnostic_event_type(websocket_event_type(value));
+    if let Some(parsed) = events::parse_rate_limits_event(value) {
         let headers = events::rate_limits_to_header_pairs(&parsed);
         metadata.rate_limit_headers.extend(headers);
         return Ok(ReducedWebSocketEvent {
@@ -69,12 +94,12 @@ pub(super) fn reduce_websocket_event(
 
     response_meta::merge_response_metadata(
         &mut metadata.response_metadata,
-        websocket_metadata_headers(&value),
+        websocket_metadata_headers(value),
     );
-    if let Some(model) = response_meta::reported_model_from_event(&value) {
+    if let Some(model) = response_meta::reported_model_from_event(value) {
         metadata.response_metadata.effective_model = Some(model.to_owned());
     }
-    let turn_state_update = websocket_metadata_turn_state(&value).and_then(|turn_state| {
+    let turn_state_update = websocket_metadata_turn_state(value).and_then(|turn_state| {
         if metadata.turn_state.is_some() {
             return None;
         }
@@ -82,21 +107,21 @@ pub(super) fn reduce_websocket_event(
         Some(turn_state)
     });
 
-    let event = websocket_event_type(&value);
-    if let Some(response_id) = websocket_response_completed_id(&value) {
+    let event = websocket_event_type(value);
+    if let Some(response_id) = websocket_response_completed_id(value) {
         continuation.record_completed(response_id);
     }
 
     let terminal = match event {
         Some("response.completed") => Some(WebSocketTerminalKind::Completed),
-        Some("response.incomplete") if websocket_response_is_interrupted(&value) => {
+        Some("response.incomplete") if websocket_response_is_interrupted(value) => {
             Some(WebSocketTerminalKind::Interrupted)
         }
         Some("response.incomplete") => Some(WebSocketTerminalKind::Incomplete),
         Some("response.failed" | "error") => Some(WebSocketTerminalKind::Failed),
         _ => None,
     };
-    let action = match websocket_event_frame(&value, raw) {
+    let action = match websocket_event_frame(value, raw) {
         Some(frame) => ExchangeAction::Forward { frame, terminal },
         None => ExchangeAction::Ignore,
     };
@@ -108,7 +133,7 @@ pub(super) fn reduce_websocket_event(
         action,
         diagnostic_event_type,
         turn_state_update,
-        error_rate_limits: events::parse_error_rate_limits(&value, None),
+        error_rate_limits: events::parse_error_rate_limits(value, None),
     })
 }
 

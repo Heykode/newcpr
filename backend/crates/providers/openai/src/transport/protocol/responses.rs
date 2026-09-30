@@ -8,6 +8,9 @@ use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+/// One precommit grace window shared by WS transport and Provider buffering.
+pub(crate) const STREAM_REPLAY_GRACE: std::time::Duration = std::time::Duration::from_millis(2_500);
+
 /// 官方 Codex 客户端据此触发完整历史重放的稳定错误码。
 pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
 /// Responses WebSocket 用于回传同一 turn 不透明状态的官方 client metadata 键。

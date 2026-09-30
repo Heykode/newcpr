@@ -434,6 +434,7 @@ pub(super) async fn create_response_attempt(
     account_id: &str,
     deadline: SystemTime,
     cancellation: &CancellationToken,
+    stream_prefetch_bytes: u64,
 ) -> Result<CodexBackendStreamingResponse, CodexHandshakeAttemptError> {
     let Some(handshake_deadline) = remaining(deadline) else {
         return Err(CodexHandshakeAttemptError::Timeout);
@@ -442,10 +443,11 @@ pub(super) async fn create_response_attempt(
         biased;
         _ = cancellation.cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
         _ = tokio::time::sleep(handshake_deadline) => Err(CodexHandshakeAttemptError::Timeout),
-        response = client.create_response_stream_with_pool_account(
+        response = client.create_response_stream_with_prefetch(
             request,
             request_context,
             Some(account_id),
+            stream_prefetch_bytes,
         ) => response.map_err(CodexHandshakeAttemptError::Client),
     }
 }
@@ -795,6 +797,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             active_account.id().as_str(),
             context.deadline(),
             &cancellation,
+            context.request_tuning().stream_prefetch_bytes,
         )
         .await;
         let websocket_failure_policy = match &response {
@@ -957,7 +960,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let mut pre_commit_events = PreCommitClientEvents::new(
             trace,
             context.request_tuning().stream_prefetch_bytes,
-        );
+        ).with_upstream_grace_started_at(response.precommit_started_at);
         let mut quota_success = false;
         loop {
             let Some(stream_deadline) = remaining(context.deadline()) else {

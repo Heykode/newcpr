@@ -670,6 +670,8 @@ pub type CodexResponseMetadataUpdates = CodexWebSocketResponseMetadataUpdates;
 pub struct CodexBackendStreamingResponse {
     /// 上游 SSE 字节流。
     pub body: CodexBackendSseStream,
+    /// First buffered lifecycle event; Provider must not restart the grace window.
+    pub precommit_started_at: Option<std::time::Instant>,
     /// 实际使用的上游传输。
     pub transport: CodexBackendTransport,
     /// WebSocket 响应所绑定的连接；HTTP transport 为 `None`。
