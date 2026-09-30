@@ -146,6 +146,34 @@ pub trait AccountStore: Send + Sync {
     ) -> AdminStoreResult<BTreeMap<String, Vec<AccountCumulativeCost>>>;
 
     /// Read optional stable-principal monthly costs, independently of provider quota.
+    async fn load_excel_recovery(
+        &self,
+        _account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, crate::model::excel_recovery::ExcelRecoveryView>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn claim_excel_recovery(
+        &self,
+    ) -> AdminStoreResult<Option<crate::model::excel_recovery::ExcelRecoveryClaim>> {
+        Ok(None)
+    }
+
+    async fn excel_recovery_current(
+        &self,
+        _claim: &crate::model::excel_recovery::ExcelRecoveryClaim,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn finish_excel_recovery(
+        &self,
+        _claim: &crate::model::excel_recovery::ExcelRecoveryClaim,
+        _outcome: crate::model::excel_recovery::ExcelRecoveryOutcome,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
     async fn load_account_purchase_costs(
         &self,
         _account_ids: &[String],

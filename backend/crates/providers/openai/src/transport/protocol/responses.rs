@@ -29,6 +29,8 @@ pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
 #[derive(Clone)]
 pub struct CodexResponsesRequest {
     pub(crate) quality_probe: Option<gateway_core::operation::quality_probe::QualityProbeStep>,
+    /// Trusted recovery expectation, never read from or serialized into client JSON.
+    pub(crate) excel_recovery_nonce: Option<String>,
     pub(crate) excel: Option<crate::transport::excel::ExcelPreparedRequest>,
     /// 上游请求体（唯一真相源）。
     body: Map<String, Value>,
@@ -513,6 +515,7 @@ impl CodexResponsesRequest {
         Self {
             excel: None,
             quality_probe: None,
+            excel_recovery_nonce: None,
             body,
             passthrough_headers: HeaderMap::new(),
             explicit_prompt_cache_key: false,

@@ -258,6 +258,9 @@ const {
   excelIgnoreEncryptedContent: batchExcelIgnoreEncryptedContent,
   requestProxySource: batchRequestProxySource,
   excel403Action: batchExcel403Action,
+  excelRecoveryEnabled: batchExcelRecoveryEnabled,
+  excelRecoveryInterval: batchExcelRecoveryInterval,
+  updateExcelRecovery: batchUpdateExcelRecovery,
   updateExcelCacheCreationAsInput: batchUpdateExcelCacheCreationAsInput,
   updateExcelIgnoreEncryptedContent: batchUpdateExcelIgnoreEncryptedContent,
   updateExcel403Action: batchUpdateExcel403Action,
@@ -302,6 +305,8 @@ const {
   excelIgnoreEncryptedContent,
   requestProxySource,
   excel403Action,
+  excelRecoveryEnabled,
+  excelRecoveryInterval,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -686,6 +691,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-ignore-encrypted-content="excelIgnoreEncryptedContent"
       v-model:request-proxy-source="requestProxySource"
       v-model:excel-403-action="excel403Action"
+      v-model:excel-recovery-enabled="excelRecoveryEnabled"
+      v-model:excel-recovery-interval="excelRecoveryInterval"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -716,9 +723,12 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       v-model:excel-cache-creation-as-input="batchExcelCacheCreationAsInput"
       v-model:excel-ignore-encrypted-content="batchExcelIgnoreEncryptedContent"
       v-model:excel-403-action="batchExcel403Action"
+      v-model:excel-recovery-enabled="batchExcelRecoveryEnabled"
+      v-model:excel-recovery-interval="batchExcelRecoveryInterval"
       v-model:update-excel-cache-creation-as-input="batchUpdateExcelCacheCreationAsInput"
       v-model:update-excel-ignore-encrypted-content="batchUpdateExcelIgnoreEncryptedContent"
       v-model:update-excel-403-action="batchUpdateExcel403Action"
+      v-model:update-excel-recovery="batchUpdateExcelRecovery"
       v-model:update-excel-models="batchUpdateExcelModels"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"

@@ -17,6 +17,7 @@ fn month_start() -> NaiveDate {
 
 fn patch(ids: &[&str], amount: Option<&str>, date: Option<NaiveDate>) -> BatchUpdateAccounts {
     BatchUpdateAccounts {
+        excel_recovery: None,
         purchase_cost: Some(AccountPurchaseUpdate {
             amount_cny: amount.map(str::to_owned),
             cycle_start: date,
@@ -57,6 +58,7 @@ async fn purchase_import_applies_per_account_preserves_omission_and_rolls_back_i
     };
     let repo = PgProviderAccountRepository::new(db.pool.clone());
     let mut settings = AccountImportSettings {
+        excel_recovery: None,
         purchase_cost: Some(AccountPurchaseUpdate {
             amount_cny: Some("50.125".into()),
             cycle_start: Some(month_start()),

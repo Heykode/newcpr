@@ -1,3 +1,5 @@
+mod recovery;
+
 use super::*;
 use crate::{
     config::OpenAiConfig,

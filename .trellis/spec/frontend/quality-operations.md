@@ -86,7 +86,7 @@
 - Account and enabled judge-group catalogs have independent requests/errors;
   searching or failing one must not clear or cancel the other. Editing a rule
   keeps its account immutable. Do not place a whole picker inside one FormItem.
-- New rules/templates use integer `intervalSeconds`, default 60, range 5–31536000,
+- New rules/templates use integer `intervalSeconds`, default 120, range 5–31536000,
   with a seconds input instead of Cron/timezone controls. Summaries and selective
   batch edits use the same field. The next due time is measured from save or round
   completion; five-second worker scans and capacity may delay actual start.
@@ -102,6 +102,11 @@
   and retries without duplicating completed rules. Failure-action groups are separate
   from the judge group and may include disabled groups. Optional auto_restore is off
   by default. Show persisted action/recovery outcomes, not inferred status changes.
+- New rules/templates/groups share `quality-ops/defaults.ts`: state probe,
+  `gpt-6-astra`, one round, 120 seconds, two abnormal rounds before remediation
+  and two normal rounds before native restoration. Keep failure action `none`
+  until the administrator explicitly chooses an action/template. Existing drafts
+  use legacy-aware normalization; absent fields never adopt new defaults.
 - Detection mode is a dropdown: question or state probe. Probe mode hides judge,
   question, effort and sample-count fields without deleting the question draft.
   Serialize one probe round and no effort; do not require a judge group to save it.
@@ -109,8 +114,9 @@
   with transport/status/length evidence and a clear heuristic limitation. Never
   render raw State or Cookie. Cancelled or paused states remain neutral.
 - Legacy `enable_excel` is available in both modes and disables whole-config restore.
-  State-probe template/Excel actions offer a separate unchecked-by-default checkbox
-  `disableExcelOnNativeRecovery`. Normalize it off for answer or unrelated actions.
+  State-probe template/Excel actions offer `disableExcelOnNativeRecovery`, checked
+  in new drafts only; saved configs missing it remain false. Normalize it off for
+  answer or unrelated actions. The enabled option shows `excelRecoveryThreshold`.
   Mirror it through templates, groups and selective bulk patches. Explain native
   probing continues after Excel, and recovery closes only this rule's unchanged
   owned route, never the rest of its template or manual/403 suspension.
@@ -131,9 +137,12 @@
 - Question-only fields do not overwrite probe drafts. Group removal and Excel
   thresholds apply only to the matching final action. Excel never enables automatic
   restore even when that field is selected in a mixed batch.
-- The Excel threshold editor defaults to 1 and accepts 1–100 rounds. Show persisted
-  progress, reset-on-save semantics, normal-round reset, inconclusive-round hold,
-  and separate opt-in native recovery. Changing frequency is separately opted in.
+- New Excel failure/recovery threshold editors default to 2 and accept 1–100 rounds;
+  legacy configs missing either field retain 1. Selective patches change only opted-in
+  fields. Show reset-on-save semantics: abnormal rounds reset the healthy count,
+  normal rounds reset the abnormal count, unknown/errors hold both. Changing frequency
+  and native recovery are separately opted in. Do not add an account-edit shortcut;
+  reuse quality operations and monitoring templates with existing bulk application.
 - Browser regressions cover partial success/retry, failed refresh, fresh unrelated
   values, empty field opt-ins on reopen and 1440/390/320px layouts. Interact with the
   visible labels of shared checkbox/switch controls and assert their checked state.

@@ -163,6 +163,7 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
             .batch_update(
                 context,
                 BatchUpdateAccounts {
+                    excel_recovery: settings.excel_recovery,
                     purchase_cost: None,
                     egress_mode: settings.egress_mode,
                     model_access: settings.model_access,

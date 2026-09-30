@@ -28,7 +28,7 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 200))
     }
     assert.ok(ready, 'Preview server did not start')
-    browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL })
+    browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL, executablePath: process.env.CHROME_PATH || undefined })
     for (const width of [1440, 390, 320]) {
       const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' })
       const errors = []
@@ -38,6 +38,10 @@ async function main() {
       let bodies = 0
       let posts = 0
       let rejectNextSave = true
+      let clears = 0
+      let storedBytes = 960
+      let recordCount = 3
+      const cutoffAt = '2026-01-01T00:00:00Z'
       const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
       await page.route('**/dev/**', async (route) => {
         const url = new URL(route.request().url())
@@ -51,7 +55,23 @@ async function main() {
             config = route.request().postDataJSON()
             return fulfill(route, null)
           }
-          return fulfill(route, { config, globalActive: config.enabled && config.globalErrors, storageFault: false, skipped: 0 })
+          return fulfill(route, { config, globalActive: config.enabled && config.globalErrors, storageFault: false, skipped: 0, storedBytes, recordCount })
+        }
+        if (url.pathname.endsWith('/request-captures/clear')) {
+          clears++
+          const body = route.request().postDataJSON()
+          assert.equal(body.confirmed, true)
+          if (clears === 1)
+            return route.fulfill({ status: 503, json: { code: 503, message: 'Fixture cleanup uncertain', data: null } })
+          if (clears === 2) {
+            assert.equal(body.cutoffAt, undefined)
+            return fulfill(route, { cutoffAt, removedRecords: 2, removedBytes: 640, complete: false })
+          }
+          assert.equal(clears, 3, 'uncertain cleanup must not be retried automatically')
+          assert.equal(body.cutoffAt, cutoffAt, 'all cleanup batches share the first server cutoff')
+          storedBytes = 320
+          recordCount = 1
+          return fulfill(route, { cutoffAt, removedRecords: 1, removedBytes: 320, complete: true })
         }
         if (url.pathname.endsWith('/request-captures/by-request')) {
           lookups++
@@ -100,6 +120,10 @@ async function main() {
       await page.getByRole('button', { name: '采集容量与保留时间', exact: true }).click()
       const settings = page.getByRole('dialog', { name: '详细错误采集', exact: true })
       await settings.waitFor()
+      const policy = settings.getByRole('combobox', { name: '容量满时的采集方案', exact: true })
+      assert.match(await policy.textContent() ?? '', /满了停止采集/)
+      await policy.click()
+      await page.getByRole('option', { name: '循环覆盖最旧材料', exact: true }).click()
       await settings.getByRole('spinbutton', { name: '采集文件总容量', exact: true }).fill('2048')
       await settings.getByRole('spinbutton', { name: '保留天数', exact: true }).fill('3')
       await page.screenshot({ path: `${output}/capture-settings-${width}.png`, fullPage: true })
@@ -108,6 +132,7 @@ async function main() {
       assert.equal(config.quotaMib, 2048)
       assert.equal(config.retentionDays, 3)
       assert.equal(config.includeMedia, false)
+      assert.equal(config.quotaPolicy, 'overwrite')
       assert.equal(posts, 3)
       assert.equal(bodies, 0)
       await page.getByRole('button', { name: '查看错误明细', exact: true }).click()
@@ -129,6 +154,28 @@ async function main() {
       await page.getByRole('button', { name: '查看错误明细', exact: true }).click()
       await dialog.locator('pre').filter({ hasText: '<script>' }).waitFor()
       assert.equal(bodies, 3, 'old captures remain available after collection is disabled')
+      await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+      await page.getByRole('button', { name: '采集容量与保留时间', exact: true }).click()
+      await settings.waitFor()
+      assert.match(await policy.textContent() ?? '', /循环覆盖最旧材料/)
+      await settings.getByRole('button', { name: '清理采集材料', exact: true }).click()
+      await settings.getByText(/不删除使用明细、普通错误日志、账号或其他文件/).waitFor()
+      await settings.getByRole('button', { name: '取消清理', exact: true }).click()
+      assert.equal(clears, 0)
+      await settings.getByRole('button', { name: '清理采集材料', exact: true }).click()
+      await settings.getByRole('button', { name: '确认清理', exact: true }).click()
+      await settings.getByText(/清理结果未确认，可能已清理部分材料/).waitFor()
+      await page.waitForTimeout(100)
+      assert.equal(clears, 1)
+      await settings.getByRole('button', { name: '清理采集材料', exact: true }).click()
+      await settings.getByRole('button', { name: '确认清理', exact: true }).click()
+      await settings.getByText(/清理完成，已清理 3 条采集材料/).waitFor()
+      assert.equal(clears, 3)
+      assert.equal(config.enabled, false, 'clearing must not change the saved capture switch')
+      assert.equal(config.quotaPolicy, 'overwrite')
+      await settings.getByText(/已存 1 条材料/).waitFor()
+      assert.ok(await settings.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      await page.screenshot({ path: `${output}/capture-cleared-${width}.png`, fullPage: true })
       assert.deepEqual(errors, [])
       await page.close()
     }

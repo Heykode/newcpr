@@ -1,6 +1,116 @@
 use super::*;
 
 #[tokio::test]
+async fn native_recovery_counts_two_healthy_rounds_holds_unknown_and_resets_on_degraded() {
+    let Some(db) = TestDatabase::create("quality_native_healthy_threshold").await else {
+        return;
+    };
+    let store = policy::probe_setup(&db).await;
+    let mut config = policy::probe_config("acct_quality_a");
+    config.disable_excel_on_native_recovery = true;
+    config.excel_failure_threshold = 2;
+    config.excel_recovery_threshold = Some(2);
+    let rule = store
+        .save(
+            None,
+            None,
+            config,
+            Utc::now() + Duration::hours(1),
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.rules().await.unwrap()[0]
+            .config
+            .excel_recovery_threshold,
+        Some(2)
+    );
+    scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    assert_eq!(policy::route(&db, "acct_quality_a").await, "codex");
+    scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    assert_eq!(policy::route(&db, "acct_quality_a").await, "excel");
+    let first = scheduled_round(&store, &rule, &[QualityVerdict::Correct]).await;
+    assert_eq!(first.action.as_deref(), Some("excel_recovery_counted"));
+    for (verdict, expected) in [
+        (QualityVerdict::Unknown, 1),
+        (QualityVerdict::RequestError, 1),
+        (QualityVerdict::Incorrect, 0),
+        (QualityVerdict::Correct, 1),
+        (QualityVerdict::Unknown, 1),
+    ] {
+        scheduled_round(&store, &rule, &[verdict]).await;
+        assert_eq!(policy::route(&db, "acct_quality_a").await, "excel");
+        let count: i32 = sqlx::query_scalar(
+            "select (recovery->>'excel_pass_streak')::int from quality_rules where id=$1",
+        )
+        .bind(&rule.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, expected);
+    }
+    let restarted = PgQualityOpsStore::new(db.pool.clone());
+    let normal = scheduled_round(&restarted, &rule, &[QualityVerdict::Correct]).await;
+    assert_eq!(
+        normal.action.as_deref(),
+        Some("excel_disabled_native_recovered")
+    );
+    assert_eq!(policy::route(&db, "acct_quality_a").await, "codex");
+    let clean: bool = sqlx::query_scalar(
+        "select not (recovery ? 'excel_pass_streak') from quality_rules where id=$1",
+    )
+    .bind(&rule.id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(clean);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn native_recovery_threshold_edit_resets_count_without_losing_owned_excel() {
+    let Some(db) = TestDatabase::create("quality_native_threshold_edit").await else {
+        return;
+    };
+    let store = policy::probe_setup(&db).await;
+    let mut config = policy::probe_config("acct_quality_a");
+    config.disable_excel_on_native_recovery = true;
+    config.excel_recovery_threshold = Some(2);
+    let rule = store
+        .save(
+            None,
+            None,
+            config,
+            Utc::now() + Duration::hours(1),
+            &context(),
+        )
+        .await
+        .unwrap();
+    scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    scheduled_round(&store, &rule, &[QualityVerdict::Correct]).await;
+    let mut config = rule.config.clone();
+    config.excel_recovery_threshold = Some(3);
+    let edited = store
+        .save(
+            Some(&rule.id),
+            Some(rule.revision),
+            config,
+            Utc::now() + Duration::hours(1),
+            &context(),
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        scheduled_round(&store, &edited, &[QualityVerdict::Correct]).await;
+        assert_eq!(policy::route(&db, "acct_quality_a").await, "excel");
+    }
+    scheduled_round(&store, &edited, &[QualityVerdict::Correct]).await;
+    assert_eq!(policy::route(&db, "acct_quality_a").await, "codex");
+    db.close().await;
+}
+
+#[tokio::test]
 async fn native_recovery_option_edits_preserve_ownership_but_model_edits_release_it() {
     for change_model in [false, true] {
         let Some(db) = TestDatabase::create("quality_native_rule_edits").await else {

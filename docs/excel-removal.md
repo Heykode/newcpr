@@ -59,6 +59,10 @@ rg -n 'ProviderReplay|TemporaryImage|provider_route|freeze_provider_route|with_i
 
 ## 数据和缓存
 
+- Excel 暂停恢复功能另见 `excel-paused-recovery.md`。整体移除时同时停用
+  `admin_excel_recovery` worker、账号 `excelRecovery` 配置和 Core 可信探测标记；
+  保留原生质量检测和历史 `0058` 迁移，不清空共享并发或调度状态。
+
 - 已应用的 `0039_account_responses_upstream.sql`、
   `0040_account_excel_models.sql`、`0041_excel_global_models.sql` 及
   `.frozen-sha256` 必须保留，不能删改或重编号。

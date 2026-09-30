@@ -18,6 +18,8 @@ pub struct ReloginNewAccountOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExcelImportSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     pub responses_upstream: gateway_core::account::ResponsesUpstream,
     pub excel_models_follow_global: bool,
     #[serde(default = "default_cache_creation_as_input")]
@@ -35,6 +37,9 @@ pub struct ExcelImportSettings {
 
 impl ExcelImportSettings {
     pub fn validate(&self) -> Result<(), AdminError> {
+        if let Some(config) = self.excel_recovery {
+            config.validate().map_err(AdminError::invalid)?;
+        }
         gateway_core::account::Excel403Action::resolve(
             self.excel_403_action,
             self.excel_auto_disable_on_403,
@@ -47,6 +52,9 @@ impl ExcelImportSettings {
     }
 
     pub fn apply(&self, settings: &mut AccountImportSettings) {
+        if let Some(config) = self.excel_recovery {
+            settings.excel_recovery = Some(config);
+        }
         settings.responses_upstream = Some(self.responses_upstream);
         settings.excel_cache_creation_as_input = Some(self.excel_cache_creation_as_input);
         settings.excel_ignore_encrypted_content = Some(self.excel_ignore_encrypted_content);
@@ -79,6 +87,8 @@ fn default_cache_creation_as_input() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReloginTemplateConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     #[serde(
@@ -116,6 +126,9 @@ pub struct ReloginTemplateConfig {
 
 impl ReloginTemplateConfig {
     pub fn settings(&self) -> Result<AccountImportSettings, AdminError> {
+        if let Some(config) = self.excel_recovery {
+            config.validate().map_err(AdminError::invalid)?;
+        }
         if self.preserve_outbound_proxy && self.outbound_proxy_id.is_some() {
             return Err(AdminError::invalid("保持原代理与指定代理不能同时设置"));
         }
@@ -146,6 +159,7 @@ impl ReloginTemplateConfig {
             }
         }
         Ok(AccountImportSettings {
+            excel_recovery: self.excel_recovery,
             purchase_cost: None,
             clear_outbound_proxy: !self.preserve_outbound_proxy && self.outbound_proxy_id.is_none(),
             egress_mode: self.egress_mode,

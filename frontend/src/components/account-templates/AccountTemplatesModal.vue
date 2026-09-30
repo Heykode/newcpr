@@ -141,6 +141,8 @@ onScopeDispose(() => {
         v-model:excel-cache-creation-as-input="form.excelCacheCreationAsInput"
         v-model:excel-ignore-encrypted-content="form.excelIgnoreEncryptedContent"
         v-model:excel-403-action="form.excel403Action"
+        v-model:excel-recovery-enabled="form.excelRecoveryEnabled"
+        v-model:excel-recovery-interval="form.excelRecoveryInterval"
         v-model:concurrency-limit="form.concurrencyLimit"
         v-model:weight="form.weight"
         v-model:selected-group-ids="form.groupIds"
@@ -155,6 +157,8 @@ onScopeDispose(() => {
         :groups="groups"
         :groups-loading="groupsLoading"
         :disabled="busy"
+        @update:excel-recovery-enabled="form.preserveExcelRecovery = false"
+        @update:excel-recovery-interval="form.preserveExcelRecovery = false"
       />
       <BaseCheckbox v-model="form.applyExcel" label="模板包含 Excel 设置" show-label :disabled="busy" />
       <div v-for="id in missingGroups" :key="id" class="flex min-w-0 items-center gap-2 text-cp-sm text-cp-warning">

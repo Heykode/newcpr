@@ -1,5 +1,6 @@
 //! Single-instance, administrator-controlled error body storage.
 
+mod capacity;
 mod control;
 mod filter;
 mod maintenance;
@@ -339,18 +340,21 @@ impl CaptureManager {
                 bundle.incomplete || bundle.incomplete_tasks & (1 << task_index) != 0;
             let id = Uuid::new_v4().to_string();
             let file = self.file(&id)?;
-            let quota = u64::from(
-                self.shared
-                    .control
-                    .read()
-                    .map_err(unavailable)?
-                    .config
-                    .quota_mib,
-            ) * 1024
-                * 1024;
-            let used: i64 = sqlx::query_scalar(
-                "select coalesce(sum((r.record->>'bytes')::bigint),0)::bigint from request_capture_records r join request_capture_tasks t on t.id=r.task_id where t.instance_id::text=$1"
-            ).bind(&self.instance_id).fetch_one(&self.pool).await.map_err(unavailable)?;
+            let config = self
+                .shared
+                .control
+                .read()
+                .map_err(unavailable)?
+                .config
+                .clone();
+            let quota = u64::from(config.quota_mib) * 1024 * 1024;
+            let overwrite = config.quota_policy == CaptureQuotaPolicy::Overwrite;
+            // Complete a bounded new record before evicting usable history.
+            let used = if overwrite {
+                0
+            } else {
+                self.stored_totals().await?.0
+            };
             let mut output = tokio::fs::OpenOptions::new();
             output.create_new(true).write(true);
             #[cfg(unix)]
@@ -381,6 +385,9 @@ impl CaptureManager {
                     &mut bytes, used, quota).await?;
                 output.flush().await.map_err(unavailable)?;
                 output.sync_all().await.map_err(unavailable)?;
+                if overwrite {
+                    self.make_room(bytes, quota).await?;
+                }
                 let record = CaptureRecord { id: id.clone(), task_id:task.task.id.clone(),
                     request_id:bundle.request_id.clone(), bytes, incomplete, created_at:Utc::now() };
                 sqlx::query("insert into request_capture_records(id,task_id,record) values($1::text::uuid,$2::text::uuid,$3)")
@@ -393,6 +400,11 @@ impl CaptureManager {
                 tokio::fs::remove_file(&file).await.map_err(unavailable)?;
                 self.shared.skipped.fetch_add(1, Ordering::Relaxed);
                 if error.kind() == AdminStoreErrorKind::Conflict {
+                    if overwrite {
+                        // A record larger than the whole quota cannot fit. Skip
+                        // that record without deleting history or stopping capture.
+                        continue;
+                    }
                     sqlx::query("update request_capture_tasks set task=jsonb_set(jsonb_set(task,'{status}','\"stopped\"'),'{expiresAt}',to_jsonb(least(expires_at,now()))), expires_at=least(expires_at,now()) where instance_id::text=$1 and task->>'status'='running'")
                         .bind(&self.instance_id).execute(&self.pool).await.map_err(unavailable)?;
                     let control = self.shared.control.read().map_err(unavailable)?;
@@ -412,13 +424,13 @@ async fn write_line(
     output: &mut tokio::fs::File,
     line: &Value,
     bytes: &mut u64,
-    used: i64,
+    used: u64,
     quota: u64,
 ) -> AdminStoreResult<()> {
     let mut encoded = serde_json::to_vec(line).map_err(unavailable)?;
     encoded.push(b'\n');
     let next = bytes.saturating_add(encoded.len() as u64);
-    if (used.max(0) as u64).saturating_add(next) > quota || next > 128 * 1024 * 1024 {
+    if used.saturating_add(next) > quota || next > 128 * 1024 * 1024 {
         return Err(conflict());
     }
     output.write_all(&encoded).await.map_err(unavailable)?;

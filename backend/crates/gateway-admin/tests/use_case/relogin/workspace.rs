@@ -374,6 +374,7 @@ async fn push(h: &Harness, id: &str, target: &AccountRecord, switch_workspace: b
                 custom_name: Some("Must not rename existing".into()),
                 excel: Some(
                     gateway_admin::model::relogin_templates::ExcelImportSettings {
+                        excel_recovery: None,
                         responses_upstream: gateway_core::account::ResponsesUpstream::Excel,
                         excel_models_follow_global: true,
                         excel_cache_creation_as_input: Default::default(),

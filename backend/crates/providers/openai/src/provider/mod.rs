@@ -471,6 +471,7 @@ impl Provider for CodexProvider {
             encode_generate_request(generate, upstream_model.as_str(), location)
                 .map_err(map_request_error)?;
         upstream_request.quality_probe = generate.quality_probe().cloned();
+        upstream_request.excel_recovery_nonce = generate.excel_recovery_nonce().map(str::to_owned);
         quality_probe::initialize(
             &mut upstream_request,
             context.is_quality_check(),

@@ -250,6 +250,9 @@ impl CodexBackendClient {
         let Some(prepared) = request.excel.as_ref() else {
             return response;
         };
+        if let Some(nonce) = &request.excel_recovery_nonce {
+            response.body = super::excel::recovery::verify_stream(response.body, nonce.clone());
+        }
         if !prepared.tools.has_client_tools() || prepared.structured.is_some() {
             response.body = super::excel::transform_stream(response.body, prepared);
             return response;
@@ -453,7 +456,11 @@ impl CodexBackendClient {
         }
         let retry_after_seconds = retry_after_seconds(response.headers(), None);
 
-        if !status.is_success() {
+        if !status.is_success()
+            || (excel.is_some()
+                && upstream_request.excel_recovery_nonce.is_some()
+                && status != reqwest::StatusCode::OK)
+        {
             let content_type = response
                 .headers()
                 .get(CONTENT_TYPE)

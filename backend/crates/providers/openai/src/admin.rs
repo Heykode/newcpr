@@ -287,6 +287,14 @@ impl ProviderAdmin for OpenAiAdminProvider {
         build_connection_test_operation(upstream_model, input_text, stream)
     }
 
+    fn excel_recovery_operation(
+        &self,
+        upstream_model: &UpstreamModelId,
+        input_text: &str,
+    ) -> Result<Operation, ProviderAdminError> {
+        build_connection_test_operation_with_effort(upstream_model, input_text, true, Some("low"))
+    }
+
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile> {
         let selection = self.profile.settings_snapshot();
         let profile = selection.effective_profile;
@@ -1496,6 +1504,15 @@ fn build_connection_test_operation(
     input_text: &str,
     stream: bool,
 ) -> Result<Operation, ProviderAdminError> {
+    build_connection_test_operation_with_effort(upstream_model, input_text, stream, None)
+}
+
+fn build_connection_test_operation_with_effort(
+    upstream_model: &UpstreamModelId,
+    input_text: &str,
+    stream: bool,
+    reasoning_effort: Option<&str>,
+) -> Result<Operation, ProviderAdminError> {
     let mut body = Map::new();
     body.insert(
         "model".to_owned(),
@@ -1511,6 +1528,12 @@ fn build_connection_test_operation(
     );
     body.insert("stream".to_owned(), Value::Bool(stream));
     body.insert("store".to_owned(), Value::Bool(false));
+    if let Some(effort) = reasoning_effort {
+        body.insert(
+            "reasoning".to_owned(),
+            serde_json::json!({"effort": effort}),
+        );
+    }
     let payload = ProtocolPayload::json_object("openai", body)
         .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
     Ok(Operation::Generate(GenerateRequest::from_protocol_payload(

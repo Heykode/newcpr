@@ -306,6 +306,15 @@ impl CodexCredentialSelector {
     ) -> bool {
         let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
+            && request
+                .attempt
+                .excel_recovery_revision()
+                .is_none_or(|revision| {
+                    account.revision().get() == revision
+                        && account.responses_upstream()
+                            == gateway_core::account::ResponsesUpstream::Excel
+                        && upstream == gateway_core::account::ResponsesUpstream::Excel
+                })
             && (request.attempt.is_diagnostic_required_account()
                 || request.attempt.is_quality_retest()
                 || self.excel_auth_block(account).is_none())
@@ -1346,10 +1355,11 @@ impl CodexCredentialSelector {
     pub(crate) async fn apply_excel_403_action(
         &self,
         account: &ProviderAccount,
+        model: Option<&str>,
     ) -> Result<bool, CredentialSelectionError> {
         self.repository
             .store()
-            .apply_excel_403_action(account)
+            .apply_excel_403_action_for_model(account, model.unwrap_or_default())
             .await
             .map_err(|_| CredentialSelectionError::Store)
     }

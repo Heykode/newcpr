@@ -36,13 +36,14 @@ import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
+import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useDownload } from '@/composables/useDownload'
 import { normalizeAccountName } from '@/utils/account-name'
 import { errorMessage } from '@/utils/async'
 import { formatDateTime } from '@/utils/date'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
-import { excelSettings } from '@/utils/excel-settings'
+import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
 import { useAccountSwipeSelect } from '../accounts/composables/useAccountSwipeSelect'
 import { importPreview } from './import-preview'
 import { credentialLabel, matchesPool, poolPresentation, processingStatus, recoveryCountdown, recoveryLabels, retryProgress, shortWorkspace, statusLabels, workspaceChoices, workspaceId } from './presentation'
@@ -337,6 +338,8 @@ const applyExcel = shallowRef(false)
 const excelEnabled = shallowRef(false)
 const excelCacheCreationAsInput = shallowRef(true)
 const excel403Action = shallowRef<Excel403Action>('none')
+const excelRecoveryEnabled = shallowRef(false)
+const excelRecoveryInterval = shallowRef('60')
 const excelModelsFollowGlobal = shallowRef(true)
 const excelModels = shallowRef(DEFAULT_EXCEL_MODELS_INPUT)
 const confirmMode = shallowRef<'push' | 'delete'>('push')
@@ -350,6 +353,8 @@ function confirm(mode: 'push' | 'delete', ids: string[]) {
   excelEnabled.value = false
   excelCacheCreationAsInput.value = true
   excel403Action.value = 'none'
+  excelRecoveryEnabled.value = false
+  excelRecoveryInterval.value = '60'
   excelModelsFollowGlobal.value = true
   excelModels.value = DEFAULT_EXCEL_MODELS_INPUT
   confirmMode.value = mode
@@ -396,7 +401,10 @@ function executeConfirmed() {
           selections[row.id] = { accountId: target.accountId, switchWorkspace: target.switchWorkspace }
       }
       const newAccountExcel = newPushCount.value > 0 && applyExcel.value
-        ? excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value, excel403Action.value)
+        ? {
+            ...excelSettings(excelEnabled.value, excelModelsFollowGlobal.value, excelModels.value, excelCacheCreationAsInput.value, excel403Action.value),
+            excelRecovery: excelRecoverySettings(excelRecoveryEnabled.value, excelRecoveryInterval.value),
+          }
         : undefined
       batchReport(await pushRelogin(pushable.value, template, customName, Object.keys(selections).length ? selections : undefined, newAccountExcel))
     }
@@ -732,6 +740,7 @@ onBeforeUnmount(() => {
           <BaseFormItem label="Excel遇到HTTP 403">
             <Excel403ActionSelect v-model="excel403Action" :disabled="busy || !excelEnabled" />
           </BaseFormItem>
+          <ExcelRecoveryFields v-model:enabled="excelRecoveryEnabled" v-model:interval="excelRecoveryInterval" :disabled="busy" />
         </template>
       </div>
       <BaseFormItem v-if="confirmMode === 'push' && newPushCount > 0" label="本批账号名称（选填）">

@@ -23,6 +23,8 @@ impl AccountProvider {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clear_outbound_proxy: bool,
@@ -71,6 +73,7 @@ impl AccountImportSettingsRequest {
         self,
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
+            excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             clear_outbound_proxy: self.clear_outbound_proxy,
             egress_mode: self.egress_mode,
@@ -258,6 +261,7 @@ impl CompleteAccountAuthorizationRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateAccountRequest {
+    pub excel_recovery: Option<gateway_admin::model::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<gateway_admin::model::account_purchase::AccountPurchaseUpdate>,
     #[serde(
         default,
@@ -309,6 +313,7 @@ impl UpdateAccountRequest {
     pub(super) fn into_command(self) -> Result<UpdateAccount, WireValidationError> {
         self.validate()?;
         Ok(UpdateAccount {
+            excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             egress_mode: self.egress_mode,
             custom_name: self

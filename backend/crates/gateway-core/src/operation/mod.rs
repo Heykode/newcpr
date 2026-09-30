@@ -307,6 +307,8 @@ struct GeneratePayload {
     protocol_payload: ProtocolPayload,
     provider_session_state: Option<ProviderSessionState>,
     quality_probe: Option<quality_probe::QualityProbeStep>,
+    excel_recovery_revision: Option<u64>,
+    excel_recovery_nonce: Option<String>,
 }
 
 impl GenerateRequest {
@@ -321,6 +323,8 @@ impl GenerateRequest {
                 protocol_payload,
                 provider_session_state: None,
                 quality_probe: None,
+                excel_recovery_revision: None,
+                excel_recovery_nonce: None,
             }),
         }
     }
@@ -346,6 +350,23 @@ impl GenerateRequest {
     #[must_use]
     pub fn quality_probe(&self) -> Option<&quality_probe::QualityProbeStep> {
         self.payload.quality_probe.as_ref()
+    }
+
+    pub(crate) fn with_excel_recovery(mut self, revision: u64, nonce: String) -> Self {
+        let payload = Arc::make_mut(&mut self.payload);
+        payload.excel_recovery_revision = Some(revision);
+        payload.excel_recovery_nonce = Some(nonce);
+        self
+    }
+
+    #[must_use]
+    pub fn excel_recovery_nonce(&self) -> Option<&str> {
+        self.payload.excel_recovery_nonce.as_deref()
+    }
+
+    #[must_use]
+    pub fn excel_recovery_revision(&self) -> Option<u64> {
+        self.payload.excel_recovery_revision
     }
 
     /// 返回最大输出 token 数。

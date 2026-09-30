@@ -393,6 +393,7 @@ pub(super) async fn observe_http_rejection(
     excel: bool,
     allows_mutation: bool,
     diagnostic: bool,
+    model: Option<&str>,
 ) {
     if !excel || !allows_mutation {
         return;
@@ -409,9 +410,10 @@ pub(super) async fn observe_http_rejection(
     suppress_rejection_recovery(failure);
     let selector = selector.clone();
     let account = account.clone();
+    let model = model.map(str::to_owned);
     // Cancellation may drop the waiter, but the already-confirmed write stays bounded.
     let _ = tokio::spawn(async move {
-        match tokio::time::timeout(Duration::from_secs(2), selector.apply_excel_403_action(&account)).await {
+        match tokio::time::timeout(Duration::from_secs(2), selector.apply_excel_403_action(&account, model.as_deref())).await {
             Ok(Ok(true)) => tracing::info!(account_id = %account.id(), action = account.excel_403_action().as_str(), "Excel HTTP 403 policy applied; request not replayed"),
             Ok(Ok(false)) => {},
             _ => tracing::warn!(account_id = %account.id(), "Excel HTTP 403 policy did not complete"),
