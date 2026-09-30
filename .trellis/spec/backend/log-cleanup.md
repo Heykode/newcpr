@@ -17,3 +17,6 @@
   文件Unix按分配块统计；读取失败保留未知，不伪造0。
 - 不自动执行物理缩库。页面不展示历史清理结果，只更新当前占用。
 - 真实测试库需显式 `CPR_TEST_DATABASE_URL` 和 `CI=true`，不能将跳过当通过。
+- 新增数据库表时，同步 `connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly`
+  的精确表清单并实测生产迁移入口；专项清理测试不能代替迁移回归。
+- 前端格式检查覆盖完整目录，包括浏览器测试 HTML；仅检查 TS/Vue 不足以覆盖 CI。
