@@ -74,7 +74,8 @@ use crate::transport::profile::{
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
-    PreviousResponseScope, ResponseEventSignals, TransportRequirement, transport_requirement,
+    PreviousResponseScope, ResponseEventSignals, STREAM_REPLAY_GRACE, TransportRequirement,
+    transport_requirement,
 };
 use crate::transport::protocol::websocket::WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 use crate::transport::request::{
@@ -116,9 +117,6 @@ const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const HTTP_JSON_TRANSPORT: &str = "http_json";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
-/// 短暂保留 response.created 等结构事件，让随后到达的明确拒绝可以无感换号；
-/// 到期即放行，避免模型长时间思考时让客户端一直收不到首事件。
-const STREAM_REPLAY_GRACE: Duration = Duration::from_millis(2_500);
 // 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照。
 const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
 const QUOTA_FAILURE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);

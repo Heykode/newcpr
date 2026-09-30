@@ -92,6 +92,9 @@ pub enum CodexWebSocketExchangeError {
     /// 上游返回非文本事件帧。
     #[error("unexpected binary websocket event")]
     UnexpectedBinaryEvent,
+    /// Malformed business event; never include upstream payload in diagnostics.
+    #[error("upstream websocket returned invalid event JSON")]
+    InvalidEventJson,
     /// 复用的池连接在收到首个上游事件前失效。
     #[error("reused websocket connection died before first upstream event: {message}")]
     ReusedConnectionDiedBeforeFirstEvent {

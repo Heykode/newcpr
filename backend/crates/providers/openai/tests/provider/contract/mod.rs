@@ -82,6 +82,7 @@ mod reasoning_replay;
 mod request_alignment;
 mod scheduling;
 mod streamed_errors;
+mod ws_message_compatibility;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
     "event: response.completed\n",
     "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_scope_capture\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"

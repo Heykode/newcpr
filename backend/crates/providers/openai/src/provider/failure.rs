@@ -102,6 +102,7 @@ pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
     prefetched_bytes: usize,
     replay_grace_started_at: Option<Instant>,
+    upstream_grace_started_at: Option<Instant>,
     committed: bool,
     max_prefetch_bytes: u64,
     trace: TraceContext,
@@ -124,10 +125,16 @@ impl PreCommitClientEvents {
             pending: Vec::new(),
             prefetched_bytes: 0,
             replay_grace_started_at: None,
+            upstream_grace_started_at: None,
             committed: false,
             max_prefetch_bytes,
             trace,
         }
+    }
+
+    pub(super) fn with_upstream_grace_started_at(mut self, started_at: Option<Instant>) -> Self {
+        self.upstream_grace_started_at = started_at;
+        self
     }
 
     pub(super) fn observe_chunk(&mut self, bytes: usize) {
@@ -165,7 +172,11 @@ impl PreCommitClientEvents {
             return self.commit_pending(PreCommitReleaseReason::ByteLimit);
         }
         if starts_replay_grace && self.replay_grace_started_at.is_none() {
-            self.replay_grace_started_at = Some(Instant::now());
+            self.replay_grace_started_at = Some(
+                self.upstream_grace_started_at
+                    .take()
+                    .unwrap_or_else(Instant::now),
+            );
         }
         Vec::new()
     }
@@ -1186,6 +1197,7 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
             ("receive", "receive_idle_timeout")
         }
         CodexWebSocketExchangeError::InvalidSse(_) => ("decode", "invalid_sse"),
+        CodexWebSocketExchangeError::InvalidEventJson => ("decode", "invalid_event_json"),
         CodexWebSocketExchangeError::UnexpectedBinaryEvent => ("decode", "unexpected_binary_event"),
         CodexWebSocketExchangeError::ClosedBeforeTerminal(close) if close.code() == Some(1009) => {
             ("receive", "message_too_big")
@@ -1291,6 +1303,9 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
         }
         CodexWebSocketExchangeError::UnexpectedBinaryEvent => {
             "OpenAI WebSocket returned an unexpected binary event".to_owned()
+        }
+        CodexWebSocketExchangeError::InvalidEventJson => {
+            "OpenAI WebSocket returned invalid event JSON".to_owned()
         }
         CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
             reason,
@@ -1585,6 +1600,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
         CodexWebSocketExchangeError::Upstream(_)
         | CodexWebSocketExchangeError::ConnectionLimitReached(_)
         | CodexWebSocketExchangeError::InvalidSse(_)
+        | CodexWebSocketExchangeError::InvalidEventJson
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => UpstreamSendState::Sent,
         CodexWebSocketExchangeError::Transport(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
@@ -1609,6 +1625,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         CodexWebSocketExchangeError::InvalidRequest(_)
         | CodexWebSocketExchangeError::Egress(_)
         | CodexWebSocketExchangeError::InvalidSse(_)
+        | CodexWebSocketExchangeError::InvalidEventJson
         | CodexWebSocketExchangeError::UnexpectedBinaryEvent => ProviderErrorKind::Protocol,
         CodexWebSocketExchangeError::ConnectTimeout { .. }
         | CodexWebSocketExchangeError::SendTimeout { .. }

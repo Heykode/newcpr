@@ -12,10 +12,21 @@ authority, finite scheduling, Excel repair, or continuation ownership contracts.
   131072 bytes. The existing JSONB overrides accept omission/null as inheritance.
 - The runtime snapshot resolves the override; an attempt uses its frozen tuning,
   never the live settings handle while streaming.
-- The Web control displays KiB and converts by exactly 1024. Zero disables only
-  additional Provider precommit buffering; parsed client events are released
-  without a grace timer. It does not bypass parsing, authentication, settlement,
-  account isolation, or nonstream JSON aggregation.
+- The Web control displays KiB and converts by exactly 1024. Zero disables
+  additional Provider precommit buffering and the lower new-chain WS lifecycle
+  wait: the first complete parsed client event, including created/in_progress,
+  can be released without waiting for later output or a grace timer. Inspect an
+  immediate first-event connection-limit rejection before delivery so its existing
+  recovery remains available. A rejection after a released lifecycle event cannot
+  transparently replay. Pass the frozen AttemptContext threshold to transport;
+  standalone client calls snapshot the threshold before opening, not while streaming.
+  A positive value bounds lower WS lifecycle buffering with the same original
+  SSE-frame byte count used by Provider. Replaying that buffered prefix into the
+  Provider does not add a second budget. Transport passes the original grace
+  start time to Provider, so a lower-layer timeout cannot start another 2.5-second
+  wait. Exact continuation ownership and HTTP/Excel transport selection stay intact.
+  This does not bypass parsing, authentication, settlement, account isolation,
+  exact continuation ownership, or nonstream JSON aggregation.
 - Accept nonnegative integral byte values. Backend storage uses `u64`; the Web
   form rejects numbers it cannot represent exactly. Do not add a product-specific
   size cap or silently clamp/round a saved value.
@@ -25,6 +36,11 @@ authority, finite scheduling, Excel repair, or continuation ownership contracts.
   threshold: this is not a hard memory ceiling or a request rejection limit.
 - Zero must not mark an incomplete, non-client-visible chunk committed. Once
   events are released, later failures must not become transparent replay.
+- Buffering does not create retry attempts. Existing same-account transport
+  budgets, account-switch budgets and the independent HTTP fallback setting
+  remain authoritative. A zero/exhausted transport retry budget with fallback
+  disabled produces no transport retry/fallback intent. Core still requires
+  replay proof and an uncommitted downstream before any configured retry.
 - Trace `provider.precommit.released` with reason, prefetchedBytes, limitBytes,
   and waitMs. No request bodies, credentials, or device identifiers are added.
 

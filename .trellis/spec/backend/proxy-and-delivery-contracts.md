@@ -1,5 +1,38 @@
 # Proxy and Responses Delivery Contracts
 
+## Upstream WS Message And Opening Compatibility
+
+- New-chain pool profiles include the effective opening beta feature set and
+  window ID, in addition to existing account/client/egress/session/auth identity.
+  Sort and deduplicate comma-separated beta features. Compute compatibility
+  from effective headers, so omitted and explicitly selected default beta remain
+  equivalent. Do not alter outgoing headers or prompt-cache identity.
+- Exact connection-local continuations still resolve their original socket even
+  when the new-chain profile changes. Never replace owner resolution with a new
+  opening that merely carries the previous response ID.
+- Parse ordinary WS JSON once and preserve its raw wire representation. Only
+  after single-document parsing fails, attempt recovery of at most 16 complete
+  typed JSON documents from a message of at most 16 MiB. Validate the complete
+  message before yielding recovered events. These are repair budgets, not new
+  limits on ordinary valid single-event messages.
+- Incomplete documents, garbage tails, untyped recovered documents and repair
+  budget overflow become a payload-free `InvalidEventJson` protocol diagnostic.
+  Retire the connection, preserve sent/ambiguous send state and do not grant replay
+  or account-health penalties. Valid unknown single-event JSON retains its prior
+  compatibility behavior.
+- Preserve text/tool/event order and bytes. If a terminal has additional complete
+  documents in the same message, do not forward the tail or return the connection
+  to the pool. Never synthesize success or replay a possibly executed request.
+- The frozen prefetch threshold also controls the lower new-chain WS lifecycle
+  wait. Zero releases the first complete event including created/in_progress;
+  positive thresholds count the same SSE-frame bytes as Provider and release on
+  threshold crossing or the shared grace deadline. Carry the original wait start
+  through the streaming response, never restarting a second grace period. Inspect the
+  first event for an explicit connection-limit rejection before returning the
+  stream, and retain this rejection classification while still buffering. After delivery, later failures retain the existing
+  no-replay contract. Do not change exact continuation, warmup, outgoing identity,
+  retry budgets, or Provider semantic-output/terminal release rules.
+
 ## WebSocket Context Window Boundaries
 
 - Read window identity from the original `response.create` frame before provider
