@@ -1,20 +1,20 @@
 use super::*;
 
-async fn probe_setup(db: &TestDatabase) -> PgQualityOpsStore {
+pub(super) async fn probe_setup(db: &TestDatabase) -> PgQualityOpsStore {
     let store = setup(db).await;
     sqlx::query("update provider_accounts set excel_models_follow_global=false,excel_models=array['fixture-model']")
         .execute(&db.pool).await.unwrap();
     store
 }
 
-fn probe_config(account: &str) -> QualityRuleConfig {
+pub(super) fn probe_config(account: &str) -> QualityRuleConfig {
     let mut config = config(account);
     config.detection_mode = QualityDetectionMode::StateProbe;
     config.failure_action = QualityFailureAction::EnableExcel;
     config
 }
 
-async fn route(db: &TestDatabase, account: &str) -> String {
+pub(super) async fn route(db: &TestDatabase, account: &str) -> String {
     sqlx::query_scalar("select responses_upstream from provider_accounts where id=$1")
         .bind(account)
         .fetch_one(&db.pool)
@@ -49,24 +49,41 @@ async fn quality_probe_excel_action_is_atomic_and_independent_between_accounts()
             .into_iter()
             .find(|r| r.id == claim.rule.id)
             .unwrap();
-        assert!(!rule.config.enabled);
+        assert!(rule.config.enabled);
         assert!(!rule.pending);
         assert!(!rule.running);
-        assert_eq!(rule.revision, claim.rule.revision + 1);
+        assert_eq!(rule.revision, claim.rule.revision);
         let run = store.detail(&claim.run_id).await.unwrap().unwrap();
         assert_eq!(run.status, "incorrect");
-        assert_eq!(run.action.as_deref(), Some("excel_enabled_probe_paused"));
+        assert_eq!(run.action.as_deref(), Some("excel_enabled"));
         assert_eq!(run.detection_mode, QualityDetectionMode::StateProbe);
     }
-    assert!(store.claim().await.unwrap().is_none());
-    // Neither a manual switch-off nor a 403 switch-off may resurrect a paused rule.
+    let continuing = store
+        .claim()
+        .await
+        .unwrap()
+        .expect("Excel keeps native monitoring active");
+    store
+        .finish(
+            &continuing,
+            Utc::now(),
+            vec![answer(QualityVerdict::Correct)],
+        )
+        .await
+        .unwrap();
+    // A 403 switch-off remains protected from being automatically re-enabled.
     sqlx::query(
         "update provider_accounts set responses_upstream='codex',excel_mode_disabled_at=now()",
     )
     .execute(&db.pool)
     .await
     .unwrap();
-    assert!(store.claim().await.unwrap().is_none());
+    let claim = store.claim().await.unwrap().unwrap();
+    store
+        .finish(&claim, Utc::now(), vec![answer(QualityVerdict::Incorrect)])
+        .await
+        .unwrap();
+    assert_eq!(route(&db, &claim.rule.config.account_id).await, "codex");
     db.close().await;
 }
 
@@ -108,7 +125,7 @@ async fn quality_probe_unknown_and_errors_never_change_route_or_pause_rule() {
                 .is_none()
         );
     }
-    // Enabling Excel while queued/running invalidates the lease and late actions.
+    // Manual route changes keep detection alive but fence this round's actions.
     let claim = store.claim().await.unwrap().unwrap();
     sqlx::query(
         "update provider_accounts set responses_upstream='excel' where id='acct_quality_a'",
@@ -116,32 +133,42 @@ async fn quality_probe_unknown_and_errors_never_change_route_or_pause_rule() {
     .execute(&db.pool)
     .await
     .unwrap();
-    assert!(!store.current(&claim).await.unwrap());
+    assert!(store.current(&claim).await.unwrap());
     store
         .finish(&claim, Utc::now(), vec![answer(QualityVerdict::Incorrect)])
         .await
         .unwrap();
     assert_eq!(
         store.detail(&claim.run_id).await.unwrap().unwrap().status,
-        "cancelled"
+        "incorrect"
     );
-    assert!(!store.rules().await.unwrap()[0].config.enabled);
+    assert_eq!(
+        store
+            .detail(&claim.run_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .action
+            .as_deref(),
+        Some("excel_blocked_configuration_changed")
+    );
+    assert!(store.rules().await.unwrap()[0].config.enabled);
     assert!(
         store
             .enqueue(&rule.id, rule.revision, &context())
             .await
-            .is_err()
+            .is_ok()
     );
     db.close().await;
 }
 
 #[tokio::test]
-async fn quality_paused_manual_probes_keep_excel_route_guards() {
+async fn quality_paused_manual_probes_keep_excel_route_and_remain_paused_after_run() {
     let Some(db) = TestDatabase::create("quality_manual_probe").await else {
         return;
     };
     let store = probe_setup(&db).await;
-    // Exercise rejection before enqueue, before claim, and after acquiring a lease.
+    // Excel may be enabled before enqueue, before claim, or during a run.
     for stage in 0..3 {
         sqlx::query(
             "update provider_accounts set responses_upstream='codex' where id='acct_quality_a'",
@@ -172,28 +199,27 @@ async fn quality_paused_manual_probes_keep_excel_route_guards() {
         .execute(&db.pool)
         .await
         .unwrap();
-        if let Some(claim) = &claim {
-            assert!(!store.current(claim).await.unwrap());
+        if stage == 0 {
             store
-                .finish(claim, Utc::now(), vec![answer(QualityVerdict::Incorrect)])
+                .enqueue(&rule.id, rule.revision, &context())
                 .await
                 .unwrap();
-            assert_eq!(
-                store.detail(&claim.run_id).await.unwrap().unwrap().status,
-                "cancelled"
-            );
         }
+        let claim = match claim {
+            Some(claim) => claim,
+            None => store.claim().await.unwrap().unwrap(),
+        };
+        assert!(store.current(&claim).await.unwrap());
+        store
+            .finish(&claim, Utc::now(), vec![answer(QualityVerdict::Correct)])
+            .await
+            .unwrap();
+        assert_eq!(route(&db, "acct_quality_a").await, "excel");
         assert!(store.claim().await.unwrap().is_none());
         let paused = store.rules().await.unwrap().remove(0);
         assert!(!paused.config.enabled);
         assert!(!paused.pending);
         assert!(!paused.running);
-        assert!(
-            store
-                .enqueue(&paused.id, paused.revision, &context())
-                .await
-                .is_err()
-        );
         // Guard checks must not repeatedly change the revision of an idle paused rule.
         assert_eq!(store.rules().await.unwrap()[0].revision, paused.revision);
         store
@@ -334,20 +360,24 @@ async fn quality_excel_threshold_counts_confirmed_rounds_and_survives_store_rest
             .await
             .unwrap();
         let rule = store.rules().await.unwrap().remove(0);
-        assert_eq!(rule.excel_failure_streak, count);
+        let expected_streak = if count == 3 { 0 } else { count };
+        assert_eq!(rule.excel_failure_streak, expected_streak);
         assert_eq!(
             route(&db, "acct_quality_a").await,
             if count == 3 { "excel" } else { "codex" }
         );
-        assert_eq!(rule.config.enabled, count != 3);
+        assert!(rule.config.enabled);
         // A duplicated completion cannot count the same round twice.
         store
             .finish(&claim, Utc::now(), vec![answer(QualityVerdict::Incorrect)])
             .await
             .unwrap();
-        assert_eq!(store.rules().await.unwrap()[0].excel_failure_streak, count);
+        assert_eq!(
+            store.rules().await.unwrap()[0].excel_failure_streak,
+            expected_streak
+        );
     }
-    assert!(store.claim().await.unwrap().is_none());
+    assert!(store.claim().await.unwrap().is_some());
     db.close().await;
 }
 

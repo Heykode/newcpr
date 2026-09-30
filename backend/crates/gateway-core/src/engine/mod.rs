@@ -163,6 +163,8 @@ pub struct AccountAttemptContext {
     credential_recovery_attempted: bool,
     diagnostic_required_account: bool,
     quality_check: bool,
+    quality_retest: bool,
+    native_quality_probe: bool,
     account_scope: Option<Arc<crate::account::scope::FrozenAccountScope>>,
 }
 
@@ -180,6 +182,8 @@ impl AccountAttemptContext {
             credential_recovery_attempted: false,
             diagnostic_required_account: false,
             quality_check: false,
+            quality_retest: false,
+            native_quality_probe: false,
             account_scope: None,
         }
     }
@@ -200,6 +204,8 @@ impl AccountAttemptContext {
             credential_recovery_attempted: false,
             diagnostic_required_account: true,
             quality_check: false,
+            quality_retest: false,
+            native_quality_probe: false,
             account_scope: None,
         }
     }
@@ -249,6 +255,16 @@ impl AccountAttemptContext {
 
     pub(crate) const fn with_quality_check(mut self, quality: bool) -> Self {
         self.quality_check = quality;
+        self
+    }
+
+    pub(crate) const fn with_quality_retest(mut self, retest: bool) -> Self {
+        self.quality_retest = retest;
+        self
+    }
+
+    pub(crate) const fn with_native_quality_probe(mut self, native: bool) -> Self {
+        self.native_quality_probe = native;
         self
     }
 
@@ -618,6 +634,20 @@ impl AttemptContext {
     #[must_use]
     pub const fn is_quality_check(&self) -> bool {
         self.account.quality_check
+    }
+
+    /// Core-only target permission; neither client JSON nor a judge opts into it.
+    #[must_use]
+    pub fn is_quality_retest(&self) -> bool {
+        self.account.quality_check
+            && self.account.quality_retest
+            && self.account.required_account.is_some()
+    }
+
+    /// Only the Core's fixed-account state probe can bypass the account's Excel route.
+    #[must_use]
+    pub fn is_native_quality_probe(&self) -> bool {
+        self.is_quality_retest() && self.account.native_quality_probe
     }
 
     /// 普通请求认证时冻结的账号范围；管理端诊断为 `None`。

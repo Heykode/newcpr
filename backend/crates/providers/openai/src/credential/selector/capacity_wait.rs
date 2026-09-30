@@ -169,7 +169,7 @@ impl CodexCredentialSelector {
         cyber_policy_key: Option<&ProviderSessionAffinityKey>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let mut control = WaitControl::new(request.attempt)?;
-        let (accounts, quality_recovery) = control.run(self.wait_accounts(request)).await?;
+        let accounts = control.run(self.wait_accounts(request)).await?;
         let ids = accounts
             .iter()
             .map(|account| account.id().clone())
@@ -278,8 +278,8 @@ impl CodexCredentialSelector {
                         .account_selection_policy()
                         .preferred_account_overrides_weight(),
                 round_robin_cursor: scheduling.round_robin_cursor(),
-                eligibility: if quality_recovery {
-                    AccountEligibilityPolicy::IgnoreQualityPause
+                eligibility: if request.attempt.is_quality_retest() {
+                    AccountEligibilityPolicy::BypassForQualityRetest
                 } else {
                     AccountEligibilityPolicy::Enforce
                 },
@@ -640,20 +640,9 @@ impl CodexCredentialSelector {
     async fn wait_accounts(
         &self,
         request: &CredentialSelectionInput<'_>,
-    ) -> Result<(Vec<ProviderAccount>, bool), CredentialSelectionError> {
+    ) -> Result<Vec<ProviderAccount>, CredentialSelectionError> {
         let mut accounts = self.repository.list_for_provider().await?;
-        let quality_recovery = if request.attempt.is_quality_check()
-            && let Some(required) = request.attempt.required_account()
-        {
-            self.repository
-                .store()
-                .quality_pause_is_owned(required)
-                .await
-                .map_err(|_| CredentialSelectionError::Store)?
-        } else {
-            false
-        };
-        if quality_recovery
+        if request.attempt.is_quality_retest()
             && let Some(required) = request.attempt.required_account()
             && !accounts.iter().any(|account| account.id() == required)
             && let Some(account) = self
@@ -666,7 +655,7 @@ impl CodexCredentialSelector {
             accounts.push(account);
         }
         self.retain_excel_auth_blocks(&accounts);
-        Ok((accounts, quality_recovery))
+        Ok(accounts)
     }
 
     async fn reload_wait_exclusions(
@@ -736,7 +725,6 @@ impl CodexCredentialSelector {
         let accounts = self
             .wait_accounts(request)
             .await?
-            .0
             .into_iter()
             .filter(|account| universe.contains(account.id()))
             .collect::<Vec<_>>();
@@ -790,7 +778,8 @@ impl CodexCredentialSelector {
             ),
             attempt.account_selection_policy().request_interval(),
             attempt.deadline(),
-        ))
+        )
+        .with_quality_check(attempt.is_quality_check()))
     }
 
     async fn wait_for_account(
@@ -1085,7 +1074,9 @@ impl CodexCredentialSelector {
                 .clone()
                 .unwrap_or_else(|| id.clone())
         };
-        if self.excel_auth_block(&candidate.account).is_some() {
+        if !request.attempt.is_quality_retest()
+            && self.excel_auth_block(&candidate.account).is_some()
+        {
             drop(guard);
             return Ok(None);
         }
@@ -1148,7 +1139,9 @@ impl CodexCredentialSelector {
         {
             self.update_session_affinity(key, id, id).await;
         }
-        if self.excel_auth_block(&candidate.account).is_some() {
+        if !request.attempt.is_quality_retest()
+            && self.excel_auth_block(&candidate.account).is_some()
+        {
             drop(guard);
             return Ok(None);
         }

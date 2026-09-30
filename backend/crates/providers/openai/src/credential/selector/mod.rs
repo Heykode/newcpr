@@ -307,6 +307,7 @@ impl CodexCredentialSelector {
         let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
             && (request.attempt.is_diagnostic_required_account()
+                || request.attempt.is_quality_retest()
                 || self.excel_auth_block(account).is_none())
             && request
                 .attempt
@@ -334,7 +335,9 @@ impl CodexCredentialSelector {
         account: &ProviderAccount,
         request: &CredentialSelectionInput<'_>,
     ) -> gateway_core::account::ResponsesUpstream {
-        if let Some(model) = request.upstream_model {
+        if request.attempt.is_native_quality_probe() {
+            gateway_core::account::ResponsesUpstream::Codex
+        } else if let Some(model) = request.upstream_model {
             account.responses_upstream_for_model(model)
         } else if crate::transport::excel::image_generation::is_image_path(
             request.request_url.path(),

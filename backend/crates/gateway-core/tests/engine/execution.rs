@@ -1221,6 +1221,7 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
     struct QualityProvider {
         complete: bool,
         probe: bool,
+        retest: bool,
     }
     #[async_trait]
     impl Provider for QualityProvider {
@@ -1242,6 +1243,8 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
         ) -> Result<ProviderStream, ProviderError> {
             assert!(!context.is_diagnostic_required_account());
             assert!(context.is_quality_check());
+            assert_eq!(context.is_quality_retest(), self.retest || self.probe);
+            assert_eq!(context.is_native_quality_probe(), self.probe);
             assert_eq!(context.required_account().unwrap().as_str(), "acct_start");
             let scope = context.account_scope().expect("quality account scope");
             assert!(scope.allows_model(context.required_account().unwrap(), "gpt-start"));
@@ -1307,26 +1310,32 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             ))
         }
     }
-    let cases = [(true, false), (false, false), (true, true), (false, true)]
-        .into_iter()
-        .flat_map(|(complete, probe)| {
-            [
-                AccountModelAccess::all(),
-                AccountModelAccess::new(
-                    AccountModelAccessMode::Allowlist,
-                    vec!["gpt-other".into()],
-                )
+    let cases = [
+        (true, false, false),
+        (false, false, false),
+        (true, false, true),
+        (false, false, true),
+        (true, true, true),
+        (false, true, true),
+    ]
+    .into_iter()
+    .flat_map(|(complete, probe, retest)| {
+        [
+            AccountModelAccess::all(),
+            AccountModelAccess::new(AccountModelAccessMode::Allowlist, vec!["gpt-other".into()])
                 .unwrap(),
-                AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["gpt-start".into()])
-                    .unwrap(),
-            ]
-            .map(|policy| (complete, probe, policy))
-        });
-    for (complete, probe, model_access) in cases {
+            AccountModelAccess::new(AccountModelAccessMode::Denylist, vec!["gpt-start".into()])
+                .unwrap(),
+        ]
+        .map(|policy| (complete, probe, retest, policy))
+    });
+    for (complete, probe, retest, model_access) in cases {
         let store = Arc::new(TrackingExecutionStore::default());
-        let providers = ProviderRegistry::new([
-            Arc::new(QualityProvider { complete, probe }) as Arc<dyn Provider>
-        ])
+        let providers = ProviderRegistry::new([Arc::new(QualityProvider {
+            complete,
+            probe,
+            retest,
+        }) as Arc<dyn Provider>])
         .unwrap();
         let target = ProviderAccountId::new("acct_start").unwrap();
         let ordinary_allowed = model_access.allows("gpt-start");
@@ -1386,9 +1395,12 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
                 }
             );
         } else {
-            let result = block_on(
-                service.quality_check(request, gateway_core::lifecycle::CancellationToken::new()),
-            );
+            let cancellation = gateway_core::lifecycle::CancellationToken::new();
+            let result = block_on(if retest {
+                service.quality_retest(request, cancellation)
+            } else {
+                service.quality_check(request, cancellation)
+            });
             if complete {
                 assert_eq!(result.unwrap().text.concat(), "fixture answer");
             } else {
@@ -2789,8 +2801,12 @@ mod failure_isolation {
                 assert_eq!(contexts.len(), 2);
                 assert_eq!(contexts[0].attempt_index().get(), 1);
                 assert_eq!(contexts[0].is_diagnostic_required_account(), diagnostic);
+                assert!(!contexts[0].is_quality_retest());
+                assert!(!contexts[0].is_native_quality_probe());
                 assert_eq!(contexts[1].request_id(), &successful_request);
                 assert!(!contexts[1].is_diagnostic_required_account());
+                assert!(!contexts[1].is_quality_retest());
+                assert!(!contexts[1].is_native_quality_probe());
                 assert!(contexts[1].required_account().is_none());
                 if diagnostic {
                     assert_ne!(contexts[0].request_id(), contexts[1].request_id());

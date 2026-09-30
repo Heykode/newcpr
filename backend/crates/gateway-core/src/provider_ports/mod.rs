@@ -112,6 +112,7 @@ pub struct ProviderSchedulingLeaseRequest {
     max_concurrent: NonZeroU32,
     request_interval: Duration,
     deadline: SystemTime,
+    quality_check: bool,
 }
 
 impl ProviderSchedulingLeaseRequest {
@@ -131,6 +132,7 @@ impl ProviderSchedulingLeaseRequest {
             max_concurrent,
             request_interval,
             deadline,
+            quality_check: false,
         }
     }
 
@@ -162,6 +164,18 @@ impl ProviderSchedulingLeaseRequest {
     #[must_use]
     pub const fn deadline(&self) -> SystemTime {
         self.deadline
+    }
+
+    /// Administrative quality work shares account spacing, but not business capacity.
+    #[must_use]
+    pub const fn with_quality_check(mut self, quality: bool) -> Self {
+        self.quality_check = quality;
+        self
+    }
+
+    #[must_use]
+    pub const fn is_quality_check(&self) -> bool {
+        self.quality_check
     }
 }
 

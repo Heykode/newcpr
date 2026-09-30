@@ -193,11 +193,12 @@ impl RedisCapacityWait {
         account: &ProviderAccountId,
         identity: &str,
         deadline: SystemTime,
+        quality: bool,
     ) -> Result<(Ownership, [String; 3]), ProviderStoreError> {
         if self.sender.is_closed() || self.lifecycle.stopping.load(Ordering::SeqCst) {
             return Err(unavailable("capacity wait cleanup worker unavailable"));
         }
-        let keys = self
+        let mut keys = self
             .repository
             .keys(&CredentialLeaseRequest {
                 scope: CredentialLeaseScope::ProviderAccount,
@@ -206,6 +207,10 @@ impl RedisCapacityWait {
                 ttl: Duration::from_secs(1),
             })
             .map_err(|_| invalid("capacity wait account keys"))?;
+        // Keep the account hash tag, interval and fence; isolate active/cleanup keys.
+        if quality {
+            keys[0].push_str(":quality");
+        }
         let fingerprint = resource_fingerprint("capacity wait request", identity)
             .map_err(|_| invalid("capacity wait request identity"))?;
         let token = format!(
@@ -242,7 +247,12 @@ impl RedisCapacityWait {
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async move {
             let deadline = request.deadline().min(SystemTime::now() + EXECUTION_TTL);
-            let (mut owner, keys) = self.ownership(request.account_id(), "scheduling", deadline)?;
+            let (mut owner, keys) = self.ownership(
+                request.account_id(),
+                "scheduling",
+                deadline,
+                request.is_quality_check(),
+            )?;
             let (outcome, value) = owner.acquire_execution(&keys, &request, false).await?;
             match outcome {
                 1 => Ok(ProviderLeaseAcquisition::Acquired(Box::new(owner))),
@@ -273,6 +283,7 @@ impl RedisCapacityWait {
                 request.account_id(),
                 request.request_id().as_str(),
                 request.deadline(),
+                false,
             )?;
             let cleanup = owner.cleanup.as_ref().expect("pending ownership");
             let mut connection = self.connection.clone();
@@ -327,6 +338,7 @@ impl ProviderWaitLease for RedisWaitLease {
             };
             if request.provider_kind() != self.request.provider_kind()
                 || request.account_id() != self.request.account_id()
+                || request.is_quality_check()
             {
                 return Err(invalid("capacity promotion owner mismatch"));
             }
@@ -406,7 +418,11 @@ impl Ownership {
             .arg(&cleanup.token)
             .arg(cleanup.wait_deadline)
             .arg(execution_millis)
-            .arg(request.max_concurrent().get())
+            .arg(if request.is_quality_check() {
+                u32::MAX
+            } else {
+                request.max_concurrent().get()
+            })
             .arg(interval_millis)
             .arg(SIGNAL_TTL_MILLIS.max(interval_millis))
             .arg(u8::from(require_wait))

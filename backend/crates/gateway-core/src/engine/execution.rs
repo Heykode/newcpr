@@ -762,6 +762,7 @@ impl DefaultExecutionService {
         &self,
         request: AccountProbeRequest,
         cancellation: CancellationToken,
+        retest: bool,
     ) -> Result<AccountProbeResult, AccountProbeError> {
         let state_probe = matches!(&request.operation, Operation::Generate(generate) if generate.quality_probe().is_some());
         let timeout_duration = std::time::Duration::from_secs(if state_probe { 45 } else { 120 });
@@ -817,7 +818,7 @@ impl DefaultExecutionService {
             started_at,
             deadline_at,
         };
-        // The real coordinator owns account leases, observations and usage settlement.
+        // The real coordinator owns isolated quality leases, observations and settlement.
         // A request-local token lets finalization cancel this attempt without
         // cancelling the whole quality round that owns `cancellation`.
         let attempt_cancellation = CancellationToken::new();
@@ -829,6 +830,7 @@ impl DefaultExecutionService {
                 plan,
                 request.account_id,
                 attempt_cancellation.clone(),
+                retest,
             )
             .await
             .map_err(|error| AccountProbeError::from(gateway_error_from_engine(&error)))?;
@@ -1313,7 +1315,7 @@ impl AccountProbe for DefaultExecutionService {
                         .with_quality_probe(exchange.step(continuation)),
                 );
                 if self
-                    .quality_check_inner(shot, cancellation.clone())
+                    .quality_check_inner(shot, cancellation.clone(), true)
                     .await
                     .is_err()
                 {
@@ -1345,7 +1347,15 @@ impl AccountProbe for DefaultExecutionService {
         request: AccountProbeRequest,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
-        Box::pin(async move { self.quality_check_inner(request, cancellation).await })
+        Box::pin(async move { self.quality_check_inner(request, cancellation, false).await })
+    }
+
+    fn quality_retest(
+        &self,
+        request: AccountProbeRequest,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async move { self.quality_check_inner(request, cancellation, true).await })
     }
 
     fn probe(

@@ -434,10 +434,10 @@ async fn template_controls_codex_and_scheduling_and_probe_lifecycle() {
             .await
             .action
             .as_deref(),
-        Some("template_applied_probe_paused")
+        Some("template_applied")
     );
     let paused = store.rules().await.unwrap().remove(0);
-    assert!(!paused.config.enabled);
+    assert!(paused.config.enabled);
     assert!(!paused.pending);
     assert!(!paused.running);
     template.config.responses_upstream = Some(gateway_core::account::ResponsesUpstream::Codex);
@@ -474,6 +474,44 @@ async fn template_controls_codex_and_scheduling_and_probe_lifecycle() {
     assert_eq!(account["account"]["excel_ignore_encrypted_content"], false);
     assert_eq!(account["account"]["excel_403_action"], "none");
     assert_eq!(account["account"]["enabled"], false);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn native_recovery_closes_template_owned_excel_without_reverting_other_settings() {
+    let Some(db) = TestDatabase::create("quality_template_native_recovery").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let template = template(&db).await;
+    let mut config = config("acct_quality_a");
+    config.detection_mode = QualityDetectionMode::StateProbe;
+    config.failure_action = QualityFailureAction::ApplyAccountTemplate;
+    config.failure_template = Some(template);
+    config.disable_excel_on_native_recovery = true;
+    let rule = store
+        .save(
+            None,
+            None,
+            config,
+            Utc::now() + Duration::hours(1),
+            &context(),
+        )
+        .await
+        .unwrap();
+    scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    let applied = snapshot(&db).await;
+    assert_eq!(applied["account"]["responses_upstream"], "excel");
+    let run = scheduled_round(&store, &rule, &[QualityVerdict::Correct]).await;
+    assert_eq!(
+        run.action.as_deref(),
+        Some("excel_disabled_native_recovered")
+    );
+    let mut restored = snapshot(&db).await;
+    assert_eq!(restored["account"]["responses_upstream"], "codex");
+    restored["account"]["responses_upstream"] = applied["account"]["responses_upstream"].clone();
+    restored["account"]["updated_at"] = applied["account"]["updated_at"].clone();
+    assert_eq!(restored, applied, "only route and timestamp may change");
     db.close().await;
 }
 

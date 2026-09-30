@@ -85,7 +85,7 @@
 - 0, >1000, duplicate or invalid target IDs -> reject the entire application request.
 - Stale template or rule revision -> no overwrite; account-level conflicts return
   a failed result while independent successful targets remain applied.
-- Incompatible Excel state probe -> reject via existing checks, never change route.
+- Excel state probes use the trusted native override without changing the account route.
 - Read failure is not an empty authoritative catalog or an absent rule.
 
 ### 5. Good/Base/Bad Cases
@@ -118,23 +118,36 @@
   may be later. Old strict-deserialization binaries cannot read seconds configs;
   reconcile configs before downgrade. No schema migration is required.
 
-- `AccountProbe::quality_check` is separate from diagnostic `probe`. It MUST use
+- `AccountProbe::quality_retest` (target) and `quality_check` (judge) are separate
+  from diagnostic `probe`. Both MUST use
   the persistent ordinary coordinator with its fixed-account quality selection. Never
   reuse `start_diagnostic`, synthesize a user API key, or call upstream HTTP directly.
+- Only Core's target entry point may set the request-local `quality_retest` marker.
+  The OpenAI fixed-target selector loads disabled targets and bypasses cached enabled,
+  credential health, quota, cooldown and Excel auth-block eligibility. It still requires
+  an existing in-scope account, live publication, matching credential revision and
+  decodable credential. Judges enforce ordinary availability, including quality-owned
+  pauses. Neither client JSON nor ordinary requests may request the target override.
 - Fixed-account quality requests ignore only the target account's local model
   allowlist/denylist through a Core-only, request-local FrozenAccountScope override.
   Apply it before routing and pass the same scope to normal/queued selection. The
   original directory, other accounts, ordinary requests and client catalogs retain
   their policies; missing/out-of-scope accounts cannot gain access. This does not
-  grant upstream model entitlement or bypass model-specific Excel routing policy.
-- Provider transport, model-specific Excel policy, credentials, fingerprint,
-  egress, request interval and availability remain authoritative. Quality checks bypass
-  only the target account's business concurrency cap and local user-facing model policy.
+  grant upstream model entitlement. Native state probes alone bypass the Excel route;
+  answer checks and judges keep model-specific Excel routing.
+- Provider transport, credentials, fingerprint, UA,
+  egress and request interval remain authoritative. Quality checks bypass business
+  concurrency and local user-facing model policy; only target retests additionally
+  bypass cached availability. This never enables ordinary scheduling of an unavailable
+  account or removes upstream entitlement, authentication or quota enforcement.
   A fixed quality account blocked only by its request interval waits within the original
   request deadline and cancellation scope, then reloads live safety facts. It does not
   consume a business wait-queue slot, switch accounts or inherit the ordinary hard-pin
   interval rejection. Redis lease races recheck the same account and interval; they
   must not turn a just-started parallel sample into `NoEligibleCredential`.
+  Quality lease requests use a separate Redis active key in the same account hash
+  slot, sharing interval/fence keys but never business active/waiting counts. Keep
+  cancellation-safe ownership, deadlines and cleanup; never merely subtract in UI.
   Only explicitly configured
   quality failure actions may pause scheduling or remove selected group memberships.
   Legacy configs default to `none`; auto_restore defaults false. Explicit wrong answers
@@ -163,12 +176,11 @@
   use a one-shot pending flag and never enable the schedule. Saving never queues
   an immediate run. Reference: ranxi2001/sub2api f80611d6; unlike its
   per-scan worker cap, CPR keeps a database-wide admission bound.
-- Quality-owned scheduling pauses have a separate owner marker. Fixed-account quality
-  tests may ignore only that verified pause, the business concurrency cap and their
-  explicit local model-policy exception, never credentials, quotas, cooldown or
-  request interval.
-  Revalidate ownership after lease
-  acquisition. Ordinary traffic cannot request this override or select paused accounts.
+- Quality-owned scheduling pauses have a separate owner marker for remediation and
+  opt-in recovery, not target retest eligibility. Retesting an unavailable target
+  does not clear its manual pause; successful checks may undo only the rule's owned
+  mutations through the existing policy transaction. Ordinary traffic and judges
+  cannot request target retest eligibility or select paused accounts.
 - Store action, recovery ownership, config revision and audit commit together. Lock
   runtime configuration before rule/account mutations. Rule/lease/identity fences
   reject stale actions. Same-identity credential rotation does not reset ownership.
@@ -213,9 +225,9 @@
 
 ### 4. Validation & Error Matrix
 - Pending, live lease, stale revision or missing rule -> existing conflict.
-- An Excel account's state probe -> reject, even when its rule is already paused.
-- Switching to Excel invalidates enabled, queued or leased state probes; an idle
-  paused probe is not repeatedly revised. Commit automatic pause before rejection.
+- Excel account state probes remain eligible through the trusted native route.
+  A route change fences account mutations, not continued detection or manual runs.
+  Historical paused rules remain paused until an explicit administrator action.
 
 ### 5. Good / Base / Bad Cases
 - Good: pause, request one manual run, store its result and remain paused.
@@ -268,11 +280,21 @@
   quota and scheduling, and fences relevant account/proxy/UA/egress policy changes.
   Do not use the global config revision as a fence: independent concurrent account
   actions must not invalidate each other. A 403-disabled Excel marker vetoes auto-enable.
-- Account route mutation, audit/config publication, rule pause, queue/lease cleanup
-  and result commit are transactional. Answer rules remain enabled; probe rules
-  pause. Already-Excel probes pause on claim/enqueue/heartbeat/finalization.
-  Later Excel switch-off never resumes a rule automatically. EnableExcel has no
-  auto-restore-to-Codex policy.
+- Account route mutation, audit/config publication, recovery ownership and result
+  commit are transactional. Enabling Excel no longer pauses native state probes.
+  Only Core's trusted probe operation can set `native_quality_probe`; selector
+  route freeze and actual execution both use Codex. Client JSON, judges and answer
+  checks cannot acquire this override.
+- `disableExcelOnNativeRecovery` defaults false and is valid only for state probes
+  using enable_excel or apply_account_template. Persist `recovery.excel_owner`
+  only when this rule switches Codex to Excel, after its audit/config publication.
+  Record account identity, model and relevant policy scope, including account audit
+  revision. Correct native results may close that route only when all still match.
+  Manual/preexisting Excel, policy/identity edits, 403 protection and late results
+  must not be overwritten. Never restore the whole template or clear 403 markers.
+  While ownership matches, degraded rounds do not repeatedly reapply the template.
+  Rule model/mode/action/template edits release ownership; frequency or recovery
+  checkbox edits preserve it. Closing Excel leaves the rule active for future cycles.
 - Changing detection mode clears the latest rule verdict but retains mode snapshots
   in historical runs. Keep existing owned scheduling/group recovery behavior intact.
 
@@ -288,8 +310,8 @@
   scope. A changed identity, UA, proxy or egress policy cannot inherit old progress.
   Saving any rule clears progress without queueing an immediate detection.
 - Reaching the threshold calls the existing Excel enable policy, including its
-  403 veto, model/account guards, audit and probe pause. This feature never turns
-  Excel off automatically and does not alter normal routing or retry decisions.
+  403 veto, model/account guards and audit. Native probes continue; only the separate
+  explicit native-recovery option may reverse their owned Excel route.
 - No migration is required for the JSON addition, but old strict-config binaries
   still require stored-config reconciliation before a downgrade.
 
@@ -324,8 +346,8 @@
   Storage-unavailable errors roll back the entire finish transaction. Successful
   mutation, config publication, audit and result share one transaction.
 - Reuse `excel_streak` and `excelFailureThreshold`; no second counter. Successful
-  template application clears this rule's recovery, has no auto-restore, and
-  pauses state-probe rules only if the resulting account route is Excel.
+  template application clears old recovery and records route ownership if it newly
+  enables Excel for a native probe. No whole-template restoration or auto-pause.
 - Historical `QualityRun.config` retains template name, version and settings.
   A binary-only downgrade cannot read the new action; reconcile configs first.
 
@@ -336,7 +358,7 @@
 - Credential/expiry/quota/independent pause: `template_blocked_account`.
 - 403-disabled Excel or disallowed model: existing `excel_blocked_*` guards.
 - Proxy/IPv6 conflict: `template_blocked_settings`, complete savepoint rollback.
-- Success: `template_applied` or `template_applied_probe_paused`.
+- Success: `template_applied`; retain historical paused-action labels for old runs.
 
 ### 5. Good / Base / Bad Cases
 - Good: a confirmed degraded OAuth account receives the selected Excel/IPv6

@@ -99,10 +99,13 @@ const actions: Record<string, string> = {
   no_change: '账号原已暂停或不在指定分组，未改动',
   identity_changed: '检测期间账号身份已变化，未执行处置',
   excel_enabled: '已开启 Excel 模式',
+  excel_recovery_pending: '保持本规则的 Excel 处置，继续检测原生通道',
+  excel_recovery_released: '账号或规则设置已变化，保留现状，不自动关闭 Excel',
+  excel_disabled_native_recovered: '原生通道恢复正常，已关闭本规则开启的 Excel',
   excel_enabled_probe_paused: '已开启 Excel 模式，探针规则已暂停',
   probe_paused_excel: '账号已开启 Excel 模式，探针规则已暂停',
   excel_already_enabled: '账号已开启 Excel 模式',
-  excel_blocked_configuration_changed: '检测期间配置已变化，未开启 Excel',
+  excel_blocked_configuration_changed: '检测期间配置已变化，未自动更改 Excel 或模板',
   excel_blocked_403: 'Excel 曾因 HTTP 403 关闭，未自动重开',
   excel_blocked_model: '检测模型未配置为 Excel 模型，未改动账号',
   excel_blocked_account: '账号当前不可用，未开启 Excel',
@@ -165,6 +168,7 @@ function defaults(): QualityRuleConfig {
     failureTemplate: null,
     failureGroupIds: [],
     autoRestore: false,
+    disableExcelOnNativeRecovery: false,
     excelFailureThreshold: 1,
   }
 }
@@ -512,6 +516,8 @@ async function save() {
   }
   if (usesFailureThreshold(config.failureAction))
     config.autoRestore = false
+  if (config.detectionMode !== 'state_probe' || !usesFailureThreshold(config.failureAction))
+    config.disableExcelOnNativeRecovery = false
   if (config.failureAction !== 'apply_account_template')
     delete config.failureTemplate
   const accountIds = editing.value ? [config.accountId] : [...selectedAccounts.value]
@@ -1089,10 +1095,14 @@ onBeforeUnmount(() => {
             <span>连续异常多少轮后执行处置</span>
             <BaseNumberInput v-model="draft.excelFailureThreshold" label="连续异常阈值" :min="1" :max="100" />
             <p class="text-xs text-cp-text-secondary">
-              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。不会自动撤销已应用的配置。
+              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。除单独勾选的原生恢复关闭 Excel 外，不会撤销已应用的配置。
             </p>
           </div>
           <BaseSwitch v-if="!usesFailureThreshold(draft.failureAction)" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
+          <BaseCheckbox v-if="isProbe && usesFailureThreshold(draft.failureAction)" v-model="draft.disableExcelOnNativeRecovery" label="原生通道恢复正常后自动关闭 Excel" show-label />
+          <p v-if="isProbe" class="text-xs text-cp-text-secondary">
+            即使账号已开启 Excel，状态探针也继续检测原生 Codex 通道。勾选恢复选项只关闭本规则开启且未被后续人工设置覆盖的 Excel，不撤销模板其他配置。未勾选则只检测，不自动关闭。
+          </p>
           <p class="text-xs text-cp-text-secondary">
             {{ isProbe ? '无法判断时不执行处置。换票结果仅表示探针观察，不等于模型能力的完整评估。' : '仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。' }}
           </p>

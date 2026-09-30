@@ -427,6 +427,8 @@ pub enum AccountEligibilityPolicy {
     #[default]
     Enforce,
     BypassForDiagnostic,
+    /// Trusted fixed-account quality retests, never ordinary traffic or judges.
+    BypassForQualityRetest,
     /// Provider must verify persistent quality ownership for the pinned account first.
     IgnoreQualityPause,
 }
@@ -434,7 +436,10 @@ pub enum AccountEligibilityPolicy {
 impl AccountEligibilityPolicy {
     #[must_use]
     pub const fn bypasses_local_eligibility(self) -> bool {
-        matches!(self, Self::BypassForDiagnostic)
+        matches!(
+            self,
+            Self::BypassForDiagnostic | Self::BypassForQualityRetest
+        )
     }
 }
 

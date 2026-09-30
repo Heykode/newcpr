@@ -34,11 +34,24 @@ function base(overrides = {}) {
     failureAction: 'none',
     failureGroupIds: ['group-a'],
     autoRestore: false,
+    disableExcelOnNativeRecovery: false,
     excelFailureThreshold: 3,
     ...overrides,
   }
 }
 const rule = (id, config = base()) => ({ id, revision: 8, config })
+
+test('native recovery is explicitly opted in and never applied to answer or unrelated rules', () => {
+  const probe = base({ detectionMode: 'state_probe', failureAction: 'enable_excel' })
+  assert.equal(applyQualityPatch(probe, { model: 'changed' }).disableExcelOnNativeRecovery, false)
+  const enabled = applyQualityPatch(probe, { disableExcelOnNativeRecovery: true })
+  assert.equal(enabled.disableExcelOnNativeRecovery, true)
+  assert.equal(enabled.autoRestore, false)
+  assert.equal(applyQualityPatch(enabled, { detectionMode: 'answer' }).disableExcelOnNativeRecovery, false)
+  assert.equal(applyQualityPatch(enabled, { failureAction: 'none' }).disableExcelOnNativeRecovery, false)
+  assert.equal(applyQualityPatch(base(), { disableExcelOnNativeRecovery: true }).disableExcelOnNativeRecovery, false)
+  assert.deepEqual(plain(buildQualityPatch(['disableExcelOnNativeRecovery'], enabled)), { disableExcelOnNativeRecovery: true })
+})
 
 test('only checked fields are included and account identity cannot be patched', () => {
   const draft = base({ intervalSeconds: 75, model: 'another-model' })

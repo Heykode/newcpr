@@ -21,6 +21,7 @@ export interface QualityRuleConfig {
   failureTemplate?: AccountTemplate | null
   failureGroupIds: string[]
   autoRestore: boolean
+  disableExcelOnNativeRecovery: boolean
   excelFailureThreshold: number
 }
 

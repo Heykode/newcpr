@@ -108,8 +108,13 @@
 - Render probe normal/suspect/inconclusive labels from the persisted run mode,
   with transport/status/length evidence and a clear heuristic limitation. Never
   render raw State or Cookie. Cancelled or paused states remain neutral.
-- `enable_excel` is available in both modes and disables auto-restore. Display the
-  persisted pause/skip reason; switching Excel off does not silently resume a rule.
+- Legacy `enable_excel` is available in both modes and disables whole-config restore.
+  State-probe template/Excel actions offer a separate unchecked-by-default checkbox
+  `disableExcelOnNativeRecovery`. Normalize it off for answer or unrelated actions.
+  Mirror it through templates, groups and selective bulk patches. Explain native
+  probing continues after Excel, and recovery closes only this rule's unchanged
+  owned route, never the rest of its template or manual/403 suspension.
+  Retain historical pause labels; new Excel activation does not pause the rule.
 - Browser regressions cover mode switching, preserved question drafts, judge-free
   saves, Excel action, paused results and 1440/390/320px probe panels.
 
@@ -128,7 +133,7 @@
   restore even when that field is selected in a mixed batch.
 - The Excel threshold editor defaults to 1 and accepts 1–100 rounds. Show persisted
   progress, reset-on-save semantics, normal-round reset, inconclusive-round hold,
-  and no automatic Excel shutdown. Changing frequency is separately opted in.
+  and separate opt-in native recovery. Changing frequency is separately opted in.
 - Browser regressions cover partial success/retry, failed refresh, fresh unrelated
   values, empty field opt-ins on reopen and 1440/390/320px layouts. Interact with the
   visible labels of shared checkbox/switch controls and assert their checked state.

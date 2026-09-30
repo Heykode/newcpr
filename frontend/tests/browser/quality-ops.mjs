@@ -382,6 +382,10 @@ async function main() {
     assert.equal(await creation.getByRole('switch', { name: '后续整轮通过后自动恢复', exact: true }).count(), 0)
     assert.equal(await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).inputValue(), '1')
     await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).fill('3')
+    const nativeRecovery = creation.getByRole('checkbox', { name: '原生通道恢复正常后自动关闭 Excel', exact: true })
+    assert.equal(await nativeRecovery.isChecked(), false)
+    await nativeRecovery.locator('..').click()
+    assert.equal(await nativeRecovery.isChecked(), true)
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
       assert.ok(await creation.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
@@ -396,6 +400,7 @@ async function main() {
     assert.equal(rules[2].config.failureAction, 'apply_account_template')
     assert.deepEqual(rules[2].config.failureTemplate, template)
     assert.equal(rules[2].config.autoRestore, false)
+    assert.equal(rules[2].config.disableExcelOnNativeRecovery, true)
     assert.equal(rules[2].config.excelFailureThreshold, 3)
     Object.assign(run, { config: rules[2].config, detectionMode: 'state_probe', status: 'incorrect', correct: 0, incorrect: 1, action: 'template_applied_probe_paused' })
     rules[2].config.enabled = false

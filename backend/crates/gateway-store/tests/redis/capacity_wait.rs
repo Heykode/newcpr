@@ -72,6 +72,99 @@ async fn queue_pressure_reads_real_wait_ownership_without_advancing_rotation() {
 }
 
 #[tokio::test]
+async fn quality_leases_bypass_business_capacity_without_counting_as_business_work() {
+    let Some(mut fixture) = Fixture::new().await else {
+        return;
+    };
+    let request = scheduling("quality", 1, Duration::ZERO, Duration::from_secs(30));
+    let ProviderLeaseAcquisition::Acquired(business) = fixture
+        .port
+        .try_acquire_scheduling(request.clone())
+        .await
+        .unwrap()
+    else {
+        panic!("business slot")
+    };
+    let quality = request.clone().with_quality_check(true);
+    let mut probes = Vec::new();
+    for _ in 0..3 {
+        let ProviderLeaseAcquisition::Acquired(probe) = fixture
+            .port
+            .try_acquire_scheduling(quality.clone())
+            .await
+            .unwrap()
+        else {
+            panic!("quality bypasses full business capacity")
+        };
+        probes.push(probe);
+    }
+    assert_eq!(fixture.in_flight("quality").await, 1);
+    assert_eq!(fixture.waiting("quality").await, 0);
+    assert!(matches!(
+        fixture.port.try_acquire_scheduling(request).await.unwrap(),
+        ProviderLeaseAcquisition::Busy { .. }
+    ));
+    let key = format!("{}:quality", fixture.active_key("quality"));
+    let count: u32 = redis::cmd("ZCARD")
+        .arg(&key)
+        .query_async(&mut fixture.connection)
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
+    drop(probes);
+    drop(business);
+    fixture.drain().await;
+    assert_eq!(fixture.in_flight("quality").await, 0);
+    let count: u32 = redis::cmd("ZCARD")
+        .arg(&key)
+        .query_async(&mut fixture.connection)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "probe cancellation cleans its own key");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn quality_leases_still_share_account_spacing_with_business_requests() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let request = scheduling(
+        "quality-spacing",
+        1,
+        Duration::from_secs(1),
+        Duration::from_secs(30),
+    );
+    let ProviderLeaseAcquisition::Acquired(probe) = fixture
+        .port
+        .try_acquire_scheduling(request.clone().with_quality_check(true))
+        .await
+        .unwrap()
+    else {
+        panic!("probe")
+    };
+    assert_eq!(fixture.in_flight("quality-spacing").await, 0);
+    assert!(matches!(
+        fixture
+            .port
+            .try_acquire_scheduling(request.clone())
+            .await
+            .unwrap(),
+        ProviderLeaseAcquisition::Busy { .. }
+    ));
+    assert!(matches!(
+        fixture
+            .port
+            .try_acquire_scheduling(request.with_quality_check(true))
+            .await
+            .unwrap(),
+        ProviderLeaseAcquisition::Busy { .. }
+    ));
+    drop(probe);
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn capacity_wait_modes_share_atomic_limits_without_execution_or_cursor_changes() {
     let Some(mut fixture) = Fixture::new().await else {
         return;

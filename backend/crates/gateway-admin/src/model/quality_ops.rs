@@ -94,6 +94,8 @@ pub struct QualityRuleConfig {
     pub failure_group_ids: Vec<String>,
     #[serde(default)]
     pub auto_restore: bool,
+    #[serde(default)]
+    pub disable_excel_on_native_recovery: bool,
     #[serde(default = "default_excel_failure_threshold")]
     pub excel_failure_threshold: u8,
 }
