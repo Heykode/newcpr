@@ -20,6 +20,48 @@ fn context() -> MutationContext {
     }
 }
 
+async fn clean_capture_records(database: &TestDatabase, manager: Arc<CaptureManager>) {
+    use gateway_admin::{model::log_cleanup::*, ports::log_cleanup::LogCleanupStore};
+    let store =
+        gateway_store::postgres::PgLogCleanupStore::new(database.pool.clone(), None, Some(manager));
+    let state = store.state().await.unwrap();
+    let mut config = state.config;
+    config.requests.selected = false;
+    config.files.selected = false;
+    config.captures.selected = true;
+    store
+        .configure(
+            CleanupCommand {
+                revision: state.revision,
+                config,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let state = store.state().await.unwrap();
+    store
+        .start(
+            CleanupPreview {
+                revision: state.revision,
+                config: state.config,
+                cutoff_at: chrono::Utc::now(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    for _ in 0..12 {
+        store.run_batch().await.unwrap();
+        let job = store.state().await.unwrap().job.unwrap();
+        if job.status != CleanupJobStatus::Running {
+            assert_eq!(job.status, CleanupJobStatus::Succeeded);
+            return;
+        }
+    }
+    panic!("capture cleanup did not finish");
+}
+
 async fn setup(
     database: &TestDatabase,
     directory: &std::path::Path,
@@ -686,6 +728,12 @@ async fn request_capture_global_retention_is_per_record_not_running_task() {
     let (manager, _) = CaptureManager::open(database.pool.clone(), directory.path().into())
         .await
         .unwrap();
+    assert_eq!(
+        manager.for_request("req_old_global").await.unwrap().len(),
+        1,
+        "restart must not bypass the automatic cleanup switch"
+    );
+    clean_capture_records(&database, manager.clone()).await;
     assert!(
         manager
             .for_request("req_old_global")
@@ -775,7 +823,7 @@ async fn request_capture_global_quota_pauses_without_affecting_delivery_and_can_
 }
 
 #[tokio::test]
-async fn request_capture_retention_removes_metadata_and_body_on_restart() {
+async fn request_capture_retention_removes_metadata_and_body_only_when_requested() {
     let Some(database) = TestDatabase::create("capture_retention").await else {
         return;
     };
@@ -804,9 +852,13 @@ async fn request_capture_retention_removes_metadata_and_body_on_restart() {
     .execute(&database.pool)
     .await
     .unwrap();
+    sqlx::query("update request_capture_records set created_at=now()-interval '8 days' where task_id::text=$1")
+        .bind(&task.id).execute(&database.pool).await.unwrap();
     let (manager, _) = CaptureManager::open(database.pool.clone(), directory.path().into())
         .await
         .unwrap();
+    assert!(body.exists());
+    clean_capture_records(&database, manager.clone()).await;
     let status = manager.status().await.unwrap();
     assert!(status.tasks.is_empty());
     assert!(status.records.is_empty());

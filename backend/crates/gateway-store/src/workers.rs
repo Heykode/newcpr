@@ -9,7 +9,7 @@ pub(crate) fn store_worker_contributions(
     admission_release_writer: redis::ClientAdmissionReleaseWriter,
     circuit_feedback_writer: redis::ProviderCircuitFeedbackWriter,
     capacity_wait_cleanup_writer: redis::CapacityWaitCleanupWriter,
-    retention: Arc<postgres::PgRetentionRepository>,
+    retention: Arc<postgres::PgLogCleanupStore>,
 ) -> StoreResult<Vec<WorkerContribution>> {
     let stale_id = WorkerId::try_new(WorkerKind::StaleModelRequestRecovery, "postgres")
         .map_err(worker_definition_error)?;
@@ -35,11 +35,25 @@ pub(crate) fn store_worker_contributions(
             Duration::from_secs(30),
             Box::new(StaleModelRequestRecoveryTask { execution }),
         )?),
-        WorkerContribution::Registration(scheduled_worker(
-            retention_id,
-            Duration::from_secs(60 * 60),
-            Box::new(RetentionTask { retention }),
-        )?),
+        // Each host services its local files. PostgreSQL row locks serialize all hosts.
+        WorkerContribution::Registration(
+            WorkerRegistration::try_new(
+                retention_id,
+                WorkerRunnable::Scheduled {
+                    schedule: WorkerSchedule::try_new(
+                        Duration::from_secs(2),
+                        Duration::from_secs(1),
+                        Duration::from_secs(60),
+                        Duration::from_secs(60),
+                        Duration::from_secs(30),
+                    )
+                    .map_err(worker_definition_error)?,
+                    lease: None,
+                    task: Box::new(RetentionTask { retention }),
+                },
+            )
+            .map_err(worker_definition_error)?,
+        ),
         WorkerContribution::Registration(
             WorkerRegistration::try_new(
                 ops_flush_id,
@@ -150,7 +164,7 @@ impl ScheduledTask for StaleModelRequestRecoveryTask {
 }
 
 pub(crate) struct RetentionTask {
-    retention: Arc<postgres::PgRetentionRepository>,
+    retention: Arc<postgres::PgLogCleanupStore>,
 }
 
 impl ScheduledTask for RetentionTask {
@@ -159,31 +173,11 @@ impl ScheduledTask for RetentionTask {
         context: WorkerCycleContext,
     ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
         Box::pin(async move {
-            let settings =
-                postgres::RetentionRepository::load_retention_settings(self.retention.as_ref())
-                    .await
-                    .map_err(|_| WorkerTaskError::safe("retention settings read failed"))?;
-            let started_at = std::time::Instant::now();
-            let cleanup = postgres::RetentionRepository::apply_retention(
-                self.retention.as_ref(),
-                chrono::Utc::now(),
-                settings,
-            );
-            let report = tokio::select! {
+            tokio::select! {
                 () = context.cancellation().cancelled() => return Ok(()),
-                result = cleanup => result
+                result = self.retention.run_batch() => result
                     .map_err(|_| WorkerTaskError::safe("retention cleanup failed"))?,
-            };
-            tracing::info!(
-                model_requests = report.model_requests,
-                ops_events = report.ops_events,
-                admin_audit_events = report.admin_audit_events,
-                batches = report.batches,
-                budget_exhausted = report.budget_exhausted,
-                elapsed_milliseconds =
-                    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-                "PostgreSQL retention cycle completed"
-            );
+            }
             Ok(())
         })
     }

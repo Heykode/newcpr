@@ -33,7 +33,10 @@ impl RotatingLogWriter {
     ) -> io::Result<Self> {
         fs::create_dir_all(&directory)?;
         let date = Utc::now().date_naive();
-        cleanup_log_files(&directory, prefix, date, retention_days)?;
+        // Zero delegates retention to administrator-controlled maintenance.
+        if retention_days > 0 {
+            cleanup_log_files(&directory, prefix, date, retention_days)?;
+        }
         let latest = managed_log_files(&directory, prefix)?
             .into_iter()
             .filter(|entry| entry.date == date)
@@ -105,8 +108,9 @@ impl RotatingLogWriter {
             self.health.maintenance_failed(error.kind());
         }
         // Maintenance errors must not discard the record that triggered rotation.
-        if let Err(error) =
-            cleanup_log_files(&self.directory, self.prefix, date, self.retention_days)
+        if self.retention_days > 0
+            && let Err(error) =
+                cleanup_log_files(&self.directory, self.prefix, date, self.retention_days)
         {
             self.health.maintenance_failed(error.kind());
         }
@@ -163,6 +167,9 @@ fn managed_log_files(directory: &Path, prefix: &str) -> io::Result<Vec<ManagedLo
     let mut files = Vec::new();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let Some(body) = name.strip_prefix(&format!("{prefix}.")) else {

@@ -79,7 +79,8 @@ fn retention_preserves_complete_dates_across_compression_rotation_and_restart() 
         assert!(
             expired
                 .iter()
-                .all(|path| !path.exists() && !path.with_extension("log.gz").exists())
+                .all(|path| path.with_extension("log.gz").exists()),
+            "the writer must not bypass administrator-controlled retention"
         );
         assert!(unrelated.exists());
 

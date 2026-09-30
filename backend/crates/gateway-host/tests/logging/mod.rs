@@ -7,6 +7,7 @@ use std::process::Command;
 use gateway_host::config::{FileLoggingConfig, HostConfig, ListenConfig, LoggingConfig};
 use gateway_host::system_update::SystemUpdateConfig;
 
+mod maintenance;
 mod sink;
 mod writer;
 
