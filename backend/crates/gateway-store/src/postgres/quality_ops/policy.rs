@@ -4,6 +4,8 @@ use super::*;
 use gateway_admin::model::MutationActor;
 use serde::{Deserialize, Serialize};
 
+pub(super) use super::native_recovery::record as record_excel_ownership;
+
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default)]
 struct Recovery {
@@ -277,6 +279,9 @@ async fn apply_excel_threshold(
             .fetch_one(&mut **tx)
             .await
             .map_err(unavailable)?;
+    if let Some(action) = native_recovery::apply(tx, claim, status, &value).await? {
+        return Ok(Some(action));
+    }
     if status == "correct" {
         if value.get("excel_streak").is_none() {
             return Ok(None);
@@ -402,14 +407,7 @@ async fn enable_excel(
     .execute(&mut **tx)
     .await
     .map_err(unavailable)?;
-    let action = if claim.rule.config.detection_mode == QualityDetectionMode::StateProbe {
-        sqlx::query("update quality_rules set enabled=false,config=jsonb_set(config,'{enabled}','false'),
-            revision=revision+1,pending=false,lease_token=null,lease_until=null,updated_at=now() where id=$1")
-            .bind(&claim.rule.id).execute(&mut **tx).await.map_err(unavailable)?;
-        "excel_enabled_probe_paused"
-    } else {
-        "excel_enabled"
-    };
+    let action = "excel_enabled";
     let revision = bump_config_revision_in_transaction(tx)
         .await
         .map_err(unavailable)?;
@@ -429,5 +427,6 @@ async fn enable_excel(
     )
     .await
     .map_err(unavailable)?;
+    record_excel_ownership(tx, claim).await?;
     Ok(action)
 }

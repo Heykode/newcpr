@@ -17,6 +17,7 @@ export const qualityEditableFields = [
   'failureTemplate',
   'failureGroupIds',
   'autoRestore',
+  'disableExcelOnNativeRecovery',
   'excelFailureThreshold',
 ] as const satisfies readonly (keyof QualityRuleConfig)[]
 
@@ -65,6 +66,8 @@ export function applyQualityPatch(source: QualityRuleConfig, patch: QualityPatch
   }
   if (usesFailureThreshold(action))
     next.autoRestore = false
+  if (mode !== 'state_probe' || !usesFailureThreshold(action))
+    next.disableExcelOnNativeRecovery = false
   if (action !== 'apply_account_template')
     delete next.failureTemplate
   if (action === 'apply_account_template' && !next.failureTemplate)

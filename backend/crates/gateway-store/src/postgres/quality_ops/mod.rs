@@ -12,6 +12,7 @@ use gateway_admin::{
 use sqlx::{PgPool, Row as _};
 
 mod group_rules;
+mod native_recovery;
 mod policy;
 mod rule_templates;
 mod template_action;
@@ -186,41 +187,6 @@ async fn action_scope(
     .map(|scope| scope.unwrap_or(serde_json::Value::Null))
 }
 
-async fn pause_excel_probes(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    rule_id: Option<&str>,
-) -> AdminStoreResult<()> {
-    let ids: Vec<String> = sqlx::query_scalar(
-        "update quality_rules q set enabled=false,config=jsonb_set(config,'{enabled}','false'),
-         pending=false,revision=revision+1,lease_token=null,lease_until=null,
-         last_action='probe_paused_excel',updated_at=now()
-         where (enabled or pending or lease_token is not null)
-         and config->>'detectionMode'='state_probe'
-         and ($1::text is null or q.id=$1) and exists(
-           select 1 from provider_accounts a where a.id=q.account_id and a.responses_upstream='excel')
-         returning id",
-    )
-    .bind(rule_id).fetch_all(&mut **tx).await.map_err(unavailable)?;
-    if !ids.is_empty() {
-        sqlx::query("update quality_runs set status='cancelled',finished_at=now(),action='probe_paused_excel'
-            where rule_id=any($1::text[]) and status='running'")
-            .bind(&ids).execute(&mut **tx).await.map_err(unavailable)?;
-        for id in ids {
-            audit(
-                tx,
-                &MutationContext {
-                    actor: gateway_admin::model::MutationActor::System,
-                    request_id: "quality-excel-pause".into(),
-                },
-                "quality_rule.auto_pause",
-                &id,
-            )
-            .await?;
-        }
-    }
-    Ok(())
-}
-
 impl PgQualityOpsStore {
     async fn save_checked(
         &self,
@@ -286,12 +252,9 @@ impl PgQualityOpsStore {
             let valid: bool = sqlx::query_scalar(
                 "select exists(select 1 from provider_accounts a where id=$1
                  and provider_kind='openai' and authentication_kind='oauth'
-                 and (not $2 or not $3 or responses_upstream='codex')
-                 and (not $4 or $5=any(case when excel_models_follow_global then
+                 and (not $2 or $3=any(case when excel_models_follow_global then
                  (select excel_default_models from runtime_settings where id=1) else excel_models end)))")
                 .bind(&config.account_id)
-                .bind(config.detection_mode == QualityDetectionMode::StateProbe)
-                .bind(config.enabled)
                 .bind(config.failure_action == QualityFailureAction::EnableExcel)
                 .bind(&config.model).fetch_one(&mut *tx).await.map_err(unavailable)?;
             if !valid {
@@ -314,7 +277,11 @@ impl PgQualityOpsStore {
             let row = sqlx::query(
                 "update quality_rules set config=$3,enabled=$4,next_run_at=$5,
                  source_template=coalesce($7,source_template),
-                 recovery=recovery-'excel_streak',
+                 recovery=case when config->>'model' is distinct from $3->>'model'
+                    or config->>'detectionMode' is distinct from $3->>'detectionMode'
+                    or config->>'failureAction' is distinct from $3->>'failureAction'
+                    or config->'failureTemplate' is distinct from $3->'failureTemplate'
+                    then recovery-'excel_streak'-'excel_owner' else recovery-'excel_streak' end,
                  last_action=case when last_action in ('excel_threshold_pending','excel_streak_reset')
                     then null else last_action end,
                  last_status=case when coalesce(config->>'detectionMode','answer')<>
@@ -539,21 +506,6 @@ impl QualityOpsStore for PgQualityOpsStore {
     ) -> AdminStoreResult<()> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
-        pause_excel_probes(&mut tx, Some(id)).await?;
-        // Commit the automatic pause even when a manual run is now inapplicable.
-        let applicable: bool = sqlx::query_scalar(
-            "select exists(select 1 from quality_rules q where q.id=$1 and not exists(
-               select 1 from provider_accounts a where a.id=q.account_id
-               and a.responses_upstream='excel' and q.config->>'detectionMode'='state_probe'))",
-        )
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(unavailable)?;
-        if !applicable {
-            tx.commit().await.map_err(unavailable)?;
-            return Err(conflict());
-        }
         let result = sqlx::query(
             "update quality_rules set pending=true where id=$1 and revision=$2
              and not pending and (lease_until is null or lease_until<now())",
@@ -573,7 +525,6 @@ impl QualityOpsStore for PgQualityOpsStore {
     async fn claim(&self) -> AdminStoreResult<Option<QualityClaim>> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
-        pause_excel_probes(&mut tx, None).await?;
         // Serialize only the short admission transaction, not model requests.
         sqlx::query("select pg_advisory_xact_lock(71632046)")
             .execute(&mut *tx)
@@ -648,7 +599,6 @@ impl QualityOpsStore for PgQualityOpsStore {
     async fn current(&self, claim: &QualityClaim) -> AdminStoreResult<bool> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
-        pause_excel_probes(&mut tx, Some(&claim.rule.id)).await?;
         let result = sqlx::query(
             "update quality_rules set lease_until=now()+interval '5 minutes'
             where id=$1 and revision=$2 and lease_token=$3 and lease_until>now()",
@@ -671,7 +621,6 @@ impl QualityOpsStore for PgQualityOpsStore {
     ) -> AdminStoreResult<()> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
-        pause_excel_probes(&mut tx, Some(&claim.rule.id)).await?;
         let mut counts = [0_i32; 4];
         for answer in &answers {
             counts[match answer.verdict {

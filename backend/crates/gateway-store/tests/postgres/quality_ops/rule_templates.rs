@@ -374,7 +374,7 @@ async fn rule_templates_reject_stale_versions_and_wrong_targets_and_preserve_pro
                 &context()
             )
             .await
-            .is_err()
+            .is_ok()
     );
     assert!(
         store
@@ -387,7 +387,7 @@ async fn rule_templates_reject_stale_versions_and_wrong_targets_and_preserve_pro
             .await
             .is_ok()
     );
-    assert_eq!(store.rules().await.unwrap().len(), 2);
+    assert_eq!(store.rules().await.unwrap().len(), 3);
     store
         .delete_template(&new_template.id, new_template.revision, &context())
         .await

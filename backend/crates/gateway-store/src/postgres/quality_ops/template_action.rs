@@ -217,12 +217,6 @@ pub(super) async fn apply(
         .execute(&mut **tx)
         .await
         .map_err(unavailable)?;
-    let pause_probe = excel && claim.rule.config.detection_mode == QualityDetectionMode::StateProbe;
-    if pause_probe {
-        sqlx::query("update quality_rules set enabled=false,config=jsonb_set(config,'{enabled}','false'),
-            revision=revision+1,pending=false,lease_token=null,lease_until=null,updated_at=now() where id=$1")
-            .bind(&claim.rule.id).execute(&mut **tx).await.map_err(unavailable)?;
-    }
     sqlx::query("update quality_rules set recovery='{}'::jsonb where id=$1")
         .bind(&claim.rule.id)
         .execute(&mut **tx)
@@ -254,9 +248,13 @@ pub(super) async fn apply(
     )
     .await
     .map_err(unavailable)?;
-    Ok(if pause_probe {
-        "template_applied_probe_paused"
-    } else {
-        "template_applied"
-    })
+    if excel
+        && row
+            .try_get::<String, _>("responses_upstream")
+            .map_err(unavailable)?
+            != "excel"
+    {
+        policy::record_excel_ownership(tx, claim).await?;
+    }
+    Ok("template_applied")
 }

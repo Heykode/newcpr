@@ -119,6 +119,17 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
         }
         template.config.settings()?;
     }
+    if config.disable_excel_on_native_recovery
+        && (config.detection_mode != QualityDetectionMode::StateProbe
+            || !matches!(
+                config.failure_action,
+                QualityFailureAction::EnableExcel | QualityFailureAction::ApplyAccountTemplate
+            ))
+    {
+        return Err(AdminError::invalid(
+            "原生恢复后关闭Excel仅适用于状态探针的开启Excel或应用模板规则",
+        ));
+    }
     if !(1..=100).contains(&config.excel_failure_threshold) {
         return Err(AdminError::invalid("连续异常阈值必须为 1–100 轮"));
     }
@@ -268,12 +279,6 @@ impl QualityOpsService {
                     "被测模型不在账号有效Excel模型列表，请先在账号设置中配置",
                 ));
             }
-        }
-        if state_probe
-            && config.enabled
-            && account.account.responses_upstream == gateway_core::account::ResponsesUpstream::Excel
-        {
-            return Err(AdminError::invalid("账号已开启Excel模式，不能启用状态探针"));
         }
         // Validate an answer operation without sending an upstream request.
         self.providers
@@ -511,22 +516,22 @@ impl QualityOpsService {
         } else {
             operation
         };
-        self.probe
-            .quality_check(
-                AccountProbeRequest {
-                    account_id: ProviderAccountId::new(account_id.to_owned())
-                        .map_err(|_| AdminError::invalid("账号ID不合法"))?,
-                    provider_kind,
-                    upstream_model,
-                    operation,
-                },
-                cancellation,
-            )
-            .await
-            .map_err(|error| {
-                // Persist stable classification, not upstream bodies which may contain secrets.
-                AdminError::bad_gateway(format!("请求失败：{:?}", error.kind()))
-            })
+        let request = AccountProbeRequest {
+            account_id: ProviderAccountId::new(account_id.to_owned())
+                .map_err(|_| AdminError::invalid("账号ID不合法"))?,
+            provider_kind,
+            upstream_model,
+            operation,
+        };
+        let result = if judge_group.is_some() {
+            self.probe.quality_check(request, cancellation).await
+        } else {
+            self.probe.quality_retest(request, cancellation).await
+        };
+        result.map_err(|error| {
+            // Persist stable classification, not upstream bodies which may contain secrets.
+            AdminError::bad_gateway(format!("请求失败：{:?}", error.kind()))
+        })
     }
 
     async fn judge(
@@ -675,12 +680,6 @@ impl QualityOpsService {
                 .await
                 .map_err(|error| map_store_error(error, "quality account"))?
                 .ok_or_else(|| AdminError::not_found("被测账号不存在"))?;
-            if item.account.responses_upstream == gateway_core::account::ResponsesUpstream::Excel {
-                return Ok(StateProbeReport {
-                    reason: StateProbeReason::ExcelEnabled,
-                    ..Default::default()
-                });
-            }
             let provider_kind = item.account.provider_kind;
             let model = UpstreamModelId::new(config.model.clone())
                 .map_err(|_| AdminError::invalid("检测模型不合法"))?;
@@ -887,6 +886,7 @@ mod tests {
             failure_action: QualityFailureAction::None,
             failure_group_ids: Vec::new(),
             auto_restore: false,
+            disable_excel_on_native_recovery: false,
         };
         let now = DateTime::parse_from_rfc3339("2026-09-27T00:01:00Z")
             .unwrap()
@@ -944,6 +944,7 @@ mod tests {
         assert_eq!(config.detection_mode, QualityDetectionMode::Answer);
         assert_eq!(config.failure_action, QualityFailureAction::None);
         assert!(!config.auto_restore);
+        assert!(!config.disable_excel_on_native_recovery);
         assert_eq!(config.excel_failure_threshold, 1);
         for invalid in [0, 101, 255] {
             config.excel_failure_threshold = invalid;
@@ -982,6 +983,11 @@ mod tests {
         config.auto_restore = true;
         assert!(validate(&config).is_err());
         config.auto_restore = false;
+        config.disable_excel_on_native_recovery = true;
+        assert!(validate(&config).is_ok());
+        config.failure_action = QualityFailureAction::None;
+        assert!(validate(&config).is_err());
+        config.failure_action = QualityFailureAction::EnableExcel;
         config.detection_mode = QualityDetectionMode::Answer;
         assert!(validate(&config).is_err());
     }

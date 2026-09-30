@@ -55,6 +55,7 @@ const labels: Record<QualityEditableField, string> = {
   failureTemplate: '异常处置账号模板（仅应用模板规则）',
   failureGroupIds: '处置分组（仅移出分组规则）',
   autoRestore: '自动恢复（不适用于应用模板或旧版开启 Excel）',
+  disableExcelOnNativeRecovery: '原生恢复后关闭 Excel（仅状态探针的模板或开启 Excel 规则）',
   excelFailureThreshold: '连续异常阈值（模板或旧版开启 Excel 规则）',
 }
 const fields = ref<QualityEditableField[]>([])
@@ -162,7 +163,7 @@ onBeforeUnmount(() => {
       <div v-for="field in qualityEditableFields" :key="field" class="grid min-w-0 gap-3 border-b border-cp-border pb-4">
         <BaseCheckbox :model-value="fields.includes(field)" :label="`修改${labels[field]}`" show-label @update:model-value="selectField(field, $event)" />
         <template v-if="fields.includes(field)">
-          <BaseSwitch v-if="field === 'enabled' || field === 'autoRestore'" v-model="draft[field]" :label="labels[field]" show-label />
+          <BaseSwitch v-if="field === 'enabled' || field === 'autoRestore' || field === 'disableExcelOnNativeRecovery'" v-model="draft[field]" :label="labels[field]" show-label />
           <QualitySchedule v-else-if="field === 'intervalSeconds'" v-model="draft.intervalSeconds" />
           <BaseNumberInput v-else-if="field === 'repetitions' || field === 'excelFailureThreshold'" v-model="draft[field]" :label="labels[field]" :min="1" :max="field === 'repetitions' ? 8 : 100" />
           <QualityCatalogPicker v-else-if="field === 'judgeGroupId'" v-model="draft.judgeGroupId" label="判题分组" :load-page="groupPage" />

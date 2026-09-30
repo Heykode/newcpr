@@ -560,9 +560,13 @@ impl Provider for CodexProvider {
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         let lease = Arc::new(lease);
-        let responses_upstream = lease
-            .account()
-            .responses_upstream_for_model(upstream_model.as_str());
+        let responses_upstream = if context.is_native_quality_probe() {
+            gateway_core::account::ResponsesUpstream::Codex
+        } else {
+            lease
+                .account()
+                .responses_upstream_for_model(upstream_model.as_str())
+        };
         let excel = responses_upstream == gateway_core::account::ResponsesUpstream::Excel;
         if previous_session
             .as_ref()

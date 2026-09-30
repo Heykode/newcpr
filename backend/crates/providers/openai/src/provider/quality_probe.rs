@@ -40,11 +40,8 @@ pub(super) fn prepare(
     let Some(step) = request.quality_probe.clone() else {
         return Ok(());
     };
-    if !context.is_quality_check() || !step.begin() {
+    if !context.is_native_quality_probe() || !step.begin() {
         return Err(rejected(&step, StateProbeReason::RepeatedAttempt));
-    }
-    if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
-        return Err(rejected(&step, StateProbeReason::ExcelEnabled));
     }
     if account.authentication_kind() != "oauth" {
         return Err(rejected(&step, StateProbeReason::UnsupportedAccount));

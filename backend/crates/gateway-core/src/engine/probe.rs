@@ -176,7 +176,7 @@ pub trait AccountProbe: Send + Sync {
         request: AccountProbeRequest,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>>;
 
-    /// Scheduled quality checks use ordinary eligibility, never diagnostic bypasses.
+    /// Judge requests retain ordinary eligibility on the quality execution path.
     fn quality_check(
         &self,
         _request: AccountProbeRequest,
@@ -189,5 +189,15 @@ pub trait AccountProbe: Send + Sync {
             )
             .into())
         })
+    }
+
+    /// Retest the explicitly selected target without trusting its cached availability.
+    /// Providers still own credentials, identity, transport and upstream feedback.
+    fn quality_retest(
+        &self,
+        request: AccountProbeRequest,
+        cancellation: crate::lifecycle::CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        self.quality_check(request, cancellation)
     }
 }

@@ -665,7 +665,11 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
         Box::pin(async move {
             match request {
                 ProviderLeaseRequest::Scheduling(request) => {
-                    self.acquire_scheduling(&request).await
+                    if request.is_quality_check() {
+                        self.capacity_wait.acquire_scheduling(request).await
+                    } else {
+                        self.acquire_scheduling(&request).await
+                    }
                 }
                 ProviderLeaseRequest::RefreshCapacity(request) => {
                     self.acquire_refresh_capacity(request).await

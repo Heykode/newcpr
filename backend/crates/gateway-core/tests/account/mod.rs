@@ -195,6 +195,81 @@ fn quality_recovery_ignores_only_its_scheduling_pause() {
 }
 
 #[test]
+fn quality_retest_bypasses_cached_availability_but_retains_selection_boundaries() {
+    let now = SystemTime::now();
+    for state in [
+        CredentialState::Ready,
+        CredentialState::Expired,
+        CredentialState::Invalid,
+        CredentialState::Banned,
+        CredentialState::Unknown,
+    ] {
+        let mut candidate = candidate("acct_retest", 0, None);
+        candidate.account = candidate.account.with_account_facts(
+            false,
+            state,
+            QuotaState::exhausted(QuotaEvidence::ProviderDenied, now, None),
+            None,
+            None,
+        );
+        candidate.signals.rate_limited_until = Some(now + Duration::from_secs(60));
+        let mut context = context(RotationStrategy::Sticky);
+        assert!(
+            AccountSelector
+                .select(std::slice::from_ref(&candidate), &context)
+                .is_none()
+        );
+
+        context.eligibility = AccountEligibilityPolicy::BypassForQualityRetest;
+        let selected = AccountSelector
+            .select(std::slice::from_ref(&candidate), &context)
+            .unwrap();
+        assert_eq!(selected.candidate().account, candidate.account);
+        assert!(!selected.candidate().account.enabled());
+
+        context
+            .excluded_accounts
+            .insert(candidate.account.id().clone());
+        assert!(
+            AccountSelector
+                .select(std::slice::from_ref(&candidate), &context)
+                .is_none()
+        );
+        context.excluded_accounts.clear();
+        context.account_scope = Some(Arc::new(FrozenAccountScope::new(
+            Arc::new(RuntimeAccountDirectory::new(BTreeMap::new())),
+            ClientRoutingScope::all_accounts(),
+        )));
+        assert!(
+            AccountSelector
+                .select(std::slice::from_ref(&candidate), &context)
+                .is_none()
+        );
+        context.account_scope = None;
+
+        // Provider's quality path separately bypasses business concurrency, not intervals.
+        context.policy = AccountSelectionPolicy::new(
+            RotationStrategy::Sticky,
+            NonZeroU32::new(3).unwrap(),
+            Duration::from_secs(60),
+        );
+        candidate.signals.last_started_at = Some(context.now);
+        assert!(
+            AccountSelector
+                .select(std::slice::from_ref(&candidate), &context)
+                .is_none()
+        );
+        candidate.signals.last_started_at = None;
+        candidate.signals.in_flight = 3;
+        assert!(
+            AccountSelector
+                .select(std::slice::from_ref(&candidate), &context)
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn plaintext_credential_debug_should_redact_values() {
     let mut object = Map::new();
     object.insert("access_token".to_owned(), Value::from("secret-at"));

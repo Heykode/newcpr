@@ -8,6 +8,7 @@ use gateway_store::postgres::quality_ops::PgQualityOpsStore;
 
 mod group_safety;
 mod groups;
+mod native_recovery;
 mod policy;
 mod rule_templates;
 mod templates;
@@ -40,6 +41,7 @@ fn config(account: &str) -> QualityRuleConfig {
         failure_action: QualityFailureAction::None,
         failure_group_ids: Vec::new(),
         auto_restore: false,
+        disable_excel_on_native_recovery: false,
     }
 }
 

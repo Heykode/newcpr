@@ -45,7 +45,7 @@ pub struct AttemptCoordinator<S: ?Sized> {
 #[derive(Debug, Clone)]
 enum AccountSelection {
     Scheduled(Option<crate::account::ProviderAccountId>),
-    Quality(crate::account::ProviderAccountId),
+    Quality(crate::account::ProviderAccountId, bool),
     Diagnostic(crate::account::ProviderAccountId),
 }
 
@@ -53,7 +53,7 @@ impl AccountSelection {
     fn required_account(&self) -> Option<&crate::account::ProviderAccountId> {
         match self {
             Self::Scheduled(account) => account.as_ref(),
-            Self::Diagnostic(account) | Self::Quality(account) => Some(account),
+            Self::Diagnostic(account) | Self::Quality(account, _) => Some(account),
         }
     }
 
@@ -128,12 +128,13 @@ where
         plan: RoutingPlan,
         account: crate::account::ProviderAccountId,
         cancellation: CancellationToken,
+        retest: bool,
     ) -> Result<ResponseExecutionSession<S>, EngineError> {
         self.start_with_account_selection(
             request,
             operation,
             plan,
-            AccountSelection::Quality(account),
+            AccountSelection::Quality(account, retest),
             None,
             cancellation,
         )
@@ -887,7 +888,7 @@ where
                 AccountSelection::Diagnostic(account) => {
                     (Some(account.clone()), AttemptTransport::Default)
                 }
-                AccountSelection::Scheduled(_) | AccountSelection::Quality(_) => (
+                AccountSelection::Scheduled(_) | AccountSelection::Quality(_, _) => (
                     self.recovery_account
                         .take()
                         .or_else(|| self.account_selection.required_account().cloned()),
@@ -908,7 +909,7 @@ where
                 account.clone(),
                 self.account_state_owner.clone(),
             ),
-            AccountSelection::Scheduled(_) | AccountSelection::Quality(_) => {
+            AccountSelection::Scheduled(_) | AccountSelection::Quality(_, _) => {
                 AccountAttemptContext::new(
                     self.excluded_accounts.clone(),
                     pinned_account.clone(),
@@ -917,7 +918,15 @@ where
                 .with_account_scope(Arc::clone(self.plan.account_scope()))
                 .with_quality_check(matches!(
                     &self.account_selection,
-                    AccountSelection::Quality(_)
+                    AccountSelection::Quality(_, _)
+                ))
+                .with_quality_retest(matches!(
+                    &self.account_selection,
+                    AccountSelection::Quality(_, true)
+                ))
+                .with_native_quality_probe(matches!(
+                    &self.operation,
+                    Operation::Generate(generate) if generate.quality_probe().is_some()
                 ))
             }
         }
