@@ -245,10 +245,33 @@ fn outlived_accounts_do_not_hide_calculable_expiry_or_reduce_eta_balance() {
         &MonitorUsage::default(),
         Some(0),
     );
-    assert_eq!(missing.expected_expiry_usd, None);
-    assert_eq!(missing.expiry_status, "lifespan_learning");
+    assert_eq!(missing.expected_expiry_usd, Some(80.0));
+    assert_eq!(missing.expiry_status, "partial");
     assert_eq!(missing.eta_status, "ready");
     assert_eq!(missing.eta_minutes, Some(50.0));
+}
+
+#[test]
+fn unknown_cost_for_one_new_account_preserves_known_group_rate_and_expiry() {
+    let mut unknown = account("new");
+    unknown.consumption = MonitorUsage {
+        usd: 0.0,
+        missing_costs: 1,
+    };
+    let mixed = project_group_monitor(
+        group(),
+        &[account("established"), unknown],
+        &MonitorUsage {
+            usd: 2.0,
+            missing_costs: 1,
+        },
+        Some(0),
+    );
+    assert_eq!(mixed.remaining_usd, Some(200.0));
+    assert_eq!(mixed.quota_consume_usd_per_minute, Some(2.0));
+    assert_eq!(mixed.eta_minutes, Some(100.0));
+    assert_eq!(mixed.expected_expiry_usd, Some(80.0));
+    assert_eq!(mixed.expiry_status, "partial");
 }
 
 #[test]

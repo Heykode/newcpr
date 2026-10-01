@@ -1,5 +1,10 @@
 import type { AccountGroup, MonitorStatus } from '@/api'
 
+export function monitorSnapshotExpired(sampledAt: string | undefined, now: number) {
+  const time = Date.parse(sampledAt ?? '')
+  return !Number.isFinite(time) || now - time > 45_000
+}
+
 export function readPinnedGroups(raw: unknown): string[] {
   if (!Array.isArray(raw))
     return []

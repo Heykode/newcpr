@@ -240,12 +240,13 @@ impl AccountGroupStore for FakeGroupStore {
 }
 
 #[tokio::test]
-async fn monitor_reuses_ungrouped_peer_current_usage_then_switches_to_own_estimate() {
-    use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, quota_local_usage};
+async fn monitor_reuses_persisted_reference_after_peer_deletion_without_ratio_takeover() {
+    use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record};
     use gateway_admin::model::{
-        accounts::{AccountCost, AccountUsageWindowResult},
         group_monitor::MonitorQuotaPeer,
+        group_monitor_quota::monitor_learning_observations,
         provider_credentials::{ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution},
+        quota_learning::{QuotaLearningEstimate, QuotaLearningSource},
     };
     let events = Arc::new(Mutex::new(Vec::new()));
     let store = FakeAccountStore::new("openai", events.clone());
@@ -253,7 +254,7 @@ async fn monitor_reuses_ungrouped_peer_current_usage_then_switches_to_own_estima
     donor.id = "acct_peer".to_owned();
     store.set_accounts(vec![account_record("openai"), donor]);
     let provider = FakeProviderAdmin::new("openai", events.clone());
-    provider.set_quota(ProviderQuota {
+    let quota = ProviderQuota {
         plan_type: Some("plus".to_owned()),
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -274,10 +275,22 @@ async fn monitor_reuses_ungrouped_peer_current_usage_then_switches_to_own_estima
             local_usage: None,
             provider_data: None,
         }],
-    });
+    };
+    let observation =
+        monitor_learning_observations("acct_test", "openai", Some("plus"), &quota, Utc::now())
+            .remove(0);
+    store.set_learning_estimates(vec![QuotaLearningEstimate {
+        account_id: "acct_test".to_owned(),
+        window_key: observation.window_key,
+        window_minutes: observation.window_minutes,
+        effective_limit_usd: Some(100.0),
+        source: QuotaLearningSource::PlanAverage,
+        sample_count: 3,
+    }]);
+    provider.set_quota(quota.clone());
     let services = AdminHarness::new()
         .accounts(store.clone())
-        .provider(provider)
+        .provider(provider.clone())
         .account_runtime(Arc::new(FakeRuntimeStore::default()))
         .account_groups(Arc::new(FakeGroupStore {
             extra_quota_peers: vec![MonitorQuotaPeer {
@@ -290,27 +303,10 @@ async fn monitor_reuses_ungrouped_peer_current_usage_then_switches_to_own_estima
         }))
         .build()
         .await;
-    for (own_cost, donor_cost, remaining) in
-        [("0", "10", 90.0), ("0", "20", 180.0), ("1", "20", 9.0)]
-    {
-        store.set_quota_window_usage(
-            [("acct_test", own_cost), ("acct_peer", donor_cost)]
-                .into_iter()
-                .map(|(id, cost)| {
-                    let mut usage = quota_local_usage(id, 0);
-                    usage.costs = vec![AccountCost {
-                        currency: "USD".to_owned(),
-                        amount: cost.parse().unwrap(),
-                    }];
-                    usage.cost_coverage = Default::default();
-                    AccountUsageWindowResult {
-                        account_id: id.to_owned(),
-                        key: "week".to_owned(),
-                        usage,
-                    }
-                })
-                .collect(),
-        );
+    for (percent, remaining) in [(0.0, 100.0), (1.0, 99.0), (10.0, 90.0)] {
+        let mut current = quota.clone();
+        current.windows[0].used_percent = Some(percent);
+        provider.set_quota(current);
         services.group_monitor().sample().await.unwrap();
         let report = services
             .group_monitor()
@@ -334,7 +330,7 @@ async fn monitor_reuses_ungrouped_peer_current_usage_then_switches_to_own_estima
             .unwrap()
             .items[0]
             .remaining_usd,
-        Some(9.0)
+        Some(90.0)
     );
     store.set_accounts(vec![]);
     assert!(
@@ -550,11 +546,13 @@ async fn monitor_runtime_failure_does_not_publish_zero_or_infinite_eta() {
 }
 
 #[tokio::test]
-async fn monitor_recalculates_each_account_from_current_weekly_usage_without_plan_learning() {
+async fn monitor_updates_unused_fraction_without_relearning_from_unaligned_list_cost() {
     use super::accounts::{FakeAccountStore, FakeProviderAdmin};
     use gateway_admin::model::{
         accounts::{AccountCost, AccountUsage},
+        group_monitor_quota::monitor_learning_observations,
         provider_credentials::{ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution},
+        quota_learning::{QuotaLearningEstimate, QuotaLearningSource},
     };
     let events = Arc::new(Mutex::new(Vec::new()));
     let provider = FakeProviderAdmin::new("openai", events.clone());
@@ -603,10 +601,22 @@ async fn monitor_recalculates_each_account_from_current_weekly_usage_without_pla
         provider_data: None,
     };
     provider.set_quota(quota.clone());
+    let store = FakeAccountStore::new("openai", events);
+    let observed =
+        monitor_learning_observations("acct_test", "openai", Some("plus"), &quota, Utc::now())
+            .remove(0);
+    store.set_learning_estimates(vec![QuotaLearningEstimate {
+        account_id: observed.account_id,
+        window_key: observed.window_key,
+        window_minutes: observed.window_minutes,
+        effective_limit_usd: Some(200.0),
+        source: QuotaLearningSource::Personal,
+        sample_count: 3,
+    }]);
     let services = AdminHarness::new()
         .account_groups(Arc::new(FakeGroupStore::default()))
         .account_runtime(Arc::new(FakeRuntimeStore::default()))
-        .accounts(FakeAccountStore::new("openai", events))
+        .accounts(store)
         .provider(provider.clone())
         .build()
         .await;
@@ -628,7 +638,7 @@ async fn monitor_recalculates_each_account_from_current_weekly_usage_without_pla
             .unwrap()
             .items[0]
             .remaining_usd,
-        Some(297.0)
+        Some(198.0)
     );
     quota.windows[0].used_percent = Some(2.0);
     provider.set_quota(quota);
@@ -641,7 +651,7 @@ async fn monitor_recalculates_each_account_from_current_weekly_usage_without_pla
             .unwrap()
             .items[0]
             .remaining_usd,
-        Some(147.0)
+        Some(196.0)
     );
 }
 

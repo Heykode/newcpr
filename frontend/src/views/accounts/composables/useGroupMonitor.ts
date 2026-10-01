@@ -3,7 +3,7 @@ import type { AccountGroup, GroupMonitorItem } from '@/api'
 import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { getGroupMonitor } from '@/api'
-import { orderMonitorGroups, readPinnedGroups } from '../components/group-monitor-presentation'
+import { monitorSnapshotExpired, orderMonitorGroups, readPinnedGroups } from '../components/group-monitor-presentation'
 
 export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<number>) {
   const page = ref(0)
@@ -24,10 +24,8 @@ export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<numbe
   // An all-empty catalog still needs the authenticated scope to restore saved pins.
   const requestSignature = computed(() => signature.value || (!viewer.value ? groups.value[0]?.id ?? '' : ''))
   const storageKey = computed(() => `cpr.accounts.monitor.pins.${viewer.value}`)
-  const stale = computed(() => error.value || refreshing.value || visible.value.some((group) => {
-    const time = Date.parse(sampleTimes.value.get(group.id) ?? '')
-    return !Number.isFinite(time) || now.value - time > 45_000
-  }))
+  const stale = computed(() => error.value || refreshing.value || visible.value.some(group =>
+    monitorSnapshotExpired(sampleTimes.value.get(group.id), now.value)))
   let controller: AbortController | undefined
   let generation = 0
   let disposed = false
@@ -131,5 +129,5 @@ export function useGroupMonitor(groups: Ref<AccountGroup[]>, pageSize: Ref<numbe
     generation += 1
     controller?.abort()
   })
-  return { page, pins, viewer, visible, displayedCount, totalPages, records, stale, loading, refreshing, error, now, togglePin, refresh, refreshNow }
+  return { page, pins, viewer, visible, displayedCount, totalPages, records, sampleTimes, stale, loading, refreshing, error, now, togglePin, refresh, refreshNow }
 }

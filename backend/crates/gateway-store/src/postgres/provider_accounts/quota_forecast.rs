@@ -7,6 +7,57 @@ use gateway_admin::model::quota_forecast_sampling::{
 
 use super::*;
 
+pub(super) async fn load_learning_usage(
+    pool: &PgPool,
+    budget: &super::super::ObservabilityQueryBudget,
+    window: &AccountUsageWindowQuery,
+) -> AdminStoreResult<QuotaForecastUsage> {
+    validate_admin_account_ids(std::slice::from_ref(&window.account_id))
+        .map_err(|error| admin_store_error(ENTITY, error))?;
+    let range = ObservabilityRange::new(window.range.start, window.range.end)
+        .map_err(|error| admin_store_error(ENTITY, error))?;
+    if range.end - range.start > TimeDelta::days(32) {
+        return Err(AdminStoreError::new(
+            AdminStoreErrorKind::Invalid,
+            ENTITY,
+            "learning range exceeds supported quota windows",
+        ));
+    }
+    let query = format!(
+        "select count(*)::bigint as request_count,
+                count(*) filter (where coalesce(cost_source in ('calculated', 'provider_reported')
+                  and cost_currency = 'USD' and cost_amount is not null, false))::bigint as known_cost_count,
+                count(*) filter (where not coalesce(cost_source in ('calculated', 'provider_reported')
+                  and cost_currency = 'USD' and cost_amount is not null, false))::bigint as unavailable_cost_count,
+                coalesce(sum(cost_amount) filter (where cost_source in ('calculated', 'provider_reported')
+                  and cost_currency = 'USD'), 0)::float8 as usd
+           from model_requests mr
+          where mr.provider_account_ref = $1
+            and mr.started_at >= $2 and mr.started_at < $3
+            and mr.completed_at <= $3 and {}",
+        completed_usage_fact_predicate("mr"),
+    );
+    let row = budget
+        .run("load monitor learning usage", async {
+            sqlx::query(sqlx::AssertSqlSafe(query))
+                .bind(&window.account_id)
+                .bind(range.start)
+                .bind(range.end)
+                .fetch_one(pool)
+                .await
+                .map_err(|_| postgres_unavailable("load monitor learning usage"))
+        })
+        .await
+        .map_err(|error| admin_store_error(ENTITY, error))?;
+    Ok(QuotaForecastUsage {
+        request_count: window_usage_count(&row, "request_count")?,
+        known_cost_count: window_usage_count(&row, "known_cost_count")?,
+        unavailable_cost_count: window_usage_count(&row, "unavailable_cost_count")?,
+        usd: window_usage_value(&row, "usd")?,
+        ..QuotaForecastUsage::default()
+    })
+}
+
 pub(super) async fn load_history(
     pool: &PgPool,
     budget: &super::super::ObservabilityQueryBudget,

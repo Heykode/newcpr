@@ -50,6 +50,11 @@ BaseModal、BaseSwitch、BaseNumberInput、BaseSelect、BaseToast 和主题。
 上一份结果。寿命学习、消耗采样和全部超过平均寿命使用不同短文案，解释置于
 悬停提示；不修改金额或预计可支撑算法。
 
+卡片与预警弹窗共用 `monitorSnapshotExpired(sampledAt, now)`，沿用 45 秒
+有效期。`sampleTimes` 保存服务器的原始 `generatedAt`；pending/网络失败
+不得续期。不要用某个成员的 `earliestResetAt` 清空整卡，账号窗口由后端
+单独校验。过期之后隐藏估算金额/可支撑，恢复有效采样后再显示。
+
 ## 5. 例子
 
 正常：Bark 重要警告可覆盖音量为 8，关掉自定义音量恢复全局继承。

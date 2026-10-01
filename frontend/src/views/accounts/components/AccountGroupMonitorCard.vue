@@ -4,11 +4,12 @@ import { Pin, PinOff, Settings } from '@lucide/vue'
 import { computed } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
-import { monitorEta, monitorExpiryHint, monitorMoney } from './group-monitor-presentation'
+import { monitorEta, monitorExpiryHint, monitorMoney, monitorSnapshotExpired } from './group-monitor-presentation'
 
 const props = defineProps<{
   group: AccountGroup
   snapshot?: GroupMonitorItem
+  sampledAt?: string
   pinned: boolean
   pinDisabled: boolean
   stale: boolean
@@ -17,7 +18,7 @@ const props = defineProps<{
 }>()
 defineEmits<{ pin: [], settings: [] }>()
 
-const expired = computed(() => !!props.snapshot?.earliestResetAt && Date.parse(props.snapshot.earliestResetAt) <= props.now)
+const expired = computed(() => monitorSnapshotExpired(props.sampledAt, props.now))
 const status = computed(() => !props.group.enabled ? 'disabled' : expired.value ? 'unknown' : props.snapshot?.remainingStatus ?? 'unknown')
 const metrics = computed(() => [
   { label: '预计剩余额度', value: monitorMoney(expired.value ? null : props.snapshot?.remainingUsd, status.value) },
