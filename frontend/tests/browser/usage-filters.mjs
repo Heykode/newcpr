@@ -52,6 +52,19 @@ async function main() {
       page.on('pageerror', error => report.errors.push(error.message))
       await page.goto(`${base}usage`)
       await page.getByLabel('请求搜索', { exact: true }).waitFor()
+      const placement = await page.locator('section[aria-label="请求筛选"]').evaluate((filters) => {
+        const heading = [...document.querySelectorAll('h2')].find(element => element.textContent.trim() === '请求明细')
+        const insights = [...document.querySelectorAll('h3,h2')].find(element => element.textContent.trim() === '热点诊断')
+        const card = heading?.closest('section,article')
+        return {
+          insideDetails: Boolean(card?.contains(filters)),
+          belowHeading: Boolean(heading && (heading.compareDocumentPosition(filters) & Node.DOCUMENT_POSITION_FOLLOWING)),
+          belowInsights: Boolean(insights && (insights.compareDocumentPosition(filters) & Node.DOCUMENT_POSITION_FOLLOWING)),
+          count: document.querySelectorAll('section[aria-label="请求筛选"]').length,
+        }
+      })
+      assert.deepEqual(placement, { insideDetails: true, belowHeading: true, belowInsights: true, count: 1 }, `filters stay inside request details at ${width}px`)
+      await page.getByText('Pro', { exact: true }).first().waitFor()
       const account = page.getByLabel('搜索账号', { exact: true })
       await account.fill('filter-')
       await page.getByRole('option', { name: /filter-a@example.invalid/ }).click()
@@ -70,6 +83,7 @@ async function main() {
       await page.getByLabel('搜索请求分组', { exact: true }).fill('测试')
       await page.getByRole('button', { name: /测试分组 group-filter/ }).click()
       await page.getByRole('radio', { name: '错误排查', exact: true }).click()
+      assert.equal(await page.locator('section[aria-label="请求筛选"]').count(), 1)
       await page.getByLabel('客户端状态码', { exact: true }).fill('502')
       await page.getByLabel('上游状态码', { exact: true }).fill('403')
       await page.waitForResponse(response => response.url().includes('/operations/errors?')

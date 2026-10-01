@@ -86,6 +86,8 @@ export interface UsageListRecord {
   accountEmail: string | null
   accountName: string | null
   accountCustomName: string | null
+  accountPlanType?: string | null
+  accountPlanTypeDisplay?: string | null
   route: string
   model: string | null
   requestedModel: string | null
@@ -444,6 +446,8 @@ export interface UsageInsightsOverviewResponse {
 export interface UsageDiagnosticItem {
   key: string
   name: string
+  accountPlanType?: string | null
+  accountPlanTypeDisplay?: string | null
   requestCount: number
   successCount: number
   errorCount: number

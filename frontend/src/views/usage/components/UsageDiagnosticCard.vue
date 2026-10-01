@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { getUsageRecordInsightsDiagnostics } from '@/api'
+import type { TableColumnSize } from '@/components/base/BaseTable/columns'
 import { ChevronLeft, ChevronRight, CornerDownRight } from '@lucide/vue'
 
 import { computed } from 'vue'
@@ -10,6 +11,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { formatLocalizedCompactNumber as formatCompactNumber } from '@/utils/number'
+import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 
 import { formatDuration, formatPercent, formatUsd } from '../utils/format'
 
@@ -40,12 +42,23 @@ const dimensionOptions = [
 
 const resultDimension = computed(() => props.diagnostics.dimension || dimension.value)
 
+const dimensionNameSizes: Record<string, TableColumnSize> = {
+  model: 'xl',
+  keyModel: 'xl',
+  account: '2xl',
+  apiKey: 'md',
+  provider: 'lg',
+  transport: 'sm',
+  failureClass: 'xl',
+}
+
 const diagnosticColumns = computed(() => defineTableColumns<DiagnosticDisplayItem>([
   {
     key: 'nameDisplay',
     label: '维度',
     kind: 'custom',
-    size: 'xl',
+    size: dimensionNameSizes[resultDimension.value] ?? 'xl',
+    grow: 1,
   },
   {
     key: 'requestCount',
@@ -163,6 +176,7 @@ function diagnosticNameDisplay(name: string, key: string) {
         :columns="diagnosticColumns"
         :rows="displayItems"
         density="compact"
+        column-layout="content"
         row-key="key"
         empty-text="暂无诊断数据"
       >
@@ -177,6 +191,13 @@ function diagnosticNameDisplay(name: string, key: string) {
             >
               {{ row.nameDisplay.primary }}
             </code>
+            <AccountPlanBadge
+              v-if="resultDimension === 'account' && row.accountPlanTypeDisplay"
+              class="justify-self-start"
+              :plan-type="row.accountPlanType"
+              :plan-type-display="row.accountPlanTypeDisplay"
+              size="xs"
+            />
             <span
               v-if="row.nameDisplay.secondary"
               class="flex min-w-0 items-center gap-1.25 text-cp-text-secondary"

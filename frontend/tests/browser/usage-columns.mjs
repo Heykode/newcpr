@@ -57,6 +57,8 @@ function fixtures() {
   }
   const success = [1, 2].map(index => ({
     ...common,
+    accountPlanType: 'pro',
+    accountPlanTypeDisplay: 'Pro',
     id: `usage_columns_${index}`,
     upstreamTransport: 'http_sse',
     tokenDetails: Object.fromEntries(Object.entries({
@@ -172,6 +174,13 @@ function fixtures() {
     },
   }
   return new Map([
+    ['/api/admin/request-captures/config', {
+      config: { enabled: false, globalErrors: false, includeMedia: false, quotaMib: 1024, retentionDays: 7 },
+      globalActive: false,
+      storageFault: false,
+      skipped: 0,
+    }],
+    ['/api/admin/request-captures/by-request', []],
     ['/api/admin/auth/status', { authenticated: true }],
     ['/api/admin/system/version', {
       version: 'synthetic',

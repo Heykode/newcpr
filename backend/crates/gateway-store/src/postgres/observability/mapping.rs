@@ -441,6 +441,8 @@ pub(crate) fn admin_usage_list_record(
         provider_account_name: record.provider_account_name,
         provider_account_email: record.provider_account_email,
         provider_account_custom_name: record.provider_account_custom_name,
+        provider_account_plan_type: record.provider_account_plan_type,
+        provider_account_plan_type_display: None,
         provider_account_authentication_kind: record.provider_account_authentication_kind,
         upstream_model_id: record.upstream_model_id,
         upstream_transport: record.upstream_transport,
@@ -685,6 +687,8 @@ pub(crate) fn admin_diagnostic_observation(
     Ok(admin_observability::DiagnosticObservation {
         key: observation.key,
         name: observation.name,
+        account_provider_kind: observation.account_provider_kind,
+        account_plan_type: observation.account_plan_type,
         request_count: observation.request_count,
         success_count: observation.success_count,
         failure_count: observation.failure_count,
@@ -695,6 +699,7 @@ pub(crate) fn admin_diagnostic_observation(
         first_token_p95_ms: observation.first_token_p95_ms,
         non_completion_count: observation.non_completion_count,
         retry_count: observation.retry_count,
+        retried_request_count: observation.retried_request_count,
         cost_coverage: admin_cost_coverage(observation.cost_coverage),
         costs: admin_currency_costs(observation.costs)?,
     })
@@ -783,6 +788,7 @@ pub(crate) fn usage_list_record_from_row(
         provider_account_name: get(row, "provider_account_name")?,
         provider_account_email: get(row, "provider_account_email")?,
         provider_account_custom_name: get(row, "provider_account_custom_name")?,
+        provider_account_plan_type: get(row, "provider_account_plan_type")?,
         provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: get(row, "upstream_transport")?,

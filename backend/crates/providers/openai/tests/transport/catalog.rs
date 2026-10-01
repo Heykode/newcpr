@@ -40,7 +40,7 @@ fn native_document_keeps_unknown_nested_fields_nulls_and_model_instructions() {
 
 #[test]
 fn gpt6_catalog_should_preserve_declared_capabilities_and_native_document() {
-    for slug in ["gpt-6-sol", "gpt-6-luna"] {
+    for slug in ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"] {
         let efforts = ["none", "low", "medium", "high", "xhigh", "max"];
         let levels: Vec<Value> = efforts
             .iter()

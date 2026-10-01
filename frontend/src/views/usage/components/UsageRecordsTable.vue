@@ -5,6 +5,7 @@ import type { BaseTableColumn } from '@/components/base/BaseTable/columns'
 import { Minimize2 } from '@lucide/vue'
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import {
   usageAccountText,
   usageAuthenticationKind,
@@ -60,6 +61,13 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
       >
         {{ usageAccountText(row) }}
       </button>
+      <AccountPlanBadge
+        v-if="row.accountPlanTypeDisplay"
+        class="mt-1"
+        :plan-type="row.accountPlanType"
+        :plan-type-display="row.accountPlanTypeDisplay"
+        size="xs"
+      />
       <span
         v-if="row.accountCustomName?.trim()"
         class="mt-1 block max-w-full truncate text-cp-xs font-emphasis text-cp-text-quaternary"

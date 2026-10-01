@@ -77,9 +77,10 @@ fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() 
 }
 
 #[test]
-fn gpt6_sol_and_luna_billing_should_preserve_components_tiers_and_context_boundary() {
+fn gpt6_billing_should_preserve_components_tiers_and_context_boundary() {
     // Published USD/1M rates in ten-thousandths: input, cache read, cache write, output.
     for (model, rates) in [
+        ("gpt-6.1-sol", [20_000_u128, 1_000, 25_000, 100_000]),
         ("gpt-6-sol", [20_000_u128, 2_000, 25_000, 100_000]),
         ("gpt-6-luna", [1_000_u128, 100, 1_250, 5_000]),
     ] {
@@ -106,7 +107,7 @@ fn gpt6_sol_and_luna_billing_should_preserve_components_tiers_and_context_bounda
             ] {
                 let breakdown =
                     openai_billing_breakdown(model, billing_usage(input, 5, 20, 10), tier)
-                        .expect("published GPT-6 Sol/Luna pricing");
+                        .expect("published GPT-6 family pricing");
                 let expected_rates = standard_rates.map(|rate| rate * u128::from(multiplier) / 100);
                 let prices = [
                     breakdown.input_price_per_million(),
@@ -412,6 +413,8 @@ fn billing_should_keep_active_base_models_and_not_yet_shutdown_snapshots() {
 #[test]
 fn billing_should_not_inherit_prices_for_unknown_models_or_tiers() {
     for model in [
+        "gpt-6.1-sol-future",
+        "gpt-6.1-sol-2099-01-01",
         "gpt-6-astra-future",
         "gpt-6-astra-2099-01-01",
         "gpt-6-sol-future",

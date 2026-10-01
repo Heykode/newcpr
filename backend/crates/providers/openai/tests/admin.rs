@@ -360,6 +360,34 @@ async fn openai_admin_provider_exposes_live_wire_profile_and_validated_billing()
 }
 
 #[tokio::test]
+async fn gpt61_sol_admin_billing_exposes_the_new_cache_rate() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let billing = bundle
+        .admin_provider()
+        .calculated_billing(&ProviderBillingInput {
+            upstream_model_id: "gpt-6.1-sol".to_owned(),
+            service_tier: None,
+            input_tokens: Some(100),
+            output_tokens: Some(0),
+            cached_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total: CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: "0.0002".parse().unwrap(),
+            },
+        })
+        .unwrap()
+        .expect("GPT-6.1 Sol billing breakdown");
+    assert_eq!(billing.input_price_per_million.amount.as_str(), "2");
+    assert_eq!(billing.cache_read_price_per_million.amount.as_str(), "0.1");
+    assert_eq!(billing.cache_write_price_per_million.amount.as_str(), "2.5");
+    assert_eq!(billing.output_price_per_million.amount.as_str(), "10");
+}
+
+#[tokio::test]
 async fn reset_credit_success_with_invalid_body_should_remain_an_unknown_consume_result() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

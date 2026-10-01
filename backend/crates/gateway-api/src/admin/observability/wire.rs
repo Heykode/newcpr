@@ -95,6 +95,8 @@ pub struct UsageListRecordView {
     pub account_email: Option<String>,
     pub account_name: Option<String>,
     pub account_custom_name: Option<String>,
+    pub account_plan_type: Option<String>,
+    pub account_plan_type_display: Option<String>,
     pub route: String,
     pub model: Option<String>,
     pub requested_model: Option<String>,
@@ -751,6 +753,8 @@ pub struct UsageInsightsOverviewView {
 pub struct DiagnosticItemView {
     pub key: String,
     pub name: String,
+    pub account_plan_type: Option<String>,
+    pub account_plan_type_display: Option<String>,
     pub request_count: u64,
     pub success_count: u64,
     pub error_count: u64,
