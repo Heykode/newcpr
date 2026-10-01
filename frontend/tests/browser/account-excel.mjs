@@ -44,6 +44,7 @@ async function main() {
     let excelModels = ['gpt-5.6-sol']
     let followGlobal = false
     let recovered = false
+    let rejectNextExcelToggle = false
     const templates = []
     const pushes = []
     const patches = []
@@ -62,6 +63,7 @@ async function main() {
     await page.route('**/dev/api/admin/accounts?*', route => fulfill(route, {
       items: accounts.map((account, index) => ({
         ...account,
+        customName: index === 0 ? 'Excel mode sample '.repeat(6).trim() : account.customName,
         enabled: index === 1 ? recovered : account.enabled,
         status: index === 1 && !recovered ? 'disabled' : account.status,
         responsesUpstream: (index === 0 && enabled) || (index === 1 && !recovered) ? 'excel' : 'codex',
@@ -122,6 +124,10 @@ async function main() {
     })
     await page.route('**/dev/api/admin/accounts/batch-update', (route) => {
       const body = route.request().postDataJSON()
+      if (rejectNextExcelToggle && body.responsesUpstream !== undefined) {
+        rejectNextExcelToggle = false
+        return route.fulfill({ status: 503, json: { code: 503, message: 'Synthetic Excel toggle failed', data: null } })
+      }
       patches.push(body)
       if (body.responsesUpstream !== undefined)
         enabled = body.responsesUpstream === 'excel'
@@ -134,6 +140,8 @@ async function main() {
     const warningAvatar = warningRow.locator('[data-account-avatar][data-account-excel-status="warning"]')
     const firstRow = page.locator(`tr[data-row-key="${accounts[0].id}"]`)
     const firstAvatar = firstRow.locator('[data-account-avatar]')
+    const firstExcelMark = firstRow.locator('[data-account-excel-mark]')
+    const warningExcelMark = warningRow.locator('[data-account-excel-mark]')
     const monitor = warningRow.getByRole('link', { name: '监测中', exact: true })
     await warningAvatar.waitFor()
     await monitor.waitFor()
@@ -142,6 +150,10 @@ async function main() {
     assert.equal(await page.getByText('BPS 403疑似被封excel', { exact: true }).count(), 0)
     assert.equal(await page.locator('[aria-label="Excel 入口"]').count(), 0)
     assert.equal(await firstAvatar.getAttribute('data-account-excel-status'), 'default')
+    assert.equal(await firstExcelMark.count(), 0)
+    await warningExcelMark.waitFor()
+    assert.equal(await warningExcelMark.getAttribute('title'), 'Excel 模式已开启')
+    assert.equal(await page.locator(`tr[data-row-key="${accounts[2].id}"] [data-account-excel-mark]`).count(), 0)
     const defaultAvatarClass = await firstAvatar.getAttribute('class')
     const originalAvatarSize = await firstAvatar.evaluate(element => ({ width: element.offsetWidth, height: element.offsetHeight }))
     await page.getByText('Excel 403 自动关闭', { exact: true }).waitFor()
@@ -158,14 +170,32 @@ async function main() {
     const recoveredRow = page.locator(`tr[data-row-key="${accounts[1].id}"]`)
     assert.equal(await recoveredRow.getByRole('switch', { name: '暂停账号调度', exact: true }).isChecked(), true)
     assert.ok((await warningAvatar.getAttribute('title')).includes('Excel 模式未开启'))
+    assert.equal(await warningExcelMark.count(), 0)
     await page.screenshot({ path: `${output}/excel-403-history-after-recovery.png` })
     recovered = false
     await page.reload()
     await warningAvatar.waitFor()
     const more = page.getByRole('button', { name: '更多操作', exact: true }).first()
+    async function expectFailedToggle(label, markerCount) {
+      rejectNextExcelToggle = true
+      const previousPatchCount = patches.length
+      await more.click()
+      const rejected = page.waitForResponse(response => response.url().endsWith('/accounts/batch-update') && response.status() === 503)
+      await page.getByRole('button', { name: label, exact: true }).click()
+      await rejected
+      await page.getByText('Synthetic Excel toggle failed', { exact: true }).waitFor()
+      assert.equal(await firstExcelMark.count(), markerCount)
+      assert.equal(patches.length, previousPatchCount)
+      await page.getByRole('button', { name: '关闭失败通知', exact: true }).click()
+    }
+    await expectFailedToggle('开启 Excel 入口', 0)
     await more.click()
     await page.getByRole('button', { name: '开启 Excel 入口', exact: true }).click()
     await firstRow.locator('[data-account-avatar][data-account-excel-status="enabled"]').waitFor()
+    await firstExcelMark.waitFor()
+    assert.equal(await firstExcelMark.getAttribute('aria-label'), 'Excel 模式已开启')
+    await firstExcelMark.click()
+    assert.equal(patches.length, 1)
     assert.deepEqual(await firstAvatar.evaluate(element => ({ width: element.offsetWidth, height: element.offsetHeight })), originalAvatarSize)
     assert.deepEqual(patches[0], { accountIds: [accounts[0].id], responsesUpstream: 'excel' })
     await page.locator('button[title="展开统计"]').first().click()
@@ -210,6 +240,31 @@ async function main() {
         assert.equal(greenStyle.successBorder, true)
         assert.equal(greenStyle.borderWidth, 2)
         assert.notEqual(greenStyle.borderColor, avatarStyle.borderColor)
+        for (const marker of [firstExcelMark, warningExcelMark]) {
+          const markerStyle = await marker.evaluate((element) => {
+            const bounds = element.getBoundingClientRect()
+            const title = element.nextElementSibling
+            const titleBounds = title.getBoundingClientRect()
+            const style = getComputedStyle(element)
+            return {
+              width: bounds.width,
+              height: bounds.height,
+              noOverlap: bounds.right <= titleBounds.left,
+              titleFits: titleBounds.right <= element.parentElement.getBoundingClientRect().right + 1,
+              titleWidth: titleBounds.width,
+              green: element.classList.contains('text-cp-success'),
+              color: style.color,
+              iconVisible: !!element.querySelector('svg'),
+              interactive: element.matches('button, a, [role="button"], [tabindex]'),
+            }
+          })
+          assert.equal(markerStyle.width, 16)
+          assert.equal(markerStyle.height, 16)
+          assert.ok(markerStyle.noOverlap && markerStyle.titleFits && markerStyle.titleWidth > 0)
+          assert.ok(markerStyle.green && markerStyle.iconVisible)
+          assert.notEqual(markerStyle.color, 'rgba(0, 0, 0, 0)')
+          assert.equal(markerStyle.interactive, false)
+        }
         const avatarBounds = await warningAvatar.boundingBox()
         const monitorBounds = await monitor.boundingBox()
         assert.ok(monitorBounds.x >= avatarBounds.x + avatarBounds.width)
@@ -223,9 +278,11 @@ async function main() {
       }
     }
     await page.setViewportSize({ width: 1440, height: 900 })
+    await expectFailedToggle('关闭 Excel 入口', 1)
     await more.click()
     await page.getByRole('button', { name: '关闭 Excel 入口', exact: true }).click()
     await firstRow.locator('[data-account-avatar][data-account-excel-status="default"]').waitFor()
+    assert.equal(await firstExcelMark.count(), 0)
     assert.equal(await firstAvatar.getAttribute('class'), defaultAvatarClass)
     assert.deepEqual(await firstAvatar.evaluate(element => ({ width: element.offsetWidth, height: element.offsetHeight })), originalAvatarSize)
     assert.equal(await page.locator('[aria-label="Excel 入口"]').count(), 0)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { getAccounts } from '@/api'
-import { KeyRound } from '@lucide/vue'
+import { KeyRound, Table2 } from '@lucide/vue'
 import { computed } from 'vue'
 
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
@@ -134,6 +134,16 @@ const avatarDescription = computed(() => {
     </span>
     <div class="min-w-0 flex-1" data-swipe-select-ignore>
       <div class="flex min-w-0 items-center gap-2">
+        <span
+          v-if="account.responsesUpstream === 'excel'"
+          data-account-excel-mark
+          class="inline-flex size-4 shrink-0 items-center justify-center text-cp-success"
+          title="Excel 模式已开启"
+          aria-label="Excel 模式已开启"
+          role="img"
+        >
+          <Table2 class="size-4" aria-hidden="true" />
+        </span>
         <span :title="displayTitle" class="min-w-0 flex-1 truncate text-cp font-heavy text-cp-text">
           {{ displayTitle }}
         </span>
