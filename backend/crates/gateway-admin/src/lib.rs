@@ -166,6 +166,7 @@ pub struct AdminServices {
     relogin: Arc<dyn ReloginService>,
     request_capture: Arc<dyn RequestCaptureService>,
     log_cleanup: Arc<use_case::log_cleanup::LogCleanupService>,
+    reset_credits: Arc<use_case::reset_credits::ResetCreditsService>,
     outbound_user_agent: Arc<dyn OutboundUserAgentService>,
     proxies: Arc<dyn ProxiesService>,
     egress: Arc<dyn ProviderEgressService>,
@@ -185,6 +186,10 @@ pub struct AdminServices {
 }
 
 impl AdminServices {
+    #[must_use]
+    pub fn reset_credits(&self) -> &use_case::reset_credits::ResetCreditsService {
+        &self.reset_credits
+    }
     #[must_use]
     pub fn log_cleanup(&self) -> &use_case::log_cleanup::LogCleanupService {
         &self.log_cleanup
@@ -364,14 +369,21 @@ pub async fn initialize(
     auth.ensure_default_admin(config.default_password.expose())
         .await?;
 
-    let accounts = Arc::new(DefaultAccountsService::new(
-        store.accounts(),
-        store.account_runtime(),
-        store.settings(),
-        registry.clone(),
-        snapshot.clone(),
-        probe.clone(),
-    ));
+    let accounts = Arc::new(
+        DefaultAccountsService::new(
+            store.accounts(),
+            store.account_runtime(),
+            store.settings(),
+            registry.clone(),
+            snapshot.clone(),
+            probe.clone(),
+        )
+        .with_reset_store(store.reset_credits()),
+    );
+    let reset_credits = Arc::new(use_case::reset_credits::ResetCreditsService {
+        accounts: accounts.clone(),
+        store: store.reset_credits(),
+    });
     let backup_ports = store.backup();
     let backups = Arc::new(DefaultBackupService::new(
         backup_ports.repository(),
@@ -455,6 +467,7 @@ pub async fn initialize(
         log_cleanup: Arc::new(use_case::log_cleanup::LogCleanupService(
             store.log_cleanup(),
         )),
+        reset_credits: reset_credits.clone(),
         outbound_user_agent: outbound_user_agent.clone(),
         egress: Arc::new(DefaultProviderEgressService::new(
             store.egress(),
@@ -520,6 +533,7 @@ pub async fn initialize(
     worker_contributions.push(workers::group_monitor::contribution(group_monitor)?);
     worker_contributions.push(workers::quality_ops::contribution(quality_ops)?);
     worker_contributions.push(workers::excel_recovery::contribution(excel_recovery)?);
+    worker_contributions.push(workers::reset_credits::contribution(reset_credits)?);
     worker_contributions.push(workers::notifications::contribution(notifications)?);
     Ok(AdminBundle {
         services,

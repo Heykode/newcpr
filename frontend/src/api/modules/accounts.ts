@@ -365,6 +365,7 @@ export interface AccountResetCredit {
 }
 
 export interface AccountResetCreditsResponse {
+  pending?: { redeemRequestId: string, creditId: string | null, retryAfter: string } | null
   availableCount: number
   credits: AccountResetCredit[]
 }

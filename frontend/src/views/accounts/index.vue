@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { AccountRow } from './constants'
-import { ChevronDown, ListTodo, RefreshCw } from '@lucide/vue'
+import { ChevronDown, History, ListTodo, RefreshCw, RotateCcw } from '@lucide/vue'
 import { useLocalStorage } from '@vueuse/core'
 
 import { computed, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { getRelogin } from '@/api/modules/relogin'
 import AccountTemplateMenu from '@/components/account-templates/AccountTemplateMenu.vue'
 import AccountGroupMarks from '@/components/AccountGroupMarks.vue'
+import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
@@ -35,6 +36,8 @@ import AccountPurchaseCell from './components/AccountPurchaseCell.vue'
 import AccountQuotaForecastModal from './components/AccountQuotaForecastModal/index.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
+import AccountResetBatchModal from './components/AccountResetBatchModal.vue'
+import AccountResetCreditCell from './components/AccountResetCreditCell.vue'
 import AccountSchedulingSwitch from './components/AccountSchedulingSwitch.vue'
 import AccountStatusBadge from './components/AccountStatusBadge/index.vue'
 import AccountTableActions from './components/AccountTableActions.vue'
@@ -49,6 +52,7 @@ import { useAccountRelogin } from './composables/useAccountRelogin'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
 import { useAccountSwipeSelect } from './composables/useAccountSwipeSelect'
+import { useBatchResetCredits } from './composables/useBatchResetCredits'
 import { accountColumnOptions, accountColumns, derivedAccountStatus, readAccountColumnKeys, writeAccountColumnKeys } from './constants'
 import { accountHasReloginTotp, reloginTotpEmailSet } from './relogin-availability'
 
@@ -83,6 +87,20 @@ const {
   handlePageSizeChange,
   handleSortChange,
 } = useAccountsQuery()
+
+const resetCredits = useBatchResetCredits({ accounts, selectedIds, reload: refreshAccountsSilently })
+const {
+  inventory: resetInventory,
+  busy: resetBusy,
+  open: resetOpen,
+  error: resetError,
+  batches: resetBatches,
+  current: resetBatch,
+  activeCount: resetActiveCount,
+  selectedBatchId: resetSelectedBatchId,
+  resetType,
+  typeOptions: resetTypeOptions,
+} = resetCredits
 
 const reloginTotpEmails = shallowRef<ReadonlySet<string>>(new Set())
 let reloginAvailabilityGeneration = 0
@@ -442,6 +460,18 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           @toggle-column="toggleColumn"
         >
           <template #account-templates>
+            <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.refreshSelected">
+              <RefreshCw class="size-4" />
+              刷新重置次数
+            </BaseButton>
+            <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.prepare(false)">
+              <RotateCcw class="size-4" />
+              使用重置次数
+            </BaseButton>
+            <BaseButton variant="secondary" :disabled="resetBusy" @click="resetCredits.history">
+              <History class="size-4" />
+              重置记录{{ resetActiveCount ? ` (${resetActiveCount})` : '' }}
+            </BaseButton>
             <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingQualityTemplate" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
             <QualityTemplateApplyMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingTemplate" @applying="applyingQualityTemplate = $event" @applied="onTemplateApplied" />
           </template>
@@ -560,6 +590,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
             <template #purchaseCost="{ row }">
               <AccountPurchaseCell :cost="row.purchaseCost" />
+            </template>
+            <template #resetCredits="{ row }">
+              <AccountResetCreditCell :inventory="resetInventory[row.id]" :supported="row.provider === 'openai'" />
             </template>
 
             <template #actions="{ row }">
@@ -708,6 +741,20 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @save="saveAccountEdit"
     />
 
+    <AccountResetBatchModal
+      v-model="resetOpen"
+      v-model:reset-type="resetType"
+      v-model:selected-batch-id="resetSelectedBatchId"
+      :batch="resetBatch"
+      :batches="resetBatches"
+      :accounts="accounts"
+      :busy="resetBusy"
+      :error="resetError"
+      :type-options="resetTypeOptions"
+      @confirm="resetCredits.confirm"
+      @prepare="resetCredits.prepare(true)"
+      @retry="resetCredits.retry"
+    />
     <AccountBatchEditModal
       v-model:purchase-amount="batchPurchaseAmount"
       v-model:purchase-cycle-start="batchPurchaseCycleStart"

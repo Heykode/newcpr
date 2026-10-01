@@ -543,13 +543,22 @@ where
     let result = state
         .admin_services()
         .accounts()
-        .reset_credits(&auth.context().mutation_context(), account_id)
+        .reset_credits(&auth.context().mutation_context(), account_id.clone())
         .await
         .map_err(map_service_error)?;
-    Ok(AdminResponse::new(
-        StatusCode::OK,
-        AdminEnvelope::ok(AccountResetCreditsData::from(result)),
-    ))
+    let mut data = AccountResetCreditsData::from(result);
+    if let Ok(rows) = state
+        .admin_services()
+        .reset_credits()
+        .inventories(vec![account_id.as_str().to_owned()])
+        .await
+    {
+        data.pending = rows
+            .into_iter()
+            .find(|row| row.account_id == account_id.as_str())
+            .and_then(|row| row.pending);
+    }
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
 async fn consume_account_reset_credit<S>(

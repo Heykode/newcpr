@@ -26,6 +26,7 @@ pub mod proxies;
 pub mod quality_ops;
 pub mod relogin;
 pub mod request_capture;
+pub mod reset_credits;
 pub mod settings;
 pub mod system;
 pub mod wire;
@@ -46,6 +47,7 @@ where
         .merge(account_groups::router::<S>())
         .merge(group_monitor::router::<S>())
         .merge(log_cleanup::router::<S>())
+        .merge(reset_credits::router::<S>())
         .merge(proxies::router::<S>())
         .merge(mihomo::router::<S>())
         .merge(relogin::router::<S>())

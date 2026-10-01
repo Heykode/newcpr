@@ -35,6 +35,7 @@ mod query_budget;
 mod quota_learning;
 mod relogin;
 mod request_capture;
+mod reset_credits;
 mod retention;
 mod runtime_settings;
 mod schema_integrity;
@@ -253,6 +254,9 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
             "account_relogin_settings",
             "account_relogin_successes",
             "account_relogin_templates",
+            "account_reset_batches",
+            "account_reset_consumptions",
+            "account_reset_inventories",
             "account_token_guard_config",
             "account_token_guard_events",
             "admin_audit_events",

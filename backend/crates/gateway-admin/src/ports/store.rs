@@ -756,10 +756,25 @@ pub struct AdminStorePorts {
     relogin: Option<Arc<dyn super::relogin::ReloginStore>>,
     request_capture: Option<Arc<dyn super::request_capture::RequestCaptureStore>>,
     log_cleanup: Option<Arc<dyn super::log_cleanup::LogCleanupStore>>,
+    reset_credits: Option<Arc<dyn super::reset_credits::ResetCreditsStore>>,
     quality_ops: Option<Arc<dyn super::quality_ops::QualityOpsStore>>,
 }
 
 impl AdminStorePorts {
+    #[must_use]
+    pub fn with_reset_credits(
+        mut self,
+        store: Arc<dyn super::reset_credits::ResetCreditsStore>,
+    ) -> Self {
+        self.reset_credits = Some(store);
+        self
+    }
+
+    #[must_use]
+    pub fn reset_credits(&self) -> Option<Arc<dyn super::reset_credits::ResetCreditsStore>> {
+        self.reset_credits.clone()
+    }
+
     #[must_use]
     pub fn with_log_cleanup(mut self, store: Arc<dyn super::log_cleanup::LogCleanupStore>) -> Self {
         self.log_cleanup = Some(store);
@@ -791,6 +806,7 @@ impl AdminStorePorts {
             relogin: None,
             request_capture: None,
             log_cleanup: None,
+            reset_credits: None,
             quality_ops: None,
         }
     }

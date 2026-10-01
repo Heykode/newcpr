@@ -222,6 +222,7 @@ pub(crate) struct DefaultAccountsService {
     providers: ProviderAdminRegistry,
     snapshot: Arc<dyn SnapshotControl>,
     probe: Arc<dyn AccountProbe>,
+    reset_store: Option<Arc<dyn crate::ports::reset_credits::ResetCreditsStore>>,
     reset_credit_locks:
         Arc<futures::lock::Mutex<BTreeMap<ProviderAccountId, Arc<futures::lock::Mutex<()>>>>>,
 }
@@ -243,8 +244,17 @@ impl DefaultAccountsService {
             providers,
             snapshot,
             probe,
+            reset_store: None,
             reset_credit_locks: Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub(crate) fn with_reset_store(
+        mut self,
+        store: Option<Arc<dyn crate::ports::reset_credits::ResetCreditsStore>>,
+    ) -> Self {
+        self.reset_store = store;
+        self
     }
 
     async fn default_concurrency_limit(&self) -> Result<NonZeroU32, AdminError> {
@@ -1108,7 +1118,9 @@ impl AccountsService for DefaultAccountsService {
         account_id: ProviderAccountId,
     ) -> Result<ProviderResetCredits, AdminError> {
         let (_, provider) = self.provider_for_account(&account_id).await?;
-        match provider.reset_credits(&account_id).await {
+        let checked_at = Utc::now();
+        let result = async {
+            match provider.reset_credits(&account_id).await {
             Ok(credits) => Ok(credits),
             Err(error)
                 if error.kind()
@@ -1123,6 +1135,21 @@ impl AccountsService for DefaultAccountsService {
             }
             Err(error) => Err(map_provider_error(error, "provider reset credits")),
         }
+        }
+        .await;
+        if let Some(store) = &self.reset_store {
+            store
+                .save_inventory(crate::model::reset_credits::ResetInventory {
+                    account_id: account_id.as_str().to_owned(),
+                    checked_at,
+                    credits: result.as_ref().ok().cloned(),
+                    error: result.as_ref().err().map(|e| e.message().to_owned()),
+                    pending: None,
+                })
+                .await
+                .map_err(|e| map_store_error(e, "reset credits"))?;
+        }
+        result
     }
 
     async fn consume_reset_credit(
@@ -1136,7 +1163,23 @@ impl AccountsService for DefaultAccountsService {
         let lock = self.reset_credit_lock(&account_id).await;
         let _guard = lock.lock().await;
         let (_, provider) = self.provider_for_account(&account_id).await?;
-        match provider.consume_reset_credit(command.clone()).await {
+        let permit = if let Some(store) = &self.reset_store {
+            match store
+                .begin_consume(&command, context)
+                .await
+                .map_err(|e| map_store_error(e, "reset credits"))?
+            {
+                crate::model::reset_credits::ResetConsumePermit::Completed(result) => {
+                    return Ok(result);
+                }
+                crate::model::reset_credits::ResetConsumePermit::Execute(claim) => Some(claim),
+            }
+        } else {
+            None
+        };
+        // Once persisted, all failures conservatively retain the original operation.
+        let outcome = async {
+            match provider.consume_reset_credit(command.clone()).await {
             Ok(result) => Ok(result),
             Err(error)
                 if error.kind()
@@ -1145,12 +1188,43 @@ impl AccountsService for DefaultAccountsService {
                 self.refresh(context, account_id.clone()).await?;
                 let (_, provider) = self.provider_for_account(&account_id).await?;
                 provider
-                    .consume_reset_credit(command)
+                    .consume_reset_credit(command.clone())
                     .await
                     .map_err(map_reset_credits_error_after_refresh)
             }
             Err(error) => Err(map_provider_error(error, "provider reset-credit consume")),
         }
+        }
+        .await;
+        let outcome = outcome.and_then(|result| {
+            if matches!(
+                result.code.as_str(),
+                "reset" | "already_redeemed" | "no_credit" | "nothing_to_reset"
+            ) {
+                Ok(result)
+            } else {
+                Err(AdminError::upstream_result_unknown(
+                    "上游返回未识别的重置结果，请继续确认原操作",
+                ))
+            }
+        });
+        if let (Some(store), Some(claim)) = (&self.reset_store, permit) {
+            store
+                .finish_consume(&command, claim, outcome.as_ref().ok())
+                .await
+                .map_err(|_| {
+                    AdminError::upstream_result_unknown(
+                        "上游可能已完成重置，记录未确认；请仅继续确认原操作",
+                    )
+                })?;
+        }
+        outcome.map_err(|error| {
+            if permit.is_some() {
+                AdminError::upstream_result_unknown(format!("重置结果待确认：{}", error.message()))
+            } else {
+                error
+            }
+        })
     }
 
     async fn models(

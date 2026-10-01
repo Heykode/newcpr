@@ -32,6 +32,7 @@ export const accountColumns = defineTableColumns<AccountRow>([
   { key: 'capacity', label: '容量', kind: 'numeric', align: 'center' },
   { key: 'health', label: '健康', kind: 'custom', size: 'lg' },
   { key: 'usage', label: '用量', kind: 'custom', size: '2xl', sortable: true, grow: 1 },
+  { key: 'resetCredits', label: '可用重置', kind: 'custom', size: 'md', align: 'center' },
   { key: 'groups', label: '账号分组', kind: 'status', size: 'xl' },
   {
     key: 'lastUsedAt',
@@ -87,7 +88,7 @@ export function readAccountColumnKeys(raw: string): string[] {
     const version = stored && typeof stored === 'object' && 'version' in stored ? stored.version : null
     const keys: unknown = legacy
       ? stored
-      : stored && typeof stored === 'object' && (version === 2 || version === 3 || version === 4) && 'keys' in stored
+      : stored && typeof stored === 'object' && (version === 2 || version === 3 || version === 4 || version === 5) && 'keys' in stored
         ? stored.keys
         : null
     if (!Array.isArray(keys))
@@ -99,8 +100,10 @@ export function readAccountColumnKeys(raw: string): string[] {
       selected.push('weight')
     if (legacy && !selected.includes('reloginCount'))
       selected.push('reloginCount')
-    if (version !== 4 && !selected.includes('purchaseCost'))
+    if (version !== 4 && version !== 5 && !selected.includes('purchaseCost'))
       selected.push('purchaseCost')
+    if (version !== 5 && !selected.includes('resetCredits'))
+      selected.push('resetCredits')
     return selected
   }
   catch {
@@ -109,7 +112,7 @@ export function readAccountColumnKeys(raw: string): string[] {
 }
 
 export function writeAccountColumnKeys(keys: string[]): string {
-  return JSON.stringify({ version: 4, keys })
+  return JSON.stringify({ version: 5, keys })
 }
 
 export const statusLabels: Record<AccountStatus, string> = {

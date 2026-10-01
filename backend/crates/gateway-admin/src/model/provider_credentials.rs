@@ -912,7 +912,8 @@ impl fmt::Debug for ProviderProfileAvatar {
 }
 
 /// Provider 返回的一张安全主动额度重置卡。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderResetCredit {
     pub id: String,
     pub status: Option<String>,
@@ -922,7 +923,8 @@ pub struct ProviderResetCredit {
 }
 
 /// Provider 主动额度重置卡列表。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderResetCredits {
     pub available_count: u64,
     pub credits: Vec<ProviderResetCredit>,
@@ -937,7 +939,8 @@ pub struct ConsumeProviderResetCredit {
 }
 
 /// Provider 返回的主动额度重置卡消费结果。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderResetCreditResult {
     pub code: String,
     pub credit: Option<ProviderResetCredit>,
