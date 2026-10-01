@@ -71,6 +71,15 @@ async function loadSessionCredits(session: ResetCreditsSession, silent = false) 
       credits: result.credits,
       availableCount: Math.max(0, result.availableCount),
     }
+    if (result.pending) {
+      session.pendingOperation = {
+        accountId: session.accountId,
+        creditId: result.pending.creditId ?? undefined,
+        credit: result.credits.find(credit => credit.id === result.pending?.creditId),
+        redeemRequestId: result.pending.redeemRequestId,
+        hasTransportFailure: true,
+      }
+    }
   }
   catch (error: unknown) {
     if (sequence === session.loadSequence)
@@ -98,7 +107,10 @@ export function useAccountResetCredits(options: {
   const pendingOperation = computed(() => session.value.pendingOperation)
 
   const availableCredits = computed(() =>
-    credits.value.filter(credit => credit.status === 'available'),
+    credits.value
+      .filter(credit => credit.status === 'available' && (!credit.expiresAt || Date.parse(credit.expiresAt) > Date.now()))
+      .sort((a, b) => (a.expiresAt ? Date.parse(a.expiresAt) : Infinity) - (b.expiresAt ? Date.parse(b.expiresAt) : Infinity)
+        || a.id.localeCompare(b.id)),
   )
   const selectedCredit = computed(() =>
     availableCredits.value.find(credit => credit.id === selectedCreditId.value),
@@ -122,8 +134,10 @@ export function useAccountResetCredits(options: {
       return
     }
 
-    if (!selectedCredit.value)
-      selectedCreditId.value = ''
+    if (!selectedCredit.value) {
+      const types = new Set(availableCredits.value.map(c => c.resetType))
+      selectedCreditId.value = types.size === 1 ? availableCredits.value[0]?.id ?? '' : ''
+    }
   }
 
   function selectCredit(creditId: string) {
@@ -292,6 +306,7 @@ function isAmbiguousConsumeError(error: unknown) {
   return error.code === 50202
     || error.status === 0
     || error.status === 408
+    || error.status === 409
     || error.kind === 'timeout'
     || error.kind === 'network'
 }

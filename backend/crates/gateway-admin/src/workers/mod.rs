@@ -83,3 +83,4 @@ impl ScheduledTask for UserAgentReconciliation {
 }
 pub(crate) mod excel_recovery;
 pub(crate) mod quality_ops;
+pub(crate) mod reset_credits;

@@ -1134,6 +1134,8 @@ fn profile_invocation_view(invocation: ProviderProfileInvocation) -> AccountProf
 pub struct AccountResetCreditsData {
     pub available_count: u64,
     pub credits: Vec<AccountResetCreditView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending: Option<gateway_admin::model::reset_credits::ResetPending>,
 }
 
 /// 一张安全主动额度重置卡视图。
@@ -1170,6 +1172,7 @@ impl From<ProviderResetCredit> for AccountResetCreditView {
 impl From<ProviderResetCredits> for AccountResetCreditsData {
     fn from(credits: ProviderResetCredits) -> Self {
         Self {
+            pending: None,
             available_count: credits.available_count,
             credits: credits
                 .credits

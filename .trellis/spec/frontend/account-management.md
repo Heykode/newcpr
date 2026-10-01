@@ -1,5 +1,17 @@
 # Account Management Contracts
 
+## Batch Reset Credits
+
+The optional reset-credit column reads server inventory snapshots, not upstream on every poll.
+Account selection is frozen before preview. Confirmation resubmits the same batch ID after an
+uncertain response; never create a replacement job automatically. Reset types are explicit when
+multiple windows exist, and the server selects the earliest valid expiry within that type.
+Cancelled previews must not reappear as actionable confirmations after an unrelated query failure.
+Batch history persists server-side; page disposal aborts only reads, never clears accepted jobs.
+Single-account panels restore pending card/request IDs from the server, including after page reload.
+Do not substitute a newly available card when the original operation remains unknown.
+Column preferences migrate to version 5 once and continue respecting subsequent manual hiding.
+
 ## Complete Account Row Replacement
 
 ### 1. Scope / Trigger

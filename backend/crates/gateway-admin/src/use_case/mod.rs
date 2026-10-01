@@ -17,6 +17,7 @@ pub mod openai;
 pub mod proxies;
 pub mod relogin;
 pub mod request_capture;
+pub mod reset_credits;
 pub mod settings;
 pub mod system;
 pub mod user_agent;

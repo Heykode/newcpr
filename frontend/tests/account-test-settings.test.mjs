@@ -215,22 +215,23 @@ test('saved column choices migrate once, adding new columns without revealing ol
     '@/components/base/BaseTable/columns': { defineTableColumns: value => value },
   })
   const read = raw => Array.from(columns.readAccountColumnKeys(raw))
-  assert.deepEqual(read('["identity","addedAtDisplay","provider","accountId","health",null]'), ['identity', 'addedAt', 'health', 'weight', 'reloginCount', 'purchaseCost'])
-  assert.deepEqual(read('["identity"]'), ['identity', 'weight', 'reloginCount', 'purchaseCost'])
-  assert.deepEqual(read('[]'), ['weight', 'reloginCount', 'purchaseCost'])
-  assert.deepEqual(read('["addedAt","addedAtDisplay"]'), ['addedAt', 'weight', 'reloginCount', 'purchaseCost'])
+  assert.deepEqual(read('["identity","addedAtDisplay","provider","accountId","health",null]'), ['identity', 'addedAt', 'health', 'weight', 'reloginCount', 'purchaseCost', 'resetCredits'])
+  assert.deepEqual(read('["identity"]'), ['identity', 'weight', 'reloginCount', 'purchaseCost', 'resetCredits'])
+  assert.deepEqual(read('[]'), ['weight', 'reloginCount', 'purchaseCost', 'resetCredits'])
+  assert.deepEqual(read('["addedAt","addedAtDisplay"]'), ['addedAt', 'weight', 'reloginCount', 'purchaseCost', 'resetCredits'])
   for (const keys of [[], ['identity'], ['identity', 'reloginCount'], ['weight', 'weight']]) {
     const migrated = read(JSON.stringify({ version: 2, keys }))
-    assert.deepEqual(migrated, [...new Set([...keys, 'weight', 'purchaseCost'])])
+    assert.deepEqual(migrated, [...new Set([...keys, 'weight', 'purchaseCost', 'resetCredits'])])
     assert.deepEqual(read(columns.writeAccountColumnKeys(migrated)), migrated)
   }
-  assert.equal(JSON.parse(columns.writeAccountColumnKeys([])).version, 4)
-  assert.deepEqual(read('{"version":3,"keys":["identity"]}'), ['identity', 'purchaseCost'])
+  assert.equal(JSON.parse(columns.writeAccountColumnKeys([])).version, 5)
+  assert.deepEqual(read('{"version":3,"keys":["identity"]}'), ['identity', 'purchaseCost', 'resetCredits'])
+  assert.deepEqual(read('{"version":4,"keys":["identity"]}'), ['identity', 'resetCredits'])
   assert.deepEqual(read(columns.writeAccountColumnKeys(['identity'])), ['identity'])
   assert.deepEqual(read(columns.writeAccountColumnKeys([])), [])
   assert.deepEqual(read(columns.writeAccountColumnKeys(['identity', 'reloginCount'])), ['identity', 'reloginCount'])
   assert.deepEqual(read(columns.writeAccountColumnKeys(['identity', 'weight'])), ['identity', 'weight'])
-  for (const raw of ['null', '{}', '"old"', 'broken', '{"version":2,"keys":null}', '{"version":5,"keys":[]}']) {
+  for (const raw of ['null', '{}', '"old"', 'broken', '{"version":2,"keys":null}', '{"version":6,"keys":[]}']) {
     assert.ok(read(raw).includes('addedAt'))
     assert.ok(read(raw).includes('weight'))
     assert.ok(!read(raw).includes('accountId'))

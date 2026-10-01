@@ -10,5 +10,6 @@ pub mod proxy;
 pub mod quality_ops;
 pub mod relogin;
 pub mod request_capture;
+pub mod reset_credits;
 pub mod store;
 pub mod system;

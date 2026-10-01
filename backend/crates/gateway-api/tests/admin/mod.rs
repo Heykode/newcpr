@@ -92,6 +92,7 @@ mod proxies;
 mod quality_ops;
 mod relogin;
 mod request_capture;
+mod reset_credits;
 mod settings;
 mod system;
 mod wire;
