@@ -143,7 +143,14 @@ async fn capture(
         .await
         .unwrap()
     {
-        let event = event.unwrap();
+        let event = event.unwrap_or_else(|error| {
+            panic!(
+                "wire capture failed (websocket={websocket}, same_account={same_account}): {error:?}; diagnostic={:?}",
+                error
+                    .diagnostic()
+                    .map(|diagnostic| (diagnostic.stage(), diagnostic.code(), diagnostic.as_str()))
+            )
+        });
         completed |= event
             .canonical_facts()
             .iter()
