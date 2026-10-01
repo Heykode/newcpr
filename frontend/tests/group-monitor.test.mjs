@@ -26,6 +26,21 @@ function load(path, dependencies = {}, globals = {}) {
 const presentation = load('components/group-monitor-presentation')
 const group = id => ({ id: `grp_${id}`, createdAt: `2026-01-0${id}`, enabled: true, memberCount: 1 })
 
+test('snapshot freshness is independent of individual member reset times', () => {
+  const sampledAt = '2026-09-15T00:00:00Z'
+  const time = Date.parse(sampledAt)
+  assert.equal(presentation.monitorSnapshotExpired(sampledAt, time + 10_000), false)
+  assert.equal(presentation.monitorSnapshotExpired(sampledAt, time + 45_000), false)
+  assert.equal(presentation.monitorSnapshotExpired(sampledAt, time + 45_001), true)
+  assert.equal(presentation.monitorSnapshotExpired(undefined, time), true)
+  assert.equal(presentation.monitorSnapshotExpired('invalid', time), true)
+  for (const component of ['AccountGroupMonitorCard', 'GroupAlertSettingsModal']) {
+    const text = readFileSync(new URL(`../src/views/accounts/components/${component}.vue`, import.meta.url), 'utf8')
+    assert.match(text, /monitorSnapshotExpired\(props\.sampledAt/u)
+    assert.doesNotMatch(text, /earliestResetAt/u)
+  }
+})
+
 function harness(t, initialStorage = new Map(), initialGroups = [1, 2, 3, 4, 5].map(group)) {
   let time = Date.parse('2026-09-15T00:00:00Z')
   let interval
@@ -213,6 +228,7 @@ test('pending first samples do not erase existing values or fabricate a zero bal
   await tick()
   assert.equal(h.state.refreshing.value, false)
   assert.equal(h.state.records.value.get('grp_2').remainingUsd, 2)
+  assert.equal(h.state.sampleTimes.value.get('grp_2'), '2026-09-15T00:00:10.000Z')
 
   h.advance(50_000)
   h.pending[2].resolve({
@@ -224,6 +240,7 @@ test('pending first samples do not erase existing values or fabricate a zero bal
   })
   await tick()
   assert.equal(h.state.records.value.get('grp_2').remainingUsd, 2)
+  assert.equal(h.state.sampleTimes.value.get('grp_2'), '2026-09-15T00:00:10.000Z')
   assert.equal(h.state.stale.value, true)
   assert.equal(h.state.error.value, false)
 })

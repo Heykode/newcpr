@@ -206,6 +206,14 @@ pub trait AccountStore: Send + Sync {
         window: &AccountUsageWindowQuery,
     ) -> AdminStoreResult<QuotaForecastHistory>;
 
+    /// Observation-aligned billed usage without loading historical provider documents.
+    async fn load_quota_learning_usage(
+        &self,
+        window: &AccountUsageWindowQuery,
+    ) -> AdminStoreResult<crate::model::quota_forecast_sampling::QuotaForecastUsage> {
+        Ok(self.load_quota_forecast_history(window).await?.usage)
+    }
+
     /// Persist quota observations and return the Tools-compatible effective
     /// capacity for each observed account/window.
     async fn record_quota_learning(

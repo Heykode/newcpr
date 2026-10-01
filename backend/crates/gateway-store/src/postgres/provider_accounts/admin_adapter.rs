@@ -869,6 +869,13 @@ impl AccountStore for PgAdminAccountStore {
         super::quota_learning::record(&self.pool, observations).await
     }
 
+    async fn load_quota_learning_usage(
+        &self,
+        window: &AccountUsageWindowQuery,
+    ) -> AdminStoreResult<gateway_admin::model::quota_forecast_sampling::QuotaForecastUsage> {
+        super::quota_forecast::load_learning_usage(&self.pool, &self.query_budget, window).await
+    }
+
     async fn list_credentials(
         &self,
         provider_kind: &ProviderKind,

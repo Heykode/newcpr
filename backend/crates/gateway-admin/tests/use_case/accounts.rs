@@ -663,6 +663,10 @@ pub(super) struct FakeAccountStore {
 }
 
 impl FakeAccountStore {
+    pub(super) fn set_learning_estimates(&self, estimates: Vec<QuotaLearningEstimate>) {
+        *self.quota_learning_estimates.lock().unwrap() = estimates;
+    }
+
     pub(super) fn new(kind: &str, events: EventLog) -> Arc<Self> {
         Self::with_account(account_record(kind), events)
     }
@@ -2720,6 +2724,121 @@ fn learning_quota(now: chrono::DateTime<Utc>) -> ProviderQuota {
         }],
         ..empty_quota()
     }
+}
+
+#[tokio::test]
+async fn monitor_quota_aligns_usage_and_keeps_plan_reference_after_first_paid_request() {
+    for (usd, missing, expected_cost) in [
+        (0.0, 0, Some(0.0)),
+        (1.0, 0, Some(1.0)),
+        (1.0, 1, Some(1.0)),
+        (0.0, 1, None),
+    ] {
+        let now = Utc::now();
+        let provider = FakeProviderAdmin::new("openai", events());
+        let mut quota = learning_quota(now);
+        quota.windows[0].used_percent = Some(0.0);
+        let mut account = account_record("openai");
+        account.created_at = now - TimeDelta::hours(1);
+        account.plan_type = Some(" Future-Plan ".to_owned());
+        let observations = gateway_admin::model::group_monitor_quota::monitor_learning_observations(
+            &account.id,
+            "openai",
+            account.plan_type.as_deref(),
+            &quota,
+            now,
+        );
+        let created_at = account.created_at;
+        let store = FakeAccountStore::with_account(account, events());
+        store.quota_forecast_history.lock().unwrap().usage = QuotaForecastUsage {
+            request_count: 1,
+            known_cost_count: u64::from(usd > 0.0),
+            unavailable_cost_count: missing,
+            usd,
+            ..Default::default()
+        };
+        *store.quota_learning_estimates.lock().unwrap() = vec![QuotaLearningEstimate {
+            account_id: "acct_test".to_owned(),
+            window_key: observations[0].window_key.clone(),
+            window_minutes: 10_080,
+            effective_limit_usd: Some(120.0),
+            source: QuotaLearningSource::PlanAverage,
+            sample_count: 1,
+        }];
+        provider.set_quota(quota.clone());
+        let services = accounts_service(provider.clone(), store.clone()).await;
+        let windows = services
+            .accounts()
+            .monitor_quota(&ProviderAccountId::new("acct_test").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(windows[0].remaining_usd, Some(120.0));
+        assert!(windows[0].low_sample);
+        let recorded = store.quota_learning_observations.lock().unwrap().clone();
+        assert_eq!(recorded[0].observed_cost_usd, expected_cost);
+        assert_eq!(recorded[0].plan_type, "future-plan");
+        let queries = store.quota_window_queries();
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0].range.start, created_at);
+        assert_eq!(queries[0].range.end, quota.observed_at.unwrap());
+        assert!(store.audit_requests().is_empty());
+        assert!(store.cumulative_cost_queries.lock().unwrap().is_empty());
+        assert!(
+            provider
+                .quota_requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| !request.refresh && request.rolling_usage.is_none())
+        );
+        *store.quota_learning_failure.lock().unwrap() = true;
+        assert!(
+            services
+                .accounts()
+                .monitor_quota(&ProviderAccountId::new("acct_test").unwrap())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn monitor_quota_can_inherit_before_import_but_never_uses_future_usage() {
+    let now = Utc::now();
+    let quota = learning_quota(now);
+    let provider = FakeProviderAdmin::new("openai", events());
+    provider.set_quota(quota.clone());
+    let mut account = account_record("openai");
+    account.created_at = now;
+    account.plan_type = None;
+    let observed = gateway_admin::model::group_monitor_quota::monitor_learning_observations(
+        &account.id,
+        "openai",
+        None,
+        &quota,
+        now,
+    );
+    let store = FakeAccountStore::with_account(account, events());
+    *store.quota_learning_estimates.lock().unwrap() = vec![QuotaLearningEstimate {
+        account_id: "acct_test".to_owned(),
+        window_key: observed[0].window_key.clone(),
+        window_minutes: 10_080,
+        effective_limit_usd: Some(120.0),
+        source: QuotaLearningSource::PlanAverage,
+        sample_count: 3,
+    }];
+    let windows = accounts_service(provider, store.clone())
+        .await
+        .accounts()
+        .monitor_quota(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(windows[0].remaining_usd, Some(90.0));
+    assert!(store.quota_window_queries().is_empty());
+    assert_eq!(
+        store.quota_learning_observations.lock().unwrap()[0].observed_cost_usd,
+        None
+    );
 }
 
 #[tokio::test]

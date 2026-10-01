@@ -66,6 +66,7 @@ function loadSource(filename) {
           displayedCount: ref(0),
           totalPages: ref(1),
           records: ref(new Map()),
+          sampleTimes: ref(new Map()),
           stale: ref(false),
           loading: ref(false),
           error: ref(false),

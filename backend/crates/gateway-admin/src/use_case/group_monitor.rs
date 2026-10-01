@@ -18,9 +18,11 @@ use tokio::sync::{Mutex, Semaphore};
 use crate::{
     model::{
         AdminError,
-        group_monitor::{GroupMonitorReport, MonitorAccountEstimate, project_group_monitor},
-        group_monitor_quota::monitor_quota_estimates,
-        provider_credentials::{AccountUsagePeriod, explicit_plan_type},
+        group_monitor::{
+            GroupMonitorReport, MonitorAccountEstimate, monitor_learned_remaining,
+            project_group_monitor,
+        },
+        provider_credentials::explicit_plan_type,
     },
     ports::store::{AccountGroupStore, AccountRuntimeStore},
 };
@@ -158,7 +160,7 @@ impl DefaultGroupMonitorService {
         let loaded = stream::iter(quota_ids)
             .map(|id| async move {
                 let result = match ProviderAccountId::new(id.clone()) {
-                    Ok(account_id) => self.accounts.current_quota(&account_id).await,
+                    Ok(account_id) => self.accounts.monitor_quota(&account_id).await,
                     Err(_) => Err(AdminError::internal("监控账号 ID 不合法")),
                 };
                 (id, result)
@@ -178,13 +180,14 @@ impl DefaultGroupMonitorService {
                 Err(_) => {}
             }
         }
-        let current = monitor_quota_estimates(&peers, &quotas, generated_at);
-        for (id, account) in &quotas {
-            if let Some(estimate) = estimates.get_mut(id)
-                && let Some((window, AccountUsagePeriod::Weekly)) = account.usage_window()
-            {
-                estimate.remaining_usd = current.get(id).map(|value| value.remaining_usd);
-                estimate.reset_at = window.reset_at;
+        for (id, windows) in &quotas {
+            if let Some(estimate) = estimates.get_mut(id) {
+                let (remaining, partial, low_sample, reset) =
+                    monitor_learned_remaining(windows, generated_at);
+                // An incomplete account waits without suppressing already estimated members.
+                estimate.remaining_usd = (!partial).then_some(remaining).flatten();
+                estimate.low_sample |= low_sample;
+                estimate.reset_at = reset;
             }
         }
         let mut items = Vec::new();

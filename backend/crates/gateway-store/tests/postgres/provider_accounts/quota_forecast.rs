@@ -213,6 +213,22 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     assert_eq!(history.usage.unavailable_cost_count, 1);
     assert_eq!(history.usage.usd, 2.0);
     assert_eq!(history.usage.excluded_request_count, 3);
+    let learning = store.load_quota_learning_usage(&query).await.unwrap();
+    assert_eq!(learning.request_count, 3);
+    assert_eq!(learning.known_cost_count, 2);
+    assert_eq!(learning.unavailable_cost_count, 1);
+    assert_eq!(learning.usd, 2.0);
+    // Quality probes, like prewarm traffic, must never inflate learned capacity.
+    sqlx::query(
+        "update model_requests set request_kind = 'account_quality_check' where id = 'review'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        store.load_quota_learning_usage(&query).await.unwrap().usd,
+        1.0
+    );
     database.close().await;
 }
 
@@ -359,6 +375,18 @@ async fn quota_forecast_pairs_completed_usage_and_preserves_missing_pending_and_
     assert_eq!(history.usage.usd, 4.0);
     assert_eq!(history.usage.excluded_request_count, 2);
     assert_eq!(history.pending_request_count, 1);
+    let learning = store
+        .load_quota_learning_usage(&AccountUsageWindowQuery {
+            account_id: "acct_forecast".to_owned(),
+            key: "week".to_owned(),
+            range: TimeRange { start, end },
+        })
+        .await
+        .unwrap();
+    assert_eq!(learning.request_count, 6);
+    assert_eq!(learning.known_cost_count, 4);
+    assert_eq!(learning.unavailable_cost_count, 2);
+    assert_eq!(learning.usd, 4.0);
     assert!(history.points.iter().all(|point| point.completed_at <= end));
     let tie = history
         .points

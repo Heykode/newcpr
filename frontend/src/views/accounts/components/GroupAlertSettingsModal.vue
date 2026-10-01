@@ -13,9 +13,9 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
 import { barkLevelHints, barkLevelOptions } from '@/utils/notification-presentation'
-import { monitorMoney } from './group-monitor-presentation'
+import { monitorMoney, monitorSnapshotExpired } from './group-monitor-presentation'
 
-const props = defineProps<{ group: AccountGroup | null, snapshot?: GroupMonitorItem, stale?: boolean, now?: number }>()
+const props = defineProps<{ group: AccountGroup | null, snapshot?: GroupMonitorItem, sampledAt?: string, stale?: boolean, now?: number }>()
 const open = defineModel<boolean>({ default: false })
 const loading = ref(false)
 const loaded = ref(false)
@@ -44,7 +44,7 @@ const form = reactive<GroupAlertPolicy>({
 
 const smtpReady = computed(() => Boolean(channels.value?.smtp.enabled && channels.value.smtp.host && channels.value.smtp.fromEmail))
 const barkReady = computed(() => channels.value?.bark.enabled && channels.value.bark.deviceKeySet)
-const expired = computed(() => !!props.snapshot?.earliestResetAt && Date.parse(props.snapshot.earliestResetAt) <= (props.now ?? Date.now()))
+const expired = computed(() => monitorSnapshotExpired(props.sampledAt, props.now ?? Date.now()))
 const levelOptions = [
   { label: '继承全局', value: '' },
   ...barkLevelOptions,
@@ -241,9 +241,9 @@ watch([open, () => props.group?.id], ([visible]) => {
             数据未更新，当前保留上次观测。
           </p>
           <p v-if="expired" class="text-cp-warning-text">
-            额度窗口已到期，等待新的有效观测。
+            监控采样已过期，等待更新。
           </p>
-          <p>7D 额度估算覆盖 {{ snapshot?.estimatedAccounts ?? 0 }} / {{ snapshot?.eligibleAccounts ?? 0 }} 个可调度账号；优先按自身本轮消费与已用比例计算。新号无自身估值时，参考同 Provider、套餐及窗口最新最多 3 个有效账号的平均总额度，再按自身已用比例计算剩余。不包含未来重置补充，短期限额仍可能限制使用。</p>
+          <p>额度估算覆盖 {{ snapshot?.estimatedAccounts ?? 0 }} / {{ snapshot?.eligibleAccounts ?? 0 }} 个可调度账号。消费增长至少 $5 且用量增长至少 3 个百分点后，保存该账号的额度；此前沿用同 Provider、套餐及窗口最近最多 3 份已学习额度的平均值，删除账号不清空参考。剩余按自身未用比例计算，多窗口取最小值，不含未来重置补充。</p>
           <p v-if="snapshot?.remainingStatus === 'partial'">
             部分可调度账号暂无有效额度估值，当前仅汇总已可计算账号。
           </p>
@@ -251,7 +251,7 @@ watch([open, () => props.group?.id], ([visible]) => {
             样本较少，估算可能波动。
           </p>
           <p>预计过期额度依据同 Provider、同套餐最近最多 5 个未恢复失效账号的平均寿命，有第 1 个样本就开始估算。恢复后撤销样本；普通 Token 到期、限流和额度耗尽不计死亡。全部超出时显示“已超平均寿命”，缺少寿命或消耗数据时分别显示对应状态。过期额度不从剩余额度扣除，也不参与可支撑时间计算。</p>
-          <p>每分钟消耗为最近 60 秒已完成推理请求的已记录 USD，按请求授权分组范围归属，跨组可能重叠。</p>
+          <p>每分钟消耗为当前分组账号最近 60 秒已完成推理请求的已记录 USD，共享账号的消耗可出现在多个分组。</p>
           <p>可支撑时间按共享账号在所有分组的消耗 {{ monitorMoney(snapshot?.quotaConsumeUsdPerMinute, 'unknown', 4) }} /分计算。</p>
           <p>并发为本组 API Key 的当前占用 /（本组占用 + 可调度账号的共享空位）。其他组占用共享账号时，本组可用上限随之减少。Key 绑定多个组时占用可能重叠，不同分组的额度及并发不可直接相加。</p>
           <p>预计过期额度仅供参考，不参与预警。</p>

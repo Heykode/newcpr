@@ -6,6 +6,68 @@ use gateway_admin::{
 
 use super::{TestDatabase, admin_account_store};
 
+#[tokio::test]
+async fn monitor_learning_isolates_legacy_state_and_retains_reference_for_paid_zero_percent() {
+    let Some(database) = TestDatabase::create("monitor_learning_namespace").await else {
+        return;
+    };
+    let id = "acct_monitor_donor";
+    seed_account(&database.pool, id).await;
+    let store = admin_account_store(&database.pool);
+    let now = Utc::now();
+    let reset = now + Duration::days(6);
+    for (percent, cost) in [(0.0, 0.0), (10.0, 10.0)] {
+        store
+            .record_quota_learning(&[observation(id, reset, percent, cost)])
+            .await
+            .unwrap();
+    }
+    // The v2 baseline predates legacy state, but belongs to an independent namespace.
+    let mut v2 = observation(id, reset, 0.0, 0.0);
+    v2.window_key = "monitor-v2:[\"weekly\",\"shortTerm\",null,null]".to_owned();
+    v2.observed_at = now - Duration::minutes(2);
+    let result = store.record_quota_learning(&[v2.clone()]).await.unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].source, QuotaLearningSource::Learning);
+    v2.observed_at = now - Duration::minutes(1);
+    v2.used_percent = 5.0;
+    v2.observed_cost_usd = Some(6.0);
+    let result = store.record_quota_learning(&[v2.clone()]).await.unwrap();
+    assert_eq!(result[0].effective_limit_usd, Some(120.0));
+    assert_eq!(result[0].source, QuotaLearningSource::Personal);
+
+    // An early weekly reset invalidates v2 personal state, not legacy bindings or Plan history.
+    v2.observed_at = Utc::now();
+    v2.reset_at += Duration::days(1);
+    v2.used_percent = 0.0;
+    v2.observed_cost_usd = Some(0.0);
+    let result = store.record_quota_learning(&[v2.clone()]).await.unwrap();
+    assert_eq!(result[0].source, QuotaLearningSource::PlanAverage);
+    let legacy: Option<f64> = sqlx::query_scalar(
+        "select bound_usd from quota_learning_accounts where provider_account_id = $1 and window_key = 'weekly'",
+    ).bind(id).fetch_one(&database.pool).await.unwrap();
+    assert_eq!(legacy, Some(100.0));
+    sqlx::query("delete from provider_accounts where id = $1")
+        .bind(id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    seed_account(&database.pool, "acct_monitor_new").await;
+    v2.account_id = "acct_monitor_new".to_owned();
+    for cost in [None, Some(0.0), Some(1.0), Some(8.0)] {
+        v2.observed_at = Utc::now();
+        v2.observed_cost_usd = cost;
+        let result = admin_account_store(&database.pool)
+            .record_quota_learning(&[v2.clone()])
+            .await
+            .unwrap();
+        assert_eq!(result[0].source, QuotaLearningSource::PlanAverage);
+        assert_eq!(result[0].effective_limit_usd, Some(120.0));
+        assert_eq!(result[0].sample_count, 1);
+    }
+    database.close().await;
+}
+
 async fn seed_account(pool: &sqlx::PgPool, id: &str) {
     sqlx::query(
         "insert into provider_accounts (
