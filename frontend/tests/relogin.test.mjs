@@ -191,6 +191,39 @@ test('relogin preview rejects malformed secrets, empty passwords and case-folded
   assert.equal(repeated[1].valid, false)
 })
 
+test('relogin preview accepts clipboard line endings and padding with backend line numbering', () => {
+  for (const separator of ['\n', '\r\n', '\r', '\u0085', '\u2028', '\u2029']) {
+    const first = ' \uFEFF First@Example.invalid ---- p----ass\u00A0 ----jbsw\u00A0y3dp\u3000ehpk3pxp'
+    const second = '\uFEFFsecond@example.invalid----\uFEFF pass ----JBSWY3DPEHPK3PXP'
+    const rows = importPreview(`${first}${separator} \uFEFF ${separator}${second}`)
+    assert.deepEqual(Array.from(rows, row => ({ ...row })), [
+      { line: 1, email: 'first@example.invalid', valid: true },
+      { line: 3, email: 'second@example.invalid', valid: true },
+    ])
+    const duplicate = importPreview(`${first}${separator}${separator}${first}`)
+    assert.equal(duplicate[1].line, 3)
+    assert.equal(duplicate[1].valid, false)
+    assert.equal(JSON.stringify(rows).includes('JBSWY'), false)
+    assert.equal(JSON.stringify(rows).includes('pass'), false)
+  }
+})
+
+test('relogin preview never rejoins credentials split across physical lines', () => {
+  for (const separator of ['\n', '\r\n', '\r', '\u0085', '\u2028', '\u2029']) {
+    for (const text of [
+      `test@example.invalid----test-only-${separator}password----JBSWY3DPEHPK3PXP`,
+      `test@example.invalid----test-only-password----JBSWY3DP${separator}EHPK3PXP`,
+    ]) {
+      const rows = importPreview(text)
+      assert.equal(rows.length, 2)
+      assert.equal(rows[0].valid, false)
+      assert.equal(rows[1].valid, false)
+      assert.equal(JSON.stringify(rows).includes('test-only'), false)
+      assert.equal(JSON.stringify(rows).includes('JBSWY'), false)
+    }
+  }
+})
+
 test('relogin preview rejects mailbox formats but accepts Outlook accounts with TOTP', () => {
   for (const text of [
     'person@outlook.com----test-only-password----123e4567-e89b-12d3-a456-426614174000',

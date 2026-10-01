@@ -65,6 +65,41 @@ fn relogin_parser_preserves_password_and_normalizes_email_and_totp() {
 }
 
 #[test]
+fn relogin_parser_accepts_clipboard_line_endings_without_changing_passwords() {
+    for separator in ["\n", "\r\n", "\r", "\u{0085}", "\u{2028}", "\u{2029}"] {
+        let text = format!(
+            " \u{feff} First@Example.invalid ---- p----ass\u{00a0} ----jbsw\u{00a0}y3dp\u{3000}ehpk3pxp{separator} \u{feff} {separator}\u{feff}second@example.invalid----\u{feff} pass ----JBSWY3DPEHPK3PXP"
+        );
+        let rows = parse_relogin_import(&text).expect("clipboard batch");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].email, "first@example.invalid");
+        assert_eq!(rows[0].password, " p----ass\u{00a0} ");
+        assert_eq!(rows[0].mfa_secret, "JBSWY3DPEHPK3PXP");
+        assert_eq!(rows[1].email, "second@example.invalid");
+        assert_eq!(rows[1].password, "\u{feff} pass ");
+    }
+}
+
+#[test]
+fn relogin_parser_keeps_line_numbers_and_never_joins_broken_credentials() {
+    for separator in ["\n", "\r\n", "\r", "\u{0085}", "\u{2028}", "\u{2029}"] {
+        let row = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
+        let duplicate = format!("{row}{separator}{separator}\u{feff}{row}");
+        let error = parse_relogin_import(&duplicate).err().expect("duplicate");
+        assert!(error.message().contains("第 3 行邮箱重复"));
+        for broken in [
+            format!("test@example.invalid----test-only-{separator}password----JBSWY3DPEHPK3PXP"),
+            format!("test@example.invalid----test-only-password----JBSWY3DP{separator}EHPK3PXP"),
+        ] {
+            let error = parse_relogin_import(&broken).err().expect("broken row");
+            assert!(error.message().contains("第 1 行"));
+            assert!(!error.message().contains("test-only"));
+            assert!(!error.message().contains("JBSWY"));
+        }
+    }
+}
+
+#[test]
 fn relogin_parser_rejects_invalid_rows_without_exposing_secrets() {
     for text in [
         "",

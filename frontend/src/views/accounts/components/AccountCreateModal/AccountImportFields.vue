@@ -11,6 +11,7 @@ defineProps<{
   placeholder: string
   uploadable: boolean
   disabled: boolean
+  nowrap?: boolean
 }>()
 const text = defineModel<string>({ required: true })
 const fileError = ref('')
@@ -62,6 +63,11 @@ function updateText(value: string) {
       :rows="9"
       :placeholder="placeholder"
       :disabled="disabled"
+      :wrap="nowrap ? 'off' : 'soft'"
+      :class="nowrap ? '[&_textarea]:overflow-x-auto [&_textarea]:whitespace-pre' : undefined"
+      :spellcheck="nowrap ? false : undefined"
+      :autocapitalize="nowrap ? 'off' : undefined"
+      :autocomplete="nowrap ? 'off' : undefined"
       @update:model-value="updateText"
     />
   </BaseFormItem>
