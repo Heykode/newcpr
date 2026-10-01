@@ -115,8 +115,14 @@ Never infer principal identity from email or erase usage while editing a price.
   over green Excel-enabled status; otherwise retain the stable default identity color.
   Use a constant two-pixel border (transparent by default), preserving avatar dimensions,
   provider icons, 2FA marks, swipe handles and independent quality-monitoring badges.
-  Remove the separate Excel route icon and visible yellow account-name warning;
-  retain `BPS 403疑似被封excel`, timestamp and actual Excel mode in tooltip/accessible text.
+  Keep the visible yellow account-name warning removed; retain
+  `BPS 403疑似被封excel`, timestamp and actual Excel mode in tooltip/accessible text.
+  A separate non-interactive 16px green `Table2` marker immediately before the name
+  reflects only `responsesUpstream === 'excel'`, with `Excel 模式已开启` tooltip and
+  accessible text. Preserve it for paused accounts and historical warnings; hide it
+  for absent/Codex mode, including automatic mode closure. It indicates configured
+  mode, not health or eligibility for every model. Reuse existing successful row
+  updates; failed mutations must not change it or trigger additional reads.
   The persistent `excel403WarningAt` timestamp is independent of enabled/route state; resuming
   scheduling or leaving Excel must not hide it. Fall back to legacy pause metadata
   only when the new response field is absent, not when it explicitly returns null.

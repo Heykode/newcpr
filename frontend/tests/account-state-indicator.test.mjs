@@ -73,15 +73,21 @@ function mark(html, name) {
   return element
 }
 
-test('Excel selection renders an accessible green avatar frame without changing provider identity', async () => {
+test('Excel selection renders an accessible name marker and retains the green avatar frame', async () => {
   const html = await render({ responsesUpstream: 'excel' })
   const avatar = mark(html, 'avatar')
+  const excel = mark(html, 'excel-mark')
   assert.match(avatar, /data-account-excel-status="enabled"/)
   assert.match(avatar, /border-cp-success /)
   assert.match(avatar, /aria-label="[^"]*Excel 模式已开启"/)
   assert.match(avatar, /title="[^"]*Excel 模式已开启"/)
   assert.match(avatar, /role="img"/)
-  assert.doesNotMatch(html, /data-icon="Table2"|aria-label="Excel 入口"/)
+  assert.match(excel, /aria-label="Excel 模式已开启"/)
+  assert.match(excel, /title="Excel 模式已开启"/)
+  assert.match(excel, /role="img"/)
+  assert.match(excel, /text-cp-success/)
+  assert.match(html, /data-icon="Table2"/)
+  assert.ok(html.indexOf('data-account-excel-mark') < html.indexOf('title="state-sample"'))
   assert.match(html, /data-icon="Openai"/)
   assert.match(html, /state-sample@example\.invalid/)
   assert.ok(!avatar.includes(stablePresetVisualToneClass(account.id)))
@@ -106,7 +112,11 @@ test('Excel 403 historical warning survives scheduling and route changes', async
       assert.match(avatar, responsesUpstream === 'excel' ? /Excel 模式已开启/ : /Excel 模式未开启/)
       assert.doesNotMatch(avatar, /border-cp-success/)
       assert.doesNotMatch(html, />\s*BPS 403疑似被封excel\s*</)
-      assert.doesNotMatch(html, /Excel 403 自动暂停调度|data-icon="Table2"/)
+      assert.doesNotMatch(html, /Excel 403 自动暂停调度/)
+      if (responsesUpstream === 'excel')
+        assert.match(mark(html, 'excel-mark'), /aria-label="Excel 模式已开启"/)
+      else
+        assert.doesNotMatch(html, /data-account-excel-mark|data-icon="Table2"/)
     }
   }
 })
@@ -146,7 +156,8 @@ test('Excel and 2FA indicators retain fixed sizes and swipe selection handles', 
     assert.match(avatar, /border-2/)
     assert.match(avatar, /data-swipe-select-handle/)
     assert.match(avatar, /data-account-excel-status="enabled"/)
-    assert.doesNotMatch(html, /data-icon="Table2"/)
+    assert.match(mark(html, 'excel-mark'), /size-4 shrink-0/)
+    assert.match(html, /data-icon="Table2"/)
     assert.match(html, /data-icon="KeyRound"/)
     assert.match(html, /data-swipe-select-ignore/)
   }
@@ -159,9 +170,36 @@ test('Excel indicator follows the account switch and preserves other identity pr
   assert.match(mark(on, 'avatar'), /data-account-excel-status="enabled"/)
   assert.match(on, />Team</)
   assert.match(on, /data-account-totp-mark/)
+  assert.match(on, /data-account-excel-mark/)
   assert.equal(await render({ responsesUpstream: 'codex' }, props), off)
   assert.match(mark(off, 'avatar'), /data-account-excel-status="default"/)
   assert.match(mark(off, 'avatar'), /border-2[^"]*border-transparent/)
   assert.ok(mark(off, 'avatar').includes(stablePresetVisualToneClass(account.id)))
   assert.doesNotMatch(off, /data-icon="Table2"|data-account-state/)
+})
+
+test('Excel marker reflects only the saved mode, not scheduling, model scope or historical warnings', async () => {
+  const customName = 'A long account name '.repeat(6).trim()
+  for (const enabled of [false, true]) {
+    const html = await render({
+      enabled,
+      responsesUpstream: 'excel',
+      excelModels: [],
+      customName,
+    })
+    assert.match(mark(html, 'excel-mark'), /size-4 shrink-0/)
+    assert.ok(html.indexOf('data-account-excel-mark') < html.indexOf(`title="${customName}"`))
+    assert.match(html, /min-w-0 flex-1 truncate/)
+    assert.match(html, /state-sample@example\.invalid/)
+  }
+  for (const responsesUpstream of [undefined, null, 'codex']) {
+    const html = await render({
+      responsesUpstream,
+      excel403WarningAt: '2026-09-27T00:00:00Z',
+      excelModeDisabledAt: '2026-09-27T00:00:00Z',
+    })
+    assert.doesNotMatch(html, /data-account-excel-mark|data-icon="Table2"/)
+    assert.match(mark(html, 'avatar'), /data-account-excel-status="warning"/)
+    assert.match(html, />\s*Excel 403 自动关闭\s*</)
+  }
 })
