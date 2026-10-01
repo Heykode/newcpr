@@ -267,6 +267,8 @@ pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageLi
         account_email: record.provider_account_email,
         account_name: record.provider_account_name,
         account_custom_name: record.provider_account_custom_name,
+        account_plan_type: record.provider_account_plan_type,
+        account_plan_type_display: record.provider_account_plan_type_display,
         route: record.endpoint,
         model,
         requested_model: record.requested_model_id,
@@ -1288,6 +1290,8 @@ pub(crate) fn diagnostics_view(
                 } else {
                     item.name
                 },
+                account_plan_type: item.account_plan_type,
+                account_plan_type_display: item.account_plan_type_display,
                 request_count: item.request_count,
                 success_count: item.success_count,
                 error_count: item.error_count,

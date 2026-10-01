@@ -105,7 +105,6 @@ watch(timeRange, () => {
       </template>
     </BasePageHeader>
 
-    <UsageQueryFilters v-model="draft" :range="timeRangeParams" :errors="recordView === 'errors'" :error="filterError" />
     <UsageSummaryCards :summary="summary" />
     <UsageInsightsGrid
       v-model:diagnostic-dimension="diagnosticDimension"
@@ -139,6 +138,7 @@ watch(timeRange, () => {
       </template>
 
       <template #body>
+        <UsageQueryFilters v-model="draft" :range="timeRangeParams" :errors="recordView === 'errors'" :error="filterError" />
         <div
           v-show="recordView === 'success'"
           class="grid min-h-130 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3"

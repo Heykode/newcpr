@@ -230,6 +230,8 @@ async fn usage_list_should_resolve_current_custom_names_by_account_id() {
             Some("acct_observe")
         );
         assert_eq!(personal.provider_account_email, team.provider_account_email);
+        assert_eq!(personal.provider_account_plan_type.as_deref(), Some("pro"));
+        assert_eq!(team.provider_account_plan_type.as_deref(), Some("team"));
         assert_eq!(
             personal.provider_account_custom_name.as_deref(),
             custom_name
@@ -281,6 +283,94 @@ async fn usage_list_should_resolve_current_custom_names_by_account_id() {
         Some("account@example.invalid")
     );
     assert_eq!(page.items[0].provider_account_custom_name, None);
+    assert_eq!(page.items[0].provider_account_plan_type, None);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn diagnostics_preserve_full_total_across_limits_pages_and_currency_groups() {
+    let Some(database) = TestDatabase::create("diagnostic_totals").await else {
+        return;
+    };
+    let now = Utc::now();
+    sqlx::query(
+        "insert into model_requests (
+            id, client_api_key_ref, config_revision, protocol, operation, endpoint,
+            client_transport, requested_model_id, upstream_model_id,
+            provider_kind, provider_account_ref, upstream_transport,
+            attempt_count, upstream_send_state, outcome, client_status_code,
+            cost_source, cost_currency, cost_amount, total_tokens,
+            started_at, deadline_at, completed_at, downstream_committed_at,
+            routing_scope, routing_group_refs, routing_group_names_snapshot
+         ) select 'req_diag_' || g || '_' || currency, 'key_diag', 1, 'openai', 'responses', '/v1/responses',
+                  'http_sse', 'model_' || g, 'model_' || g,
+                  'openai', 'acct_diag', 'http_sse',
+                  case when g = 1 and currency = 'USD' then 6 else 1 end,
+                  'sent', 'succeeded', 200, 'calculated', currency, 1, 10,
+                  $1, $1 + interval '1 minute', $1, $1, 'all', '{}'::text[], '[]'::jsonb
+           from generate_series(1, 101) g cross join (values ('USD'), ('EUR')) c(currency)",
+    )
+    .bind(now)
+    .execute(&database.pool)
+    .await
+    .expect("seed 101 dimensions with two currencies");
+    let range =
+        ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    let repository = observability_repository(&database.pool);
+    let top = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter::default(),
+            DiagnosticDimension::Model,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(top.total_request_count, 202);
+    assert_eq!(top.items.len(), 100);
+    assert!(
+        top.items
+            .iter()
+            .all(|item| item.request_count == 2 && item.costs.len() == 2)
+    );
+    assert!(
+        top.items
+            .iter()
+            .all(|item| item.account_plan_type.is_none())
+    );
+    let retried = top.items.iter().find(|item| item.key == "model_1").unwrap();
+    assert_eq!((retried.retry_count, retried.retried_request_count), (5, 1));
+    for (current_page, expected_len, has_more) in [(1, 100, true), (2, 1, false)] {
+        let page = repository
+            .usage_diagnostics(
+                range,
+                UsageRecordFilter::default(),
+                DiagnosticDimension::KeyModel,
+                Some(gateway_store::postgres::DiagnosticPageQuery {
+                    current_page,
+                    page_size: 100,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total_request_count, 202);
+        assert_eq!(page.items.len(), expected_len);
+        assert_eq!(page.has_more, has_more);
+    }
+    let filtered = repository
+        .usage_diagnostics(
+            range,
+            UsageRecordFilter {
+                model: Some("model_1".to_owned()),
+                ..Default::default()
+            },
+            DiagnosticDimension::Model,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered.total_request_count, 2);
+    assert_eq!(filtered.items.len(), 1);
     database.close().await;
 }
 
@@ -1971,6 +2061,12 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
     assert_eq!(diagnostics[0].success_count, 2);
     assert_eq!(diagnostics[0].failure_count, 1);
     assert_eq!(diagnostics[0].retry_count, 1);
+    assert_eq!(diagnostics[0].retried_request_count, 1);
+    assert_eq!(
+        diagnostics[0].account_provider_kind.as_deref(),
+        Some("openai")
+    );
+    assert_eq!(diagnostics[0].account_plan_type.as_deref(), Some("pro"));
     assert_eq!(diagnostics[0].costs[0].amount.as_str(), "1.25");
 
     let errors = repository

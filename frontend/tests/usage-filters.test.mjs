@@ -66,6 +66,16 @@ async function flush() {
 }
 const range = { startTime: '2026-09-01T00:00:00Z', endTime: '2026-09-02T00:00:00Z' }
 
+test('shared request filters stay inside request details, below summary and insights', () => {
+  const page = readFileSync(new URL('../src/views/usage/index.vue', import.meta.url), 'utf8')
+  const details = page.indexOf('<BaseCard')
+  assert.ok(details > page.indexOf('<UsageInsightsGrid'))
+  assert.ok(!page.slice(0, details).includes('<UsageQueryFilters'))
+  assert.equal(page.match(/<UsageQueryFilters\b/g)?.length, 1)
+  assert.match(page.slice(details), /请求明细[\s\S]*<template #body>\s*<UsageQueryFilters v-model="draft"/)
+  assert.match(page.slice(details), /:errors="recordView === 'errors'" :error="filterError"/)
+})
+
 test('shared filter validation rejects bad ranges and hides credentials and view-only keys', () => {
   const { utils } = harness()
   const { usageFilterParams, usageFilterError, readUsageFilterDraft } = utils

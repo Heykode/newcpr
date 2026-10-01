@@ -74,6 +74,8 @@ async fn key_model_pages_preserve_store_order_and_partial_exact_costs() {
     );
     assert_eq!(result.items[0].key, "key-a/model-a");
     assert_eq!(result.items[1].key, "key-b/model-b");
+    assert_eq!(result.items[0].request_share, 10.0 / 13.0);
+    assert_eq!(result.items[1].request_share, 2.0 / 13.0);
     assert_eq!(
         result.items[0].estimated_cost.as_ref().unwrap().as_str(),
         "0.1234567891"
@@ -95,7 +97,80 @@ async fn key_model_pages_preserve_store_order_and_partial_exact_costs() {
         .unwrap();
     assert_eq!(tail.items.len(), 1);
     assert_eq!(tail.items[0].key, "key-c/model-c");
+    assert_eq!(tail.items[0].request_share, 1.0 / 13.0);
     assert!(!tail.has_more);
+}
+
+#[tokio::test]
+async fn diagnostics_use_full_denominator_and_count_retried_requests_once() {
+    let now = Utc::now();
+    let range = observation_range(now);
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    let mut items: Vec<_> = (0..101)
+        .map(|i| diagnostic(&format!("model-{i}"), 2))
+        .collect();
+    items[0].retry_count = 5;
+    items[0].retried_request_count = 1;
+    items[0].attempt_count = 7;
+    store.replace_diagnostics(items);
+    let services = observability_services_with_calculated_billing(store).await;
+    let result = services
+        .observability()
+        .diagnostics(
+            range,
+            UsageFilter::default(),
+            DiagnosticDimension::Model,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.items.len(), 100);
+    assert!(
+        result
+            .items
+            .iter()
+            .all(|item| item.request_share == 2.0 / 202.0)
+    );
+    let retried = result
+        .items
+        .iter()
+        .find(|item| item.key == "model-0")
+        .unwrap();
+    assert_eq!(retried.retry_count, 5);
+    assert_eq!(retried.retry_rate, 0.5);
+    assert_eq!(retried.account_plan_type, None);
+    assert_eq!(retried.account_plan_type_display, None);
+}
+
+#[tokio::test]
+async fn usage_records_enrich_current_plan_without_requiring_billing() {
+    let now = Utc::now();
+    let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
+    let mut known = total_record("request_plan", Some("openai"), "unavailable", now);
+    known.billing = None;
+    known.provider_account_plan_type = Some("pro".to_owned());
+    known.provider_account_custom_name = Some("custom name".to_owned());
+    let unknown = total_record("request_unknown_plan", Some("openai"), "unavailable", now);
+    store.replace_usage_records(vec![known, unknown]);
+    let services = observability_services_with_calculated_billing(store).await;
+    let page = services
+        .observability()
+        .usage_records(usage_query(now))
+        .await
+        .unwrap();
+    assert_eq!(
+        page.items[0].provider_account_plan_type.as_deref(),
+        Some("pro")
+    );
+    assert_eq!(
+        page.items[0].provider_account_plan_type_display.as_deref(),
+        Some("Pro")
+    );
+    assert_eq!(
+        page.items[0].provider_account_custom_name.as_deref(),
+        Some("custom name")
+    );
+    assert_eq!(page.items[1].provider_account_plan_type_display, None);
 }
 
 #[test]
@@ -811,6 +886,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
         let offset = (current_page as usize - 1) * page_size as usize;
         let has_more = page.is_some() && all.len() > offset + page_size as usize;
         Ok(DiagnosticObservationPage {
+            total_request_count: all.iter().map(|item| item.request_count).sum(),
             items: all
                 .into_iter()
                 .skip(offset)
@@ -938,6 +1014,8 @@ fn total_record(
         provider_account_name: None,
         provider_account_email: None,
         provider_account_custom_name: None,
+        provider_account_plan_type: None,
+        provider_account_plan_type_display: None,
         provider_account_authentication_kind: None,
         upstream_model_id: Some("gpt-5.5".to_owned()),
         upstream_transport: None,
@@ -999,6 +1077,9 @@ fn health_metric_point(bucket_start: DateTime<Utc>, metrics: RequestMetrics) -> 
 
 fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
     DiagnosticObservation {
+        account_provider_kind: None,
+        account_plan_type: None,
+        retried_request_count: 0,
         first_token_p95_ms: None,
         non_completion_count: 0,
         retry_count: 0,

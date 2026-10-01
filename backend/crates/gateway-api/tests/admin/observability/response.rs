@@ -786,6 +786,9 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
         .push(DiagnosticObservation {
             key: "acct_diag".to_owned(),
             name: "diag@example.invalid".to_owned(),
+            account_provider_kind: Some("openai".to_owned()),
+            account_plan_type: Some("pro".to_owned()),
+            retried_request_count: 0,
             request_count: 2,
             success_count: 2,
             failure_count: 0,
@@ -833,6 +836,8 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
     assert_eq!(value["data"]["currentPage"], 1);
     assert_eq!(value["data"]["pageSize"], 100);
     assert_eq!(value["data"]["hasMore"], false);
+    assert_eq!(value["data"]["items"][0]["accountPlanType"], "pro");
+    assert_eq!(value["data"]["items"][0]["accountPlanTypeDisplay"], "Pro");
 }
 
 #[tokio::test]
@@ -855,6 +860,9 @@ async fn key_model_diagnostics_require_admin_and_project_pagination_and_cost_cov
         .extend((0..3).map(|index| DiagnosticObservation {
             key: serde_json::json!(["key_synthetic", format!("model-{index}")]).to_string(),
             name: format!("Named Key → model-{index}"),
+            account_provider_kind: None,
+            account_plan_type: None,
+            retried_request_count: 0,
             request_count: 3 - index,
             success_count: 3 - index,
             failure_count: 0,
@@ -904,6 +912,8 @@ async fn key_model_diagnostics_require_admin_and_project_pagination_and_cost_cov
     assert_eq!(data["hasMore"], true);
     assert_eq!(data["items"].as_array().unwrap().len(), 1);
     assert_eq!(data["items"][0]["name"], "Named Key → model-1");
+    assert_eq!(data["items"][0]["requestShare"], 2.0 / 6.0);
+    assert!(data["items"][0]["accountPlanType"].is_null());
     assert_eq!(data["items"][0]["estimatedCost"], "0.1234567891");
     assert_eq!(data["items"][0]["costIncomplete"], true);
     for query in [
@@ -1083,6 +1093,8 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             provider_account_name: Some("Snapshot Alpha".to_owned()),
             provider_account_email: Some("alpha@example.invalid".to_owned()),
             provider_account_custom_name: Some("Current custom name".to_owned()),
+            provider_account_plan_type: Some("pro".to_owned()),
+            provider_account_plan_type_display: None,
             provider_account_authentication_kind: Some("oauth".to_owned()),
             upstream_model_id: Some("grok-4.5".to_owned()),
             upstream_transport: Some("http_sse".to_owned()),
@@ -1179,6 +1191,9 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .await
         .expect("usage response body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage response JSON");
+
+    assert_eq!(value["data"]["items"][0]["accountPlanType"], "pro");
+    assert_eq!(value["data"]["items"][0]["accountPlanTypeDisplay"], "Pro");
 
     assert_eq!(
         value["data"]["items"][0]["billing"]["inputPriceDisplay"],

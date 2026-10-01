@@ -30,6 +30,8 @@ function diagnosticPage(query) {
     return {
       key: JSON.stringify([`fixture-key-${number}`, model]),
       name: `[${query.provider || 'all'}] ${keyName} → ${model}`,
+      accountPlanType: dimension === 'account' && number === 0 ? 'pro' : null,
+      accountPlanTypeDisplay: dimension === 'account' && number === 0 ? 'Pro' : null,
       requestCount: 1000 - number,
       successCount: 998 - number,
       errorCount: 1,
@@ -354,6 +356,8 @@ async function runViewport(page, state, base, output, width) {
   assert.equal(accountQuery.dimension, 'account')
   assert.equal(accountQuery.currentPage, undefined)
   assert.equal(accountQuery.pageSize, undefined)
+  assert.equal(await card.getByText('Pro', { exact: true }).count(), 1, 'current plan badge only appears for an account with a known plan')
+  await capture('account-plan')
   await requestFrom(page, () => choose(page, dimension, 'Key × 模型'))
   await assertPage(card, query)
   assert.deepEqual(apiCounts(state), beforeDimension)

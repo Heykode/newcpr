@@ -486,6 +486,7 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
             .map(admin_diagnostic_observation)
             .collect::<AdminStoreResult<Vec<_>>>()?;
         Ok(admin_observability::DiagnosticObservationPage {
+            total_request_count: result.total_request_count,
             items,
             current_page: result.current_page,
             page_size: result.page_size,

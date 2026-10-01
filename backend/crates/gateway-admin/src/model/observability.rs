@@ -582,6 +582,9 @@ pub struct UsageListRecord {
     pub provider_account_email: Option<String>,
     /// 账号当前自定义名称，按内部账号 ID 关联，不属于请求历史快照。
     pub provider_account_custom_name: Option<String>,
+    /// 账号当前套餐，非历史快照；仅供管理端展示。
+    pub provider_account_plan_type: Option<String>,
+    pub provider_account_plan_type_display: Option<String>,
     pub provider_account_authentication_kind: Option<String>,
     pub upstream_model_id: Option<String>,
     pub upstream_transport: Option<String>,
@@ -790,6 +793,8 @@ pub struct UsageSummary {
 pub struct DiagnosticObservation {
     pub key: String,
     pub name: String,
+    pub account_provider_kind: Option<String>,
+    pub account_plan_type: Option<String>,
     pub request_count: u64,
     pub success_count: u64,
     pub failure_count: u64,
@@ -800,6 +805,7 @@ pub struct DiagnosticObservation {
     pub first_token_p95_ms: Option<u64>,
     pub non_completion_count: u64,
     pub retry_count: u64,
+    pub retried_request_count: u64,
     pub cost_coverage: CostCoverage,
     pub costs: Vec<CurrencyCost>,
 }
@@ -813,6 +819,8 @@ pub struct DiagnosticPageQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticObservationPage {
+    /// All matching requests, before dimension limits and pagination.
+    pub total_request_count: u64,
     pub items: Vec<DiagnosticObservation>,
     pub current_page: u32,
     pub page_size: u16,
@@ -1185,6 +1193,8 @@ pub struct UsageInsights {
 pub struct DiagnosticsItem {
     pub key: String,
     pub name: String,
+    pub account_plan_type: Option<String>,
+    pub account_plan_type_display: Option<String>,
     pub request_count: u64,
     pub success_count: u64,
     pub error_count: u64,
