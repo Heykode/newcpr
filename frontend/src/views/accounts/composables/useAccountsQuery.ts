@@ -1,7 +1,7 @@
 import type { BaseTableSort } from '@/components/base/BaseTable/columns'
 import { useIntervalFn, watchDebounced } from '@vueuse/core'
 
-import { computed, onMounted, shallowRef, watch } from 'vue'
+import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccounts } from '@/api'
 import { usePagedQuery } from '@/composables/usePagedQuery'
 
@@ -15,6 +15,11 @@ export function useAccountsQuery() {
   const planTypeQuery = shallowRef('')
   const sort = shallowRef<BaseTableSort>()
   const activeRequests = shallowRef(0)
+  let loadedQueryKey: string | undefined
+  let disposed = false
+  onScopeDispose(() => {
+    disposed = true
+  })
   const refreshing = computed(() => activeRequests.value > 0)
   const accountSummary = shallowRef({
     total: 0,
@@ -30,7 +35,8 @@ export function useAccountsQuery() {
     load: async ({ page, pageSize }, options) => {
       activeRequests.value += 1
       try {
-        return await getAccounts({
+        const queryKey = currentQueryKey(page, pageSize)
+        const result = await getAccounts({
           page,
           pageSize,
           search: searchQuery.value,
@@ -41,15 +47,56 @@ export function useAccountsQuery() {
           sortBy: sort.value?.key ?? 'addedAt',
           sortDirection: sort.value?.direction ?? 'desc',
         }, options)
+        return { ...result, queryKey }
       }
       finally {
         activeRequests.value -= 1
       }
     },
     onSuccess: (result) => {
+      loadedQueryKey = result.queryKey
       accountSummary.value = result.summary
     },
   })
+
+  function currentQueryKey(page: number, pageSize: number) {
+    return JSON.stringify([
+      page,
+      pageSize,
+      searchQuery.value,
+      providerQuery.value,
+      statusQuery.value,
+      groupQuery.value,
+      planTypeQuery.value,
+      sort.value?.key ?? 'addedAt',
+      sort.value?.direction ?? 'desc',
+    ])
+  }
+
+  function preservesList(previous: AccountRow, updated: AccountRow) {
+    // Only known stable sorts qualify; usage/last-used ordering remains server-owned.
+    if (!['addedAt', 'createdAt', 'email', 'status', 'planType'].includes(sort.value?.key ?? 'addedAt'))
+      return false
+    const fields: (keyof AccountRow)[] = [
+      'name',
+      'customName',
+      'email',
+      'accountId',
+      'userId',
+      'resourceRef',
+      'label',
+      'provider',
+      'authenticationKind',
+      'planType',
+      'planTypeDisplay',
+      'enabled',
+      'status',
+      'addedAt',
+    ]
+    return fields.every(field => previous[field] === updated[field])
+      && JSON.stringify(previous.groups?.map(group => group.id).sort())
+      === JSON.stringify(updated.groups?.map(group => group.id).sort())
+  }
 
   const accountPagination = computed(() => ({
     currentPage: query.page.value,
@@ -74,10 +121,21 @@ export function useAccountsQuery() {
     void query.execute()
   }
 
-  async function replaceAccount(updated: AccountRow) {
-    // 状态变更可能影响筛选、排序及全局概览，统一回读并复用分页查询的末页回退。
+  async function replaceAccount(updated: AccountRow, options: { authoritative?: boolean, previous?: AccountRow } = {}) {
+    if (disposed)
+      return true
+    const index = query.items.value.findIndex(account => account.id === updated.id)
+    const previous = query.items.value[index]
+    if (options.authoritative && previous && options.previous === previous
+      && loadedQueryKey === currentQueryKey(query.page.value, query.pageSize.value)
+      && preservesList(previous, updated)) {
+      query.invalidate()
+      query.items.value = query.items.value.map((account, row) => row === index ? updated : account)
+      return true
+    }
+    // Partial patches and changed list membership still require authoritative reconciliation.
     query.invalidate()
-    if (!await query.execute())
+    if (!await query.execute(options.authoritative ? { silent: true } : {}))
       return true // 回读失败或被新查询取代时，不依据旧页面取消选择。
     return query.items.value.some(account => account.id === updated.id)
   }

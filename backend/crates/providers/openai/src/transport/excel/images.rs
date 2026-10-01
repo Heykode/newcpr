@@ -550,7 +550,7 @@ pub(crate) async fn upload_inline_with_limits(
 ) -> Result<UploadedImages, CodexClientError> {
     static UPLOADS: std::sync::LazyLock<tokio::sync::Semaphore> =
         std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(32));
-    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+    let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let _permit = UPLOADS
             .acquire()
             .await
@@ -560,7 +560,13 @@ pub(crate) async fn upload_inline_with_limits(
         upload_admitted(client, profile, context, endpoint, body, replay, limits).await
     })
     .await
-    .map_err(|_| invalid("Excel attachment upload timed out"))?
+    .unwrap_or_else(|_| Err(invalid("Excel attachment upload timed out")));
+    result.inspect_err(|error| {
+        context.trace.cloned().unwrap_or_default().record(
+            "excel.transport.failed",
+            super::diagnostics::attachment_failure(error),
+        );
+    })
 }
 
 async fn upload_admitted(

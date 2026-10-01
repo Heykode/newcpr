@@ -131,13 +131,7 @@ impl CodexBackendClient {
                 excel.replay.as_ref(),
                 excel.image_limits,
             )
-            .await
-            .inspect_err(|error| {
-                trace.record(
-                    "excel.transport.failed",
-                    super::excel::diagnostics::transport_failure(error),
-                );
-            })?;
+            .await?;
             trace.record(
                 "excel.transport",
                 serde_json::json!({"phase":"attachment_upload_completed"}),

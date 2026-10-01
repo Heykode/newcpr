@@ -1,5 +1,41 @@
 # Account Management Contracts
 
+## Complete Account Row Replacement
+
+### 1. Scope / Trigger
+Quota refresh/recovery may update a complete returned row without a list reload.
+Partial scheduling/Excel toggles retain their authoritative reread path.
+
+### 2. Signatures
+`replaceAccount(account, { authoritative: true, previous })` carries the row captured
+before the mutation. The page wrapper uses `Parameters<typeof replaceAccountQuery>[1]`
+and forwards it while preserving forecast invalidation.
+
+### 3. Contracts
+Fast replacement requires the same row object, accepted query key and unchanged
+membership/summary/supported stable sort fields. Invalidate pending reads before
+replacing only the matching ID; do not mutate other rows or total/summary values.
+Disposed pages ignore late completions.
+
+### 4. Validation & Error Matrix
+Changed status/groups/search identity, dynamic sort, different filter/page or newer
+row -> silent server reconciliation using existing last-page fallback. Missing rows
+are never appended speculatively. Failed/superseded reconciliation retains selection.
+
+### 5. Good / Base / Bad Cases
+Good: refreshed quota appears with no list GET and the expanded panel stays mounted.
+Base: partial switches still reread and correctly remove filtered-out selections.
+Bad: a late quota response overwrites a row refreshed since the operation started.
+
+### 6. Tests Required
+Run composable/caller tests and the actual account page browser fixture at desktop
+and narrow widths. Assert network counts, retained DOM, stale-read cancellation,
+concurrent mutation snapshots, filters, ordering, summary and pagination.
+
+### 7. Wrong vs Correct
+Wrong: update the mutation and query signatures but drop options in the page wrapper.
+Correct: forward options through every layer and prove the actual click avoids a GET.
+
 ## Monthly Purchase Cost
 
 The `purchaseCost` column follows priority; column preferences migrate from v3 to v4
