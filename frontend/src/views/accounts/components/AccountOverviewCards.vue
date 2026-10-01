@@ -34,6 +34,7 @@ const {
   displayedCount,
   totalPages,
   records,
+  sampleTimes,
   stale,
   loading,
   refreshing,
@@ -100,6 +101,7 @@ const {
       :key="group.id"
       :group="group"
       :snapshot="records.get(group.id)"
+      :sampled-at="sampleTimes.get(group.id)"
       :pinned="pins.includes(group.id)"
       :pin-disabled="!viewer"
       :stale="stale"
@@ -126,7 +128,7 @@ const {
         <RefreshCw class="size-3.5" />
       </BaseIconButton>
     </div>
-    <GroupAlertSettingsModal v-model="alertOpen" :group="alertGroup" :snapshot="alertGroup ? records.get(alertGroup.id) : undefined" :stale="stale" :now="now" />
+    <GroupAlertSettingsModal v-model="alertOpen" :group="alertGroup" :snapshot="alertGroup ? records.get(alertGroup.id) : undefined" :sampled-at="alertGroup ? sampleTimes.get(alertGroup.id) : undefined" :stale="stale" :now="now" />
   </div>
 </template>
 

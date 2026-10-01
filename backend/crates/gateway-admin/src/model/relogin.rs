@@ -192,6 +192,7 @@ impl ReloginEnrollment {
         }
         let result = Self {
             config: super::relogin_templates::ReloginTemplateConfig {
+                excel_recovery: settings.excel_recovery,
                 model_access: None,
                 egress_mode: settings.egress_mode,
                 name: "2FA account import".to_owned(),
@@ -377,7 +378,7 @@ pub struct ReloginInput {
 fn totp_secret(raw: &str) -> Option<String> {
     let secret: String = raw
         .chars()
-        .filter(|ch| !ch.is_ascii_whitespace() && *ch != '-')
+        .filter(|ch| !ch.is_whitespace() && *ch != '\u{feff}' && *ch != '-')
         .map(|ch| ch.to_ascii_uppercase())
         .collect();
     let secret = secret.trim_end_matches('=').to_owned();
@@ -396,8 +397,16 @@ pub fn parse_relogin_import(text: &str) -> Result<Vec<ReloginInput>, AdminError>
     }
     let mut seen = BTreeSet::new();
     let mut inputs = Vec::new();
-    for (index, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-        if line.trim().is_empty() {
+    // Count CRLF as one boundary and never join credentials across pasted lines.
+    let text = text.replace("\r\n", "\n");
+    for (index, line) in text
+        .split(['\n', '\r', '\u{0085}', '\u{2028}', '\u{2029}'])
+        .enumerate()
+    {
+        if line
+            .chars()
+            .all(|ch| ch.is_whitespace() || ch == '\u{feff}')
+        {
             continue;
         }
         let invalid = || {
@@ -416,7 +425,9 @@ pub fn parse_relogin_import(text: &str) -> Result<Vec<ReloginInput>, AdminError>
             return Err(invalid());
         }
         let mfa_secret = totp_secret(last).ok_or_else(invalid)?;
-        let email = email.trim().to_ascii_lowercase();
+        let email = email
+            .trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
+            .to_ascii_lowercase();
         if email.len() > 254
             || email.matches('@').count() != 1
             || email.starts_with('@')

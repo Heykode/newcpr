@@ -573,6 +573,119 @@ test('sorting can ascend, descend or clear while refresh preserves the selected 
   assert.deepEqual(h.errors, [])
 })
 
+test('complete quota rows replace only their own row without another list request', async (t) => {
+  const h = createHarness(t)
+  const initial = accountResponse({ total: 2 })
+  const other = { ...initial.items[0], id: 'acct_other' }
+  initial.items.push(other)
+  await mountLoaded(h, initial)
+  const updated = { ...initial.items[0], quota: { refreshed: true }, updatedAt: 'new' }
+  assert.equal(await h.query.replaceAccount(updated, { authoritative: true, previous: initial.items[0] }), true)
+  assert.equal(h.requests.length, 1)
+  assert.equal(h.query.accounts.value[0], updated)
+  assert.equal(h.query.accounts.value[1], other)
+  assert.equal(h.query.accountSummary.value, initial.summary)
+  assert.equal(h.query.totalAccounts.value, 2)
+  assert.equal(h.query.loading.value, false)
+  assert.equal(initial.items[0].quota, undefined, 'do not mutate the prior response')
+})
+
+test('a complete row invalidates an older refresh without letting its stale response overwrite the row', async (t) => {
+  const h = createHarness(t)
+  await mountLoaded(h)
+  const older = h.query.refreshAccountsSilently()
+  const pending = h.requests.at(-1)
+  const updated = { ...h.query.accounts.value[0], quota: { refreshed: true } }
+  await h.query.replaceAccount(updated, { authoritative: true, previous: h.query.accounts.value[0] })
+  assert.equal(h.requests.length, 2)
+  assert.equal(pending.options.signal.aborted, true)
+  pending.resolve(accountResponse({ version: 99 }))
+  assert.equal(await older, false)
+  assert.equal(h.query.accounts.value[0], updated)
+  assert.equal(h.query.refreshing.value, false)
+})
+
+test('complete rows silently reconcile changed status, groups, identity or ordering', async (t) => {
+  for (const scenario of ['status', 'groups', 'identity', 'sort', 'absent']) {
+    const h = createHarness(t)
+    const initial = accountResponse()
+    initial.items[0].groups = [{ id: 'grp_before' }]
+    await mountLoaded(h, initial)
+    if (scenario === 'sort') {
+      h.query.handleSortChange({ key: 'usage', direction: 'desc' })
+      await h.settle(initial)
+    }
+    const updated = { ...initial.items[0] }
+    if (scenario === 'status')
+      updated.status = 'disabled'
+    if (scenario === 'groups')
+      updated.groups = [{ id: 'grp_after' }]
+    if (scenario === 'identity')
+      updated.email = 'changed@example.com'
+    if (scenario === 'absent')
+      updated.id = 'acct_other_page'
+    const before = h.requests.length
+    const replacement = h.query.replaceAccount(updated, { authoritative: true, previous: initial.items[0] })
+    assert.equal(h.requests.length, before + 1, scenario)
+    assert.equal(h.requests.at(-1).options.silent, true)
+    assert.equal(h.query.loading.value, false)
+    assertResult(h.query, initial)
+    const accepted = accountResponse({ version: 2 })
+    await h.settle(accepted)
+    assert.equal(await replacement, scenario !== 'absent')
+    assertResult(h.query, accepted)
+  }
+})
+
+test('pending filter changes cannot accept a complete row into an old query snapshot', async (t) => {
+  const h = createHarness(t)
+  await mountLoaded(h)
+  h.query.searchQuery.value = 'new search'
+  const replacement = h.query.replaceAccount({ ...h.query.accounts.value[0] }, { authoritative: true, previous: h.query.accounts.value[0] })
+  assert.equal(h.requests.length, 2)
+  assert.equal(h.requests.at(-1).params.search, 'new search')
+  const accepted = { ...accountResponse({ total: 0 }), items: [] }
+  await h.settle(accepted)
+  assert.equal(await replacement, false)
+  assertResult(h.query, accepted)
+})
+
+test('a late mutation response cannot overwrite an account row refreshed after that mutation started', async (t) => {
+  const h = createHarness(t)
+  const initial = accountResponse()
+  await mountLoaded(h, initial)
+  const previous = h.query.accounts.value[0]
+  const refresh = h.query.refreshAccountsSilently()
+  const newer = accountResponse({ version: 2 })
+  newer.items[0].quota = { version: 2 }
+  await h.settle(newer)
+  assert.equal(await refresh, true)
+  const late = { ...previous, quota: { version: 1 } }
+  const replacement = h.query.replaceAccount(late, { authoritative: true, previous })
+  assert.equal(h.requests.length, 3)
+  assertResult(h.query, newer)
+  assert.equal(h.requests.at(-1).options.silent, true)
+  const authoritative = accountResponse({ version: 3 })
+  await h.settle(authoritative)
+  assert.equal(await replacement, true)
+  assertResult(h.query, authoritative)
+})
+
+test('complete-row reconciliation failure preserves summary and selection and disposal ignores late rows', async (t) => {
+  const h = createHarness(t)
+  const initial = accountResponse()
+  await mountLoaded(h, initial)
+  const replacement = h.query.replaceAccount({ ...initial.items[0], status: 'disabled' }, { authoritative: true })
+  h.requests.at(-1).reject(new Error('reconciliation unavailable'))
+  assert.equal(await replacement, true)
+  assertResult(h.query, initial)
+  h.scope.stop()
+  const count = h.requests.length
+  assert.equal(await h.query.replaceAccount({ ...initial.items[0], quota: { refreshed: true } }, { authoritative: true }), true)
+  assert.equal(h.requests.length, count)
+  assertResult(h.query, initial)
+})
+
 test('account mutations reread authoritative filtered rows and summary and invalidate an older refresh', async (t) => {
   const h = createHarness(t)
   const { query, requests } = h
@@ -685,12 +798,14 @@ function toggleHarness(harness, row) {
     '@/api': {
       updateAccount: body => new Promise((resolve, reject) => writes.push({ body, resolve, reject })),
       batchUpdateAccounts: body => new Promise((resolve, reject) => writes.push({ body, resolve, reject })),
+      refreshAccountQuota: body => new Promise((resolve, reject) => writes.push({ body, resolve, reject })),
+      recoverAccount: body => new Promise((resolve, reject) => writes.push({ body, resolve, reject })),
     },
     '@/components/base/BaseToast': notifications,
     '@/composables/useAsyncAction': actions,
     '@/composables/useIdSet': ids,
     '@/composables/useDownload': { useDownload: () => ({ downloadJson() {} }) },
-    '@/utils/async': asyncUtils,
+    '@/utils/async': { ...asyncUtils, withMinimumDuration: action => action() },
     './useAccountOnboarding': { useAccountOnboarding: () => ({}) },
   })
   const state = harness.scope.run(() => mutations.useAccountMutations({
@@ -700,6 +815,25 @@ function toggleHarness(harness, row) {
     replaceAccount: harness.query.replaceAccount,
   }))
   return { state, writes, selectedIds }
+}
+
+for (const action of ['handleRefreshQuota', 'handleRecover']) {
+  test(`${action} forwards a complete returned row and its starting snapshot without a list reload`, async (t) => {
+    const h = createHarness(t)
+    const initial = accountResponse()
+    await mountLoaded(h, initial)
+    const row = initial.items[0]
+    const { state, writes, selectedIds } = toggleHarness(h, row)
+    const operation = state[action](row.id)
+    assert.equal(writes.length, 1)
+    const updated = { ...row, quota: { refreshed: true } }
+    writes[0].resolve({ account: updated })
+    await operation
+    assert.equal(h.requests.length, 1)
+    assert.equal(h.query.accounts.value[0], updated)
+    assert.equal(h.query.accountSummary.value, initial.summary)
+    assert.equal(selectedIds.value.size, 2)
+  })
 }
 
 for (const enabled of [false, true]) {

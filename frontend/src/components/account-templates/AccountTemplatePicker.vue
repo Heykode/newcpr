@@ -93,6 +93,10 @@ onScopeDispose(() => controller?.abort())
         <dt>Excel遇到HTTP 403</dt>
         <dd>{{ excel403ActionLabel(accountExcel403Action(selected.config)) }}</dd>
       </template>
+      <template v-if="selected.config.excelRecovery">
+        <dt>Excel 暂停恢复探测</dt>
+        <dd>{{ selected.config.excelRecovery.enabled ? `开启，每 ${selected.config.excelRecovery.intervalMinutes} 分钟` : '关闭' }}</dd>
+      </template>
       <dt class="text-cp-text-secondary">
         调度
       </dt><dd class="m-0">

@@ -39,6 +39,7 @@ fn success() -> ProxyTestResult {
 
 fn update(account_id: &str, selection: AccountProxySelection) -> UpdateAccount {
     UpdateAccount {
+        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         model_access: Default::default(),
@@ -266,6 +267,7 @@ async fn partial_batch_proxy_updates_preserve_credentials_groups_and_unselected_
         .await
         .unwrap();
     let mut command = BatchUpdateAccounts {
+        excel_recovery: None,
         purchase_cost: None,
         egress_mode: None,
         model_access: Default::default(),
@@ -1039,6 +1041,7 @@ async fn legacy_urls_join_one_catalog_entry_and_invalid_batch_rolls_back() {
         admin
             .batch_update_accounts(
                 BatchUpdateAccounts {
+                    excel_recovery: None,
                     purchase_cost: None,
                     egress_mode: None,
                     model_access: Default::default(),
@@ -1097,7 +1100,9 @@ async fn migration_backfills_shared_proxies_without_changing_credentials() {
             .await
             .unwrap();
     }
-    sqlx::raw_sql("alter table runtime_settings drop column turn_state_probe_proxy_id;
+    // Recreate the pre-0005 fixture without the newer column-dependent trigger.
+    sqlx::raw_sql("drop trigger invalidate_excel_recovery on provider_accounts;
+        alter table runtime_settings drop column turn_state_probe_proxy_id;
         alter table provider_accounts drop column outbound_proxy_id; drop table outbound_proxies;
         update provider_accounts set outbound_proxy_url = 'http://user:$secret@127.0.0.1:8080/' where id <> 'acct_direct';")
         .execute(&database.pool).await.unwrap();

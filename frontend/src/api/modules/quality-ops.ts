@@ -23,6 +23,7 @@ export interface QualityRuleConfig {
   autoRestore: boolean
   disableExcelOnNativeRecovery: boolean
   excelFailureThreshold: number
+  excelRecoveryThreshold?: number
 }
 
 export interface QualityRule {

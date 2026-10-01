@@ -10,6 +10,7 @@ pub mod backup;
 pub mod client_distribution;
 pub mod client_keys;
 pub mod egress;
+pub mod excel_recovery;
 pub mod group_monitor;
 pub mod group_monitor_quota;
 pub mod import_tasks;

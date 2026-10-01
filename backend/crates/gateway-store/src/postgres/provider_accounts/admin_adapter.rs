@@ -287,6 +287,9 @@ impl PgAdminAccountStore {
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut changed_fields = vec!["credentials".to_owned()];
         if let Some(settings) = &settings {
+            if settings.excel_recovery.is_some() {
+                changed_fields.push("excel_recovery".to_owned());
+            }
             if settings.purchase_cost.is_some() {
                 changed_fields.push("purchase_cost".to_owned());
             }
@@ -772,6 +775,54 @@ impl AccountStore for PgAdminAccountStore {
         Ok(costs)
     }
 
+    async fn load_excel_recovery(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::excel_recovery::ExcelRecoveryView>>
+    {
+        let mut values = BTreeMap::new();
+        for ids in account_ids.chunks(ADMIN_USAGE_CHUNK_SIZE) {
+            validate_admin_account_ids(ids).map_err(|error| admin_store_error(ENTITY, error))?;
+            values.extend(
+                self.query_budget
+                    .run(
+                        "load Excel recovery",
+                        super::excel_recovery::load(&self.pool, ids),
+                    )
+                    .await
+                    .map_err(|error| admin_store_error(ENTITY, error))?,
+            );
+        }
+        Ok(values)
+    }
+
+    async fn claim_excel_recovery(
+        &self,
+    ) -> AdminStoreResult<Option<gateway_admin::model::excel_recovery::ExcelRecoveryClaim>> {
+        super::excel_recovery::claim(&self.pool)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
+    async fn excel_recovery_current(
+        &self,
+        claim: &gateway_admin::model::excel_recovery::ExcelRecoveryClaim,
+    ) -> AdminStoreResult<bool> {
+        super::excel_recovery::current(&self.pool, claim)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
+    async fn finish_excel_recovery(
+        &self,
+        claim: &gateway_admin::model::excel_recovery::ExcelRecoveryClaim,
+        outcome: gateway_admin::model::excel_recovery::ExcelRecoveryOutcome,
+    ) -> AdminStoreResult<bool> {
+        super::excel_recovery::finish(&self.pool, claim, outcome)
+            .await
+            .map_err(|error| admin_store_error(ENTITY, error))
+    }
+
     async fn load_account_purchase_costs(
         &self,
         account_ids: &[String],
@@ -816,6 +867,13 @@ impl AccountStore for PgAdminAccountStore {
         observations: &[gateway_admin::model::quota_learning::QuotaLearningObservation],
     ) -> AdminStoreResult<Vec<gateway_admin::model::quota_learning::QuotaLearningEstimate>> {
         super::quota_learning::record(&self.pool, observations).await
+    }
+
+    async fn load_quota_learning_usage(
+        &self,
+        window: &AccountUsageWindowQuery,
+    ) -> AdminStoreResult<gateway_admin::model::quota_forecast_sampling::QuotaForecastUsage> {
+        super::quota_forecast::load_learning_usage(&self.pool, &self.query_budget, window).await
     }
 
     async fn list_credentials(
@@ -1127,6 +1185,9 @@ impl AccountStore for PgAdminAccountStore {
             "weight".to_owned(),
             "groups".to_owned(),
         ];
+        if command.excel_recovery.is_some() {
+            changed_fields.push("excel_recovery".to_owned());
+        }
         if command.outbound_proxy.is_some() {
             changed_fields.push("outbound_proxy".to_owned());
         }
@@ -1174,6 +1235,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,
                 custom_name: command.custom_name,
@@ -1270,6 +1332,9 @@ impl AccountStore for PgAdminAccountStore {
             "provider_accounts".to_owned()
         };
         let mut changed_fields = Vec::new();
+        if command.excel_recovery.is_some() {
+            changed_fields.push("excel_recovery".to_owned());
+        }
         for (changed, field) in [
             (command.purchase_cost.is_some(), "purchase_cost"),
             (
@@ -1321,6 +1386,7 @@ impl AccountStore for PgAdminAccountStore {
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+                excel_recovery: command.excel_recovery,
                 purchase_cost: command.purchase_cost,
                 egress_mode: command.egress_mode,
                 custom_name: command.custom_name,

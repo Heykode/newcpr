@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use gateway_admin::{
-    model::quota_learning::{QuotaLearningEstimate, QuotaLearningObservation, QuotaLearningSource},
+    model::quota_learning::{
+        MONITOR_LEARNING_PREFIX, QuotaLearningEstimate, QuotaLearningObservation,
+        QuotaLearningSource,
+    },
     ports::store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -260,17 +263,25 @@ async fn invalidate_changed_accounts<'a>(
 ) -> AdminStoreResult<Vec<&'a QuotaLearningObservation>> {
     let accounts = observations
         .iter()
-        .map(|observation| &observation.account_id)
+        .map(|observation| {
+            (
+                &observation.account_id,
+                observation.window_key.starts_with(MONITOR_LEARNING_PREFIX),
+            )
+        })
         .collect::<BTreeSet<_>>();
     let now = Utc::now();
     let mut accepted = Vec::with_capacity(observations.len());
-    for account_id in accounts {
+    for (account_id, monitor) in accounts {
         let rows = sqlx::query(
             "select provider_kind, plan_type, window_key, window_minutes,
                     last_percent, last_reset_at, last_observed_at
-               from quota_learning_accounts where provider_account_id = $1 for update",
+               from quota_learning_accounts where provider_account_id = $1
+                and starts_with(window_key, $2) = $3 for update",
         )
         .bind(account_id)
+        .bind(MONITOR_LEARNING_PREFIX)
+        .bind(monitor)
         .fetch_all(&mut **transaction)
         .await
         .map_err(unavailable)?;
@@ -292,7 +303,10 @@ async fn invalidate_changed_accounts<'a>(
         let current = observations
             .iter()
             .copied()
-            .filter(|observation| &observation.account_id == account_id)
+            .filter(|observation| {
+                &observation.account_id == account_id
+                    && observation.window_key.starts_with(MONITOR_LEARNING_PREFIX) == monitor
+            })
             .filter(|observation| {
                 latest.as_ref().is_none_or(|(observed_at, provider, plan)| {
                     let timestamp = observation.observed_at.timestamp_micros();
@@ -333,11 +347,16 @@ async fn invalidate_changed_accounts<'a>(
             }
         }
         if reset {
-            sqlx::query("delete from quota_learning_accounts where provider_account_id = $1")
-                .bind(account_id)
-                .execute(&mut **transaction)
-                .await
-                .map_err(unavailable)?;
+            sqlx::query(
+                "delete from quota_learning_accounts where provider_account_id = $1
+                  and starts_with(window_key, $2) = $3",
+            )
+            .bind(account_id)
+            .bind(MONITOR_LEARNING_PREFIX)
+            .bind(monitor)
+            .execute(&mut **transaction)
+            .await
+            .map_err(unavailable)?;
         }
         accepted.extend(current);
     }

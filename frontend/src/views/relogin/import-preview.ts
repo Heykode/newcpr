@@ -7,7 +7,7 @@ export interface ImportPreviewRow {
 // This projection never exposes password or TOTP fields.
 export function importPreview(text: string): ImportPreviewRow[] {
   const seen = new Set<string>()
-  return text.replace(/^\uFEFF/, '').split(/\r?\n/).flatMap((line, index) => {
+  return text.replace(/\r\n/g, '\n').split(/[\n\r\u0085\u2028\u2029]/u).flatMap((line, index) => {
     if (!line.trim())
       return []
     const first = line.indexOf('----')
@@ -15,7 +15,7 @@ export function importPreview(text: string): ImportPreviewRow[] {
     const email = first >= 0 ? line.slice(0, first).trim().toLowerCase() : ''
     const password = line.slice(first + 4, last)
     const lastPart = line.slice(last + 4)
-    const secret = lastPart.replace(/[\t\n\r \f\v-]/g, '').toUpperCase().replace(/=+$/, '')
+    const secret = lastPart.replace(/[\p{White_Space}\uFEFF-]/gu, '').toUpperCase().replace(/=+$/, '')
     const legacyMailbox = /----[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(password)
     const totp = /^[A-Z2-7]{16,128}$/.test(secret)
       && [0, 2, 4, 5, 7].includes(secret.length % 8)

@@ -20,6 +20,7 @@ use crate::{
             AccountListQuery, AccountPageItem, AccountUpdateResult, AccountUsageWindowQuery,
             AccountsUpdateResult, BatchUpdateAccounts, TurnStateProbeOutcome, UpdateAccount,
         },
+        group_monitor_quota::{monitor_learned_windows, monitor_learning_observations},
         observability::TimeRange,
         provider_credentials::{
             AccountDirectoryItem, AccountDirectoryPage, AccountExportBundle, AccountPersonalInfo,
@@ -33,6 +34,7 @@ use crate::{
             forecast_window,
         },
         quota_forecast_sampling::{QuotaForecastPoint, select_forecast_sample},
+        quota_learning::LearnedQuotaWindow,
     },
     ports::{
         provider::ProviderAdminRegistry,
@@ -157,6 +159,12 @@ pub trait AccountsService: Send + Sync {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<ProviderQuota, AdminError>;
+
+    /// Learn monitor capacity from cached quota; account-list estimates stay independent.
+    async fn monitor_quota(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<Vec<LearnedQuotaWindow>, AdminError>;
 
     async fn personal_info(
         &self,
@@ -350,15 +358,21 @@ impl DefaultAccountsService {
             end: now,
         };
         let ids = vec![account.id.clone()];
-        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) =
-            futures::try_join!(
-                self.accounts.load_account_usage(rolling_range, &ids),
-                self.accounts
-                    .load_account_health_timeline(account_health_range(now), &ids),
-                self.accounts.load_account_cumulative_costs(&ids),
-                self.accounts.load_account_purchase_costs(&ids),
-            )
-            .map_err(|error| map_store_error(error, "account usage"))?;
+        let (
+            rolling_usage,
+            health_usage,
+            mut cumulative_costs,
+            mut purchase_costs,
+            mut excel_recoveries,
+        ) = futures::try_join!(
+            self.accounts.load_account_usage(rolling_range, &ids),
+            self.accounts
+                .load_account_health_timeline(account_health_range(now), &ids),
+            self.accounts.load_account_cumulative_costs(&ids),
+            self.accounts.load_account_purchase_costs(&ids),
+            self.accounts.load_excel_recovery(&ids),
+        )
+        .map_err(|error| map_store_error(error, "account usage"))?;
         let rolling_usage = rolling_usage.into_iter().next();
         let health_timeline = health_usage
             .into_iter()
@@ -389,6 +403,7 @@ impl DefaultAccountsService {
             .and_then(|(window, _)| window.local_usage.clone());
         let default_concurrency = self.default_concurrency_limit().await?;
         Ok(AccountDirectoryItem {
+            excel_recovery: excel_recoveries.remove(account_id.as_str()),
             purchase_cost: purchase_costs.remove(account_id.as_str()),
             turn_state: None,
             effective_concurrency_limit: stored
@@ -451,15 +466,21 @@ impl AccountsService for DefaultAccountsService {
             .iter()
             .map(|item| item.account.id.clone())
             .collect::<Vec<_>>();
-        let (rolling_usage, health_usage, mut cumulative_costs, mut purchase_costs) =
-            futures::try_join!(
-                self.accounts.load_account_usage(rolling_range, &ids),
-                self.accounts
-                    .load_account_health_timeline(account_health_range(now), &ids),
-                self.accounts.load_account_cumulative_costs(&ids),
-                self.accounts.load_account_purchase_costs(&ids),
-            )
-            .map_err(|error| map_store_error(error, "account usage"))?;
+        let (
+            rolling_usage,
+            health_usage,
+            mut cumulative_costs,
+            mut purchase_costs,
+            mut excel_recoveries,
+        ) = futures::try_join!(
+            self.accounts.load_account_usage(rolling_range, &ids),
+            self.accounts
+                .load_account_health_timeline(account_health_range(now), &ids),
+            self.accounts.load_account_cumulative_costs(&ids),
+            self.accounts.load_account_purchase_costs(&ids),
+            self.accounts.load_excel_recovery(&ids),
+        )
+        .map_err(|error| map_store_error(error, "account usage"))?;
         let rolling_usage = rolling_usage
             .into_iter()
             .map(|usage| (usage.account_id.clone(), usage))
@@ -523,6 +544,7 @@ impl AccountsService for DefaultAccountsService {
                     .usage_window()
                     .and_then(|(window, _)| window.local_usage.clone());
                 AccountDirectoryItem {
+                    excel_recovery: excel_recoveries.remove(&item.account.id),
                     purchase_cost: purchase_costs.remove(&item.account.id),
                     turn_state: None,
                     effective_concurrency_limit: item
@@ -654,6 +676,7 @@ impl AccountsService for DefaultAccountsService {
             self.accounts
                 .batch_update_accounts(
                     BatchUpdateAccounts {
+                        excel_recovery: None,
                         purchase_cost: None,
                         egress_mode: None,
                         model_access: None,
@@ -981,6 +1004,59 @@ impl AccountsService for DefaultAccountsService {
         };
         apply_current_quota_estimates(&quota, &mut report);
         Ok(report)
+    }
+
+    async fn monitor_quota(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<Vec<LearnedQuotaWindow>, AdminError> {
+        let (stored, provider) = self.provider_for_account(account_id).await?;
+        let quota = provider
+            .quota(ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: false,
+                rolling_usage: None,
+            })
+            .await
+            .map_err(|error| map_provider_error(error, "monitor quota snapshot"))?;
+        let mut observations = monitor_learning_observations(
+            account_id.as_str(),
+            stored.account.provider_kind.as_str(),
+            stored.account.plan_type.as_deref(),
+            &quota,
+            Utc::now(),
+        );
+        for observation in &mut observations {
+            let start = (observation.reset_at
+                - Duration::minutes(i64::from(observation.window_minutes)))
+            .max(stored.account.created_at);
+            if start >= observation.observed_at {
+                continue;
+            }
+            let usage = self
+                .accounts
+                .load_quota_learning_usage(&AccountUsageWindowQuery {
+                    account_id: account_id.to_string(),
+                    key: observation.window_key.clone(),
+                    range: TimeRange {
+                        start,
+                        end: observation.observed_at,
+                    },
+                })
+                .await
+                .map_err(|error| map_store_error(error, "monitor aligned usage"))?;
+            // Unknown fees do not erase a positive known subtotal or inherited capacity.
+            observation.observed_cost_usd = (usage.usd.is_finite()
+                && usage.usd >= 0.0
+                && (usage.usd > 0.0 || usage.unavailable_cost_count == 0))
+                .then_some(usage.usd);
+        }
+        let estimates = self
+            .accounts
+            .record_quota_learning(&observations)
+            .await
+            .map_err(|error| map_store_error(error, "monitor quota learning"))?;
+        Ok(monitor_learned_windows(&quota, &observations, &estimates))
     }
 
     async fn personal_info(

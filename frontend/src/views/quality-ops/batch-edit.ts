@@ -19,6 +19,7 @@ export const qualityEditableFields = [
   'autoRestore',
   'disableExcelOnNativeRecovery',
   'excelFailureThreshold',
+  'excelRecoveryThreshold',
 ] as const satisfies readonly (keyof QualityRuleConfig)[]
 
 export type QualityEditableField = typeof qualityEditableFields[number]
@@ -55,6 +56,8 @@ export function applyQualityPatch(source: QualityRuleConfig, patch: QualityPatch
     if (field === 'failureGroupIds' && action !== 'remove_groups')
       continue
     if (field === 'excelFailureThreshold' && !usesFailureThreshold(action))
+      continue
+    if (field === 'excelRecoveryThreshold' && (mode !== 'state_probe' || !usesFailureThreshold(action)))
       continue
     if (field === 'failureTemplate' && action !== 'apply_account_template')
       continue

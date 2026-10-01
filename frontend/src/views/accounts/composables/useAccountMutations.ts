@@ -27,7 +27,7 @@ export function useAccountMutations(options: {
   accounts: Ref<AccountRow[]>
   selectedIds: Ref<Set<string>>
   reload: (options?: RequestOptions) => Promise<unknown>
-  replaceAccount: (account: AccountRow) => Promise<boolean>
+  replaceAccount: (account: AccountRow, options?: { authoritative?: boolean, previous?: AccountRow }) => Promise<boolean>
   onImportTaskCreated: (task: AccountImportTask) => void
 }) {
   const loadAccounts = options.reload
@@ -233,8 +233,9 @@ export function useAccountMutations(options: {
   async function handleRefreshQuota(accountId: string) {
     await refreshingQuotaAccounts.run(accountId, async () => {
       try {
+        const previous = options.accounts.value.find(account => account.id === accountId)
         const result = await withMinimumDuration(() => refreshAccountQuota({ accountId }))
-        const remainsVisible = await options.replaceAccount(result.account)
+        const remainsVisible = await options.replaceAccount(result.account, { authoritative: true, previous })
         if (!remainsVisible) {
           const selectedIds = new Set(options.selectedIds.value)
           selectedIds.delete(accountId)
@@ -286,8 +287,9 @@ export function useAccountMutations(options: {
   async function handleRecover(accountId: string) {
     await recoveringAccounts.run(accountId, async () => {
       try {
+        const previous = options.accounts.value.find(account => account.id === accountId)
         const result = await withMinimumDuration(() => recoverAccount({ accountId }))
-        const remainsVisible = await options.replaceAccount(result.account)
+        const remainsVisible = await options.replaceAccount(result.account, { authoritative: true, previous })
         if (!remainsVisible) {
           const selectedIds = new Set(options.selectedIds.value)
           selectedIds.delete(accountId)

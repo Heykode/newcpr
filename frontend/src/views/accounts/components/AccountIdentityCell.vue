@@ -16,7 +16,7 @@ type AccountIdentity = Pick<AccountRow, 'id' | 'email' | 'planType' | 'planTypeD
   & Partial<Pick<AccountRow, 'accountId'>>
   & Partial<Pick<AccountRow, 'qualityMonitoring'>>
   & Partial<Pick<AccountRow, 'enabled' | 'status' | 'errorReason'>>
-  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt' | 'excel403WarningAt' | 'excelModeDisabledAt'>>
+  & Partial<Pick<AccountRow, 'responsesUpstream' | 'excelAutoDisabledAt' | 'excel403WarningAt' | 'excelModeDisabledAt' | 'excelRecovery'>>
 
 const props = withDefaults(
   defineProps<{
@@ -68,8 +68,15 @@ const secondaryClass = computed(() =>
 
 const metaGapClass = computed(() => props.metaSize === 'xs' ? 'gap-1' : 'gap-1.5')
 
+const verifiedExcelRecovery = computed(() => {
+  const recoveredAt = props.account.excelRecovery?.recoveredAt
+  return !!recoveredAt && props.account.responsesUpstream === 'excel'
+    && props.account.enabled === true && !props.account.excelAutoDisabledAt
+    && (!excel403WarningAt.value || Date.parse(recoveredAt) >= Date.parse(excel403WarningAt.value))
+})
+
 const avatarExcelStatus = computed(() => {
-  if (excel403WarningAt.value)
+  if (excel403WarningAt.value && !verifiedExcelRecovery.value)
     return 'warning'
   return props.account.responsesUpstream === 'excel' ? 'enabled' : 'default'
 })
@@ -85,6 +92,8 @@ const avatarToneClass = computed(() => {
 
 const avatarDescription = computed(() => {
   const mode = props.account.responsesUpstream === 'excel' ? 'Excel 模式已开启' : 'Excel 模式未开启'
+  if (verifiedExcelRecovery.value)
+    return `${displayTitle.value}：${mode}。BPS 完整探测成功并恢复调度（${formatDateTime(props.account.excelRecovery!.recoveredAt!)}）。${excel403WarningAt.value ? `历史 403：${formatDateTime(excel403WarningAt.value)}。` : ''}这是最近一次探测结果，不保证后续请求不再报错。`
   if (excel403WarningAt.value)
     return `${displayTitle.value}：BPS 403疑似被封excel。${mode}。此账号曾因 Excel 上游 HTTP 403 触发自动暂停（${formatDateTime(excel403WarningAt.value)}）。此为历史标记，恢复调度或切换模式后仍保留，不代表当前调度状态。`
   return `${displayTitle.value}：${mode}`

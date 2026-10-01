@@ -14,7 +14,17 @@ pub struct RequestCaptureConfig {
     #[serde(default)]
     pub include_media: bool,
     pub quota_mib: u32,
+    #[serde(default)]
+    pub quota_policy: CaptureQuotaPolicy,
     pub retention_days: u16,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureQuotaPolicy {
+    #[default]
+    Stop,
+    Overwrite,
 }
 
 impl Default for RequestCaptureConfig {
@@ -24,6 +34,7 @@ impl Default for RequestCaptureConfig {
             global_errors: false,
             include_media: false,
             quota_mib: 1024,
+            quota_policy: CaptureQuotaPolicy::Stop,
             retention_days: 7,
         }
     }
@@ -123,6 +134,35 @@ pub struct RequestCaptureSettings {
     pub global_active: bool,
     pub storage_fault: bool,
     pub skipped: u64,
+    pub stored_bytes: u64,
+    pub record_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClearCaptures {
+    pub confirmed: bool,
+    pub cutoff_at: Option<DateTime<Utc>>,
+}
+
+impl ClearCaptures {
+    pub fn validate(&self) -> Result<(), AdminError> {
+        if !self.confirmed || self.cutoff_at.is_some_and(|cutoff| cutoff > Utc::now()) {
+            return Err(AdminError::invalid(
+                "请确认仅清理已有采集材料，截止时间不能在未来",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureClearResult {
+    pub cutoff_at: DateTime<Utc>,
+    pub removed_records: u64,
+    pub removed_bytes: u64,
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -281,8 +281,8 @@ impl PgQualityOpsStore {
                     or config->>'detectionMode' is distinct from $3->>'detectionMode'
                     or config->>'failureAction' is distinct from $3->>'failureAction'
                     or config->'failureTemplate' is distinct from $3->'failureTemplate'
-                    then recovery-'excel_streak'-'excel_owner' else recovery-'excel_streak' end,
-                 last_action=case when last_action in ('excel_threshold_pending','excel_streak_reset')
+                    then recovery-'excel_streak'-'excel_owner'-'excel_pass_streak' else recovery-'excel_streak'-'excel_pass_streak' end,
+                 last_action=case when last_action in ('excel_threshold_pending','excel_streak_reset','excel_recovery_counted')
                     then null else last_action end,
                  last_status=case when coalesce(config->>'detectionMode','answer')<>
                     coalesce($3->>'detectionMode','answer') then null else last_status end,

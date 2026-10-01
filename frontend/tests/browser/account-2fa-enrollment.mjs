@@ -85,12 +85,24 @@ async function main() {
     await page.getByRole('option', { name: '关闭Excel模式', exact: true }).click()
     await dialog.getByRole('button', { name: '继续导入', exact: true }).click()
     await dialog.getByRole('radio', { name: '2FA', exact: true }).click()
-    const material = 'import@example.invalid----synthetic-password----JBSWY3DPEHPK3PXP'
-    await dialog.getByRole('textbox', { name: '2FA 账号', exact: true }).fill(material)
+    const material = [
+      `import@example.invalid----synthetic-${'x'.repeat(180)}----JBSWY3DPEHPK3PXP`,
+      '',
+      '\uFEFFsecond@example.invalid---- synthetic password ----jbsw\u00A0y3dp\u3000ehpk3pxp',
+    ].join('\n')
+    const input = dialog.getByRole('textbox', { name: '2FA 账号', exact: true })
+    await input.fill(material)
+    assert.equal(await input.getAttribute('wrap'), 'off')
+    assert.equal(await input.getAttribute('spellcheck'), 'false')
     await dialog.getByText('确认更新已有账号的 2FA 资料', { exact: true }).waitFor()
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
       assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      assert.equal(await input.inputValue(), material)
+      assert.ok(await input.evaluate(element =>
+        getComputedStyle(element).whiteSpace === 'pre'
+        && element.scrollWidth > element.clientWidth,
+      ))
       assert.ok(await dialog.getByRole('radiogroup', { name: '账号添加方式' })
         .locator('button > span')
         .evaluateAll(labels => labels.every(label => label.scrollWidth <= label.clientWidth)))

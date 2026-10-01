@@ -34,6 +34,7 @@ where
         .route("/api/admin/request-captures/stop", post(stop::<S>))
         .route("/api/admin/request-captures/export", get(export_task::<S>))
         .route("/api/admin/request-captures/delete", post(delete::<S>))
+        .route("/api/admin/request-captures/clear", post(clear::<S>))
         .route("/api/admin/request-captures/records", get(read::<S>))
         .route(
             "/api/admin/request-captures/records/export",
@@ -165,6 +166,26 @@ where
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(())))
 }
+async fn clear<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(input): AdminJson<gateway_admin::model::request_capture::ClearCaptures>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .request_capture()
+        .clear(input, &auth.context().mutation_context())
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CaptureId {

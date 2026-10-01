@@ -69,6 +69,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         usage,
         cumulative_costs,
         purchase_cost,
+        excel_recovery,
         quota,
         in_flight,
         health_timeline,
@@ -82,6 +83,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
     let (quota, refresh_token_expires_at) = account_quota_view(quota, rate_limited_until, now);
     AccountView {
         purchase_cost,
+        excel_recovery,
         id: account.id.clone(),
         name: account.name,
         custom_name: account.custom_name,

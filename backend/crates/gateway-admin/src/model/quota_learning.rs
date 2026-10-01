@@ -1,5 +1,8 @@
 use chrono::{DateTime, Utc};
 
+/// Separates monitor dimensions from retired, incompatible learning records.
+pub const MONITOR_LEARNING_PREFIX: &str = "monitor-v2:";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaLearningObservation {
     pub account_id: String,

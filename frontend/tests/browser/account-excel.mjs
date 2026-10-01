@@ -14,18 +14,23 @@ async function main() {
     env: { ...process.env, QA_PORT: port },
     stdio: 'ignore',
   })
+  const serverExited = new Promise(resolve => server.once('exit', resolve))
   const output = process.env.QA_OUTPUT_DIR || '/tmp/cpr-excel-ui'
   await mkdir(output, { recursive: true })
   let browser
   try {
+    let ready = false
     for (let i = 0; i < 100; i++) {
       try {
-        if ((await fetch(`http://127.0.0.1:${port}/accounts`)).ok)
+        if ((await fetch(`http://127.0.0.1:${port}/accounts`)).ok) {
+          ready = true
           break
+        }
       }
       catch {}
       await new Promise(resolve => setTimeout(resolve, 100))
     }
+    assert.ok(ready, 'The browser fixture server did not become ready')
     browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || undefined })
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' })
     const errors = []
@@ -372,7 +377,13 @@ async function main() {
     }
     await confirm.getByRole('button', { name: '确认', exact: true }).click()
     await confirm.waitFor({ state: 'detached' })
-    assert.deepEqual(pushes[0].newAccountExcel, { responsesUpstream: 'excel', excelModelsFollowGlobal: true, excelCacheCreationAsInput: true, excel403Action: 'none' })
+    assert.deepEqual(pushes[0].newAccountExcel, {
+      responsesUpstream: 'excel',
+      excelModelsFollowGlobal: true,
+      excelCacheCreationAsInput: true,
+      excel403Action: 'none',
+      excelRecovery: { enabled: false, intervalMinutes: 60 },
+    })
     let settings = {
       excelDefaultModels: ['gpt-5.6-sol', 'gpt-6-astra'],
       modelMappings: {},
@@ -405,28 +416,30 @@ async function main() {
       verified: false,
     }))
     await page.goto(`http://127.0.0.1:${port}/settings`)
-    const globalModels = page.getByRole('textbox', { name: '全局 Excel 模型', exact: true })
+    await page.getByRole('radio', { name: 'Excel 配置', exact: true }).click()
+    const globalModels = page.getByRole('textbox', { name: 'Excel 默认模型列表', exact: true })
     await globalModels.waitFor()
     assert.equal(await globalModels.inputValue(), 'gpt-5.6-sol, gpt-6-astra')
-    await page.getByRole('button', { name: '请求与连接高级参数', exact: true }).click()
     for (const [name, value, maximum] of [
-      ['Excel 单张图片上限', '20971520', '134217728'],
-      ['Excel 请求图片总量上限', '33554432', '134217728'],
-      ['Excel 单请求图片数量上限', '20', '4096'],
-      ['Excel 图片中转字节预算', '1073741824', '17179869184'],
-      ['Excel 图片中转条目上限', '512', '65536'],
-      ['Excel 图片有效期', '30', '1440'],
+      ['单张图片上限（MiB）', '20', '512'],
+      ['每请求图片总大小（MiB）', '32', '512'],
+      ['每请求图片数上限（张）', '20', '65536'],
+      ['进程暂存容量（MiB）', '1024', '262144'],
+      ['进程暂存图片数（张）', '512', '1048576'],
+      ['最大在途中转请求数（个）', '128', '512'],
+      ['中转下载并发上限（个）', '32', '128'],
+      ['链接有效期（分钟）', '30', '10080'],
     ]) {
       const field = page.getByRole('spinbutton', { name, exact: true })
       assert.equal(await field.inputValue(), value)
       assert.equal(await field.getAttribute('max'), maximum)
     }
-    const imageTtl = page.getByRole('spinbutton', { name: 'Excel 图片有效期', exact: true })
+    const imageTtl = page.getByRole('spinbutton', { name: '链接有效期（分钟）', exact: true })
     await imageTtl.fill('60')
-    const imageMode = page.getByLabel('Excel 图片处理方式', { exact: true })
+    const imageMode = page.getByLabel('Excel 图片传输方式', { exact: true })
     await imageMode.click()
-    await page.getByRole('option', { name: /^HTTPS 中转/ }).click()
-    const imageOrigin = page.getByRole('textbox', { name: 'Excel 图片中转地址', exact: true })
+    await page.getByRole('option', { name: /^临时 HTTPS 中转/ }).click()
+    const imageOrigin = page.getByRole('textbox', { name: 'Excel 公网 HTTPS 访问地址', exact: true })
     await imageOrigin.fill('https://images.example.com')
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
@@ -441,22 +454,25 @@ async function main() {
       await page.screenshot({ path: `${output}/excel-image-mode-${width}.png` })
     }
     await globalModels.fill('gpt-6-astra')
-    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '保存全部设置', exact: true }).click()
     await page.getByText('设置已保存', { exact: true }).waitFor()
     assert.deepEqual(settings.excelDefaultModels, ['gpt-6-astra'])
+    assert.equal(settings.requestTuning.excelImageMaxBytes, 20 * 1024 * 1024)
+    assert.equal(settings.requestTuning.excelImageTotalBytes, 32 * 1024 * 1024)
+    assert.equal(settings.requestTuning.excelImageRelayBytes, 1024 * 1024 * 1024)
     assert.equal(settings.requestTuning.excelImageRelayTtlMinutes, 60)
     assert.deepEqual(settings.requestTuning.excelImageTransport, { mode: 'relay', publicUrl: 'https://images.example.com' })
     await dismissNotices()
     await imageMode.click()
-    await page.getByRole('option', { name: /^原生附件/ }).click()
+    await page.getByRole('option', { name: /^BPS 原生附件上传/ }).click()
     assert.equal(await imageOrigin.count(), 0)
-    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '保存全部设置', exact: true }).click()
     await page.getByText('设置已保存', { exact: true }).waitFor()
     assert.deepEqual(settings.requestTuning.excelImageTransport, { mode: 'native' })
     await dismissNotices()
     await imageMode.click()
     await page.getByRole('option', { name: /^继承启动配置/ }).click()
-    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByRole('button', { name: '保存全部设置', exact: true }).click()
     await page.getByText('设置已保存', { exact: true }).waitFor()
     assert.equal(settings.requestTuning.excelImageTransport, null)
     assert.equal(settings.rotationStrategy, 'smart')
@@ -476,7 +492,7 @@ async function main() {
   finally {
     await browser?.close()
     server.kill('SIGTERM')
-    await new Promise(resolve => server.once('exit', resolve))
+    await serverExited
   }
 }
 

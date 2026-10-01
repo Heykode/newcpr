@@ -1,157 +1,114 @@
-//! Sample-local peer estimates, never persisted as account or Plan capacity.
-
-use std::collections::BTreeMap;
+//! Persistent, observation-aligned capacity used only by the group monitor.
 
 use chrono::{DateTime, Duration, Utc};
 
 use super::{
-    group_monitor::MonitorQuotaPeer,
     provider_credentials::{
-        AccountUsagePeriod, ProviderQuota, ProviderQuotaWindow, explicit_plan_type,
+        ProviderQuota, ProviderQuotaWindow, QuotaLocalUsageAttribution, explicit_plan_type,
     },
-    quota_forecast::{CurrentQuotaEstimate, current_window_estimate},
+    quota_learning::{
+        LearnedQuotaWindow, MONITOR_LEARNING_PREFIX, QuotaLearningEstimate,
+        QuotaLearningObservation,
+    },
 };
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-struct PeerKey {
-    provider: String,
-    plan: String,
-    window: String,
-    group: String,
-    limit_id: Option<String>,
-    role: Option<&'static str>,
-    seconds: u64,
+fn learning_key(window: &ProviderQuotaWindow) -> String {
+    format!(
+        "{MONITOR_LEARNING_PREFIX}{}",
+        serde_json::json!([
+            window.key,
+            window.group,
+            window.limit_id,
+            window.role.map(|role| role.as_str()),
+        ])
+    )
 }
 
-fn peer_key(peer: &MonitorQuotaPeer, window: &ProviderQuotaWindow) -> Option<PeerKey> {
-    Some(PeerKey {
-        provider: peer.provider.clone(),
-        plan: explicit_plan_type(peer.plan.as_deref())?
-            .trim()
-            .to_ascii_lowercase(),
-        window: window.key.clone(),
-        group: window.group.clone(),
-        limit_id: window.limit_id.clone(),
-        role: window.role.map(|role| role.as_str()),
-        seconds: window.window_seconds?,
-    })
-}
-
-fn live_window(quota: &ProviderQuota, now: DateTime<Utc>) -> Option<&ProviderQuotaWindow> {
-    let (window, period) = quota.usage_window()?;
-    if period != AccountUsagePeriod::Weekly {
-        return None;
-    }
-    let reset = window.reset_at?;
-    let seconds = i64::try_from(window.window_seconds?).ok()?;
-    let start = reset.checked_sub_signed(Duration::try_seconds(seconds)?)?;
-    // Upstream reset timestamps lose sub-second precision; do not reject that rounding gap.
-    let earliest_observation = start.checked_sub_signed(Duration::seconds(1))?;
-    let observed = quota.observed_at?;
-    (seconds > 0
-        && earliest_observation <= observed
-        && observed <= now
-        && now < reset
-        && window
-            .used_percent
-            .is_some_and(|percent| percent.is_finite() && (0.0..=100.0).contains(&percent)))
-    .then_some(window)
-}
-
-/// Prefer own current-window estimate. Positive known USD can feed peers even
-/// when other requests in the same window have unavailable costs.
 #[must_use]
-pub fn monitor_quota_estimates(
-    peers: &[MonitorQuotaPeer],
-    quotas: &BTreeMap<String, ProviderQuota>,
+pub fn monitor_learning_observations(
+    account_id: &str,
+    provider_kind: &str,
+    account_plan: Option<&str>,
+    quota: &ProviderQuota,
     now: DateTime<Utc>,
-) -> BTreeMap<String, CurrentQuotaEstimate> {
-    let mut result = BTreeMap::new();
-    let mut sources: BTreeMap<PeerKey, Vec<(&MonitorQuotaPeer, f64)>> = BTreeMap::new();
-    for peer in peers {
-        let Some(quota) = quotas.get(&peer.id) else {
-            continue;
-        };
-        let Some((window, AccountUsagePeriod::Weekly)) = quota.usage_window() else {
-            continue;
-        };
-        if let Some(estimate) = current_window_estimate(window, now) {
-            result.insert(peer.id.clone(), estimate);
-            if live_window(quota, now).is_some()
-                && let Some(key) = peer_key(peer, window)
-            {
-                sources
-                    .entry(key)
-                    .or_default()
-                    .push((peer, estimate.total_usd));
+) -> Vec<QuotaLearningObservation> {
+    let Some(plan) =
+        explicit_plan_type(account_plan).or_else(|| explicit_plan_type(quota.plan_type.as_deref()))
+    else {
+        return Vec::new();
+    };
+    let Some(observed_at) = quota.observed_at.filter(|observed| *observed <= now) else {
+        return Vec::new();
+    };
+    quota
+        .windows
+        .iter()
+        .filter(|window| window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide)
+        .filter_map(|window| {
+            let seconds = window
+                .window_seconds
+                .filter(|seconds| *seconds > 0 && *seconds <= 32 * 86_400 && seconds % 60 == 0)?;
+            let reset_at = window.reset_at.filter(|reset| *reset > now)?;
+            let start = reset_at.checked_sub_signed(Duration::seconds(seconds as i64))?;
+            let percent = window
+                .used_percent
+                .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))?;
+            // Reset times have whole-second precision; tolerate only that rounding gap.
+            if observed_at < start - Duration::seconds(1) || observed_at >= reset_at {
+                return None;
             }
-        }
-    }
-    let averages = sources
-        .into_iter()
-        .map(|(key, mut values)| {
-            values.sort_by(|(a, _), (b, _)| {
-                b.created_at
-                    .cmp(&a.created_at)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            values.dedup_by(|(a, _), (b, _)| a.id == b.id);
-            values.truncate(3);
-            let count = values.len() as f64;
-            (
-                key,
-                values.iter().map(|(_, total)| total / count).sum::<f64>(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    for peer in peers {
-        if result.contains_key(&peer.id) {
-            continue;
-        }
-        let Some(window) = quotas
-            .get(&peer.id)
-            .and_then(|quota| live_window(quota, now))
-        else {
-            continue;
-        };
-        // Missing billed costs are not the same as a newly imported zero-use account.
-        let Some(usage) = window.local_usage.as_ref() else {
-            continue;
-        };
-        if usage.cost_coverage.unavailable_count > 0
-            || usage.cost_coverage.partial_count > 0
-            || (usage.request_count > 0
-                && !usage
-                    .costs
-                    .iter()
-                    .any(|cost| cost.currency.eq_ignore_ascii_case("USD")))
-            || usage.costs.iter().any(|cost| {
-                cost.currency.eq_ignore_ascii_case("USD")
-                    && cost.amount.to_string().parse::<f64>().ok() != Some(0.0)
+            Some(QuotaLearningObservation {
+                account_id: account_id.to_owned(),
+                provider_kind: provider_kind.to_owned(),
+                plan_type: plan.trim().to_ascii_lowercase(),
+                window_key: learning_key(window),
+                window_minutes: (seconds / 60) as i32,
+                used_percent: percent,
+                reset_at,
+                observed_at,
+                observed_cost_usd: None,
             })
-        {
-            continue;
-        }
-        let Some(total) = peer_key(peer, window)
-            .and_then(|key| averages.get(&key))
-            .copied()
-        else {
-            continue;
-        };
-        let Some(percent) = window.used_percent else {
-            continue;
-        };
-        let remaining = total * (1.0 - percent / 100.0);
-        if total.is_finite() && remaining.is_finite() {
-            result.insert(
-                peer.id.clone(),
-                CurrentQuotaEstimate {
-                    total_usd: total,
-                    remaining_usd: remaining.max(0.0),
-                    incomplete_cost: false,
-                },
-            );
-        }
-    }
-    result
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn monitor_learned_windows(
+    quota: &ProviderQuota,
+    observations: &[QuotaLearningObservation],
+    estimates: &[QuotaLearningEstimate],
+) -> Vec<LearnedQuotaWindow> {
+    quota
+        .windows
+        .iter()
+        .filter(|window| window.local_usage_attribution == QuotaLocalUsageAttribution::AccountWide)
+        .map(|window| {
+            let key = learning_key(window);
+            let observation = observations.iter().find(|observation| {
+                observation.window_key == key
+                    && window.window_seconds == Some(observation.window_minutes as u64 * 60)
+            });
+            let estimate = observation.and_then(|observation| {
+                estimates.iter().find(|estimate| {
+                    estimate.account_id == observation.account_id
+                        && estimate.window_key == observation.window_key
+                        && estimate.window_minutes == observation.window_minutes
+                })
+            });
+            let remaining = observation
+                .zip(estimate)
+                .and_then(|(observation, estimate)| {
+                    let limit = estimate
+                        .effective_limit_usd
+                        .filter(|value| value.is_finite() && *value > 0.0)?;
+                    let amount = limit * (1.0 - observation.used_percent / 100.0);
+                    amount.is_finite().then_some(amount.max(0.0))
+                });
+            LearnedQuotaWindow {
+                remaining_usd: remaining,
+                reset_at: window.reset_at,
+                low_sample: estimate.is_some_and(|estimate| estimate.sample_count < 3),
+            }
+        })
+        .collect()
 }

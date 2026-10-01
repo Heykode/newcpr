@@ -49,6 +49,50 @@ pub(crate) fn transport_failure(error: &crate::transport::CodexClientError) -> V
     json!({"phase":stage,"cause":cause})
 }
 
+/// Add upload context without changing the error or exposing response content.
+pub(crate) fn attachment_failure(error: &crate::transport::CodexClientError) -> Value {
+    use crate::transport::CodexClientError;
+    use gateway_protocol::openai::sse::SseError;
+
+    let mut facts = transport_failure(error);
+    let (phase, cause) = match error {
+        CodexClientError::Upstream { status, .. } => {
+            facts["status"] = json!(status.as_u16());
+            ("attachment_http", None)
+        }
+        CodexClientError::Http(error) | CodexClientError::HttpJson(error) if error.is_builder() => {
+            ("attachment_prepare", None)
+        }
+        CodexClientError::InvalidSse(SseError::ParseError(message)) => match message.as_str() {
+            "Excel attachment response is not JSON" => {
+                ("attachment_response", Some("invalid_json"))
+            }
+            "Excel attachment response has no file ID" => {
+                ("attachment_response", Some("invalid_file_id"))
+            }
+            "Excel attachment response is too large" => {
+                ("attachment_response", Some("response_too_large"))
+            }
+            "Excel attachment admission unavailable" => {
+                ("attachment_capacity", Some("admission_unavailable"))
+            }
+            "Excel inline image input limit exceeded" => {
+                ("attachment_capacity", Some("local_image_limit"))
+            }
+            "Excel attachment upload timed out" => ("attachment_transport", Some("upload_timeout")),
+            _ => ("attachment_prepare", Some("invalid_image_input")),
+        },
+        _ => ("attachment_transport", None),
+    };
+    facts["transportPhase"] = facts["phase"].clone();
+    facts["phase"] = json!(phase);
+    facts["generation_started"] = json!(false);
+    if let Some(cause) = cause {
+        facts["cause"] = json!(cause);
+    }
+    facts
+}
+
 pub(crate) fn request_summary(body: &Map<String, Value>, bytes: usize) -> Value {
     let input = body.get("input").and_then(Value::as_array);
     let mut kinds = BTreeMap::<&str, usize>::new();
@@ -151,6 +195,62 @@ pub(crate) fn request_summary(body: &Map<String, Value>, bytes: usize) -> Value 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachment_diagnostics_classify_fixed_causes_without_payloads() {
+        use crate::transport::CodexClientError;
+        use gateway_protocol::openai::sse::SseError;
+
+        for (message, phase, cause) in [
+            (
+                "Excel attachment response is not JSON",
+                "attachment_response",
+                "invalid_json",
+            ),
+            (
+                "Excel attachment response has no file ID",
+                "attachment_response",
+                "invalid_file_id",
+            ),
+            (
+                "Excel attachment response is too large",
+                "attachment_response",
+                "response_too_large",
+            ),
+            (
+                "Excel attachment admission unavailable",
+                "attachment_capacity",
+                "admission_unavailable",
+            ),
+            (
+                "Excel inline image input limit exceeded",
+                "attachment_capacity",
+                "local_image_limit",
+            ),
+            (
+                "Excel attachment upload timed out",
+                "attachment_transport",
+                "upload_timeout",
+            ),
+            (
+                "private image contents https://example.com/private",
+                "attachment_prepare",
+                "invalid_image_input",
+            ),
+        ] {
+            let error = CodexClientError::InvalidSse(SseError::ParseError(message.into()));
+            let facts = attachment_failure(&error);
+            assert_eq!(facts["phase"], phase);
+            assert_eq!(facts["cause"], cause);
+            assert_eq!(facts["generation_started"], false);
+            assert!(!facts.to_string().contains("private"));
+            assert!(!facts.to_string().contains("example.com"));
+            assert_eq!(
+                error.to_string(),
+                CodexClientError::InvalidSse(SseError::ParseError(message.into())).to_string()
+            );
+        }
+    }
 
     #[test]
     fn excel_large_request_summary_contains_no_client_content_or_identifiers() {

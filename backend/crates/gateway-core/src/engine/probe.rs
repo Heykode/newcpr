@@ -163,6 +163,23 @@ impl From<GatewayError> for AccountProbeError {
 }
 
 pub trait AccountProbe: Send + Sync {
+    /// Trusted fixed-account BPS recovery, never derived from client JSON.
+    fn excel_recovery(
+        &self,
+        _request: AccountProbeRequest,
+        _credential_revision: u64,
+        _config_revision: u64,
+        _expected_nonce: String,
+        _cancellation: crate::lifecycle::CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async {
+            Err(
+                GatewayError::new(GatewayErrorKind::Unsupported, "Excel recovery unavailable")
+                    .into(),
+            )
+        })
+    }
+
     fn state_probe(
         &self,
         _request: AccountProbeRequest,

@@ -1,19 +1,21 @@
 # Quota Forecast Contracts
 
-## 当前合同：动态额度与可恢复寿命
+## 当前合同：列表动态额度、监控持久学习与可恢复寿命
 
-本节替代下方旧 Tools 学习与历史缓存说明；第 9 节仅记录旧数据结构，运行时已停用其调用。
+列表与分组不再共用动态比值。第 9 节仅供分组监控，不能改动列表或详情公式。
 
-- Admin `current_window_estimate` 是金额估值唯一 owner：当前窗口已知 USD 消费
+- Admin `current_window_estimate` 是列表/详情动态金额估值 owner：当前窗口已知 USD 消费
   `* 100 / used_percent`，剩余 `max(total-cost, 0)`。有限正数即可，无 $5/3pp/5pp 门槛。
   `window.local_usage` 与原 `usage_window()` 共用归属，不能混合模型桶或历史累计。
 - API `usage.quotaWindow` 投影源窗口及 `estimatedUsd/remainingUsd`，前端不重复计算。
-  列表每 30 秒请求时现算，分组每 10 秒通过 `AccountsService::current_quota`
-  读取同一窗口消费现算；不加账号估值缓存，也不加载健康/累计/Token 预测历史。
+  列表每 30 秒请求时现算。分组每 10 秒通过 `AccountsService::monitor_quota`
+  读取缓存百分比，并用 `AccountStore::load_quota_learning_usage` 对齐观察时刻的费用；
+  不加载健康/累计/Token 预测历史，也不增加上游流量。
 - 详情美元值同样动态计算，Token 配对算法保留。详情缓存 10 秒，打开时 30 秒重读；
   列表不预取详情。所有读取均不主动请求上游额度/认证。
-- 分组只汇总可用账号的真实周窗口；不是可连续使用额度承诺，短期限额仍可阻断。
-  已停用的 `0014` 学习数据不删、不读、不写；`0015` 只保存最新分组结果。
+- 分组汇总可用账号的真实账号级窗口，多窗口取最小剩余，不累加或外推。
+  复用 `0014` 两张表，用 `monitor-v2:` 加结构化窗口维度键隔离旧样本；
+  旧键不借用、不覆盖。`0015` 只保存最新分组结果。
 - `0016` 保存监控生命周期，首次时间只复用既有 `provider_accounts.created_at`。
   用现有 Provider/上游用户/空间自然标识作结构化 key；无用户标识时以本地账号 ID 隔离。
   不依赖设备记录是否已生成，不用邮箱，不改任何身份/指纹字段。
@@ -25,7 +27,7 @@
   同 Provider/Plan 按最近最多五个仍失效账号求均值，恢复后允许较早样本替补。
 - 同身份跨删除/重导入保留创建时间与已确认失效历史；不同空间不合并。
   Store 串行同步只写监控表，后续业务统计仍只读；过期采样不得覆盖新生命周期。
-  生命周期保留历史与额度样本停用是两回事。
+  生命周期与额度学习的样本数、失效规则和用途不同，不能互相替代。
 
 ### Group Monitor Dynamic Capacity
 
@@ -40,28 +42,29 @@
   of `max(account_limit - account_global_in_flight, 0)` for unique eligible
   members. Failed reads yield unknown concurrency, not zero; the UI hides both
   numbers when `usedSlots` is null. Configured account limits never change.
-- Group-only quota fallback uses the arithmetic mean of up to three genuine
-  current estimates from existing pool accounts, including ungrouped peers.
-  Rank by account `created_at` descending and ID ascending. Match provider,
-  normalized explicit Plan, window key/group/role/limit ID and exact duration.
-  New explicit Plan names work without registration.
-- References require a live weekly observation and a finite positive known USD
-  subtotal. Other unavailable or partial request costs do not disqualify the
-  account or mark the group partial. Recipients
-  require a valid current percentage and zero known local USD consumption,
-  without missing/partial costs. Remaining is peer mean times unused fraction.
+- Group-only references use the arithmetic mean of the latest three completed
+  learned bindings, ordered by binding time, not account creation time. They
+  survive donor deletion, an empty pool and restart. Match provider, normalized
+  explicit Plan, structured window key/group/role/limit ID and exact duration.
+  New Plan names work without registration. A completely new dimension needs
+  natural learning; never bootstrap from an unstable list estimate or old keys.
+- Recipients require a valid current percentage, not zero local cost. Before
+  completing their own learning, zero-cost, paid-0%, and low-percent accounts all
+  keep using the matching persisted reference. Remaining is the learned limit
+  times unused fraction. A positive known fee subtotal remains usable despite
+  missing fees; all-missing zero cannot create a baseline.
   Upstream reset timestamps have whole-second precision, so an observation at
   most one second before the derived window start is still current; anything
   older remains ineligible.
-  Own `current_window_estimate` always wins, even below 5%. Do not feed fallback
-  values into references, persist peer samples or change account-list estimates.
-  An empty reference pool remains unknown, with no historical template.
+  Never feed inherited limits back into completed samples. Account-list
+  `current_window_estimate` remains independent and has no learning threshold.
 - Failed optional peer reads are excluded from references; required eligible
   account read errors still fail the sample. Never disguise an account read
   error as zero usage or substitute a peer estimate for unreadable own facts.
 - Mixed expiry projections skip accounts that outlived their Plan average,
   while retaining calculable accounts. All-outlived groups and otherwise missing
-  lifespan/rate evidence retain null expiry amounts with distinct statuses.
+  lifespan/rate evidence retain null expiry amounts with distinct statuses when
+  no account is calculable. Otherwise keep the known subtotal with partial status.
   ETA still uses the full known remaining
   amount and estimated accounts' deduplicated cross-group consumption. An
   eligible account awaiting its first usable quota window remains visible in
@@ -82,10 +85,16 @@
 - Expiry states distinguish `lifespan_learning`, `rate_sampling` and
   `all_accounts_outlived_average`; none changes the independent ETA estimate.
   Continue using the existing latest-five valid death average and recovery
-  retraction. No new quota-learning templates or lifecycle tables are introduced.
+  retraction. No new learning or lifecycle tables are introduced.
 - Group burn-rate inputs use a finite positive known USD subtotal even when
   other requests lack cost. A complete zero remains idle; zero known USD with
-  missing costs stays unknown. Missing costs alone add no card warning.
+  missing costs stays unknown. Sum known account costs before this test so one
+  all-missing account does not null another's known rate. Missing costs alone add
+  no card warning.
+- The UI uses original snapshot time plus the existing 45-second freshness
+  bound. One member's earliest reset must not mask an entire valid snapshot.
+  Backend window eligibility remains account-local; stale/display-only reports
+  remain excluded from alert evaluation.
 
 
 ## 1. Scope / Trigger
@@ -117,14 +126,12 @@ estimates are not balances, billing facts or scheduling inputs.
   to the source window.
 - Token forecasts require a current snapshot, compatible plan/reset boundaries
   and at least five sampled percentage points. Truncated history and counter
-  regressions must not silently become full-window samples. USD capacity uses
-  the persistent Tools-aligned learning rules in section 9, not this old ratio.
+  regressions must not silently become full-window samples. List/detail USD
+  capacity remains the dynamic ratio; section 9 applies only to group monitoring.
 - Missing costs and tokens have independent coverage. Missing data stays
   unknown rather than becoming zero or a false fully-covered estimate. Token
-  estimates may use partial known totals with the incomplete flag. New USD
-  bindings require fully covered cost observations and no pending requests;
-  a recorded zero is a valid baseline, not a missing fee. Previously learned
-  USD limits can be reused without a new account's local usage. The source's displayed Token subtotal is
+  estimates may use partial known totals with the incomplete flag. A recorded
+  zero is distinct from an unknown fee. The source's displayed Token subtotal is
   also null when no tokens were observed; preserve a recorded zero and a
   positive partial subtotal instead of conflating them with all-unknown data.
 - Store queries are bounded to 32 days and at most 128 provider-document
@@ -223,16 +230,16 @@ Correct: classify new prewarm requests from the provider's actual
   log a safe warning and retry on the next tick; display-only failures must not
   fail gateway readiness. Host still supervises panic/restart and cancellation.
 - Atomically save one latest row per group in `account_group_monitor_snapshots`;
-  retain the original timestamp on failure, reject older overwrites, and only read
-  rows matching the current config revision. Group deletion cascades the snapshot
-  but never Plan learning. A missing/currently invalid snapshot returns unavailable.
+  retain the original timestamp on failure and reject older overwrites.
+  Revision-mismatched read fallback is display-only, as specified above.
+  Group deletion cascades the snapshot but never Plan learning.
 - Optional strict boolean `refreshForecasts` defaults to false. Ordinary/page
   polling reads persisted snapshots only. A manual true request triggers the same
   global sample and then returns the selected one-to-three groups. The previous
   300-second forecast cache is removed; persistent learning and existing upstream
   observations remain the source of truth.
-- `routing_group_refs` records authorized scope, not exclusive group selection.
-  Group rates can overlap. ETA uses deduplicated eligible accounts' all-group
+- Group rates follow current account membership and can overlap for shared
+  accounts. ETA uses deduplicated eligible estimated accounts' all-group
   rate; shared balances/concurrency must not be added across groups.
 - Do not sum weekly/monthly extrapolated balances. Failed reads and missing
   runtime retain distinct unknown states. A missing estimate for a newly imported
@@ -241,9 +248,9 @@ Correct: classify new prewarm requests from the provider's actual
   despite other missing fees; an all-missing rate is unknown, and an idle complete
   rate is not infinite ETA.
 - Expiry waste is a qualified observed-lifespan estimate, never token/reset
-  expiry. Only durable `banned` plus `account_banned` rows are samples. Device
-  first-seen timestamps survive reimport; absent/deleted history is not invented.
-  No lifespan sample or an age beyond the observed mean leaves the estimate unknown.
+  expiry. Use the recoverable lifecycle and original account creation-time
+  contracts above; device first-seen is not the start of this lifetime.
+  Missing lifespan or age beyond the mean excludes that account's waste estimate.
 - Test the SQL against isolated real PostgreSQL, including completion boundaries,
   overlapping scopes, prewarm exclusion and unchanged account/audit/revision rows.
 
@@ -256,6 +263,14 @@ Correct: classify new prewarm requests from the provider's actual
 - Persist an account/window baseline. Bind USD capacity only after both known
   cost growth >= $5 and usage growth >= 3 percentage points:
   `cost_delta / (percent_delta / 100)`. Never generate requests to reach a threshold.
+- Read only settled inference costs completed no later than quota `observed_at`,
+  starting at max(window start, account creation). In-flight work is excluded,
+  not a global blocker. Reuse the inference predicate; no provider documents or
+  cumulative-account ledger. Positive known subtotal is allowed with missing
+  fees; unknown zero is not a baseline. Database errors fail sampling.
+- `monitor-v2:` keys encode `[key, group, limit_id, role]` as JSON, with exact
+  duration separate. Invalidation and stale-observation fencing are confined to
+  the same key namespace. Never seed v2 from retired unversioned bindings.
 - Use the account's bound limit first, otherwise the arithmetic mean of the
   latest at most three completed samples for Provider + case-insensitive Plan +
   window key + window minutes. One or two samples are usable but low-sample.
@@ -272,11 +287,22 @@ Correct: classify new prewarm requests from the provider's actual
   precision; repeated observations must not rewrite state or create extra samples.
 - Account-wide short windows also constrain monitor remaining USD. Use the
   tightest real source window, never sum or extrapolate remaining capacity.
-  Missing/expired windows retain partial coverage and prevent a confident ETA.
+  Missing/expired windows leave that account unestimated, without suppressing
+  other calculable accounts in the group.
   Weekly/monthly capacity DTOs and Token predictions retain their existing format.
-- Learning still runs through the existing forecast service, now also called by
-  the unattended group sampler. Windows longer than the existing 32-day query limit remain unknown.
+- Learning runs only through `AccountsService::monitor_quota`, called by the
+  unattended sampler. List/detail forecast paths never write learning samples.
+  Windows longer than the existing 32-day query limit remain unknown.
   New Plan names work automatically; new upstream protocols still need adaptation.
 - Learning failures return a safe Admin error, not a successful zero or a fallback
-  to the old USD ratio. Lifespan/expiry-waste history is separate: this task does
-  not port Tools' persisted lifespan state machine.
+  to the list USD ratio. Lifespan/expiry-waste history remains separate and reuses
+  the existing five-death recovery-aware state machine.
+
+### Regression Boundaries
+
+The prior fixes retained HTTP/configuration-failure snapshots but did not cover
+a successful response whose derived fields became null. Test transitions, not
+only initial renders: no cost -> paid 0% -> first percent -> personal binding,
+donor deletion -> empty pool -> new recipient, and single-window reset -> fresh
+aggregate -> genuinely stale snapshot. Do not repair a null calculation by
+refreshing an old timestamp, fabricating zero percent, or using it for alerts.

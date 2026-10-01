@@ -133,6 +133,12 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
     if !(1..=100).contains(&config.excel_failure_threshold) {
         return Err(AdminError::invalid("连续异常阈值必须为 1–100 轮"));
     }
+    if config
+        .excel_recovery_threshold
+        .is_some_and(|value| !(1..=100).contains(&value))
+    {
+        return Err(AdminError::invalid("连续正常阈值必须为 1–100 轮"));
+    }
     let groups = config
         .failure_group_ids
         .iter()
@@ -869,6 +875,7 @@ mod tests {
         let mut config = QualityRuleConfig {
             failure_template: None,
             excel_failure_threshold: 1,
+            excel_recovery_threshold: None,
             detection_mode: QualityDetectionMode::Answer,
             account_id: "test-account".into(),
             model: "test-model".into(),
@@ -946,6 +953,22 @@ mod tests {
         assert!(!config.auto_restore);
         assert!(!config.disable_excel_on_native_recovery);
         assert_eq!(config.excel_failure_threshold, 1);
+        assert_eq!(config.excel_recovery_threshold, None);
+        assert!(
+            serde_json::to_value(&config)
+                .unwrap()
+                .get("excelRecoveryThreshold")
+                .is_none()
+        );
+        for invalid in [0, 101, 255] {
+            config.excel_recovery_threshold = Some(invalid);
+            assert!(validate(&config).is_err());
+        }
+        for valid in [1, 2, 100] {
+            config.excel_recovery_threshold = Some(valid);
+            assert!(validate(&config).is_ok());
+        }
+        config.excel_recovery_threshold = None;
         for invalid in [0, 101, 255] {
             config.excel_failure_threshold = invalid;
             assert!(validate(&config).is_err());

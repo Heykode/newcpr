@@ -10,6 +10,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import Excel403ActionSelect from '@/components/Excel403ActionSelect.vue'
 import ExcelModelFields from '@/components/ExcelModelFields.vue'
+import ExcelRecoveryFields from '@/components/ExcelRecoveryFields.vue'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import AccountModelAccessField from './AccountModelAccessField.vue'
 import AccountOutboundField from './AccountOutboundField.vue'
@@ -43,6 +44,9 @@ const excelIgnoreEncryptedContent = defineModel<boolean>('excelIgnoreEncryptedCo
 const requestProxySource = defineModel<import('@/utils/request-proxy-source').RequestProxySource>('requestProxySource', { default: 'account' })
 const updateExcelIgnoreEncryptedContent = defineModel<boolean>('updateExcelIgnoreEncryptedContent', { default: false })
 const excel403Action = defineModel<Excel403Action>('excel403Action', { default: 'none' })
+const excelRecoveryEnabled = defineModel<boolean>('excelRecoveryEnabled', { default: false })
+const excelRecoveryInterval = defineModel<string>('excelRecoveryInterval', { default: '60' })
+const updateExcelRecovery = defineModel<boolean>('updateExcelRecovery', { default: false })
 const updateExcelCacheCreationAsInput = defineModel<boolean>('updateExcelCacheCreationAsInput', { default: false })
 const updateExcel403Action = defineModel<boolean>('updateExcel403Action', { default: false })
 const updateExcelModels = defineModel<boolean>('updateExcelModels', { default: false })
@@ -171,6 +175,15 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
         :disabled="disabled || (batch ? !updateExcel403Action : !excelEnabled)"
       />
     </BaseFormItem>
+
+    <div v-if="excelAvailable" class="grid gap-3">
+      <BaseCheckbox v-if="batch" v-model="updateExcelRecovery" label="应用 Excel 恢复探测更改" :disabled="disabled" />
+      <ExcelRecoveryFields
+        v-model:enabled="excelRecoveryEnabled"
+        v-model:interval="excelRecoveryInterval"
+        :disabled="disabled || (batch && !updateExcelRecovery)"
+      />
+    </div>
 
     <div class="grid gap-4 sm:grid-cols-2">
       <BaseFormItem label="并发限制">

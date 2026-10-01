@@ -430,6 +430,11 @@ pub async fn initialize(
         xai_service.clone(),
     );
     let import_task = use_case::import_tasks::ImportTaskWorker(import_tasks.clone());
+    let excel_recovery = Arc::new(use_case::excel_recovery::ExcelRecoveryService {
+        accounts: store.accounts(),
+        providers: registry.clone(),
+        probe: probe.clone(),
+    });
     let quality_ops = Arc::new(use_case::quality_ops::QualityOpsService::new(
         store.quality_ops(),
         store.accounts(),
@@ -514,6 +519,7 @@ pub async fn initialize(
     )?);
     worker_contributions.push(workers::group_monitor::contribution(group_monitor)?);
     worker_contributions.push(workers::quality_ops::contribution(quality_ops)?);
+    worker_contributions.push(workers::excel_recovery::contribution(excel_recovery)?);
     worker_contributions.push(workers::notifications::contribution(notifications)?);
     Ok(AdminBundle {
         services,

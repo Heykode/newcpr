@@ -25,7 +25,7 @@ pub(super) async fn record(
         identity: claim.account_identity.clone(),
         model: claim.rule.config.model.clone(),
     };
-    sqlx::query("update quality_rules set recovery=jsonb_set(recovery-'excel_streak','{excel_owner}',$2) where id=$1")
+    sqlx::query("update quality_rules set recovery=jsonb_set(recovery-'excel_streak'-'excel_pass_streak','{excel_owner}',$2) where id=$1")
         .bind(&claim.rule.id)
         .bind(serde_json::to_value(owner).map_err(unavailable)?)
         .execute(&mut **tx).await.map_err(unavailable)?;
@@ -50,8 +50,33 @@ pub(super) async fn apply(
         release(tx, &claim.rule.id).await?;
         return Ok(Some("excel_recovery_released"));
     }
+    let threshold = claim.rule.config.excel_recovery_threshold.unwrap_or(1);
+    let previous = recovery
+        .get("excel_pass_streak")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .unwrap_or(0)
+        .min(threshold);
+    let count = match status {
+        "incorrect" => 0,
+        "correct" if claim.rule.config.disable_excel_on_native_recovery => {
+            previous.saturating_add(1).min(threshold)
+        }
+        _ => previous,
+    };
+    if count != previous {
+        sqlx::query("update quality_rules set recovery=jsonb_set(recovery,'{excel_pass_streak}',to_jsonb($2::int)) where id=$1")
+            .bind(&claim.rule.id)
+            .bind(i32::from(count))
+            .execute(&mut **tx)
+            .await
+            .map_err(unavailable)?;
+    }
     if status != "correct" || !claim.rule.config.disable_excel_on_native_recovery {
         return Ok(Some("excel_recovery_pending"));
+    }
+    if count < threshold {
+        return Ok(Some("excel_recovery_counted"));
     }
     // The finish transaction already holds the configuration and rule lease
     // fences. Still CAS the route/identity and do not clear a 403 protection flag.
@@ -100,7 +125,7 @@ async fn release(
     rule: &str,
 ) -> AdminStoreResult<()> {
     sqlx::query(
-        "update quality_rules set recovery=recovery-'excel_owner'-'excel_streak' where id=$1",
+        "update quality_rules set recovery=recovery-'excel_owner'-'excel_streak'-'excel_pass_streak' where id=$1",
     )
     .bind(rule)
     .execute(&mut **tx)

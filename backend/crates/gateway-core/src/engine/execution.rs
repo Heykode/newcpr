@@ -763,15 +763,28 @@ impl DefaultExecutionService {
         request: AccountProbeRequest,
         cancellation: CancellationToken,
         retest: bool,
+        recovery_config_revision: Option<u64>,
     ) -> Result<AccountProbeResult, AccountProbeError> {
         let state_probe = matches!(&request.operation, Operation::Generate(generate) if generate.quality_probe().is_some());
-        let timeout_duration = std::time::Duration::from_secs(if state_probe { 45 } else { 120 });
+        let excel_recovery = matches!(&request.operation, Operation::Generate(generate) if generate.excel_recovery_revision().is_some());
+        let timeout_duration = std::time::Duration::from_secs(if state_probe || excel_recovery {
+            45
+        } else {
+            120
+        });
         let snapshot = self.snapshots.acquire().map_err(|_| {
             GatewayError::new(
                 GatewayErrorKind::Internal,
                 "runtime snapshot is unavailable",
             )
         })?;
+        if recovery_config_revision.is_some_and(|revision| snapshot.revision().get() != revision) {
+            return Err(GatewayError::new(
+                GatewayErrorKind::Cancelled,
+                "Excel recovery configuration is not current",
+            )
+            .into());
+        }
         let public_model = PublicModelId::new(request.upstream_model.as_str().to_owned())
             .map_err(|_| GatewayError::new(GatewayErrorKind::Unsupported, "invalid model"))?;
         let account_scope = Arc::new(
@@ -1288,6 +1301,30 @@ impl ExecutionService for DefaultExecutionService {
 }
 
 impl AccountProbe for DefaultExecutionService {
+    fn excel_recovery(
+        &self,
+        mut request: AccountProbeRequest,
+        credential_revision: u64,
+        config_revision: u64,
+        expected_nonce: String,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
+        Box::pin(async move {
+            let Operation::Generate(generate) = request.operation else {
+                return Err(GatewayError::new(
+                    GatewayErrorKind::Unsupported,
+                    "invalid Excel recovery operation",
+                )
+                .into());
+            };
+            request.operation = Operation::Generate(
+                generate.with_excel_recovery(credential_revision, expected_nonce),
+            );
+            self.quality_check_inner(request, cancellation, true, Some(config_revision))
+                .await
+        })
+    }
+
     fn state_probe(
         &self,
         request: AccountProbeRequest,
@@ -1315,7 +1352,7 @@ impl AccountProbe for DefaultExecutionService {
                         .with_quality_probe(exchange.step(continuation)),
                 );
                 if self
-                    .quality_check_inner(shot, cancellation.clone(), true)
+                    .quality_check_inner(shot, cancellation.clone(), true, None)
                     .await
                     .is_err()
                 {
@@ -1347,7 +1384,10 @@ impl AccountProbe for DefaultExecutionService {
         request: AccountProbeRequest,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
-        Box::pin(async move { self.quality_check_inner(request, cancellation, false).await })
+        Box::pin(async move {
+            self.quality_check_inner(request, cancellation, false, None)
+                .await
+        })
     }
 
     fn quality_retest(
@@ -1355,7 +1395,10 @@ impl AccountProbe for DefaultExecutionService {
         request: AccountProbeRequest,
         cancellation: CancellationToken,
     ) -> BoxFuture<'_, Result<AccountProbeResult, AccountProbeError>> {
-        Box::pin(async move { self.quality_check_inner(request, cancellation, true).await })
+        Box::pin(async move {
+            self.quality_check_inner(request, cancellation, true, None)
+                .await
+        })
     }
 
     fn probe(

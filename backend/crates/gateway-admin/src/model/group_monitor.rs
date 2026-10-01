@@ -8,6 +8,7 @@ use gateway_core::routing::AccountGroupId;
 use super::{
     account_groups::{AccountGroupMemberFact, AccountGroupRef},
     quota_forecast::AccountQuotaForecastReport,
+    quota_learning::LearnedQuotaWindow,
 };
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -104,24 +105,7 @@ pub fn monitor_remaining(
     now: DateTime<Utc>,
 ) -> (Option<f64>, bool, bool, Option<DateTime<Utc>>) {
     if !report.learned_windows.is_empty() {
-        let mut remaining: Option<f64> = None;
-        let mut reset: Option<DateTime<Utc>> = None;
-        let mut partial = false;
-        let mut low_sample = false;
-        for window in &report.learned_windows {
-            low_sample |= window.low_sample;
-            let valid = window
-                .remaining_usd
-                .filter(|amount| amount.is_finite() && *amount >= 0.0)
-                .zip(window.reset_at.filter(|reset_at| *reset_at > now));
-            if let Some((amount, reset_at)) = valid {
-                remaining = Some(remaining.map_or(amount, |value| value.min(amount)));
-                reset = Some(reset.map_or(reset_at, |value| value.min(reset_at)));
-            } else {
-                partial = true;
-            }
-        }
-        return (remaining, partial, low_sample, reset);
+        return monitor_learned_remaining(&report.learned_windows, now);
     }
     let is_valid = |forecast: &&super::quota_forecast::AccountQuotaForecast| {
         forecast.unavailable_reason.is_none()
@@ -147,6 +131,31 @@ pub fn monitor_remaining(
         }
         partial |= forecast.incomplete_cost;
         low_sample |= forecast.low_sample;
+    }
+    (remaining, partial, low_sample, reset)
+}
+
+#[must_use]
+pub fn monitor_learned_remaining(
+    windows: &[LearnedQuotaWindow],
+    now: DateTime<Utc>,
+) -> (Option<f64>, bool, bool, Option<DateTime<Utc>>) {
+    let mut remaining: Option<f64> = None;
+    let mut reset: Option<DateTime<Utc>> = None;
+    let mut partial = false;
+    let mut low_sample = false;
+    for window in windows {
+        low_sample |= window.low_sample;
+        let valid = window
+            .remaining_usd
+            .filter(|amount| amount.is_finite() && *amount >= 0.0)
+            .zip(window.reset_at.filter(|reset_at| *reset_at > now));
+        if let Some((amount, reset_at)) = valid {
+            remaining = Some(remaining.map_or(amount, |value| value.min(amount)));
+            reset = Some(reset.map_or(reset_at, |value| value.min(reset_at)));
+        } else {
+            partial = true;
+        }
     }
     (remaining, partial, low_sample, reset)
 }
@@ -186,7 +195,8 @@ pub fn project_group_monitor(
         earliest_reset_at: None,
     };
     let mut remaining = 0.0;
-    let mut expiry = Some(0.0);
+    let mut expiry = 0.0;
+    let mut quota_usage = MonitorUsage::default();
     let mut calculable_expiry = 0;
     let mut outlived = 0;
     let mut missing_lifespan = false;
@@ -204,10 +214,10 @@ pub fn project_group_monitor(
         {
             item.estimated_accounts += 1;
             remaining += amount;
-            item.quota_consume_usd_per_minute = item
-                .quota_consume_usd_per_minute
-                .zip(usable_usage(&account.consumption))
-                .map(|(left, right)| left + right);
+            quota_usage.usd += account.consumption.usd;
+            quota_usage.missing_costs = quota_usage
+                .missing_costs
+                .saturating_add(account.consumption.missing_costs);
             item.low_sample |= account.low_sample;
             if let Some(reset) = account.reset_at {
                 item.earliest_reset_at = Some(
@@ -221,15 +231,15 @@ pub fn project_group_monitor(
             {
                 Some(minutes) if minutes <= 0.0 => outlived += 1,
                 Some(minutes) => {
-                    missing_rate |= usable_usage(&account.consumption).is_none();
-                    expiry = expiry
-                        .zip(usable_usage(&account.consumption))
-                        .map(|(total, rate)| total + (amount - rate * minutes).max(0.0));
-                    calculable_expiry += 1;
+                    if let Some(rate) = usable_usage(&account.consumption) {
+                        expiry += (amount - rate * minutes).max(0.0);
+                        calculable_expiry += 1;
+                    } else {
+                        missing_rate = true;
+                    }
                 }
                 None => {
                     missing_lifespan = true;
-                    expiry = None;
                 }
             }
         }
@@ -238,9 +248,7 @@ pub fn project_group_monitor(
         item.total_slots = used.saturating_add(free);
         used
     });
-    if calculable_expiry == 0 && item.eligible_accounts > 0 {
-        expiry = None;
-    }
+    item.quota_consume_usd_per_minute = usable_usage(&quota_usage);
     if !item.group.enabled {
         item.remaining_status = "disabled";
         item.expiry_status = "disabled";
@@ -255,20 +263,23 @@ pub fn project_group_monitor(
         item.remaining_status = if complete { "ready" } else { "partial" };
     }
     if complete {
-        item.expected_expiry_usd = expiry
-            .filter(|value| value.is_finite())
-            .map(|value| value.min(remaining));
-        item.expiry_status = if item.expected_expiry_usd.is_some() {
-            "ready"
-        } else if missing_lifespan {
-            "lifespan_learning"
-        } else if missing_rate {
-            "rate_sampling"
-        } else if outlived > 0 && outlived == item.estimated_accounts {
-            "all_accounts_outlived_average"
-        } else {
-            "learning"
-        };
+        item.expected_expiry_usd = ((calculable_expiry > 0 || item.eligible_accounts == 0)
+            && expiry.is_finite())
+        .then_some(expiry.min(remaining));
+        item.expiry_status =
+            if item.expected_expiry_usd.is_some() && (missing_lifespan || missing_rate) {
+                "partial"
+            } else if item.expected_expiry_usd.is_some() {
+                "ready"
+            } else if missing_lifespan {
+                "lifespan_learning"
+            } else if missing_rate {
+                "rate_sampling"
+            } else if outlived > 0 && outlived == item.estimated_accounts {
+                "all_accounts_outlived_average"
+            } else {
+                "learning"
+            };
         if remaining == 0.0 {
             item.eta_minutes = Some(0.0);
             item.eta_status = "empty";

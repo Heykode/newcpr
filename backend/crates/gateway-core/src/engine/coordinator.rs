@@ -928,6 +928,10 @@ where
                     &self.operation,
                     Operation::Generate(generate) if generate.quality_probe().is_some()
                 ))
+                .with_excel_recovery(match &self.operation {
+                    Operation::Generate(generate) => generate.excel_recovery_revision(),
+                    _ => None,
+                })
             }
         }
         .with_credential_recovery_attempted(pinned_account.as_ref().is_some_and(|account| {
@@ -1430,11 +1434,13 @@ where
             && !self
                 .credential_recovery_attempted_accounts
                 .contains(current.metadata.provider_account_id());
-        let retryable = continuation_retry
-            || same_account_retry
-            || ordinary_retry
-            || account_rotation_retry
-            || transport_recovery.is_some();
+        let recovery_probe = matches!(&self.operation, Operation::Generate(generate) if generate.excel_recovery_revision().is_some());
+        let retryable = !recovery_probe
+            && (continuation_retry
+                || same_account_retry
+                || ordinary_retry
+                || account_rotation_retry
+                || transport_recovery.is_some());
 
         self.trace.attempt(current.index.get()).record("retry.decided", json!({
             "retryable": retryable, "continuationRetry": continuation_retry,

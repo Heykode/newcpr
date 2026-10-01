@@ -114,6 +114,441 @@ async fn enable(manager: &CaptureManager) -> CaptureTask {
 fn trace(manager: &CaptureManager, id: &str) -> TraceContext {
     TraceContext::new(id).with_capture(manager.start(id, "fixture-key", &[]))
 }
+
+async fn wait_request(manager: &CaptureManager, id: &str) -> CaptureRecord {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(record) = manager.for_request(id).await.unwrap().into_iter().next() {
+                return record;
+            }
+            assert!(!manager.settings().await.unwrap().storage_fault);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+
+fn capture_error(manager: &CaptureManager, id: &str, body: &[u8]) {
+    let request = trace(manager, id);
+    request.capture("client.request.body", body);
+    request.record("request.finished", json!({"outcome":"Failed"}));
+}
+
+async fn seed_capture(
+    database: &TestDatabase,
+    directory: &std::path::Path,
+    task_id: &str,
+    request_id: &str,
+) -> CaptureRecord {
+    let record = CaptureRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        task_id: task_id.into(),
+        request_id: request_id.into(),
+        bytes: 3,
+        incomplete: false,
+        created_at: chrono::Utc::now(),
+    };
+    sqlx::query("insert into request_capture_records(id,task_id,record) values($1::text::uuid,$2::text::uuid,$3)")
+        .bind(&record.id).bind(task_id).bind(serde_json::to_value(&record).unwrap())
+        .execute(&database.pool).await.unwrap();
+    tokio::fs::write(directory.join(format!("{}.jsonl", record.id)), b"{}\n")
+        .await
+        .unwrap();
+    record
+}
+
+#[tokio::test]
+async fn request_capture_overwrite_evicts_oldest_and_oversized_records_preserve_history() {
+    let Some(database) = TestDatabase::create("capture_overwrite").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&database, directory.path()).await;
+    let config = RequestCaptureConfig {
+        enabled: true,
+        global_errors: true,
+        quota_mib: 1,
+        quota_policy: CaptureQuotaPolicy::Overwrite,
+        ..Default::default()
+    };
+    manager.configure(config, &context()).await.unwrap();
+    let body = serde_json::to_vec(&json!({"input":"x".repeat(400 * 1024)})).unwrap();
+    capture_error(&manager, "overwrite_oldest", &body);
+    let oldest = wait_request(&manager, "overwrite_oldest").await;
+    capture_error(&manager, "overwrite_middle", &body);
+    let middle = wait_request(&manager, "overwrite_middle").await;
+    capture_error(&manager, "overwrite_latest", &body);
+    wait_request(&manager, "overwrite_latest").await;
+    assert!(
+        manager
+            .for_request("overwrite_oldest")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !directory
+            .path()
+            .join(format!("{}.jsonl", oldest.id))
+            .exists()
+    );
+    assert!(
+        directory
+            .path()
+            .join(format!("{}.jsonl", middle.id))
+            .exists()
+    );
+    let before = manager.settings().await.unwrap();
+    assert!(before.stored_bytes <= 1024 * 1024);
+    assert_eq!(before.record_count, 2);
+    assert!(before.global_active);
+    capture_error(
+        &manager,
+        "overwrite_too_large",
+        &serde_json::to_vec(&json!({"input":"x".repeat(1200 * 1024)})).unwrap(),
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while manager.settings().await.unwrap().skipped == before.skipped {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let after = manager.settings().await.unwrap();
+    assert_eq!(after.stored_bytes, before.stored_bytes);
+    assert_eq!(after.record_count, 2);
+    assert!(after.global_active && !after.storage_fault);
+    assert!(
+        manager
+            .for_request("overwrite_too_large")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    capture_error(&manager, "overwrite_after_large", br#"{"input":"small"}"#);
+    wait_request(&manager, "overwrite_after_large").await;
+    cancel.cancel();
+    worker.await.unwrap();
+    drop(manager);
+    let (manager, writer) = CaptureManager::open(database.pool.clone(), directory.path().into())
+        .await
+        .unwrap();
+    assert_eq!(
+        manager.settings().await.unwrap().config.quota_policy,
+        CaptureQuotaPolicy::Overwrite
+    );
+    assert_eq!(manager.settings().await.unwrap().record_count, 3);
+    assert!(manager.settings().await.unwrap().global_active);
+    drop(writer);
+    drop(manager);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn request_capture_clear_resumes_quota_pause_and_keeps_future_captures() {
+    let Some(database) = TestDatabase::create("capture_clear_resume").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&database, directory.path()).await;
+    manager
+        .configure(
+            RequestCaptureConfig {
+                enabled: true,
+                global_errors: true,
+                quota_mib: 1,
+                ..Default::default()
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let body = serde_json::to_vec(&json!({"input":"x".repeat(600 * 1024)})).unwrap();
+    capture_error(&manager, "clear_old", &body);
+    let old = wait_request(&manager, "clear_old").await;
+    capture_error(&manager, "clear_overflow", &body);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while manager.settings().await.unwrap().global_active {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let result = manager
+        .clear(
+            ClearCaptures {
+                confirmed: true,
+                cutoff_at: None,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(result.complete);
+    assert_eq!(result.removed_records, 1);
+    assert_eq!(result.removed_bytes, old.bytes);
+    assert!(!directory.path().join(format!("{}.jsonl", old.id)).exists());
+    assert!(manager.settings().await.unwrap().global_active);
+    // A request already in progress has not been stored yet and must survive a clear.
+    let request = trace(&manager, "clear_inflight");
+    request.capture("client.request.body", br#"{"input":"inflight"}"#);
+    let boundary = manager
+        .clear(
+            ClearCaptures {
+                confirmed: true,
+                cutoff_at: None,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    request.record("request.finished", json!({"outcome":"Failed"}));
+    drop(request);
+    wait_request(&manager, "clear_inflight").await;
+    let result = manager
+        .clear(
+            ClearCaptures {
+                confirmed: true,
+                cutoff_at: Some(boundary.cutoff_at),
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.removed_records, 0);
+    assert_eq!(
+        manager.for_request("clear_inflight").await.unwrap().len(),
+        1
+    );
+    manager
+        .configure(RequestCaptureConfig::default(), &context())
+        .await
+        .unwrap();
+    manager
+        .clear(
+            ClearCaptures {
+                confirmed: true,
+                cutoff_at: None,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(!manager.settings().await.unwrap().global_active);
+    cancel.cancel();
+    worker.await.unwrap();
+    drop(manager);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn request_capture_clear_is_bounded_instance_scoped_and_preserves_usage() {
+    let Some(database) = TestDatabase::create("capture_clear_bounds").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let other_directory = tempfile::tempdir().unwrap();
+    let (manager, writer) = CaptureManager::open(database.pool.clone(), directory.path().into())
+        .await
+        .unwrap();
+    manager
+        .configure(
+            RequestCaptureConfig {
+                enabled: true,
+                global_errors: true,
+                ..Default::default()
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let task = manager.status().await.unwrap().tasks[0].clone();
+    let (other, other_writer) =
+        CaptureManager::open(database.pool.clone(), other_directory.path().into())
+            .await
+            .unwrap();
+    let other_task = other.status().await.unwrap().tasks[0].clone();
+    let other_record = seed_capture(
+        &database,
+        other_directory.path(),
+        &other_task.id,
+        "other_instance",
+    )
+    .await;
+    for index in 0..260 {
+        seed_capture(
+            &database,
+            directory.path(),
+            &task.id,
+            &format!("clear_fixture_{index}"),
+        )
+        .await;
+    }
+    tokio::fs::write(directory.path().join("unrelated.log"), b"preserve")
+        .await
+        .unwrap();
+    tokio::fs::create_dir(directory.path().join("unrelated-directory"))
+        .await
+        .unwrap();
+    sqlx::query("insert into provider_accounts (id,provider_kind,name,upstream_user_id,authentication_kind,provider_credentials_json,has_refresh_token,credential_observed_at,created_at,updated_at)
+        values ('capture-protected-account','openai','Fixture','fixture-user','oauth','{}',false,now(),now(),now())")
+        .execute(&database.pool).await.unwrap();
+    let account: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(a) from provider_accounts a where id='capture-protected-account'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    sqlx::query("insert into model_requests (id,client_api_key_ref,config_revision,protocol,operation,endpoint,client_transport,started_at,deadline_at,completed_at,routing_scope,outcome,client_status_code,cost_amount,cost_currency,cost_source,diagnostic_trace_json)
+        values ('capture-protected','fixture-key',1,'openai','responses','/v1/responses','http',now(),now()+interval '1 minute',now(),'all','failed',400,0.25,'USD','calculated','{\"error\":\"fixture\"}'::jsonb)")
+        .execute(&database.pool).await.unwrap();
+    let usage: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(r) from model_requests r where id='capture-protected'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let denied = manager
+        .clear(
+            ClearCaptures {
+                confirmed: false,
+                cutoff_at: None,
+            },
+            &context(),
+        )
+        .await;
+    assert!(denied.is_err());
+    assert_eq!(manager.settings().await.unwrap().record_count, 260);
+    let first = manager
+        .clear(
+            ClearCaptures {
+                confirmed: true,
+                cutoff_at: None,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(!first.complete);
+    assert_eq!(first.removed_records, 256);
+    let new_record = seed_capture(
+        &database,
+        directory.path(),
+        &task.id,
+        "after_clear_boundary",
+    )
+    .await;
+    let second = manager
+        .clear(
+            ClearCaptures {
+                confirmed: true,
+                cutoff_at: Some(first.cutoff_at),
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(second.complete);
+    assert_eq!(second.removed_records, 4);
+    assert_eq!(manager.settings().await.unwrap().record_count, 1);
+    assert!(
+        directory
+            .path()
+            .join(format!("{}.jsonl", new_record.id))
+            .exists()
+    );
+    assert!(directory.path().join("unrelated-directory").is_dir());
+    assert_eq!(
+        tokio::fs::read(directory.path().join("unrelated.log"))
+            .await
+            .unwrap(),
+        b"preserve"
+    );
+    assert!(directory.path().join(".instance").exists());
+    assert!(directory.path().join(".lock").exists());
+    assert_eq!(other.settings().await.unwrap().record_count, 1);
+    assert!(
+        other_directory
+            .path()
+            .join(format!("{}.jsonl", other_record.id))
+            .exists()
+    );
+    let after: serde_json::Value =
+        sqlx::query_scalar("select to_jsonb(r) from model_requests r where id='capture-protected'")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(after, usage, "request/error/cost fields must be untouched");
+    let after_account: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(a) from provider_accounts a where id='capture-protected-account'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(after_account, account);
+    assert_eq!(manager.status().await.unwrap().tasks.len(), 1);
+    assert!(manager.settings().await.unwrap().global_active);
+    drop(writer);
+    drop(manager);
+    drop(other_writer);
+    drop(other);
+    database.close().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn request_capture_clear_rejects_symlinks_without_deleting_targets_or_index() {
+    let Some(database) = TestDatabase::create("capture_clear_symlink").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let protected = outside.path().join("protected.log");
+    tokio::fs::write(&protected, b"preserve").await.unwrap();
+    let (manager, writer) = CaptureManager::open(database.pool.clone(), directory.path().into())
+        .await
+        .unwrap();
+    manager
+        .configure(
+            RequestCaptureConfig {
+                enabled: true,
+                global_errors: true,
+                ..Default::default()
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let task = manager.status().await.unwrap().tasks[0].clone();
+    let record = seed_capture(&database, directory.path(), &task.id, "symlink_fixture").await;
+    let path = directory.path().join(format!("{}.jsonl", record.id));
+    tokio::fs::remove_file(&path).await.unwrap();
+    std::os::unix::fs::symlink(&protected, &path).unwrap();
+    assert!(
+        manager
+            .clear(
+                ClearCaptures {
+                    confirmed: true,
+                    cutoff_at: None
+                },
+                &context()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(manager.settings().await.unwrap().record_count, 1);
+    assert_eq!(tokio::fs::read(&protected).await.unwrap(), b"preserve");
+    assert!(
+        tokio::fs::symlink_metadata(&path)
+            .await
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    drop(writer);
+    drop(manager);
+    database.close().await;
+}
 fn select(trace: &TraceContext, account: &str) {
     trace.record("account.selection", json!({"selectedAccountId":account}));
 }
@@ -547,6 +982,17 @@ fn request_capture_legacy_config_does_not_enable_global_collection() {
     .unwrap();
     assert!(!config.global_errors);
     assert!(!config.include_media);
+    assert_eq!(config.quota_policy, CaptureQuotaPolicy::Stop);
+    assert_eq!(
+        RequestCaptureConfig::default().quota_policy,
+        CaptureQuotaPolicy::Stop
+    );
+    assert!(
+        serde_json::from_value::<RequestCaptureConfig>(json!({
+            "enabled":true, "quotaMib":1, "retentionDays":7, "quotaPolicy":"unknown"
+        }))
+        .is_err()
+    );
     assert!(
         CreateCaptureTask {
             scope: CaptureScope::Global,

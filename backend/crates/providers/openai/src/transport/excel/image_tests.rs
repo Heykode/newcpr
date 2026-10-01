@@ -362,7 +362,8 @@ async fn native_codex_does_not_enter_excel_image_policy_or_apply_excel_limits() 
         .expect(1)
         .mount(&server)
         .await;
-    let input = json!([image_message(21)]);
+    let mut input = json!([image_message(21)]);
+    input[0]["id"] = json!("item_0123456789abcdef01234567");
     let req = CodexResponsesRequest::from_body(
         json!({"model":VERIFIED_MODEL,"input":input,"stream":true})
             .as_object()
@@ -1320,11 +1321,81 @@ async fn excel_user_upload_failure_never_generates_or_falls_back() {
             format!("{}{RESPONSES_PATH}", server.uri()),
             json!([{"role":"user","content":[image()]}]),
         );
-        let error = run(&server, &req).await.unwrap_err();
+        let trace = gateway_core::diagnostics::TraceContext::new("req_upload_failure");
+        let error = client(&server.uri())
+            .create_response_stream_http_sse(
+                &req,
+                CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None)
+                    .with_trace(&trace),
+            )
+            .await
+            .err()
+            .expect("attachment rejection must stop before generation");
         assert!(
             matches!(error, CodexClientError::Upstream {status:actual,..} if actual.as_u16()==status)
         );
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        let snapshot = trace.snapshot().unwrap();
+        let failures: Vec<_> = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["stage"] == "excel.transport.failed")
+            .collect();
+        assert_eq!(failures.len(), 1);
+        let facts = &failures[0]["data"];
+        assert_eq!(facts["phase"], "attachment_http");
+        assert_eq!(facts["status"], status);
+        assert_eq!(facts["generation_started"], false);
+        assert!(!facts.to_string().contains("fixture"));
+    }
+}
+
+#[tokio::test]
+async fn excel_malformed_upload_responses_report_safe_diagnostics_without_generation() {
+    for (payload, cause) in [
+        ("private-invalid-json".to_owned(), "invalid_json"),
+        (
+            json!({"id":"https://example.com/private-id"}).to_string(),
+            "invalid_file_id",
+        ),
+        ("private-large-response".repeat(4000), "response_too_large"),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(path("/basispoints/api/attachments"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(payload))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let req = request(
+            format!("{}{RESPONSES_PATH}", server.uri()),
+            json!([{"role":"user","content":[image()]}]),
+        );
+        let trace = gateway_core::diagnostics::TraceContext::new("req_upload_response");
+        let error = client(&server.uri())
+            .create_response_stream_http_sse(
+                &req,
+                CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None)
+                    .with_trace(&trace),
+            )
+            .await
+            .err()
+            .expect("invalid attachment response must stop before generation");
+        assert!(matches!(error, CodexClientError::InvalidSse(_)));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        let snapshot = trace.snapshot().unwrap();
+        let failures: Vec<_> = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["stage"] == "excel.transport.failed")
+            .collect();
+        assert_eq!(failures.len(), 1);
+        let facts = &failures[0]["data"];
+        assert_eq!(facts["phase"], "attachment_response");
+        assert_eq!(facts["cause"], cause);
+        assert_eq!(facts["generation_started"], false);
+        assert!(!facts.to_string().contains("private"));
     }
 }
 

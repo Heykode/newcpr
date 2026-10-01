@@ -41,6 +41,15 @@ function base(overrides = {}) {
 }
 const rule = (id, config = base()) => ({ id, revision: 8, config })
 
+test('healthy threshold changes require explicit selection and only apply to native probe recovery actions', () => {
+  const probe = base({ detectionMode: 'state_probe', failureAction: 'enable_excel', excelRecoveryThreshold: 2 })
+  assert.equal(applyQualityPatch(probe, { model: 'changed' }).excelRecoveryThreshold, 2)
+  assert.equal(applyQualityPatch(probe, { excelRecoveryThreshold: 5 }).excelRecoveryThreshold, 5)
+  assert.equal(applyQualityPatch(base(), { excelRecoveryThreshold: 5 }).excelRecoveryThreshold, undefined)
+  assert.deepEqual(plain(buildQualityPatch(['excelRecoveryThreshold'], probe)), { excelRecoveryThreshold: 2 })
+  assert.deepEqual(plain(buildQualityPatch(['model'], probe)), { model: probe.model })
+})
+
 test('native recovery is explicitly opted in and never applied to answer or unrelated rules', () => {
   const probe = base({ detectionMode: 'state_probe', failureAction: 'enable_excel' })
   assert.equal(applyQualityPatch(probe, { model: 'changed' }).disableExcelOnNativeRecovery, false)

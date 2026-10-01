@@ -236,6 +236,20 @@ pub trait ProviderAdmin: Send + Sync {
         self.connection_test_operation(upstream_model, input_text)
     }
 
+    /// 生成 Excel/BPS 恢复探针；Provider 可为该内部探针固定较低推理档位。
+    fn excel_recovery_operation(
+        &self,
+        upstream_model: &UpstreamModelId,
+        input_text: &str,
+    ) -> Result<Operation, ProviderAdminError> {
+        self.connection_test_operation_with_options(
+            upstream_model,
+            input_text,
+            ConnectionTestEndpoint::Responses,
+            true,
+        )
+    }
+
     /// 返回该 Provider 实际持有的 Dashboard 上游身份画像。
     fn dashboard_wire_profile(&self) -> Option<DashboardWireProfile>;
 

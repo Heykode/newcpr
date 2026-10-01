@@ -64,6 +64,19 @@ fn generate_request_should_keep_client_body_opaque_and_redacted() {
 }
 
 #[test]
+fn client_json_cannot_forge_excel_recovery_or_native_quality_markers() {
+    let request = generate(json!({
+        "model":"fixture-model", "input":"fixture",
+        "excel_recovery_revision":7, "excelRecoveryRevision":7,
+        "excel_recovery_nonce":"forged", "excelRecoveryNonce":"forged",
+        "quality_retest":true, "quality_probe":{},
+    }));
+    assert_eq!(request.excel_recovery_revision(), None);
+    assert_eq!(request.excel_recovery_nonce(), None);
+    assert!(request.quality_probe().is_none());
+}
+
+#[test]
 fn capability_requirements_should_read_known_openai_fields_without_rewriting_body() {
     let request = generate(json!({
         "model": "gpt-test",

@@ -57,6 +57,7 @@ const labels: Record<QualityEditableField, string> = {
   autoRestore: '自动恢复（不适用于应用模板或旧版开启 Excel）',
   disableExcelOnNativeRecovery: '原生恢复后关闭 Excel（仅状态探针的模板或开启 Excel 规则）',
   excelFailureThreshold: '连续异常阈值（模板或旧版开启 Excel 规则）',
+  excelRecoveryThreshold: '连续正常阈值（状态探针恢复后关闭 Excel）',
 }
 const fields = ref<QualityEditableField[]>([])
 const draft = ref<QualityRuleConfig>({ ...props.defaultConfig, failureGroupIds: [] })
@@ -83,7 +84,7 @@ watch(open, (value) => {
   if (!value)
     return
   const first = props.rules.find(rule => props.selectedIds.includes(rule.id))?.config ?? props.defaultConfig
-  draft.value = { ...props.defaultConfig, ...first, intervalSeconds: first.intervalSeconds ?? DEFAULT_QUALITY_INTERVAL_SECONDS, failureGroupIds: [...first.failureGroupIds] }
+  draft.value = { ...props.defaultConfig, ...first, excelRecoveryThreshold: first.excelRecoveryThreshold ?? 1, intervalSeconds: first.intervalSeconds ?? DEFAULT_QUALITY_INTERVAL_SECONDS, failureGroupIds: [...first.failureGroupIds] }
   fields.value = []
   pending.value = [...props.selectedIds]
   names.value = Object.fromEntries(props.rules.map(rule => [rule.id, props.accountName(rule.config.accountId)]))
@@ -165,7 +166,7 @@ onBeforeUnmount(() => {
         <template v-if="fields.includes(field)">
           <BaseSwitch v-if="field === 'enabled' || field === 'autoRestore' || field === 'disableExcelOnNativeRecovery'" v-model="draft[field]" :label="labels[field]" show-label />
           <QualitySchedule v-else-if="field === 'intervalSeconds'" v-model="draft.intervalSeconds" />
-          <BaseNumberInput v-else-if="field === 'repetitions' || field === 'excelFailureThreshold'" v-model="draft[field]" :label="labels[field]" :min="1" :max="field === 'repetitions' ? 8 : 100" />
+          <BaseNumberInput v-else-if="field === 'repetitions' || field === 'excelFailureThreshold' || field === 'excelRecoveryThreshold'" :model-value="draft[field] ?? 1" :label="labels[field]" :min="1" :max="field === 'repetitions' ? 8 : 100" @update:model-value="draft[field] = $event" />
           <QualityCatalogPicker v-else-if="field === 'judgeGroupId'" v-model="draft.judgeGroupId" label="判题分组" :load-page="groupPage" />
           <QualityCatalogPicker v-else-if="field === 'failureGroupIds'" v-model:selected-values="draft.failureGroupIds" label="处置分组" multiple :load-page="actionGroupPage" />
           <AccountTemplatePicker v-else-if="field === 'failureTemplate'" v-model="selectedTemplate" label="异常处置账号模板" :disabled="saving" />

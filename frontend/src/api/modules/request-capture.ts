@@ -7,6 +7,7 @@ export interface CaptureConfig {
   globalErrors: boolean
   includeMedia: boolean
   quotaMib: number
+  quotaPolicy?: 'stop' | 'overwrite'
   retentionDays: number
 }
 export interface CaptureTask {
@@ -42,6 +43,17 @@ export interface CaptureSettings {
   globalActive: boolean
   storageFault: boolean
   skipped: number
+  storedBytes?: number
+  recordCount?: number
+}
+export interface CaptureClearResult {
+  cutoffAt: string
+  removedRecords: number
+  removedBytes: number
+  complete: boolean
+}
+export function clearCapturedErrors(data: { confirmed: true, cutoffAt?: string }) {
+  return request<CaptureClearResult>({ url: '/api/admin/request-captures/clear', method: 'POST', data })
 }
 export function getCaptureSettings(options: RequestOptions = {}) {
   return request<CaptureSettings>({ url: '/api/admin/request-captures/config', method: 'GET', ...options })

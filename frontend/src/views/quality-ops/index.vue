@@ -19,14 +19,14 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { formatDateTime } from '@/utils/date'
+import { newQualityConfig, qualityConfigDraft } from './defaults'
 import { failureActionOptions, usesFailureThreshold } from './failure-actions'
-import { CANDY_PROMPT, CANDY_REFERENCE_ANSWER, DEFAULT_JUDGE_PROMPT } from './presets'
 import QualityBulkEditor from './QualityBulkEditor.vue'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
 import QualitySchedule from './QualitySchedule.vue'
 import QualityTemplateCatalog from './QualityTemplateCatalog.vue'
-import { DEFAULT_QUALITY_INTERVAL_SECONDS, qualityScheduleSummary } from './schedule'
+import { qualityScheduleSummary } from './schedule'
 
 const route = useRoute()
 const activeTab = ref<'rules' | 'templates' | 'groups'>(route.query.tab === 'groups' ? 'groups' : route.query.tab === 'templates' ? 'templates' : 'rules')
@@ -100,6 +100,7 @@ const actions: Record<string, string> = {
   identity_changed: '检测期间账号身份已变化，未执行处置',
   excel_enabled: '已开启 Excel 模式',
   excel_recovery_pending: '保持本规则的 Excel 处置，继续检测原生通道',
+  excel_recovery_counted: '原生正常次数尚未达到关闭阈值，继续检测',
   excel_recovery_released: '账号或规则设置已变化，保留现状，不自动关闭 Excel',
   excel_disabled_native_recovered: '原生通道恢复正常，已关闭本规则开启的 Excel',
   excel_enabled_probe_paused: '已开启 Excel 模式，探针规则已暂停',
@@ -149,28 +150,7 @@ const counts = computed(() => ({
   errors: rules.value.filter(rule => rule.lastStatus === 'request_error').length,
 }))
 function defaults(): QualityRuleConfig {
-  return {
-    detectionMode: 'answer',
-    accountId: '',
-    model: '',
-    enabled: true,
-    intervalSeconds: DEFAULT_QUALITY_INTERVAL_SECONDS,
-    cron: '',
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-    repetitions: 1,
-    prompt: CANDY_PROMPT,
-    referenceAnswer: CANDY_REFERENCE_ANSWER,
-    reasoningEffort: null,
-    judgeGroupId: '',
-    judgeModel: '',
-    judgePrompt: DEFAULT_JUDGE_PROMPT,
-    failureAction: 'none',
-    failureTemplate: null,
-    failureGroupIds: [],
-    autoRestore: false,
-    disableExcelOnNativeRecovery: false,
-    excelFailureThreshold: 1,
-  }
+  return newQualityConfig(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
 }
 const draft = ref(defaults())
 const selectedTemplate = computed({
@@ -436,7 +416,7 @@ function edit(rule: QualityRule | null) {
   groupFilter.value = { group: '', statuses: [] }
   templateMode.value = false
   editing.value = rule ? { ...rule, config: { ...rule.config } } : null
-  draft.value = rule ? { ...defaults(), ...rule.config, intervalSeconds: rule.config.intervalSeconds ?? null, failureGroupIds: [...(rule.config.failureGroupIds ?? [])] } : defaults()
+  draft.value = rule ? qualityConfigDraft(rule.config, defaults().timezone) : defaults()
   selectedAccounts.value = rule ? [rule.config.accountId] : []
   editorError.value = ''
   editorOpen.value = true
@@ -449,7 +429,7 @@ function editTemplate(template: QualityRuleTemplate | null, rule?: QualityRule) 
   editingTemplate.value = template ? { ...template } : null
   templateName.value = template?.name ?? ''
   const config = template?.config ?? rule?.config
-  draft.value = config ? { ...defaults(), ...structuredClone(toRaw(config)), intervalSeconds: config.intervalSeconds ?? null, accountId: '' } : defaults()
+  draft.value = config ? { ...qualityConfigDraft(structuredClone(toRaw(config)), defaults().timezone), accountId: '' } : defaults()
   selectedAccounts.value = []
   editorError.value = ''
   editorOpen.value = true
@@ -461,7 +441,7 @@ function editGroup(group: QualityGroupRule | null) {
   groupName.value = group?.name ?? ''
   groupFilter.value = group ? structuredClone(toRaw(group.filter)) : { group: '', statuses: [] }
   if (group)
-    draft.value = { ...defaults(), ...structuredClone(toRaw(group.config)), accountId: '', intervalSeconds: group.config.intervalSeconds ?? null }
+    draft.value = { ...qualityConfigDraft(structuredClone(toRaw(group.config)), defaults().timezone), accountId: '' }
 }
 async function toggleGroup(group: QualityGroupRule) {
   if (busy.value)
@@ -1100,6 +1080,13 @@ onBeforeUnmount(() => {
           </div>
           <BaseSwitch v-if="!usesFailureThreshold(draft.failureAction)" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
           <BaseCheckbox v-if="isProbe && usesFailureThreshold(draft.failureAction)" v-model="draft.disableExcelOnNativeRecovery" label="原生通道恢复正常后自动关闭 Excel" show-label />
+          <div v-if="isProbe && usesFailureThreshold(draft.failureAction) && draft.disableExcelOnNativeRecovery" class="grid gap-2 text-cp-sm">
+            <span>连续正常多少轮后关闭 Excel</span>
+            <BaseNumberInput :model-value="draft.excelRecoveryThreshold ?? 1" label="连续正常阈值" :min="1" :max="100" @update:model-value="draft.excelRecoveryThreshold = $event" />
+            <p class="text-xs text-cp-text-secondary">
+              正常轮累计，明确异常清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。
+            </p>
+          </div>
           <p v-if="isProbe" class="text-xs text-cp-text-secondary">
             即使账号已开启 Excel，状态探针也继续检测原生 Codex 通道。勾选恢复选项只关闭本规则开启且未被后续人工设置覆盖的 Excel，不撤销模板其他配置。未勾选则只检测，不自动关闭。
           </p>

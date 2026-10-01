@@ -100,6 +100,88 @@ fn attributed_history(agent: bool) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn excel_compatibility_message_ids_are_removed_only_from_prepared_wire_history() {
+    let server = MockServer::start().await;
+    Mock::given(path(RESPONSES_PATH))
+        .respond_with(|request: &wiremock::Request| {
+            let body: Value = request.body_json().unwrap();
+            if body["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["id"] == "item_0123456789abcdef01234567")
+            {
+                ResponseTemplate::new(400).set_body_json(json!({"error":{"code":"invalid_request",
+                    "message":"Invalid local message ID"}}))
+            } else {
+                completed()
+            }
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+    let source = json!({"model":VERIFIED_MODEL,"input":[
+        {"role":"user","id":"item_0123456789abcdef01234567","content":"preserved question"},
+        {"role":"assistant","id":"msg_fixture","content":"preserved answer"},
+        {"role":"user","id":"item_unknown","content":"follow-up"}
+    ]});
+    let before = source.clone();
+    let mut raw = request(
+        format!("{}{RESPONSES_PATH}", server.uri()),
+        source["input"].clone(),
+    );
+    raw.excel
+        .as_mut()
+        .unwrap()
+        .body
+        .insert("input".into(), source["input"].clone());
+    assert!(
+        client(&server.uri())
+            .create_response_stream_http_sse(
+                &raw,
+                CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None)
+            )
+            .await
+            .is_err()
+    );
+    for stream in [true, false] {
+        let mut prepared_source = source.as_object().unwrap().clone();
+        prepared_source.insert("stream".into(), json!(stream));
+        let mut req = request(
+            format!("{}{RESPONSES_PATH}", server.uri()),
+            source["input"].clone(),
+        );
+        req.excel.as_mut().unwrap().body = prepare_request(
+            &prepared_source,
+            &ClientTools::default(),
+            &BTreeMap::new(),
+            None,
+        )
+        .unwrap();
+        client(&server.uri())
+            .create_response_stream_http_sse(
+                &req,
+                CodexRequestContext::auxiliary("Bearer fixture", Some("workspace"), "req", None),
+            )
+            .await
+            .unwrap()
+            .body
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        let calls = server.received_requests().await.unwrap();
+        let wire: Value = calls.last().unwrap().body_json().unwrap();
+        let items = wire["input"].as_array().unwrap();
+        let messages = &items[items.len() - 3..];
+        assert!(messages[0].get("id").is_none());
+        assert_eq!(messages[0]["content"], source["input"][0]["content"]);
+        assert_eq!(messages[1], source["input"][1]);
+        assert_eq!(messages[2], source["input"][2]);
+    }
+    assert_eq!(source, before);
+}
+
+#[tokio::test]
 async fn excel_attribution_wire_regression_rejects_old_fields_and_accepts_normalized_history() {
     let server = MockServer::start().await;
     Mock::given(path(RESPONSES_PATH))

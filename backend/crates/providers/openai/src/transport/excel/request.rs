@@ -62,7 +62,9 @@ pub(crate) enum ExcelRequestError {
         part: usize,
         reason: &'static str,
     },
-    #[error("Excel image {kind} limit exceeded: observed {actual}, allowed {limit}")]
+    #[error(
+        "Excel image {kind} limit exceeded by local gateway configuration: observed {actual}, allowed {limit}"
+    )]
     ImageLimit {
         kind: &'static str,
         actual: usize,
