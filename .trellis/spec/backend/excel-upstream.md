@@ -1,5 +1,42 @@
 # Excel Upstream Contracts
 
+## Selective Message IDs And Upload Diagnostics
+
+### 1. Scope / Trigger
+Sub2API #229 and #231/#232 are Excel-only compatibility/observability changes.
+They do not authorize scheduler, identity, retry or native transport changes.
+
+### 2. Signatures
+`history_messages::normalize` owns ordinary-message ID omission.
+`diagnostics::attachment_failure(&CodexClientError) -> Value` owns fixed upload facts.
+
+### 3. Contracts
+Omit only `item_` plus 24 ASCII hex characters before the no-attribution early return.
+Keep native/unknown/tool IDs and agent attribution; never mutate canonical history.
+Upload failure recording belongs in `upload_inline_with_limits`, exactly once.
+Keep errors unchanged; include fixed attachment phase/cause, optional HTTP status,
+and `generation_started=false`. Never record raw error text or attachment data.
+
+### 4. Validation & Error Matrix
+Malformed upload JSON -> `attachment_response/invalid_json`; missing/invalid ID ->
+`invalid_file_id`; oversized body -> `response_too_large`; HTTP error ->
+`attachment_http` with original status. Local image limits explicitly say local
+gateway configuration; admission and recovery rules are unchanged.
+
+### 5. Good / Base / Bad Cases
+Good: complete inline history loses only its recognized local message ID.
+Base: native Codex wire, unknown IDs and retries remain unchanged.
+Bad: delete arbitrary IDs, response bodies or images to obtain a successful request.
+
+### 6. Tests Required
+History/image modules assert preservation, idempotence, a negative wire control,
+native isolation, no generation/fallback after upload errors and trace redaction.
+Retain provider contracts and architecture checks.
+
+### 7. Wrong vs Correct
+Wrong: diagnostics change the error type or count as replay authorization.
+Correct: borrow the original error to construct bounded facts, then return it intact.
+
 ## 1. Scope
 
 Account-scoped Excel generation and retirement of managed State, including

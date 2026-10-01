@@ -20,6 +20,18 @@ pub(super) fn normalize(
     {
         return Ok(item);
     }
+    // Local compatibility IDs do not identify stored Excel messages.
+    if !agent
+        && item
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| id.strip_prefix("item_"))
+            .is_some_and(|suffix| {
+                suffix.len() == 24 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+    {
+        item.remove("id");
+    }
     let metadata = item
         .iter()
         .filter(|(key, _)| {
@@ -143,6 +155,81 @@ mod tests {
         ] {
             assert_eq!(normalized(&source), *source.as_object().unwrap());
         }
+    }
+
+    #[test]
+    fn compatibility_message_ids_are_omitted_without_changing_inline_content() {
+        for role in ["user", "assistant", "system", "developer"] {
+            for typed in [false, true] {
+                for id in [
+                    "item_0123456789abcdef01234567",
+                    "item_0123456789ABCDEF01234567",
+                ] {
+                    let mut source = json!({"role":role,"id":id,"phase":"commentary",
+                        "status":"completed","content":[{"type":"input_text","text":"unchanged"},
+                            {"type":"input_image","file_id":"file_fixture"}]});
+                    if typed {
+                        source["type"] = json!("message");
+                    }
+                    let mut expected = source.as_object().unwrap().clone();
+                    expected.remove("id");
+                    let result = normalized(&source);
+                    assert_eq!(result, expected);
+                    assert_eq!(normalize(result.clone(), 26).unwrap(), result);
+                    assert_eq!(source["id"], id);
+                }
+            }
+        }
+        let source = json!({"type":"message","role":"assistant",
+            "id":"item_0123456789abcdef01234567","author":"worker","content":"unchanged"});
+        let result = normalized(&source);
+        assert!(!result.contains_key("id"));
+        assert_eq!(result["content"][1]["text"], "unchanged");
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("worker")
+        );
+    }
+
+    #[test]
+    fn native_unknown_and_non_message_identities_are_preserved() {
+        for id in [
+            Value::Null,
+            json!(42),
+            json!("msg_0123456789abcdef01234567"),
+            json!("item_0123456789abcdef0123456"),
+            json!("item_0123456789abcdef012345678"),
+            json!("item_0123456789abcdef0123456g"),
+            json!("item_0123456789abcdef012345é"),
+            json!("ITEM_0123456789abcdef01234567"),
+            json!("item_fixture"),
+        ] {
+            let source = json!({"role":"user","id":id,"content":"unchanged"});
+            assert_eq!(normalized(&source), *source.as_object().unwrap());
+        }
+        for kind in [
+            "function_call",
+            "function_call_output",
+            "custom_tool_call",
+            "custom_tool_call_output",
+            "item_reference",
+            "reasoning",
+        ] {
+            let source = json!({"type":kind,"id":"item_0123456789abcdef01234567",
+                "call_id":"item_abcdef0123456789abcdef01","content":"unchanged"});
+            assert_eq!(normalized(&source), *source.as_object().unwrap());
+        }
+        let source = json!({"type":"agent_message","id":"item_0123456789abcdef01234567",
+            "content":"agent context"});
+        let result = normalized(&source);
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("item_0123456789abcdef01234567")
+        );
     }
 
     #[test]

@@ -335,10 +335,10 @@ const visibleAccountColumns = computed(() => accountColumns.filter(column =>
 ))
 const { cache: forecastCache } = useAccountListForecast(accounts)
 
-async function replaceAccount(account: AccountRow) {
+async function replaceAccount(account: AccountRow, options?: Parameters<typeof replaceAccountQuery>[1]) {
   forecastCache.invalidate(account.id)
   forecastCache.syncAccount(account)
-  const retained = await replaceAccountQuery(account)
+  const retained = await replaceAccountQuery(account, options)
   return retained
 }
 watch(visibleColumnKeys, (keys) => {
