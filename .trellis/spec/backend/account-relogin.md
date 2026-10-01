@@ -1,5 +1,12 @@
 # Account Relogin Contracts
 
+- Bulk 2FA import and its preview recognize LF, CRLF (one source line), bare CR,
+  NEL, Unicode line/paragraph separators, blank lines and per-row BOM padding.
+  Email padding and whitespace in Base32 TOTP material may be normalized; password
+  bytes, including spaces and interior `----`, must remain unchanged. Never join
+  fragments across physical lines or silently drop invalid records. Both import
+  textareas disable visual wrapping without changing the submitted text.
+
 - Account-management 2FA enrollment is a separate explicit intent, not a change to
   ordinary library import/manual queue semantics. Persist frozen import settings
   and administrator context; reuse the existing worker, identity/CAS and create-only

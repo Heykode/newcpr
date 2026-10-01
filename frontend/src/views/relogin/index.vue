@@ -683,7 +683,7 @@ onBeforeUnmount(() => {
           </BaseButton>
           <input ref="fileInput" type="file" accept=".txt,.tsv" aria-label="账号资料文件" class="hidden" @change="readFile">
         </div>
-        <BaseTextarea v-model="importText" aria-label="账号资料" autocomplete="off" :spellcheck="false" :rows="7" :disabled="busy" />
+        <BaseTextarea v-model="importText" aria-label="账号资料" autocomplete="off" autocapitalize="off" wrap="off" class="[&_textarea]:overflow-x-auto [&_textarea]:whitespace-pre" :spellcheck="false" :rows="7" :disabled="busy" />
         <BaseCheckbox v-model="replaceExisting" label="确认更新重复邮箱的密码和 2FA 资料" show-label :disabled="busy" />
         <div v-if="preview.length" class="max-h-40 overflow-auto text-cp-sm">
           <div class="mb-2 text-cp-text-secondary">

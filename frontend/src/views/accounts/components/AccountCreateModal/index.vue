@@ -173,6 +173,7 @@ function continueToImport() {
           :label="view.importInput.label"
           :placeholder="view.importInput.placeholder"
           :uploadable="view.importInput.uploadable"
+          :nowrap="mode === 'two_fa'"
           :disabled="busy"
         />
         <BaseCheckbox
