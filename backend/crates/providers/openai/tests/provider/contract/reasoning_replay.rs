@@ -116,7 +116,10 @@ async fn reasoning_replay_preserves_unrelated_fields_and_plaintext_on_http_and_w
         {"type":"future_item","status":"keep","content":[1]},
         {"status":"keep","content":[1]},
         null,
-        "opaque-item"
+        "opaque-item",
+        {"type":"reasoning","id":"rs_missing_ciphertext","summary":[{"type":"summary_text","text":"summary"}],"content":[],"encrypted_content":null},
+        {"type":"reasoning","id":"rs_missing_content","summary":[]},
+        {"type":"reasoning","id":"rs_plaintext","content":[{"type":"reasoning_text","text":"replay"}]}
     ]);
     let mut expected = input.clone();
     for index in [0, 1, 2] {
@@ -126,11 +129,26 @@ async fn reasoning_replay_preserves_unrelated_fields_and_plaintext_on_http_and_w
             .shift_remove("status");
     }
     expected[0].as_object_mut().unwrap().shift_remove("content");
+    expected
+        .as_array_mut()
+        .unwrap()
+        .retain(|item| item["id"] != "rs_missing_ciphertext" && item["id"] != "rs_missing_content");
     for qx in [false, true] {
         for websocket in [false, true] {
             let actual = capture(input.clone(), websocket, qx).await;
             assert_eq!(actual["input"].to_string(), expected.to_string());
         }
+    }
+}
+
+#[tokio::test]
+async fn stored_reasoning_reference_remains_available() {
+    let input = json!([{"type":"reasoning","id":"rs_stored","summary":[]}]);
+    for websocket in [false, true] {
+        assert_eq!(
+            capture_with_store(input.clone(), websocket, false, true).await["input"],
+            input
+        );
     }
 }
 
@@ -146,6 +164,10 @@ async fn reasoning_replay_preserves_non_array_input_without_guessing() {
 }
 
 async fn capture(input: Value, websocket: bool, qx: bool) -> Value {
+    capture_with_store(input, websocket, qx, false).await
+}
+
+async fn capture_with_store(input: Value, websocket: bool, qx: bool, stored: bool) -> Value {
     let http = MockServer::start().await;
     let (base_url, websocket_server) = if websocket {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -176,7 +198,7 @@ async fn capture(input: Value, websocket: bool, qx: bool) -> Value {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let original = json!({
-        "model":"gpt-5.4","store":false,"stream":true,"input":input,
+        "model":"gpt-5.4","store":stored,"stream":true,"input":input,
         "instructions":"Preserve the original instructions.",
         "tools":[{"type":"function","name":"echo","parameters":{"type":"object","properties":{"status":{"type":"string"},"content":{"type":"array"}}}}],
         "future_field":{"status":"keep","content":[1]},

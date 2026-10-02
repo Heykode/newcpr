@@ -137,15 +137,32 @@ pub(crate) fn encode_responses_body(
 
 /// Normalize only rejected reasoning replay fields on the selected OAuth copy.
 pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
+    let stateless = body.get("store") != Some(&Value::Bool(true));
     let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return;
     };
-    for item in input {
+    input.retain_mut(|item| {
         let Some(item) = item.as_object_mut() else {
-            continue;
+            return true;
         };
         if item.get("type").and_then(Value::as_str) != Some("reasoning") {
-            continue;
+            return true;
+        }
+        // A stateless rs_ reference without replayable content cannot be resolved upstream.
+        if stateless
+            && item
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id.starts_with("rs_"))
+            && item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .is_none_or(|content| content.trim().is_empty())
+            && item.get("content").is_none_or(|content| {
+                content.is_null() || content.as_array().is_some_and(Vec::is_empty)
+            })
+        {
+            return false;
         }
         item.shift_remove("status");
         // Preserve plaintext-only history; only encrypted replay makes it redundant.
@@ -160,7 +177,8 @@ pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
         {
             item.shift_remove("content");
         }
-    }
+        true
+    });
 }
 
 fn adapt_codex_responses_body(
