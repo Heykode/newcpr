@@ -1,6 +1,7 @@
 //! 过渡期展示格式化；目标迁移到 Vue presenter。
 
 use super::*;
+use gateway_core::time::DeploymentTimeZone;
 
 pub(crate) fn display_duration(value: Option<u64>) -> String {
     let Some(value) = value.and_then(|value| i64::try_from(value).ok()) else {
@@ -44,14 +45,23 @@ fn basis_points_rate(value: u64) -> f64 {
     value as f64 / 10_000.0
 }
 
-pub(crate) fn china_datetime(value: &DateTime<Utc>) -> String {
-    (*value + Duration::hours(8))
+pub(crate) fn timezone_datetime(value: &DateTime<Utc>, timezone: DeploymentTimeZone) -> String {
+    timezone
+        .local(*value)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string()
 }
 
 pub(crate) fn china_label(value: DateTime<Utc>, format: &str) -> String {
-    (value + Duration::hours(8)).format(format).to_string()
+    timezone_label(value, format, DeploymentTimeZone::default())
+}
+
+pub(crate) fn timezone_label(
+    value: DateTime<Utc>,
+    format: &str,
+    timezone: DeploymentTimeZone,
+) -> String {
+    timezone.local(value).format(format).to_string()
 }
 
 pub(crate) fn outcome_name(outcome: &domain::RequestOutcome) -> &str {
@@ -250,10 +260,13 @@ pub(crate) fn billing_view(billing: Option<&domain::UsageBilling>) -> Option<Bil
     }
 }
 
-pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageListRecordView {
+pub(crate) fn usage_list_record_view_with_timezone(
+    record: domain::UsageListRecord,
+    timezone: DeploymentTimeZone,
+) -> UsageListRecordView {
     let token_details = usage_list_token_details(&record);
     let billing = billing_view(record.billing.as_ref());
-    let created_at_display = china_datetime(&record.started_at);
+    let created_at_display = timezone_datetime(&record.started_at, timezone);
     let model = record
         .upstream_model_id
         .clone()
@@ -308,7 +321,10 @@ pub(crate) fn usage_list_record_view(record: domain::UsageListRecord) -> UsageLi
     }
 }
 
-pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView {
+pub(crate) fn usage_record_view_with_timezone(
+    record: domain::UsageRecord,
+    timezone: DeploymentTimeZone,
+) -> UsageRecordView {
     let tokens = token_details(&record);
     let billing = billing_view(record.billing.as_ref());
     let costs = record
@@ -415,7 +431,7 @@ pub(crate) fn usage_record_view(record: domain::UsageRecord) -> UsageRecordView 
         message,
         metadata,
         created_at: record.started_at,
-        created_at_display: china_datetime(&record.started_at),
+        created_at_display: timezone_datetime(&record.started_at, timezone),
         client_ip: record.client_ip,
         user_agent: record.user_agent,
         reasoning_effort: record.reasoning_effort,
@@ -537,11 +553,14 @@ pub(crate) fn usage_attempt_view(attempt: domain::UsageAttempt) -> UsageAttemptV
     }
 }
 
-pub(crate) fn usage_detail_view(detail: domain::UsageDetail) -> UsageRecordDetailView {
+pub(crate) fn usage_detail_view_with_timezone(
+    detail: domain::UsageDetail,
+    timezone: DeploymentTimeZone,
+) -> UsageRecordDetailView {
     UsageRecordDetailView {
         trace: detail.trace,
         related_requests: detail.related_requests,
-        request: usage_record_view(detail.request),
+        request: usage_record_view_with_timezone(detail.request, timezone),
         attempts: detail
             .attempts
             .into_iter()
@@ -551,16 +570,26 @@ pub(crate) fn usage_detail_view(detail: domain::UsageDetail) -> UsageRecordDetai
     }
 }
 
-pub(crate) fn usage_page_view(page: domain::UsagePage) -> PageData<UsageListRecordView> {
+pub(crate) fn usage_page_view_with_timezone(
+    page: domain::UsagePage,
+    timezone: DeploymentTimeZone,
+) -> PageData<UsageListRecordView> {
     PageData {
-        items: page.items.into_iter().map(usage_list_record_view).collect(),
+        items: page
+            .items
+            .into_iter()
+            .map(|record| usage_list_record_view_with_timezone(record, timezone))
+            .collect(),
         current_page: page.current_page,
         page_size: page.page_size,
         total: page.total,
     }
 }
 
-pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
+pub(crate) fn ops_error_view_with_timezone(
+    error: domain::OpsError,
+    timezone: DeploymentTimeZone,
+) -> OpsErrorView {
     let account_label = error
         .provider_account_email
         .as_ref()
@@ -629,22 +658,32 @@ pub(crate) fn ops_error_view(error: domain::OpsError) -> OpsErrorView {
             recovery_total_latency_ms: error.recovery_total_latency_ms,
         },
         created_at: error.occurred_at,
-        created_at_display: china_datetime(&error.occurred_at),
+        created_at_display: timezone_datetime(&error.occurred_at, timezone),
     }
 }
 
-pub(crate) fn ops_page_view(page: domain::OpsErrorPage) -> PageData<OpsErrorView> {
+pub(crate) fn ops_page_view_with_timezone(
+    page: domain::OpsErrorPage,
+    timezone: DeploymentTimeZone,
+) -> PageData<OpsErrorView> {
     PageData {
-        items: page.items.into_iter().map(ops_error_view).collect(),
+        items: page
+            .items
+            .into_iter()
+            .map(|error| ops_error_view_with_timezone(error, timezone))
+            .collect(),
         current_page: page.current_page,
         page_size: page.page_size,
         total: page.total,
     }
 }
 
-pub(crate) fn trend_point_view(point: domain::TrendPoint) -> TrendPointView {
-    let local_time = china_label(point.bucket_start, "%H:%M");
-    let label = china_label(point.bucket_start, "%m-%d %H:%M");
+pub(crate) fn trend_point_view_with_timezone(
+    point: domain::TrendPoint,
+    timezone: DeploymentTimeZone,
+) -> TrendPointView {
+    let local_time = timezone_label(point.bucket_start, "%H:%M", timezone);
+    let label = timezone_label(point.bucket_start, "%m-%d %H:%M", timezone);
     let success_rate_value = point.success_rate.map(|value| value * 100.0);
     TrendPointView {
         time: local_time,
@@ -767,11 +806,19 @@ pub(crate) fn trend_summary_view(
     }
 }
 
-pub(crate) fn trend_view(trend: domain::Trend, kind: TrendKind) -> TrendData {
+pub(crate) fn trend_view_with_timezone(
+    trend: domain::Trend,
+    kind: TrendKind,
+    timezone: DeploymentTimeZone,
+) -> TrendData {
     TrendData {
         kind,
         summary: trend_summary_view(kind, &trend.summary),
-        points: trend.points.into_iter().map(trend_point_view).collect(),
+        points: trend
+            .points
+            .into_iter()
+            .map(|point| trend_point_view_with_timezone(point, timezone))
+            .collect(),
     }
 }
 
@@ -854,13 +901,17 @@ pub(crate) fn wire_profile_view(profile: domain::DashboardWireProfile) -> Dashbo
     }
 }
 
-pub(crate) fn relative_time(value: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
+pub(crate) fn relative_time_with_timezone(
+    value: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
+) -> String {
     let Some(value) = value else {
         return "从未使用".to_owned();
     };
     let elapsed = now.signed_duration_since(value);
     if elapsed.num_seconds() < 0 {
-        return china_datetime(&value);
+        return timezone_datetime(&value, timezone);
     }
     if elapsed.num_seconds() < 60 {
         return "刚刚".to_owned();
@@ -874,9 +925,10 @@ pub(crate) fn relative_time(value: Option<DateTime<Utc>>, now: DateTime<Utc>) ->
     format!("{} 天前", elapsed.num_days())
 }
 
-pub(crate) fn dashboard_view(
+pub(crate) fn dashboard_view_with_timezone(
     result: domain::DashboardResult,
     kind: TrendKind,
+    timezone: DeploymentTimeZone,
 ) -> DashboardDataView {
     let domain::DashboardResult {
         observation,
@@ -949,12 +1001,12 @@ pub(crate) fn dashboard_view(
                 })
                 .collect(),
             quota_used_percent: credential.quota_used_percent,
-            usage_window: credential
-                .quota_window
-                .map(crate::admin::accounts::quota_window_view),
+            usage_window: credential.quota_window.map(|window| {
+                crate::admin::accounts::quota_window_view_with_timezone(window, timezone)
+            }),
             metric_label,
             metric_value,
-            last_used: relative_time(credential.last_used_at, range.end),
+            last_used: relative_time_with_timezone(credential.last_used_at, range.end, timezone),
         });
     }
     let unavailable_accounts = provider_accounts
@@ -995,13 +1047,13 @@ pub(crate) fn dashboard_view(
                 average_first_token_latency_ms: display_duration(average_first_token_latency_ms),
             },
         },
-        trend: trend_view(trend, kind),
+        trend: trend_view_with_timezone(trend, kind, timezone),
         health_timeline: health_timeline_view(health_timeline),
         wire_profiles: wire_profiles.into_iter().map(wire_profile_view).collect(),
         account_usage: account_usage_views,
         usage_records: recent_requests
             .into_iter()
-            .map(usage_list_record_view)
+            .map(|record| usage_list_record_view_with_timezone(record, timezone))
             .collect(),
         pool_summary: DashboardPoolSummaryView {
             total: provider_accounts.total,

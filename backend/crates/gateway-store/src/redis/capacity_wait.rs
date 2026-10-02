@@ -37,6 +37,7 @@ local clock = redis.call('TIME')
 local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
 local deadline = tonumber(ARGV[2])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now)
 if deadline <= now or redis.call('EXISTS', KEYS[2]) == 1 then
   return -1
 end
@@ -48,6 +49,12 @@ if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
   return 0
 end
 redis.call('ZADD', KEYS[1], deadline, ARGV[1])
+if ARGV[4] == '1' then
+  redis.call('ZADD', KEYS[3], deadline, ARGV[1])
+  if redis.call('PTTL', KEYS[3]) < deadline - now then
+    redis.call('PEXPIREAT', KEYS[3], deadline)
+  end
+end
 if redis.call('PTTL', KEYS[1]) < deadline - now then
   redis.call('PEXPIREAT', KEYS[1], deadline)
 end
@@ -59,6 +66,7 @@ local clock = redis.call('TIME')
 local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+redis.call('ZREMRANGEBYSCORE', KEYS[6], '-inf', now)
 local wait_deadline = tonumber(ARGV[2])
 local execution_deadline = tonumber(ARGV[3])
 if wait_deadline <= now or execution_deadline <= now
@@ -70,6 +78,10 @@ if ARGV[7] == '1' and not redis.call('ZSCORE', KEYS[1], ARGV[1]) then
 end
 if redis.call('ZSCORE', KEYS[2], ARGV[1]) then
   return {1, '0'}
+end
+-- Recheck priority atomically with admission, including a displaced normal waiter.
+if ARGV[8] ~= '1' and redis.call('ZCARD', KEYS[6]) > 0 then
+  return {0, '100'}
 end
 local retry = 0
 if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[4]) then
@@ -97,6 +109,7 @@ if redis.call('PTTL', KEYS[3]) < tonumber(ARGV[6]) then
   redis.call('PEXPIRE', KEYS[3], ARGV[6])
 end
 redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('ZREM', KEYS[6], ARGV[1])
 if redis.call('ZCARD', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[1])
 end
@@ -112,6 +125,7 @@ if deadline > now then
 end
 redis.call('ZREM', KEYS[1], ARGV[1])
 redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('ZREM', KEYS[4], ARGV[1])
 if redis.call('ZCARD', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[1])
 end
@@ -220,6 +234,7 @@ impl RedisCapacityWait {
         );
         let cleanup = Cleanup {
             waiting_key: format!("{}:waiting", keys[0]),
+            priority_key: format!("{}:waiting:priority", keys[0]),
             active_key: keys[0].clone(),
             cancelled_key: format!("{}:cancelled:{token}", keys[0]),
             token,
@@ -290,9 +305,11 @@ impl RedisCapacityWait {
             let outcome = Script::new(ENQUEUE_SCRIPT)
                 .key(&cleanup.waiting_key)
                 .key(&cleanup.cancelled_key)
+                .key(&cleanup.priority_key)
                 .arg(&cleanup.token)
                 .arg(deadline)
                 .arg(request.max_waiting().get())
+                .arg(u8::from(request.priority()))
                 .invoke_async::<i64>(&mut connection)
                 .await
                 .map_err(|_| unavailable("enqueue account capacity wait"))?;
@@ -339,6 +356,7 @@ impl ProviderWaitLease for RedisWaitLease {
             if request.provider_kind() != self.request.provider_kind()
                 || request.account_id() != self.request.account_id()
                 || request.is_quality_check()
+                || request.priority() != self.request.priority()
             {
                 return Err(invalid("capacity promotion owner mismatch"));
             }
@@ -376,6 +394,7 @@ impl ProviderWaitLease for RedisWaitLease {
 
 struct Cleanup {
     waiting_key: String,
+    priority_key: String,
     active_key: String,
     cancelled_key: String,
     token: String,
@@ -415,6 +434,7 @@ impl Ownership {
             .key(&keys[1])
             .key(&keys[2])
             .key(&cleanup.cancelled_key)
+            .key(&cleanup.priority_key)
             .arg(&cleanup.token)
             .arg(cleanup.wait_deadline)
             .arg(execution_millis)
@@ -426,6 +446,7 @@ impl Ownership {
             .arg(interval_millis)
             .arg(SIGNAL_TTL_MILLIS.max(interval_millis))
             .arg(u8::from(require_wait))
+            .arg(u8::from(request.priority()))
             .invoke_async(&mut connection)
             .await
             .map_err(|_| unavailable("acquire account execution capacity"))
@@ -543,6 +564,7 @@ async fn cleanup_once(
             .key(&cleanup.waiting_key)
             .key(&cleanup.active_key)
             .key(&cleanup.cancelled_key)
+            .key(&cleanup.priority_key)
             .arg(&cleanup.token)
             .arg(cleanup.wait_deadline)
             .invoke_async::<i64>(&mut connection)

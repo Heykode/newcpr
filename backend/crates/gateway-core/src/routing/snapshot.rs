@@ -33,6 +33,7 @@ pub struct SnapshotSettingsFacts {
     responses_max_decompressed_body_bytes: u64,
     request_location: Option<crate::account::RequestLocation>,
     max_concurrent_per_account: u32,
+    openai_guardian_reserved_concurrency: u32,
     request_interval_ms: u64,
     rotation_strategy: String,
     model_mappings: BTreeMap<String, String>,
@@ -91,6 +92,7 @@ impl SnapshotSettingsFacts {
             responses_max_decompressed_body_bytes:
                 super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES,
             max_concurrent_per_account,
+            openai_guardian_reserved_concurrency: 0,
             request_location: None,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
@@ -134,6 +136,12 @@ impl SnapshotSettingsFacts {
     #[must_use]
     pub const fn with_turn_state_probe_concurrency(mut self, concurrency: u32) -> Self {
         self.turn_state_probe_concurrency = concurrency;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_openai_guardian_reserved_concurrency(mut self, reserved: u32) -> Self {
+        self.openai_guardian_reserved_concurrency = reserved;
         self
     }
 }
@@ -575,7 +583,8 @@ async fn compile_runtime_snapshot(
         default_concurrency,
         Duration::from_millis(facts.settings.request_interval_ms),
     )
-    .with_smart_scheduling(request_tuning.smart_scheduling);
+    .with_smart_scheduling(request_tuning.smart_scheduling)
+    .with_openai_guardian_reserved_concurrency(facts.settings.openai_guardian_reserved_concurrency);
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
         let mut disable_fast = false;

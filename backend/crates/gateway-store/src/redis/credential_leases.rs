@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -26,7 +26,6 @@ use super::capacity_wait::{CapacityWaitCleanupWriter, RedisCapacityWait};
 use super::{MAX_REDIS_EXACT_INTEGER, namespace, resource_fingerprint};
 
 const SIGNAL_TTL_MILLIS: u64 = 24 * 60 * 60 * 1_000;
-const PROVIDER_ACCOUNT_LEASE_TTL: Duration = Duration::from_secs(10 * 60);
 const OAUTH_REFRESH_LEASE_TTL: Duration = Duration::from_secs(5 * 60);
 const OAUTH_REFRESH_CAPACITY_RESOURCE: &str = "oauth-refresh-global";
 
@@ -542,44 +541,6 @@ impl RedisProviderLeaseCoordinator {
             .collect()
     }
 
-    async fn acquire_scheduling(
-        &self,
-        request: &ProviderSchedulingLeaseRequest,
-    ) -> Result<ProviderLeaseAcquisition, ProviderStoreError> {
-        let ttl = request
-            .deadline()
-            .duration_since(SystemTime::now())
-            .ok()
-            .filter(|remaining| !remaining.is_zero())
-            .map(|remaining| remaining.min(PROVIDER_ACCOUNT_LEASE_TTL))
-            .ok_or_else(|| {
-                ProviderStoreError::new(
-                    ProviderStoreErrorKind::Unavailable,
-                    "acquire expired scheduling lease",
-                )
-            })?;
-        let acquisition = self
-            .repository
-            .try_acquire_bounded_lease(&CredentialBoundedLeaseRequest {
-                scope: CredentialLeaseScope::ProviderAccount,
-                resource_id: request.account_id().as_str().to_owned(),
-                owner_id: self.owner_id("request"),
-                max_concurrent: request.max_concurrent().get(),
-                request_interval: request.request_interval(),
-                ttl,
-            })
-            .await
-            .map_err(|_| provider_unavailable("acquire scheduling lease"))?;
-        Ok(match acquisition {
-            CredentialBoundedLeaseAcquisition::Acquired(guard) => {
-                ProviderLeaseAcquisition::Acquired(Box::new(guard))
-            }
-            CredentialBoundedLeaseAcquisition::Busy { retry_after } => {
-                ProviderLeaseAcquisition::Busy { retry_after }
-            }
-        })
-    }
-
     async fn acquire_refresh_capacity(
         &self,
         request: ProviderRefreshCapacityRequest,
@@ -665,11 +626,9 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
         Box::pin(async move {
             match request {
                 ProviderLeaseRequest::Scheduling(request) => {
-                    if request.is_quality_check() {
-                        self.capacity_wait.acquire_scheduling(request).await
-                    } else {
-                        self.acquire_scheduling(&request).await
-                    }
+                    // All request leases share the capacity-wait admission script so a
+                    // normal request cannot bypass a queued Guardian waiter.
+                    self.capacity_wait.acquire_scheduling(request).await
                 }
                 ProviderLeaseRequest::RefreshCapacity(request) => {
                     self.acquire_refresh_capacity(request).await

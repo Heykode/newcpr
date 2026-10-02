@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _};
 use gateway_admin::model::{
     AdminError as AdminServiceError, PageSize,
@@ -74,7 +74,7 @@ mod wire;
 
 pub use credentials::*;
 pub use handlers::{profile_avatar_response, router};
-pub(super) use presenter::quota_window_view;
+pub(super) use presenter::quota_window_view_with_timezone;
 pub use wire::*;
 
 use credentials::{

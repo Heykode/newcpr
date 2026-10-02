@@ -10,6 +10,50 @@ use super::{candidate, candidate_with_concurrency, context};
 
 const FAILURE_RATE_HALF_LIFE: Duration = Duration::from_secs(15 * 60);
 
+#[test]
+fn guardian_reservation_keeps_frozen_and_live_capacity_consistent() {
+    for (limit, reserved, normal_limit) in [(4, 0, 4), (4, 1, 3), (4, 4, 1), (1, u32::MAX, 1)] {
+        for inflight in 0..=limit {
+            let candidates = vec![candidate_with_concurrency("acct_reserved", inflight, limit)];
+            let mut ctx = context(RotationStrategy::Smart);
+            ctx.reserved_concurrency = reserved;
+            let limits = live_limits(&[("acct_reserved", limit)]);
+            assert_eq!(
+                ctx.concurrency_limit(&candidates[0].account).get(),
+                normal_limit
+            );
+            assert_eq!(
+                AccountSelector.select(&candidates, &ctx).is_some(),
+                inflight < normal_limit
+            );
+            assert_eq!(
+                AccountSelector
+                    .select_with_live_capacity(&candidates, &ctx, &limits)
+                    .is_some(),
+                inflight < normal_limit
+            );
+            assert_eq!(
+                AccountSelector
+                    .capacity_snapshot_with_live_limits(&candidates, &ctx, &limits)
+                    .unwrap()
+                    .total_slots(),
+                u64::from(normal_limit)
+            );
+            ctx.reserved_concurrency = 0;
+            assert_eq!(
+                AccountSelector.select(&candidates, &ctx).is_some(),
+                inflight < limit
+            );
+            assert_eq!(
+                AccountSelector
+                    .select_with_live_capacity(&candidates, &ctx, &limits)
+                    .is_some(),
+                inflight < limit
+            );
+        }
+    }
+}
+
 fn live_limits(values: &[(&str, u32)]) -> gateway_core::runtime::AccountConcurrencySnapshot {
     gateway_core::runtime::AccountConcurrencySnapshot::new(
         gateway_core::routing::ConfigRevision::new(1).unwrap(),

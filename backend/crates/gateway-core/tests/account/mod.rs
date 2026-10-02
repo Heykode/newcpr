@@ -132,6 +132,7 @@ fn context(strategy: RotationStrategy) -> AccountSelectionContext {
         round_robin_cursor: 0,
         eligibility: AccountEligibilityPolicy::Enforce,
         account_scope: None,
+        reserved_concurrency: 0,
     }
 }
 

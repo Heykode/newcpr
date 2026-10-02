@@ -4,12 +4,14 @@ use super::*;
 use gateway_admin::model::quota_forecast::{
     AccountQuotaForecast, AccountQuotaForecastReport, current_window_estimate,
 };
+use gateway_core::time::DeploymentTimeZone;
 
 pub(super) fn account_page_data(
     result: AccountDirectoryPage,
     page: u32,
     page_size: u16,
     now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
 ) -> AccountPageData {
     let total_pages = if result.total == 0 {
         0
@@ -20,7 +22,7 @@ pub(super) fn account_page_data(
         items: result
             .items
             .into_iter()
-            .map(|item| account_view(item, now))
+            .map(|item| account_view(item, now, timezone))
             .collect(),
         page: PageMeta::new(page, u32::from(page_size), result.total, total_pages),
         summary: AccountSummaryView {
@@ -37,9 +39,10 @@ pub(super) fn account_page_data(
 pub(super) fn account_refresh_data(
     result: AccountRefreshResult,
     now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
 ) -> AccountRefreshData {
     AccountRefreshData {
-        account: account_view(result.account, now),
+        account: account_view(result.account, now, timezone),
     }
 }
 
@@ -59,7 +62,11 @@ pub(super) fn account_models_data(result: ProviderModels) -> AccountModelsData {
     }
 }
 
-pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> AccountView {
+pub(super) fn account_view(
+    item: AccountDirectoryItem,
+    now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
+) -> AccountView {
     let AccountDirectoryItem {
         turn_state,
         account,
@@ -76,11 +83,15 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
     } = item;
     let status = projection.status.as_str().to_owned();
     let rate_limited_until = projection.rate_limited_until.map(DateTime::<Utc>::from);
-    let expires_at = account.access_token_expires_at.as_ref().map(china_rfc3339);
-    let added_at = china_rfc3339(&account.created_at);
-    let updated_at = china_rfc3339(&account.updated_at);
-    let usage = account_usage_view(usage, quota.usage_window(), now);
-    let (quota, refresh_token_expires_at) = account_quota_view(quota, rate_limited_until, now);
+    let expires_at = account
+        .access_token_expires_at
+        .as_ref()
+        .map(|value| timezone_rfc3339(value, timezone));
+    let added_at = timezone_rfc3339(&account.created_at, timezone);
+    let updated_at = timezone_rfc3339(&account.updated_at, timezone);
+    let usage = account_usage_view(usage, quota.usage_window(), now, timezone);
+    let (quota, refresh_token_expires_at) =
+        account_quota_view(quota, rate_limited_until, now, timezone);
     AccountView {
         purchase_cost,
         excel_recovery,
@@ -108,7 +119,10 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         authentication_kind: account.authentication_kind,
         has_refresh_token: account.has_refresh_token,
         relogin_count: account.relogin_count,
-        last_relogin_at: account.last_relogin_at.as_ref().map(china_rfc3339),
+        last_relogin_at: account
+            .last_relogin_at
+            .as_ref()
+            .map(|value| timezone_rfc3339(value, timezone)),
         status,
         error_reason: projection
             .error_reason
@@ -143,7 +157,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
                     .into_iter()
                     .map(|(model, expires_at)| AccountTurnStateModelView {
                         model,
-                        expires_at: china_rfc3339(&expires_at),
+                        expires_at: timezone_rfc3339(&expires_at, timezone),
                     })
                     .collect(),
                 models: models
@@ -156,7 +170,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
                         probe_cooldown_until: status
                             .probe_cooldown_until
                             .as_ref()
-                            .map(china_rfc3339),
+                            .map(|value| timezone_rfc3339(value, timezone)),
                         probe_retry_from_upstream: status.probe_retry_from_upstream,
                         probe_http_status: status.probe_http_status,
                         probe_error_code: status.probe_error_code,
@@ -165,20 +179,26 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
                         last_probe_reason: status.last_probe_reason,
                         active: status.active.map(|slot| AccountTurnStateSlotView {
                             chars: slot.chars,
-                            captured_at: slot.captured_at.as_ref().map(china_rfc3339),
-                            expires_at: china_rfc3339(&slot.expires_at),
+                            captured_at: slot
+                                .captured_at
+                                .as_ref()
+                                .map(|value| timezone_rfc3339(value, timezone)),
+                            expires_at: timezone_rfc3339(&slot.expires_at, timezone),
                         }),
                         standby: status.standby.map(|slot| AccountTurnStateSlotView {
                             chars: slot.chars,
-                            captured_at: slot.captured_at.as_ref().map(china_rfc3339),
-                            expires_at: china_rfc3339(&slot.expires_at),
+                            captured_at: slot
+                                .captured_at
+                                .as_ref()
+                                .map(|value| timezone_rfc3339(value, timezone)),
+                            expires_at: timezone_rfc3339(&slot.expires_at, timezone),
                         }),
                     })
                     .collect(),
             }
         }),
         in_flight,
-        health_timeline: account_health_timeline_view(health_timeline, in_flight, now),
+        health_timeline: account_health_timeline_view(health_timeline, in_flight, now, timezone),
         concurrency_limit: account.concurrency_limit.map(|limit| limit.get()),
         effective_concurrency_limit: effective_concurrency_limit.get(),
         weight: account.weight.get(),
@@ -191,13 +211,15 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
         access_token_expires_at_display: account
             .access_token_expires_at
             .as_ref()
-            .map(china_datetime),
+            .map(|value| timezone_datetime(value, timezone)),
         refresh_token_expires_at,
-        next_refresh_at: account.next_refresh_at.map(|value| china_rfc3339(&value)),
+        next_refresh_at: account
+            .next_refresh_at
+            .map(|value| timezone_rfc3339(&value, timezone)),
         added_at,
-        added_at_display: china_datetime(&account.created_at),
+        added_at_display: timezone_datetime(&account.created_at, timezone),
         updated_at,
-        updated_at_display: china_datetime(&account.updated_at),
+        updated_at_display: timezone_datetime(&account.updated_at, timezone),
         quota,
         usage,
         cumulative_costs: cumulative_costs
@@ -209,19 +231,29 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
 
 impl From<AccountQuotaForecastReport> for AccountQuotaForecastData {
     fn from(report: AccountQuotaForecastReport) -> Self {
-        Self {
-            account_id: report.account_id,
-            generated_at: china_rfc3339(&report.generated_at),
-            forecasts: report
-                .forecasts
-                .into_iter()
-                .map(quota_forecast_view)
-                .collect(),
-        }
+        account_quota_forecast_data(report, DeploymentTimeZone::default())
     }
 }
 
-fn quota_forecast_view(forecast: AccountQuotaForecast) -> AccountQuotaForecastView {
+pub(super) fn account_quota_forecast_data(
+    report: AccountQuotaForecastReport,
+    timezone: DeploymentTimeZone,
+) -> AccountQuotaForecastData {
+    AccountQuotaForecastData {
+        account_id: report.account_id,
+        generated_at: timezone_rfc3339(&report.generated_at, timezone),
+        forecasts: report
+            .forecasts
+            .into_iter()
+            .map(|forecast| quota_forecast_view(forecast, timezone))
+            .collect(),
+    }
+}
+
+fn quota_forecast_view(
+    forecast: AccountQuotaForecast,
+    timezone: DeploymentTimeZone,
+) -> AccountQuotaForecastView {
     AccountQuotaForecastView {
         period: match forecast.period {
             AccountUsagePeriod::Weekly => "weekly",
@@ -235,11 +267,14 @@ fn quota_forecast_view(forecast: AccountQuotaForecast) -> AccountQuotaForecastVi
             used_percent_display: source
                 .used_percent
                 .map_or_else(|| "—".to_owned(), |value| format!("{value:.1}%")),
-            observed_at: source.observed_at.map(|value| china_rfc3339(&value)),
-            observed_at_display: source
+            observed_at: source
                 .observed_at
-                .map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
-            reset_at: china_rfc3339(&source.reset_at),
+                .map(|value| timezone_rfc3339(&value, timezone)),
+            observed_at_display: source.observed_at.map_or_else(
+                || "—".to_owned(),
+                |value| timezone_datetime(&value, timezone),
+            ),
+            reset_at: timezone_rfc3339(&source.reset_at, timezone),
             tokens_display: display_optional_tokens(source.tokens),
             usd_display: forecast_usd_display(source.usd),
         }),
@@ -269,6 +304,7 @@ fn account_health_timeline_view(
     buckets: Vec<AccountRequestBucket>,
     in_flight: Option<u64>,
     now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
 ) -> Vec<AccountHealthBucketView> {
     let current_bucket = now.timestamp().div_euclid(300);
     let by_bucket = buckets
@@ -283,7 +319,7 @@ fn account_health_timeline_view(
             let bucket = by_bucket.get(&bucket_number);
             AccountHealthBucketView {
                 key: bucket_start.to_rfc3339(),
-                start_at: china_rfc3339(&bucket_start),
+                start_at: timezone_rfc3339(&bucket_start, timezone),
                 request_count: bucket.map_or(0, |value| value.request_count),
                 success_count: bucket.map_or(0, |value| value.success_count),
                 error_count: bucket.map_or(0, |value| value.error_count),
@@ -302,28 +338,42 @@ pub(super) fn account_quota_view(
     mut quota: ProviderQuota,
     rate_limited_until: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
 ) -> (AccountQuotaView, Option<String>) {
     quota.apply_limit_reached_display();
     let refresh_token_expires_at = quota
         .refresh_token_expires_at
-        .map(|value| china_rfc3339(&value));
-    let refreshed_at_display = quota
-        .observed_at
-        .map_or_else(|| "—".to_owned(), |value| relative_time(value, now));
-    let windows = quota.windows.into_iter().map(quota_window_view).collect();
-    let rate_limited_until = rate_limited_until.map(|until| china_datetime(&until));
+        .map(|value| timezone_rfc3339(&value, timezone));
+    let refreshed_at_display = quota.observed_at.map_or_else(
+        || "—".to_owned(),
+        |value| relative_time_with_timezone(value, now, timezone),
+    );
+    let windows = quota
+        .windows
+        .into_iter()
+        .map(|window| quota_window_view_with_timezone(window, timezone))
+        .collect();
+    let rate_limited_until = rate_limited_until.map(|until| timezone_datetime(&until, timezone));
     (
         AccountQuotaView {
             refreshed_at_display,
             limit_reached: quota.limit_reached,
             rate_limited_until,
             windows,
+            credits: quota.credits.map(|credits| AccountQuotaCreditsView {
+                has_credits: credits.has_credits,
+                unlimited: credits.unlimited,
+                balance: credits.balance,
+            }),
         },
         refresh_token_expires_at,
     )
 }
 
-pub(crate) fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWindowView {
+pub(crate) fn quota_window_view_with_timezone(
+    window: ProviderQuotaWindow,
+    timezone: DeploymentTimeZone,
+) -> AccountQuotaWindowView {
     let ProviderQuotaWindow {
         key,
         group,
@@ -357,7 +407,10 @@ pub(crate) fn quota_window_view(window: ProviderQuotaWindow) -> AccountQuotaWind
         limit_reached,
         local_usage: local_usage.as_ref().map(quota_local_usage),
         reset_at,
-        reset_at_display: reset_at.map_or_else(|| "—".to_owned(), |value| china_datetime(&value)),
+        reset_at_display: reset_at.map_or_else(
+            || "—".to_owned(),
+            |value| timezone_datetime(&value, timezone),
+        ),
     }
 }
 
@@ -391,6 +444,7 @@ pub(super) fn account_usage_view(
     usage: Option<AccountUsage>,
     source: Option<(&ProviderQuotaWindow, AccountUsagePeriod)>,
     now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
 ) -> AccountUsageView {
     let Some(usage) = usage else {
         return empty_account_usage();
@@ -448,10 +502,13 @@ pub(super) fn account_usage_view(
         created_tokens_display: display_optional_tokens(usage.cache_write_tokens),
         read_tokens: usage.cached_tokens,
         read_tokens_display: display_optional_tokens(usage.cached_tokens),
-        last_used_at: usage.last_used_at.map(|value| china_rfc3339(&value)),
-        last_used_at_display: usage
+        last_used_at: usage
             .last_used_at
-            .map_or_else(|| "—".to_owned(), |value| relative_time(value, now)),
+            .map(|value| timezone_rfc3339(&value, timezone)),
+        last_used_at_display: usage.last_used_at.map_or_else(
+            || "—".to_owned(),
+            |value| relative_time_with_timezone(value, now, timezone),
+        ),
         cost_estimate_status: cost_estimate_status.to_owned(),
         known_cost_count: Some(known_count),
         partial_cost_count: Some(u64::from(cost_estimate_status == "partial")),
@@ -460,7 +517,7 @@ pub(super) fn account_usage_view(
         models: usage
             .models
             .into_iter()
-            .map(|model| account_model_usage_view(model, now))
+            .map(|model| account_model_usage_view(model, now, timezone))
             .collect(),
     }
 }
@@ -468,6 +525,7 @@ pub(super) fn account_usage_view(
 pub(super) fn account_model_usage_view(
     usage: AccountModelUsage,
     now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
 ) -> ModelUsageView {
     let known_count = usage
         .cost_coverage
@@ -524,8 +582,8 @@ pub(super) fn account_model_usage_view(
         partial_cost_count: u64::from(cost_estimate_status == "partial"),
         unknown_cost_count: usage.cost_coverage.unavailable_count,
         costs: usage.costs.iter().map(account_currency_cost_view).collect(),
-        last_used_at: china_rfc3339(&usage.last_used_at),
-        last_used_at_display: relative_time(usage.last_used_at, now),
+        last_used_at: timezone_rfc3339(&usage.last_used_at, timezone),
+        last_used_at_display: relative_time_with_timezone(usage.last_used_at, now, timezone),
     }
 }
 
@@ -597,10 +655,14 @@ pub(super) fn empty_account_usage() -> AccountUsageView {
     }
 }
 
-pub(super) fn relative_time(value: DateTime<Utc>, now: DateTime<Utc>) -> String {
+pub(super) fn relative_time_with_timezone(
+    value: DateTime<Utc>,
+    now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
+) -> String {
     let elapsed = now.signed_duration_since(value);
     if elapsed.num_seconds() < 0 {
-        return china_datetime(&value);
+        return timezone_datetime(&value, timezone);
     }
     if elapsed.num_seconds() < 60 {
         return "刚刚".to_owned();
@@ -614,17 +676,13 @@ pub(super) fn relative_time(value: DateTime<Utc>, now: DateTime<Utc>) -> String 
     format!("{} 天前", elapsed.num_days())
 }
 
-pub(super) fn china_offset() -> FixedOffset {
-    FixedOffset::east_opt(8 * 60 * 60).expect("UTC+8 is a valid fixed offset")
+pub(super) fn timezone_rfc3339(value: &DateTime<Utc>, timezone: DeploymentTimeZone) -> String {
+    timezone.local(*value).to_rfc3339()
 }
 
-pub(super) fn china_rfc3339(value: &DateTime<Utc>) -> String {
-    value.with_timezone(&china_offset()).to_rfc3339()
-}
-
-pub(super) fn china_datetime(value: &DateTime<Utc>) -> String {
-    value
-        .with_timezone(&china_offset())
+pub(super) fn timezone_datetime(value: &DateTime<Utc>, timezone: DeploymentTimeZone) -> String {
+    timezone
+        .local(*value)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string()
 }

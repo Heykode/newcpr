@@ -545,6 +545,7 @@ mod provider {
             in_flight: None,
             health_timeline: Vec::new(),
             quota: ProviderQuota {
+                credits: None,
                 plan_type: None,
                 observed_at: None,
                 refresh_token_expires_at: None,

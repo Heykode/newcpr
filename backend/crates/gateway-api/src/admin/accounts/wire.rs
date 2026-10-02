@@ -522,6 +522,15 @@ pub struct AccountQuotaView {
     /// 429 临时限流（Redis 冷却）到期时间展示；非限流中为 `null`。
     pub rate_limited_until: Option<String>,
     pub windows: Vec<AccountQuotaWindowView>,
+    pub credits: Option<AccountQuotaCreditsView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountQuotaCreditsView {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
 }
 
 /// 一个 quota 时间窗口。

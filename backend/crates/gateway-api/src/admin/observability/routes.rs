@@ -94,8 +94,12 @@ where
 {
     let kind = query.trend_kind().map_err(map_wire_error)?;
     // 概览默认按中国时区当日统计，与单独趋势接口保持同一口径。
-    let range = dashboard_today_range(query.start_time.as_deref(), query.end_time.as_deref())
-        .map_err(map_wire_error)?;
+    let range = dashboard_today_range_with_timezone(
+        query.start_time.as_deref(),
+        query.end_time.as_deref(),
+        state.deployment_timezone(),
+    )
+    .map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
@@ -104,7 +108,11 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(dashboard_view(result, kind)),
+        AdminEnvelope::ok(dashboard_view_with_timezone(
+            result,
+            kind,
+            state.deployment_timezone(),
+        )),
     ))
 }
 
@@ -117,8 +125,12 @@ where
     S: AdminSessionState + Send + Sync,
 {
     let kind = query.trend_kind().map_err(map_wire_error)?;
-    let range = dashboard_today_range(query.start_time.as_deref(), query.end_time.as_deref())
-        .map_err(map_wire_error)?;
+    let range = dashboard_today_range_with_timezone(
+        query.start_time.as_deref(),
+        query.end_time.as_deref(),
+        state.deployment_timezone(),
+    )
+    .map_err(map_wire_error)?;
     let result = state
         .admin_services()
         .observability()
@@ -127,7 +139,11 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(trend_view(result, kind)),
+        AdminEnvelope::ok(trend_view_with_timezone(
+            result,
+            kind,
+            state.deployment_timezone(),
+        )),
     ))
 }
 
@@ -146,7 +162,7 @@ where
         .usage_records(command)
         .await
         .map_err(map_service_error)?;
-    let data = usage_page_view(result);
+    let data = usage_page_view_with_timezone(result, state.deployment_timezone());
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 
@@ -167,7 +183,10 @@ where
         .map_err(map_service_error)?;
     Ok(AdminResponse::new(
         StatusCode::OK,
-        AdminEnvelope::ok(usage_detail_view(result)),
+        AdminEnvelope::ok(usage_detail_view_with_timezone(
+            result,
+            state.deployment_timezone(),
+        )),
     ))
 }
 
@@ -271,6 +290,6 @@ where
         .ops_errors(command)
         .await
         .map_err(map_service_error)?;
-    let data = ops_page_view(result);
+    let data = ops_page_view_with_timezone(result, state.deployment_timezone());
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }

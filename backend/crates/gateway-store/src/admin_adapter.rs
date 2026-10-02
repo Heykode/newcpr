@@ -115,6 +115,18 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
+                openai_guardian_reserved_concurrency: command
+                    .openai_guardian_reserved_concurrency
+                    .unwrap_or(current.settings.openai_guardian_reserved_concurrency),
+                account_warmup_enabled: command
+                    .account_warmup_enabled
+                    .unwrap_or(current.settings.account_warmup_enabled),
+                account_warmup_schedule_time: command
+                    .account_warmup_schedule_time
+                    .unwrap_or(current.settings.account_warmup_schedule_time),
+                account_warmup_model: command
+                    .account_warmup_model
+                    .unwrap_or(current.settings.account_warmup_model),
                 request_interval_ms: command.request_interval_ms,
                 rotation_strategy: command.rotation_strategy.as_str().to_owned(),
                 model_mappings: store_model_mappings(command.model_mappings),
@@ -264,6 +276,10 @@ pub(crate) fn admin_runtime_settings(
         refresh_margin_seconds: settings.refresh_margin_seconds,
         refresh_concurrency: settings.refresh_concurrency,
         max_concurrent_per_account: settings.max_concurrent_per_account,
+        openai_guardian_reserved_concurrency: settings.openai_guardian_reserved_concurrency,
+        account_warmup_enabled: settings.account_warmup_enabled,
+        account_warmup_schedule_time: settings.account_warmup_schedule_time,
+        account_warmup_model: settings.account_warmup_model,
         request_interval_ms: settings.request_interval_ms,
         rotation_strategy,
         min_codex_desktop_version: settings.min_codex_desktop_version,

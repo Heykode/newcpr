@@ -17,6 +17,7 @@ use gateway_admin::{
     AdminServices,
     model::auth::{AdminPrincipal, AdminRequestContext, ChangePassword, LoginCommand, LoginError},
 };
+use gateway_core::time::DeploymentTimeZone;
 use serde::{Deserialize, Serialize};
 use tower_http::request_id::RequestId;
 use url::Url;
@@ -29,6 +30,10 @@ const ADMIN_SESSION_COOKIE: &str = "cpr_admin_session";
 /// 所有管理 HTTP 模块从 state 消费同一个认证用例端口。
 pub trait AdminSessionState {
     fn admin_services(&self) -> &AdminServices;
+
+    fn deployment_timezone(&self) -> DeploymentTimeZone {
+        DeploymentTimeZone::default()
+    }
 }
 
 fn admin_session_cookie_attrs(headers: &HeaderMap) -> &'static str {

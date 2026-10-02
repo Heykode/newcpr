@@ -444,6 +444,18 @@ impl SettingsStore for MemorySettingsStore {
             refresh_margin_seconds: command.refresh_margin_seconds,
             refresh_concurrency: command.refresh_concurrency,
             max_concurrent_per_account: command.max_concurrent_per_account,
+            openai_guardian_reserved_concurrency: command
+                .openai_guardian_reserved_concurrency
+                .unwrap_or(settings.openai_guardian_reserved_concurrency),
+            account_warmup_enabled: command
+                .account_warmup_enabled
+                .unwrap_or(settings.account_warmup_enabled),
+            account_warmup_schedule_time: command
+                .account_warmup_schedule_time
+                .unwrap_or_else(|| settings.account_warmup_schedule_time.clone()),
+            account_warmup_model: command
+                .account_warmup_model
+                .unwrap_or_else(|| settings.account_warmup_model.clone()),
             request_interval_ms: command.request_interval_ms,
             rotation_strategy: command.rotation_strategy,
             min_codex_desktop_version: command.min_codex_desktop_version,
@@ -1495,6 +1507,10 @@ fn test_runtime_settings() -> RuntimeSettings {
         refresh_margin_seconds: 3_600,
         refresh_concurrency: 2,
         max_concurrent_per_account: 3,
+        openai_guardian_reserved_concurrency: 0,
+        account_warmup_enabled: false,
+        account_warmup_schedule_time: "08:00".to_owned(),
+        account_warmup_model: None,
         request_interval_ms: 50,
         rotation_strategy: RotationStrategy::Smart,
         min_codex_desktop_version: None,

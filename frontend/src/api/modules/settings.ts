@@ -81,6 +81,10 @@ export interface RuntimeSettings {
   refreshMarginSeconds: number
   refreshConcurrency: number
   maxConcurrentPerAccount: number
+  openaiGuardianReservedConcurrency: number
+  accountWarmupEnabled: boolean
+  accountWarmupScheduleTime: string
+  accountWarmupModel: string | null
   requestIntervalMs: number
   rotationStrategy: RotationStrategy
   minCodexDesktopVersion: string | null

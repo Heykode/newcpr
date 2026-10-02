@@ -284,6 +284,7 @@ impl CodexCredentialSelector {
                     AccountEligibilityPolicy::Enforce
                 },
                 account_scope: request.attempt.account_scope().cloned(),
+                reserved_concurrency: request.reserved_concurrency,
             },
             pinned,
             affinity,
@@ -295,7 +296,7 @@ impl CodexCredentialSelector {
         // A changed account/credential/publication gets a bounded fresh selection, never an upstream retry.
         'rescan: for scan in 0..3 {
             control
-                .run(self.reload_wait_exclusions(&mut state, request.attempt))
+                .run(self.reload_wait_exclusions(&mut state, request))
                 .await?;
             if scan != 0 {
                 candidates = control
@@ -435,7 +436,7 @@ impl CodexCredentialSelector {
                 };
                 state.context.now = SystemTime::now();
                 control
-                    .run(self.reload_wait_exclusions(&mut state, request.attempt))
+                    .run(self.reload_wait_exclusions(&mut state, request))
                     .await?;
                 let limits = self.wait_limits()?;
                 if AccountSelector.availability(&candidate, &state.context, &limits)
@@ -448,7 +449,7 @@ impl CodexCredentialSelector {
                     continue;
                 }
                 let lease_request =
-                    self.wait_execution_request(&candidate.account, &limits, request.attempt)?;
+                    self.wait_execution_request(&candidate.account, &limits, request)?;
                 match control
                     .run(async {
                         self.leases
@@ -661,9 +662,9 @@ impl CodexCredentialSelector {
     async fn reload_wait_exclusions(
         &self,
         state: &mut WaitingSelection,
-        attempt: &AttemptContext,
+        request: &CredentialSelectionInput<'_>,
     ) -> Result<(), CredentialSelectionError> {
-        state.context.excluded_accounts = attempt.excluded_accounts().clone();
+        state.context.excluded_accounts = request.attempt.excluded_accounts().clone();
         state
             .context
             .excluded_accounts
@@ -764,22 +765,29 @@ impl CodexCredentialSelector {
         &self,
         account: &ProviderAccount,
         limits: &AccountConcurrencySnapshot,
-        attempt: &AttemptContext,
+        request: &CredentialSelectionInput<'_>,
     ) -> Result<ProviderSchedulingLeaseRequest, CredentialSelectionError> {
         Ok(ProviderSchedulingLeaseRequest::new(
             self.provider_kind.clone(),
             account.id().clone(),
             account.revision(),
             quality_concurrency_limit(
-                limits
-                    .limit_for(account.id().as_str())
-                    .ok_or(CredentialSelectionError::NoEligibleCredential)?,
-                attempt.is_quality_check(),
+                super::reserved_limit(
+                    limits
+                        .limit_for(account.id().as_str())
+                        .ok_or(CredentialSelectionError::NoEligibleCredential)?,
+                    request.reserved_concurrency,
+                ),
+                request.attempt.is_quality_check(),
             ),
-            attempt.account_selection_policy().request_interval(),
-            attempt.deadline(),
+            request
+                .attempt
+                .account_selection_policy()
+                .request_interval(),
+            request.attempt.deadline(),
         )
-        .with_quality_check(attempt.is_quality_check()))
+        .with_quality_check(request.attempt.is_quality_check())
+        .with_priority(request.priority()))
     }
 
     async fn wait_for_account(
@@ -795,7 +803,7 @@ impl CodexCredentialSelector {
         };
         state.context.now = SystemTime::now();
         control
-            .run(self.reload_wait_exclusions(state, request.attempt))
+            .run(self.reload_wait_exclusions(state, request))
             .await?;
         let limits = self.wait_limits()?;
         let interval_end = (mode == AccountWaitMode::Sticky && state.pinned.is_none())
@@ -813,7 +821,7 @@ impl CodexCredentialSelector {
                             .try_acquire_scheduling(self.wait_execution_request(
                                 &candidate.account,
                                 &limits,
-                                request.attempt,
+                                request,
                             )?)
                             .await
                             .map_err(Into::into)
@@ -842,7 +850,7 @@ impl CodexCredentialSelector {
                 };
                 state.context.now = SystemTime::now();
                 control
-                    .run(self.reload_wait_exclusions(state, request.attempt))
+                    .run(self.reload_wait_exclusions(state, request))
                     .await?;
                 let limits = self.wait_limits()?;
                 if matches!(
@@ -874,14 +882,17 @@ impl CodexCredentialSelector {
         let acquisition = control
             .run(async {
                 self.leases
-                    .try_acquire_wait(ProviderWaitLeaseRequest::new(
-                        self.provider_kind.clone(),
-                        id.clone(),
-                        request.attempt.request_id().clone(),
-                        mode,
-                        max_waiting,
-                        deadline.deadline(),
-                    ))
+                    .try_acquire_wait(
+                        ProviderWaitLeaseRequest::new(
+                            self.provider_kind.clone(),
+                            id.clone(),
+                            request.attempt.request_id().clone(),
+                            mode,
+                            max_waiting,
+                            deadline.deadline(),
+                        )
+                        .with_priority(request.priority()),
+                    )
                     .await
                     .map_err(Into::into)
             })
@@ -898,7 +909,7 @@ impl CodexCredentialSelector {
                     };
                     let limits = self.wait_limits()?;
                     state.context.now = SystemTime::now();
-                    self.reload_wait_exclusions(state, request.attempt).await?;
+                    self.reload_wait_exclusions(state, request).await?;
                     match AccountSelector.availability(&candidate, &state.context, &limits) {
                         AccountSchedulingAvailability::Blocked(
                             AccountSchedulingBlocker::RequestInterval,
@@ -927,7 +938,7 @@ impl CodexCredentialSelector {
                         .try_promote(self.wait_execution_request(
                             &candidate.account,
                             &limits,
-                            request.attempt,
+                            request,
                         )?)
                         .await?;
                     match promotion {
@@ -1003,7 +1014,7 @@ impl CodexCredentialSelector {
         };
         let limits = self.wait_limits()?;
         state.context.now = SystemTime::now();
-        self.reload_wait_exclusions(state, request.attempt).await?;
+        self.reload_wait_exclusions(state, request).await?;
         // The acquired lease has just written last_started_at. Its own interval
         // is not a reason to reject it; the atomic acquisition checked the prior start.
         let mut acquired_context = state.context.clone();
@@ -1097,7 +1108,7 @@ impl CodexCredentialSelector {
             })
             .collect();
         let current = self.reload_wait_pool(request, &state.universe).await?;
-        self.reload_wait_exclusions(state, request.attempt).await?;
+        self.reload_wait_exclusions(state, request).await?;
         let current_limits = self.wait_limits()?;
         acquired_context.now = SystemTime::now();
         acquired_context.excluded_accounts = state.context.excluded_accounts.clone();

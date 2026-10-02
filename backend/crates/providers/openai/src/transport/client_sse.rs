@@ -41,7 +41,7 @@ use crate::transport::{
         CodexWebSocketPoolKey, CodexWebSocketStreamingExchange, WEBSOCKET_FAST_PATH_BUDGET,
         WebSocketFastPath, WebSocketOriginBreaker, execute_prepared_response_create_request_stream,
         post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
-        write_websocket_audit_artifact_from_env,
+        write_websocket_audit_artifact_from_env_with_timezone,
     },
 };
 
@@ -70,6 +70,7 @@ impl CodexBackendClient {
             attempt_pinned: false,
             forced_pool_key: None,
             request_tuning: None,
+            timezone: gateway_core::time::DeploymentTimeZone::default(),
             base_url,
             profile,
             websocket_pool: None,
@@ -683,7 +684,10 @@ impl CodexBackendClient {
                 websocket_create.connection().opening_audit_snapshot(),
                 websocket_payload_audit_snapshot(&websocket_request),
             );
-            if let Err(error) = write_websocket_audit_artifact_from_env(&artifact).await {
+            if let Err(error) =
+                write_websocket_audit_artifact_from_env_with_timezone(&artifact, self.timezone)
+                    .await
+            {
                 tracing::warn!(error = %error, "Failed to write Codex WebSocket audit artifact");
             }
         }

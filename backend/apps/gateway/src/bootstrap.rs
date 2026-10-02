@@ -68,6 +68,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         xai,
         _compose_services: _,
     } = config;
+    let timezone = host.timezone;
 
     let host = gateway_host::initialize_with_proxy_client_builder(
         host,
@@ -89,7 +90,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     )
     .await;
     let mut openai = provider_openai::initialize_with_request_tuning(
-        openai,
+        openai.with_timezone(timezone),
         provider_ports.clone(),
         request_tuning.clone(),
     )
@@ -102,7 +103,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         gateway_core::initialize_with_request_tuning(store.core_ports(), providers, request_tuning)
             .await?;
     host.report_startup_ready("Core");
-    let mut admin = gateway_admin::initialize(
+    let mut admin = gateway_admin::initialize_with_timezone(
         admin,
         store.admin_ports(),
         vec![openai.admin_provider(), xai.admin_provider()],
@@ -113,6 +114,7 @@ pub async fn run() -> Result<(), BootstrapError> {
         ),
         host.client_distribution_resolver(),
         (host.system_operations(), host.notification_delivery()?),
+        timezone,
     )
     .await?;
     host.report_startup_ready("Admin");
@@ -120,13 +122,14 @@ pub async fn run() -> Result<(), BootstrapError> {
     let mut probes = store.health_probes();
     probes.extend(core.health_probes());
     probes.push(host.logging_health_probe());
-    let api = gateway_api::initialize(
+    let api = gateway_api::initialize_with_timezone(
         api,
         core.execution_service(),
         admin.services().with_mihomo(host.mihomo_management()),
         probes,
         host.worker_health(),
         host.connection_lifecycle(),
+        timezone,
     )?
     .with_image_relay(openai.image_relay());
     host.report_startup_ready("API");

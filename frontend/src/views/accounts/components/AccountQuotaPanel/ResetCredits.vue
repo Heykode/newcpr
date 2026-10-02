@@ -10,6 +10,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
+import AccountQuotaCredits from './Credits.vue'
 import UsageLimits from './UsageLimits.vue'
 
 const props = defineProps<{
@@ -144,6 +145,8 @@ function handleRequestConsume(creditId: string) {
           {{ expiryLabel(consumptionCredit.expiresAt) }}
         </p>
       </section>
+
+      <AccountQuotaCredits :credits="account.quota.credits" />
     </div>
 
     <div v-else class="grid gap-4">

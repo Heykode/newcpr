@@ -87,6 +87,8 @@ fn missing_config_field(error: &config::ConfigError) -> Option<String> {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HostConfig {
+    #[serde(default)]
+    pub timezone: gateway_core::time::DeploymentTimeZone,
     pub listen: ListenConfig,
     pub runtime_data_dir: PathBuf,
     pub logging: LoggingConfig,

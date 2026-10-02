@@ -180,7 +180,8 @@ async fn initialize_with_request_tuning_mode(
         config.base_url().to_owned(),
         ports.cooldowns(),
     )
-    .with_request_tuning(request_tuning.clone());
+    .with_request_tuning(request_tuning.clone())
+    .with_runtime_policy(Arc::clone(&runtime_policy));
     let quota = Arc::new(match &egress_runtime {
         Some(runtime) => quota.with_egress_runtime(Arc::clone(runtime)),
         None => quota,
@@ -218,6 +219,7 @@ async fn initialize_with_request_tuning_mode(
         config.base_url().to_owned(),
         Arc::clone(&websocket_pool),
         config.stream_max_retries(),
+        config.timezone,
     )
     .map_err(OpenAiInitializeError::Provider)?
     .with_request_tuning(request_tuning.clone())
@@ -284,6 +286,7 @@ async fn initialize_with_request_tuning_mode(
         },
         websocket_pool,
         desktop_release_status,
+        config.timezone,
     );
     let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(match &egress_runtime {
         Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
@@ -296,6 +299,7 @@ async fn initialize_with_request_tuning_mode(
         config.quota_refresh_policy(),
         config.oauth_refresh_enabled(),
         desktop_release,
+        config.timezone,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
 

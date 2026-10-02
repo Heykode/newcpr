@@ -29,6 +29,7 @@ const REQUEST_DUMP_SECRET: &str = "unredacted-authorization-value";
 #[test]
 fn logging_requires_at_least_one_sink() {
     let mut config = HostConfig {
+        timezone: Default::default(),
         listen: ListenConfig {
             host: "127.0.0.1".to_owned(),
             port: 8080,
@@ -261,6 +262,7 @@ fn with_logging(config: HostConfig, write: impl FnOnce()) {
 
 fn logging_config(directory: PathBuf, request_dump: bool) -> HostConfig {
     HostConfig {
+        timezone: Default::default(),
         listen: ListenConfig {
             host: "127.0.0.1".to_owned(),
             port: 8080,
@@ -283,6 +285,12 @@ fn logging_config(directory: PathBuf, request_dump: bool) -> HostConfig {
         drain_timeout_seconds: 30,
         worker_shutdown_timeout_seconds: 30,
     }
+}
+
+fn deployment_today() -> chrono::NaiveDate {
+    gateway_core::time::DeploymentTimeZone::default()
+        .local(chrono::Utc::now())
+        .date_naive()
 }
 
 fn read_log_file_set(directory: &Path, file_prefix: &str) -> String {

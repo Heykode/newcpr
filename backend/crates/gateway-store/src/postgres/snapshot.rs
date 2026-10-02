@@ -32,6 +32,7 @@ pub struct SnapshotRuntimeSettings {
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
     pub request_tuning: RequestTuningOverrides,
+    pub openai_guardian_reserved_concurrency: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,7 +162,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             )
             .with_request_location(data.settings.request_tuning.openai_request_location.clone())
             .with_excel_image_transport(data.settings.request_tuning.excel_image_transport.clone())
-            .with_request_tuning(to_core_request_tuning(data.settings.request_tuning));
+            .with_request_tuning(to_core_request_tuning(data.settings.request_tuning))
+            .with_openai_guardian_reserved_concurrency(
+                data.settings.openai_guardian_reserved_concurrency,
+            );
             let client_policies = data
                 .client_api_keys
                 .into_iter()
@@ -356,13 +360,15 @@ async fn load_settings(
             Option<sqlx::types::Json<RequestTuningOverrides>>,
             bool,
             i64,
+            i64,
         ),
     >(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, disable_fast,
-                responses_max_decompressed_body_bytes
+                responses_max_decompressed_body_bytes,
+                openai_guardian_reserved_concurrency
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -388,6 +394,7 @@ async fn load_settings(
                 .map_or_else(RequestTuningOverrides::default, |value| value.0),
             disable_fast: row.10,
             responses_max_decompressed_body_bytes: to_u64(row.11)?,
+            openai_guardian_reserved_concurrency: to_u32(row.12)?,
         },
     ))
 }

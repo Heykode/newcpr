@@ -14,6 +14,7 @@ pub use self::{
     audit::{
         WS_AUDIT_DIR_ENV, websocket_audit_dir, write_websocket_audit_artifact_for_dir,
         write_websocket_audit_artifact_from_env,
+        write_websocket_audit_artifact_from_env_with_timezone,
     },
     breaker::{
         WebSocketOriginBreaker, WebSocketOriginBreakerConfig, WebSocketOriginBreakerDecision,

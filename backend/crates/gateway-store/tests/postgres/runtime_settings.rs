@@ -10,6 +10,61 @@ use serde_json::{Value, json};
 
 use super::TestDatabase;
 
+#[tokio::test]
+async fn warmup_cursor_is_atomic_durable_and_monotonic_across_configuration_updates() {
+    use gateway_core::provider_ports::ProviderRuntimePolicyPort as _;
+    let Some(database) = TestDatabase::create("warmup_cursor").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let zone = "America/New_York".parse().unwrap();
+    let slot = "2026-11-01T01:30:00".parse().unwrap();
+    let results =
+        futures::future::join_all((0..16).map(|_| repository.claim_warmup_slot(zone, slot))).await;
+    assert_eq!(
+        results
+            .into_iter()
+            .filter(|result| *result.as_ref().unwrap())
+            .count(),
+        1
+    );
+    let revision = repository
+        .load_runtime_settings()
+        .await
+        .unwrap()
+        .config_revision;
+    let recreated = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert!(!recreated.claim_warmup_slot(zone, slot).await.unwrap());
+    assert!(
+        !recreated
+            .claim_warmup_slot(zone, slot - TimeDelta::days(1))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        recreated
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .config_revision,
+        revision
+    );
+    let mut update = settings_with_margin(3_600);
+    update.account_warmup_enabled = true;
+    update.account_warmup_model = Some("fixture-model".into());
+    update.openai_guardian_reserved_concurrency = 2;
+    recreated.update_runtime_settings(update).await.unwrap();
+    assert!(recreated.load_warmup_policy().await.unwrap().enabled());
+    assert!(!recreated.claim_warmup_slot(zone, slot).await.unwrap());
+    assert!(
+        recreated
+            .claim_warmup_slot(zone, slot + TimeDelta::days(1))
+            .await
+            .unwrap()
+    );
+    database.close().await;
+}
+
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         turn_state_probe_proxy_id: None,
@@ -27,6 +82,10 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         refresh_margin_seconds,
         refresh_concurrency: 2,
         max_concurrent_per_account: 3,
+        openai_guardian_reserved_concurrency: 0,
+        account_warmup_enabled: false,
+        account_warmup_schedule_time: "03:00".to_owned(),
+        account_warmup_model: None,
         request_interval_ms: 50,
         rotation_strategy: "smart".to_owned(),
         model_mappings: BTreeMap::from([

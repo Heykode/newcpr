@@ -12,6 +12,7 @@ use gateway_core::{
         DaemonRestartPolicy, WorkerContribution, WorkerId, WorkerKind, WorkerRegistration,
         WorkerRunnable,
     },
+    time::DeploymentTimeZone,
 };
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
@@ -333,6 +334,33 @@ impl AdminBundle {
 ///
 /// 配置非法、Provider 注册冲突/缺失或默认管理员初始化失败时返回错误。
 pub async fn initialize(
+    config: AdminConfig,
+    store: AdminStorePorts,
+    providers: Vec<Arc<dyn ProviderAdmin>>,
+    snapshot: Arc<dyn SnapshotControl>,
+    probes: (Arc<dyn AccountProbe>, Arc<dyn ports::proxy::ProxyProbe>),
+    client_distribution: Arc<dyn ClientDistributionResolver>,
+    host_operations: (
+        Arc<dyn SystemOperations>,
+        Arc<dyn ports::notification::NotificationDelivery>,
+    ),
+) -> Result<AdminBundle, AdminError> {
+    initialize_with_timezone(
+        config,
+        store,
+        providers,
+        snapshot,
+        probes,
+        client_distribution,
+        host_operations,
+        DeploymentTimeZone::default(),
+    )
+    .await
+}
+
+/// 使用部署时区初始化管理控制面；绝对时间字段仍由各 Store 按 UTC 保存。
+#[expect(clippy::too_many_arguments)]
+pub async fn initialize_with_timezone(
     mut config: AdminConfig,
     store: AdminStorePorts,
     providers: Vec<Arc<dyn ProviderAdmin>>,
@@ -343,6 +371,7 @@ pub async fn initialize(
         Arc<dyn SystemOperations>,
         Arc<dyn ports::notification::NotificationDelivery>,
     ),
+    timezone: DeploymentTimeZone,
 ) -> Result<AdminBundle, AdminError> {
     let (system, notification_delivery) = host_operations;
     let (probe, proxy_probe) = probes;
@@ -492,11 +521,12 @@ pub async fn initialize(
             snapshot.clone(),
         )),
         client_distribution: Arc::new(DefaultClientDistributionService::new(client_distribution)),
-        observability: Arc::new(DefaultObservabilityService::new(
+        observability: Arc::new(DefaultObservabilityService::new_with_timezone(
             store.observability(),
             store.accounts(),
             store.settings(),
             registry,
+            timezone,
         )),
         settings: Arc::new(DefaultSettingsService::new(
             store.settings(),

@@ -793,6 +793,7 @@ fn waiting_provider_with_exclusions(
         base_url,
         Arc::new(CodexWebSocketPool::default()),
         u32::try_from(DEFAULT_STREAM_MAX_RETRIES).unwrap(),
+        gateway_core::time::DeploymentTimeZone::default(),
     )
     .unwrap()
 }

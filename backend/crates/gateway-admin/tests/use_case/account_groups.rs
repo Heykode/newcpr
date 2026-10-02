@@ -255,6 +255,7 @@ async fn monitor_reuses_persisted_reference_after_peer_deletion_without_ratio_ta
     store.set_accounts(vec![account_record("openai"), donor]);
     let provider = FakeProviderAdmin::new("openai", events.clone());
     let quota = ProviderQuota {
+        credits: None,
         plan_type: Some("plus".to_owned()),
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
@@ -557,6 +558,7 @@ async fn monitor_updates_unused_fraction_without_relearning_from_unaligned_list_
     let events = Arc::new(Mutex::new(Vec::new()));
     let provider = FakeProviderAdmin::new("openai", events.clone());
     let mut quota = ProviderQuota {
+        credits: None,
         plan_type: Some("plus".to_owned()),
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,

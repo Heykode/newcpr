@@ -44,6 +44,10 @@ pub struct RuntimeSettingsView {
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
+    pub openai_guardian_reserved_concurrency: u64,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
@@ -71,6 +75,11 @@ pub struct UpdateRuntimeSettingsRequest {
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
     pub max_concurrent_per_account: u64,
+    pub openai_guardian_reserved_concurrency: Option<u64>,
+    pub account_warmup_enabled: Option<bool>,
+    pub account_warmup_schedule_time: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_probe_proxy_selection")]
+    pub account_warmup_model: Option<Option<String>>,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
@@ -126,6 +135,31 @@ impl UpdateRuntimeSettingsRequest {
         if i64::try_from(self.request_interval_ms).is_err() {
             return Err(WireValidationError::new("requestIntervalMs"));
         }
+        if self
+            .openai_guardian_reserved_concurrency
+            .is_some_and(|value| value > u64::from(u32::MAX))
+        {
+            return Err(WireValidationError::new(
+                "openaiGuardianReservedConcurrency",
+            ));
+        }
+        if self
+            .account_warmup_schedule_time
+            .as_deref()
+            .is_some_and(|value| !gateway_core::provider_ports::valid_warmup_schedule_time(value))
+            || self
+                .account_warmup_model
+                .as_ref()
+                .and_then(Option::as_deref)
+                .is_some_and(|model| {
+                    model.is_empty()
+                        || model.len() > 128
+                        || model != model.trim()
+                        || model.bytes().any(|byte| byte.is_ascii_control())
+                })
+        {
+            return Err(WireValidationError::new("accountWarmup"));
+        }
         if RotationStrategy::parse(&self.rotation_strategy).is_none() {
             return Err(WireValidationError::new("rotationStrategy"));
         }
@@ -168,6 +202,16 @@ impl UpdateRuntimeSettingsRequest {
                 .map_err(|_| WireValidationError::new("settingsRefreshConcurrencyOverflow"))?,
             max_concurrent_per_account: u32::try_from(self.max_concurrent_per_account)
                 .map_err(|_| WireValidationError::new("settingsMaxConcurrencyOverflow"))?,
+            openai_guardian_reserved_concurrency: self
+                .openai_guardian_reserved_concurrency
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| {
+                    WireValidationError::new("settingsGuardianReservedConcurrencyOverflow")
+                })?,
+            account_warmup_enabled: self.account_warmup_enabled,
+            account_warmup_schedule_time: self.account_warmup_schedule_time,
+            account_warmup_model: self.account_warmup_model,
             request_interval_ms: self.request_interval_ms,
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
@@ -202,6 +246,12 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: u64::from(settings.refresh_concurrency),
             max_concurrent_per_account: u64::from(settings.max_concurrent_per_account),
+            openai_guardian_reserved_concurrency: u64::from(
+                settings.openai_guardian_reserved_concurrency,
+            ),
+            account_warmup_enabled: settings.account_warmup_enabled,
+            account_warmup_schedule_time: settings.account_warmup_schedule_time,
+            account_warmup_model: settings.account_warmup_model,
             request_interval_ms: settings.request_interval_ms,
             rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
             min_codex_desktop_version: settings.min_codex_desktop_version,

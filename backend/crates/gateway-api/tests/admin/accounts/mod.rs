@@ -1831,6 +1831,7 @@ mod response {
                 models: vec![],
             }),
             quota: ProviderQuota {
+                credits: None,
                 plan_type: None,
                 observed_at: Some(now),
                 refresh_token_expires_at: None,

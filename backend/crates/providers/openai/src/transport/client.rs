@@ -13,6 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use futures::{Stream, StreamExt};
 use gateway_core::runtime::RequestTuningHandle;
+use gateway_core::time::DeploymentTimeZone;
 use gateway_protocol::openai::{
     WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, events::retry_after_seconds_from_body,
     sse::SseError,
@@ -742,6 +743,7 @@ pub struct CodexBackendClient {
     pub(super) attempt_pinned: bool,
     pub(super) forced_pool_key: Option<CodexWebSocketPoolKey>,
     pub(super) request_tuning: Option<RequestTuningHandle>,
+    pub(super) timezone: DeploymentTimeZone,
 }
 
 impl CodexBackendClient {
@@ -876,6 +878,11 @@ impl CodexBackendClient {
             .clone()
             .with_request_tuning(request_tuning.clone());
         self.request_tuning = Some(request_tuning);
+        self
+    }
+
+    pub(crate) fn with_timezone(mut self, timezone: DeploymentTimeZone) -> Self {
+        self.timezone = timezone;
         self
     }
 

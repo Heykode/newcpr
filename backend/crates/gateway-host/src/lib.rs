@@ -52,7 +52,7 @@ pub async fn initialize_with_proxy_client_builder<E>(
     config: HostConfig,
     build: impl Fn(reqwest::ClientBuilder) -> Result<reqwest::Client, E> + Send + Sync + 'static,
 ) -> Result<HostBundle, HostError> {
-    let log_guard = initialize_logging(&config.logging)?;
+    let log_guard = initialize_logging(&config.logging, config.timezone)?;
     let cancellation = CancellationToken::new();
     let connections = Arc::new(ConnectionTracker::new(cancellation.clone()));
     let workers = WorkerSupervisor::new(cancellation.clone());
@@ -87,7 +87,7 @@ impl HostBundle {
     pub fn log_file_maintenance(
         &self,
     ) -> Arc<dyn gateway_admin::ports::log_cleanup::LogFileMaintenance> {
-        logging::file_maintenance(&self.config.logging)
+        logging::file_maintenance(&self.config.logging, self.config.timezone)
     }
     #[must_use]
     pub fn mihomo_management(&self) -> Arc<dyn gateway_admin::ports::mihomo::MihomoManagement> {

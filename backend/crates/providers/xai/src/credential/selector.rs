@@ -232,6 +232,7 @@ impl GrokAccountSessionSelector {
                 AccountEligibilityPolicy::Enforce
             },
             account_scope: (!diagnostic).then(|| Arc::clone(request.account_scope())),
+            reserved_concurrency: 0,
         };
         let mut capacity_denied = false;
         let mut retry_after = None;

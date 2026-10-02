@@ -64,6 +64,10 @@ export function useSettingsForm() {
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
+    openaiGuardianReservedConcurrency: null as number | null,
+    accountWarmupEnabled: false,
+    accountWarmupScheduleTime: '08:00',
+    accountWarmupModel: '',
     requestIntervalMs: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
     minCodexDesktopVersion: '',
@@ -76,7 +80,7 @@ export function useSettingsForm() {
 
   const excelImages = useExcelImageSettings(computed(() => form.requestTuning))
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'openaiGuardianReservedConcurrency') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -93,6 +97,7 @@ export function useSettingsForm() {
   const refreshMarginSecondsValue = numericModel('refreshMarginSeconds')
   const refreshConcurrencyValue = numericModel('refreshConcurrency')
   const maxConcurrentPerAccountValue = numericModel('maxConcurrentPerAccount')
+  const openaiGuardianReservedConcurrencyValue = numericModel('openaiGuardianReservedConcurrency')
   const requestIntervalMsValue = numericModel('requestIntervalMs')
   const responsesMaxDecompressedBodyBytesValue = computed({
     get: () => String(form.responsesMaxDecompressedBodyBytes),
@@ -118,6 +123,10 @@ export function useSettingsForm() {
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
+    form.openaiGuardianReservedConcurrency = data.openaiGuardianReservedConcurrency ?? 0
+    form.accountWarmupEnabled = data.accountWarmupEnabled ?? false
+    form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
+    form.accountWarmupModel = data.accountWarmupModel ?? ''
     form.requestIntervalMs = data.requestIntervalMs
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
@@ -205,6 +214,20 @@ export function useSettingsForm() {
     const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy } = form
     if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || requestIntervalMs === null || !rotationStrategy) {
       toast.warning('请完整填写运行参数和调度策略')
+      return
+    }
+    const openaiGuardianReservedConcurrencyValue = form.openaiGuardianReservedConcurrency
+    if (openaiGuardianReservedConcurrencyValue === null
+      || !Number.isSafeInteger(openaiGuardianReservedConcurrencyValue)
+      || openaiGuardianReservedConcurrencyValue < 0) {
+      toast.warning('Guardian 预留并发须为非负整数')
+      return
+    }
+    const openaiGuardianReservedConcurrency = openaiGuardianReservedConcurrencyValue
+    const accountWarmupModel = form.accountWarmupModel.trim()
+    if (/^(?:[01]\d|2[0-3]):[0-5]\d(?:,(?:[01]\d|2[0-3]):[0-5]\d)*$/.test(form.accountWarmupScheduleTime.trim()) === false
+      || (form.accountWarmupEnabled && !accountWarmupModel)) {
+      toast.warning('预热时间须为 HH:MM，可填写多个逗号分隔时间；启用时必须填写模型')
       return
     }
     if (minCodexDesktopVersionError.value || minCodexCliVersionError.value) {
@@ -310,6 +333,10 @@ export function useSettingsForm() {
         refreshMarginSeconds,
         refreshConcurrency,
         maxConcurrentPerAccount,
+        openaiGuardianReservedConcurrency,
+        accountWarmupEnabled: form.accountWarmupEnabled,
+        accountWarmupScheduleTime: form.accountWarmupScheduleTime.trim(),
+        accountWarmupModel: accountWarmupModel || null,
         requestIntervalMs,
         rotationStrategy,
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
@@ -351,6 +378,7 @@ export function useSettingsForm() {
     refreshMarginSecondsValue,
     refreshConcurrencyValue,
     maxConcurrentPerAccountValue,
+    openaiGuardianReservedConcurrencyValue,
     requestIntervalMsValue,
     responsesMaxDecompressedBodyBytesValue,
     minCodexDesktopVersionError,

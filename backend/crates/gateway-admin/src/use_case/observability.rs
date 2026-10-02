@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Timelike as _, Utc};
 use futures::TryStreamExt;
-use gateway_core::{account::ProviderAccountId, routing::ProviderKind};
+use gateway_core::{account::ProviderAccountId, routing::ProviderKind, time::DeploymentTimeZone};
 
 use crate::{
     model::{
@@ -24,7 +24,7 @@ use crate::{
             TrendSummary, UsageBilling, UsageCalculatedBillingFact, UsageDetail, UsageFilter,
             UsageInsights, UsageInsightsCost, UsageInsightsCostPoint, UsageInsightsHealth,
             UsageInsightsHealthPoint, UsageInsightsPerformance, UsageInsightsPerformancePoint,
-            UsageOverview, UsagePage, UsageQuery, UsageSummary, china_day_start,
+            UsageOverview, UsagePage, UsageQuery, UsageSummary,
         },
         provider_credentials::ProviderQuotaRequest,
     },
@@ -137,15 +137,17 @@ pub(crate) struct DefaultObservabilityService {
     settings: Arc<dyn SettingsStore>,
     providers: ProviderAdminRegistry,
     dashboard_queries: DashboardQueryCache,
+    timezone: DeploymentTimeZone,
 }
 
 impl DefaultObservabilityService {
     #[must_use]
-    pub(crate) fn new(
+    pub(crate) fn new_with_timezone(
         store: Arc<dyn ObservabilityStore>,
         accounts: Arc<dyn AccountStore>,
         settings: Arc<dyn SettingsStore>,
         providers: ProviderAdminRegistry,
+        timezone: DeploymentTimeZone,
     ) -> Self {
         Self {
             store,
@@ -153,6 +155,7 @@ impl DefaultObservabilityService {
             settings,
             providers,
             dashboard_queries: DashboardQueryCache::default(),
+            timezone,
         }
     }
 
@@ -175,7 +178,10 @@ impl DefaultObservabilityService {
                 .providers
                 .plan_type_display(&account.provider_kind, account.plan_type.as_deref());
         }
-        let today_start = china_day_start(observation.range.end);
+        let today_start = self
+            .timezone
+            .day_start(observation.range.end)
+            .unwrap_or(observation.range.end);
         let yesterday_start = today_start - Duration::days(1);
         let today =
             dashboard_period_metrics(&observation.trend, today_start, observation.range.end);
@@ -197,7 +203,7 @@ impl DefaultObservabilityService {
         let average_first_token_latency_ms =
             average(first_token_latency_sum_ms, first_token_latency_count);
         let trend = trend(TrendKind::Usage, observation.trend.clone())?;
-        let health_timeline = health_timeline_at(&observation.trend, Utc::now());
+        let health_timeline = health_timeline_at(&observation.trend, Utc::now(), self.timezone);
         let wire_profiles = self.providers.dashboard_wire_profiles();
         let max_concurrent_per_account = u64::from(settings.max_concurrent_per_account);
         let total_slots = runtime_slots.as_ref().map_or_else(
@@ -890,9 +896,13 @@ impl DefaultObservabilityService {
 
 /// 按指定时刻计算中国自然日的 96 个 15 分钟健康桶。
 #[must_use]
-fn health_timeline_at(records: &[RequestMetricPoint], now: DateTime<Utc>) -> HealthTimeline {
+fn health_timeline_at(
+    records: &[RequestMetricPoint],
+    now: DateTime<Utc>,
+    timezone: DeploymentTimeZone,
+) -> HealthTimeline {
     let current_slot = quarter_hour_start(now);
-    let start = china_day_start(now);
+    let start = timezone.day_start(now).unwrap_or(now);
     let mut buckets = (0..HEALTH_TIMELINE_SLOTS)
         .map(|index| {
             (

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use chrono::{NaiveDate, Utc};
 use flate2::{Compression, write::GzEncoder};
+use gateway_core::time::DeploymentTimeZone;
 
 use super::sink::LogHealth;
 
@@ -21,6 +22,7 @@ pub(super) struct RotatingLogWriter {
     bytes_written: u64,
     file: File,
     health: Arc<LogHealth>,
+    timezone: DeploymentTimeZone,
 }
 
 impl RotatingLogWriter {
@@ -30,9 +32,10 @@ impl RotatingLogWriter {
         maximum_bytes: u64,
         retention_days: usize,
         health: Arc<LogHealth>,
+        timezone: DeploymentTimeZone,
     ) -> io::Result<Self> {
         fs::create_dir_all(&directory)?;
-        let date = Utc::now().date_naive();
+        let date = timezone.local(Utc::now()).date_naive();
         // Zero delegates retention to administrator-controlled maintenance.
         if retention_days > 0 {
             cleanup_log_files(&directory, prefix, date, retention_days)?;
@@ -60,6 +63,7 @@ impl RotatingLogWriter {
             bytes_written,
             file,
             health,
+            timezone,
         };
         // Recover unfinished archive work after restart; the active file is never compressed.
         for entry in managed_log_files(&writer.directory, prefix)? {
@@ -74,7 +78,7 @@ impl RotatingLogWriter {
     }
 
     fn rotate_if_required(&mut self, incoming_bytes: usize) -> io::Result<()> {
-        let date = Utc::now().date_naive();
+        let date = self.timezone.local(Utc::now()).date_naive();
         let day_changed = date != self.date;
         let size_exceeded = self.bytes_written > 0
             && self.bytes_written.saturating_add(incoming_bytes as u64) > self.maximum_bytes;

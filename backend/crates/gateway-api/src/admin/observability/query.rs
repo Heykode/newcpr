@@ -328,12 +328,18 @@ pub(crate) fn usage_range(
     domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
 }
 
-pub(crate) fn dashboard_today_range(
+pub(crate) fn dashboard_today_range_with_timezone(
     start: Option<&str>,
     end: Option<&str>,
+    timezone: gateway_core::time::DeploymentTimeZone,
 ) -> Result<domain::TimeRange, WireValidationError> {
     let end = parse_datetime(end)?.unwrap_or_else(Utc::now);
-    let start = parse_datetime(start)?.unwrap_or_else(|| domain::china_day_start(end));
+    let start = match parse_datetime(start)? {
+        Some(start) => start,
+        None => timezone
+            .day_start(end)
+            .ok_or_else(|| WireValidationError::new("timeRange"))?,
+    };
     domain::TimeRange::new(start, end).map_err(|_| WireValidationError::new("timeRange"))
 }
 

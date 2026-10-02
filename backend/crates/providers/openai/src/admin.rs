@@ -24,9 +24,9 @@ use gateway_admin::model::provider_credentials::{
     ProviderExportCredentialInput, ProviderModel, ProviderModels, ProviderProfileActivityInsights,
     ProviderProfileAvatar, ProviderProfileAvatarStreamError, ProviderProfileDailyUsage,
     ProviderProfileInvocation, ProviderProfileStatistics, ProviderProfileStatisticsSummary,
-    ProviderQuota, ProviderQuotaRequest, ProviderQuotaWindow, ProviderQuotaWindowRole,
-    ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits, ProviderSubscription,
-    QuotaLocalUsageAttribution,
+    ProviderQuota, ProviderQuotaCredits, ProviderQuotaRequest, ProviderQuotaWindow,
+    ProviderQuotaWindowRole, ProviderResetCredit, ProviderResetCreditResult, ProviderResetCredits,
+    ProviderSubscription, QuotaLocalUsageAttribution,
 };
 use gateway_admin::model::quota_forecast_sampling::QuotaForecastObservation;
 use gateway_admin::ports::provider::{ProviderAdmin, ProviderAdminError, ProviderAdminErrorKind};
@@ -44,6 +44,7 @@ use gateway_core::provider_ports::{
     ProviderStoreErrorKind,
 };
 use gateway_core::routing::{ProviderKind, UpstreamModelId};
+use gateway_core::time::DeploymentTimeZone;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Deserialize;
 use serde_json::{Map, Number, Value};
@@ -85,6 +86,7 @@ pub(crate) struct OpenAiAdminProvider {
     catalog: Arc<CodexCredentialCatalogService>,
     websocket_pool: Arc<CodexWebSocketPool>,
     desktop_release: CodexDesktopReleaseStatus,
+    timezone: DeploymentTimeZone,
 }
 
 pub(crate) struct OpenAiAdminServices {
@@ -104,6 +106,7 @@ impl OpenAiAdminProvider {
         services: OpenAiAdminServices,
         websocket_pool: Arc<CodexWebSocketPool>,
         desktop_release: CodexDesktopReleaseStatus,
+        timezone: DeploymentTimeZone,
     ) -> Self {
         Self {
             egress_runtime: None,
@@ -117,6 +120,7 @@ impl OpenAiAdminProvider {
             catalog: services.catalog,
             websocket_pool,
             desktop_release,
+            timezone,
         }
     }
 
@@ -798,7 +802,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
             });
         }
         let document = CodexCredentialAdmin
-            .format_cpr_export(items)
+            .format_cpr_export_with_timezone(items, self.timezone)
             .and_then(|document| document.into_json())
             .map_err(map_credential_admin_error)?;
         let Value::Object(document) = document else {
@@ -1041,6 +1045,7 @@ fn empty_quota() -> ProviderQuota {
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),
+        credits: None,
         limit_reached: false,
         provider_data: None,
     }
@@ -1102,6 +1107,11 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         observed_at: Some(DateTime::<Utc>::from(snapshot.observed_at())),
         refresh_token_expires_at: None,
         windows,
+        credits: snapshot.credits().map(|credits| ProviderQuotaCredits {
+            has_credits: credits.has_credits,
+            unlimited: credits.unlimited,
+            balance: credits.balance.clone(),
+        }),
         limit_reached,
         provider_data: Some(ProviderDocument::new(OpaqueProviderData::new(
             provider_data,
