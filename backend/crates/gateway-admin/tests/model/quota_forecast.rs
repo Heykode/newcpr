@@ -59,6 +59,7 @@ pub(super) fn window(key: &str, days: u64) -> ProviderQuotaWindow {
 
 pub(super) fn quota(windows: Vec<ProviderQuotaWindow>) -> ProviderQuota {
     ProviderQuota {
+        credits: None,
         plan_type: None,
         observed_at: Some(now()),
         refresh_token_expires_at: None,

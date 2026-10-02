@@ -8,6 +8,7 @@ import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 
+import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import AdminPasswordCard from './components/AdminPasswordCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
@@ -56,6 +57,7 @@ const {
   refreshMarginSecondsValue,
   refreshConcurrencyValue,
   maxConcurrentPerAccountValue,
+  openaiGuardianReservedConcurrencyValue,
   requestIntervalMsValue,
   responsesMaxDecompressedBodyBytesValue,
   minCodexDesktopVersionError,
@@ -146,12 +148,20 @@ watch(
 
         <RuntimeSettingsCard
           v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
+          v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
           v-model:refresh-margin-seconds="refreshMarginSecondsValue"
           v-model:refresh-concurrency="refreshConcurrencyValue"
           v-model:request-interval-ms="requestIntervalMsValue"
           v-model:responses-max-decompressed-body-bytes="responsesMaxDecompressedBodyBytesValue"
           v-model:disable-fast="form.disableFast"
           v-model:request-tuning="form.requestTuning"
+          :disabled="loading || saving"
+        />
+
+        <AccountWarmupCard
+          v-model:enabled="form.accountWarmupEnabled"
+          v-model:schedule-time="form.accountWarmupScheduleTime"
+          v-model:model="form.accountWarmupModel"
           :disabled="loading || saving"
         />
 

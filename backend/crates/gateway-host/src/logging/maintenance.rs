@@ -7,12 +7,25 @@ use gateway_admin::{
         store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult},
     },
 };
+use gateway_core::time::DeploymentTimeZone;
 use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
 
-pub(crate) struct FileMaintenance(pub PathBuf);
+pub(crate) struct FileMaintenance {
+    directory: PathBuf,
+    timezone: DeploymentTimeZone,
+}
+
+impl FileMaintenance {
+    pub(crate) fn new(directory: PathBuf, timezone: DeploymentTimeZone) -> Self {
+        Self {
+            directory,
+            timezone,
+        }
+    }
+}
 
 fn unavailable(_: impl std::fmt::Display) -> AdminStoreError {
     AdminStoreError::new(
@@ -67,7 +80,7 @@ async fn directory(path: &Path) -> AdminStoreResult<Option<tokio::fs::ReadDir>> 
 #[async_trait]
 impl LogFileMaintenance for FileMaintenance {
     async fn bytes(&self) -> AdminStoreResult<u64> {
-        let Some(mut entries) = directory(&self.0).await? else {
+        let Some(mut entries) = directory(&self.directory).await? else {
             return Ok(0);
         };
         let mut total = 0_u64;
@@ -100,7 +113,7 @@ impl LogFileMaintenance for FileMaintenance {
     }
 
     async fn clean(&self, cutoff: DateTime<Utc>, limit: usize) -> AdminStoreResult<CleanupBatch> {
-        let Some(mut entries) = directory(&self.0).await? else {
+        let Some(mut entries) = directory(&self.directory).await? else {
             return Ok(CleanupBatch {
                 removed: 0,
                 complete: true,
@@ -115,7 +128,7 @@ impl LogFileMaintenance for FileMaintenance {
             let Some((date, true)) = managed_name(&entry.file_name().to_string_lossy()) else {
                 continue;
             };
-            if date >= cutoff.date_naive() {
+            if date >= self.timezone.local(cutoff).date_naive() {
                 continue;
             }
             let metadata = match tokio::fs::symlink_metadata(entry.path()).await {

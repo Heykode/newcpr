@@ -1,6 +1,8 @@
 //! OpenAI Provider 向 Host 贡献的后台 worker。
 
 use super::*;
+use chrono::{Timelike as _, Utc};
+use gateway_core::time::DeploymentTimeZone;
 
 pub(super) const WORKER_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 pub(super) const WORKER_MAXIMUM_BACKOFF: Duration = Duration::from_secs(60);
@@ -11,6 +13,8 @@ pub(super) const QUOTA_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 pub(super) const DESKTOP_RELEASE_WORKER_OWNER: &str = "openai-desktop-release";
 pub(super) const MODEL_ETAG_WORKER_OWNER: &str = "openai-model-etag";
 pub(super) const MODEL_CATALOG_WORKER_OWNER: &str = "openai-model-catalog";
+pub(super) const WARMUP_WORKER_OWNER: &str = "openai-account-warmup";
+pub(super) const WARMUP_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EtagRefreshBackoff {
@@ -50,6 +54,7 @@ pub(crate) fn worker_contributions(
     quota_refresh_policy: CodexQuotaRefreshPolicy,
     oauth_refresh_enabled: bool,
     desktop_release: Arc<CodexDesktopReleaseService>,
+    timezone: DeploymentTimeZone,
 ) -> Result<Vec<WorkerContribution>, WorkerDefinitionError> {
     let refresh_id = WorkerId::try_new(WorkerKind::OAuthRefresh, PROVIDER_NAME)?;
     let quota_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, PROVIDER_NAME)?;
@@ -57,6 +62,7 @@ pub(crate) fn worker_contributions(
     let etag_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, MODEL_ETAG_WORKER_OWNER)?;
     let desktop_release_id =
         WorkerId::try_new(WorkerKind::QuotaCatalogHealth, DESKTOP_RELEASE_WORKER_OWNER)?;
+    let warmup_id = WorkerId::try_new(WorkerKind::QuotaCatalogHealth, WARMUP_WORKER_OWNER)?;
     let mut contributions = Vec::new();
     if oauth_refresh_enabled {
         contributions.push(WorkerContribution::Registration(scheduled_registration(
@@ -69,7 +75,14 @@ pub(crate) fn worker_contributions(
         WorkerContribution::Registration(scheduled_registration(
             quota_id,
             QUOTA_CHECK_INTERVAL,
-            Box::new(OpenAiQuotaTask { quota }),
+            Box::new(OpenAiQuotaTask {
+                quota: Arc::clone(&quota),
+            }),
+        )?),
+        WorkerContribution::Registration(scheduled_registration(
+            warmup_id,
+            WARMUP_CHECK_INTERVAL,
+            Box::new(OpenAiWarmupTask { quota, timezone }),
         )?),
         WorkerContribution::Registration(scheduled_registration(
             catalog_id,
@@ -199,6 +212,11 @@ pub(super) struct OpenAiQuotaTask {
     quota: Arc<CodexCredentialQuotaService>,
 }
 
+pub(super) struct OpenAiWarmupTask {
+    quota: Arc<CodexCredentialQuotaService>,
+    timezone: DeploymentTimeZone,
+}
+
 pub(super) struct OpenAiCatalogTask {
     catalog: Arc<CodexCredentialCatalogService>,
 }
@@ -257,6 +275,80 @@ impl ScheduledTask for OpenAiQuotaTask {
                 }
             }
             Ok(())
+        })
+    }
+}
+
+impl ScheduledTask for OpenAiWarmupTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            if context.cancellation().is_cancelled() {
+                return Ok(());
+            }
+            let Some(runtime_policy) = self.quota.runtime_policy() else {
+                return Ok(());
+            };
+            let policy = runtime_policy.load_warmup_policy().await.map_err(|error| {
+                tracing::warn!(error = %error, "OpenAI warmup policy load failed");
+                WorkerTaskError::safe("OpenAI warmup policy load failed")
+            })?;
+            if !policy.enabled() {
+                return Ok(());
+            }
+            let local_now = self.timezone.local(Utc::now());
+            let local_slot = local_now
+                .naive_local()
+                .with_second(0)
+                .and_then(|value| value.with_nanosecond(0));
+            let Some(local_slot) = local_slot else {
+                return Err(WorkerTaskError::safe("OpenAI warmup local time is invalid"));
+            };
+            let scheduled = policy
+                .scheduled_times()
+                .into_iter()
+                .any(|(hour, minute)| hour == local_slot.hour() && minute == local_slot.minute());
+            if !scheduled {
+                return Ok(());
+            }
+            let claimed = runtime_policy
+                .claim_warmup_slot(self.timezone, local_slot)
+                .await
+                .map_err(|error| {
+                    tracing::warn!(error = %error, "OpenAI warmup slot claim failed");
+                    WorkerTaskError::safe("OpenAI warmup slot claim failed")
+                })?;
+            if !claimed {
+                return Ok(());
+            }
+            let Some(model) = policy.model() else {
+                return Err(WorkerTaskError::safe("OpenAI warmup model is missing"));
+            };
+            tracing::info!(
+                timezone = self.timezone.name(),
+                model,
+                "OpenAI account warmup cycle started"
+            );
+            tokio::select! {
+                () = context.cancellation().cancelled() => Ok(()),
+                result = self.quota.execute_warmup(model) => {
+                    match result {
+                        Ok(summary) => {
+                            tracing::info!(
+                                warmed_up = summary.warmed_up,
+                                skipped_active = summary.skipped_active,
+                                skipped_exhausted = summary.skipped_exhausted,
+                                failed = summary.failed,
+                                "OpenAI account warmup cycle completed"
+                            );
+                            Ok(())
+                        }
+                        Err(error) => {
+                            tracing::warn!(error = %error, "OpenAI account warmup cycle failed");
+                            Err(WorkerTaskError::safe("OpenAI account warmup cycle failed"))
+                        }
+                    }
+                }
+            }
         })
     }
 }

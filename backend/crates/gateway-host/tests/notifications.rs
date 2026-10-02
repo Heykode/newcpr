@@ -23,6 +23,7 @@ async fn delivery() -> Arc<dyn NotificationDelivery> {
     DELIVERY
         .get_or_init(|| async {
             let bundle = gateway_host::initialize(HostConfig {
+                timezone: Default::default(),
                 listen: ListenConfig {
                     host: "127.0.0.1".to_owned(),
                     port: 8080,

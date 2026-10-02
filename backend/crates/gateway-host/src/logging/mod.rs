@@ -5,6 +5,7 @@ use std::io;
 use std::sync::Arc;
 
 use gateway_core::health::HealthProbe;
+use gateway_core::time::DeploymentTimeZone;
 use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -17,8 +18,12 @@ mod writer;
 
 pub(crate) fn file_maintenance(
     config: &LoggingConfig,
+    timezone: DeploymentTimeZone,
 ) -> Arc<dyn gateway_admin::ports::log_cleanup::LogFileMaintenance> {
-    Arc::new(maintenance::FileMaintenance(config.file.directory.clone()))
+    Arc::new(maintenance::FileMaintenance::new(
+        config.file.directory.clone(),
+        timezone,
+    ))
 }
 
 use sink::{FileLogGuard, FileLogSink, LogHealth};
@@ -55,7 +60,10 @@ pub enum LogError {
 }
 
 /// 初始化日志；文件按完整日期留存，不以分片数量淘汰窗口内记录。
-pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> {
+pub fn initialize_logging(
+    config: &LoggingConfig,
+    timezone: DeploymentTimeZone,
+) -> Result<LogGuard, LogError> {
     let directive = env::var("RUST_LOG").unwrap_or_else(|_| config.level.clone());
     let file_filter = application_file_filter(&directive)?;
     let recovery_file_filter = oauth_recovery_file_filter();
@@ -81,6 +89,7 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
             APPLICATION_LOG_FILE_PREFIX,
             "gateway-log-application-file",
             Arc::clone(&health),
+            timezone,
         )?;
         file_guards.push(guard);
         Some(writer)
@@ -94,6 +103,7 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
             OAUTH_RECOVERY_LOG_FILE_PREFIX,
             "gateway-log-oauth-recovery-file",
             Arc::clone(&health),
+            timezone,
         )?;
         file_guards.push(guard);
         Some(writer)
@@ -107,6 +117,7 @@ pub fn initialize_logging(config: &LoggingConfig) -> Result<LogGuard, LogError> 
             REQUEST_DUMP_LOG_FILE_PREFIX,
             "gateway-log-request-dump-file",
             Arc::clone(&health),
+            timezone,
         )?;
         file_guards.push(guard);
         Some(writer)
@@ -220,6 +231,7 @@ fn create_file_writer(
     prefix: &'static str,
     thread_name: &'static str,
     health: Arc<LogHealth>,
+    timezone: DeploymentTimeZone,
 ) -> Result<(FileLogSink, FileLogGuard), LogError> {
     let maximum_bytes = config
         .file
@@ -232,6 +244,7 @@ fn create_file_writer(
         maximum_bytes,
         0,
         Arc::clone(&health),
+        timezone,
     )?;
     Ok(FileLogSink::spawn(writer, thread_name, health)?)
 }

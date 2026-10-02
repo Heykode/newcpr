@@ -19,7 +19,7 @@ fn retention_preserves_complete_dates_across_compression_rotation_and_restart() 
         return;
     }
     let directory = tempfile::tempdir().unwrap();
-    let today = chrono::Utc::now().date_naive();
+    let today = deployment_today();
     let mut retained = Vec::new();
     let mut expired = Vec::new();
     for (prefix, days) in [

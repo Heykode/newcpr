@@ -29,6 +29,76 @@ use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
 
 #[tokio::test]
+async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_cancel() {
+    let Some(mut fixture) = Fixture::new().await else {
+        return;
+    };
+    let id = "guardian-priority";
+    let mut normal = fixture.wait(id, Duration::from_secs(10)).await;
+    let ProviderWaitLeaseAcquisition::Acquired(mut guardian) = fixture
+        .port
+        .try_acquire_wait(
+            wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(10))
+                .with_priority(true),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("guardian admitted");
+    };
+    let request = scheduling(id, 1, Duration::ZERO, Duration::from_secs(10));
+    assert!(matches!(
+        normal.try_promote(request.clone()).await.unwrap(),
+        ProviderWaitPromotion::Busy { .. }
+    ));
+    assert!(matches!(
+        fixture
+            .port
+            .try_acquire_scheduling(request.clone())
+            .await
+            .unwrap(),
+        ProviderLeaseAcquisition::Busy { .. }
+    ));
+    let ProviderWaitPromotion::Acquired(active) = guardian
+        .try_promote(request.clone().with_priority(true))
+        .await
+        .unwrap()
+    else {
+        panic!("guardian promoted");
+    };
+    assert!(matches!(
+        normal.try_promote(request.clone()).await.unwrap(),
+        ProviderWaitPromotion::Busy { .. }
+    ));
+    drop(active);
+    fixture.drain().await;
+    let ProviderWaitPromotion::Acquired(active) =
+        normal.try_promote(request.clone()).await.unwrap()
+    else {
+        panic!("normal promoted");
+    };
+    drop(active);
+    fixture.drain().await;
+    let ProviderWaitLeaseAcquisition::Acquired(guardian) = fixture
+        .port
+        .try_acquire_wait(
+            wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(10))
+                .with_priority(true),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("guardian admitted");
+    };
+    guardian.release().await.unwrap();
+    assert!(matches!(
+        fixture.port.try_acquire_scheduling(request).await.unwrap(),
+        ProviderLeaseAcquisition::Acquired(_)
+    ));
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn queue_pressure_reads_real_wait_ownership_without_advancing_rotation() {
     let Some(fixture) = Fixture::new().await else {
         return;

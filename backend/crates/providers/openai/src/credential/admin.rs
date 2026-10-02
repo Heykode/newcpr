@@ -8,7 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Utc};
 use gateway_core::account::{
     AccountErrorReason, CredentialCasUpdate, CredentialRevision, CredentialState, LoadedCredential,
     NewProviderAccount, ProviderAccount, ProviderAccountId, ProviderAccountIdentity,
@@ -19,6 +19,7 @@ use gateway_core::provider_ports::{
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRuntimePolicyPort,
 };
 use gateway_core::routing::ProviderKind;
+use gateway_core::time::DeploymentTimeZone;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use serde_json::Value;
@@ -505,6 +506,14 @@ impl CodexCredentialAdmin {
         &self,
         items: Vec<ExportManagedCodexCredential>,
     ) -> Result<CodexCprExportDocument, CodexCredentialAdminError> {
+        self.format_cpr_export_with_timezone(items, DeploymentTimeZone::default())
+    }
+
+    pub fn format_cpr_export_with_timezone(
+        &self,
+        items: Vec<ExportManagedCodexCredential>,
+        timezone: DeploymentTimeZone,
+    ) -> Result<CodexCprExportDocument, CodexCredentialAdminError> {
         if items.is_empty() || items.len() > MAX_BATCH {
             return Err(CodexCredentialAdminError::InvalidInput);
         }
@@ -529,8 +538,8 @@ impl CodexCredentialAdmin {
                 label: Some(account.name().to_owned()),
                 plan_type: account.plan_type().map(str::to_owned),
                 status: cpr_status(&account),
-                added_at: china_rfc3339(item.added_at),
-                updated_at: china_rfc3339(item.updated_at),
+                added_at: timezone_rfc3339(item.added_at, timezone),
+                updated_at: timezone_rfc3339(item.updated_at, timezone),
                 outbound_proxy_url: account
                     .outbound_proxy()
                     .map(|proxy| proxy.expose_url().to_owned()),
@@ -1151,10 +1160,8 @@ fn cpr_status(account: &ProviderAccount) -> &'static str {
     }
 }
 
-fn china_rfc3339(value: DateTime<Utc>) -> String {
-    value
-        .with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("valid China offset"))
-        .to_rfc3339()
+fn timezone_rfc3339(value: DateTime<Utc>, timezone: DeploymentTimeZone) -> String {
+    timezone.local(value).to_rfc3339()
 }
 
 fn map_refresh_failure(error: RefreshFailure) -> CodexCredentialAdminError {

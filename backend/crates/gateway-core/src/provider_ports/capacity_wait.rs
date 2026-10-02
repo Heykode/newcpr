@@ -19,6 +19,7 @@ pub struct ProviderWaitLeaseRequest {
     mode: AccountWaitMode,
     max_waiting: NonZeroU32,
     deadline: SystemTime,
+    priority: bool,
 }
 
 impl ProviderWaitLeaseRequest {
@@ -38,6 +39,7 @@ impl ProviderWaitLeaseRequest {
             mode,
             max_waiting,
             deadline,
+            priority: false,
         }
     }
 
@@ -69,6 +71,17 @@ impl ProviderWaitLeaseRequest {
     #[must_use]
     pub const fn deadline(&self) -> SystemTime {
         self.deadline
+    }
+
+    #[must_use]
+    pub const fn with_priority(mut self, priority: bool) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    #[must_use]
+    pub const fn priority(&self) -> bool {
+        self.priority
     }
 }
 

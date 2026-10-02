@@ -74,7 +74,7 @@ async fn openai_bundle_exposes_one_core_provider_and_drains_worker_contributions
     assert_eq!(bundle.core_provider().name(), "openai");
     assert_eq!(bundle.admin_provider().provider_kind().as_str(), "openai");
     let contributions = bundle.take_worker_contributions();
-    assert_eq!(contributions.len(), 5);
+    assert_eq!(contributions.len(), 6);
     assert!(contributions.iter().all(|contribution| match contribution {
         WorkerContribution::Registration(registration) =>
             !registration.id.owner().starts_with("openai-turn-state"),

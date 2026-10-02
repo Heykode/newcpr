@@ -303,6 +303,7 @@ fn provider_and_quota_with_profile(
         base_url,
         websocket_pool,
         stream_max_retries,
+        gateway_core::time::DeploymentTimeZone::default(),
     )
     .expect("official OpenAI provider");
     (provider, quota)

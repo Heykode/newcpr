@@ -49,6 +49,11 @@ const CLOUDFLARE_PATH_BLOCK_THRESHOLD: u32 = 3;
 const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
 const CYBER_POLICY_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 
+fn reserved_limit(limit: NonZeroU32, reserved: u32) -> NonZeroU32 {
+    NonZeroU32::new(limit.get().saturating_sub(reserved).max(1))
+        .expect("reserved concurrency keeps one normal slot")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexAccountFailure {
     /// Access token 已被上游明确判定为过期或失效。
@@ -98,6 +103,9 @@ pub struct SelectCodexCredential<'a> {
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
     pub session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
+    /// Guardian 使用完整账号并发；普通请求扣除策略预留槽位。
+    pub reserved_concurrency: u32,
+    pub guardian: bool,
 }
 
 pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
@@ -112,6 +120,21 @@ struct CredentialSelectionInput<'a> {
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
     session_affinity_observation: Option<&'a CodexSessionAffinity>,
+    reserved_concurrency: u32,
+    guardian: bool,
+}
+
+impl CredentialSelectionInput<'_> {
+    fn priority(&self) -> bool {
+        self.guardian
+            && self
+                .attempt
+                .account_selection_policy()
+                .openai_guardian_reserved_concurrency()
+                > 0
+            && !self.attempt.is_quality_check()
+            && !self.attempt.is_diagnostic_required_account()
+    }
 }
 
 #[derive(Clone)]
@@ -367,6 +390,8 @@ impl CodexCredentialSelector {
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
             session_affinity_observation: None,
+            reserved_concurrency: request.reserved_concurrency,
+            guardian: request.guardian,
         };
         self.select_inner(&input, None).await
     }
@@ -383,6 +408,8 @@ impl CodexCredentialSelector {
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
             session_affinity_observation,
+            reserved_concurrency: request.reserved_concurrency,
+            guardian: request.guardian,
         };
         self.select_inner(&input, cyber_policy_session_key).await
     }
@@ -401,6 +428,8 @@ impl CodexCredentialSelector {
             attempt: request.attempt,
             session_affinity_key: request.session_affinity.map(CodexSessionAffinity::key),
             session_affinity_observation: request.session_affinity,
+            reserved_concurrency: 0,
+            guardian: false,
         };
         self.select_inner(&input, None).await
     }
@@ -654,6 +683,7 @@ impl CodexCredentialSelector {
                     AccountEligibilityPolicy::Enforce
                 },
                 account_scope: request.attempt.account_scope().cloned(),
+                reserved_concurrency: request.reserved_concurrency,
             };
             let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
             capacity_unavailable |= AccountSelector.has_busy_candidate(&candidates, &context);
@@ -709,7 +739,10 @@ impl CodexCredentialSelector {
                         account.id().clone(),
                         account.revision(),
                         quality_concurrency_limit(
-                            account.effective_concurrency(policy.max_concurrent_per_account()),
+                            reserved_limit(
+                                account.effective_concurrency(policy.max_concurrent_per_account()),
+                                request.reserved_concurrency,
+                            ),
                             quality,
                         ),
                         policy.request_interval(),

@@ -329,6 +329,8 @@ async fn excel_authentication_failed_write_blocks_both_selectors_and_new_credent
                 request_url: &url,
                 attempt: &context(),
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             })
             .await;
         assert!(
@@ -355,6 +357,8 @@ async fn excel_authentication_failed_write_blocks_both_selectors_and_new_credent
                 request_url: &url,
                 attempt: &context(),
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             })
             .await
             .unwrap();
@@ -386,6 +390,8 @@ async fn excel_authentication_slow_write_is_bounded_and_diagnostic_can_recover()
             request_url: &url,
             attempt: &attempt(BTreeSet::new()),
             session_affinity_key: None,
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .unwrap();
@@ -414,6 +420,8 @@ async fn excel_authentication_failed_persistence_has_bounded_refreshable_runtime
                 request_url: &url,
                 attempt: &attempt(BTreeSet::new()),
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             })
             .await;
         assert_eq!(result.is_ok(), !revoked);
@@ -448,6 +456,8 @@ async fn excel_authentication_later_generic_401_does_not_downgrade_revocation() 
             request_url: &url,
             attempt: &attempt(BTreeSet::new()),
             session_affinity_key: None,
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await;
     assert!(result.is_err());
@@ -619,6 +629,8 @@ fn selector_uses_frozen_global_account_policy_for_lease() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select account");
@@ -665,6 +677,8 @@ fn excel_route_fence_excludes_codex_retries_and_unselected_models() {
         request_url: &url,
         attempt: &attempt,
         session_affinity_key: None,
+        reserved_concurrency: 0,
+        guardian: false,
     }))
     .unwrap();
     assert_eq!(lease.account_id().as_str(), "acct_primary");
@@ -677,6 +691,8 @@ fn excel_route_fence_excludes_codex_retries_and_unselected_models() {
             request_url: &url,
             attempt: &attempt,
             session_affinity_key: None,
+            reserved_concurrency: 0,
+            guardian: false,
         }))
         .is_err()
     );
@@ -687,6 +703,8 @@ fn excel_route_fence_excludes_codex_retries_and_unselected_models() {
             request_url: &url,
             attempt: &attempt,
             session_affinity_key: None,
+            reserved_concurrency: 0,
+            guardian: false,
         }))
         .is_err()
     );
@@ -718,6 +736,8 @@ async fn excel_model_routes_match_with_and_without_capacity_wait() {
                     request_url: &url,
                     attempt: &attempt,
                     session_affinity_key: None,
+                    reserved_concurrency: 0,
+                    guardian: false,
                 })
                 .await
                 .unwrap();
@@ -746,6 +766,8 @@ fn selector_uses_the_account_concurrency_override_for_the_redis_lease() {
             &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL"),
         attempt: &attempt,
         session_affinity_key: None,
+        reserved_concurrency: 0,
+        guardian: false,
     }))
     .expect("select account");
 
@@ -770,6 +792,8 @@ fn selector_round_robin_cursor_advances_across_requests() {
             request_url: &request_url,
             attempt: &attempt,
             session_affinity_key: None,
+            reserved_concurrency: 0,
+            guardian: false,
         }))
         .expect("select round robin account");
         selected.push(lease.account_id().as_str().to_owned());
@@ -803,6 +827,8 @@ async fn selector_should_claim_the_initial_session_account_before_upstream_send(
                 .expect("request URL"),
             attempt: &request_attempt,
             session_affinity_key: Some(&key),
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .expect("select initial account");
@@ -870,6 +896,8 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
             request_url: &request_url,
             attempt: &first_attempt,
             session_affinity_key: Some(&key),
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .expect("select first account");
@@ -885,6 +913,8 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
             request_url: &request_url,
             attempt: &second_attempt,
             session_affinity_key: Some(&key),
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .expect("select bound account");
@@ -942,6 +972,8 @@ async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succ
             request_url: &request_url,
             attempt: &request_attempt,
             session_affinity_key: Some(&key),
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .expect("select fallback account");
@@ -1012,6 +1044,8 @@ async fn selector_should_prefer_session_over_weight_and_soft_health() {
             request_url: &request_url,
             attempt: &request_attempt,
             session_affinity_key: Some(&key),
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .expect("select bound account");
@@ -1053,6 +1087,8 @@ async fn selector_should_escape_a_quota_exhausted_affinity_account() {
             request_url: &request_url,
             attempt: &request_attempt,
             session_affinity_key: Some(&key),
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .expect("select fallback account");
@@ -1085,6 +1121,8 @@ fn selector_honors_attempt_local_account_exclusion() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select non-excluded account");
@@ -1107,6 +1145,8 @@ fn selector_uses_only_the_required_account() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select required account");
@@ -1130,6 +1170,8 @@ fn unavailable_required_account_never_falls_back() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect_err("missing required account must not fall back");
@@ -1208,6 +1250,8 @@ fn selector_returns_capacity_error_when_every_redis_lease_is_busy() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect_err("busy lease must reject selection");
@@ -1233,6 +1277,8 @@ fn credential_expired_failure_marks_unified_account_expired() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select account");
@@ -1333,6 +1379,8 @@ fn rate_limited_failure_records_runtime_cooldown_without_changing_persisted_fact
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select account");
@@ -1687,6 +1735,8 @@ fn native_continuation_surfaces_the_original_accounts_quota_status_to_the_coordi
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect_err("the selector must surface the unavailable native account");
@@ -1759,6 +1809,8 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect_err("the selector must surface the quota-limited native account");
@@ -1784,6 +1836,8 @@ fn identity_verification_failure_isolates_only_selected_account() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select account");
@@ -1830,6 +1884,8 @@ fn cloudflare_challenge_does_not_change_persisted_account_facts() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select account");
@@ -1869,6 +1925,8 @@ fn repeated_cloudflare_path_block_marks_only_the_affected_account_invalid() {
                     .expect("request URL"),
                 attempt: &attempt,
                 session_affinity_key: None,
+                reserved_concurrency: 0,
+                guardian: false,
             }),
         )
         .expect("select account");
@@ -1912,6 +1970,8 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
         request_url: &request_url,
         attempt: &first_attempt,
         session_affinity_key: None,
+        reserved_concurrency: 0,
+        guardian: false,
     }))
     .expect("select account");
     block_on(selector.capture_response_cookies(
@@ -1927,6 +1987,8 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
         request_url: &request_url,
         attempt: &second_attempt,
         session_affinity_key: None,
+        reserved_concurrency: 0,
+        guardian: false,
     }))
     .expect("select revised account");
     block_on(selector.record_failure(
@@ -1959,6 +2021,8 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
         request_url: &request_url,
         attempt: &first_attempt,
         session_affinity_key: None,
+        reserved_concurrency: 0,
+        guardian: false,
     }))
     .expect("select account");
     block_on(selector.capture_response_cookies(
@@ -1974,6 +2038,8 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
         request_url: &request_url,
         attempt: &second_attempt,
         session_affinity_key: None,
+        reserved_concurrency: 0,
+        guardian: false,
     }))
     .expect("select revised account");
     block_on(selector.record_failure(
@@ -2176,6 +2242,8 @@ fn response_cookie_rotation_returns_a_current_account_for_later_fenced_writes() 
         request_url: &request_url,
         attempt: &attempt,
         session_affinity_key: None,
+        reserved_concurrency: 0,
+        guardian: false,
     }))
     .expect("select account");
 
@@ -2243,6 +2311,8 @@ async fn capacity_select(
             request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap(),
             attempt,
             session_affinity_key: affinity,
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
 }
@@ -3763,6 +3833,8 @@ fn model_access_routes_luna_and_other_models_to_separate_accounts_even_with_unkn
                 &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
             attempt: &attempt,
             session_affinity_key: None,
+            reserved_concurrency: 0,
+            guardian: false,
         }))
         .expect("eligible account");
         assert_eq!(lease.account_id().as_str(), expected);
@@ -3793,6 +3865,8 @@ fn model_access_never_escapes_to_a_forbidden_account_after_failover_or_required_
                 &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
             attempt: &attempt,
             session_affinity_key: None,
+            reserved_concurrency: 0,
+            guardian: false,
         }));
         assert!(matches!(
             result,
@@ -3831,6 +3905,8 @@ async fn model_access_overrides_soft_session_affinity() {
                 .expect("URL"),
             attempt: &attempt,
             session_affinity_key: Some(&key),
+            reserved_concurrency: 0,
+            guardian: false,
         })
         .await
         .expect("select pro");

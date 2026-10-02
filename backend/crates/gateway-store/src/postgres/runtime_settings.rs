@@ -12,6 +12,7 @@ use gateway_core::account::RotationStrategy;
 use gateway_core::policy::CodexClientVersion;
 use gateway_core::provider_ports::{
     ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind,
+    ProviderWarmupPolicy,
 };
 
 use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
@@ -31,6 +32,10 @@ pub struct RuntimeSettings {
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
+    pub openai_guardian_reserved_concurrency: u32,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
@@ -98,6 +103,10 @@ pub struct RuntimeSettingsUpdate {
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
+    pub openai_guardian_reserved_concurrency: u32,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
     pub request_interval_ms: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
@@ -155,6 +164,11 @@ impl RuntimeSettingsUpdate {
             || !valid_turn_state_models(&self.turn_state_models)
             || !valid_client_version(self.min_codex_desktop_version.as_deref())
             || !valid_client_version(self.min_codex_cli_version.as_deref())
+            || !gateway_core::provider_ports::valid_warmup_schedule_time(
+                &self.account_warmup_schedule_time,
+            )
+            || (self.account_warmup_enabled && self.account_warmup_model.is_none())
+            || !valid_warmup_model(self.account_warmup_model.as_deref())
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
             || !self.request_tuning.validate()
         {
@@ -217,7 +231,9 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
-                    min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency
+                    min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
+                    openai_guardian_reserved_concurrency,
+                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -260,6 +276,45 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
             )
         })
     }
+
+    fn load_warmup_policy(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderWarmupPolicy, ProviderStoreError>> {
+        Box::pin(async move {
+            let settings = RuntimeSettingsRepository::load_runtime_settings(self)
+                .await
+                .map_err(|_| provider_unavailable("load warmup policy"))?;
+            ProviderWarmupPolicy::try_new(
+                settings.account_warmup_enabled,
+                settings.account_warmup_schedule_time,
+                settings.account_warmup_model,
+            )
+        })
+    }
+
+    fn claim_warmup_slot<'a>(
+        &'a self,
+        timezone: gateway_core::time::DeploymentTimeZone,
+        slot: chrono::NaiveDateTime,
+    ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async move {
+            let Some(slot) = timezone.resolve_local(slot) else {
+                return Err(provider_invalid("resolve warmup slot"));
+            };
+            let claimed = sqlx::query_scalar::<_, bool>(
+                "update runtime_settings
+                 set account_warmup_cursor = $1
+                 where id = 1
+                   and (account_warmup_cursor is null or account_warmup_cursor < $1)
+                 returning true",
+            )
+            .bind(slot)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| provider_unavailable("claim warmup slot"))?;
+            Ok(claimed.unwrap_or(false))
+        })
+    }
 }
 
 pub(crate) async fn load_runtime_settings_in_transaction(
@@ -270,7 +325,9 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
-                min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency
+                min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
+                openai_guardian_reserved_concurrency,
+                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -347,8 +404,12 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	                 turn_state_models = $17,
 	                 turn_state_probe_proxy_id = case when $18 then $19 else turn_state_probe_proxy_id end,
 	                 turn_state_probe_concurrency = coalesce($20, turn_state_probe_concurrency),
-	                 excel_default_models = $21,
-	                 updated_at = now()
+                 excel_default_models = $21,
+                 openai_guardian_reserved_concurrency = $22,
+                 account_warmup_enabled = $23,
+                 account_warmup_schedule_time = $24,
+                 account_warmup_model = $25,
+                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
     )
@@ -376,6 +437,10 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.turn_state_probe_proxy_id.as_ref().and_then(Option::as_deref))
     .bind(update.turn_state_probe_concurrency.map(i64::from))
     .bind(update.excel_default_models.as_slice())
+    .bind(i64::from(update.openai_guardian_reserved_concurrency))
+    .bind(update.account_warmup_enabled)
+    .bind(&update.account_warmup_schedule_time)
+    .bind(update.account_warmup_model.as_deref())
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -447,6 +512,10 @@ struct RuntimeSettingsRow {
     min_codex_cli_version: Option<String>,
     request_tuning_json: Option<sqlx::types::Json<RequestTuningOverrides>>,
     updated_at: DateTime<Utc>,
+    openai_guardian_reserved_concurrency: i64,
+    account_warmup_enabled: bool,
+    account_warmup_schedule_time: String,
+    account_warmup_model: Option<String>,
 }
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
@@ -477,6 +546,10 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         request_tuning: row
             .request_tuning_json
             .map_or_else(RequestTuningOverrides::default, |value| value.0),
+        openai_guardian_reserved_concurrency: to_u32(row.openai_guardian_reserved_concurrency)?,
+        account_warmup_enabled: row.account_warmup_enabled,
+        account_warmup_schedule_time: row.account_warmup_schedule_time,
+        account_warmup_model: row.account_warmup_model,
         updated_at: row.updated_at,
     })
 }
@@ -534,4 +607,13 @@ fn valid_model_name(value: &str, max_len: usize) -> bool {
 
 fn valid_client_version(value: Option<&str>) -> bool {
     value.is_none_or(|value| CodexClientVersion::parse(value).is_ok())
+}
+
+fn valid_warmup_model(value: Option<&str>) -> bool {
+    value.is_none_or(|value| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value == value.trim()
+            && !value.bytes().any(|byte| byte.is_ascii_control())
+    })
 }

@@ -113,6 +113,7 @@ pub struct ProviderSchedulingLeaseRequest {
     request_interval: Duration,
     deadline: SystemTime,
     quality_check: bool,
+    priority: bool,
 }
 
 impl ProviderSchedulingLeaseRequest {
@@ -133,6 +134,7 @@ impl ProviderSchedulingLeaseRequest {
             request_interval,
             deadline,
             quality_check: false,
+            priority: false,
         }
     }
 
@@ -176,6 +178,17 @@ impl ProviderSchedulingLeaseRequest {
     #[must_use]
     pub const fn is_quality_check(&self) -> bool {
         self.quality_check
+    }
+
+    #[must_use]
+    pub const fn with_priority(mut self, priority: bool) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    #[must_use]
+    pub const fn priority(&self) -> bool {
+        self.priority
     }
 }
 
@@ -995,6 +1008,116 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
     ) -> BoxFuture<'a, Result<ProviderUserAgentOverride, ProviderStoreError>> {
         Box::pin(async { Ok(ProviderUserAgentOverride::Default) })
     }
+
+    fn load_warmup_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderWarmupPolicy, ProviderStoreError>> {
+        Box::pin(async { Ok(ProviderWarmupPolicy::disabled()) })
+    }
+
+    fn claim_warmup_slot<'a>(
+        &'a self,
+        _timezone: crate::time::DeploymentTimeZone,
+        _slot: chrono::NaiveDateTime,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async {
+            Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::Unavailable,
+                "claim warmup slot",
+            ))
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderWarmupPolicy {
+    enabled: bool,
+    schedule_time: String,
+    model: Option<String>,
+}
+
+impl ProviderWarmupPolicy {
+    pub fn try_new(
+        enabled: bool,
+        schedule_time: String,
+        model: Option<String>,
+    ) -> Result<Self, ProviderStoreError> {
+        if !valid_warmup_schedule_time(&schedule_time)
+            || (enabled && model.is_none())
+            || model.as_deref().is_some_and(|model| {
+                model.is_empty()
+                    || model.len() > 128
+                    || model != model.trim()
+                    || model.bytes().any(|byte| byte.is_ascii_control())
+            })
+        {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate warmup policy",
+            ));
+        }
+        Ok(Self {
+            enabled,
+            schedule_time,
+            model,
+        })
+    }
+
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            schedule_time: "08:00".to_owned(),
+            model: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn schedule_time(&self) -> &str {
+        &self.schedule_time
+    }
+
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    #[must_use]
+    pub fn scheduled_times(&self) -> Vec<(u32, u32)> {
+        self.schedule_time
+            .split(',')
+            .filter_map(|part| {
+                let mut parts = part.split(':');
+                Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+            })
+            .collect()
+    }
+}
+
+#[must_use]
+pub fn valid_warmup_schedule_time(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 255
+        || value != value.trim()
+        || value.chars().any(char::is_control)
+    {
+        return false;
+    }
+    value.split(',').all(|part| {
+        let bytes = part.as_bytes();
+        if bytes.len() != 5 || bytes[2] != b':' {
+            return false;
+        }
+        let (Ok(hour), Ok(minute)) = (part[0..2].parse::<u32>(), part[3..5].parse::<u32>()) else {
+            return false;
+        };
+        hour <= 23 && minute <= 59
+    })
 }
 
 /// OAuth pending flow 的原始绑定只在 Provider 与 Store 边界内短暂存在。

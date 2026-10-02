@@ -172,6 +172,7 @@ fn valid_config() -> HostConfig {
         ..SystemUpdateConfig::default()
     };
     HostConfig {
+        timezone: Default::default(),
         listen: ListenConfig {
             host: "127.0.0.1".to_owned(),
             port: 8080,

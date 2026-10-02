@@ -59,7 +59,7 @@ fn log_cleanup_deletes_only_closed_old_managed_files() {
     for name in &names[1..] {
         assert!(directory.join(name).exists());
     }
-    let today = chrono::Utc::now().date_naive();
+    let today = deployment_today();
     assert!(
         directory
             .join(format!("{APPLICATION_LOG_FILE_PREFIX}{today}.log"))

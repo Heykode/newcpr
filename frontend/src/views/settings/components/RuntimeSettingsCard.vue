@@ -12,6 +12,7 @@ import RequestLocationFields from '@/components/RequestLocationFields.vue'
 
 defineProps<{ disabled?: boolean }>()
 const maxConcurrentPerAccount = defineModel<string>('maxConcurrentPerAccount', { required: true })
+const openaiGuardianReservedConcurrency = defineModel<string>('openaiGuardianReservedConcurrency', { required: true })
 const refreshMarginSeconds = defineModel<string>('refreshMarginSeconds', { required: true })
 const refreshConcurrency = defineModel<string>('refreshConcurrency', { required: true })
 const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
@@ -77,6 +78,23 @@ const tuningValues = {
           v-model="maxConcurrentPerAccount"
           aria-label="单账号默认最大并发"
           type="number"
+        >
+          <template #prefix>
+            <Gauge class="size-4" />
+          </template>
+        </BaseInput>
+      </BaseFormItem>
+
+      <BaseFormItem
+        label="Guardian 预留并发"
+        description="普通请求为 Guardian 保留的并发槽位；0 为关闭"
+      >
+        <BaseInput
+          v-model="openaiGuardianReservedConcurrency"
+          aria-label="Guardian 预留并发"
+          type="number"
+          min="0"
+          step="1"
         >
           <template #prefix>
             <Gauge class="size-4" />

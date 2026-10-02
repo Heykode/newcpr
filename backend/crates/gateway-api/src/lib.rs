@@ -15,6 +15,7 @@ use gateway_admin::AdminServices;
 use gateway_core::engine::execution::ExecutionService;
 use gateway_core::health::{HealthProbe, WorkerHealthSource};
 use gateway_core::lifecycle::ConnectionLifecycle;
+use gateway_core::time::DeploymentTimeZone;
 use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -129,12 +130,33 @@ impl ApiBundle {
 
 /// 组装客户端、管理端、健康检查和静态资源路由。
 pub fn initialize(
+    config: ApiConfig,
+    execution: Arc<dyn ExecutionService>,
+    admin: AdminServices,
+    probes: Vec<Arc<dyn HealthProbe>>,
+    worker_health: Arc<dyn WorkerHealthSource>,
+    lifecycle: Arc<dyn ConnectionLifecycle>,
+) -> Result<ApiBundle, ApiError> {
+    initialize_with_timezone(
+        config,
+        execution,
+        admin,
+        probes,
+        worker_health,
+        lifecycle,
+        DeploymentTimeZone::default(),
+    )
+}
+
+/// 使用部署时区初始化 API；时区只影响本地展示和日界计算。
+pub fn initialize_with_timezone(
     mut config: ApiConfig,
     execution: Arc<dyn ExecutionService>,
     admin: AdminServices,
     probes: Vec<Arc<dyn HealthProbe>>,
     worker_health: Arc<dyn WorkerHealthSource>,
     lifecycle: Arc<dyn ConnectionLifecycle>,
+    timezone: DeploymentTimeZone,
 ) -> Result<ApiBundle, ApiError> {
     // Bootstrap resolves paths and environment overrides once.
     config.validate().map_err(ApiError::Config)?;
@@ -144,6 +166,7 @@ pub fn initialize(
         admin,
         openai: OpenAiService::new(execution, lifecycle),
         health: HealthStatus::new(probes, worker_health),
+        timezone,
     };
     let index = config.asset_directory.join("index.html");
     let mut router = Router::new()
@@ -225,6 +248,7 @@ pub(crate) struct ApiState {
     admin: AdminServices,
     openai: OpenAiService,
     health: HealthStatus,
+    timezone: DeploymentTimeZone,
 }
 
 impl ApiState {
@@ -242,6 +266,10 @@ impl ApiState {
 impl admin::AdminSessionState for ApiState {
     fn admin_services(&self) -> &AdminServices {
         &self.admin
+    }
+
+    fn deployment_timezone(&self) -> DeploymentTimeZone {
+        self.timezone
     }
 }
 

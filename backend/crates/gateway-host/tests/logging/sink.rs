@@ -64,7 +64,7 @@ fn write_failure_marks_log_completeness_unhealthy_even_after_writes_recover() {
         assert_eq!(runtime.block_on(health.check()), HealthState::Healthy);
         let blocked = directory.join(format!(
             "{REQUEST_DUMP_LOG_FILE_PREFIX}{}.1.log",
-            chrono::Utc::now().date_naive()
+            deployment_today()
         ));
         fs::create_dir(&blocked).unwrap();
         let payload = "x".repeat(1024 * 1024);

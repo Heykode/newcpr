@@ -18,15 +18,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use futures::StreamExt as _;
 use gateway_core::account::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
     QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaObservationTouch,
     QuotaState, QuotaWriteOutcome,
 };
-use gateway_core::provider_ports::{ProviderCooldown, ProviderCooldownPort};
+use gateway_core::provider_ports::{
+    ProviderCooldown, ProviderCooldownPort, ProviderRuntimePolicyPort,
+};
 use gateway_core::runtime::RequestTuningHandle;
 use gateway_protocol::openai::events::{ParsedRateLimits, RateLimitDetails, RateLimitWindow};
+use gateway_protocol::openai::sse::{SseEvent, SseEventDecoder};
 use reqwest::Client;
 use secrecy::ExposeSecret;
 use serde_json::{Map, Value};
@@ -36,9 +40,10 @@ use uuid::Uuid;
 
 use crate::transport::egress::CodexEgressRuntime;
 use crate::transport::profile::CodexWireProfileState;
+use crate::transport::protocol::responses::CodexResponsesRequest;
 use crate::transport::{
-    CodexBackendClient, CodexClientError, CodexRateLimitObservation, CodexRateLimitResetCredits,
-    CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
+    CodexBackendClient, CodexBackendStreamingResponse, CodexClientError, CodexRateLimitObservation,
+    CodexRateLimitResetCredits, CodexRateLimitResetCreditsConsumeResult, CodexRequestContext,
 };
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
@@ -63,6 +68,83 @@ const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
 // 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
 const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
 const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
+const WARMUP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const WARMUP_STREAM_MAX_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodexWarmupSummary {
+    pub warmed_up: u64,
+    pub skipped_active: u64,
+    pub skipped_exhausted: u64,
+    pub failed: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WarmupTerminal {
+    Missing,
+    Completed,
+    Failed,
+}
+
+fn observe_warmup_events(events: Vec<SseEvent>, terminal: &mut WarmupTerminal) {
+    for event in events {
+        let parsed = serde_json::from_str::<Value>(&event.data).ok();
+        let kind = parsed
+            .as_ref()
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str)
+            .or(event.event.as_deref());
+        match kind {
+            Some("response.completed") => {
+                if *terminal != WarmupTerminal::Failed {
+                    *terminal = if parsed
+                        .as_ref()
+                        .and_then(|data| data.pointer("/response/status"))
+                        .and_then(Value::as_str)
+                        .is_none_or(|status| status == "completed")
+                    {
+                        WarmupTerminal::Completed
+                    } else {
+                        WarmupTerminal::Failed
+                    };
+                }
+            }
+            Some("response.failed" | "response.incomplete" | "error") => {
+                *terminal = WarmupTerminal::Failed;
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn consume_warmup_sse(
+    response: &mut CodexBackendStreamingResponse,
+) -> Result<(), &'static str> {
+    let mut decoder = SseEventDecoder::default();
+    let mut terminal = WarmupTerminal::Missing;
+    let mut received_bytes = 0_usize;
+    while let Some(chunk) = response.body.next().await {
+        let chunk = chunk.map_err(|_| "stream_read_failed")?;
+        received_bytes = received_bytes.saturating_add(chunk.len());
+        if received_bytes > WARMUP_STREAM_MAX_BYTES {
+            return Err("stream_size_limit_exceeded");
+        }
+        let events = decoder.push(&chunk).map_err(|_| "invalid_sse")?;
+        observe_warmup_events(events, &mut terminal);
+        if terminal != WarmupTerminal::Missing {
+            break;
+        }
+    }
+    if terminal == WarmupTerminal::Missing {
+        let events = decoder.finish().map_err(|_| "invalid_sse")?;
+        observe_warmup_events(events, &mut terminal);
+    }
+    match terminal {
+        WarmupTerminal::Completed => Ok(()),
+        WarmupTerminal::Missing => Err("completion_event_missing"),
+        WarmupTerminal::Failed => Err("response_failed"),
+    }
+}
 
 /// OpenAI Provider 主动额度刷新的调度策略。
 ///
@@ -219,6 +301,7 @@ pub struct CodexCredentialQuotaService {
     http: Client,
     base_url: String,
     cooldowns: Arc<dyn ProviderCooldownPort>,
+    runtime_policy: Option<Arc<dyn ProviderRuntimePolicyPort>>,
     request_tuning: Option<RequestTuningHandle>,
     scheduling: CodexQuotaSchedulingProjection,
     reset_consume_locks: Mutex<HashMap<ProviderAccountId, Arc<Mutex<()>>>>,
@@ -549,6 +632,7 @@ impl CodexCredentialQuotaService {
             http,
             base_url,
             cooldowns,
+            runtime_policy: None,
             request_tuning: None,
             scheduling: CodexQuotaSchedulingProjection::default(),
             reset_consume_locks: Mutex::new(HashMap::new()),
@@ -565,6 +649,20 @@ impl CodexCredentialQuotaService {
     pub fn with_request_tuning(mut self, request_tuning: RequestTuningHandle) -> Self {
         self.request_tuning = Some(request_tuning);
         self
+    }
+
+    #[must_use]
+    pub fn with_runtime_policy(
+        mut self,
+        runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    ) -> Self {
+        self.runtime_policy = Some(runtime_policy);
+        self
+    }
+
+    #[must_use]
+    pub fn runtime_policy(&self) -> Option<Arc<dyn ProviderRuntimePolicyPort>> {
+        self.runtime_policy.clone()
     }
 
     fn request_tuning(&self) -> gateway_core::routing::RequestTuning {
@@ -588,6 +686,172 @@ impl CodexCredentialQuotaService {
             Some(runtime) => client.with_egress_runtime(Arc::clone(runtime)),
             None => client,
         }
+    }
+
+    /// Execute the official account warmup request using the account's existing
+    /// wire profile, egress route, and installation identity.
+    pub async fn execute_warmup(
+        &self,
+        model: &str,
+    ) -> Result<CodexWarmupSummary, CodexCredentialQuotaError> {
+        let mut accounts = self.repository.list_for_provider().await?;
+        accounts.retain(|account| {
+            account.authentication_kind() == crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+                && account.enabled()
+                && matches!(
+                    account.credential_state(),
+                    CredentialState::Unknown | CredentialState::Ready
+                )
+        });
+        let mut summary = CodexWarmupSummary::default();
+        if accounts.is_empty() {
+            return Ok(summary);
+        }
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        let observed = self.store.get_quotas(&account_ids).await?;
+        let observed_snapshots = observed
+            .iter()
+            .filter_map(|observation| {
+                quota_snapshot_from_observation(observation)
+                    .map(|snapshot| (observation.account_id.clone(), snapshot))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let client = self.backend_client();
+        let now = chrono::Utc::now();
+
+        for account in accounts {
+            if let Some(snapshot) = observed_snapshots.get(account.id()) {
+                if snapshot.windows().iter().any(|window| {
+                    window.kind() == CodexQuotaWindowKind::Weekly && window.limit_reached()
+                }) {
+                    summary.skipped_exhausted += 1;
+                    continue;
+                }
+                if snapshot.windows().iter().any(|window| {
+                    window.kind() == CodexQuotaWindowKind::ShortTerm
+                        && window
+                            .reset_at()
+                            .is_some_and(|reset_at| reset_at > now + chrono::Duration::minutes(30))
+                }) {
+                    summary.skipped_active += 1;
+                    continue;
+                }
+            }
+
+            let credential = match self.repository.load_runtime_credential(&account).await {
+                Ok(credential) => credential,
+                Err(error) => {
+                    tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup credential load failed");
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+            let authorization = match credential.authentication.authorization_header() {
+                Ok(authorization) => authorization,
+                Err(error) => {
+                    tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup credential authorization failed");
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+            let request_id = format!("warmup_{}", Uuid::now_v7().simple());
+            let mut body = Map::new();
+            body.insert("model".to_owned(), Value::String(model.to_owned()));
+            body.insert(
+                "input".to_owned(),
+                serde_json::json!([{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                }]),
+            );
+            body.insert("stream".to_owned(), Value::Bool(true));
+            body.insert("store".to_owned(), Value::Bool(false));
+            body.insert("generate".to_owned(), Value::Bool(false));
+            body.insert(
+                "service_tier".to_owned(),
+                Value::String("default".to_owned()),
+            );
+            body.insert(
+                "reasoning".to_owned(),
+                serde_json::json!({"effort": "none"}),
+            );
+            body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
+            let request = CodexResponsesRequest::from_body(body);
+            let account_client = match client.for_account(&account) {
+                Ok(client) => client,
+                Err(error) => {
+                    tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup account client construction failed");
+                    summary.failed += 1;
+                    continue;
+                }
+            };
+            let context = CodexRequestContext::auxiliary(
+                authorization.expose_secret(),
+                account.upstream_account_id(),
+                &request_id,
+                Some(&credential.installation_id),
+            );
+            let result = tokio::time::timeout(WARMUP_REQUEST_TIMEOUT, async {
+                let mut response = account_client
+                    .create_response_stream_http_sse(&request, context)
+                    .await
+                    .map_err(|error| format!("request: {error}"))?;
+                let observed_at = response.rate_limit_observed_at;
+                let terminal = consume_warmup_sse(&mut response)
+                    .await
+                    .map_err(str::to_owned);
+                let headers = response.rate_limit_headers.clone();
+                let updates = match response.rate_limit_updates.as_ref() {
+                    Some(updates) => std::mem::take(&mut *updates.lock().await),
+                    None => Vec::new(),
+                };
+                terminal.map(|()| (observed_at, headers, updates))
+            })
+            .await;
+
+            match result {
+                Ok(Ok((observed_at, headers, updates))) => {
+                    if !headers.is_empty()
+                        && let Err(error) = self
+                            .synchronize_passive_headers(
+                                &account,
+                                &headers,
+                                observed_at,
+                                QuotaRefreshAuthority::ObserveAccess,
+                            )
+                            .await
+                    {
+                        tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup header observation failed");
+                    }
+                    if !updates.is_empty()
+                        && let Err(error) = self
+                            .synchronize_passive_rate_limits(
+                                &account,
+                                &updates,
+                                QuotaRefreshAuthority::ObserveAccess,
+                            )
+                            .await
+                    {
+                        tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup event observation failed");
+                    }
+                    summary.warmed_up += 1;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(account_id = %account.id(), error, "OpenAI warmup request failed");
+                    summary.failed += 1;
+                }
+                Err(_) => {
+                    tracing::warn!(account_id = %account.id(), "OpenAI warmup request timed out");
+                    summary.failed += 1;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        Ok(summary)
     }
 
     /// 查询当前账号由 Codex Desktop 暴露的主动额度重置卡。
@@ -1687,6 +1951,8 @@ fn merge_passive_metadata(quota: &mut Map<String, Value>, rate_limits: &ParsedRa
         value.insert("unlimited".to_owned(), Value::Bool(credits.unlimited));
         if let Some(balance) = credits.balance.as_ref() {
             value.insert("balance".to_owned(), Value::String(balance.clone()));
+        } else {
+            value.remove("balance");
         }
         quota.insert("credits".to_owned(), Value::Object(value));
     }

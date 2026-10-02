@@ -48,6 +48,8 @@ pub struct OpenAiConfig {
     pub wire_profile: CodexWireProfileConfig,
     #[serde(skip)]
     identity_secret_path: PathBuf,
+    #[serde(skip)]
+    pub(crate) timezone: gateway_core::time::DeploymentTimeZone,
 }
 
 impl OpenAiConfig {
@@ -117,6 +119,12 @@ impl OpenAiConfig {
             .unwrap_or(MAX_STREAM_MAX_RETRIES as u32)
     }
 
+    #[must_use]
+    pub fn with_timezone(mut self, timezone: gateway_core::time::DeploymentTimeZone) -> Self {
+        self.timezone = timezone;
+        self
+    }
+
     pub(crate) fn session_identity(
         &self,
     ) -> Result<CodexSessionIdentity, CodexSessionIdentityError> {
@@ -135,6 +143,7 @@ impl Default for OpenAiConfig {
             stream_max_retries: DEFAULT_STREAM_MAX_RETRIES,
             wire_profile: CodexWireProfileConfig::default(),
             identity_secret_path: PathBuf::new(),
+            timezone: gateway_core::time::DeploymentTimeZone::default(),
         }
     }
 }

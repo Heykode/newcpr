@@ -82,6 +82,10 @@ fn update_body() -> Value {
             "accountBusyWaitFallbackTimeoutSeconds": 31
         }
     });
+    body["openaiGuardianReservedConcurrency"] = json!(0);
+    body["accountWarmupEnabled"] = json!(false);
+    body["accountWarmupScheduleTime"] = json!("08:00");
+    body["accountWarmupModel"] = Value::Null;
     body["requestTuning"]["excelImageRelayBytes"] = Value::Null;
     body["requestTuning"]["smartScheduling"] = Value::Null;
     body["requestTuning"]["excelImageRelayRequests"] = Value::Null;
@@ -366,6 +370,10 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         refresh_margin_seconds: 1800,
         refresh_concurrency: 4,
         max_concurrent_per_account: 5,
+        openai_guardian_reserved_concurrency: 0,
+        account_warmup_enabled: false,
+        account_warmup_schedule_time: "08:00".to_owned(),
+        account_warmup_model: None,
         request_interval_ms: 25,
         rotation_strategy: RotationStrategy::RoundRobin,
         min_codex_desktop_version: Some("26.825.6671".to_owned()),
@@ -463,6 +471,10 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         },
         "updatedAt": "2026-08-02T10:30:00Z"
     });
+    expected["openaiGuardianReservedConcurrency"] = json!(0);
+    expected["accountWarmupEnabled"] = json!(false);
+    expected["accountWarmupScheduleTime"] = json!("08:00");
+    expected["accountWarmupModel"] = Value::Null;
     expected["requestTuning"]["excelImageTransport"] = json!({"mode":"native"});
     expected["requestTuning"]["excelImageRelayBytes"] = json!(67108864);
     expected["requestTuning"]["smartScheduling"] = Value::Null;
@@ -530,6 +542,10 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         refresh_margin_seconds: request.refresh_margin_seconds,
         refresh_concurrency: u32::try_from(request.refresh_concurrency).expect("u32"),
         max_concurrent_per_account: u32::try_from(request.max_concurrent_per_account).expect("u32"),
+        openai_guardian_reserved_concurrency: 0,
+        account_warmup_enabled: false,
+        account_warmup_schedule_time: "08:00".to_owned(),
+        account_warmup_model: None,
         request_interval_ms: request.request_interval_ms,
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
             .expect("fixture rotation strategy"),

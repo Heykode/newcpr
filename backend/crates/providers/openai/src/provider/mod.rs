@@ -41,6 +41,7 @@ use gateway_core::task::{
     WorkerDefinitionError, WorkerId, WorkerKind, WorkerLeaseRequest, WorkerRegistration,
     WorkerRunnable, WorkerSchedule, WorkerTaskError,
 };
+use gateway_core::time::DeploymentTimeZone;
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use gateway_protocol::openai::events::rate_limits_to_header_pairs;
 use reqwest::Client;
@@ -223,6 +224,7 @@ impl CodexProvider {
         base_url: String,
         websocket_pool: Arc<CodexWebSocketPool>,
         _stream_max_retries: u32,
+        timezone: DeploymentTimeZone,
     ) -> Result<Self, CodexProviderConfigError> {
         let responses_url = Url::parse(&endpoint_url(&base_url, CODEX_RESPONSES_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
@@ -239,8 +241,9 @@ impl CodexProvider {
         let search_url = Url::parse(&endpoint_url(&base_url, CODEX_ALPHA_SEARCH_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let location = profile.snapshot().location;
-        let client =
-            CodexBackendClient::new(http, base_url, profile).with_websocket_pool(websocket_pool);
+        let client = CodexBackendClient::new(http, base_url, profile)
+            .with_websocket_pool(websocket_pool)
+            .with_timezone(timezone);
         Ok(Self {
             session_proxy_pool: None,
             selector,
@@ -540,6 +543,7 @@ impl Provider for CodexProvider {
             derive_codex_session_affinity(&upstream_request, context.client_api_key_ref());
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
+        let guardian = upstream_request.subagent_kind().as_deref() == Some("guardian");
 
         let selection_started_at = Instant::now();
         let lease = self
@@ -550,6 +554,16 @@ impl Provider for CodexProvider {
                     request_url: &self.responses_url,
                     attempt: &context,
                     session_affinity_key: session_affinity.as_ref().map(|affinity| affinity.key()),
+                    reserved_concurrency: if upstream_request.subagent_kind().as_deref()
+                        == Some("guardian")
+                    {
+                        0
+                    } else {
+                        context
+                            .account_selection_policy()
+                            .openai_guardian_reserved_concurrency()
+                    },
+                    guardian,
                 },
                 cyber_policy_session_key.as_ref(),
                 session_affinity.as_ref(),
