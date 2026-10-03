@@ -38,7 +38,7 @@ const app = createApp({
         billing: { longContextBillingApplied: true, totalAmountDisplay: '$1.23',
           inputAmountDisplay:'$1.00',outputAmountDisplay:'$0.23',cacheReadAmountDisplay:'$0.00',
           cacheWriteAmountDisplay:'$0.00',inputPriceDisplay:'$2.00',outputPriceDisplay:'$4.00',
-          cacheWritePriceDisplay:'$0.00',serviceTierDisplay:'Standard',multiplierDisplay:'1.00x',
+          cacheWritePriceDisplay:'$0.00',serviceTierDisplay:'Fast',multiplierDisplay:'1.00x',
           standardAmountDisplay:'$1.23' }
       }] }),
       h('div', { style: 'max-width:480px;margin-top:20px' }, [
@@ -148,6 +148,7 @@ async function main() {
       assert.equal(await keyName.evaluate(element => element.scrollWidth > element.clientWidth), true)
       const billing = page.getByRole('button', { name: '查看长上下文计费明细' })
       assert.equal(await billing.count(), 1)
+      assert.equal(await page.getByRole('img', { name: 'Fast 加速' }).count(), 1)
       assert.match(await billing.getAttribute('class'), /warning/)
       await billing.hover()
       const billingTitle = page.getByText('长上下文计费明细', { exact: true })
