@@ -126,7 +126,20 @@ export function useAccountImportTasks(options: { reload: () => Promise<unknown> 
   watch(selectedId, () => {
     selectionVersion++
   }, { flush: 'sync' })
-  watch(open, () => void refresh())
+  watch(open, (isOpen) => {
+    if (isOpen) {
+      void refresh()
+      return
+    }
+    selectionVersion++
+    controller?.abort()
+    clearTimeout(timer)
+  }, { flush: 'sync' })
+
+  function afterLeave() {
+    if (!open.value && !disposed)
+      void refresh(true)
+  }
   onMounted(() => void refresh())
   onScopeDispose(() => {
     disposed = true
@@ -135,5 +148,5 @@ export function useAccountImportTasks(options: { reload: () => Promise<unknown> 
     loading.value = false
   })
 
-  return { open, tasks, detail, selectedId, error, stopError, loading, activeCount, stopping: stopAction.loading, select, created, refresh, stop }
+  return { open, tasks, detail, selectedId, error, stopError, loading, activeCount, stopping: stopAction.loading, select, created, refresh, stop, afterLeave }
 }

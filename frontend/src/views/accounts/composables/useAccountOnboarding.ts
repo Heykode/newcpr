@@ -52,13 +52,18 @@ export function useAccountOnboarding(options: {
     get: () => createModalOpen.value,
     set: (value: boolean) => {
       createModalOpen.value = value
-      if (!value) {
+      if (!value)
         clearSubmission()
-        reauthorizingAccount.value = null
-        createForm.value = emptyAccountCreateForm()
-      }
     },
   })
+
+  function clearCreate() {
+    if (showCreateModal.value)
+      return
+    clearSubmission()
+    reauthorizingAccount.value = null
+    createForm.value = emptyAccountCreateForm()
+  }
 
   async function handleCreate() {
     if (createForm.value.mode === 'oauth') {
@@ -257,6 +262,7 @@ export function useAccountOnboarding(options: {
   return {
     enrollmentIds,
     showCreateModal,
+    clearCreate,
     reauthorizingAccount,
     creatingAccount,
     authorizingOAuth,

@@ -164,8 +164,10 @@ test('2FA enrollment submits one durable intent and clears secrets after accepta
   assert.equal(h.enrollments[0].settings.excel403Action, 'disable_excel')
   assert.equal(h.enrollments[0].settings.excelCacheCreationAsInput, true)
   assert.deepEqual([...h.state.enrollmentIds.value], ['relogin-new'])
-  assert.equal(h.state.createForm.value.importTexts.two_fa, '')
   assert.equal(h.state.showCreateModal.value, false)
+  assert.notEqual(h.state.createForm.value.importTexts.two_fa, '')
+  h.state.clearCreate()
+  assert.equal(h.state.createForm.value.importTexts.two_fa, '')
 })
 
 test('failed enrollment preserves the form without assuming the account was created', async (t) => {
@@ -311,6 +313,8 @@ for (const mode of ['access_token', 'refresh_token']) {
     })))
     assert.equal(h.created.length, 1)
     assert.equal(h.state.showCreateModal.value, false)
+    assert.notEqual(h.state.createForm.value.importTexts[mode], '')
+    h.state.clearCreate()
     assert.equal(h.state.createForm.value.importTexts[mode], '')
     assert.equal(Object.hasOwn(h.state.createForm.value, 'turnStateInjectionEnabled'), false)
     assert.equal(h.state.createForm.value.customName, '')
@@ -642,6 +646,8 @@ test('mount restores server jobs; reopening discovers terminal/new tasks without
   assert.equal(h.state.detail.value.taskId, 'task-b')
   h.state.open.value = false
   await flush()
+  assert.equal(h.timers.size, 0, 'closing aborts foreground polling immediately')
+  h.state.afterLeave()
   const detailReads = h.requests.detail.length
   await h.list([completed('task-b'), completed()])
   assert.equal(h.requests.detail.length, detailReads, 'closed panels only read summaries')
@@ -755,6 +761,7 @@ test('superseded details, close and unmount cannot publish stale results or rest
   await flush()
   assert.equal(oldList.options.signal.aborted, true)
   oldList.reject(new Error('late failure'))
+  h.state.afterLeave()
   await h.list([task(), task('task-b')])
   assert.equal(h.state.error.value, '')
   h.tick()

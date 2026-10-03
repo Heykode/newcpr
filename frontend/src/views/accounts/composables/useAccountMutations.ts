@@ -39,6 +39,7 @@ export function useAccountMutations(options: {
   })
   const selectedAccountsById = new Map<string, AccountRow>()
   const showDeleteModal = ref(false)
+  const deletingCount = ref(0)
   const showSingleDeleteModal = ref(false)
   const showExportModal = ref(false)
   const pendingDeleteAccount = ref<AccountRow | null>(null)
@@ -63,6 +64,11 @@ export function useAccountMutations(options: {
   const deletingAccount = deletingAccountAction.loading
   const batchDeleting = batchDeletingAction.loading
   const exportingAccounts = exportingAccountsAction.loading
+
+  watch([showDeleteModal, batchDeleting, () => options.selectedIds.value.size], ([open, busy, count]) => {
+    if (open && !busy)
+      deletingCount.value = count
+  }, { flush: 'sync' })
 
   watch(
     [options.accounts, options.selectedIds],
@@ -96,7 +102,6 @@ export function useAccountMutations(options: {
         remaining.delete(account.id)
         options.selectedIds.value = remaining
         showSingleDeleteModal.value = false
-        pendingDeleteAccount.value = null
         await loadAccounts()
         toast.success('账号已删除')
       },
@@ -341,6 +346,7 @@ export function useAccountMutations(options: {
   return {
     ...onboarding,
     showDeleteModal,
+    deletingCount,
     showSingleDeleteModal,
     showExportModal,
     pendingDeleteAccount,

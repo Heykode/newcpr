@@ -36,12 +36,14 @@ export function useAccountPersonalInfo(accountId: Ref<string>, open: Ref<boolean
 
   // 打开或切换账号只请求一次；关闭取消等待，刷新按钮复用同一入口。
   watch([open, accountId], ([isOpen]) => {
-    request.invalidate()
+    request.invalidate({ resetLoading: isOpen })
+    if (!isOpen)
+      return
     info.value = null
     request.error.value = ''
     if (isOpen)
       void load()
-  }, { immediate: true })
+  }, { immediate: true, flush: 'sync' })
 
   return {
     profile,

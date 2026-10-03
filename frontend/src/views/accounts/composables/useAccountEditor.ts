@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import type { AccountModelAccess, getAccounts } from '@/api'
 import type { AccountEgressDraft, AccountEgressReadState } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
-import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
+import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 
 import { updateAccount } from '@/api'
 import { getIpv6Egress } from '@/api/modules/ipv6-egress'
@@ -60,12 +60,7 @@ export function useAccountEditor(options: {
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
-  const editingAccount = computed(() => {
-    const accountId = editingAccountId.value
-    return accountId
-      ? options.accounts.value.find(account => account.id === accountId) ?? null
-      : null
-  })
+  const editingAccount = shallowRef<AccountRow | null>(null)
 
   function applyInitialEgress(draft: AccountEgressDraft | undefined) {
     initialEgress = draft
@@ -108,6 +103,7 @@ export function useAccountEditor(options: {
     purchaseCycleStart.value = account.purchaseCost?.cycleAnchor ?? ''
     initialPurchase = JSON.stringify([purchaseAmount.value, purchaseCycleStart.value])
     editingAccountId.value = account.id
+    editingAccount.value = { ...account }
     customName.value = account.customName ?? ''
     initialCustomName = customName.value
     schedulingEnabled.value = account.enabled
@@ -205,10 +201,14 @@ export function useAccountEditor(options: {
     })
   }
 
-  watch([showEditModal, saving], ([open, isSaving]) => {
-    if (open || isSaving)
+  function clear() {
+    if (showEditModal.value)
       return
     editingAccountId.value = null
+    editingAccount.value = null
+    purchaseAmount.value = ''
+    purchaseCycleStart.value = ''
+    initialPurchase = ''
     customName.value = ''
     initialCustomName = ''
     applyInitialEgress(undefined)
@@ -235,7 +235,7 @@ export function useAccountEditor(options: {
     modelAccess.value = undefined
     initialModelAccess = ''
     selectedGroupIds.value = []
-  })
+  }
 
   return {
     purchaseAmount,
@@ -264,5 +264,6 @@ export function useAccountEditor(options: {
     saving,
     open,
     save,
+    clear,
   }
 }

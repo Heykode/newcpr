@@ -64,6 +64,62 @@ function requestHarness() {
   return { ...api, ...errors, ...actions, messages, response, fail }
 }
 
+test('API key exit cleanup retains content, removes plaintext after leave and cannot clear a reopened modal', async () => {
+  const api = requestHarness()
+  const scope = vue.effectScope()
+  const row = { id: 'key-example', name: 'example', groups: [], maxConcurrency: 2, requestsPerMinute: 3, dailyLimitUsd: '1', weeklyLimitUsd: '5' }
+  const module = load('views/api-keys/composables/useApiKeyMutations.ts', {
+    vue,
+    '@/api': {},
+    '@/components/base/BaseToast': { toast: {} },
+    '@/composables/useAsyncAction': api,
+    '@/composables/useCopyText': { useCopyText: () => () => {} },
+    '@/composables/useIdSet': load('composables/useIdSet.ts', { vue }),
+  })
+  try {
+    const state = scope.run(() => module.useApiKeyMutations({ selectedIds: vue.ref(new Set()), reload: async () => {} }))
+    state.openEdit(row)
+    state.showFormModal.value = false
+    assert.equal(state.editingKey.value.id, row.id)
+    assert.equal(state.form.value.name, row.name)
+    state.openCreate()
+    state.form.value.name = 'reopened'
+    state.clearForm()
+    assert.equal(state.form.value.name, 'reopened')
+    state.showFormModal.value = false
+    state.clearForm()
+    assert.equal(state.editingKey.value, null)
+    assert.equal(state.form.value.name, '')
+    state.createdKey.value = 'synthetic-plaintext'
+    state.createdKeyName.value = 'synthetic-name'
+    state.showKeyModal.value = true
+    state.clearCreatedKey()
+    assert.equal(state.createdKey.value, 'synthetic-plaintext')
+    state.showKeyModal.value = false
+    assert.equal(state.createdKey.value, 'synthetic-plaintext')
+    state.clearCreatedKey()
+    assert.equal(state.createdKey.value, '')
+    assert.equal(state.createdKeyName.value, '')
+    const use = load('views/api-keys/composables/useApiKeyUse.ts', {
+      vue,
+      '@/api/constants': { API_BASE_URL: '' },
+      '../utils/ccswitchImport': {},
+    }).useApiKeyUse({ createdKey: state.createdKey, createdKeyName: state.createdKeyName, revealPlaintextKey: async () => 'synthetic-revealed' })
+    await use.openUseKeyModal(row)
+    use.showUseKeyModal.value = false
+    assert.equal(use.selectedUseKey.value.key, 'synthetic-revealed')
+    await use.openUseKeyModal({ ...row, id: 'key-reopened' })
+    use.clearUseKey()
+    assert.equal(use.selectedUseKey.value.id, 'key-reopened')
+    use.showUseKeyModal.value = false
+    use.clearUseKey()
+    assert.equal(use.selectedUseKey.value, null)
+  }
+  finally {
+    scope.stop()
+  }
+})
+
 test('request notifications handle business errors once, preserve silent auth handling and suppress cancellation', async () => {
   const api = requestHarness()
   await assert.rejects(
@@ -341,7 +397,7 @@ test('quota forecast is loaded only on demand and cannot replace another account
     assert.equal(pending[3].signal.aborted, true)
     pending[3].resolve({ accountId: 'account-b', forecasts: [] })
     await closingLoad
-    assert.equal(state.report.value, null)
+    assert.equal(state.report.value.accountId, 'account-b', 'closing retains the last valid exit frame')
     const cell = readFileSync(source('views/accounts/components/AccountQuotaSummaryCell/index.vue'), 'utf8')
     assert.doesNotMatch(cell, /estimatedTotalCost|cost\s*\*\s*100|getAccountQuotaForecast|useIntervalFn/)
     assert.match(cell, /forecastRequested/)

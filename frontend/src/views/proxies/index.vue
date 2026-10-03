@@ -2,7 +2,7 @@
 import type { OutboundProxyRecord } from '@/api'
 import { LockKeyhole, Pencil, Plus, RefreshCw, Search, Trash2, Users, Wifi } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
-import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
 import { createProxy, deleteProxy, getProxies, probeProxy, testProxy, updateProxy } from '@/api'
 import { defaultRequestLocation } from '@/api/modules/proxies'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -128,7 +128,6 @@ async function save() {
       ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, autoLocation: form.autoLocation, requestLocation })
       : createProxy({ name, proxyUrl, autoLocation: form.autoLocation, requestLocation }))
     showForm.value = false
-    form.proxyUrl = ''
     toast.success('代理已保存')
     if (result.record.autoLocation && result.record.lastTest) {
       const feedback = proxyTestFeedback(result.record.lastTest)
@@ -168,11 +167,11 @@ function setPageSize(size: number) {
   setPage(1)
 }
 
-watch(showForm, (open) => {
-  if (!open) {
+function clearForm() {
+  if (!showForm.value) {
     form.proxyUrl = ''
   }
-})
+}
 watchDebounced(search, () => setPage(1), { debounce: 300 })
 onMounted(() => void query.execute())
 </script>
@@ -289,6 +288,7 @@ onMounted(() => void query.execute())
       :proxy="editing"
       :saving="saving"
       :testing="testingForm"
+      @after-leave="clearForm"
       @save="save"
       @test="testConnection"
     />

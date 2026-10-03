@@ -25,6 +25,7 @@ export function useAccountBatchEditor(options: {
 }) {
   const selectedAccountsById = new Map<string, AccountRow>()
   const showBatchEditModal = shallowRef(false)
+  const editingCount = shallowRef(0)
   const customName = shallowRef('')
   const purchaseAmount = shallowRef('')
   const purchaseCycleStart = shallowRef('')
@@ -104,6 +105,7 @@ export function useAccountBatchEditor(options: {
     const accounts = selectedAccounts()
     if (accounts.length === 0)
       return
+    editingCount.value = accounts.length
     const firstName = accounts[0]?.customName ?? ''
     customName.value = accounts.every(account => (account.customName ?? '') === firstName) ? firstName : ''
 
@@ -233,9 +235,10 @@ export function useAccountBatchEditor(options: {
     { immediate: true, flush: 'sync' },
   )
 
-  watch([showBatchEditModal, saving], ([open, isSaving]) => {
-    if (open || isSaving)
+  function clear() {
+    if (showBatchEditModal.value)
       return
+    editingCount.value = 0
     customName.value = ''
     schedulingEnabled.value = true
     excelAvailable.value = false
@@ -251,7 +254,7 @@ export function useAccountBatchEditor(options: {
     catalogAccountId.value = undefined
     selectedGroupIds.value = []
     resetUpdateSelection()
-  })
+  }
 
   return {
     purchaseAmount,
@@ -260,6 +263,8 @@ export function useAccountBatchEditor(options: {
     customName,
     updateCustomName,
     showBatchEditModal,
+    editingCount,
+    clear,
     excelAvailable,
     requestProxyAvailable,
     schedulingEnabled,

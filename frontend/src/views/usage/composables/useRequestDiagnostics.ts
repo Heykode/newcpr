@@ -4,7 +4,7 @@ import { getUsageRecordDetail } from '@/api'
 import { errorMessage } from '@/utils/async'
 
 /** Requests can be switched while a lookup is pending; stale results never replace the active trace. */
-export function useRequestDiagnostics(requestId: () => string) {
+export function useRequestDiagnostics(requestId: () => string, isActive: () => boolean = () => true) {
   const selectedId = shallowRef(requestId())
   const revision = shallowRef(0)
   const detail = shallowRef<UsageRecordDetail | null>(null)
@@ -12,7 +12,9 @@ export function useRequestDiagnostics(requestId: () => string) {
   const error = shallowRef('')
 
   watch(requestId, id => selectedId.value = id)
-  watch([selectedId, revision], async ([id], _previous, onCleanup) => {
+  watch([selectedId, revision, isActive], async ([id, , enabled], _previous, onCleanup) => {
+    if (!enabled)
+      return
     let active = true
     const controller = new AbortController()
     onCleanup(() => {
@@ -35,7 +37,7 @@ export function useRequestDiagnostics(requestId: () => string) {
       if (active)
         loading.value = false
     }
-  }, { immediate: true })
+  }, { immediate: true, flush: 'sync' })
 
   return { selectedId, detail, loading, error, refresh: () => revision.value++ }
 }

@@ -176,6 +176,7 @@ const {
   select: selectImportTask,
   created: importTaskCreated,
   refresh: refreshImportTasks,
+  afterLeave: afterImportTasksLeave,
   stop: stopImportTask,
 } = useAccountImportTasks({
   reload: () => Promise.all([refreshAccountsSilently(), loadGroups({ silent: true })]),
@@ -183,7 +184,9 @@ const {
 
 const {
   showCreateModal,
+  clearCreate,
   showDeleteModal,
+  deletingCount,
   showSingleDeleteModal,
   showExportModal,
   pendingDeleteAccount,
@@ -302,6 +305,8 @@ const {
   saving: savingBatchEdit,
   open: openBatchEdit,
   save: saveBatchEdit,
+  clear: clearBatchEdit,
+  editingCount: batchEditingCount,
 } = useAccountBatchEditor({
   accounts,
   selectedIds,
@@ -336,6 +341,7 @@ const {
   saving: savingAccountEdit,
   open: openAccountEdit,
   save: saveAccountEdit,
+  clear: clearAccountEdit,
 } = useAccountEditor({
   accounts,
   reloadAccounts: loadAccounts,
@@ -695,6 +701,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @select="selectImportTask"
       @refresh="refreshImportTasks()"
       @stop="stopImportTask"
+      @after-leave="afterImportTasksLeave"
       @view-accounts="importTasksOpen = false; void refreshAccounts()"
     />
 
@@ -708,6 +715,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :reauthorizing="Boolean(reauthorizingAccount)"
       :saving="creatingAccount"
       @create="handleCreate"
+      @after-leave="clearCreate"
       @generate-oauth="handleAuthorizeOAuth"
     />
 
@@ -739,6 +747,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :saving="savingAccountEdit"
       :egress-read-state="editingEgressReadState"
       @save="saveAccountEdit"
+      @after-leave="clearAccountEdit"
     />
 
     <AccountResetBatchModal
@@ -795,11 +804,12 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       :has-updates="batchHasUpdates"
       :excel-available="batchExcelAvailable"
       :request-proxy-available="batchRequestProxyAvailable"
-      :selected-count="selectedIds.size"
+      :selected-count="batchEditingCount"
       :groups="groups"
       :groups-loading="groupsLoading"
       :saving="savingBatchEdit"
       @save="saveBatchEdit"
+      @after-leave="clearBatchEdit"
     />
 
     <BaseConfirmModal
@@ -853,7 +863,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       @confirm="handleBatchDelete"
     >
       <p class="m-0">
-        确定要删除选中的 {{ selectedIds.size }} 个账号吗？此操作不可撤销
+        确定要删除选中的 {{ deletingCount }} 个账号吗？此操作不可撤销
       </p>
     </BaseConfirmModal>
 
@@ -865,6 +875,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       confirm-text="确认删除"
       :loading="deletingAccount"
       @confirm="handleDelete"
+      @after-leave="!showSingleDeleteModal && (pendingDeleteAccount = null)"
     >
       <p class="m-0">
         确定要删除

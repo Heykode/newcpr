@@ -39,6 +39,7 @@ const {
   refreshing,
   deleting,
   deleteTarget,
+  showDelete,
   downloadStates,
   load: loadRecords,
   refresh,
@@ -107,6 +108,7 @@ watch(
     />
 
     <BackupRecordsCard
+      v-model:delete-open="showDelete"
       :records="records"
       :page="page"
       :page-size="pageSize"
@@ -126,7 +128,6 @@ watch(
       @download="downloadBackup($event)"
       @request-delete="requestDelete($event)"
       @confirm-delete="confirmDelete()"
-      @cancel-delete="deleteTarget = null"
     />
 
     <R2GuideModal v-model="showR2Guide" />
