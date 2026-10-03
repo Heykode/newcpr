@@ -159,6 +159,19 @@ class DeployTests(unittest.TestCase):
             with self.assertRaises(images.Unavailable):
                 deploy.reviewed_upgrade("v3.19.1", labels, proof, target)
 
+    def test_v3201_upgrade_matches_existing_v3191_schema_and_added_migrations(self):
+        plan = json.loads((deploy.ROOT / "deploy/upgrades/v3.20.1.json").read_text())
+        self.assertEqual(plan["from_version"], "3.19.1")
+        self.assertEqual(plan["to_version"], "3.20.1")
+        self.assertEqual(plan["from_migrations_tree"], "906f084734203e93db61f2d4dca7a908f0075d34")
+        self.assertEqual(plan["to_migrations_tree"], "dffc11221dd5d18eef9f12d6adf2307d60379a7d")
+        self.assertEqual(plan["added"], [
+            "0056_log_cleanup.sql", "0057_account_purchase_costs.sql",
+            "0058_excel_paused_recovery.sql", "0060_account_reset_credits.sql",
+            "0061_guardian_reserved_concurrency.sql", "0062_account_warmup.sql",
+        ])
+        self.assertEqual(plan["recovery"], "manual")
+
     def test_latest_main_ci_required(self):
         run, _, _ = fixtures()
         run["event"] = "push"
