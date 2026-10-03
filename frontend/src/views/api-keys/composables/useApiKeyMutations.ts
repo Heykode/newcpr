@@ -49,6 +49,11 @@ export function useApiKeyMutations(options: {
   const savingKey = savingKeyAction.loading
   const deletingKey = deletingKeyAction.loading
   const batchDeleting = batchDeletingAction.loading
+  const deletingCount = shallowRef(0)
+  watch([showDeleteModal, batchDeleting, () => options.selectedIds.value.size], ([open, busy, count]) => {
+    if (open && !busy)
+      deletingCount.value = count
+  }, { flush: 'sync' })
   const updatingStatusKeyIds = updatingStatusKeys.ids
   const revealingKeyIds = revealingKeys.ids
   const form = ref<ApiKeyFormValue>(emptyForm())
@@ -73,7 +78,6 @@ export function useApiKeyMutations(options: {
     await resetBudgetAction.run(async () => {
       await resetApiKeyBudget({ id: key.id, period: budgetPeriod.value })
       showBudgetResetModal.value = false
-      pendingBudgetKey.value = null
       toast.success('已用额度已重置')
       await options.reload()
     }, { onError: () => void options.reload() })
@@ -140,8 +144,6 @@ export function useApiKeyMutations(options: {
         }
 
         showFormModal.value = false
-        editingKey.value = null
-        form.value = emptyForm()
         await options.reload()
         if (current) {
           toast.success('API Key 已更新')
@@ -198,7 +200,6 @@ export function useApiKeyMutations(options: {
         remaining.delete(keyId)
         options.selectedIds.value = remaining
         showSingleDeleteModal.value = false
-        pendingDeleteKey.value = null
         await options.reload()
         toast.success('删除成功')
       },
@@ -267,20 +268,21 @@ export function useApiKeyMutations(options: {
       await copyToClipboard(key)
   }
 
-  watch(showKeyModal, (open) => {
-    if (!open) {
+  function clearCreatedKey() {
+    if (!showKeyModal.value) {
       createdKey.value = ''
       createdKeyName.value = ''
     }
-  })
-  watch(showFormModal, (open) => {
-    if (!open && !savingKey.value) {
+  }
+  function clearForm() {
+    if (!showFormModal.value) {
       editingKey.value = null
       form.value = emptyForm()
     }
-  })
+  }
 
   return {
+    deletingCount,
     showBudgetResetModal,
     pendingBudgetKey,
     budgetPeriod,
@@ -288,6 +290,8 @@ export function useApiKeyMutations(options: {
     requestBudgetReset,
     handleBudgetReset,
     showFormModal,
+    clearForm,
+    clearCreatedKey,
     showDeleteModal,
     showSingleDeleteModal,
     showKeyModal,

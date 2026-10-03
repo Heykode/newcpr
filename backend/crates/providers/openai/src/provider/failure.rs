@@ -1658,10 +1658,3 @@ pub(super) fn provider_error(
 ) -> ProviderError {
     ProviderError::new(kind, send_state)
 }
-
-pub(super) fn remaining(deadline: SystemTime) -> Option<Duration> {
-    deadline
-        .duration_since(SystemTime::now())
-        .ok()
-        .filter(|remaining| !remaining.is_zero())
-}

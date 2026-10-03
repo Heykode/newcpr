@@ -1,6 +1,6 @@
 import type { Ref, ShallowRef } from 'vue'
 import type { getApiKeys } from '@/api'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef } from 'vue'
 
 import { API_BASE_URL } from '@/api/constants'
 import { buildCodexCcSwitchImportDeeplink } from '../utils/ccswitchImport'
@@ -70,13 +70,14 @@ export function useApiKeyUse(options: {
     })
   }
 
-  watch(showUseKeyModal, (open) => {
-    if (!open)
+  function clearUseKey() {
+    if (!showUseKeyModal.value)
       selectedUseKey.value = null
-  })
+  }
 
   return {
     showUseKeyModal,
+    clearUseKey,
     selectedUseKey,
     serviceRootUrl,
     openAiBaseUrl,

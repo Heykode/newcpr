@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use gateway_core::engine::{ModelRequestId, admission::ClientAdmissionPort};
+use gateway_core::lifecycle::{CancellationToken, Deadline};
+use gateway_core::policy::ClientApiKeyId;
 use gateway_store::redis::{
     ClientAdmissionDecision, ClientAdmissionLimits, ClientAdmissionRecentRequest,
     ClientAdmissionRejection, ClientAdmissionRepository, ClientAdmissionRequest,
@@ -9,6 +12,176 @@ use gateway_store::redis::{
 };
 use redis::aio::ConnectionManager;
 use uuid::Uuid;
+
+#[tokio::test]
+async fn request_renewal_keeps_concurrency_without_charging_rpm_and_stops_on_drop() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let key = ClientApiKeyId::new("key_renewal").unwrap();
+    let request = ModelRequestId::new("req_renewal").unwrap();
+    repository
+        .admit_client_request(&admission_request(
+            request.as_str(),
+            key.as_str(),
+            Duration::from_secs(30),
+        ))
+        .await
+        .unwrap();
+    let keys = namespace_keys(&mut connection, &namespace).await;
+    let active = key_with_suffix(&keys, ":active");
+    let recent = key_with_suffix(&keys, ":requests");
+    let rpm_before: Vec<(String, f64)> = redis::cmd("ZRANGE")
+        .arg(recent)
+        .arg(0)
+        .arg(-1)
+        .arg("WITHSCORES")
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    let cancellation = CancellationToken::new();
+    let guard = ClientAdmissionPort::maintain(
+        &repository,
+        &key,
+        &request,
+        Deadline::default(),
+        cancellation.clone(),
+    );
+    wait_for_renewal(&mut connection, active, request.as_str()).await;
+    let short =
+        (redis_now(&mut connection).await + chrono::Duration::seconds(15)).timestamp_millis();
+    redis::cmd("ZADD")
+        .arg(active)
+        .arg(short)
+        .arg(request.as_str())
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(201)).await;
+    tokio::time::resume();
+    wait_for_renewal(&mut connection, active, request.as_str()).await;
+    let rpm_after: Vec<(String, f64)> = redis::cmd("ZRANGE")
+        .arg(recent)
+        .arg(0)
+        .arg(-1)
+        .arg("WITHSCORES")
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(rpm_before, rpm_after, "renewal is not a second admission");
+    assert!(!cancellation.is_cancelled());
+    drop(guard);
+    tokio::task::yield_now().await;
+    redis::cmd("ZADD")
+        .arg(active)
+        .arg(short)
+        .arg(request.as_str())
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(201)).await;
+    tokio::time::resume();
+    tokio::task::yield_now().await;
+    let score: i64 = redis::cmd("ZSCORE")
+        .arg(active)
+        .arg(request.as_str())
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(score, short, "dropping the owner stops renewal");
+    repository
+        .release_client_request(key.as_str(), request.as_str())
+        .await
+        .unwrap();
+    delete_namespace_keys(&mut connection, &namespace).await;
+}
+
+#[tokio::test]
+async fn renewal_cannot_resurrect_expired_released_or_cancelled_admission() {
+    let Some((repository, mut connection, namespace)) = repository().await else {
+        return;
+    };
+    let key = ClientApiKeyId::new("key_lost_renewal").unwrap();
+    for reason in ["expired", "released", "cancelled"] {
+        let request = ModelRequestId::new(format!("req_{reason}")).unwrap();
+        repository
+            .admit_client_request(&admission_request(
+                request.as_str(),
+                key.as_str(),
+                Duration::from_secs(30),
+            ))
+            .await
+            .unwrap();
+        let keys = namespace_keys(&mut connection, &namespace).await;
+        let active = key_with_suffix(&keys, ":active");
+        match reason {
+            "expired" => {
+                redis::cmd("ZADD")
+                    .arg(active)
+                    .arg(1)
+                    .arg(request.as_str())
+                    .query_async::<i64>(&mut connection)
+                    .await
+                    .unwrap();
+            }
+            "released" => {
+                repository
+                    .release_client_request(key.as_str(), request.as_str())
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                ClientAdmissionPort::cancel_admission(&repository, &key, &request)
+                    .await
+                    .unwrap();
+            }
+        }
+        let cancellation = CancellationToken::new();
+        let guard = ClientAdmissionPort::maintain(
+            &repository,
+            &key,
+            &request,
+            Deadline::default(),
+            cancellation.clone(),
+        );
+        tokio::time::timeout(Duration::from_secs(2), cancellation.cancelled())
+            .await
+            .expect("lost ownership cancels execution");
+        let score: Option<i64> = redis::cmd("ZSCORE")
+            .arg(active)
+            .arg(request.as_str())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert!(
+            score.is_none_or(|score| score == 1),
+            "lost member must never become live"
+        );
+        drop(guard);
+    }
+    delete_namespace_keys(&mut connection, &namespace).await;
+}
+
+async fn wait_for_renewal(connection: &mut ConnectionManager, active: &str, request: &str) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let score: Option<i64> = redis::cmd("ZSCORE")
+                .arg(active)
+                .arg(request)
+                .query_async(connection)
+                .await
+                .unwrap();
+            if score.is_some_and(|score| score > Utc::now().timestamp_millis() + 500_000) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("live owner renews its bounded lease");
+}
 
 #[test]
 fn client_admission_rejects_zero_ttl() {

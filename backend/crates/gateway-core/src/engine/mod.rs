@@ -452,7 +452,7 @@ impl RequestAttemptContext {
 pub struct AttemptContext {
     request: RequestAttemptContext,
     attempt_index: NonZeroU32,
-    deadline: SystemTime,
+    deadline: crate::lifecycle::Deadline,
     account_selection_policy: AccountSelectionPolicy,
     account: AccountAttemptContext,
     continuation: Option<ContinuationBinding>,
@@ -502,10 +502,10 @@ impl AttemptContext {
     }
 
     #[must_use]
-    pub const fn new(
+    pub fn new(
         request: RequestAttemptContext,
         attempt_index: NonZeroU32,
-        deadline: SystemTime,
+        deadline: impl Into<crate::lifecycle::Deadline>,
         account_selection_policy: AccountSelectionPolicy,
         account: AccountAttemptContext,
         continuation: Option<ContinuationBinding>,
@@ -519,7 +519,7 @@ impl AttemptContext {
         Self {
             request,
             attempt_index,
-            deadline,
+            deadline: deadline.into(),
             account_selection_policy,
             account,
             continuation,
@@ -597,7 +597,7 @@ impl AttemptContext {
     }
 
     #[must_use]
-    pub const fn deadline(&self) -> SystemTime {
+    pub const fn deadline(&self) -> crate::lifecycle::Deadline {
         self.deadline
     }
 
@@ -718,7 +718,8 @@ pub struct NewModelRequest {
     /// Client Key 准入判定的完整耗时；内部探测不经过该阶段。
     pub admission_decision_ms: Option<u64>,
     pub started_at: SystemTime,
-    pub deadline_at: SystemTime,
+    /// Optional execution cutoff; Store projects it into a renewable recovery lease.
+    pub deadline_at: crate::lifecycle::Deadline,
 }
 
 /// 每次真实上游发送前对同一 `model_requests` 行的更新。
@@ -830,6 +831,14 @@ pub struct RecoveryReport {
 /// `model_requests` 与必要 `ops_events` 的唯一 Core port。
 #[async_trait]
 pub trait ExecutionStore: Send + Sync {
+    fn maintain_request(
+        &self,
+        _request_id: &ModelRequestId,
+        _deadline: crate::lifecycle::Deadline,
+    ) -> Box<dyn crate::lifecycle::LeaseGuard> {
+        Box::new(())
+    }
+
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError>;
     async fn record_attempt(&self, attempt: AttemptRecord) -> Result<(), StoreError>;
     /// 请求插入与首次 attempt 合并持久化；两者写同一行，支持合并写的

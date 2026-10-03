@@ -445,9 +445,14 @@ async fn select_grok_session(
     } else {
         AccountEligibilityPolicy::Enforce
     })
-    .with_affinity(affinity);
-    let selection_deadline = remaining(context.deadline())
-        .ok_or_else(|| provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent))?;
+    .with_affinity(affinity)
+    .with_cancellation(context.cancellation().clone());
+    if context.deadline().is_elapsed() {
+        return Err(provider_error(
+            ProviderErrorKind::Timeout,
+            UpstreamSendState::NotSent,
+        ));
+    }
     let cancellation = context.cancellation().clone();
     let selected = tokio::select! {
         biased;
@@ -455,7 +460,7 @@ async fn select_grok_session(
             ProviderErrorKind::Cancelled,
             UpstreamSendState::NotSent,
         )),
-        _ = tokio::time::sleep(selection_deadline) => Err(provider_error(
+        _ = context.deadline().wait() => Err(provider_error(
             ProviderErrorKind::Timeout,
             UpstreamSendState::NotSent,
         )),

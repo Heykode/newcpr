@@ -36,7 +36,7 @@ impl AccountWaitFailure {
 
 struct WaitControl<'a> {
     attempt: &'a AttemptContext,
-    deadline: tokio::time::Instant,
+    deadline: Option<tokio::time::Instant>,
 }
 
 impl<'a> WaitControl<'a> {
@@ -51,11 +51,10 @@ impl<'a> WaitControl<'a> {
         }
         Ok(Self {
             attempt,
-            deadline: tokio::time::Instant::now()
-                + attempt
-                    .deadline()
-                    .duration_since(SystemTime::now())
-                    .unwrap_or_default(),
+            deadline: attempt
+                .deadline()
+                .remaining()
+                .map(|remaining| tokio::time::Instant::now() + remaining),
         })
     }
 
@@ -73,7 +72,11 @@ impl<'a> WaitControl<'a> {
             }
             _ => CredentialSelectionError::Coordinator,
         })?;
-        self.deadline = self.deadline.min(deadline.monotonic_deadline().into());
+        let entered = deadline.monotonic_deadline().into();
+        self.deadline = Some(
+            self.deadline
+                .map_or(entered, |current| current.min(entered)),
+        );
         Ok(deadline)
     }
 
@@ -84,7 +87,12 @@ impl<'a> WaitControl<'a> {
         tokio::select! {
             biased;
             () = self.attempt.cancellation().cancelled() => Err(CredentialSelectionError::Cancelled),
-            () = tokio::time::sleep_until(self.deadline) => {
+            () = async {
+                match self.deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 if let Some(budget) = self.attempt.account_wait_budget() {
                     budget.expire();
                 }
@@ -787,6 +795,7 @@ impl CodexCredentialSelector {
             request.attempt.deadline(),
         )
         .with_quality_check(request.attempt.is_quality_check())
+        .with_cancellation(request.attempt.cancellation().clone())
         .with_priority(request.priority()))
     }
 
@@ -864,7 +873,11 @@ impl CodexCredentialSelector {
         let tuning = request.attempt.request_tuning();
         // A skipped interval must not start a new sticky window for later retries.
         if interval_end.is_some_and(|end| {
-            end >= request.attempt.deadline()
+            request
+                .attempt
+                .deadline()
+                .at()
+                .is_some_and(|deadline| end >= deadline)
                 || end.duration_since(SystemTime::now()).unwrap_or_default()
                     >= Duration::from_secs(tuning.account_busy_wait_sticky_timeout_seconds)
         }) {

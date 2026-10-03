@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::future::join_all;
 use gateway_core::account::{CredentialRevision, ProviderAccountId};
 use gateway_core::engine::{AccountWaitMode, ModelRequestId};
-use gateway_core::lifecycle::CancellationToken;
+use gateway_core::lifecycle::{CancellationToken, Deadline};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort,
@@ -27,6 +27,95 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
+
+#[tokio::test]
+async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after_loss() {
+    let Some(mut fixture) = Fixture::new().await else {
+        return;
+    };
+    for promote in [false, true] {
+        let id = if promote {
+            "renew-promoted"
+        } else {
+            "renew-ordinary"
+        };
+        let cancellation = CancellationToken::new();
+        let request = ProviderSchedulingLeaseRequest::new(
+            provider(),
+            account(id),
+            CredentialRevision::new(1).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            Duration::ZERO,
+            Deadline::default(),
+        )
+        .with_cancellation(cancellation.clone());
+        let guard = if promote {
+            let mut waiter = fixture.wait(id, Duration::from_secs(30)).await;
+            promoted(waiter.try_promote(request).await.unwrap())
+        } else {
+            fast_acquired(fixture.port.try_acquire_scheduling(request).await.unwrap())
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let active = fixture.active_key(id);
+        let members: Vec<String> = redis::cmd("ZRANGE")
+            .arg(&active)
+            .arg(0)
+            .arg(-1)
+            .query_async(&mut fixture.connection)
+            .await
+            .unwrap();
+        assert_eq!(members.len(), 1);
+        let token = &members[0];
+        let short = timestamp_millis(SystemTime::now() + Duration::from_secs(15));
+        redis::cmd("ZADD")
+            .arg(&active)
+            .arg(short)
+            .arg(token)
+            .query_async::<i64>(&mut fixture.connection)
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(201)).await;
+        tokio::time::resume();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let score: i64 = redis::cmd("ZSCORE")
+                    .arg(&active)
+                    .arg(token)
+                    .query_async(&mut fixture.connection)
+                    .await
+                    .unwrap();
+                if score > timestamp_millis(SystemTime::now() + Duration::from_secs(500)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("execution owner renews");
+        assert_eq!(fixture.in_flight(id).await, 1);
+        assert!(!cancellation.is_cancelled());
+        redis::cmd("ZREM")
+            .arg(&active)
+            .arg(token)
+            .query_async::<i64>(&mut fixture.connection)
+            .await
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(201)).await;
+        tokio::time::resume();
+        tokio::time::timeout(Duration::from_secs(2), cancellation.cancelled())
+            .await
+            .expect("owner loss cancels execution");
+        assert_eq!(fixture.in_flight(id).await, 0);
+        drop(guard);
+    }
+    fixture.finish().await;
+}
+
+fn timestamp_millis(time: SystemTime) -> i64 {
+    i64::try_from(time.duration_since(UNIX_EPOCH).unwrap().as_millis()).unwrap()
+}
 
 #[tokio::test]
 async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_cancel() {
@@ -70,15 +159,33 @@ async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_canc
         normal.try_promote(request.clone()).await.unwrap(),
         ProviderWaitPromotion::Busy { .. }
     ));
+    guardian.release().await.unwrap();
+    let writer = fixture.writer.take().expect("cleanup writer");
+    let cancellation = CancellationToken::new();
+    let worker_cancellation = cancellation.clone();
+    let worker = tokio::spawn(async move { writer.run(worker_cancellation).await });
     drop(active);
-    fixture.drain().await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while fixture.in_flight(id).await != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("guardian execution released");
     let ProviderWaitPromotion::Acquired(active) =
         normal.try_promote(request.clone()).await.unwrap()
     else {
         panic!("normal promoted");
     };
+    normal.release().await.unwrap();
     drop(active);
-    fixture.drain().await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while fixture.in_flight(id).await != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("normal execution released");
     let ProviderWaitLeaseAcquisition::Acquired(guardian) = fixture
         .port
         .try_acquire_wait(
@@ -95,6 +202,12 @@ async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_canc
         fixture.port.try_acquire_scheduling(request).await.unwrap(),
         ProviderLeaseAcquisition::Acquired(_)
     ));
+    cancellation.cancel();
+    tokio::time::timeout(Duration::from_secs(2), worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
     fixture.finish().await;
 }
 
@@ -597,7 +710,7 @@ async fn capacity_wait_cancelled_future_cleans_write_before_reply_delivery() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::HoldReply, 2).await;
+    let mut proxy = FaultProxy::start(Fault::HoldReply, 3).await;
     let connection = proxy.connection().await;
     let repository = RedisCredentialLeaseRepository::new(connection, &fixture.namespace)
         .expect("proxy repository");
@@ -681,7 +794,7 @@ async fn capacity_wait_cancelled_promotion_cleans_committed_slot_and_cannot_retr
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::HoldReply, 5).await;
+    let mut proxy = FaultProxy::start(Fault::HoldReply, 6).await;
     let repository =
         RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
             .expect("proxy repository");
@@ -734,7 +847,7 @@ async fn capacity_wait_failed_explicit_release_is_retried_by_tracked_writer() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::DelayCommand, 3).await;
+    let mut proxy = FaultProxy::start(Fault::DelayCommand, 4).await;
     let repository =
         RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
             .expect("proxy repository");
@@ -796,7 +909,7 @@ async fn capacity_wait_fast_lost_reply_is_owned_and_late_write_is_fenced() {
                 .expect("load real execution script"),
         );
         drop(warm);
-        let mut proxy = FaultProxy::start(fault, 5).await;
+        let mut proxy = FaultProxy::start(fault, 6).await;
         let repository =
             RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
                 .expect("proxy repository");
@@ -841,7 +954,7 @@ async fn capacity_wait_running_writer_cleans_promptly_and_retries_redis_disconne
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::DelayCommand, 3).await;
+    let mut proxy = FaultProxy::start(Fault::DelayCommand, 4).await;
     let repository =
         RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
             .expect("proxy repository");
@@ -1087,7 +1200,7 @@ async fn fault_scenario(fault: Fault, promotion: bool) {
         ));
     }
     warm.release().await.expect("warm script cleanup");
-    let mut proxy = FaultProxy::start(fault, if promotion { 5 } else { 2 }).await;
+    let mut proxy = FaultProxy::start(fault, if promotion { 6 } else { 3 }).await;
     let connection = proxy.connection().await;
     let repository = RedisCredentialLeaseRepository::new(connection, &fixture.namespace)
         .expect("proxy repository");

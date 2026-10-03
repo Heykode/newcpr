@@ -70,3 +70,17 @@ Questions to answer:
   change the shared `BaseSwitch` merely to implement one feature's persistence.
 - Browser regression coverage must assert the actual checkbox state after
   rejection, then a successful retry; API-payload assertions alone are not enough.
+
+### Modal Exit Lifecycle
+
+- `BaseModal` emits `afterLeave` after its real transition. Preserve visible
+  content, titles and confirmation counts until that event, rather than replacing
+  them with empty defaults when the open model becomes false.
+- Closing still cancels requests and invalidates stale responses immediately.
+  Delayed visual cleanup must not allow a closed request to update another modal.
+- Clear editable drafts, selected targets and plaintext keys on `afterLeave`,
+  only if that modal is still closed. A late callback cannot erase a rapid reopen.
+- Multi-root modal wrappers must explicitly forward each modal's leave event;
+  single-root wrappers may forward undeclared listeners to their `BaseModal` root.
+- Verify non-reduced-motion exit frames, rapid reopen and sensitive-content
+  removal in desktop/mobile browsers, plus composable cleanup regressions.

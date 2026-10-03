@@ -256,6 +256,8 @@ test('encrypted content omission needs fresh batch opt-in and clears when Excel 
   await state.save()
   assert.deepEqual(requests[0], { accountIds: ['account-a'], excelIgnoreEncryptedContent: true })
   await vue.nextTick()
+  assert.equal(state.updateExcelIgnoreEncryptedContent.value, true)
+  state.clear()
   assertNoUpdates(state)
   accounts.value[0].excelIgnoreEncryptedContent = true
   selectedIds.value = new Set(['account-a'])
@@ -324,6 +326,8 @@ test('Excel cache billing is separately opted in and does not implicitly switch 
   await state.save()
   assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], excelCacheCreationAsInput: true }])
   await vue.nextTick()
+  assert.equal(state.updateExcelCacheCreationAsInput.value, true)
+  state.clear()
   assertNoUpdates(state)
   editor.selectedIds.value = new Set(['account-a'])
   state.open()
@@ -422,6 +426,8 @@ test('model restrictions are opt-in, validate only when checked and clear explic
     modelAccess: { mode: 'denylist', models: ['model-b'] },
   })
   await vue.nextTick()
+  assert.deepEqual(JSON.parse(JSON.stringify(state.modelAccess.value)), { mode: 'denylist', models: ['model-b'] })
+  state.clear()
   assert.equal(state.modelAccess.value, undefined)
   assert.equal(state.catalogAccountId.value, undefined)
 })
@@ -437,6 +443,8 @@ test('custom names require opt-in, support clear, and ignore unchecked invalid t
     await editor.state.save()
     assert.deepEqual(editor.requests, [{ accountIds: ['account-a'], customName: expected }])
     await vue.nextTick()
+    assert.equal(editor.state.customName.value, value)
+    editor.state.clear()
     assert.equal(editor.state.customName.value, '')
   }
   const editor = mountEditor(t)
@@ -524,6 +532,8 @@ test('batch editor requires fresh opt-ins initially, on every open and after clo
 
   state.showBatchEditModal.value = false
   await vue.nextTick()
+  assert.equal(state.hasUpdates.value, true, 'closing retains the exit frame')
+  state.clear()
   assertNoUpdates(state)
   assert.equal(state.schedulingEnabled.value, true)
   assert.equal(state.concurrencyLimit.value, '')
@@ -656,6 +666,8 @@ test('every single field and combination sends exactly the opted-in patch after 
       assert.equal(state.saving.value, false)
       assert.equal(state.showBatchEditModal.value, false)
       assert.equal(editor.selectedIds.value.size, 0)
+      assert.equal(state.hasUpdates.value, true, 'committed values remain during leave')
+      state.clear()
       assertNoUpdates(state)
     })
   }
@@ -875,6 +887,22 @@ test('opening mixed accounts does not turn their displayed defaults into implici
   assert.deepEqual(editor.messages.warning, [])
 })
 
+test('late after-leave cleanup cannot reset a reopened batch or its frozen count', async (t) => {
+  const { state, selectedIds } = mountEditor(t, { accounts: [account('account-a'), account('account-b')] })
+  state.open()
+  assert.equal(state.editingCount.value, 2)
+  selectedIds.value = new Set(['account-a'])
+  assert.equal(state.editingCount.value, 2)
+  state.showBatchEditModal.value = false
+  state.open()
+  state.updateWeight.value = true
+  state.weight.value = '9'
+  state.clear()
+  assert.equal(state.editingCount.value, 1)
+  assert.equal(state.updateWeight.value, true)
+  assert.equal(state.weight.value, '9')
+})
+
 test('real async action blocks duplicate saves and resets opt-ins after success', async (t) => {
   let complete
   const editor = mountEditor(t, {
@@ -899,6 +927,8 @@ test('real async action blocks duplicate saves and resets opt-ins after success'
   await vue.nextTick()
   assert.equal(state.saving.value, false)
   assert.equal(state.showBatchEditModal.value, false)
+  assert.equal(state.updateEnabled.value, true)
+  state.clear()
   assertNoUpdates(state)
   assert.deepEqual(editor.reloads, { accounts: 1, groups: 1 })
 })
@@ -934,6 +964,8 @@ test('failed saves retain the selection and opt-ins for retry through the real a
     { accountIds: ['account-a'], groupIds: [] },
   ])
   assert.deepEqual(editor.reloads, { accounts: 2, groups: 1 })
+  assert.equal(state.updateGroups.value, true)
+  state.clear()
   assertNoUpdates(state)
 })
 

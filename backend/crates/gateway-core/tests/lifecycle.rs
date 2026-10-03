@@ -2,6 +2,37 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use gateway_core::lifecycle::CancellationToken;
+use gateway_core::lifecycle::{Deadline, REQUEST_LEASE_TTL};
+use std::time::{Duration, SystemTime};
+
+#[test]
+fn ordinary_deadline_is_absent_but_lease_is_bounded() {
+    let deadline = Deadline::default();
+    assert_eq!(deadline.at(), None);
+    assert_eq!(deadline.remaining(), None);
+    assert!(!deadline.is_elapsed());
+    assert_eq!(deadline.bounded(REQUEST_LEASE_TTL), REQUEST_LEASE_TTL);
+    let before = SystemTime::now();
+    let lease = deadline.lease_deadline();
+    let after = SystemTime::now();
+    assert!(lease >= before + REQUEST_LEASE_TTL);
+    assert!(lease <= after + REQUEST_LEASE_TTL);
+    assert_eq!(Deadline::from_timeout(before, None), Some(deadline));
+}
+
+#[test]
+fn explicit_deadline_still_caps_waits_and_resource_leases() {
+    let now = SystemTime::now();
+    let at = now + Duration::from_secs(7);
+    let deadline = Deadline::from_timeout(now, Some(Duration::from_secs(7))).unwrap();
+    assert_eq!(deadline.at(), Some(at));
+    assert_eq!(deadline.lease_deadline(), at);
+    assert!(deadline.bounded(REQUEST_LEASE_TTL) <= Duration::from_secs(7));
+    assert_eq!(Deadline::default().min(at), deadline);
+    let expired = Deadline::from(now - Duration::from_secs(1));
+    assert!(expired.is_elapsed());
+    assert_eq!(expired.bounded(REQUEST_LEASE_TTL), Duration::ZERO);
+}
 
 #[test]
 fn cancellation_token_should_wake_current_state() {

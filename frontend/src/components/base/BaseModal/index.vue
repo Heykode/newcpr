@@ -31,6 +31,7 @@ const props = withDefaults(
   },
 )
 
+const emit = defineEmits<{ afterLeave: [] }>()
 const open = defineModel<boolean>({ default: false })
 const panel = useTemplateRef<HTMLElement>('panel')
 const titleId = useId()
@@ -99,6 +100,11 @@ function closeModal() {
   if (!props.dismissible)
     return
   open.value = false
+}
+
+function afterLeave() {
+  resetPosition()
+  emit('afterLeave')
 }
 
 function focusableElements() {
@@ -190,7 +196,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <Transition name="cp-modal" @after-leave="resetPosition">
+    <Transition name="cp-modal" @after-leave="afterLeave">
       <div
         v-if="open"
         class="fixed inset-0 z-50 grid place-items-center overflow-hidden p-3 sm:p-6"

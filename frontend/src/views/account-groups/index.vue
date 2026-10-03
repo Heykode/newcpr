@@ -31,11 +31,13 @@ const {
   saving,
   deleting,
   batchDeleting,
+  deletingCount,
   disabling,
   updatingStatusGroupIds,
   referencedKeyNames,
   openCreate,
   openEdit,
+  clearForm,
   save,
   requestToggle,
   confirmDisable,
@@ -167,6 +169,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       :group="editingGroup"
       :saving="saving"
       @save="save"
+      @after-leave="clearForm"
     />
 
     <BaseConfirmModal
@@ -179,7 +182,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       @confirm="confirmBatchDelete"
     >
       <p class="m-0">
-        确定删除选中的 {{ selectedIds.size }} 个分组吗？账号本身不会被删除。
+        确定删除选中的 {{ deletingCount }} 个分组吗？账号本身不会被删除。
       </p>
     </BaseConfirmModal>
 
@@ -190,6 +193,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       confirm-text="确认禁用"
       :loading="disabling"
       @confirm="confirmDisable"
+      @after-leave="!showDisableModal && (pendingDisableGroup = null)"
     >
       <p class="m-0">
         确定禁用“{{ pendingDisableGroup?.name }}”吗？
@@ -210,6 +214,7 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
       confirm-text="确认删除"
       :loading="deleting"
       @confirm="confirmDelete"
+      @after-leave="!showDeleteModal && (pendingDeleteGroup = null)"
     >
       <p class="m-0">
         确定删除“{{ pendingDeleteGroup?.name || '该分组' }}”吗？账号本身不会被删除。

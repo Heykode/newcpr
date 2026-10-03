@@ -54,7 +54,7 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
 
 | 保持冻结 | 重新核验 |
 | --- | --- |
-| 请求 tuning、排序策略、请求间隔、总截止 | 账号存在性、enabled、凭据状态/到期、额度、cooldown、模型支持观测 |
+| 请求 tuning、排序策略、请求间隔、可选显式总截止 | 账号存在性、enabled、凭据状态/到期、额度、cooldown、模型支持观测 |
 | `FrozenAccountScope`、required/native owner、Core 排除集 | Provider 会话排除状态、Redis `in_flight`、live 容量及 publication revision |
 | 当前选择的 Universe 和 RR cursor | 返回凭据前的完整账号事实及 runtime credential revision |
 
@@ -154,7 +154,9 @@ D_active = min(D_shared, 所有已经启动的 D_mode)
 
 Core 使用单调时钟保留截止，并从同一次 wall/monotonic origin 导出 Store 所需绝对时间。
 Provider `WaitControl::run` 将取消和 deadline 覆盖到账号读取、Store await、轮询和终检；
-取消优先赢得竞速时不得再发业务请求。请求总截止仍受既有 Core 生命周期约束。
+取消优先赢得竞速时不得再发业务请求。普通模型请求不设隐式总截止；管理诊断保留
+显式 600 秒上限。不存在请求总截止时，Key 与账号等待仍受各自既有有限共享窗口约束，
+不能把取消总执行上限解释为无限排队。连接/空闲超时及下游取消语义不变。
 
 ## 7. 原子所有权与有界清理
 
@@ -164,7 +166,13 @@ Provider `WaitControl::run` 将取消和 deadline 覆盖到账号读取、Store 
 - 同账号 sticky/fallback 使用同一个 waiting ZSET 与总 `ZCARD`，各自阈值检查该总数，
   不是独立的 3+100 保留区，也不是每个 Client Key 各 100 人。
 - Store 使用 Redis TIME、唯一 token、绝对 member deadline；key TTL 覆盖最晚 member，
-  新入队不能续旧 token。执行到期继续受请求总截止及原有 600 秒上限限制。
+  新入队不能续旧 token。600 秒是异常回收租约，不是普通模型请求总执行上限。
+  已交付的普通或晋升执行 guard 每 200 秒续自己的 live member；显式截止仍限制续期。
+  续期使用 Redis TIME 和 ZADD XX，不更新 RPM、last-started、亲和或排队人数；
+  过期、释放、取消的 token 不得复活。续期暂时失败仅在已知有效期内重试，
+  确认所有权丢失或超过该有效期须取消执行，不能继续无并发约束地请求上游。
+  Client Key admission 同样随请求 guard 续期；PG recovery 仅续运行中且未过期记录，
+  不修改终结记录、不创建缺行；观测失败不独立取消客户端执行。
 - 准入前建立 pending ownership；晋升 future 创建时转移 ownership，不能等收到 grant
   才建 guard。即使 future 未 poll、Lua 已提交但响应丢失，也必须有精确 token 可清理。
 - 晋升脚本使用与原执行 key 相同的 hash tag，在一次原子操作中检查 token、取消标记、
@@ -175,7 +183,8 @@ Provider `WaitControl::run` 将取消和 deadline 覆盖到账号读取、Store 
 - 取消脚本先写 token tombstone，再删精确 waiting/active member；准入和晋升拒绝该 token。
   不能仅早到 `ZREM` 后允许迟到 `ZADD` 复活，也不能用共享裸计数的 `DECR` 清理。
 - `Ownership::Drop` 使用有界 `try_send`，不新建无跟踪后台任务。当前清理队列上限 4096、
-  并行清理上限 32、单次 I/O 250ms、重试间隔 100ms；重试受相关 lease 原到期时间约束。
+  并行清理上限 32、单次 I/O 250ms、重试间隔 100ms；重试受相关 lease 最新可能到期时间约束。
+  释放/Drop 先停止续期，再提交精确 owner 清理，重试须覆盖已续期的保守期限。
   可能已晋升的结果不确定操作须覆盖 execution 到期，不能仅覆盖较短的 waiting 到期。
 - 满队列、断连或超出 drain 上界时保留告警及 TTL 保守回收，不能声称立即清零，
   也不能绕过并发限制。TTL 不是 Redis 数据丢失后恢复全部在途执行状态的保证。

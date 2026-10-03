@@ -2,7 +2,31 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use gateway_core::engine::{AccountWaitBudget, AccountWaitBudgetError, AccountWaitMode};
+use gateway_core::lifecycle::Deadline;
 use gateway_core::routing::RequestTuning;
+
+#[test]
+fn absent_request_deadline_does_not_extend_shared_account_wait_windows() {
+    let wall = SystemTime::now();
+    let now = Instant::now();
+    let budget = AccountWaitBudget::new_at(Deadline::default(), enabled(), wall, now);
+    let first = now + Duration::from_secs(900);
+    assert!(!budget.is_exhausted_at(first));
+    let sticky = budget.enter_at(AccountWaitMode::Sticky, first).unwrap();
+    assert_eq!(
+        sticky.monotonic_deadline(),
+        first + Duration::from_secs(120)
+    );
+    assert_eq!(sticky.deadline(), wall + Duration::from_secs(1020));
+    let fallback = budget
+        .enter_at(AccountWaitMode::Fallback, first + Duration::from_secs(100))
+        .unwrap();
+    assert_eq!(fallback, sticky);
+    assert_eq!(
+        budget.enter_at(AccountWaitMode::Sticky, first + Duration::from_secs(120)),
+        Err(AccountWaitBudgetError::Expired)
+    );
+}
 
 fn enabled() -> RequestTuning {
     RequestTuning {

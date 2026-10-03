@@ -69,6 +69,11 @@ export function useAccountGroups() {
   const saving = savingAction.loading
   const deleting = deletingAction.loading
   const batchDeleting = batchDeletingAction.loading
+  const deletingCount = shallowRef(0)
+  watch([showBatchDeleteModal, batchDeleting, () => selectedIds.value.size], ([open, busy, count]) => {
+    if (open && !busy)
+      deletingCount.value = count
+  }, { flush: 'sync' })
   const disabling = disablingAction.loading
   const updatingStatusGroupIds = updatingStatusGroups.ids
   const referencedKeyNames = computed(() => {
@@ -152,8 +157,6 @@ export function useAccountGroups() {
         })
       }
       showFormModal.value = false
-      editingGroup.value = null
-      form.value = emptyForm()
       await Promise.all([query.execute(), loadReferenceKeys()])
       toast.success(updating ? '分组已更新' : '分组已创建')
     })
@@ -175,7 +178,6 @@ export function useAccountGroups() {
     await disablingAction.run(async () => {
       await disableAccountGroup({ id: group.id })
       showDisableModal.value = false
-      pendingDisableGroup.value = null
       await query.execute()
       toast.success('分组已禁用')
     })
@@ -208,7 +210,6 @@ export function useAccountGroups() {
       remaining.delete(group.id)
       selectedIds.value = remaining
       showDeleteModal.value = false
-      pendingDeleteGroup.value = null
       await query.execute()
       toast.success('分组已删除')
     }, { onError: () => void query.execute() })
@@ -272,24 +273,26 @@ export function useAccountGroups() {
     query.page.value = 1
     void query.execute()
   })
-  watch(showFormModal, (open) => {
-    if (!open && !saving.value) {
+  function clearForm() {
+    if (!showFormModal.value) {
       editingGroup.value = null
       form.value = emptyForm()
     }
-  })
+  }
 
   onMounted(() => {
     void Promise.all([query.execute(), loadReferenceKeys()])
   })
 
   return {
+    deletingCount,
     groups,
     loading: query.loading,
     pagination,
     searchQuery,
     statusQuery,
     showFormModal,
+    clearForm,
     showDeleteModal,
     showBatchDeleteModal,
     showDisableModal,

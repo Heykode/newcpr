@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::lifecycle::Deadline;
 use crate::routing::RequestTuning;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +69,7 @@ pub struct AccountWaitBudget {
     tuning: RequestTuning,
     wall_origin: SystemTime,
     monotonic_origin: Instant,
-    request_deadline: Instant,
+    request_deadline: Option<Instant>,
     windows: Mutex<WaitWindows>,
 }
 
@@ -79,34 +80,36 @@ impl AccountWaitBudget {
         windows.shared = Some(
             windows
                 .shared
-                .map_or(deadline, |current| current.min(deadline))
-                .min(self.request_deadline),
+                .map_or(deadline, |current| current.min(deadline)),
         );
+        if let Some(request_deadline) = self.request_deadline {
+            windows.shared = windows.shared.map(|end| end.min(request_deadline));
+        }
     }
 
     #[must_use]
-    pub fn new(request_deadline: SystemTime, tuning: RequestTuning) -> Self {
+    pub fn new(request_deadline: impl Into<Deadline>, tuning: RequestTuning) -> Self {
         Self::new_at(request_deadline, tuning, SystemTime::now(), Instant::now())
     }
 
     /// Supply one clock observation when coordinating an existing request.
     #[must_use]
     pub fn new_at(
-        request_deadline: SystemTime,
+        request_deadline: impl Into<Deadline>,
         tuning: RequestTuning,
         wall_now: SystemTime,
         monotonic_now: Instant,
     ) -> Self {
-        let remaining = request_deadline
-            .duration_since(wall_now)
-            .unwrap_or_default();
+        let request_deadline = request_deadline.into().at().map(|at| {
+            monotonic_now
+                .checked_add(at.duration_since(wall_now).unwrap_or_default())
+                .unwrap_or(monotonic_now)
+        });
         Self {
             tuning,
             wall_origin: wall_now,
             monotonic_origin: monotonic_now,
-            request_deadline: monotonic_now
-                .checked_add(remaining)
-                .unwrap_or(monotonic_now),
+            request_deadline,
             windows: Mutex::new(WaitWindows::default()),
         }
     }
@@ -138,7 +141,11 @@ impl AccountWaitBudget {
             .windows
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if now >= self.request_deadline || windows.expired_at(now) {
+        if self
+            .request_deadline
+            .is_some_and(|deadline| now >= deadline)
+            || windows.expired_at(now)
+        {
             windows.expired = true;
             return Err(AccountWaitBudgetError::Expired);
         }
@@ -146,10 +153,12 @@ impl AccountWaitBudget {
             .tuning
             .account_busy_wait_sticky_timeout_seconds
             .max(self.tuning.account_busy_wait_fallback_timeout_seconds);
+        let shared_candidate = now
+            .checked_add(Duration::from_secs(shared_seconds))
+            .ok_or(AccountWaitBudgetError::InvalidConfiguration)?;
         let shared = *windows.shared.get_or_insert_with(|| {
-            now.checked_add(Duration::from_secs(shared_seconds))
-                .unwrap_or(self.request_deadline)
-                .min(self.request_deadline)
+            self.request_deadline
+                .map_or(shared_candidate, |end| shared_candidate.min(end))
         });
         let (slot, seconds) = match mode {
             AccountWaitMode::Sticky => (
@@ -188,7 +197,9 @@ impl AccountWaitBudget {
     #[must_use]
     pub fn is_exhausted_at(&self, now: Instant) -> bool {
         self.tuning.account_busy_wait_enabled
-            && (now >= self.request_deadline
+            && (self
+                .request_deadline
+                .is_some_and(|deadline| now >= deadline)
                 || self
                     .windows
                     .lock()
@@ -213,7 +224,7 @@ mod tests {
         let wall = SystemTime::now();
         let now = Instant::now();
         let budget = AccountWaitBudget::new_at(
-            wall + Duration::from_secs(600),
+            Deadline::default(),
             RequestTuning {
                 account_busy_wait_enabled: true,
                 ..Default::default()

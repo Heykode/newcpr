@@ -612,7 +612,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
       connectionTestModelRequest += 1
       abortConnectionTest()
     }
-  })
+  }, { flush: 'sync' })
 
   onBeforeUnmount(() => {
     connectionTestModelRequest += 1

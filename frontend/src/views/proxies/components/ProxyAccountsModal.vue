@@ -20,14 +20,9 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ removed: [] }>()
 const open = defineModel<boolean>({ required: true })
+const displayProxy = shallowRef<OutboundProxyRecord | null>(null)
 const pendingRemove = shallowRef<OutboundProxyAccount | null>(null)
-const showRemove = computed({
-  get: () => pendingRemove.value !== null,
-  set: (value: boolean) => {
-    if (!value)
-      pendingRemove.value = null
-  },
-})
+const showRemove = shallowRef(false)
 const { accounts, loading, error, pagination, search, setPage, setPageSize, removing, removeAccount } = useProxyAccounts({
   isOpen: () => open.value,
   proxyId: () => props.proxy?.id,
@@ -48,15 +43,15 @@ const rows = computed(() => accounts.value.map(account => ({
   initial: Array.from(account.name.trim())[0]?.toUpperCase() || '—',
   avatarTone: stablePresetVisualToneClass(account.id),
 })))
-const description = computed(() => props.proxy
-  ? props.proxy.name
+const description = computed(() => displayProxy.value
+  ? displayProxy.value.name
   : undefined)
 const emptyText = computed(() => error.value
   || (search.value.trim() ? '没有找到匹配的账号，请尝试其他名称或邮箱' : '暂无关联账号'))
 const tableHeight = computed(() => {
   // 空列表与少量账号保留最小高度，多行限制高度并在表格内滚动。
   const count = accounts.value.length || (loading.value
-    ? Math.min(pagination.value.total || props.proxy?.accountCount || 0, pagination.value.pageSize)
+    ? Math.min(pagination.value.total || displayProxy.value?.accountCount || 0, pagination.value.pageSize)
     : 0)
   return `min(55dvh, max(20rem, min(30rem, ${44 + count * 64}px)))`
 })
@@ -64,12 +59,26 @@ const tableHeight = computed(() => {
 async function confirmRemove() {
   const account = pendingRemove.value
   if (account && await removeAccount(account.id))
-    pendingRemove.value = null
+    showRemove.value = false
 }
 
-watch([open, () => props.proxy?.id], () => {
+watch([open, () => props.proxy?.id], ([isOpen]) => {
+  if (!isOpen)
+    return
+  displayProxy.value = props.proxy
+  showRemove.value = false
   pendingRemove.value = null
-})
+}, { immediate: true, flush: 'sync' })
+
+function requestRemove(account: OutboundProxyAccount) {
+  pendingRemove.value = account
+  showRemove.value = true
+}
+
+function clearRemove() {
+  if (!showRemove.value)
+    pendingRemove.value = null
+}
 </script>
 
 <template>
@@ -80,7 +89,7 @@ watch([open, () => props.proxy?.id], () => {
           <Search class="size-4.5 text-cp-text-tertiary" />
         </template>
       </BaseInput>
-      <BaseTable :key="proxy?.id" class="min-h-0 shrink-0 [--cp-table-row-height:64px]" :style="{ height: tableHeight }" :columns="columns" :rows="rows" :loading="loading" :empty-text="emptyText">
+      <BaseTable :key="displayProxy?.id" class="min-h-0 shrink-0 [--cp-table-row-height:64px]" :style="{ height: tableHeight }" :columns="columns" :rows="rows" :loading="loading" :empty-text="emptyText">
         <template #identity="{ row }">
           <div class="flex min-w-0 items-center gap-3">
             <span class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-cp font-extrabold" :class="row.avatarTone" aria-hidden="true">
@@ -114,7 +123,7 @@ watch([open, () => props.proxy?.id], () => {
             label="从当前代理移除账号"
             :disabled="removing"
             :loading="removing && pendingRemove?.id === row.id"
-            @click="pendingRemove = row"
+            @click="requestRemove(row)"
           >
             <Unlink class="size-3.5 text-cp-error" />
           </BaseIconButton>
@@ -123,9 +132,9 @@ watch([open, () => props.proxy?.id], () => {
       <BaseTablePagination :pagination="pagination" :loading="loading || removing" @page-change="setPage" @page-size-change="setPageSize" />
     </div>
   </BaseModal>
-  <BaseConfirmModal v-model="showRemove" title="移除关联账号" confirm-text="移除" :loading="removing" @confirm="confirmRemove">
+  <BaseConfirmModal v-model="showRemove" title="移除关联账号" confirm-text="移除" :loading="removing" @confirm="confirmRemove" @after-leave="clearRemove">
     <p class="m-0 break-words">
-      将“{{ pendingRemove?.name }}”从“{{ proxy?.name }}”移除后，该账号将改为直连。
+      将“{{ pendingRemove?.name }}”从“{{ displayProxy?.name }}”移除后，该账号将改为直连。
     </p>
   </BaseConfirmModal>
 </template>

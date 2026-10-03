@@ -17,6 +17,20 @@ use crate::{StoreError, StoreResult, redis_unavailable, require_nonempty};
 
 use super::{MAX_REDIS_EXACT_INTEGER, namespace, resource_fingerprint};
 
+// Renew only live concurrency ownership; never consume RPM or revive a release.
+const RENEW_SCRIPT: &str = r#"
+local clock = redis.call('TIME')
+local now_ms = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+local expires = tonumber(redis.call('ZSCORE', KEYS[1], ARGV[1]) or '0')
+if expires <= now_ms or redis.call('ZSCORE', KEYS[2], ARGV[1]) then return 0 end
+local ttl = tonumber(ARGV[2])
+redis.call('ZADD', KEYS[1], 'XX', now_ms + ttl, ARGV[1])
+if redis.call('PTTL', KEYS[1]) < ttl + 60000 then
+  redis.call('PEXPIRE', KEYS[1], ttl + 60000)
+end
+return 1
+"#;
+
 const ADMIT_SCRIPT: &str = r#"
 local clock = redis.call('TIME')
 local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
@@ -410,6 +424,40 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
 }
 
 impl ClientAdmissionPort for RedisClientAdmissionRepository {
+    fn maintain(
+        &self,
+        key: &gateway_core::policy::ClientApiKeyId,
+        request: &gateway_core::engine::ModelRequestId,
+        deadline: gateway_core::lifecycle::Deadline,
+        cancellation: gateway_core::lifecycle::CancellationToken,
+    ) -> Box<dyn gateway_core::lifecycle::LeaseGuard> {
+        let repository = self.clone();
+        let key = key.as_str().to_owned();
+        let request = request.as_str().to_owned();
+        Box::new(crate::lease_renewal::LeaseRenewal::spawn(
+            deadline,
+            Some(cancellation),
+            move |ttl| {
+                let repository = repository.clone();
+                let key = key.clone();
+                let request = request.clone();
+                Box::pin(async move {
+                    let keys = repository.keys(&key)?;
+                    let mut connection = repository.connection.clone();
+                    let renewed = Script::new(RENEW_SCRIPT)
+                        .key(&keys[0])
+                        .key(&keys[2])
+                        .arg(request)
+                        .arg(redis_duration_millis(ttl)?)
+                        .invoke_async::<i64>(&mut connection)
+                        .await
+                        .map_err(|_| redis_unavailable("renew client request"))?;
+                    Ok(renewed == 1)
+                })
+            },
+        ))
+    }
+
     fn cancel_admission<'a>(
         &'a self,
         key: &'a gateway_core::policy::ClientApiKeyId,
@@ -419,7 +467,7 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
             let keys = self.keys(key.as_str()).map_err(|_| CoreAdmissionError)?;
             let mut connection = self.connection.clone();
             // Fence a delayed acquire as well as removing a completed one. The expiry
-            // covers Core's maximum ten-minute request lifetime.
+            // covers an uncertain acquire's bounded lease horizon.
             let result = Script::new(
                 r"
                     local clock = redis.call('TIME')

@@ -2810,7 +2810,7 @@ async fn capacity_wait_corrupt_promotions_preserve_rescans_deadline_and_cleanup(
                         },
                     );
                     assert_eq!(*deadline.get_or_insert(wait.deadline()), wait.deadline());
-                    assert!(wait.deadline() < attempt.deadline());
+                    assert!(wait.deadline() < attempt.deadline().at().expect("finite deadline"));
                 }
                 {
                     let signals = leases.capacity.signals.lock().unwrap();
@@ -3021,7 +3021,7 @@ async fn capacity_wait_sticky_holds_original_before_an_idle_alternative_and_does
             gateway_core::engine::AccountWaitMode::Sticky
         );
         assert_eq!(waits[0].max_waiting().get(), 3);
-        assert!(waits[0].deadline() <= attempt.deadline());
+        assert!(waits[0].deadline() <= attempt.deadline().at().expect("finite deadline"));
     }
     leases.capacity.set_load("acct_original", 0);
     let lease = selected.await.unwrap();

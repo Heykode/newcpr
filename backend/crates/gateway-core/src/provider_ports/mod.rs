@@ -104,27 +104,28 @@ impl ProviderSchedulingState {
 }
 
 /// 请求级账号 lease 的全部中立事实。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ProviderSchedulingLeaseRequest {
     provider_kind: ProviderKind,
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
     max_concurrent: NonZeroU32,
     request_interval: Duration,
-    deadline: SystemTime,
+    deadline: crate::lifecycle::Deadline,
+    cancellation: crate::lifecycle::CancellationToken,
     quality_check: bool,
     priority: bool,
 }
 
 impl ProviderSchedulingLeaseRequest {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         provider_kind: ProviderKind,
         account_id: ProviderAccountId,
         credential_revision: CredentialRevision,
         max_concurrent: NonZeroU32,
         request_interval: Duration,
-        deadline: SystemTime,
+        deadline: impl Into<crate::lifecycle::Deadline>,
     ) -> Self {
         Self {
             provider_kind,
@@ -132,7 +133,8 @@ impl ProviderSchedulingLeaseRequest {
             credential_revision,
             max_concurrent,
             request_interval,
-            deadline,
+            deadline: deadline.into(),
+            cancellation: crate::lifecycle::CancellationToken::new(),
             quality_check: false,
             priority: false,
         }
@@ -164,8 +166,19 @@ impl ProviderSchedulingLeaseRequest {
     }
 
     #[must_use]
-    pub const fn deadline(&self) -> SystemTime {
+    pub const fn deadline(&self) -> crate::lifecycle::Deadline {
         self.deadline
+    }
+
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: crate::lifecycle::CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    #[must_use]
+    pub fn cancellation(&self) -> crate::lifecycle::CancellationToken {
+        self.cancellation.clone()
     }
 
     /// Administrative quality work shares account spacing, but not business capacity.
@@ -215,7 +228,7 @@ impl fmt::Debug for ProviderLeaseAcquisition {
 }
 
 /// Provider 运行时会持有的三类 lease；刷新必须同时持有全局容量与账号互斥 lease。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum ProviderLeaseRequest {
     Scheduling(ProviderSchedulingLeaseRequest),
     RefreshCapacity(ProviderRefreshCapacityRequest),

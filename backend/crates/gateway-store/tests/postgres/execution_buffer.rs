@@ -368,7 +368,7 @@ async fn zero_attempt_dropped_finalize_is_fail_open_and_recoverable_at_deadline(
     assert!(pending.attempts.is_empty());
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().expect("finite deadline"))
             .await
             .expect("recover without queue")
             .requests,
@@ -388,7 +388,7 @@ async fn zero_attempt_dropped_finalize_is_fail_open_and_recoverable_at_deadline(
     assert!(recovered.attempts.is_empty());
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().expect("finite deadline"))
             .await
             .expect("repeat recovery")
             .requests,
@@ -452,7 +452,7 @@ async fn zero_attempt_dropped_create_does_not_make_finalize_an_upsert() {
     assert_eq!(count, 0);
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().expect("finite deadline"))
             .await
             .expect("nothing to recover")
             .requests,
@@ -545,7 +545,7 @@ async fn zero_attempt_postgres_write_failures_are_not_retried_and_do_not_stop_th
     );
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().expect("finite deadline"))
             .await
             .expect("recover only inserted unfinished row")
             .requests,

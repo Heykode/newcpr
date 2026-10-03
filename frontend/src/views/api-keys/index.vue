@@ -63,11 +63,14 @@ const {
   savingKey,
   deletingKey,
   batchDeleting,
+  deletingCount,
   updatingStatusKeyIds,
   revealingKeyIds,
   form,
   openCreate,
   openEdit,
+  clearForm,
+  clearCreatedKey,
   requestSave,
   confirmAllAccountsScope,
   requestDeleteKey,
@@ -90,6 +93,7 @@ const {
   openAiBaseUrl,
   importCreatedKeyToCcs,
   openUseKeyModal,
+  clearUseKey,
   importToCcs,
 } = useApiKeyUse({
   createdKey,
@@ -220,6 +224,7 @@ watch(
       :api-key="pendingBudgetKey"
       :loading="resettingBudget"
       @confirm="handleBudgetReset"
+      @after-leave="!showBudgetResetModal && (pendingBudgetKey = null)"
     />
 
     <ApiKeyCreateModal
@@ -233,6 +238,8 @@ watch(
       :saving="savingKey"
       @copy="copyToClipboard"
       @save="requestSave"
+      @after-leave="clearForm"
+      @created-after-leave="clearCreatedKey"
       @import-ccs="importCreatedKeyToCcs"
     />
 
@@ -241,6 +248,7 @@ watch(
       :api-key="selectedUseKey"
       :api-base-url="openAiBaseUrl"
       @copy="copyToClipboard"
+      @after-leave="clearUseKey"
     />
 
     <BaseConfirmModal
@@ -266,7 +274,7 @@ watch(
       @confirm="handleBatchDelete"
     >
       <p class="m-0">
-        确定删除选中的 {{ selectedIds.size }} 个 API Key 吗？
+        确定删除选中的 {{ deletingCount }} 个 API Key 吗？
       </p>
     </BaseConfirmModal>
 
@@ -278,6 +286,7 @@ watch(
       confirm-text="确认删除"
       :loading="deletingKey"
       @confirm="handleDelete"
+      @after-leave="!showSingleDeleteModal && (pendingDeleteKey = null)"
     >
       <p class="m-0">
         确定删除 {{ pendingDeleteKey?.name || pendingDeleteKey?.prefix || '该 API Key' }} 吗？

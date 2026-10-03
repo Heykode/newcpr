@@ -259,7 +259,8 @@ impl GrokAccountSessionSelector {
                         ),
                         request.account_selection_policy().request_interval(),
                         request.deadline(),
-                    ),
+                    )
+                    .with_cancellation(request.cancellation().clone()),
                 ))
                 .await
                 .map_err(|_| GrokSessionSelectorError::Unavailable)?;

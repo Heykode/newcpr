@@ -485,7 +485,7 @@ impl CodexCredentialSelector {
             if request.attempt.cancellation().is_cancelled() {
                 return Err(CredentialSelectionError::Cancelled);
             }
-            if SystemTime::now() >= request.attempt.deadline() {
+            if request.attempt.deadline().is_elapsed() {
                 break;
             }
         }
@@ -747,7 +747,8 @@ impl CodexCredentialSelector {
                         ),
                         policy.request_interval(),
                         request.attempt.deadline(),
-                    ),
+                    )
+                    .with_cancellation(request.attempt.cancellation().clone()),
                 ))
                 .await?
             {
