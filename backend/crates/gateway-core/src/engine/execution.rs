@@ -33,7 +33,7 @@ use crate::engine::{
 use crate::error::{GatewayError, GatewayErrorKind, ProviderErrorKind, StoreError};
 use crate::event::{GatewayEvent, ProviderEvent, ProviderResponseHeader};
 use crate::identity::ProviderKind;
-use crate::lifecycle::CancellationToken;
+use crate::lifecycle::{CancellationToken, Deadline, LeaseGuard, REQUEST_LEASE_TTL};
 use crate::operation::{Operation, ProviderSessionState};
 use crate::policy::{ClientApiKeyId, ClientPolicy};
 use crate::routing::{
@@ -42,7 +42,7 @@ use crate::routing::{
 };
 use crate::runtime::RuntimeSnapshotHandle;
 
-const MODEL_REQUEST_DEADLINE: Duration = Duration::from_secs(10 * 60);
+const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const COORDINATION_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,11 +380,7 @@ impl DefaultExecutionService {
                 ),
             })?;
         let started_at = SystemTime::now();
-        let deadline_at = started_at
-            .checked_add(MODEL_REQUEST_DEADLINE)
-            .ok_or_else(|| {
-                GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
-            })?;
+        let deadline_at = Deadline::default();
         let request_id = new_request_id()?;
         let routing_context = self
             .route_context(request.client.policy.account_scope().provider_kinds())
@@ -511,7 +507,7 @@ impl DefaultExecutionService {
         request: PendingStartExecution,
         request_id: ModelRequestId,
         started_at: SystemTime,
-        deadline_at: SystemTime,
+        deadline_at: Deadline,
         plan: crate::routing::RoutingPlan,
         continuation: Option<ContinuationBinding>,
     ) -> Result<StartedExecution, GatewayError> {
@@ -522,6 +518,7 @@ impl DefaultExecutionService {
             metadata,
         } = request;
         let admission_started_at = Instant::now();
+        let cancellation = CancellationToken::new();
         let wait_budget = Arc::new(super::AccountWaitBudget::new(
             deadline_at,
             plan.request_tuning(),
@@ -533,6 +530,7 @@ impl DefaultExecutionService {
                 deadline_at,
                 plan.request_tuning(),
                 &wait_budget,
+                cancellation.clone(),
             )
             .await?;
         let admission_decision_ms = duration_ms(admission_started_at.elapsed());
@@ -584,7 +582,7 @@ impl DefaultExecutionService {
                 plan,
                 None,
                 continuation,
-                CancellationToken::new(),
+                cancellation,
             )
             .await
         {
@@ -624,27 +622,27 @@ impl DefaultExecutionService {
         &self,
         client: &AuthenticatedClient,
         request_id: &ModelRequestId,
-        deadline: SystemTime,
+        deadline: Deadline,
         tuning: crate::routing::RequestTuning,
         wait_budget: &super::AccountWaitBudget,
+        cancellation: CancellationToken,
     ) -> Result<AdmissionLease, GatewayError> {
         let key = client.policy.key_id();
         let limits = client.policy.limits();
         let mut ticket: Option<super::key_wait::KeyWaitTicket> = None;
         let mut lease = AdmissionLease {
+            renewal: None,
             armed: false,
             port: Arc::clone(&self.admissions),
             client_api_key_id: key.clone(),
             model_request_id: request_id.clone(),
         };
         loop {
-            let remaining = deadline
-                .duration_since(SystemTime::now())
-                .unwrap_or_default();
-            let acquire_timeout = ticket
-                .as_ref()
-                .map_or(remaining, |t| remaining.min(t.remaining()));
-            if acquire_timeout.is_zero() {
+            let remaining = deadline.bounded(REQUEST_LEASE_TTL);
+            let acquire_deadline = ticket.as_ref().map_or(deadline, |t| {
+                deadline.min(SystemTime::now() + t.remaining())
+            });
+            if acquire_deadline.is_elapsed() {
                 return Err(if ticket.is_some() {
                     super::key_wait::timeout()
                 } else {
@@ -665,9 +663,11 @@ impl DefaultExecutionService {
                         || !self.admission_waiting.has_waiters(key),
                 })
                 .fuse();
-            let timeout = Delay::new(acquire_timeout).fuse();
-            pin_mut!(acquire, timeout);
+            let timeout = acquire_deadline.wait().fuse();
+            let cancelled = cancellation.cancelled().fuse();
+            pin_mut!(acquire, timeout, cancelled);
             let decision = select_biased! {
+                () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "request admission was cancelled")),
                 result = acquire => result.map_err(|_| GatewayError::new(
                     GatewayErrorKind::NoAvailableProvider, "request admission is temporarily unavailable",
                 ))?,
@@ -676,7 +676,15 @@ impl DefaultExecutionService {
                 }),
             };
             match decision {
-                ClientAdmissionDecision::Granted => return Ok(lease),
+                ClientAdmissionDecision::Granted => {
+                    lease.renewal = Some(self.admissions.maintain(
+                        key,
+                        request_id,
+                        deadline,
+                        cancellation.clone(),
+                    ));
+                    return Ok(lease);
+                }
                 ClientAdmissionDecision::Rejected(reason) => {
                     lease.armed = false;
                     if reason == ClientAdmissionRejection::RateLimited
@@ -693,7 +701,7 @@ impl DefaultExecutionService {
                         }
                         let now = Instant::now();
                         let wait_deadline = now
-                            + remaining.min(Duration::from_secs(
+                            + deadline.bounded(Duration::from_secs(
                                 tuning.key_concurrency_wait_timeout_seconds,
                             ));
                         wait_budget.constrain_deadline(wait_deadline);
@@ -704,7 +712,13 @@ impl DefaultExecutionService {
                         )?);
                     }
                     if let Some(ticket) = &ticket {
-                        ticket.retry().await?;
+                        let retry = ticket.retry().fuse();
+                        let cancelled = cancellation.cancelled().fuse();
+                        pin_mut!(retry, cancelled);
+                        select_biased! {
+                            () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "request admission was cancelled")),
+                            result = retry => result?,
+                        }
                     }
                 }
             }
@@ -829,7 +843,7 @@ impl DefaultExecutionService {
             image_generation_requested: false,
             admission_decision_ms: None,
             started_at,
-            deadline_at,
+            deadline_at: deadline_at.into(),
         };
         // The real coordinator owns isolated quality leases, observations and settlement.
         // A request-local token lets finalization cancel this attempt without
@@ -960,11 +974,9 @@ impl DefaultExecutionService {
             )
             .map_err(map_routing_error)?;
         let started_at = SystemTime::now();
-        let deadline_at = started_at
-            .checked_add(MODEL_REQUEST_DEADLINE)
-            .ok_or_else(|| {
-                GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
-            })?;
+        let deadline_at = started_at.checked_add(DIAGNOSTIC_TIMEOUT).ok_or_else(|| {
+            GatewayError::new(GatewayErrorKind::Internal, "system clock is invalid")
+        })?;
         let request_id = new_request_id()?;
         let actor = ClientApiKeyId::new("admin_connection_test")
             .map_err(|_| GatewayError::new(GatewayErrorKind::Internal, "invalid admin actor"))?;
@@ -990,7 +1002,7 @@ impl DefaultExecutionService {
             image_generation_requested: false,
             admission_decision_ms: None,
             started_at,
-            deadline_at,
+            deadline_at: deadline_at.into(),
         };
         let mut session = match self
             .probe_coordinator
@@ -1410,6 +1422,7 @@ impl AccountProbe for DefaultExecutionService {
 }
 
 struct AdmissionLease {
+    renewal: Option<Box<dyn LeaseGuard>>,
     armed: bool,
     port: Arc<dyn ClientAdmissionPort>,
     client_api_key_id: ClientApiKeyId,
@@ -1424,6 +1437,7 @@ async fn settle_budget(port: &dyn ClientBudgetPort, charge: ClientBudgetCharge) 
 
 impl AdmissionLease {
     async fn release(mut self) {
+        self.renewal.take();
         if let Err(error) = self
             .port
             .release(&self.client_api_key_id, &self.model_request_id)
@@ -1437,6 +1451,7 @@ impl AdmissionLease {
 
 impl Drop for AdmissionLease {
     fn drop(&mut self) {
+        self.renewal.take();
         if self.armed {
             self.port
                 .abandon(&self.client_api_key_id, &self.model_request_id);

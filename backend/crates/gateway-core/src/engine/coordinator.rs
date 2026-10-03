@@ -29,7 +29,7 @@ use crate::error::{
 use crate::event::{
     GatewayEvent, ProviderEvent, ProviderResponseHeader, ProviderResponseObservation,
 };
-use crate::lifecycle::CancellationToken;
+use crate::lifecycle::{CancellationToken, Deadline, LeaseGuard};
 use crate::metering::Decimal;
 use crate::operation::{Operation, ProviderSessionState};
 use crate::routing::RoutingPlan;
@@ -209,12 +209,8 @@ where
                 deadline,
                 plan.request_tuning(),
             )),
-            deadline_timer: Delay::new(
-                deadline
-                    .duration_since(SystemTime::now())
-                    .unwrap_or(Duration::ZERO),
-            )
-            .fuse(),
+            deadline_timer: deadline.wait().fuse(),
+            lease: Some(self.engine.store.maintain_request(&request.id, deadline)),
             pending_request: Some(request),
             request_persisted: false,
             operation,
@@ -256,7 +252,7 @@ where
             session.finish_interruption(&EngineError::Cancelled).await?;
             return Err(EngineError::Cancelled);
         }
-        if SystemTime::now() >= deadline {
+        if deadline.is_elapsed() {
             session.finish_interruption(&EngineError::Deadline).await?;
             return Err(EngineError::Deadline);
         }
@@ -319,10 +315,11 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     budget_prior_attempts_usd: Decimal,
     budget_attempt_already_counted: bool,
     trace: TraceContext,
-    deadline: SystemTime,
+    deadline: Deadline,
+    lease: Option<Box<dyn LeaseGuard>>,
     account_wait_budget: Arc<super::AccountWaitBudget>,
     /// 会话级 deadline 计时器；deadline 固定，帧循环内复用而非逐事件新建。
-    deadline_timer: Fuse<Delay>,
+    deadline_timer: Fuse<BoxFuture<'static, ()>>,
     pending_request: Option<NewModelRequest>,
     request_persisted: bool,
     operation: Operation,
@@ -1952,6 +1949,7 @@ where
         if let Some(RequestFinalization::Pending(write)) = self.finalization.as_mut() {
             self.request_persisted = write.await;
             self.finalization = Some(RequestFinalization::Complete);
+            self.lease.take();
         }
     }
 
@@ -2112,10 +2110,10 @@ enum PollBoundary {
 async fn poll_stream_item(
     stream: &mut ProviderStream,
     cancellation: CancellationToken,
-    deadline: SystemTime,
-    mut deadline_timer: &mut Fuse<Delay>,
+    deadline: Deadline,
+    mut deadline_timer: &mut Fuse<BoxFuture<'static, ()>>,
 ) -> PollBoundary {
-    if SystemTime::now() >= deadline {
+    if deadline.is_elapsed() {
         return PollBoundary::Deadline;
     }
     let next = stream.next().fuse();
@@ -2143,14 +2141,14 @@ enum RetryDelayBoundary {
 async fn poll_retry_delay(
     delay: Duration,
     cancellation: CancellationToken,
-    deadline: SystemTime,
+    deadline: Deadline,
 ) -> RetryDelayBoundary {
-    let Ok(remaining) = deadline.duration_since(SystemTime::now()) else {
+    if deadline.is_elapsed() {
         return RetryDelayBoundary::Deadline;
-    };
+    }
     let retry_delay = Delay::new(delay).fuse();
     let cancelled = cancellation.cancelled().fuse();
-    let timeout = Delay::new(remaining).fuse();
+    let timeout = deadline.wait().fuse();
     pin_mut!(retry_delay, cancelled, timeout);
     select_biased! {
         _ = cancelled => RetryDelayBoundary::Cancelled,
@@ -2164,14 +2162,14 @@ async fn poll_provider(
     request: ProviderRequest,
     context: AttemptContext,
     cancellation: CancellationToken,
-    deadline: SystemTime,
+    deadline: Deadline,
 ) -> ProviderBoundary {
-    let Ok(remaining) = deadline.duration_since(SystemTime::now()) else {
+    if deadline.is_elapsed() {
         return ProviderBoundary::Deadline;
-    };
+    }
     let execution = provider.execute(request, context).fuse();
     let cancelled = cancellation.cancelled().fuse();
-    let timeout = Delay::new(remaining).fuse();
+    let timeout = deadline.wait().fuse();
     pin_mut!(execution, cancelled, timeout);
     select_biased! {
         _ = cancelled => ProviderBoundary::Cancelled,

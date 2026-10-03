@@ -30,6 +30,87 @@ use sqlx::PgPool;
 
 use super::{TestDatabase, admin_observability_store, observability_repository};
 
+#[tokio::test]
+async fn request_recovery_lease_renews_only_running_live_records() {
+    let Some(database) = TestDatabase::create("recovery_renewal").await else {
+        return;
+    };
+    let store = PgExecutionStore::new(database.pool.clone());
+    let mut request = accepted_request("req_recovery_renewal");
+    request.deadline_at = gateway_core::lifecycle::Deadline::default();
+    ExecutionStore::create_model_request(&store, request.clone())
+        .await
+        .unwrap();
+    let guard = ExecutionStore::maintain_request(&store, &request.id, request.deadline_at);
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    sqlx::query(
+        "update model_requests set deadline_at = now() + interval '15 seconds' where id = $1",
+    )
+    .bind(request.id.as_str())
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(StdDuration::from_secs(201)).await;
+    tokio::time::resume();
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        loop {
+            let renewed: bool = sqlx::query_scalar("select deadline_at > now() + interval '500 seconds' from model_requests where id = $1").bind(request.id.as_str()).fetch_one(&database.pool).await.unwrap();
+            if renewed { break; }
+            tokio::time::sleep(StdDuration::from_millis(5)).await;
+        }
+    }).await.expect("live recovery lease renewed");
+    drop(guard);
+    ExecutionStore::finalize_model_request(&store, early_failure(&request))
+        .await
+        .unwrap();
+    let before: DateTime<Utc> =
+        sqlx::query_scalar("select deadline_at from model_requests where id = $1")
+            .bind(request.id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let guard = ExecutionStore::maintain_request(&store, &request.id, request.deadline_at);
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let after: DateTime<Utc> =
+        sqlx::query_scalar("select deadline_at from model_requests where id = $1")
+            .bind(request.id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        before, after,
+        "finished recovery rows are immutable to renewal"
+    );
+    drop(guard);
+    let expired = accepted_request("req_expired_renewal");
+    ExecutionStore::create_model_request(&store, expired.clone())
+        .await
+        .unwrap();
+    sqlx::query(
+        "update model_requests set started_at = now() - interval '2 seconds', deadline_at = now() - interval '1 second' where id = $1",
+    )
+    .bind(expired.id.as_str())
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let guard = ExecutionStore::maintain_request(
+        &store,
+        &expired.id,
+        gateway_core::lifecycle::Deadline::default(),
+    );
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    let still_expired: bool =
+        sqlx::query_scalar("select deadline_at < now() from model_requests where id = $1")
+            .bind(expired.id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    assert!(still_expired, "expired recovery row cannot resurrect");
+    drop(guard);
+    database.close().await;
+}
+
 #[test]
 fn postgres_execution_adapter_implements_core_port() {
     fn assert_port<T: ExecutionStore>() {}
@@ -1467,7 +1548,7 @@ pub(super) fn accepted_request(id: &str) -> CoreNewModelRequest {
         image_generation_requested: false,
         admission_decision_ms: Some(2),
         started_at,
-        deadline_at: started_at + StdDuration::from_secs(30),
+        deadline_at: (started_at + StdDuration::from_secs(30)).into(),
     }
 }
 
@@ -1536,7 +1617,9 @@ async fn stored_row(pool: &PgPool, request_id: &str) -> Value {
 fn zero_attempt_range(request: &CoreNewModelRequest) -> ObservabilityRange {
     ObservabilityRange::new(
         DateTime::from(request.started_at - StdDuration::from_secs(60)),
-        DateTime::from(request.deadline_at + StdDuration::from_secs(60)),
+        DateTime::from(
+            request.deadline_at.at().expect("finite deadline") + StdDuration::from_secs(60),
+        ),
     )
     .expect("observation range")
 }
@@ -1809,7 +1892,7 @@ async fn zero_attempt_duplicate_create_and_finalization_never_overwrite_terminal
     );
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().expect("finite deadline"))
             .await
             .expect("recover")
             .requests,
@@ -1841,7 +1924,8 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     let request = accepted_request("req_zero_attempt_recovery");
     let mut active = request.clone();
     active.id = ModelRequestId::new("req_zero_attempt_still_running").expect("request id");
-    active.deadline_at += StdDuration::from_secs(30);
+    active.deadline_at =
+        (active.deadline_at.at().expect("finite deadline") + StdDuration::from_secs(30)).into();
     store
         .create_model_request(request.clone())
         .await
@@ -1852,7 +1936,9 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
         .expect("create active request");
     assert_eq!(
         store
-            .recover_expired(request.deadline_at - StdDuration::from_micros(1))
+            .recover_expired(
+                request.deadline_at.at().expect("finite deadline") - StdDuration::from_micros(1)
+            )
             .await
             .expect("before deadline")
             .requests,
@@ -1860,7 +1946,7 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     );
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().expect("finite deadline"))
             .await
             .expect("at deadline")
             .requests,
@@ -1869,7 +1955,7 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     let recovered = stored_row(&database.pool, request.id.as_str()).await;
     assert_eq!(
         store
-            .recover_expired(request.deadline_at)
+            .recover_expired(request.deadline_at.at().expect("finite deadline"))
             .await
             .expect("repeat recovery")
             .requests,
@@ -1898,7 +1984,9 @@ async fn zero_attempt_recovery_respects_deadline_and_does_not_invent_a_trace() {
     );
     assert_eq!(
         detail.request.completed_at,
-        Some(DateTime::from(request.deadline_at))
+        Some(DateTime::from(
+            request.deadline_at.at().expect("finite deadline")
+        ))
     );
     assert_eq!(detail.request.attempt_count, 0);
     assert_eq!(detail.request.upstream_send_state, "not_sent");

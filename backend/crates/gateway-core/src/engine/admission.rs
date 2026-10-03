@@ -2,6 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
+use crate::lifecycle::{CancellationToken, Deadline, LeaseGuard};
 use futures::future::BoxFuture;
 
 use crate::policy::{ClientApiKeyId, RateLimits};
@@ -59,6 +60,17 @@ pub struct ClientAdmissionRestoreResult {
 pub struct ClientAdmissionError;
 
 pub trait ClientAdmissionPort: Send + Sync {
+    /// Renew the existing concurrency member without consuming RPM again.
+    fn maintain(
+        &self,
+        _key: &ClientApiKeyId,
+        _request: &ModelRequestId,
+        _deadline: Deadline,
+        _cancellation: CancellationToken,
+    ) -> Box<dyn LeaseGuard> {
+        Box::new(())
+    }
+
     /// Non-blocking cleanup for cancellation or an unobserved admission result.
     fn abandon(&self, _key: &ClientApiKeyId, _request: &ModelRequestId) {}
 

@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
 use gateway_core::account::ProviderAccountId;
-use gateway_core::lifecycle::CancellationToken;
+use gateway_core::lifecycle::{CancellationToken, Deadline};
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderSchedulingLeaseRequest, ProviderStoreError,
     ProviderStoreErrorKind, ProviderWaitLease, ProviderWaitLeaseAcquisition,
@@ -28,8 +28,18 @@ const QUEUE_CAPACITY: usize = 4_096;
 const CLEANUP_CONCURRENCY: usize = 32;
 const IO_TIMEOUT: Duration = Duration::from_millis(250);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
-const EXECUTION_TTL: Duration = Duration::from_secs(600);
 const SIGNAL_TTL_MILLIS: u64 = 86_400_000;
+
+const RENEW_EXECUTION_SCRIPT: &str = r#"
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+local expires = tonumber(redis.call('ZSCORE', KEYS[1], ARGV[1]) or '0')
+if expires <= now or redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+local ttl = tonumber(ARGV[2])
+redis.call('ZADD', KEYS[1], 'XX', now + ttl, ARGV[1])
+if redis.call('PTTL', KEYS[1]) < ttl then redis.call('PEXPIRE', KEYS[1], ttl) end
+return 1
+"#;
 
 // All keys have the existing execution account hash tag. Both modes use KEYS[1].
 const ENQUEUE_SCRIPT: &str = r#"
@@ -247,6 +257,8 @@ impl RedisCapacityWait {
             sender: self.sender.clone(),
             cleanup: Some(cleanup),
             lifecycle: Arc::clone(&self.lifecycle),
+            renewal: None,
+            execution_deadline: None,
         };
         // Pair with shutdown's stop-then-count sequence; never submit a write
         // after a zero-owner shutdown has closed the cleanup receiver.
@@ -261,7 +273,7 @@ impl RedisCapacityWait {
         request: ProviderSchedulingLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async move {
-            let deadline = request.deadline().min(SystemTime::now() + EXECUTION_TTL);
+            let deadline = request.deadline().lease_deadline();
             let (mut owner, keys) = self.ownership(
                 request.account_id(),
                 "scheduling",
@@ -270,7 +282,10 @@ impl RedisCapacityWait {
             )?;
             let (outcome, value) = owner.acquire_execution(&keys, &request, false).await?;
             match outcome {
-                1 => Ok(ProviderLeaseAcquisition::Acquired(Box::new(owner))),
+                1 => {
+                    owner.maintain(&request);
+                    Ok(ProviderLeaseAcquisition::Acquired(Box::new(owner)))
+                }
                 0 => {
                     let retry_after = retry_interval(&value)?;
                     owner.cleanup = None;
@@ -364,6 +379,7 @@ impl ProviderWaitLease for RedisWaitLease {
             match outcome {
                 1 => {
                     // No await between delivery and disarming the waiting guard.
+                    owner.maintain(&request);
                     Ok(ProviderWaitPromotion::Acquired(Box::new(owner)))
                 }
                 0 => {
@@ -407,9 +423,50 @@ struct Ownership {
     sender: mpsc::Sender<Cleanup>,
     cleanup: Option<Cleanup>,
     lifecycle: Arc<CleanupLifecycle>,
+    renewal: Option<crate::lease_renewal::LeaseRenewal>,
+    execution_deadline: Option<Deadline>,
 }
 
 impl Ownership {
+    fn maintain(&mut self, request: &ProviderSchedulingLeaseRequest) {
+        let cleanup = self.cleanup.as_ref().expect("execution ownership");
+        let active_key = cleanup.active_key.clone();
+        let cancelled_key = cleanup.cancelled_key.clone();
+        let token = cleanup.token.clone();
+        let connection = self.connection.clone();
+        self.execution_deadline = Some(request.deadline());
+        self.renewal = Some(crate::lease_renewal::LeaseRenewal::spawn(
+            request.deadline(),
+            Some(request.cancellation()),
+            move |ttl| {
+                let mut connection = connection.clone();
+                let active_key = active_key.clone();
+                let cancelled_key = cancelled_key.clone();
+                let token = token.clone();
+                Box::pin(async move {
+                    let renewed = Script::new(RENEW_EXECUTION_SCRIPT)
+                        .key(active_key)
+                        .key(cancelled_key)
+                        .arg(token)
+                        .arg(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX))
+                        .invoke_async::<i64>(&mut connection)
+                        .await
+                        .map_err(|_| crate::redis_unavailable("renew account execution"))?;
+                    Ok(renewed == 1)
+                })
+            },
+        ));
+    }
+
+    fn stop_renewal(&mut self) {
+        self.renewal.take();
+        // Cleanup retries must cover the latest possible renewed member, not
+        // the initial acquisition horizon. Lua still removes only this owner.
+        if let (Some(deadline), Some(cleanup)) = (self.execution_deadline, &mut self.cleanup) {
+            cleanup.cleanup_deadline = cleanup.cleanup_deadline.max(deadline.lease_deadline());
+        }
+    }
+
     async fn acquire_execution(
         &mut self,
         keys: &[String; 3],
@@ -419,7 +476,7 @@ impl Ownership {
         if self.lifecycle.stopping.load(Ordering::SeqCst) {
             return Err(unavailable("capacity wait cleanup worker stopping"));
         }
-        let execution_deadline = request.deadline().min(SystemTime::now() + EXECUTION_TTL);
+        let execution_deadline = request.deadline().lease_deadline();
         let execution_millis = timestamp(execution_deadline)?;
         let interval_millis = u64::try_from(request.request_interval().as_millis())
             .ok()
@@ -453,6 +510,7 @@ impl Ownership {
     }
 
     async fn release(mut self) -> Result<(), ProviderStoreError> {
+        self.stop_renewal();
         if let Some(cleanup) = self.cleanup.as_ref() {
             cleanup_once(self.connection.clone(), cleanup).await?;
         }
@@ -463,6 +521,7 @@ impl Ownership {
 
 impl Drop for Ownership {
     fn drop(&mut self) {
+        self.stop_renewal();
         if let Some(cleanup) = self.cleanup.take()
             && let Err(error) = self.sender.try_send(cleanup)
         {

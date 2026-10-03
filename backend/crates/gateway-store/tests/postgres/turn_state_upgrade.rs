@@ -255,11 +255,21 @@ async fn encrypted_omission_upgrade_defaults_off_without_changing_accounts_or_se
         Some(serde_json::json!("account"))
     );
     assert_eq!(before, after);
-    let settings_after: serde_json::Value =
+    let mut settings_after: serde_json::Value =
         sqlx::query_scalar("select to_jsonb(s) from runtime_settings s")
             .fetch_one(&database.pool)
             .await
             .unwrap();
+    let settings = settings_after.as_object_mut().unwrap();
+    for (field, default) in [
+        ("openai_guardian_reserved_concurrency", serde_json::json!(0)),
+        ("account_warmup_enabled", serde_json::json!(false)),
+        ("account_warmup_model", serde_json::Value::Null),
+        ("account_warmup_schedule_time", serde_json::json!("08:00")),
+        ("account_warmup_cursor", serde_json::Value::Null),
+    ] {
+        assert_eq!(settings.remove(field), Some(default), "{field} default");
+    }
     assert_eq!(settings_before, settings_after);
     sqlx::query("update provider_accounts set excel_ignore_encrypted_content=true")
         .execute(&database.pool)

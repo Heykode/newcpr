@@ -26,7 +26,7 @@ use gateway_core::event::{
     ProviderResponseMetadata, ProviderResponseObservation, ProviderResponseTimings, ResponseMeta,
     UpstreamHttpVersion, WebSocketPoolKind,
 };
-use gateway_core::lifecycle::CancellationToken;
+use gateway_core::lifecycle::{CancellationToken, Deadline};
 use gateway_core::operation::{
     GenerateRequest, ImageRequest, ImageRequestKind, Operation, OperationKind,
     ProviderSessionState, StandaloneSearchRequest,
@@ -437,7 +437,7 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         }
-        if remaining(context.deadline()).is_none() {
+        if context.deadline().is_elapsed() {
             return Err(provider_error(
                 ProviderErrorKind::Timeout,
                 UpstreamSendState::NotSent,
