@@ -1189,7 +1189,7 @@ async fn request_capture_global_retention_is_per_record_not_running_task() {
         1,
         "restart must not bypass the automatic cleanup switch"
     );
-    clean_capture_records(&database, manager.clone(), 7).await;
+    clean_capture_records(&database, manager.clone(), 1).await;
     assert!(
         manager
             .for_request("req_old_global")
