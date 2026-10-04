@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      fresh_runtime:
+        description: Rebuild runtime layers without cache for scheduled security validation
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -73,6 +78,24 @@ jobs:
             }
           skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
 
+      - name: Select runtime cache policy
+        id: cache-policy
+        shell: bash
+        env:
+          FRESH_RUNTIME: ${{ inputs.fresh_runtime }}
+        run: |
+          set -euo pipefail
+          if [[ "$FRESH_RUNTIME" == "true" ]]; then
+            {
+              echo 'no_cache_filters<<EOF'
+              echo 'runtime-base'
+              echo 'runtime'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo 'no_cache_filters=' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build runtime image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -88,9 +111,7 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ inputs.ref }}
             org.opencontainers.image.version=${{ steps.identity.outputs.version }}
-          no-cache-filters: |
-            runtime-base
-            runtime
+          no-cache-filters: ${{ steps.cache-policy.outputs.no_cache_filters }}
           cache-from: type=gha,scope=runtime-ci
           cache-to: type=gha,mode=max,scope=runtime-ci
 
