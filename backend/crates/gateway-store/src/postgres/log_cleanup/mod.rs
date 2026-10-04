@@ -77,15 +77,24 @@ impl PgLogCleanupStore {
         .fetch_one(&mut **tx)
         .await
         .map_err(unavailable)?;
-        config.requests.retention_days = u32::try_from(days.0).map_err(unavailable)?;
-        config.audit.retention_days = u32::try_from(days.1).map_err(unavailable)?;
+        // A zero saved in the cleanup config is an explicit "remove all finished
+        // history" choice. Keep the old runtime settings as a fallback for
+        // configurations written by older clients, but never overwrite zero.
+        if config.requests.retention_days > 0 {
+            config.requests.retention_days = u32::try_from(days.0).map_err(unavailable)?;
+        }
+        if config.audit.retention_days > 0 {
+            config.audit.retention_days = u32::try_from(days.1).map_err(unavailable)?;
+        }
         let capture_days: i32 = sqlx::query_scalar(
             "select (config->>'retentionDays')::int from request_capture_config where singleton",
         )
         .fetch_one(&mut **tx)
         .await
         .map_err(unavailable)?;
-        config.captures.retention_days = u32::try_from(capture_days).map_err(unavailable)?;
+        if config.captures.retention_days > 0 {
+            config.captures.retention_days = u32::try_from(capture_days).map_err(unavailable)?;
+        }
         Ok(CleanupState {
             revision: row.0,
             config,
@@ -249,8 +258,13 @@ impl LogCleanupStore for PgLogCleanupStore {
             .bind(serde_json::to_value(&command.config).map_err(unavailable)?)
             .bind(command.config.next_after(Utc::now()).map_err(invalid)?)
             .execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("update runtime_settings set usage_retention_days=$1, audit_retention_days=$2, ops_event_retention_days=$1 where id=1")
-            .bind(i64::from(command.config.requests.retention_days)).bind(i64::from(command.config.audit.retention_days))
+        sqlx::query("update runtime_settings
+            set usage_retention_days = case when $1 > 0 then $1 else usage_retention_days end,
+                ops_event_retention_days = case when $1 > 0 then $1 else ops_event_retention_days end,
+                audit_retention_days = case when $2 > 0 then $2 else audit_retention_days end
+            where id=1")
+            .bind(i64::from(command.config.requests.retention_days))
+            .bind(i64::from(command.config.audit.retention_days))
             .execute(&mut *tx).await.map_err(unavailable)?;
         super::bump_config_revision_in_transaction(&mut tx)
             .await

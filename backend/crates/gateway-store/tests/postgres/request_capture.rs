@@ -20,7 +20,11 @@ fn context() -> MutationContext {
     }
 }
 
-async fn clean_capture_records(database: &TestDatabase, manager: Arc<CaptureManager>) {
+async fn clean_capture_records(
+    database: &TestDatabase,
+    manager: Arc<CaptureManager>,
+    retention_days: u32,
+) {
     use gateway_admin::{model::log_cleanup::*, ports::log_cleanup::LogCleanupStore};
     let store =
         gateway_store::postgres::PgLogCleanupStore::new(database.pool.clone(), None, Some(manager));
@@ -29,6 +33,7 @@ async fn clean_capture_records(database: &TestDatabase, manager: Arc<CaptureMana
     config.requests.selected = false;
     config.files.selected = false;
     config.captures.selected = true;
+    config.captures.retention_days = retention_days;
     store
         .configure(
             CleanupCommand {
@@ -987,6 +992,11 @@ fn request_capture_legacy_config_does_not_enable_global_collection() {
         RequestCaptureConfig::default().quota_policy,
         CaptureQuotaPolicy::Stop
     );
+    let zero_retention = RequestCaptureConfig {
+        retention_days: 0,
+        ..Default::default()
+    };
+    assert!(zero_retention.validate().is_ok());
     assert!(
         serde_json::from_value::<RequestCaptureConfig>(json!({
             "enabled":true, "quotaMib":1, "retentionDays":7, "quotaPolicy":"unknown"
@@ -1179,7 +1189,7 @@ async fn request_capture_global_retention_is_per_record_not_running_task() {
         1,
         "restart must not bypass the automatic cleanup switch"
     );
-    clean_capture_records(&database, manager.clone()).await;
+    clean_capture_records(&database, manager.clone(), 7).await;
     assert!(
         manager
             .for_request("req_old_global")
@@ -1197,6 +1207,82 @@ async fn request_capture_global_retention_is_per_record_not_running_task() {
         1
     );
     assert!(manager.settings().await.unwrap().global_active);
+    drop(manager);
+    database.close().await;
+}
+
+#[tokio::test]
+async fn request_capture_zero_retention_removes_finished_material_but_keeps_running_task() {
+    let Some(database) = TestDatabase::create("capture_zero_retention").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&database, directory.path()).await;
+    let finished_task = enable(&manager).await;
+    let finished_request = trace(&manager, "req_zero_finished");
+    select(&finished_request, "capture-owner");
+    finished_request.record("request.finished", json!({"outcome":"Failed"}));
+    drop(finished_request);
+    let finished_record = wait_request(&manager, "req_zero_finished").await;
+    manager.stop(&finished_task.id, &context()).await.unwrap();
+
+    let running_task = enable(&manager).await;
+    let running_request = trace(&manager, "req_zero_running");
+    select(&running_request, "capture-owner");
+    running_request.record("request.finished", json!({"outcome":"Failed"}));
+    drop(running_request);
+    let running_record = wait_request(&manager, "req_zero_running").await;
+    let old = chrono::Utc::now() - chrono::Duration::days(1);
+    sqlx::query("update request_capture_tasks set expires_at=$1 where id::text=$2")
+        .bind(old)
+        .bind(&finished_task.id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    sqlx::query("update request_capture_records set created_at=$1 where id::text = any($2)")
+        .bind(old)
+        .bind(vec![finished_record.id.clone(), running_record.id.clone()])
+        .execute(&database.pool)
+        .await
+        .unwrap();
+
+    clean_capture_records(&database, manager.clone(), 0).await;
+
+    assert!(
+        manager
+            .for_request("req_zero_finished")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !directory
+            .path()
+            .join(format!("{}.jsonl", finished_record.id))
+            .exists()
+    );
+    assert_eq!(
+        manager.for_request("req_zero_running").await.unwrap().len(),
+        1
+    );
+    assert!(
+        directory
+            .path()
+            .join(format!("{}.jsonl", running_record.id))
+            .exists()
+    );
+    assert!(
+        manager
+            .status()
+            .await
+            .unwrap()
+            .tasks
+            .iter()
+            .any(|task| task.id == running_task.id && task.status == CaptureTaskStatus::Running)
+    );
+
+    cancel.cancel();
+    worker.await.unwrap();
     drop(manager);
     database.close().await;
 }
@@ -1304,7 +1390,7 @@ async fn request_capture_retention_removes_metadata_and_body_only_when_requested
         .await
         .unwrap();
     assert!(body.exists());
-    clean_capture_records(&database, manager.clone()).await;
+    clean_capture_records(&database, manager.clone(), 7).await;
     let status = manager.status().await.unwrap();
     assert!(status.tasks.is_empty());
     assert!(status.records.is_empty());

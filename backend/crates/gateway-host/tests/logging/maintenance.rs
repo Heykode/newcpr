@@ -60,6 +60,18 @@ fn log_cleanup_deletes_only_closed_old_managed_files() {
         assert!(directory.join(name).exists());
     }
     let today = deployment_today();
+    let closed_today = directory.join(format!("{APPLICATION_LOG_FILE_PREFIX}{today}.1.log.gz"));
+    fs::write(&closed_today, "closed fixture").unwrap();
+    filetime::set_file_mtime(
+        &closed_today,
+        filetime::FileTime::from_unix_time(1_577_836_800, 0),
+    )
+    .unwrap();
+    let zero_day = runtime
+        .block_on(maintenance.clean(chrono::Utc::now(), 100))
+        .unwrap();
+    assert_eq!(zero_day.removed, 1);
+    assert!(!closed_today.exists());
     assert!(
         directory
             .join(format!("{APPLICATION_LOG_FILE_PREFIX}{today}.log"))

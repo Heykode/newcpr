@@ -22,12 +22,14 @@ test('occupancy distinguishes failed measurement from real zero and uses decimal
 test('cleanup confirmation uses a frozen cutoff, not the current browser clock', () => {
   assert.equal(cleanupCutoff('2026-09-30T00:00:00Z', 31), '2026-08-30T00:00:00.000Z')
 })
-test('retention validation preserves request history and capture limits', () => {
+test('retention validation allows zero and preserves category limits', () => {
   const config = Object.fromEntries(cleanupCategories.map(({ key, min }) => [key, { selected: true, retentionDays: min }]))
   assert.equal(cleanupValidation(config), '')
   config.requests.retentionDays = 30
+  assert.equal(cleanupValidation(config), '')
+  config.requests.retentionDays = 3651
   assert.notEqual(cleanupValidation(config), '')
-  config.requests.retentionDays = 31
+  config.requests.retentionDays = 0
   config.captures.retentionDays = 31
   assert.notEqual(cleanupValidation(config), '')
 })

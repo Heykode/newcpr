@@ -125,6 +125,75 @@ async fn log_cleanup_is_bounded_and_preserves_accounts_and_billing() {
 }
 
 #[tokio::test]
+async fn zero_request_retention_cleans_finished_history_without_changing_usage_window() {
+    let Some(db) = TestDatabase::create("cleanup_zero_requests").await else {
+        return;
+    };
+    let store = PgLogCleanupStore::new(db.pool.clone(), None, None);
+    let state = store.state().await.unwrap();
+    let mut config = state.config;
+    config.enabled = false;
+    config.requests.selected = true;
+    config.requests.retention_days = 0;
+    config.files.selected = false;
+    config.captures.selected = false;
+    config.audit.selected = false;
+    store
+        .configure(
+            CleanupCommand {
+                revision: state.revision,
+                config,
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let state = store.state().await.unwrap();
+    assert_eq!(state.config.requests.retention_days, 0);
+    let windows: (i64, i64, i64) = sqlx::query_as(
+        "select usage_retention_days, ops_event_retention_days, audit_retention_days from runtime_settings where id=1",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(windows, (31, 30, 90));
+
+    sqlx::query("insert into model_requests (
+        id,client_api_key_ref,config_revision,protocol,operation,endpoint,client_transport,
+        outcome,client_status_code,started_at,deadline_at,completed_at,downstream_committed_at,routing_scope
+    ) values
+        ('cleanup-zero-finished','fixture-key',1,'openai','responses','/v1/responses','http',
+         'succeeded',200,now()-interval '1 day',now(),now()-interval '1 hour',now()-interval '1 hour','all'),
+        ('cleanup-zero-running','fixture-key',1,'openai','responses','/v1/responses','http',
+         'running',null,now()-interval '1 day',now()+interval '1 hour',null,null,'all')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    store
+        .start(
+            CleanupPreview {
+                revision: state.revision,
+                config: state.config,
+                cutoff_at: Utc::now(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let finished = finish(&store).await;
+    assert_eq!(finished.status, CleanupJobStatus::Succeeded);
+    let remaining: Vec<String> = sqlx::query_scalar(
+        "select id from model_requests where id like 'cleanup-zero-%' order by id",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, ["cleanup-zero-running"]);
+    db.close().await;
+}
+
+#[tokio::test]
 async fn log_cleanup_rejects_stale_preview_and_serializes_workers() {
     let Some(db) = TestDatabase::create("cleanup_concurrency").await else {
         return;
@@ -155,7 +224,7 @@ async fn log_cleanup_rejects_stale_preview_and_serializes_workers() {
         CleanupJobStatus::Cancelled
     );
     let mut invalid = request_only(&store).await;
-    invalid.config.requests.retention_days = 1;
+    invalid.config.requests.retention_days = 3651;
     assert!(store.start(invalid, &context()).await.is_err());
     db.close().await;
 }

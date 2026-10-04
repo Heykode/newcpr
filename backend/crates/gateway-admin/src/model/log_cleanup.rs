@@ -56,19 +56,14 @@ impl CleanupConfig {
         }
         for category in CleanupCategory::ALL {
             let days = self.selection(category).retention_days;
-            let minimum = if category == CleanupCategory::Requests {
-                31
-            } else {
-                1
-            };
             let maximum = if category == CleanupCategory::Captures {
                 30
             } else {
                 3650
             };
-            if !(minimum..=maximum).contains(&days) {
+            if days > maximum {
                 return Err(AdminError::invalid(
-                    "保留天数超出范围：请求日志31至3650天，采集1至30天，其他1至3650天",
+                    "保留天数超出范围：请求日志、运行日志和管理员日志0至3650天，采集0至30天",
                 ));
             }
         }

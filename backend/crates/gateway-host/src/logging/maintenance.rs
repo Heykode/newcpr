@@ -128,7 +128,7 @@ impl LogFileMaintenance for FileMaintenance {
             let Some((date, true)) = managed_name(&entry.file_name().to_string_lossy()) else {
                 continue;
             };
-            if date >= self.timezone.local(cutoff).date_naive() {
+            if date > self.timezone.local(cutoff).date_naive() {
                 continue;
             }
             let metadata = match tokio::fs::symlink_metadata(entry.path()).await {
