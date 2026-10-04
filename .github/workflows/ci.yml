@@ -30,6 +30,7 @@ jobs:
       backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
       frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
       container: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.container == 'true' }}
+      deployment: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.deployment == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,21 +59,33 @@ jobs:
             backend:
               - 'backend/**'
               - 'release/version.yaml'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_quality.yml'
             frontend:
               - 'frontend/**'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_quality.yml'
             container:
               - 'backend/**'
-              - 'frontend/**'
               - 'deploy/**'
               - '.dockerignore'
               - 'release/version.yaml'
               - '.github/actions/**'
               - '.github/workflows/_container.yml'
               - '.github/workflows/ci.yml'
+              - 'frontend/package.json'
+              - 'frontend/pnpm-lock.yaml'
+              - 'frontend/pnpm-workspace.yaml'
+              - 'frontend/vite.config.*'
+              - 'frontend/tsconfig*.json'
               - 'release/verified_image.py'
               - 'release/deploy.py'
+            deployment:
+              - 'deploy/**'
+              - 'release/**'
+              - '.github/actions/verify-container/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/_container.yml'
 
   quality:
     needs: changes
@@ -96,7 +109,7 @@ jobs:
 
   deployment-tools:
     needs: changes
-    if: needs.changes.outputs.reused != 'true'
+    if: needs.changes.outputs.deployment == 'true' && needs.changes.outputs.reused != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -124,6 +137,7 @@ jobs:
           QUALITY: ${{ needs.quality.result }}
           CONTAINER_REQUIRED: ${{ needs.changes.outputs.container }}
           CONTAINER: ${{ needs.container.result }}
+          DEPLOYMENT_REQUIRED: ${{ needs.changes.outputs.deployment }}
           DEPLOYMENT: ${{ needs.deployment-tools.result }}
         run: |
           set -euo pipefail
@@ -134,8 +148,12 @@ jobs:
             test "$DEPLOYMENT" = skipped
           else
             test "$QUALITY" = success
-            test "$DEPLOYMENT" = success
             if [ "$CONTAINER_REQUIRED" = true ]; then
               test "$CONTAINER" = success
+            fi
+            if [ "$DEPLOYMENT_REQUIRED" = true ]; then
+              test "$DEPLOYMENT" = success
+            else
+              test "$DEPLOYMENT" = skipped
             fi
           fi
