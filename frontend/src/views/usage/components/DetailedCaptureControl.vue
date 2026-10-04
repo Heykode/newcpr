@@ -28,7 +28,7 @@ const enabled = computed(() => !!settings.value?.config.enabled && !!settings.va
 const valid = computed(() => !!draft.value
   && ['stop', 'overwrite'].includes(draft.value.quotaPolicy ?? 'stop')
   && Number.isInteger(draft.value.quotaMib) && draft.value.quotaMib >= 1 && draft.value.quotaMib <= 102400
-  && Number.isInteger(draft.value.retentionDays) && draft.value.retentionDays >= 1 && draft.value.retentionDays <= 30)
+  && Number.isInteger(draft.value.retentionDays) && draft.value.retentionDays >= 0 && draft.value.retentionDays <= 30)
 let alive = true
 let controller: AbortController | undefined
 
@@ -172,7 +172,8 @@ onBeforeUnmount(() => {
         </div>
         <div class="grid gap-2">
           <span class="text-cp-sm">保留天数</span>
-          <BaseNumberInput v-model="draft.retentionDays" label="保留天数" unit="天" :min="1" :max="30" :disabled="busy" />
+          <BaseNumberInput v-model="draft.retentionDays" label="保留天数" unit="天" :min="0" :max="30" :disabled="busy" />
+          <span class="text-cp-xs text-cp-text-secondary">设为0表示清理全部已结束的采集材料；正在运行的采集任务不受影响。</span>
         </div>
         <BaseSwitch v-model="draft.includeMedia" label="保存媒体正文" show-label :disabled="busy" />
         <p class="m-0 text-cp-xs text-cp-warning-text">

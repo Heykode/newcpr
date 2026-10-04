@@ -27,9 +27,13 @@ fn log_cleanup_validates_windows_and_calendar_schedule() {
         config.next_after(now).unwrap().unwrap(),
         Utc.with_ymd_and_hms(2026, 1, 1, 4, 0, 0).unwrap()
     );
-    config.requests.retention_days = 30;
+    config.requests.retention_days = 3651;
     assert!(config.validate().is_err());
-    config.requests.retention_days = 31;
+    config.requests.retention_days = 0;
+    config.files.retention_days = 0;
+    config.captures.retention_days = 0;
+    config.audit.retention_days = 0;
+    config.validate().unwrap();
     config.timezone = "invalid".into();
     assert!(config.validate().is_err());
 }

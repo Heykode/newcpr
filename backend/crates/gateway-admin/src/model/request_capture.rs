@@ -42,7 +42,7 @@ impl Default for RequestCaptureConfig {
 
 impl RequestCaptureConfig {
     pub fn validate(&self) -> Result<(), AdminError> {
-        if !(1..=102_400).contains(&self.quota_mib) || !(1..=30).contains(&self.retention_days) {
+        if !(1..=102_400).contains(&self.quota_mib) || self.retention_days > 30 {
             return Err(AdminError::invalid("采集配额或保留天数超出范围"));
         }
         Ok(())

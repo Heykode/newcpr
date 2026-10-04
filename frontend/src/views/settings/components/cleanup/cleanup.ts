@@ -1,10 +1,10 @@
 import type { CleanupCategory, CleanupConfig } from '@/api/modules/log-cleanup'
 
 export const cleanupCategories: { key: CleanupCategory, label: string, min: number, max: number }[] = [
-  { key: 'requests', label: '请求日志（含索引）', min: 31, max: 3650 },
-  { key: 'files', label: '运行日志', min: 1, max: 3650 },
-  { key: 'captures', label: '错误采集记录', min: 1, max: 30 },
-  { key: 'audit', label: '管理员操作日志', min: 1, max: 3650 },
+  { key: 'requests', label: '请求日志（含索引）', min: 0, max: 3650 },
+  { key: 'files', label: '运行日志', min: 0, max: 3650 },
+  { key: 'captures', label: '错误采集记录', min: 0, max: 30 },
+  { key: 'audit', label: '管理员操作日志', min: 0, max: 3650 },
 ]
 export function cleanupBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0)

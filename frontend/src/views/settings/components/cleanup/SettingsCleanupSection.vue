@@ -106,10 +106,10 @@ function date(value: string) {
         </BaseButton>
       </div>
       <p class="mb-1 text-cp-xs leading-6 text-cp-text-secondary">
-        请求日志含诊断轨迹、索引及运维事件，至少保留31天。清理后对应历史详情和明细统计不可查；账号、凭据、余额及累计计费保留。
+        保留天数设为0表示清理全部已结束历史。请求日志含诊断轨迹、索引及运维事件；清理后对应历史详情和明细统计不可查，账号、凭据、余额及累计计费保留。
       </p>
       <p class="my-1 text-cp-xs leading-6 text-cp-text-secondary">
-        数据库释放的空间可能先供内部复用，磁盘占用不一定立即下降。运行日志仅清理已归档分片；日志和采集文件仅统计、清理当前服务实例。
+        正在运行的请求、当前活动日志文件和正在运行的采集任务不会删除。数据库释放的空间可能先供内部复用，磁盘占用不一定立即下降；日志和采集文件仅统计、清理当前服务实例。
       </p>
     </template>
     <BaseConfirmModal v-model="confirming" title="确认清理日志" confirm-text="确认清理" destructive :loading="busy" @confirm="confirmCleanup">
