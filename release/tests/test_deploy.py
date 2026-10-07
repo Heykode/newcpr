@@ -172,6 +172,19 @@ class DeployTests(unittest.TestCase):
         ])
         self.assertEqual(plan["recovery"], "manual")
 
+    def test_v3220_upgrade_includes_undeployed_v3210_and_auto_reset_migrations(self):
+        plan = json.loads((deploy.ROOT / "deploy/upgrades/v3.22.0.json").read_text())
+        self.assertEqual(plan["from_version"], "3.20.1")
+        self.assertEqual(plan["to_version"], "3.22.0")
+        self.assertEqual(plan["from_migrations_tree"], "dffc11221dd5d18eef9f12d6adf2307d60379a7d")
+        self.assertEqual(plan["to_migrations_tree"], "9f2a609cc8ee00680e3eacddcc1af5d6b5dbe57f")
+        self.assertEqual(plan["added"], [
+            "0063_refresh_margin_default.sql", "0064_group_fast_mode.sql",
+            "0065_openai_session_binding_ttl.sql", "0066_openai_account_affinity.sql",
+            "0067_account_auto_reset.sql",
+        ])
+        self.assertEqual(plan["recovery"], "manual")
+
     def test_latest_main_ci_required(self):
         run, _, _ = fixtures()
         run["event"] = "push"

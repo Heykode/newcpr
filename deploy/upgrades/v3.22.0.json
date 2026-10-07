@@ -1,0 +1,14 @@
+{
+  "from_version": "3.20.1",
+  "to_version": "3.22.0",
+  "from_migrations_tree": "dffc11221dd5d18eef9f12d6adf2307d60379a7d",
+  "to_migrations_tree": "9f2a609cc8ee00680e3eacddcc1af5d6b5dbe57f",
+  "added": [
+    "0063_refresh_margin_default.sql",
+    "0064_group_fast_mode.sql",
+    "0065_openai_session_binding_ttl.sql",
+    "0066_openai_account_affinity.sql",
+    "0067_account_auto_reset.sql"
+  ],
+  "recovery": "manual"
+}
