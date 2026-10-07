@@ -15,6 +15,8 @@ AdminAuth/no-store POST `/api/admin/quality-ops/models` takes
 One explicit account reads its own native catalog/egress. Excel uses configured models,
 never Codex fallback. Aggregate reads are cache-only, with 100 candidates per page and
 no pool-wide HTTP fanout. Only exact evidence supplies reasoningEfforts; aggregate is null.
+An absent in-memory snapshot is not proof of an empty backing cache: fall back to
+the existing read_account_catalog cache-only method, never a refresh-on-miss API.
 Suggestions never restrict manually entered rule models or mutate account state.
 
 ### Validation & Error Matrix
@@ -28,6 +30,8 @@ account's capability evidence or query all upstream accounts for a dropdown.
 ### Tests Required
 Fake-provider exact/cache-only pagination; native loopback selected credential and zero
 aggregate requests; Excel isolation; API auth/no-store/scope; UI pagination/cancellation.
+Cover an uninitialized in-memory catalog with both empty and populated backing caches;
+neither aggregate read may send an upstream request. Run the full Provider admin suite.
 
 ### Wrong vs Correct
 Wrong: pool sampler for exact account. Correct: account_catalog_documents for exact

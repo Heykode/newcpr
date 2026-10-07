@@ -760,11 +760,21 @@ impl ProviderAdmin for OpenAiAdminProvider {
                 .collect());
         }
         if !exact {
-            return Ok(self
+            let models = match self
                 .catalog
                 .cached_account_models(&account)
                 .map_err(map_catalog_error)?
-                .unwrap_or_default()
+            {
+                Some(models) => models,
+                None => self
+                    .catalog
+                    .read_account_catalog(&account)
+                    .await
+                    .map_err(map_catalog_error)?
+                    .map(|catalog| catalog.models().to_vec())
+                    .unwrap_or_default(),
+            };
+            return Ok(models
                 .into_iter()
                 .map(|id| QualityModelChoice {
                     name: id.clone(),
