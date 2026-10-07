@@ -18,7 +18,7 @@ fn blocked_file_output_keeps_http_and_sse_responsive_and_reserves_errors() {
         config.logging.file.max_file_size_mb = 8;
         let bundle = runtime.block_on(gateway_host::initialize(config)).unwrap();
         let health = bundle.logging_health_probe();
-        let date = chrono::Utc::now().date_naive();
+        let date = deployment_today();
         let fifo = directory.join(format!("{APPLICATION_LOG_FILE_PREFIX}{date}.1.log"));
         assert!(
             Command::new("mkfifo")
