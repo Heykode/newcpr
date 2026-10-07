@@ -951,4 +951,5 @@ mod cpa_stream;
 mod newapi;
 mod newapi_extensions;
 mod output_extensions;
+mod reasoning;
 mod request_extensions;

@@ -23,6 +23,7 @@ pub fn decode_chat_request(value: Value) -> Result<DecodedChatRequest> {
             "tool_choice",
             "parallel_tool_calls",
             "reasoning_effort",
+            "reasoning",
             "response_format",
             "text",
             "verbosity",
@@ -125,21 +126,68 @@ pub fn decode_chat_request(value: Value) -> Result<DecodedChatRequest> {
     if let Some(limit) = limit {
         responses.insert("max_output_tokens".into(), limit);
     }
-    if let Some(effort) = source.get("reasoning_effort").filter(|v| !v.is_null()) {
-        if !effort
-            .as_str()
-            .is_some_and(|s| ["none", "minimal", "low", "medium", "high", "xhigh"].contains(&s))
-        {
-            return Err(Error::invalid("reasoning_effort"));
-        }
-        responses.insert("reasoning".into(), json!({"effort": effort}));
-    }
+    reasoning_options(source, &mut responses)?;
     text_options(source, &mut responses)?;
     Ok(DecodedChatRequest {
         responses,
         stream,
         include_usage,
     })
+}
+
+fn reasoning_options(
+    source: &Map<String, Value>,
+    responses: &mut Map<String, Value>,
+) -> Result<()> {
+    let flat = source
+        .get("reasoning_effort")
+        .filter(|value| !value.is_null())
+        .map(|value| reasoning_effort(value, "reasoning_effort", false))
+        .transpose()?
+        .flatten();
+    let mut reasoning = Map::new();
+    let nested = match source.get("reasoning").filter(|value| !value.is_null()) {
+        Some(value) => {
+            let nested = object(value, "reasoning")?;
+            only_keys(nested, &["effort", "summary"], "reasoning")?;
+            if let Some(summary) = nested.get("summary") {
+                if !summary.is_null()
+                    && !summary
+                        .as_str()
+                        .is_some_and(|value| ["auto", "concise", "detailed"].contains(&value))
+                {
+                    return Err(Error::invalid("reasoning.summary"));
+                }
+                reasoning.insert("summary".into(), summary.clone());
+            }
+            nested
+                .get("effort")
+                .filter(|value| !value.is_null())
+                .map(|value| reasoning_effort(value, "reasoning.effort", true))
+                .transpose()?
+                .flatten()
+        }
+        None => None,
+    };
+    if let Some(effort) = nested.or(flat) {
+        reasoning.insert("effort".into(), json!(effort));
+    }
+    if !reasoning.is_empty() {
+        responses.insert("reasoning".into(), Value::Object(reasoning));
+    }
+    Ok(())
+}
+
+fn reasoning_effort<'a>(value: &'a Value, param: &str, nested: bool) -> Result<Option<&'a str>> {
+    let effort = value.as_str().ok_or_else(|| Error::invalid(param))?;
+    let effort = if nested { effort.trim() } else { effort };
+    if nested && effort.is_empty() {
+        return Ok(None);
+    }
+    if !["none", "minimal", "low", "medium", "high", "xhigh", "max"].contains(&effort) {
+        return Err(Error::invalid(param));
+    }
+    Ok(Some(effort))
 }
 
 fn boolean(source: &Map<String, Value>, key: &str) -> Result<Option<bool>> {

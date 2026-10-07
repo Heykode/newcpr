@@ -21,6 +21,7 @@ async fn quality_routes_require_auth_and_disable_caching() {
         ("POST", "templates/delete"),
         ("POST", "templates/apply"),
         ("POST", "monitoring"),
+        ("POST", "models"),
         ("GET", "groups"),
         ("POST", "groups/save"),
         ("POST", "groups/delete"),
@@ -60,4 +61,41 @@ async fn quality_without_store_is_unavailable_not_a_fake_success() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn quality_models_reject_invalid_scope_and_unknown_fields() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("quality-session");
+    let app = gateway_api::admin::router::<AdminTestState>().with_state(fixture.state());
+    for body in [
+        serde_json::json!({"page": 0}),
+        serde_json::json!({"page": 1000001}),
+        serde_json::json!({"page": 1, "accountIds": ["acct_fixture"], "group": "fixture-group"}),
+        serde_json::json!({"page": 1, "accountIds": ["acct_fixture"], "statuses": ["normal"]}),
+        serde_json::json!({"page": 1, "statuses": ["invented-status"]}),
+        serde_json::json!({"page": 1, "forceRefresh": true}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/quality-ops/models")
+                    .header(header::COOKIE, "cpr_admin_session=quality-session")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-request-id", "quality-fixture")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let expected = if body.get("forceRefresh").is_some() {
+            StatusCode::UNPROCESSABLE_ENTITY
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        assert_eq!(response.status(), expected, "{body}");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
 }

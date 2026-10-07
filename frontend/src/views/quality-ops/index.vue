@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { QualityGroupFilter, QualityGroupRule, QualityRule, QualityRuleConfig, QualityRuleTemplate, QualityRun } from '@/api/modules/quality-ops'
+import type { QualityGroupFilter, QualityGroupRule, QualityModelChoice, QualityRule, QualityRuleConfig, QualityRuleTemplate, QualityRun } from '@/api/modules/quality-ops'
 import { ClipboardCheck, Copy, Eye, Pause, Pencil, Play, Plus, RefreshCw, Save, Trash2 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -21,9 +21,11 @@ import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { formatDateTime } from '@/utils/date'
 import { newQualityConfig, qualityConfigDraft } from './defaults'
 import { failureActionOptions, usesFailureThreshold } from './failure-actions'
+import { qualityEffortOptions } from './model-choices'
 import QualityBulkEditor from './QualityBulkEditor.vue'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
+import QualityModelPicker from './QualityModelPicker.vue'
 import QualitySchedule from './QualitySchedule.vue'
 import QualityTemplateCatalog from './QualityTemplateCatalog.vue'
 import { qualityScheduleSummary } from './schedule'
@@ -119,7 +121,7 @@ const detailOpen = ref(false)
 const detail = ref<QualityRun | null>(null)
 const detailError = ref('')
 const names = ref<Record<string, string>>({})
-const efforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ value, label: value }))
+const testModels = ref<QualityModelChoice[]>([])
 const labels: Record<string, string> = {
   correct: '通过',
   incorrect: '答案不符',
@@ -153,6 +155,11 @@ function defaults(): QualityRuleConfig {
   return newQualityConfig(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
 }
 const draft = ref(defaults())
+const modelScope = computed(() => templateMode.value ? {} : groupMode.value ? groupFilter.value : { accountIds: editing.value ? [draft.value.accountId] : selectedAccounts.value })
+const effortOptions = computed(() => qualityEffortOptions(testModels.value, draft.value.model, draft.value.reasoningEffort ?? ''))
+watch(editorOpen, () => {
+  testModels.value = []
+})
 const selectedTemplate = computed({
   get: () => draft.value.failureTemplate ?? null,
   set: (value) => { draft.value.failureTemplate = value },
@@ -1021,10 +1028,10 @@ onBeforeUnmount(() => {
         </div>
         <div class="grid gap-4 sm:grid-cols-2">
           <FormItem label="检测模型" required>
-            <BaseInput v-model="draft.model" placeholder="模型 ID" />
+            <QualityModelPicker v-model="draft.model" :scope="modelScope" @choices="testModels = $event" />
           </FormItem>
           <FormItem v-if="!isProbe" label="推理强度">
-            <BaseSelect v-model="effort" :options="[{ value: '', label: '按默认' }, ...efforts]" />
+            <BaseSelect v-model="effort" :options="effortOptions" />
           </FormItem>
           <QualitySchedule v-model="draft.intervalSeconds" :cron="draft.cron" :timezone="draft.timezone" />
           <div v-if="!isProbe" class="grid gap-2 text-cp-sm">
@@ -1052,7 +1059,7 @@ onBeforeUnmount(() => {
             </p>
             <QualityCatalogPicker v-model="draft.judgeGroupId" label="判题账号分组" search-placeholder="搜索分组名称" :load-page="groupPage" />
             <FormItem label="判题模型" required>
-              <BaseInput v-model="draft.judgeModel" placeholder="模型 ID" />
+              <QualityModelPicker v-model="draft.judgeModel" :scope="{ group: draft.judgeGroupId }" />
             </FormItem>
             <FormItem label="判题提示词" required>
               <BaseTextarea v-model="draft.judgePrompt" :rows="3" />

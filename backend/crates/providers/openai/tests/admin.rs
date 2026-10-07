@@ -652,6 +652,7 @@ async fn openai_reauthorization_pending_payload_reuses_the_account_installation_
 
 #[tokio::test]
 async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export() {
+    let server = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     let mut oauth_secret = secret("admin-projection-access");
     oauth_secret.id_token = Some(SecretString::from("header.id-token.signature"));
@@ -669,15 +670,15 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
         .account("acct_admin_projection")
         .expect("stored account");
     let record = account_record(&account);
-    let config = valid_config();
+    let mut config = valid_config();
+    config.config.api.base_url = server.uri();
     let catalog_cache = Arc::new(TestCatalogCache::default());
-    catalog_cache.seed("plan:pro", ["gpt-5.4"]);
     let bundle = provider_openai::initialize(
         config.config.clone(),
         provider_ports_with_catalog(
             Arc::clone(&store),
             Arc::new(TestOAuthPending::default()),
-            catalog_cache,
+            Arc::clone(&catalog_cache),
         ),
     )
     .await
@@ -783,6 +784,30 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
         .await
         .expect("cached quota");
     assert!(quota.windows.is_empty());
+    assert!(
+        admin
+            .quality_model_choices(&account_id, false)
+            .await
+            .expect("missing quality cache")
+            .is_empty()
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+    catalog_cache.seed("plan:pro", ["gpt-5.4"]);
+    let choices = admin
+        .quality_model_choices(&account_id, false)
+        .await
+        .expect("cached quality choices");
+    assert_eq!(
+        choices.len(),
+        1,
+        "read cache before in-memory catalog initialization"
+    );
+    assert_eq!(choices[0].id, "gpt-5.4");
+    assert!(
+        choices[0].reasoning_efforts.is_none(),
+        "shared plan cache is not exact-account capability evidence"
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
     let models = admin
         .models(&account_id, false)
         .await
@@ -2137,6 +2162,49 @@ async fn reset_credit_admin(
     .await
     .expect("OpenAI reset-credit bundle");
     (bundle, account_id, config)
+}
+
+#[tokio::test]
+async fn quality_model_catalog_exact_uses_selected_identity_while_cached_mode_never_fetches() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/codex/models"))
+        .and(wiremock::matchers::header("authorization", "Bearer reset-credit-access"))
+        .and(wiremock::matchers::header("chatgpt-account-id", "chatgpt-reset-credit"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"models": [
+            {"slug":"fixture-reasoning", "display_name":"Fixture", "supported_reasoning_levels":[{"effort":"max", "description":"Fixture"}]},
+            {"slug":"fixture-unknown", "display_name":"Unknown"}
+        ]}))).expect(1).mount(&server).await;
+    let (bundle, account_id, _config) = reset_credit_admin(&server).await;
+    let admin = bundle.admin_provider();
+    assert!(
+        admin
+            .quality_model_choices(&account_id, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+    let choices = admin
+        .quality_model_choices(&account_id, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        choices
+            .iter()
+            .find(|m| m.id == "fixture-reasoning")
+            .unwrap()
+            .reasoning_efforts,
+        Some(vec!["max".into()])
+    );
+    assert!(
+        choices
+            .iter()
+            .find(|m| m.id == "fixture-unknown")
+            .unwrap()
+            .reasoning_efforts
+            .is_none()
+    );
+    server.verify().await;
 }
 
 fn reset_credit_command(account_id: ProviderAccountId) -> ConsumeProviderResetCredit {

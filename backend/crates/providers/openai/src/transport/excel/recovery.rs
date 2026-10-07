@@ -57,7 +57,7 @@ fn validate(wire: &[u8], nonce: &str) -> Result<(), CodexClientError> {
         let event: ProbeEvent =
             serde_json::from_str(data).map_err(|_| invalid("invalid SSE event"))?;
         match event.kind.as_str() {
-            "response.failed" | "response.incomplete" => {
+            "response.failed" | "response.incomplete" | "response.cancelled" | "error" => {
                 return Err(invalid("response did not complete normally"));
             }
             "response.completed" => {

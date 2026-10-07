@@ -737,6 +737,69 @@ impl ProviderAdmin for OpenAiAdminProvider {
         })
     }
 
+    async fn quality_model_choices(
+        &self,
+        account_id: &ProviderAccountId,
+        exact: bool,
+    ) -> Result<Vec<gateway_admin::model::quality_ops::QualityModelChoice>, ProviderAdminError>
+    {
+        use crate::transport::catalog::CodexCatalogCapabilityEvidence;
+        use gateway_admin::model::quality_ops::QualityModelChoice;
+
+        let account = self.account(account_id).await?;
+        if account.responses_upstream() == gateway_core::account::ResponsesUpstream::Excel {
+            return Ok(account
+                .excel_models()
+                .as_slice()
+                .iter()
+                .map(|id| QualityModelChoice {
+                    id: id.clone(),
+                    name: id.clone(),
+                    reasoning_efforts: None,
+                })
+                .collect());
+        }
+        if !exact {
+            let models = match self
+                .catalog
+                .cached_account_models(&account)
+                .map_err(map_catalog_error)?
+            {
+                Some(models) => models,
+                None => self
+                    .catalog
+                    .read_account_catalog(&account)
+                    .await
+                    .map_err(map_catalog_error)?
+                    .map(|catalog| catalog.models().to_vec())
+                    .unwrap_or_default(),
+            };
+            return Ok(models
+                .into_iter()
+                .map(|id| QualityModelChoice {
+                    name: id.clone(),
+                    id,
+                    reasoning_efforts: None,
+                })
+                .collect());
+        }
+        let (models, _) = self
+            .catalog
+            .account_catalog_documents(&account)
+            .await
+            .map_err(map_catalog_error)?;
+        Ok(models
+            .iter()
+            .map(|model| QualityModelChoice {
+                id: model.request_model().as_str().to_owned(),
+                name: model.display_name().to_owned(),
+                reasoning_efforts: (model.capabilities().reasoning()
+                    != CodexCatalogCapabilityEvidence::Unknown)
+                    .then(|| model.capabilities().reasoning_efforts().to_vec()),
+            })
+            .collect())
+    }
+
     async fn model_catalog_document(
         &self,
         account_id: &ProviderAccountId,

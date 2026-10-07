@@ -20,6 +20,7 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route("/api/admin/quality-ops/models", post(models::<S>))
         .route("/api/admin/quality-ops/groups", get(groups::<S>))
         .route("/api/admin/quality-ops/groups/save", post(save_group::<S>))
         .route(
@@ -46,6 +47,26 @@ where
             post(apply_template::<S>),
         )
         .route("/api/admin/quality-ops/monitoring", post(monitoring::<S>))
+}
+
+async fn models<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(query): AdminJson<gateway_admin::model::quality_ops::QualityModelQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .model_choices(query)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
 }
 
 #[derive(Deserialize)]

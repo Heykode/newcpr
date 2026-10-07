@@ -373,6 +373,15 @@ pub trait ProviderAdmin: Send + Sync {
         refresh: bool,
     ) -> Result<ProviderModels, ProviderAdminError>;
 
+    /// Quality editor suggestions. Aggregate calls must never initiate network requests.
+    async fn quality_model_choices(
+        &self,
+        _account_id: &ProviderAccountId,
+        _exact: bool,
+    ) -> Result<Vec<crate::model::quality_ops::QualityModelChoice>, ProviderAdminError> {
+        Ok(Vec::new())
+    }
+
     async fn model_catalog_document(
         &self,
         _account_id: &ProviderAccountId,

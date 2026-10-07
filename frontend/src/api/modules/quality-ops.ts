@@ -129,6 +129,27 @@ export interface QualityRun {
 }
 
 const base = '/api/admin/quality-ops'
+export interface QualityModelChoice {
+  id: string
+  name: string
+  reasoningEfforts: string[] | null
+}
+export interface QualityModelScope {
+  accountIds?: string[]
+  group?: string
+  statuses?: string[]
+}
+export interface QualityModelPage {
+  models: QualityModelChoice[]
+  nextPage: number | null
+  matchedAccounts: number
+  knownAccounts: number
+  failedAccounts: number
+}
+export function getQualityModels(scope: QualityModelScope, page: number, options: RequestOptions = {}) {
+  return request<QualityModelPage>({ url: `${base}/models`, method: 'POST', data: { ...scope, page }, ...options })
+}
+
 export function getQualityGroups(options: RequestOptions = {}) {
   return request<QualityGroupRule[]>({ url: `${base}/groups`, method: 'GET', ...options })
 }

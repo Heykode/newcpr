@@ -577,6 +577,27 @@ impl ProviderAdmin for FakeProviderAdmin {
         })
     }
 
+    async fn quality_model_choices(
+        &self,
+        account_id: &ProviderAccountId,
+        exact: bool,
+    ) -> Result<Vec<gateway_admin::model::quality_ops::QualityModelChoice>, ProviderAdminError>
+    {
+        self.record(if exact {
+            "provider.quality_models_exact"
+        } else {
+            "provider.quality_models_cached"
+        });
+        self.require_available()?;
+        Ok(vec![
+            gateway_admin::model::quality_ops::QualityModelChoice {
+                id: format!("model-{}", account_id.as_str()),
+                name: "Fixture".into(),
+                reasoning_efforts: Some(vec!["max".into()]),
+            },
+        ])
+    }
+
     async fn model_catalog_document(
         &self,
         account_id: &ProviderAccountId,
@@ -1472,6 +1493,88 @@ async fn account_native_catalog_export_dispatches_only_the_selected_account_with
             "store.load_account"
         ]
     );
+}
+
+#[tokio::test]
+async fn quality_model_suggestions_preserve_exact_account_capabilities_and_bound_aggregate_reads() {
+    use gateway_admin::model::quality_ops::QualityModelQuery;
+    let log = events();
+    let provider = FakeProviderAdmin::new("openai", log.clone());
+    let account = account_record("openai");
+    let store = FakeAccountStore::with_account(account.clone(), log.clone());
+    let services = accounts_service(provider.clone(), store.clone()).await;
+    log.lock().unwrap().clear();
+    let page = services
+        .quality_ops()
+        .model_choices(QualityModelQuery {
+            account_ids: vec![account.id.clone()],
+            page: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.models.len(), 1);
+    assert_eq!(page.models[0].reasoning_efforts, Some(vec!["max".into()]));
+    assert!(
+        log.lock()
+            .unwrap()
+            .contains(&"provider.quality_models_exact")
+    );
+    let accounts: Vec<_> = (0..101)
+        .map(|n| {
+            let mut account = account.clone();
+            account.id = format!("acct_quality_{n}");
+            account
+        })
+        .collect();
+    let ids: Vec<_> = accounts.iter().map(|a| a.id.clone()).collect();
+    store.set_accounts(accounts);
+    log.lock().unwrap().clear();
+    let page = services
+        .quality_ops()
+        .model_choices(QualityModelQuery {
+            account_ids: ids.clone(),
+            page: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.models.len(), 100);
+    assert_eq!(page.next_page, Some(2));
+    assert!(
+        page.models.iter().all(|m| m.reasoning_efforts.is_none()),
+        "first account does not prove aggregate capabilities"
+    );
+    assert!(
+        !log.lock()
+            .unwrap()
+            .contains(&"provider.quality_models_exact")
+    );
+    let page = services
+        .quality_ops()
+        .model_choices(QualityModelQuery {
+            account_ids: ids,
+            page: 2,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.models.len(), 1);
+    assert_eq!(page.next_page, None);
+    for query in [
+        QualityModelQuery {
+            page: 0,
+            ..Default::default()
+        },
+        QualityModelQuery {
+            page: 1,
+            account_ids: vec!["a".into()],
+            group: "b".into(),
+            ..Default::default()
+        },
+    ] {
+        assert!(services.quality_ops().model_choices(query).await.is_err());
+    }
 }
 
 #[tokio::test]

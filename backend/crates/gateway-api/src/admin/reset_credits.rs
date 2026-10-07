@@ -1,5 +1,5 @@
 use super::{
-    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminResponse, AdminSessionState,
+    AdminAuth, AdminEnvelope, AdminError, AdminJson, AdminQuery, AdminResponse, AdminSessionState,
     wire::map_admin_service_error,
 };
 use axum::{
@@ -17,6 +17,10 @@ where
     S: AdminSessionState + Clone + Send + Sync + 'static,
 {
     Router::new()
+        .route(
+            "/api/admin/accounts/reset-credits/automatic",
+            get(auto_policy::<S>).post(save_auto_policy::<S>),
+        )
         .route("/api/admin/accounts/reset-credits/cache", post(cache::<S>))
         .route(
             "/api/admin/accounts/reset-credits/refresh",
@@ -35,6 +39,55 @@ where
             post(confirm::<S>),
         )
         .route("/api/admin/accounts/reset-credits/retry", post(retry::<S>))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutoQuery {
+    account_id: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutoSave {
+    account_id: String,
+    revision: i64,
+    config: gateway_admin::model::reset_credits::AutoResetConfig,
+}
+async fn auto_policy<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<AutoQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let data = state
+        .admin_services()
+        .reset_credits()
+        .auto_policy(&query.account_id)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+async fn save_auto_policy<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(command): AdminJson<AutoSave>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let data = state
+        .admin_services()
+        .reset_credits()
+        .save_auto_policy(
+            &command.account_id,
+            command.revision,
+            command.config,
+            &auth.context().mutation_context(),
+        )
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

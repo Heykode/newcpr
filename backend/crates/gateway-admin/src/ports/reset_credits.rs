@@ -9,6 +9,26 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait ResetCreditsStore: Send + Sync {
+    async fn auto_policy(&self, account_id: &str) -> AdminStoreResult<AutoResetPolicy>;
+    async fn save_auto_policy(
+        &self,
+        account_id: &str,
+        revision: i64,
+        config: AutoResetConfig,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AutoResetPolicy>;
+    async fn claim_auto_check(&self) -> AdminStoreResult<Option<AutoResetCheck>>;
+    async fn auto_execution(
+        &self,
+        request: Uuid,
+    ) -> AdminStoreResult<Option<(AutoResetConfig, AutoResetObservation)>>;
+    async fn finish_auto_check(
+        &self,
+        check: &AutoResetCheck,
+        observation: Option<AutoResetObservation>,
+        credit: Option<crate::model::provider_credentials::ProviderResetCredit>,
+        message: &str,
+    ) -> AdminStoreResult<()>;
     async fn inventories(&self, ids: &[String]) -> AdminStoreResult<Vec<ResetInventory>>;
     async fn save_inventory(&self, inventory: ResetInventory) -> AdminStoreResult<()>;
     async fn save_preview(&self, batch: ResetBatch) -> AdminStoreResult<ResetBatch>;

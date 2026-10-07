@@ -46,7 +46,29 @@ impl DaemonTask for ResetWorker {
                     }
                 }
             };
-            futures::future::join_all((0..3).map(|_| lane())).await;
+            let scanner = async {
+                loop {
+                    tokio::select! { biased; () = cancellation.cancelled() => break,
+                    () = tokio::time::sleep(Duration::from_secs(1)) => {} }
+                    // Bounded scan; durable per-account due times and leases coordinate instances.
+                    for _ in 0..100 {
+                        if cancellation.is_cancelled() {
+                            break;
+                        }
+                        match self.0.check_auto_one().await {
+                            Ok(true) => {}
+                            Ok(false) => break,
+                            Err(_) => {
+                                tracing::warn!(
+                                    "automatic reset check could not update; no consumption retry"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            };
+            futures::future::join(futures::future::join_all((0..3).map(|_| lane())), scanner).await;
             Ok(())
         })
     }

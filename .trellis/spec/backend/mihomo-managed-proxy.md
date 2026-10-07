@@ -70,6 +70,18 @@ upload on a second node.
 
 ## 6. Tests Required
 
+Background account warmup model requests must also use the selected source through
+the existing `SessionProxyPool` and `for_session_proxy` transport. Wire the pool into
+the quota service during provider initialization; do not change quota/catalog/token
+auxiliary calls. Use a distinct transient warmup scope, never a user's session binding.
+Keep the lease until stream completion, error or cancellation, release it before the
+inter-account delay, and reuse existing transport health feedback. No qualified pool
+means failure, never direct fallback. Preserve saved account proxy/IPv6 behavior for
+the `account` source, existing request profile, installation identity and warmup policy.
+`tests/credential/quota/warmup.rs` uses loopback upstream/proxy fixtures to exercise
+both pools, the saved account route, unavailable pools, business rejection, cancellation,
+successful release and unchanged account identity. No production credentials are needed.
+
 Host tests cover node identity, redaction, two pools, stale generations, cooling,
 references and retry fences. The isolated official-kernel test must prove relay,
 candidate rejection, disabled-node rejection, restore and parent-drop cleanup.

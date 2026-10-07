@@ -1,5 +1,18 @@
 # Account Management Contracts
 
+## Codex Credit Visibility
+
+- Render `quota.credits` in both the account-list usage cell and ordinary quota panel.
+  A reset-card query or consumption confirmation must never be a prerequisite.
+  Credits and reset-card inventory are different upstream facts; neither creates
+  a recharge or consumption action. Non-OpenAI accounts do not display Codex credits.
+- Reuse the same presenter for compact/full views. Preserve decimal-string precision
+  and distinguish zero, unavailable balance, no credits and unlimited credits.
+- Expanded rows live inside a horizontally scrollable table. Constrain the mobile
+  balance to the viewport and assert its actual text bounds, not just DOM presence
+  or its own scrollWidth. Test 1440/390/320px with synthetic APIs and zero reset cards.
+- Coverage: `tests/account-credits.test.mjs` and `tests/browser/account-credits.mjs`.
+
 ## Batch Reset Credits
 
 The optional reset-credit column reads server inventory snapshots, not upstream on every poll.

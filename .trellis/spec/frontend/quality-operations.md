@@ -1,5 +1,37 @@
 # Quality Operations UI
 
+## Editable Model Suggestions
+
+### Scope / Trigger
+Test/judge fields in single-account, template, group and bulk editors.
+
+### Signatures
+QualityModelPicker accepts `v-model:string`, `scope:QualityModelScope`, emits
+`choices:QualityModelChoice[]` and consumes `/quality-ops/models` pages.
+
+### Contracts
+Searchable editable combobox. Preserve saved/manual values absent from catalogs.
+Scope changes clear suggestions, not input. Label known exact-account efforts while
+retaining unknown/custom choices; never inject an effort. Abort and generation-fence reads
+on close, scope changes, refresh and unmount. Load additional pages explicitly.
+Retry/load-more/refresh return focus to the input before replacing their buttons;
+otherwise focusout can close the picker and abort its own request.
+
+### Validation & Error Matrix
+Failure -> retry with retained input; empty success -> no known candidates;
+stale response -> ignored. One aggregate page is not the complete catalog.
+
+### Good / Base / Bad
+Good: manually enter a new model. Base: unchecked bulk fields stay unchanged.
+Bad: clear input on empty results or label aggregate capability as account-specific.
+
+### Tests Required
+Keyboard selection/manual input, failed read/retry, pagination, stale results, template/
+group/bulk integration, and 1440/390/320px synthetic layouts without upstream traffic.
+
+### Wrong vs Correct
+Wrong: enforce predefined selection. Correct: suggestions assist the existing string field.
+
 ## Group Enrollment And Deletion
 
 - Keep account-monitoring, group-rule and template views distinct. Reuse the existing

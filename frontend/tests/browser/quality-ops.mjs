@@ -33,7 +33,10 @@ async function main() {
     browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || undefined })
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
     const errors = []
-    page.on('pageerror', error => errors.push(error.message))
+    page.on('pageerror', (error) => {
+      errors.push(error.message)
+      console.error('Quality fixture browser error:', error.message)
+    })
     const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
     const now = new Date().toISOString()
     const template = {
@@ -114,8 +117,36 @@ async function main() {
             page: { page: 1, pageSize: 50, total: 1, totalPages: 1 },
           })
     })
+    let modelMode = 'normal'
+    let releaseModel
     await page.route('**/dev/api/admin/quality-ops/**', async (route) => {
       const url = new URL(route.request().url())
+      if (url.pathname.endsWith('/models')) {
+        const body = route.request().postDataJSON()
+        if (modelMode === 'failed')
+          return route.fulfill({ status: 503, json: { code: 503, message: 'fixture catalog unavailable', data: null } })
+        if (modelMode === 'delayed') {
+          await new Promise((resolve) => {
+            releaseModel = resolve
+          })
+          return fulfill(route, { models: [{ id: 'stale-fixture', name: 'Stale fixture', reasoningEfforts: null }], nextPage: null, matchedAccounts: 1, knownAccounts: 1, failedAccounts: 0 })
+        }
+        if (body.page === 2) {
+          assert.equal(modelMode, 'paged')
+          return fulfill(route, { models: [{ id: 'fixture-page-two', name: 'Page two', reasoningEfforts: null }], nextPage: null, matchedAccounts: 1, knownAccounts: 1, failedAccounts: 0 })
+        }
+        assert.equal(body.page, 1)
+        return fulfill(route, {
+          models: [
+            { id: 'fixture-reasoning', name: 'Fixture reasoning', reasoningEfforts: body.accountIds?.length === 1 ? ['high', 'max'] : null },
+            { id: 'fixture-model-with-a-very-long-name-for-mobile-bounds', name: 'Long fixture', reasoningEfforts: null },
+          ],
+          nextPage: modelMode === 'paged' ? 2 : null,
+          matchedAccounts: 1,
+          knownAccounts: 1,
+          failedAccounts: 0,
+        })
+      }
       if (url.pathname.endsWith('/rules') && failRules)
         return route.fulfill({ status: 503, json: { code: 503, message: 'fixture rules unavailable', data: null } })
       if (url.pathname.endsWith('/rules'))
@@ -182,7 +213,11 @@ async function main() {
       return route.abort()
     })
     await page.goto(`http://127.0.0.1:${port}/quality-ops`)
-    await page.getByRole('heading', { name: '质量运维', exact: true }).waitFor()
+    await page.getByRole('heading', { name: '质量运维', exact: true }).waitFor().catch(async (error) => {
+      await page.screenshot({ path: `${output}/quality-load-failure.png`, fullPage: true })
+      console.error(await page.locator('body').textContent())
+      throw error
+    })
     await page.getByRole('button', { name: '查看结果', exact: true }).waitFor()
     await page.getByRole('button', { name: '立即检测', exact: true }).dblclick()
     assert.equal(enqueues, 1)
@@ -210,6 +245,33 @@ async function main() {
     await page.getByRole('button', { name: '编辑规则', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '编辑检测规则' })
     await editor.waitFor()
+    const models = editor.getByRole('combobox', { name: /^检测模型/ })
+    modelMode = 'failed'
+    await models.click()
+    await editor.getByRole('alert').filter({ hasText: '目录读取失败' }).waitFor()
+    assert.equal(await models.inputValue(), config.model)
+    modelMode = 'paged'
+    await editor.getByRole('button', { name: '重试', exact: true }).click()
+    await editor.getByRole('option', { name: 'fixture-reasoning', exact: true }).waitFor()
+    await editor.getByRole('button', { name: '加载更多', exact: true }).click()
+    await editor.getByRole('option', { name: 'fixture-page-two', exact: true }).waitFor()
+    modelMode = 'delayed'
+    await editor.getByRole('button', { name: '刷新模型目录', exact: true }).click()
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (releaseModel)
+        break
+      await page.waitForTimeout(10)
+    }
+    assert.ok(releaseModel, 'catalog refresh request started')
+    await models.press('Escape')
+    modelMode = 'normal'
+    await models.click()
+    await editor.getByRole('option', { name: 'fixture-reasoning', exact: true }).waitFor()
+    releaseModel()
+    await page.waitForTimeout(50)
+    assert.equal(await editor.getByRole('option', { name: 'stale-fixture', exact: true }).count(), 0)
+    assert.equal(await models.inputValue(), config.model)
+    await models.press('Escape')
     assert.equal(await editor.getByRole('textbox', { name: /^题目/ }).inputValue(), config.prompt)
     assert.equal(await editor.getByRole('textbox', { name: /^参考答案/ }).inputValue(), config.referenceAnswer)
     assert.equal(await editor.getByRole('textbox', { name: /^判题提示词/ }).inputValue(), config.judgePrompt)
@@ -254,6 +316,19 @@ async function main() {
       await page.getByRole('button', { name: '编辑规则', exact: true }).click()
       await editor.waitFor()
       assert.equal(await editor.getByRole('spinbutton', { name: '检测频率', exact: true }).inputValue(), '17')
+      const modelInput = editor.getByRole('combobox', { name: /^检测模型/ })
+      const oldModel = await modelInput.inputValue()
+      await modelInput.click()
+      await editor.getByRole('option', { name: 'fixture-reasoning', exact: true }).waitFor()
+      await modelInput.fill('fixture-reasoning')
+      await modelInput.press('ArrowDown')
+      await modelInput.press('Enter')
+      assert.equal(await modelInput.inputValue(), 'fixture-reasoning')
+      await modelInput.fill('manually-entered-unlisted-model')
+      await modelInput.press('Enter')
+      assert.equal(await modelInput.inputValue(), 'manually-entered-unlisted-model')
+      await modelInput.fill(oldModel)
+      await modelInput.press('Escape')
       await page.screenshot({ path: `${output}/quality-editor-${width}.png`, fullPage: true, animations: 'disabled' })
       assert.ok(await editor.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
       const saveBox = await editor.getByRole('button', { name: '保存', exact: true }).boundingBox()
@@ -283,7 +358,7 @@ async function main() {
     failGroups = true
     await page.getByRole('button', { name: '新建规则', exact: true }).click()
     const creation = page.getByRole('dialog', { name: '新建检测规则' })
-    assert.equal(await creation.getByRole('textbox', { name: /^检测模型/ }).inputValue(), 'gpt-6-astra')
+    assert.equal(await creation.getByRole('combobox', { name: /^检测模型/ }).inputValue(), 'gpt-6-astra')
     assert.equal(await creation.getByRole('spinbutton', { name: '检测频率', exact: true }).inputValue(), '120')
     assert.equal(await creation.getByRole('textbox', { name: /^题目/ }).count(), 0)
     async function chooseAnswer() {
@@ -326,13 +401,13 @@ async function main() {
       await page.screenshot({ path: `${output}/quality-create-${width}.png`, fullPage: true, animations: 'disabled' })
     }
     await page.setViewportSize({ width: 1440, height: 1000 })
-    await creation.getByRole('textbox', { name: /^检测模型/ }).fill('fixture-create-model')
+    await creation.getByRole('combobox', { name: /^检测模型/ }).fill('fixture-create-model')
     await creation.getByRole('textbox', { name: /^题目/ }).fill('question')
     await creation.getByRole('textbox', { name: /^参考答案/ }).fill('answer')
     await creation.getByRole('radio', { name: '独立判题分组', exact: true }).check()
-    await creation.getByRole('textbox', { name: /^判题模型/ }).fill('fixture-judge')
+    await creation.getByRole('combobox', { name: /^判题模型/ }).fill('fixture-judge')
     await creation.getByRole('combobox', { name: '推理强度', exact: true }).click()
-    await page.getByRole('option', { name: 'high', exact: true }).click()
+    await page.getByRole('option', { name: /^high（/ }).click()
     assert.equal(await creation.getByRole('spinbutton', { name: '检测频率', exact: true }).inputValue(), '120')
     await creation.getByRole('spinbutton', { name: '检测频率', exact: true }).fill('90')
     await creation.getByRole('combobox', { name: '处理方式', exact: true }).click()
@@ -372,7 +447,7 @@ async function main() {
     await creation.getByRole('combobox', { name: /^检测模式/ }).click()
     await page.getByRole('option', { name: '状态探针', exact: true }).click()
     assert.equal(await creation.getByRole('textbox', { name: /^题目/ }).count(), 0)
-    assert.equal(await creation.getByRole('textbox', { name: /^判题模型/ }).count(), 0)
+    assert.equal(await creation.getByRole('combobox', { name: /^判题模型/ }).count(), 0)
     assert.equal(await creation.getByRole('spinbutton', { name: '每轮并行答题次数' }).count(), 0)
     await creation.getByRole('combobox', { name: /^检测模式/ }).click()
     await page.getByRole('option', { name: '题目检测', exact: true }).click()
@@ -380,7 +455,7 @@ async function main() {
     await creation.getByRole('combobox', { name: /^检测模式/ }).click()
     await page.getByRole('option', { name: '状态探针', exact: true }).click()
     await accountPicker.getByRole('checkbox', { name: 'sample-02@example.test', exact: true }).check()
-    await creation.getByRole('textbox', { name: /^检测模型/ }).fill('fixture-model')
+    await creation.getByRole('combobox', { name: /^检测模型/ }).fill('fixture-model')
     await creation.getByRole('combobox', { name: '处理方式', exact: true }).click()
     assert.equal(await page.getByRole('option', { name: /^开启Excel模式/ }).count(), 0)
     await page.getByRole('option', { name: '应用账号模板', exact: true }).click()

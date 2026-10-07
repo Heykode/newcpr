@@ -4,6 +4,7 @@ import { computed } from 'vue'
 
 const props = defineProps<{
   credits: AccountQuotaCredits | null
+  compact?: boolean
 }>()
 
 const integerFormatter = new Intl.NumberFormat('zh-CN')
@@ -29,16 +30,20 @@ const hasBalance = computed(() => !props.credits?.unlimited && balanceDisplay.va
 </script>
 
 <template>
-  <div class="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-cp bg-cp-fill-quaternary px-4 py-3.5" aria-label="额度点数">
-    <span class="text-cp-sm font-heavy text-cp-text">额度点数</span>
+  <div
+    class="flex min-w-0 flex-wrap items-baseline gap-y-1"
+    :class="compact ? 'justify-start gap-x-1.5 text-[10px]' : 'justify-between gap-x-4 rounded-cp bg-cp-fill-quaternary px-4 py-3.5 text-cp-sm'"
+    aria-label="Codex 点数"
+  >
+    <span class="font-heavy text-cp-text">Codex 点数</span>
     <span class="flex min-w-0 items-baseline gap-1.5">
       <strong
-        class="min-w-0 text-right text-cp-sm font-heavy wrap-anywhere"
+        class="min-w-0 text-right font-heavy wrap-anywhere"
         :class="hasBalance ? 'font-mono tabular-nums text-cp-text' : 'text-cp-text-secondary'"
       >
         {{ value }}
       </strong>
-      <span v-if="hasBalance" class="shrink-0 text-cp-xs text-cp-text-tertiary">点</span>
+      <span v-if="hasBalance" class="shrink-0 text-cp-text-tertiary" :class="compact ? 'text-[10px]' : 'text-cp-xs'">点</span>
     </span>
   </div>
 </template>

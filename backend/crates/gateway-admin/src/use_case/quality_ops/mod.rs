@@ -1,6 +1,7 @@
 //! Scheduled answer checks through current account transport, with opt-in quality policy.
 
 mod groups;
+mod models;
 
 use std::{
     str::FromStr as _,

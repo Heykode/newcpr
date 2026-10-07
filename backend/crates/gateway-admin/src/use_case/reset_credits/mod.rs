@@ -12,6 +12,8 @@ use gateway_core::account::ProviderAccountId;
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+mod automatic;
+
 pub struct ResetCreditsService {
     pub(crate) accounts: Arc<dyn AccountsService>,
     pub(crate) store: Option<Arc<dyn ResetCreditsStore>>,
@@ -253,6 +255,20 @@ impl ResetCreditsService {
             .as_ref()
             .ok_or_else(|| AdminError::invalid("未选定重置卡"))?;
         if !item.retry {
+            if let Some((config, previous)) = self
+                .store()?
+                .auto_execution(item.redeem_request_id)
+                .await
+                .map_err(|e| map_store_error(e, "auto reset admission"))?
+            {
+                let current = self.fresh_auto_observation(&account_id, &config).await?;
+                if !current.overlaps(&previous.triggered) {
+                    return Ok((
+                        ResetItemStatus::Skipped,
+                        "额度窗口已恢复或变化，本次未消费".into(),
+                    ));
+                }
+            }
             let current = self
                 .accounts
                 .reset_credits(context, account_id.clone())

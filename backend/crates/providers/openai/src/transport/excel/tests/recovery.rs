@@ -118,6 +118,38 @@ async fn recovery_requires_one_completed_response_and_checks_the_tail() {
 }
 
 #[tokio::test]
+async fn recovery_rejects_failure_events_before_or_after_completion() {
+    let good = completion(json!([message()]));
+    for kind in [
+        "response.failed",
+        "response.incomplete",
+        "response.cancelled",
+        "error",
+    ] {
+        let failure = format!("data: {}\n\n", json!({"type":kind}));
+        for wire in [
+            failure.clone(),
+            format!("{failure}{good}"),
+            format!("{good}{failure}"),
+        ] {
+            for chunk_size in [1, 17, wire.len()] {
+                let chunks: Vec<_> = wire
+                    .as_bytes()
+                    .chunks(chunk_size)
+                    .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                    .collect();
+                let mut verified = verify_stream(Box::pin(stream::iter(chunks)), NONCE.into());
+                assert!(
+                    matches!(verified.next().await, Some(Err(_))),
+                    "must reject {kind} without releasing a successful completion"
+                );
+                assert!(verified.next().await.is_none());
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn recovery_never_releases_completion_before_eof_or_after_transport_failure() {
     let good = Bytes::from(completion(json!([message()])));
     let chunks = vec![
@@ -173,6 +205,16 @@ async fn recovery_http_gate_checks_raw_tail_and_status_without_changing_ordinary
         (
             200,
             format!("{good}data: {{\"type\":\"response.failed\"}}\n\n"),
+            false,
+        ),
+        (
+            200,
+            format!("{good}data: {{\"type\":\"error\"}}\n\n"),
+            false,
+        ),
+        (
+            200,
+            format!("{good}data: {{\"type\":\"response.cancelled\"}}\n\n"),
             false,
         ),
         (201, good.clone(), false),

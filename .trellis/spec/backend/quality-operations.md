@@ -1,5 +1,42 @@
 # Scheduled Quality Checks
 
+## Read-Only Model Suggestions
+
+### Scope / Trigger
+Quality-test/judge suggestions only; no scheduling, model restrictions or public discovery.
+
+### Signatures
+AdminAuth/no-store POST `/api/admin/quality-ops/models` takes
+`{accountIds?:string[],group?:string,statuses?:string[],page:number}` and returns
+`{models:[{id,name,reasoningEfforts}],nextPage,matchedAccounts,knownAccounts,failedAccounts}`.
+`ProviderAdmin::quality_model_choices(account_id, exact)` owns provider-specific discovery.
+
+### Contracts
+One explicit account reads its own native catalog/egress. Excel uses configured models,
+never Codex fallback. Aggregate reads are cache-only, with 100 candidates per page and
+no pool-wide HTTP fanout. Only exact evidence supplies reasoningEfforts; aggregate is null.
+An absent in-memory snapshot is not proof of an empty backing cache: fall back to
+the existing read_account_catalog cache-only method, never a refresh-on-miss API.
+Suggestions never restrict manually entered rule models or mutate account state.
+
+### Validation & Error Matrix
+Auth -> 401; schema -> 422; invalid page/scope -> 400. Account IDs cannot combine with
+group/status filters. Exact failure propagates; aggregate failures increment failedAccounts.
+
+### Good / Base / Bad
+Good: exact-account catalog. Base: rule execution unchanged. Bad: borrow another
+account's capability evidence or query all upstream accounts for a dropdown.
+
+### Tests Required
+Fake-provider exact/cache-only pagination; native loopback selected credential and zero
+aggregate requests; Excel isolation; API auth/no-store/scope; UI pagination/cancellation.
+Cover an uninitialized in-memory catalog with both empty and populated backing caches;
+neither aggregate read may send an upstream request. Run the full Provider admin suite.
+
+### Wrong vs Correct
+Wrong: pool sampler for exact account. Correct: account_catalog_documents for exact
+scope, cached_account_models for aggregate scopes.
+
 ## Excel Paused Recovery
 
 - `ExcelRecoveryConfig` is default-off, account-scoped, and separate from native quality rules.
@@ -13,8 +50,9 @@
   operation metadata, not protocol JSON or prompt-string inference.
 - In the OpenAI provider, validate raw HTTP 200 SSE to EOF before Excel transformation:
   2 MiB total, 1 MiB per line, exactly one completed terminal, final assistant/output_text
-  only (ignore reasoning), and exact trimmed nonce. Reject duplicate terminals, failed/
-  incomplete events, malformed data and transport errors even after completion. Never
+  only (ignore reasoning), and exact trimmed nonce. Reject duplicate terminals, `error`,
+  `response.failed`, `response.incomplete`, `response.cancelled`, malformed data and
+  transport errors before or after completion. Never
   buffer ordinary Excel streams or move wire protocol parsing into Core.
 - Durable PostgreSQL slots bound global probes to three. Request deadline is 45 seconds;
   cancellation drains coordinator finalization before releasing the two-minute crash lease.
@@ -26,6 +64,9 @@
   recovery on later pauses, and never present manual resume as a successful BPS test.
 - Tests: Admin worker nonce/failure/cancel cases, Core trusted marker/completion cases, Store
   real migrations/admission/fences/parallel success, and frontend synthetic mobile/desktop flows.
+  Provider recovery tests must reject every failure terminal before/after the nonce completion,
+  including fragmented streams, without yielding any successful output. The HTTP gate tests
+  must cover error/cancelled tails while retaining ordinary Excel streaming behavior.
 
 ## Dynamic Group Rules
 
