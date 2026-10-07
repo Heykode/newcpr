@@ -1,3 +1,5 @@
+mod retention;
+
 use super::TestDatabase;
 use chrono::{Duration, Utc};
 use gateway_admin::{

@@ -9,6 +9,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import { useLogCleanup } from '../../composables/useLogCleanup'
 import { cleanupBytes, cleanupCategories, cleanupCutoff } from './cleanup'
+import CleanupRetentionInput from './CleanupRetentionInput.vue'
 
 const { state, draft, usage, preview, confirming, busy, refreshing, loading, error, usageError, dirty, running, selected, refreshUsage, save, requestCleanup, confirmCleanup, stop } = useLogCleanup()
 const frequencies = [
@@ -71,7 +72,7 @@ function date(value: string) {
         <span class="font-mono text-sm tabular-nums" :aria-label="`${item.label}当前占用`">
           {{ refreshing ? '读取中...' : usage ? cleanupBytes(usage.items.find(row => row.category === item.key)?.bytes) : '读取失败' }}
         </span>
-        <BaseNumberInput v-model="draft[item.key].retentionDays" :label="`${item.label}保留天数`" unit="天" :min="item.min" :max="item.max" :disabled="busy || running" class="w-fit max-w-full" />
+        <CleanupRetentionInput v-model="draft[item.key].retentionDays" :label="item.label" :max="item.max" :disabled="busy || running" />
       </div>
       <div class="flex flex-wrap items-center gap-x-6 gap-y-4 border-b border-cp-border py-5">
         <BaseSwitch v-model="draft.enabled" label="启用自动清理" show-label :disabled="busy || running" />
@@ -106,7 +107,7 @@ function date(value: string) {
         </BaseButton>
       </div>
       <p class="mb-1 text-cp-xs leading-6 text-cp-text-secondary">
-        保留天数设为0表示清理全部已结束历史。请求日志含诊断轨迹、索引及运维事件；清理后对应历史详情和明细统计不可查，账号、凭据、余额及累计计费保留。
+        全部清理仅包含已结束历史。请求日志含诊断轨迹、索引及运维事件；清理后对应历史详情和明细统计不可查，账号、凭据、余额及累计计费保留。
       </p>
       <p class="my-1 text-cp-xs leading-6 text-cp-text-secondary">
         正在运行的请求、当前活动日志文件和正在运行的采集任务不会删除。数据库释放的空间可能先供内部复用，磁盘占用不一定立即下降；日志和采集文件仅统计、清理当前服务实例。
@@ -117,7 +118,7 @@ function date(value: string) {
         <ul class="m-0 grid gap-3 pl-5 text-sm">
           <template v-for="item in cleanupCategories" :key="item.key">
             <li v-if="preview.config[item.key].selected">
-              {{ item.label }}：清理 {{ date(cleanupCutoff(preview.cutoffAt, preview.config[item.key].retentionDays)) }} 之前的数据
+              {{ item.label }}：{{ preview.config[item.key].retentionDays === 0 ? '全部清理已结束历史' : `保留最近${preview.config[item.key].retentionDays}天` }}，清理 {{ date(cleanupCutoff(preview.cutoffAt, preview.config[item.key].retentionDays)) }} 之前的数据
             </li>
           </template>
         </ul>

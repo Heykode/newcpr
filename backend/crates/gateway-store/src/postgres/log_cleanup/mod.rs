@@ -77,10 +77,9 @@ impl PgLogCleanupStore {
         .fetch_one(&mut **tx)
         .await
         .map_err(unavailable)?;
-        // A zero saved in the cleanup config is an explicit "remove all finished
-        // history" choice. Keep the old runtime settings as a fallback for
-        // configurations written by older clients, but never overwrite zero.
-        if config.requests.retention_days > 0 {
+        // The legacy usage window cannot represent cleanup retention below 31
+        // days. Keep those values (including clear-all) owned by cleanup only.
+        if config.requests.retention_days >= 31 {
             config.requests.retention_days = u32::try_from(days.0).map_err(unavailable)?;
         }
         if config.audit.retention_days > 0 {
@@ -259,8 +258,8 @@ impl LogCleanupStore for PgLogCleanupStore {
             .bind(command.config.next_after(Utc::now()).map_err(invalid)?)
             .execute(&mut *tx).await.map_err(unavailable)?;
         sqlx::query("update runtime_settings
-            set usage_retention_days = case when $1 > 0 then $1 else usage_retention_days end,
-                ops_event_retention_days = case when $1 > 0 then $1 else ops_event_retention_days end,
+            set usage_retention_days = case when $1 >= 31 then $1 else usage_retention_days end,
+                ops_event_retention_days = case when $1 >= 31 then $1 else ops_event_retention_days end,
                 audit_retention_days = case when $2 > 0 then $2 else audit_retention_days end
             where id=1")
             .bind(i64::from(command.config.requests.retention_days))

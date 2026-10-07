@@ -1,10 +1,10 @@
 import type { CleanupCategory, CleanupConfig } from '@/api/modules/log-cleanup'
 
 export const cleanupCategories: { key: CleanupCategory, label: string, min: number, max: number }[] = [
-  { key: 'requests', label: '请求日志（含索引）', min: 0, max: 3650 },
-  { key: 'files', label: '运行日志', min: 0, max: 3650 },
-  { key: 'captures', label: '错误采集记录', min: 0, max: 30 },
-  { key: 'audit', label: '管理员操作日志', min: 0, max: 3650 },
+  { key: 'requests', label: '请求日志（含索引）', min: 1, max: 3650 },
+  { key: 'files', label: '运行日志', min: 1, max: 3650 },
+  { key: 'captures', label: '错误采集记录', min: 1, max: 30 },
+  { key: 'audit', label: '管理员操作日志', min: 1, max: 3650 },
 ]
 export function cleanupBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0)
@@ -20,7 +20,8 @@ export function cleanupCutoff(at: string, days: number): string {
 export function cleanupValidation(config: CleanupConfig): string {
   if (!cleanupCategories.some(({ key }) => config[key].selected))
     return '请选择至少一个清理项目'
-  if (cleanupCategories.some(({ key, min, max }) => !Number.isInteger(config[key].retentionDays) || config[key].retentionDays < min || config[key].retentionDays > max))
+  // Zero is the existing wire encoding for the explicit clear-all checkbox.
+  if (cleanupCategories.some(({ key, min, max }) => config[key].retentionDays !== 0 && (!Number.isInteger(config[key].retentionDays) || config[key].retentionDays < min || config[key].retentionDays > max)))
     return '请检查保留天数'
   return ''
 }
