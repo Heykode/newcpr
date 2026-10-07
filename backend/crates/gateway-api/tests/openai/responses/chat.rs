@@ -1178,3 +1178,44 @@ async fn chat_invalid_parameters_fail_before_account_execution() {
     }
     assert!(execution.captured.lock().expect("capture").is_empty());
 }
+
+#[tokio::test]
+async fn chat_nested_reasoning_reaches_the_existing_execution_in_both_delivery_modes() {
+    for stream in [false, true] {
+        let execution = ChatExecution::new(Scenario::Text);
+        let response = request(
+            Arc::clone(&execution),
+            json!({
+                "model":"model-a", "stream":stream,
+                "messages":[{"role":"user","content":"hello"}],
+                "reasoning_effort":"low",
+                "reasoning":{"effort":"max","summary":"detailed"}
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = read_text(response).await;
+        assert!(text.contains("hello"));
+        let captured = execution.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0]["body"]["reasoning"],
+            json!({"effort":"max","summary":"detailed"})
+        );
+        assert!(captured[0]["body"].get("reasoning_effort").is_none());
+        assert_eq!(captured[0]["context"]["session_id"], "test-session");
+    }
+    let execution = ChatExecution::new(Scenario::Text);
+    let response = request(
+        Arc::clone(&execution),
+        json!({
+            "model":"model-a", "messages":[{"role":"user","content":"hello"}],
+            "reasoning":{"effort":true}
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let error: Value = serde_json::from_str(&read_text(response).await).unwrap();
+    assert_eq!(error["error"]["param"], "reasoning.effort");
+    assert!(execution.captured.lock().unwrap().is_empty());
+}

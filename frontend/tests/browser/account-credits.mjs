@@ -26,6 +26,9 @@ async function main() {
       const errors = []
       const unexpected = []
       let resetReads = 0
+      let autoPolicy = { accountId: accounts[0].id, revision: 0, config: { enabled: false, fiveHourUsedMillis: 100000, sevenDayUsedMillis: 100000 }, checkedAt: null, message: null }
+      let autoWrites = 0
+      let failSave = false
       const row = structuredClone(accounts[0])
       row.quota.credits = { hasCredits: true, unlimited: false, balance: '123.45' }
       page.on('pageerror', error => errors.push(error.message))
@@ -40,6 +43,18 @@ async function main() {
         if (!url.pathname.startsWith('/dev/api/'))
           return route.continue()
         const path = url.pathname.replace(/^\/dev/, '')
+        if (path === '/api/admin/accounts/reset-credits/automatic') {
+          if (request.method() === 'POST') {
+            autoWrites++
+            if (failSave)
+              return route.fulfill({ status: 503, json: { code: 503, message: 'fixture unavailable' } })
+            const body = request.postDataJSON()
+            assert.equal(body.accountId, row.id)
+            assert.equal(body.revision, autoPolicy.revision)
+            autoPolicy = { ...autoPolicy, config: body.config, revision: autoPolicy.revision + 1 }
+          }
+          return fulfill(route, autoPolicy)
+        }
         if (path === '/api/admin/auth/refresh' && request.method() === 'POST')
           return fulfill(route, { authenticated: true })
         if (['/api/admin/relogin/accounts/query', '/api/admin/accounts/reset-credits/cache'].includes(path) && request.method() === 'POST')
@@ -94,6 +109,31 @@ async function main() {
         await page.screenshot({ path: `${output}/credits-${width}.png` })
         await panel.getByRole('button', { name: '查看主动重置卡', exact: true }).click()
         await page.getByRole('dialog').getByText('可用 0 次', { exact: true }).waitFor()
+        const auto = page.getByRole('dialog').getByRole('region', { name: '自动使用重置卡' })
+        const toggle = auto.getByRole('switch', { name: '自动重置', exact: true })
+        await toggle.waitFor()
+        assert.equal(await toggle.isChecked(), false)
+        assert.equal(autoWrites, 0, 'opening controls must not authorize consumption')
+        await toggle.locator('..').click()
+        assert.equal(await toggle.isChecked(), true)
+        await auto.getByRole('spinbutton', { name: '5 小时已用阈值', exact: true }).fill('75.5')
+        await auto.getByRole('spinbutton', { name: '7 天已用阈值', exact: true }).fill('0')
+        await auto.getByRole('button', { name: '保存自动重置', exact: true }).click()
+        await auto.getByText('设置已保存；已发送的重置请求不受关闭操作影响。').waitFor()
+        assert.deepEqual(autoPolicy.config, { enabled: true, fiveHourUsedMillis: 75500, sevenDayUsedMillis: 0 })
+        assert.ok(await auto.evaluate(el => el.scrollWidth <= el.clientWidth + 1))
+        await auto.scrollIntoViewIfNeeded()
+        await page.screenshot({ path: `${output}/auto-reset-${width}.png`, animations: 'disabled' })
+        failSave = true
+        await toggle.locator('..').click()
+        await auto.getByRole('button', { name: '保存自动重置', exact: true }).click()
+        await auto.getByRole('alert').waitFor()
+        assert.equal(await auto.getByRole('button', { name: '保存自动重置', exact: true }).isDisabled(), true)
+        failSave = false
+        await auto.getByRole('button', { name: '刷新自动重置设置', exact: true }).click()
+        await auto.getByRole('alert').waitFor({ state: 'hidden' })
+        await auto.locator('input[role="switch"]:checked').waitFor({ state: 'attached' })
+        assert.equal(await toggle.isChecked(), true, 'fresh authoritative policy wins after uncertain save')
         assert.equal(resetReads, 1)
         assert.equal(await credits.getByText('123.45', { exact: true }).count(), 1)
 

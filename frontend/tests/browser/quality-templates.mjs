@@ -54,6 +54,8 @@ async function main() {
     await page.route('**/dev/api/admin/quality-ops/**', async (route) => {
       const path = new URL(route.request().url()).pathname.split('/quality-ops/')[1]
       const body = route.request().method() === 'POST' ? route.request().postDataJSON() : null
+      if (path === 'models')
+        return fulfill(route, { models: [], nextPage: null, matchedAccounts: 3, knownAccounts: 0, failedAccounts: 0 })
       if (path === 'templates')
         return failCatalog ? fail(route) : fulfill(route, templates)
       if (path === 'templates/save') {
@@ -114,11 +116,11 @@ async function main() {
     await page.goto(`http://127.0.0.1:${port}/quality-ops?tab=templates`)
     await page.getByRole('button', { name: '新建规则模板', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '新建规则模板', exact: true })
-    assert.equal(await editor.getByRole('textbox', { name: /^检测模型/ }).inputValue(), 'gpt-6-astra')
+    assert.equal(await editor.getByRole('combobox', { name: /^检测模型/ }).inputValue(), 'gpt-6-astra')
     assert.equal(await editor.getByRole('spinbutton', { name: '检测频率', exact: true }).inputValue(), '120')
     await editor.getByRole('textbox', { name: /^模板名称/ }).fill('每六小时检测')
-    await editor.getByRole('textbox', { name: /^检测模型/ }).fill('fixture-model')
-    assert.equal(await editor.getByRole('textbox', { name: /^判题模型/ }).count(), 0)
+    await editor.getByRole('combobox', { name: /^检测模型/ }).fill('fixture-model')
+    assert.equal(await editor.getByRole('combobox', { name: /^判题模型/ }).count(), 0)
     assert.equal(await editor.getByText('被测账号', { exact: true }).count(), 0)
     await bounds('editor', editor)
     await editor.getByRole('button', { name: '保存', exact: true }).click()

@@ -239,6 +239,8 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
         first_tables,
         [
             "_sqlx_migrations",
+            "account_auto_reset_jobs",
+            "account_auto_reset_policies",
             "account_cumulative_cost_entries",
             "account_cumulative_costs",
             "account_excel_recovery",

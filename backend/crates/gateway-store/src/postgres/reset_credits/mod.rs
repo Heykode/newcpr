@@ -15,6 +15,8 @@ use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+mod automatic;
+
 pub struct PgResetCreditsStore(pub PgPool);
 
 fn unavailable(_: impl std::fmt::Display) -> AdminStoreError {
@@ -123,6 +125,49 @@ impl PgResetCreditsStore {
 
 #[async_trait]
 impl ResetCreditsStore for PgResetCreditsStore {
+    async fn auto_policy(&self, account_id: &str) -> AdminStoreResult<AutoResetPolicy> {
+        self.auto_policy_inner(account_id).await
+    }
+    async fn save_auto_policy(
+        &self,
+        account_id: &str,
+        revision: i64,
+        config: AutoResetConfig,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AutoResetPolicy> {
+        self.save_auto_inner(account_id, revision, config, context)
+            .await
+    }
+    async fn claim_auto_check(&self) -> AdminStoreResult<Option<AutoResetCheck>> {
+        self.claim_auto_inner().await
+    }
+    async fn finish_auto_check(
+        &self,
+        check: &AutoResetCheck,
+        observation: Option<AutoResetObservation>,
+        credit: Option<gateway_admin::model::provider_credentials::ProviderResetCredit>,
+        message: &str,
+    ) -> AdminStoreResult<()> {
+        self.finish_auto_inner(check, observation, credit, message)
+            .await
+    }
+    async fn auto_execution(
+        &self,
+        request: Uuid,
+    ) -> AdminStoreResult<Option<(AutoResetConfig, AutoResetObservation)>> {
+        let mut tx = self.locked().await?;
+        Self::validate_auto_send(&mut tx, request, false).await?;
+        let row: Option<(Value, Value)> = sqlx::query_as(
+            "select p.config,j.observation from account_auto_reset_jobs j
+            join account_auto_reset_policies p on p.account_id=j.account_id where j.request_id=$1",
+        )
+        .bind(request)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        row.map(|(config, observation)| Ok((decode(config)?, decode(observation)?)))
+            .transpose()
+    }
     async fn inventories(&self, ids: &[String]) -> AdminStoreResult<Vec<ResetInventory>> {
         let values: Vec<Value> = sqlx::query_scalar(
             "select document from account_reset_inventories where account_id=any($1)",
@@ -303,6 +348,15 @@ impl ResetCreditsStore for PgResetCreditsStore {
                         Self::write_batch(&mut tx, &batch).await?;
                         continue;
                     }
+                    if Self::validate_auto_send(&mut tx, item.redeem_request_id, item.retry)
+                        .await
+                        .is_err()
+                    {
+                        item.status = ResetItemStatus::Skipped;
+                        item.message = "自动重置授权或观测已变化，本次未消费".into();
+                        Self::write_batch(&mut tx, &batch).await?;
+                        continue;
+                    }
                     item.status = ResetItemStatus::Running;
                     item.claim_id = Some(Uuid::new_v4());
                     item.updated_at = Utc::now();
@@ -326,6 +380,9 @@ impl ResetCreditsStore for PgResetCreditsStore {
                 && i.status == ResetItemStatus::Running
         }) {
             item.updated_at = Utc::now();
+            sqlx::query("update account_auto_reset_policies p set message=$2 from account_auto_reset_jobs j
+                where j.request_id=$1 and p.account_id=j.account_id and p.revision=j.policy_revision")
+                .bind(item.redeem_request_id).bind(&item.message).execute(&mut *tx).await.map_err(unavailable)?;
             *current = item;
             Self::write_batch(&mut tx, &batch).await?;
         }
@@ -339,6 +396,7 @@ impl ResetCreditsStore for PgResetCreditsStore {
     ) -> AdminStoreResult<ResetConsumePermit> {
         let mut tx = self.locked().await?;
         let identity = Self::identity(&mut tx, command.account_id.as_str()).await?;
+        Self::validate_auto_send(&mut tx, command.redeem_request_id, true).await?;
         let planned: Option<Value> = sqlx::query_scalar(
             "select identities->($2::text) from account_reset_batches
              where document->'items' @> jsonb_build_array(jsonb_build_object('redeemRequestId',$1::text))",
@@ -380,6 +438,16 @@ impl ResetCreditsStore for PgResetCreditsStore {
             values($1,$2,$3,'running',$4,$5) on conflict(request_id) do update set status='running',claim_id=$4,updated_at=now()")
             .bind(command.redeem_request_id).bind(command.account_id.as_str()).bind(&command.credit_id).bind(claim).bind(identity)
             .execute(&mut *tx).await.map_err(unavailable)?;
+        // Queuing is reversible; fence the window only when the durable consume permit is issued.
+        sqlx::query(
+            "update account_auto_reset_policies p set last_trigger=j.observation->'triggered'
+            from account_auto_reset_jobs j where j.request_id=$1 and p.account_id=j.account_id
+            and p.revision=j.policy_revision",
+        )
+        .bind(command.redeem_request_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
         Self::audit(
             &mut tx,
             context,

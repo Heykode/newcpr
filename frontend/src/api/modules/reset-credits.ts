@@ -28,6 +28,24 @@ export interface ResetBatch {
   items: ResetBatchItem[]
 }
 const base = '/api/admin/accounts/reset-credits'
+export interface AutoResetConfig {
+  enabled: boolean
+  fiveHourUsedMillis: number
+  sevenDayUsedMillis: number
+}
+export interface AutoResetPolicy {
+  accountId: string
+  revision: number
+  config: AutoResetConfig
+  checkedAt: string | null
+  message: string | null
+}
+export function getAutoResetPolicy(accountId: string, options: RequestOptions = {}) {
+  return request<AutoResetPolicy>({ url: `${base}/automatic`, method: 'GET', params: { accountId }, ...options })
+}
+export function saveAutoResetPolicy(accountId: string, revision: number, config: AutoResetConfig) {
+  return request<AutoResetPolicy>({ url: `${base}/automatic`, method: 'POST', data: { accountId, revision, config }, silent: true })
+}
 export function getResetInventory(accountIds: string[], options: RequestOptions = {}) {
   return request<ResetInventory[]>({ url: `${base}/cache`, method: 'POST', data: { accountIds }, ...options })
 }

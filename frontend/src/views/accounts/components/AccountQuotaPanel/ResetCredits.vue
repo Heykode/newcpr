@@ -10,6 +10,7 @@ import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
+import AutoReset from './AutoReset.vue'
 import AccountQuotaCredits from './Credits.vue'
 import UsageLimits from './UsageLimits.vue'
 
@@ -158,6 +159,7 @@ function handleRequestConsume(creditId: string) {
 
     <div v-else class="grid gap-4">
       <UsageLimits :windows="account.quota.windows" />
+      <AutoReset :account-id="account.id" :native="account.authenticationKind === 'oauth' && account.responsesUpstream !== 'excel'" />
 
       <section v-if="ambiguous" class="flex items-start gap-3 rounded-cp bg-cp-warning-container px-4 py-3.5" role="status">
         <AlertTriangle class="mt-0.5 size-4 shrink-0 text-cp-warning-on-container" />

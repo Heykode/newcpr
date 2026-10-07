@@ -1,5 +1,38 @@
 # Scheduled Quality Checks
 
+## Read-Only Model Suggestions
+
+### Scope / Trigger
+Quality-test/judge suggestions only; no scheduling, model restrictions or public discovery.
+
+### Signatures
+AdminAuth/no-store POST `/api/admin/quality-ops/models` takes
+`{accountIds?:string[],group?:string,statuses?:string[],page:number}` and returns
+`{models:[{id,name,reasoningEfforts}],nextPage,matchedAccounts,knownAccounts,failedAccounts}`.
+`ProviderAdmin::quality_model_choices(account_id, exact)` owns provider-specific discovery.
+
+### Contracts
+One explicit account reads its own native catalog/egress. Excel uses configured models,
+never Codex fallback. Aggregate reads are cache-only, with 100 candidates per page and
+no pool-wide HTTP fanout. Only exact evidence supplies reasoningEfforts; aggregate is null.
+Suggestions never restrict manually entered rule models or mutate account state.
+
+### Validation & Error Matrix
+Auth -> 401; schema -> 422; invalid page/scope -> 400. Account IDs cannot combine with
+group/status filters. Exact failure propagates; aggregate failures increment failedAccounts.
+
+### Good / Base / Bad
+Good: exact-account catalog. Base: rule execution unchanged. Bad: borrow another
+account's capability evidence or query all upstream accounts for a dropdown.
+
+### Tests Required
+Fake-provider exact/cache-only pagination; native loopback selected credential and zero
+aggregate requests; Excel isolation; API auth/no-store/scope; UI pagination/cancellation.
+
+### Wrong vs Correct
+Wrong: pool sampler for exact account. Correct: account_catalog_documents for exact
+scope, cached_account_models for aggregate scopes.
+
 ## Excel Paused Recovery
 
 - `ExcelRecoveryConfig` is default-off, account-scoped, and separate from native quality rules.

@@ -59,6 +59,8 @@ async function main() {
     await page.route('**/dev/api/admin/quality-ops/**', async (route) => {
       const path = new URL(route.request().url()).pathname.split('/quality-ops/')[1]
       const body = route.request().method() === 'POST' ? route.request().postDataJSON() : null
+      if (path === 'models')
+        return fulfill(route, { models: [], nextPage: null, matchedAccounts: 2, knownAccounts: 0, failedAccounts: 0 })
       if (path === 'groups')
         return fulfill(route, groups)
       if (path === 'groups/save') {
@@ -105,17 +107,19 @@ async function main() {
     await page.getByText('暂无分组规则', { exact: true }).waitFor()
     await page.getByRole('button', { name: '新建分组规则', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '新建分组规则', exact: true })
+    await editor.getByRole('combobox', { name: /^检测模式/ }).click()
+    await page.getByRole('option', { name: '题目检测', exact: true }).click()
     await editor.getByRole('textbox', { name: /^分组规则名称/ }).fill('自动监测测试组')
     await editor.getByRole('group', { name: /^被测分组/ }).getByRole('radio', { name: '测试分组', exact: true }).check()
     await editor.getByRole('checkbox', { name: '正常', exact: true }).locator('..').click()
-    await editor.getByRole('textbox', { name: /^检测模型/ }).fill('fixture-model')
+    await editor.getByRole('combobox', { name: /^检测模型/ }).fill('fixture-model')
     await editor.getByRole('group', { name: /^判题账号分组/ }).getByRole('radio', { name: '测试分组', exact: true }).check()
-    await editor.getByRole('textbox', { name: /^判题模型/ }).fill('fixture-judge')
+    await editor.getByRole('combobox', { name: /^判题模型/ }).fill('fixture-judge')
     await bounds('group-editor', editor)
     await editor.getByRole('button', { name: '保存', exact: true }).click()
     await editor.waitFor({ state: 'hidden' })
     assert.deepEqual(groups[0].filter, { group: 'fixture-group', statuses: ['normal'] })
-    assert.equal(groups[0].config.intervalSeconds, 60)
+    assert.equal(groups[0].config.intervalSeconds, 120)
     await bounds('group-list')
     await page.getByRole('button', { name: '暂停分组规则', exact: true }).click()
     await page.getByRole('button', { name: '恢复分组规则', exact: true }).waitFor()

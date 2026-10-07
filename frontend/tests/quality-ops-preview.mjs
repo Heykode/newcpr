@@ -78,6 +78,11 @@ async function main() {
               data = rules
             if (path === '/api/admin/quality-ops/runs')
               data = []
+            if (path === '/api/admin/quality-ops/groups' || path === '/api/admin/quality-ops/templates')
+              data = []
+          }
+          else if (request.method === 'POST' && path === '/api/admin/auth/refresh') {
+            data = { authenticated: true }
           }
           else if (request.method === 'POST' && path.startsWith('/api/admin/quality-ops/')) {
             try {
@@ -90,6 +95,18 @@ async function main() {
                 chunks.push(chunk)
               }
               const body = JSON.parse(Buffer.concat(chunks).toString())
+              if (path.endsWith('/models')) {
+                data = {
+                  models: [
+                    { id: 'example-model', name: 'Example model', reasoningEfforts: body.accountIds?.length === 1 ? ['low', 'high'] : null },
+                    { id: 'example-judge', name: 'Example judge', reasoningEfforts: null },
+                  ],
+                  nextPage: null,
+                  matchedAccounts: body.accountIds?.length || accounts.length,
+                  knownAccounts: body.accountIds?.length || accounts.length,
+                  failedAccounts: 0,
+                }
+              }
               if (path.endsWith('/save')) {
                 const rule = { id: body.id || randomUUID(), revision: (body.revision || 0) + 1, config: body.config, nextRunAt: new Date().toISOString(), running: false, pending: false, lastStatus: null, lastRunAt: null }
                 rules = [...rules.filter(item => item.id !== rule.id), rule]

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { QualityBatchResult, QualityEditableField } from './batch-edit'
-import type { QualityRule, QualityRuleConfig } from '@/api/modules/quality-ops'
+import type { QualityModelChoice, QualityRule, QualityRuleConfig } from '@/api/modules/quality-ops'
 import { Save, Square } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { getQualityRules, saveQualityRule } from '@/api/modules/quality-ops'
@@ -8,15 +8,16 @@ import AccountTemplatePicker from '@/components/account-templates/AccountTemplat
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import FormItem from '@/components/base/BaseForm/FormItem.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { buildQualityPatch, qualityEditableFields, saveQualityBatch } from './batch-edit'
 import { failureActionOptions } from './failure-actions'
+import { qualityEffortOptions } from './model-choices'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
+import QualityModelPicker from './QualityModelPicker.vue'
 import QualitySchedule from './QualitySchedule.vue'
 import { DEFAULT_QUALITY_INTERVAL_SECONDS } from './schedule'
 
@@ -61,6 +62,9 @@ const labels: Record<QualityEditableField, string> = {
 }
 const fields = ref<QualityEditableField[]>([])
 const draft = ref<QualityRuleConfig>({ ...props.defaultConfig, failureGroupIds: [] })
+const testModels = ref<QualityModelChoice[]>([])
+const modelScope = computed(() => ({ accountIds: [...new Set(props.rules.filter(rule => props.selectedIds.includes(rule.id)).map(rule => rule.config.accountId))] }))
+const effortOptions = computed(() => qualityEffortOptions(testModels.value, draft.value.model, draft.value.reasoningEffort ?? ''))
 const selectedTemplate = computed({
   get: () => draft.value.failureTemplate ?? null,
   set: (value) => { draft.value.failureTemplate = value },
@@ -81,6 +85,7 @@ let alive = true
 let controller: AbortController | undefined
 
 watch(open, (value) => {
+  testModels.value = []
   if (!value)
     return
   const first = props.rules.find(rule => props.selectedIds.includes(rule.id))?.config ?? props.defaultConfig
@@ -173,9 +178,10 @@ onBeforeUnmount(() => {
           <FormItem v-else :label="labels[field]">
             <BaseSelect v-if="field === 'detectionMode'" v-model="draft.detectionMode" :options="[{ value: 'answer', label: '题目检测' }, { value: 'state_probe', label: '状态探针' }]" />
             <BaseSelect v-else-if="field === 'failureAction'" v-model="draft.failureAction" :options="failureActionOptions(draft.failureAction)" />
-            <BaseSelect v-else-if="field === 'reasoningEffort'" v-model="effort" :options="[{ value: '', label: '按默认' }, ...['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ value, label: value }))]" />
+            <BaseSelect v-else-if="field === 'reasoningEffort'" v-model="effort" :options="effortOptions" />
             <BaseTextarea v-else-if="field === 'prompt' || field === 'referenceAnswer' || field === 'judgePrompt'" v-model="draft[field]" :rows="3" />
-            <BaseInput v-else-if="field === 'model' || field === 'judgeModel'" v-model="draft[field]" />
+            <QualityModelPicker v-else-if="field === 'model'" v-model="draft.model" :scope="modelScope" @choices="testModels = $event" />
+            <QualityModelPicker v-else-if="field === 'judgeModel'" v-model="draft.judgeModel" :scope="{ group: draft.judgeGroupId }" />
           </FormItem>
         </template>
       </div>

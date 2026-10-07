@@ -1,5 +1,35 @@
 # Protocol Compatibility Contracts
 
+## Chat Reasoning Aliases
+
+### Scope / Trigger
+Only Chat decoding; native Responses, scheduling, identity stripping and encoders unchanged.
+
+### Signatures
+decode_chat_request accepts flat reasoning_effort and nested reasoning:{effort,summary}.
+Output uses the existing Responses reasoning object.
+
+### Contracts
+Validate all supplied aliases. Nonempty trimmed nested effort wins; null/empty/missing
+nested effort falls back to valid flat effort. Flat whitespace validation stays strict.
+Accept none/minimal/low/medium/high/xhigh/max. Preserve explicit summary
+(auto/concise/detailed/null); inject no effort or summary defaults.
+
+### Validation & Error Matrix
+Malformed object/effort/summary, unknown nested fields or invalid flat alias -> existing
+invalid-request path, even when the other alias is valid. No fields -> no reasoning.
+
+### Good / Base / Bad
+Good: nested high overrides flat low. Base: valid legacy requests unchanged.
+Bad: ignore an invalid flat alias just because nested effort exists.
+
+### Tests Required
+Alias priority/null/empty/unknown/type tests plus buffered/streaming Chat API forwarding.
+Keep native Responses regression coverage independent.
+
+### Wrong vs Correct
+Wrong: repair JSON in the transport/scheduler. Correct: normalize once at Chat parsing.
+
 ## Downstream Environment and WS Error Projection
 
 - Strip downstream `x-stainless-*`, `sec-ch-ua*`, `sec-fetch-*`, Origin and

@@ -5,6 +5,37 @@ use serde::{Deserialize, Serialize};
 
 pub const QUALITY_MAX_WORKERS: i64 = 10;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityModelChoice {
+    pub id: String,
+    pub name: String,
+    /// None means no capability evidence for this exact account.
+    pub reasoning_efforts: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QualityModelQuery {
+    #[serde(default)]
+    pub account_ids: Vec<String>,
+    #[serde(default)]
+    pub group: String,
+    #[serde(default)]
+    pub statuses: Vec<String>,
+    pub page: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityModelPage {
+    pub models: Vec<QualityModelChoice>,
+    pub next_page: Option<u32>,
+    pub matched_accounts: usize,
+    pub known_accounts: usize,
+    pub failed_accounts: usize,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QualityGroupFilter {

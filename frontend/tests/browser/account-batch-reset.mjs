@@ -27,7 +27,7 @@ async function main() {
   let previews = 0
   let batches = []
   let inventory = []
-  const fixtureAccounts = accounts.slice(0, 3)
+  const fixtureAccounts = accounts.slice(0, 3).map(account => ({ ...account, quota: { ...account.quota, credits: null } }))
   const card = { id: 'card-soon', status: 'available', title: '额度重置', resetType: 'codex', expiresAt: '2026-10-02T01:00:00Z' }
   let currentPreview
   const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
@@ -43,6 +43,7 @@ async function main() {
     const path = url.pathname.replace(/^\/dev/, '')
     switch (path) {
       case '/api/admin/auth/status': return fulfill(route, { authenticated: true })
+      case '/api/admin/auth/refresh': return fulfill(route, { authenticated: true })
       case '/api/admin/system/version': return fulfill(route, { version: 'local-fixture', buildType: 'test' })
       case '/api/admin/accounts':
         return fulfill(route, {
