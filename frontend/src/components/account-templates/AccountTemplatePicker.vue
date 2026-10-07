@@ -14,7 +14,7 @@ import { errorMessage } from '@/utils/async'
 import { accountExcel403Action, excel403ActionLabel } from '@/utils/excel-settings'
 import AccountTemplatesModal from './AccountTemplatesModal.vue'
 
-withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean }>(), { label: '新增账号模板', manage: false })
+withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean, summary?: boolean }>(), { label: '新增账号模板', manage: false, summary: true })
 const selected = defineModel<AccountTemplate | null>({ required: true })
 const managing = shallowRef(false)
 const rows = shallowRef<AccountTemplate[]>([])
@@ -98,7 +98,7 @@ onScopeDispose(() => controller?.abort())
     <p v-if="staleSelection" class="mb-3 break-words text-cp-sm text-cp-error" role="alert">
       所选模板已修改或删除，请重新选择并确认配置。
     </p>
-    <dl v-if="selected" class="mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-cp-sm">
+    <dl v-if="selected && summary" class="mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-cp-sm">
       <dt>模板版本</dt><dd>{{ selected.revision }}</dd>
       <template v-if="selected.config.turnStateInjectionEnabled != null">
         <dt>State</dt><dd>{{ selected.config.turnStateInjectionEnabled ? '开启' : '关闭' }}</dd>

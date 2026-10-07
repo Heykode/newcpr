@@ -38,6 +38,30 @@ pub trait AccountTemplatesService: Send + Sync {
         command: ImportCredentials,
         selection: ReloginTemplateSelection,
     ) -> Result<ImportCredentials, AdminError>;
+    async fn prepare_prefilled_import(
+        &self,
+        mut command: ImportCredentials,
+        selection: ReloginTemplateSelection,
+    ) -> Result<ImportCredentials, AdminError> {
+        let template = self.resolve(selection).await?;
+        let settings = command
+            .settings
+            .as_mut()
+            .ok_or_else(|| AdminError::invalid("缺少导入设置"))?;
+        // The edited form owns settings; the template still supplies its revision fence.
+        settings.template_proxy_mode = Some(
+            if settings.clear_outbound_proxy || command.outbound_proxy_id.is_some() {
+                ImportTemplateProxyMode::Replace
+            } else {
+                ImportTemplateProxyMode::Preserve
+            },
+        );
+        // Preserve legacy template-only State semantics without restoring its retired UI.
+        settings.turn_state_injection_enabled = settings
+            .turn_state_injection_enabled
+            .or(template.config.turn_state_injection_enabled);
+        Ok(command)
+    }
     async fn apply(
         &self,
         account_ids: Vec<String>,

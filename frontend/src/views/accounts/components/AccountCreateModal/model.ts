@@ -1,8 +1,9 @@
 import type { AccountModelAccess } from '@/api'
 import type { AccountTemplate } from '@/api/modules/account-templates'
+import type { AccountEgressDraft, AccountEgressPatch } from '@/utils/account-egress'
 import type { Excel403Action } from '@/utils/excel-settings'
 import type { RequestProxySource } from '@/utils/request-proxy-source'
-import { accountEgressPatch } from '@/utils/account-egress'
+import { accountEgressPatch, sameAccountEgress } from '@/utils/account-egress'
 import { normalizeAccountName } from '@/utils/account-name'
 import { DEFAULT_EXCEL_MODELS_INPUT } from '@/utils/excel-defaults'
 import { excelRecoverySettings, excelSettings } from '@/utils/excel-settings'
@@ -16,6 +17,7 @@ export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
   importTemplate: AccountTemplate | null
+  templateEgress?: { draft: AccountEgressDraft, patch: AccountEgressPatch }
   purchaseAmount: string
   purchaseCycleStart: string
   customName: string
@@ -26,6 +28,7 @@ export interface AccountCreateForm {
   excelEnabled: boolean
   excelModelsFollowGlobal: boolean
   excelCacheCreationAsInput: boolean
+  excelIgnoreEncryptedContent?: boolean
   excel403Action: Excel403Action
   excelRecoveryEnabled: boolean
   excelRecoveryInterval: string
@@ -81,12 +84,23 @@ export function emptyAccountCreateForm(): AccountCreateForm {
 
 export function accountProxyError(form: AccountCreateForm): string | undefined {
   try {
-    accountEgressPatch(form, form.provider === 'openai')
+    accountCreateEgress(form, form.provider === 'openai' || form.provider === 'batch')
     return undefined
   }
   catch (error) {
     return error instanceof Error ? error.message : '请选择出站隧道'
   }
+}
+
+export function accountCreateEgress(form: AccountCreateForm, openai: boolean) {
+  const snapshot = form.templateEgress
+  if (snapshot && sameAccountEgress(form, snapshot.draft)) {
+    const patch = snapshot.patch
+    if (!openai && ((patch.requestProxySource && patch.requestProxySource !== 'account') || (patch.egressMode && patch.egressMode !== 'unchanged')))
+      throw new Error('当前账号平台仅支持服务器直连或指定代理')
+    return { ...patch, ...(!openai ? { requestProxySource: undefined, egressMode: undefined } : {}) }
+  }
+  return accountEgressPatch(form, openai)
 }
 
 export function accountImportSettings(form: AccountCreateForm, provider = form.provider) {
@@ -97,7 +111,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
   const scheduling = parseAccountSchedulingForm(form.concurrencyLimit, form.weight)
   if (!scheduling.valid)
     throw new Error(scheduling.message)
-  const { requestProxySource, egressMode, outboundProxyId } = accountEgressPatch(form, provider === 'openai')
+  const { requestProxySource, egressMode, outboundProxyId } = accountCreateEgress(form, provider === 'openai')
   return {
     ...(outboundProxyId === '' ? { clearOutboundProxy: true } : {}),
     ...(form.purchaseAmount.trim() ? { purchaseCost: purchaseCostPatch(form.purchaseAmount, form.purchaseCycleStart) } : {}),
@@ -108,6 +122,7 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
     ...(form.applyExcel && provider === 'openai'
       ? {
           ...excelSettings(form.excelEnabled, form.excelModelsFollowGlobal, form.excelModels, form.excelCacheCreationAsInput, form.excel403Action),
+          ...(form.excelIgnoreEncryptedContent === undefined ? {} : { excelIgnoreEncryptedContent: form.excelEnabled && form.excelIgnoreEncryptedContent }),
           excelRecovery: excelRecoverySettings(form.excelRecoveryEnabled, form.excelRecoveryInterval),
         }
       : {}),

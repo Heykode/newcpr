@@ -177,8 +177,8 @@ async fn native_recovery_is_opt_in_owned_and_repeats_without_403_markers() {
             .await
             .unwrap();
         assert!(
-            store.claim().await.unwrap().is_none(),
-            "save is not an immediate run"
+            rule.next_run_at <= Utc::now(),
+            "new monitoring is immediately due"
         );
         let degraded = scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
         assert_eq!(degraded.action.as_deref(), Some("excel_enabled"));

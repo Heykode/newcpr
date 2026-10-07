@@ -37,6 +37,7 @@ function loader(dependencies = {}, globals = {}) {
     runInNewContext(outputText, {
       exports,
       AbortController,
+      TextEncoder,
       crypto: webcrypto,
       setTimeout,
       clearTimeout,
@@ -186,18 +187,20 @@ test('failed enrollment preserves the form without assuming the account was crea
   assert.equal(h.reloads(), 0)
 })
 
-test('credential imports freeze shared template selection without copying its configuration', async (t) => {
+test('credential imports freeze template revision while submitting the final editable settings', async (t) => {
   const h = mountOnboarding(t)
   h.input('openai', 'access_token', 'first-token\nsecond-token')
   const template = { id: 'shared-template', revision: 7, config: { enabled: false, groupIds: ['group-a'] } }
   h.state.createForm.value.importTemplate = template
-  Object.assign(h.state.createForm.value, { customName: 'Batch name', proxyMode: 'proxy', proxyId: 'ignored-manual-proxy' })
+  Object.assign(h.state.createForm.value, { customName: 'Batch name', weight: '31', proxyMode: 'proxy', proxyId: 'edited-proxy' })
   await h.state.handleCreate()
   assert.equal(h.submissions.length, 1)
   for (const item of h.submissions[0].items) {
     assert.deepEqual(item.template, { id: 'shared-template', revision: 7 })
     assert.equal('config' in item.template, false)
-    assert.equal('outboundProxyId' in item, false)
+    assert.equal(item.outboundProxyId, 'edited-proxy')
+    assert.equal(item.templateSettingsOverride, true)
+    assert.equal(item.settings.weight, 31)
     assert.equal('overwrite' in item, false)
     assert.equal(item.settings.customName, 'Batch name')
   }
@@ -205,6 +208,92 @@ test('credential imports freeze shared template selection without copying its co
   assert.equal(h.submissions[0].items[0].template.revision, 7)
   h.state.clearCreate()
   assert.equal(h.state.createForm.value.importTemplate, null)
+})
+
+test('first-step template prefill copies present settings and later edits win', () => {
+  const load = loader()
+  const { emptyAccountCreateForm, accountImportSettings, accountCreateEgress } = load('views/accounts/components/AccountCreateModal/model.ts')
+  const { prefillAccountTemplate } = load('views/accounts/components/AccountCreateModal/template.ts')
+  const base = emptyAccountCreateForm()
+  Object.assign(base, { provider: 'openai', customName: 'Keep name', purchaseAmount: '12', excelRecoveryInterval: '37' })
+  const selected = vue.reactive({
+    id: 'template-prefill',
+    revision: 3,
+    config: {
+      name: 'Not an account name',
+      enabled: false,
+      concurrencyLimit: 4,
+      weight: 8,
+      groupIds: ['group-a'],
+      modelAccess: { mode: 'denylist', models: ['model-a'] },
+      responsesUpstream: 'excel',
+      excelModels: ['model-b'],
+      excelCacheCreationAsInput: false,
+      excelIgnoreEncryptedContent: true,
+      excel403Action: 'disable_excel',
+      preserveOutboundProxy: false,
+      outboundProxyId: 'template-proxy',
+      requestProxySource: 'account',
+      egressMode: 'unchanged',
+    },
+  })
+  const form = prefillAccountTemplate(base, selected)
+  assert.equal(form.step, 'settings')
+  assert.equal(form.customName, 'Keep name')
+  assert.equal(form.purchaseAmount, '12')
+  assert.equal(form.enabled, false)
+  assert.equal(form.concurrencyLimit, '4')
+  assert.equal(form.weight, '8')
+  assert.deepEqual([...form.groupIds], ['group-a'])
+  assert.equal(form.applyExcel, true)
+  assert.equal(form.excelEnabled, true)
+  assert.equal(form.excelModelsFollowGlobal, false)
+  assert.equal(form.excelModels, 'model-b')
+  assert.equal(form.excelRecoveryInterval, '37', 'omitted fields keep the form value')
+  assert.equal(form.proxyMode, 'proxy')
+  assert.equal(form.proxyId, 'template-proxy')
+  form.groupIds.push('group-b')
+  form.modelAccess.models.push('model-c')
+  assert.equal(selected.config.groupIds.length, 1)
+  assert.equal(selected.config.modelAccess.models.length, 1)
+  Object.assign(form, { weight: '17', concurrencyLimit: '6', proxyId: 'manual-proxy', excelIgnoreEncryptedContent: false })
+  const settings = accountImportSettings(form)
+  assert.equal(settings.weight, 17)
+  assert.equal(settings.concurrencyLimit, 6)
+  assert.equal(settings.excelIgnoreEncryptedContent, false)
+  assert.equal(accountCreateEgress(form, true).outboundProxyId, 'manual-proxy')
+  const cleared = prefillAccountTemplate(form, null)
+  assert.equal(cleared.importTemplate, null)
+  assert.equal(cleared.weight, '17')
+  assert.equal(cleared.proxyId, 'manual-proxy')
+})
+
+test('partial and legacy templates preserve optional settings and exact exits until edited', () => {
+  const load = loader()
+  const { emptyAccountCreateForm, accountImportSettings, accountCreateEgress } = load('views/accounts/components/AccountCreateModal/model.ts')
+  const { prefillAccountTemplate } = load('views/accounts/components/AccountCreateModal/template.ts')
+  const base = emptyAccountCreateForm()
+  Object.assign(base, { provider: 'openai', applyExcel: true, excelEnabled: true, excelModels: 'existing-model', modelAccess: { mode: 'allowlist', models: ['existing-model'] } })
+  const template = { id: 'legacy', revision: 1, config: { name: 'Legacy', enabled: true, concurrencyLimit: null, weight: 1, groupIds: [], outboundProxyId: null } }
+  const legacy = prefillAccountTemplate(base, template)
+  assert.equal(legacy.excelModels, 'existing-model')
+  assert.equal(legacy.modelAccess, base.modelAccess)
+  assert.equal(legacy.proxyMode, 'legacy')
+  assert.equal(accountImportSettings(legacy).clearOutboundProxy, true)
+  assert.equal('egressMode' in accountImportSettings(legacy), false)
+  assert.equal('requestProxySource' in accountImportSettings(legacy), false)
+  legacy.proxyMode = 'direct'
+  assert.equal(accountImportSettings(legacy).egressMode, 'unchanged')
+  const preserve = prefillAccountTemplate(base, { ...template, config: { ...template.config, preserveOutboundProxy: true } })
+  assert.equal(preserve.proxyMode, 'preserve')
+  assert.equal('clearOutboundProxy' in accountImportSettings(preserve), false)
+  const pool = prefillAccountTemplate(base, { ...template, config: { ...template.config, preserveOutboundProxy: true, requestProxySource: 'proxy_pool' } })
+  assert.equal(pool.proxyMode, 'proxy_pool')
+  assert.equal(accountImportSettings(pool).requestProxySource, 'proxy_pool')
+  assert.equal('clearOutboundProxy' in accountImportSettings(pool), false)
+  assert.throws(() => accountCreateEgress(pool, false), /仅支持/)
+  pool.proxyMode = 'direct'
+  assert.equal(accountCreateEgress(pool, false).outboundProxyId, '')
 })
 
 test('omitted template retains manual settings and template-only changes get a new submission ID', async (t) => {

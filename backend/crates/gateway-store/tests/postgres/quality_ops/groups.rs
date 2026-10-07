@@ -50,6 +50,18 @@ async fn quality_groups_fence_concurrency_independent_rules_and_manual_deletion(
     let owner = if first { &group } else { &other };
     let rule = store.rules().await.unwrap().pop().unwrap();
     assert!(!rule.pending);
+    assert!(rule.next_run_at <= Utc::now());
+    let claim = store.claim().await.unwrap().unwrap();
+    assert_eq!(claim.rule.id, rule.id);
+    assert!(store.claim().await.unwrap().is_none());
+    store
+        .finish(
+            &claim,
+            Utc::now() + Duration::hours(1),
+            vec![answer(QualityVerdict::Correct)],
+        )
+        .await
+        .unwrap();
     let independent = store
         .save(None, None, config("acct_quality_b"), Utc::now(), &context())
         .await
@@ -196,6 +208,7 @@ async fn quality_group_edit_pause_resume_and_detach_preserve_execution_fences() 
             .is_empty()
     );
     let rules = store.rules().await.unwrap();
+    assert!(rules.iter().all(|rule| rule.next_run_at <= Utc::now()));
     store
         .delete_group_rule(&resumed.id, resumed.revision, false, &context())
         .await

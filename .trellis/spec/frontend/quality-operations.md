@@ -64,7 +64,9 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - Template editing/deletion is not live propagation. Label source snapshots as
   source templates, distinctly from failure-remediation account templates.
 - Cancel/fence reads on close/unmount, keep mutation baselines isolated from polling,
-  and never issue an upstream model request just to save or apply a template.
+  and never execute probes in the browser/save handler. Applying an enabled rule
+  for the first time or enabling a disabled rule makes it immediately due for the
+  existing background workers; template catalog edits alone do not run probes.
 - Regressions: `quality-monitoring.test.mjs`, `browser/quality-templates.mjs`, and
   existing `browser/quality-ops.mjs`; verify 1440/390/320px, legacy rules, partial
   outcomes, cancelled confirmations, failed reads, uncertain writes and deep links.
@@ -120,8 +122,9 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
   keeps its account immutable. Do not place a whole picker inside one FormItem.
 - New rules/templates use integer `intervalSeconds`, default 120, range 5–31536000,
   with a seconds input instead of Cron/timezone controls. Summaries and selective
-  batch edits use the same field. The next due time is measured from save or round
-  completion; five-second worker scans and capacity may delay actual start.
+  batch edits use the same field. First activation is due immediately; ordinary
+  edits and subsequent rounds measure the next due time from save or completion.
+  Five-second worker scans and capacity may delay actual start.
   Missing/null interval preserves legacy Cron/timezone, including on unrelated edits
   and saving a rule as a template. Only an explicit switch enables seconds scheduling;
   spreading defaults must not silently convert legacy configs. Repetitions are 1–8

@@ -102,6 +102,8 @@ impl AccountImportSettingsRequest {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportRequest {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub template_settings_override: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<gateway_admin::model::relogin_templates::ReloginTemplateSelection>,
     pub outbound_proxy_id: Option<String>,
@@ -112,6 +114,9 @@ pub struct AccountImportRequest {
 
 impl AccountImportRequest {
     pub fn validate(&self) -> Result<(), WireValidationError> {
+        if self.template_settings_override && (self.template.is_none() || self.settings.is_none()) {
+            return Err(WireValidationError::new("templateSettingsOverride"));
+        }
         if let Some(id) = &self.outbound_proxy_id {
             require_wire_id(id, "outboundProxyId")?;
         }
@@ -154,10 +159,17 @@ impl AccountImportRequest {
             document: provider_document(self.data, "data").map_err(map_wire_error)?,
         };
         if let Some(selection) = self.template {
-            command = templates
-                .prepare_import(command, selection)
-                .await
-                .map_err(map_service_error)?;
+            if self.template_settings_override {
+                command = templates
+                    .prepare_prefilled_import(command, selection)
+                    .await
+                    .map_err(map_service_error)?;
+            } else {
+                command = templates
+                    .prepare_import(command, selection)
+                    .await
+                    .map_err(map_service_error)?;
+            }
         }
         if provider != AccountProvider::OpenAi
             && command
