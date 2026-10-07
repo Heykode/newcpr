@@ -13,8 +13,9 @@
   operation metadata, not protocol JSON or prompt-string inference.
 - In the OpenAI provider, validate raw HTTP 200 SSE to EOF before Excel transformation:
   2 MiB total, 1 MiB per line, exactly one completed terminal, final assistant/output_text
-  only (ignore reasoning), and exact trimmed nonce. Reject duplicate terminals, failed/
-  incomplete events, malformed data and transport errors even after completion. Never
+  only (ignore reasoning), and exact trimmed nonce. Reject duplicate terminals, `error`,
+  `response.failed`, `response.incomplete`, `response.cancelled`, malformed data and
+  transport errors before or after completion. Never
   buffer ordinary Excel streams or move wire protocol parsing into Core.
 - Durable PostgreSQL slots bound global probes to three. Request deadline is 45 seconds;
   cancellation drains coordinator finalization before releasing the two-minute crash lease.
@@ -26,6 +27,9 @@
   recovery on later pauses, and never present manual resume as a successful BPS test.
 - Tests: Admin worker nonce/failure/cancel cases, Core trusted marker/completion cases, Store
   real migrations/admission/fences/parallel success, and frontend synthetic mobile/desktop flows.
+  Provider recovery tests must reject every failure terminal before/after the nonce completion,
+  including fragmented streams, without yielding any successful output. The HTTP gate tests
+  must cover error/cancelled tails while retaining ordinary Excel streaming behavior.
 
 ## Dynamic Group Rules
 
