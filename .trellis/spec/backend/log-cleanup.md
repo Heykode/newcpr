@@ -35,6 +35,7 @@
   文件Unix按分配块统计；读取失败保留未知，不伪造0。
 - 不自动执行物理缩库。页面不展示历史清理结果，只更新当前占用。
 - 真实测试库需显式 `CPR_TEST_DATABASE_URL` 和 `CI=true`，不能将跳过当通过。
+- 清理运行器的暂停时钟/取消回归保留在 `worker.rs` 的私有 `cfg(test)` 内联模块；架构审核只允许精确拥有者和模块名，不导出测试专用生产接口。新增测试须同时跑 gateway 架构检查及工作区测试，不能以 store 专项代替。
 - 新增数据库表时，同步 `connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly`
   的精确表清单并实测生产迁移入口；专项清理测试不能代替迁移回归。
 - 前端格式检查覆盖完整目录，包括浏览器测试 HTML；仅检查 TS/Vue 不足以覆盖 CI。
