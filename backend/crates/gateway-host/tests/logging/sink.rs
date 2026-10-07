@@ -2,6 +2,121 @@ use super::*;
 use gateway_core::health::HealthState;
 use std::time::Duration;
 
+#[cfg(unix)]
+#[test]
+fn blocked_file_output_keeps_http_and_sse_responsive_and_reserves_errors() {
+    const CHILD: &str =
+        "logging::sink::blocked_file_output_keeps_http_and_sse_responsive_and_reserves_errors";
+    if env::var_os(CHILD_PROCESS_ENV).is_some() {
+        let directory = PathBuf::from(env::var_os(LOG_DIRECTORY_ENV).unwrap());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut config = logging_config(directory.clone(), false);
+        config.logging.oauth_recovery = false;
+        config.logging.file.max_file_size_mb = 8;
+        let bundle = runtime.block_on(gateway_host::initialize(config)).unwrap();
+        let health = bundle.logging_health_probe();
+        let date = chrono::Utc::now().date_naive();
+        let fifo = directory.join(format!("{APPLICATION_LOG_FILE_PREFIX}{date}.1.log"));
+        assert!(
+            Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (release, released) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            // A bounded fallback releases a regressed blocking implementation too.
+            let explicitly_released = released.recv_timeout(Duration::from_secs(10)).is_ok();
+            let mut body = String::new();
+            fs::File::open(fifo)
+                .unwrap()
+                .read_to_string(&mut body)
+                .unwrap();
+            (explicitly_released, body)
+        });
+        let payload = "x".repeat(8 * 1024 * 1024);
+        tracing::info!(target: APPLICATION_LOG_TARGET, payload, "rotate before requests");
+        tracing::info!(target: APPLICATION_LOG_TARGET, "block on next segment");
+        runtime.block_on(async {
+            let initial = directory.join(format!("{APPLICATION_LOG_FILE_PREFIX}{date}.log"));
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while fs::metadata(&initial).unwrap().len() < 8 * 1024 * 1024 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }).await.unwrap();
+            let app = axum::Router::new()
+                .route("/admin/test", axum::routing::get(|| async {
+                    tracing::error!(target: APPLICATION_LOG_TARGET, "critical_after_congestion");
+                    "ok"
+                }))
+                .route("/v1/test", axum::routing::get(|| async {
+                    tracing::error!(target: APPLICATION_LOG_TARGET, "critical_after_congestion");
+                    axum::response::Sse::new(futures::stream::iter([
+                        Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data("first")),
+                        Ok(axum::response::sse::Event::default().data("last")),
+                    ]))
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+            for sequence in 0..5_000 {
+                tracing::info!(target: APPLICATION_LOG_TARGET, sequence, "congested regular log");
+            }
+            let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+            for path in ["/admin/test", "/v1/test"] {
+                let response = client.get(format!("http://{address}{path}")).send().await.unwrap();
+                assert!(response.status().is_success());
+                let body = response.text().await.unwrap();
+                if path.starts_with("/v1/") {
+                    assert!(body.contains("first") && body.contains("last"));
+                } else {
+                    assert_eq!(body, "ok");
+                }
+            }
+            let HealthState::Unhealthy(message) = health.check().await else {
+                panic!("queue overflow must be visible");
+            };
+            assert!(message.contains("0 warnings/errors"), "{message}");
+            server.abort();
+            let _ = server.await;
+        });
+        release.send(()).unwrap();
+        drop(bundle);
+        let (explicitly_released, body) = reader.join().unwrap();
+        assert!(
+            explicitly_released,
+            "requests waited for the blocked log reader"
+        );
+        assert_eq!(
+            body.lines()
+                .filter(|line| line.contains("critical_after_congestion"))
+                .count(),
+            2
+        );
+        for line in body.lines() {
+            serde_json::from_str::<serde_json::Value>(line).unwrap();
+        }
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env::current_exe().unwrap())
+        .args(["--exact", CHILD, "--nocapture"])
+        .env(CHILD_PROCESS_ENV, "1")
+        .env(LOG_DIRECTORY_ENV, directory.path())
+        .env("RUST_LOG", "off,logging_test_application=info")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn file_queue_drains_every_record_before_normal_shutdown() {
     if env::var_os(CHILD_PROCESS_ENV).is_some() {

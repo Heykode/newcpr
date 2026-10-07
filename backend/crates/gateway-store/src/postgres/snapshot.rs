@@ -23,6 +23,8 @@ use super::ClientApiKeySnapshot;
 pub struct SnapshotRuntimeSettings {
     pub disable_fast: bool,
     pub responses_max_decompressed_body_bytes: u64,
+    pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub openai_session_binding_ttl_hours: u32,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
     pub max_concurrent_per_account: u32,
@@ -48,6 +50,7 @@ pub struct RuntimeSnapshotData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupData {
+    pub fast_mode: gateway_core::account::FastMode,
     pub id: AccountGroupId,
     pub name: String,
     pub enabled: bool,
@@ -89,15 +92,16 @@ impl PgRuntimeSnapshotRepository {
 #[async_trait]
 impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
     async fn load_runtime_snapshot(&self) -> StoreResult<RuntimeSnapshotData> {
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin runtime snapshot"))?;
+        let mut transaction =
+            self.pool.begin().await.map_err(|error| {
+                postgres_unavailable("begin runtime snapshot").with_source(error)
+            })?;
         sqlx::query("set transaction isolation level repeatable read read only")
             .execute(&mut *transaction)
             .await
-            .map_err(|_| postgres_unavailable("configure runtime snapshot transaction"))?;
+            .map_err(|error| {
+                postgres_unavailable("configure runtime snapshot transaction").with_source(error)
+            })?;
 
         let (config_revision, settings) = load_settings(&mut transaction).await?;
         let client_api_keys = load_client_keys(&mut transaction).await?;
@@ -107,7 +111,7 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
         transaction
             .commit()
             .await
-            .map_err(|_| postgres_unavailable("commit runtime snapshot"))?;
+            .map_err(|error| postgres_unavailable("commit runtime snapshot").with_source(error))?;
 
         let observed_current_revision =
             RuntimeSnapshotRepository::current_config_revision(self).await?;
@@ -128,7 +132,7 @@ impl RuntimeSnapshotRepository for PgRuntimeSnapshotRepository {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("read current config revision"))?
+        .map_err(|error| postgres_unavailable("read current config revision").with_source(error))?
         .ok_or_else(|| StoreError::NotFound {
             entity: "runtime settings",
             id: "1".to_owned(),
@@ -165,7 +169,9 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             .with_request_tuning(to_core_request_tuning(data.settings.request_tuning))
             .with_openai_guardian_reserved_concurrency(
                 data.settings.openai_guardian_reserved_concurrency,
-            );
+            )
+            .with_openai_session_binding_ttl_hours(data.settings.openai_session_binding_ttl_hours)
+            .with_openai_account_affinity(data.settings.openai_account_affinity);
             let client_policies = data
                 .client_api_keys
                 .into_iter()
@@ -184,6 +190,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 .map(|group| {
                     SnapshotAccountGroupFacts::new(group.id, group.name, group.enabled)
                         .with_disable_fast(group.disable_fast)
+                        .with_fast_mode(group.fast_mode)
                 })
                 .collect();
             let provider_accounts = data
@@ -361,6 +368,8 @@ async fn load_settings(
             bool,
             i64,
             i64,
+            i64,
+            String,
         ),
     >(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
@@ -368,12 +377,12 @@ async fn load_settings(
                 model_mappings_json, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, disable_fast,
                 responses_max_decompressed_body_bytes,
-                openai_guardian_reserved_concurrency
+                openai_guardian_reserved_concurrency, openai_session_binding_ttl_hours, openai_account_affinity
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("load snapshot settings"))?
+    .map_err(|error| postgres_unavailable("load snapshot settings").with_source(error))?
     .ok_or_else(|| StoreError::NotFound {
         entity: "runtime settings",
         id: "1".to_owned(),
@@ -381,6 +390,9 @@ async fn load_settings(
     Ok((
         revision_from_i64(row.0)?,
         SnapshotRuntimeSettings {
+            openai_account_affinity: gateway_core::account::AccountAffinity::parse(&row.14)
+                .ok_or_else(|| invalid("invalid account affinity"))?,
+            openai_session_binding_ttl_hours: to_u32(row.13)?,
             refresh_margin_seconds: to_u64(row.1)?,
             refresh_concurrency: to_u32(row.2)?,
             max_concurrent_per_account: to_u32(row.3)?,
@@ -415,7 +427,7 @@ async fn load_client_keys(
     )
     .fetch_all(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("load snapshot client policies"))?;
+    .map_err(|error| postgres_unavailable("load snapshot client policies").with_source(error))?;
     rows.into_iter()
         .map(|row| ClientApiKeySnapshot::from_persisted(row.0, row.1, row.2, row.3, row.4))
         .collect()
@@ -424,15 +436,17 @@ async fn load_client_keys(
 async fn load_account_groups(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<SnapshotAccountGroupData>> {
-    let rows = sqlx::query_as::<_, (String, String, bool, bool)>(
-        "select id, name, enabled, disable_fast from account_groups order by id",
+    let rows = sqlx::query_as::<_, (String, String, bool, bool, String)>(
+        "select id, name, enabled, disable_fast, fast_mode from account_groups order by id",
     )
     .fetch_all(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("load snapshot account groups"))?;
+    .map_err(|error| postgres_unavailable("load snapshot account groups").with_source(error))?;
     rows.into_iter()
-        .map(|(id, name, enabled, disable_fast)| {
+        .map(|(id, name, enabled, disable_fast, fast_mode)| {
             Ok(SnapshotAccountGroupData {
+                fast_mode: gateway_core::account::FastMode::parse(&fast_mode)
+                    .ok_or_else(|| invalid("invalid fast_mode"))?,
                 id: AccountGroupId::new(id).map_err(|_| invalid("invalid account group id"))?,
                 name,
                 enabled,
@@ -455,7 +469,7 @@ async fn load_provider_accounts(
     )
     .fetch_all(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("load snapshot provider accounts"))?;
+    .map_err(|error| postgres_unavailable("load snapshot provider accounts").with_source(error))?;
     rows.into_iter()
         .map(|(id, provider_kind, concurrency_limit, model_access)| {
             Ok(SnapshotProviderAccountData {
@@ -477,7 +491,7 @@ async fn load_group_memberships(
     )
     .fetch_all(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("load snapshot group memberships"))?;
+    .map_err(|error| postgres_unavailable("load snapshot group memberships").with_source(error))?;
     rows.into_iter()
         .map(|(group_id, account_id)| {
             Ok(SnapshotGroupMembershipData {

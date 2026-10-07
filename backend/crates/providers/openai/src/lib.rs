@@ -3,6 +3,7 @@
 mod admin;
 mod admin_user_agent;
 pub mod config;
+mod jitter;
 mod provider;
 mod session_transport;
 
@@ -39,6 +40,7 @@ pub use provider::{
 pub mod credential;
 pub mod transport;
 
+pub use jitter::{quota_failure_refresh_delay, uniform_delay};
 pub use transport::tls::{
     build_reqwest_client_with_custom_ca, build_reqwest_native_client_with_custom_ca,
     ensure_rustls_provider,
@@ -227,10 +229,12 @@ async fn initialize_with_request_tuning_mode(
     .with_session_proxy_pool(ports.session_proxy_pool())
     .with_excel_image_relay(Arc::clone(&image_relay))
     .with_session_identity(session_identity);
-    let core_provider: Arc<dyn Provider> = Arc::new(match &egress_runtime {
+    let core_provider = match &egress_runtime {
         Some(runtime) => core_provider.with_egress_runtime(Arc::clone(runtime)),
         None => core_provider,
-    });
+    };
+    let core_provider: Arc<dyn Provider> =
+        Arc::new(core_provider.with_live_support(repository.clone()));
     let token_client = Arc::new(
         credential::token_client::openai_token_client(
             config.token_client_config(),

@@ -23,6 +23,7 @@ function loadText(text, dependencies = {}, globals = {}) {
     exports,
     require: name => dependencies[name] ?? (name === '@/utils/excel-defaults' ? load('utils/excel-defaults.ts') : require(name)),
     AbortController,
+    setTimeout,
     ...globals,
   })
   return exports
@@ -59,7 +60,7 @@ function requestHarness() {
     'ERR_BAD_RESPONSE',
     config,
     undefined,
-    response(config, { code: 40001, message: 'synthetic failure' }, status),
+    response(config, { code: status === 401 ? 40101 : 40001, message: 'synthetic failure' }, status),
   ))
   return { ...api, ...errors, ...actions, messages, response, fail }
 }
@@ -100,11 +101,12 @@ test('API key exit cleanup retains content, removes plaintext after leave and ca
     state.clearCreatedKey()
     assert.equal(state.createdKey.value, '')
     assert.equal(state.createdKeyName.value, '')
-    const use = load('views/api-keys/composables/useApiKeyUse.ts', {
+    const useModule = load('views/api-keys/composables/useApiKeyUse.ts', {
       vue,
       '@/api/constants': { API_BASE_URL: '' },
       '../utils/ccswitchImport': {},
-    }).useApiKeyUse({ createdKey: state.createdKey, createdKeyName: state.createdKeyName, revealPlaintextKey: async () => 'synthetic-revealed' })
+    })
+    const use = scope.run(() => useModule.useApiKeyUse({ createdKey: state.createdKey, createdKeyName: state.createdKeyName, revealPlaintextKey: async () => 'synthetic-revealed' }))
     await use.openUseKeyModal(row)
     use.showUseKeyModal.value = false
     assert.equal(use.selectedUseKey.value.key, 'synthetic-revealed')
@@ -114,6 +116,15 @@ test('API key exit cleanup retains content, removes plaintext after leave and ca
     use.showUseKeyModal.value = false
     use.clearUseKey()
     assert.equal(use.selectedUseKey.value, null)
+    await use.openUseKeyModal(row)
+    state.createdKey.value = 'synthetic-plaintext'
+    state.createdKeyName.value = 'synthetic-name'
+    state.showKeyModal.value = true
+    assert.equal(use.selectedUseKey.value.key, 'synthetic-revealed')
+    scope.stop()
+    assert.equal(use.selectedUseKey.value, null)
+    assert.equal(state.createdKey.value, '')
+    assert.equal(state.createdKeyName.value, '')
   }
   finally {
     scope.stop()
@@ -213,10 +224,12 @@ test('outbound UA automatic refresh remains silent while manual reload errors re
     '@/components/base/BaseCard.vue': {},
     '@/components/base/BaseCheckbox.vue': {},
     '@/components/base/BaseForm/FormItem.vue': {},
+    '@/components/base/BaseInput.vue': {},
     '@/components/base/BaseSelect.vue': {},
     '@/components/base/BaseTextarea.vue': {},
     '@/components/base/BaseToast': { toast: { success: () => {} } },
     '@/utils/async': { errorMessage: error => error.message },
+    '../composables/userAgentOsVersion': load('views/settings/composables/userAgentOsVersion.ts'),
     './outbound-user-agent-samples': load('views/settings/components/outbound-user-agent-samples.ts', {
       './outbound-user-agent-samples.json': JSON.parse(readFileSync(source('views/settings/components/outbound-user-agent-samples.json'), 'utf8')),
     }),

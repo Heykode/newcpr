@@ -79,6 +79,7 @@ pub struct AccountGroupListQuery {
 /// Complete account group summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroupRecord {
+    pub fast_mode: gateway_core::account::FastMode,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,
@@ -108,6 +109,7 @@ pub struct AccountGroupPage {
 /// Create an account group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateAccountGroup {
+    pub fast_mode: gateway_core::account::FastMode,
     pub name: String,
     pub description: Option<String>,
     pub color: AccountGroupColor,
@@ -117,6 +119,7 @@ pub struct CreateAccountGroup {
 /// Store-ready create command with a generated stable ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAccountGroup {
+    pub fast_mode: gateway_core::account::FastMode,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,
@@ -127,6 +130,7 @@ pub struct NewAccountGroup {
 /// Update an account group's descriptive fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAccountGroup {
+    pub fast_mode: Option<gateway_core::account::FastMode>,
     pub id: AccountGroupId,
     pub name: String,
     pub description: Option<String>,

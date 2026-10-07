@@ -26,7 +26,7 @@ pub use codex::{
     CodexResponsesRequestSemantics, codex_responses_request_semantics,
     codex_responses_request_semantics_with_turn_metadata, codex_session_id, codex_thread_id,
 };
-pub use headers::is_transport_managed_request_header;
+pub use headers::{is_transport_managed_request_header, parse_retry_after_seconds};
 pub use scheduling::{
     OPENAI_SCHEDULING_SESSION_HINT_CONTEXT_KEY, OPENAI_SCHEDULING_SESSION_HINT_HEADERS,
     OpenAiSchedulingSessionHint, is_openai_scheduling_session_hint_header,

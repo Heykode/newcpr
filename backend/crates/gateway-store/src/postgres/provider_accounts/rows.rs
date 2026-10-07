@@ -599,7 +599,7 @@ pub(crate) fn core_store_error(error: StoreError) -> CoreStoreError {
             CoreStoreErrorKind::InvalidData
         }
     };
-    CoreStoreError::new(kind)
+    CoreStoreError::caused_by(kind, error)
 }
 
 pub(crate) fn require_core_update(updated: bool) -> Result<(), CoreStoreError> {

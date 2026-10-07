@@ -88,11 +88,10 @@ pub(crate) async fn provider_account_usage(
           order by selected.sort_position, model_grouping desc, currency_grouping desc,
                    model nulls last, cost_currency nulls last",
     );
-    let rows = statement
-        .build()
-        .fetch_all(pool)
-        .await
-        .map_err(|_| postgres_unavailable("load provider account usage"))?;
+    let rows =
+        statement.build().fetch_all(pool).await.map_err(|error| {
+            postgres_unavailable("load provider account usage").with_source(error)
+        })?;
 
     let mut observations = Vec::with_capacity(usize::from(query.limit));
     let mut costs = HashMap::<String, Vec<CurrencyCostTotal>>::new();
@@ -199,7 +198,9 @@ pub(crate) async fn provider_account_request_buckets(
         .bind(range.end)
         .fetch_all(pool)
         .await
-        .map_err(|_| postgres_unavailable("load provider account request timeline"))?;
+        .map_err(|error| {
+            postgres_unavailable("load provider account request timeline").with_source(error)
+        })?;
 
     let mut observed = HashMap::<String, BTreeMap<u64, (u64, u64, u64, u64)>>::new();
     for row in rows {

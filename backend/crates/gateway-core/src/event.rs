@@ -202,6 +202,7 @@ pub struct ProtocolWireEvent {
     has_json_data: bool,
     raw_sse_frame: Option<Bytes>,
     raw_json_body: Option<Bytes>,
+    raw_http_body: Option<Bytes>,
     sse_id: Option<String>,
     sse_retry: Option<u64>,
 }
@@ -241,6 +242,7 @@ impl ProtocolWireEvent {
             has_json_data: true,
             raw_sse_frame: None,
             raw_json_body: None,
+            raw_http_body: None,
             sse_id,
             sse_retry,
         })
@@ -288,6 +290,7 @@ impl ProtocolWireEvent {
             has_json_data: false,
             raw_sse_frame: Some(raw_sse_frame),
             raw_json_body: None,
+            raw_http_body: None,
             sse_id: None,
             sse_retry: None,
         })
@@ -313,6 +316,27 @@ impl ProtocolWireEvent {
             has_json_data: false,
             raw_sse_frame: None,
             raw_json_body: Some(raw_json_body),
+            raw_http_body: None,
+            sse_id: None,
+            sse_retry: None,
+        })
+    }
+
+    /// Preserve a non-JSON HTTP response body, such as Live SDP, byte for byte.
+    pub fn raw_http_body(
+        protocol: impl Into<String>,
+        raw_http_body: Bytes,
+    ) -> Result<Self, IdentifierError> {
+        let protocol = protocol.into();
+        validate_text(&protocol, 64, true, None)?;
+        Ok(Self {
+            protocol,
+            event_type: None,
+            data: Value::Null,
+            has_json_data: false,
+            raw_sse_frame: None,
+            raw_json_body: None,
+            raw_http_body: Some(raw_http_body),
             sse_id: None,
             sse_retry: None,
         })
@@ -372,6 +396,16 @@ impl ProtocolWireEvent {
         self.raw_json_body
     }
 
+    #[must_use]
+    pub const fn raw_http_body_bytes(&self) -> Option<&Bytes> {
+        self.raw_http_body.as_ref()
+    }
+
+    #[must_use]
+    pub fn into_raw_http_body(self) -> Option<Bytes> {
+        self.raw_http_body
+    }
+
     /// 拆出协议原生 JSON 数据。
     #[must_use]
     pub fn into_data(self) -> Value {
@@ -388,6 +422,7 @@ impl fmt::Debug for ProtocolWireEvent {
             .field("has_json_data", &self.has_json_data)
             .field("has_raw_sse_frame", &self.raw_sse_frame.is_some())
             .field("has_raw_json_body", &self.raw_json_body.is_some())
+            .field("has_raw_http_body", &self.raw_http_body.is_some())
             .field("has_sse_id", &self.sse_id.is_some())
             .field("sse_retry", &self.sse_retry)
             .field("data", &"<not included in Debug>")

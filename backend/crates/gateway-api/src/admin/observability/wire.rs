@@ -802,6 +802,8 @@ pub struct OpsErrorView {
     pub account_id: Option<String>,
     pub account_name: Option<String>,
     pub account_email: Option<String>,
+    pub account_plan_type: Option<String>,
+    pub account_plan_type_display: Option<String>,
     pub route: String,
     pub model: Option<String>,
     pub requested_model: Option<String>,
@@ -826,7 +828,7 @@ pub struct OpsErrorView {
     pub subagent_kind: Option<String>,
     pub compact: Option<bool>,
     pub message: String,
-    /// 上游错误正文或 WebSocket close/error frame 原文；不做脱敏。
+    /// Legacy wire name for restricted diagnostic details and upstream error material.
     pub raw_upstream_error: Option<String>,
     pub metadata: OpsErrorMetadataView,
     pub created_at: DateTime<Utc>,

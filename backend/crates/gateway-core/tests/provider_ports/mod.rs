@@ -195,6 +195,49 @@ fn refresh_policy_should_mark_expired_tokens_due() {
 }
 
 #[test]
+fn account_refresh_windows_are_stable_bounded_and_do_not_change_request_policy() {
+    let policy =
+        ProviderRefreshPolicy::try_new(Duration::from_secs(300), NonZeroU32::new(2).unwrap())
+            .unwrap();
+    let same_policy =
+        ProviderRefreshPolicy::try_new(policy.margin(), policy.concurrency()).unwrap();
+    let observed_at = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+    let mut windows = std::collections::BTreeSet::new();
+    for index in 0..32 {
+        let account = ProviderAccountId::new(format!("acct_refresh_{index}")).unwrap();
+        let window = policy.account_refresh_window(&account);
+        assert_eq!(window, same_policy.account_refresh_window(&account));
+        assert!((policy.margin()..=policy.margin() * 2).contains(&window));
+        assert!(policy.is_refresh_due_for_account(&account, observed_at + window, observed_at));
+        assert!(!policy.is_refresh_due_for_account(
+            &account,
+            observed_at + window + Duration::from_nanos(1),
+            observed_at,
+        ));
+        assert!(policy.is_refresh_due_for_account(
+            &account,
+            observed_at - Duration::from_secs(1),
+            observed_at,
+        ));
+        assert!(!policy.is_refresh_due(
+            observed_at + policy.margin() + Duration::from_nanos(1),
+            observed_at,
+        ));
+        windows.insert(window);
+    }
+    assert!(windows.len() > 1);
+}
+
+#[test]
+fn account_refresh_windows_preserve_subsecond_margins_and_saturate() {
+    let account = ProviderAccountId::new("acct_refresh_boundaries").unwrap();
+    for margin in [Duration::from_nanos(1), Duration::MAX] {
+        let policy = ProviderRefreshPolicy::try_new(margin, NonZeroU32::new(1).unwrap()).unwrap();
+        assert_eq!(policy.account_refresh_window(&account), margin);
+    }
+}
+
+#[test]
 fn scheduling_state_preserves_provider_neutral_signals() {
     let account = ProviderAccountId::new("acct_fixture").expect("valid account");
     let signals = BTreeMap::from([(
@@ -221,4 +264,30 @@ fn scheduling_state_preserves_provider_neutral_signals() {
         CredentialRevision::new(1).expect("positive revision").get(),
         1
     );
+}
+#[test]
+fn binding_tokens_and_aliases_validate_and_keep_routing_keys_opaque() {
+    use gateway_core::provider_ports::{
+        BindingToken, ProviderSessionAffinityKey, ProviderSessionAlias,
+    };
+    for invalid in ["", "UPPER", "space value", "slash/value"] {
+        assert!(BindingToken::new(invalid).is_err());
+    }
+    assert!(BindingToken::new("a".repeat(65)).is_err());
+    let token = BindingToken::generate();
+    assert_eq!(BindingToken::new(token.expose_to_store()).unwrap(), token);
+    assert!(!format!("{token:?}").contains(token.expose_to_store()));
+    let alias = ProviderSessionAlias::new(
+        ProviderSessionAffinityKey::try_new("protected-child-key").unwrap(),
+        false,
+    )
+    .with_root_session_key(Some(
+        ProviderSessionAffinityKey::try_new("protected-root-key").unwrap(),
+    ));
+    assert_eq!(
+        alias.root_session_key().unwrap().expose_to_store(),
+        "protected-root-key"
+    );
+    assert!(!alias.follow_only());
+    assert!(!format!("{alias:?}").contains("protected-"));
 }

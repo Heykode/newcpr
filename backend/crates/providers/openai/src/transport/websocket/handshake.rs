@@ -20,10 +20,8 @@ use crate::{
         responses::CodexResponsesRequest, websocket::websocket_response_create_payload_text,
     },
     transport::{
-        client::{CodexClientVisibleUpstreamResponse, parse_retry_after},
-        diagnostics::CodexUpstreamSendPhase,
-        endpoints::CODEX_RESPONSES_PATH,
-        response_meta, tls,
+        client::CodexClientVisibleUpstreamResponse, diagnostics::CodexUpstreamSendPhase,
+        endpoints::CODEX_RESPONSES_PATH, response_meta, tls,
     },
 };
 
@@ -95,6 +93,13 @@ pub fn responses_websocket_endpoint(base_url: &str) -> String {
     } else {
         endpoint
     }
+}
+
+/// Live sideband 复用同一条拨号路径；不计入请求连接预算。
+pub(super) async fn connect_sideband_websocket(
+    connection: &CodexWebSocketConnection,
+) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
+    connect_websocket(connection).await
 }
 
 pub(super) async fn connect_pumped_websocket(
@@ -387,7 +392,7 @@ fn websocket_opening_error(response: &WsResponse<Option<Vec<u8>>>) -> CodexWebSo
         .headers()
         .get("retry-after")
         .and_then(|value| value.to_str().ok())
-        .and_then(parse_retry_after)
+        .and_then(gateway_protocol::openai::parse_retry_after_seconds)
         .or_else(|| events::retry_after_seconds_from_body(&body));
     CodexWebSocketExchangeError::upstream(
         status_code,

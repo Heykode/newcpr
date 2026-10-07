@@ -453,6 +453,7 @@ fn provider_endpoint_plan_should_not_consult_or_publish_the_text_model_catalog()
     let plan = snapshot
         .plan_provider_endpoint(
             &provider,
+            None,
             &image_operation(),
             snapshot.all_account_scope(),
             &RoutingContext::default(),
@@ -473,6 +474,7 @@ fn provider_endpoint_plan_should_still_respect_circuit_filtering() {
     let error = snapshot
         .plan_provider_endpoint(
             &provider,
+            None,
             &image_operation(),
             snapshot.all_account_scope(),
             &RoutingContext {
@@ -485,6 +487,40 @@ fn provider_endpoint_plan_should_still_respect_circuit_filtering() {
     assert!(matches!(
         error,
         gateway_core::error::RoutingError::NoCapableProviderEndpoint { .. }
+    ));
+}
+
+#[test]
+fn live_endpoint_carries_its_voice_model_without_using_the_text_catalog() {
+    use gateway_core::operation::{ProviderHttpMethod, ProviderHttpRequest, RawHttpPayload};
+    let snapshot = snapshot();
+    let provider = ProviderKind::new("openai").unwrap();
+    let voice_model = UpstreamModelId::new("voice-model").unwrap();
+    let operation = Operation::ProviderHttp(
+        ProviderHttpRequest::new(
+            "live",
+            ProviderHttpMethod::Post,
+            None,
+            vec![],
+            RawHttpPayload::new("openai", bytes::Bytes::from_static(b"v=0\r\n")).unwrap(),
+        )
+        .unwrap(),
+    );
+    let plan = snapshot
+        .plan_provider_endpoint(
+            &provider,
+            Some(&voice_model),
+            &operation,
+            snapshot.all_account_scope(),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    assert_eq!(plan.operation(), OperationKind::ProviderHttp);
+    assert_eq!(plan.candidates()[0].upstream_model(), Some(&voice_model));
+    assert!(plan.candidates()[0].model_presentation().is_none());
+    assert!(!snapshot.contains_public_model_for_provider(
+        &PublicModelId::new("voice-model").unwrap(),
+        &provider
     ));
 }
 

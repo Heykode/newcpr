@@ -9,7 +9,7 @@ import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
-import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
@@ -62,14 +62,16 @@ const description = computed(() => props.group
           :disabled="saving"
         />
       </BaseFormItem>
-      <BaseFormItem
-        label="关闭 Fast 档位"
-        description="绑定此分组的下游 Key 会把顶层 priority/fast 请求收敛为 default"
-      >
-        <BaseSwitch
-          v-model="form.disableFast"
-          label="关闭 Fast 档位"
-          show-label
+      <BaseFormItem label="Fast 模式">
+        <BaseSelect
+          v-model="form.fastMode"
+          class="w-full"
+          aria-label="Fast 模式"
+          :options="[
+            { value: 'default', label: '默认（跟随客户端）' },
+            { value: 'enabled', label: '开启' },
+            { value: 'disabled', label: '关闭' },
+          ]"
           :disabled="saving"
         />
       </BaseFormItem>

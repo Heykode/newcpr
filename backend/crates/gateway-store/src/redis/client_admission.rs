@@ -329,7 +329,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
             .arg(u8::from(request.allow_concurrency_acquire))
             .invoke_async::<i64>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("admit client request"))?;
+            .map_err(|error| redis_unavailable("admit client request").with_source(error))?;
         match code {
             0 => Ok(ClientAdmissionDecision::Granted),
             1 => Ok(ClientAdmissionDecision::Rejected(
@@ -357,7 +357,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
             .arg(model_request_id)
             .query_async::<i64>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("release client request"))?;
+            .map_err(|error| redis_unavailable("release client request").with_source(error))?;
         Ok(removed == 1)
     }
 
@@ -398,7 +398,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
         let (code, restored_recent_requests, restored_running_requests) = invocation
             .invoke_async::<(i64, u64, u64)>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("restore client admission"))?;
+            .map_err(|error| redis_unavailable("restore client admission").with_source(error))?;
         if code == -1 {
             return Err(invalid("request start time is after Redis server time"));
         }
@@ -418,7 +418,7 @@ impl ClientAdmissionRepository for RedisClientAdmissionRepository {
             .arg(&keys)
             .query_async::<i64>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("clear client admission"))?;
+            .map_err(|error| redis_unavailable("clear client admission").with_source(error))?;
         Ok(())
     }
 }
@@ -451,7 +451,9 @@ impl ClientAdmissionPort for RedisClientAdmissionRepository {
                         .arg(redis_duration_millis(ttl)?)
                         .invoke_async::<i64>(&mut connection)
                         .await
-                        .map_err(|_| redis_unavailable("renew client request"))?;
+                        .map_err(|error| {
+                            redis_unavailable("renew client request").with_source(error)
+                        })?;
                     Ok(renewed == 1)
                 })
             },

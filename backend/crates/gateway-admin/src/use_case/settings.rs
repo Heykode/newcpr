@@ -153,7 +153,13 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
         && valid_client_version(command.min_codex_desktop_version.as_deref())
         && valid_client_version(command.min_codex_cli_version.as_deref())
         && i64::try_from(command.request_interval_ms).is_ok();
-    let valid = valid && command.request_tuning.validate();
+    let valid = valid
+        && command.request_tuning.validate()
+        && command
+            .openai_session_binding_ttl_hours
+            .is_none_or(|hours| {
+                gateway_core::account::parse_openai_session_binding_ttl_hours(hours).is_some()
+            });
     if valid {
         Ok(())
     } else {

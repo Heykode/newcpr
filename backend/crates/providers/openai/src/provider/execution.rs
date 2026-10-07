@@ -5,6 +5,45 @@ use gateway_core::metering::{CalculatedCost, Usage};
 use super::*;
 
 impl CodexProvider {
+    pub(super) async fn resolve_turn_affinity(
+        &self,
+        affinity: Option<CodexSessionAffinity>,
+        context: &AttemptContext,
+    ) -> Result<Option<CodexSessionAffinity>, ProviderError> {
+        let Some(affinity) = affinity else {
+            return Ok(None);
+        };
+        let affinity =
+            affinity.with_policy(context.account_selection_policy().openai_account_affinity());
+        if context.is_diagnostic_required_account() {
+            return Ok(Some(affinity));
+        }
+        let Some(alias_key) = affinity.turn_alias_key() else {
+            return Ok(Some(affinity));
+        };
+        let Some(alias) = self
+            .selector
+            .lookup_session_alias(alias_key)
+            .await
+            .map_err(|()| map_selection_error(CredentialSelectionError::Coordinator(None)))?
+        else {
+            return Ok(Some(affinity));
+        };
+        if !affinity.accepts_turn_alias(&alias) {
+            return Err(provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            )
+            .with_retry_prohibited());
+        }
+        let affinity = affinity.with_resolved_turn_alias(&alias);
+        self.selector
+            .validate_followed_turn_alias(&affinity)
+            .await
+            .map_err(map_selection_error)?;
+        Ok(Some(affinity))
+    }
+
     pub(super) async fn execute_image(
         &self,
         image: &ImageRequest,
@@ -94,6 +133,9 @@ impl CodexProvider {
         mut request: RawJsonEndpointRequest,
     ) -> Result<ProviderStream, ProviderError> {
         let selection_started_at = Instant::now();
+        let session_affinity = self
+            .resolve_turn_affinity(request.session_affinity, &context)
+            .await?;
         let lease = match request.upstream_model.as_ref() {
             Some(model) => {
                 self.selector
@@ -102,15 +144,14 @@ impl CodexProvider {
                             upstream_model: model.as_str(),
                             request_url: &request.response_origin,
                             attempt: &context,
-                            session_affinity_key: request
-                                .session_affinity
+                            session_affinity_key: session_affinity
                                 .as_ref()
-                                .map(CodexSessionAffinity::key),
+                                .and_then(CodexSessionAffinity::key),
                             reserved_concurrency: 0,
                             guardian: false,
                         },
                         None,
-                        request.session_affinity.as_ref(),
+                        session_affinity.as_ref(),
                     )
                     .await
             }
@@ -119,7 +160,9 @@ impl CodexProvider {
                     .select_for_provider_endpoint(&SelectCodexProviderEndpointCredential {
                         request_url: &request.response_origin,
                         attempt: &context,
-                        session_affinity: request.session_affinity.as_ref(),
+                        session_affinity: session_affinity.as_ref(),
+                        upstream_model: None,
+                        requires_oauth: false,
                     })
                     .await
             }
@@ -207,10 +250,9 @@ impl CodexProvider {
             &request.body,
             lease.installation_id(),
         );
-        let session = request
-            .session_affinity
+        let session = session_affinity
             .as_ref()
-            .map(CodexSessionAffinity::persistence_hash);
+            .and_then(CodexSessionAffinity::persistence_hash);
         let client = self.account_exit_client(
             &context,
             lease.account(),
@@ -231,8 +273,7 @@ impl CodexProvider {
             selector: Arc::clone(&self.selector),
             quota: Arc::clone(&self.quota),
             lease: Arc::clone(&lease),
-            output_started_at: Instant::now(),
-            session_affinity_key: request.session_affinity.map(CodexSessionAffinity::into_key),
+            session_affinity_key: session_affinity.and_then(CodexSessionAffinity::into_key),
             upstream_model: request.upstream_model,
             excel,
             excel_image,
@@ -270,9 +311,9 @@ pub(super) struct ColdResponse {
     pub(super) quota: Arc<CodexCredentialQuotaService>,
     pub(super) catalog: Arc<CodexCredentialCatalogService>,
     pub(super) lease: Arc<CodexCredentialLease>,
-    pub(super) output_started_at: Instant,
     pub(super) session_affinity_key: Option<ProviderSessionAffinityKey>,
     pub(super) session_affinity_key_hash: Option<String>,
+    pub(super) transport_affinity_key: Option<ProviderSessionAffinityKey>,
     pub(super) session_transport_recovery: CodexSessionTransportRecovery,
     pub(super) websocket_retry_count: u32,
     pub(super) stream_max_retries: u32,
@@ -290,7 +331,6 @@ pub(super) struct ColdJsonResponse {
     pub(super) selector: Arc<CodexCredentialSelector>,
     pub(super) quota: Arc<CodexCredentialQuotaService>,
     pub(super) lease: Arc<CodexCredentialLease>,
-    pub(super) output_started_at: Instant,
     pub(super) session_affinity_key: Option<ProviderSessionAffinityKey>,
     pub(super) upstream_model: Option<UpstreamModelId>,
     pub(super) excel: Option<CodexResponsesRequest>,
@@ -614,15 +654,17 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
         };
         if allows_account_state_mutation && let Some(key) = request.session_affinity_key.as_ref() {
             // JSON 已完整接收；在首个 yield 前提交亲和迁移，避免下游取消漏掉更新。
-            request.selector.update_session_affinity(
+            request.selector.update_session_affinity_binding(
                 key,
-                request.lease.affinity_expected_account_id(),
+                request.lease.affinity_expected_binding(),
                 active_account.id(),
+                request.lease.session_binding_ttl(),
             ).await;
         }
         let mut metrics = response.transport_metrics.clone();
         metrics.first_event_ms = Some(
-            i64::try_from(request.output_started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+            i64::try_from(request.context.timing_started_at().elapsed().as_millis())
+                .unwrap_or(i64::MAX),
         );
         if let Some(mut observation) = codex_response_observation(
             CodexBackendTransport::HttpJson,
@@ -738,9 +780,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         quota,
         catalog,
         lease,
-        output_started_at,
         session_affinity_key,
         session_affinity_key_hash,
+        transport_affinity_key,
         session_transport_recovery,
         websocket_retry_count,
         stream_max_retries,
@@ -846,7 +888,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             request_id: context.request_id().as_str(),
                             attempt_index: context.attempt_index().get(),
                             account_id: active_account.id().as_str(),
-                            session_affinity_key: session_affinity_key.as_ref(),
+                            session_affinity_key: transport_affinity_key.as_ref(),
                             session_affinity_key_hash: session_affinity_key_hash.as_deref(),
                             session_transport_recovery: &session_transport_recovery,
                         },
@@ -980,7 +1022,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 }
                 Err(provider_error(ProviderErrorKind::Timeout, UpstreamSendState::Sent))?;
                 return;
-            };
+            }
             let replay_grace_deadline = pre_commit_events.replay_grace_deadline();
             let next = tokio::select! {
                 biased;
@@ -1074,7 +1116,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                                 request_id: context.request_id().as_str(),
                                 attempt_index: context.attempt_index().get(),
                                 account_id: active_account.id().as_str(),
-                                session_affinity_key: session_affinity_key.as_ref(),
+                                session_affinity_key: transport_affinity_key.as_ref(),
                                 session_affinity_key_hash: session_affinity_key_hash.as_deref(),
                                 session_transport_recovery: &session_transport_recovery,
                             },
@@ -1117,7 +1159,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 observation_state.merge_rate_limit_headers(&rate_limit_update_headers(&updates))
             };
             let first_event_changed =
-                observation_state.observe_stream_chunk(&chunk, output_started_at);
+                observation_state.observe_stream_chunk(&chunk, context.timing_started_at());
             let chunk_len = chunk.len();
             let (mut events, canonical_failure) = match decoder.push(&chunk) {
                 CodexCanonicalOutcome::Events(events) => (events, None),
@@ -1164,9 +1206,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 )
             });
             let timing_signals = decoder.take_timing_signals();
-            let timing_changed = first_event_changed
-                || observation_state
-                    .observe_timing_signals(timing_signals, output_started_at);
+            let output_timing_changed = observation_state
+                .observe_timing_signals(timing_signals, context.timing_started_at());
+            let timing_changed = first_event_changed || output_timing_changed;
             let completed = events
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
@@ -1180,7 +1222,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 && observation_state.mark_completed(terminal_response_is_incomplete(&events));
             if response_transport == CodexBackendTransport::WebSocket
                 && completed && terminal_failure.is_none()
-                && let Some(key) = session_affinity_key.as_ref()
+                && let Some(key) = transport_affinity_key.as_ref()
             {
                 session_transport_recovery.websocket_succeeded(key);
             }
@@ -1214,10 +1256,12 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     selector.record_diagnostic_success(&active_account).await;
                 } else {
                     selector
-                        .record_success(
+                        .record_success_with_parent_binding(
                             &active_account,
                             session_affinity_key.as_ref(),
-                            lease.affinity_expected_account_id(),
+                            lease.affinity_expected_binding(),
+                            lease.guardian_parent_record_key(),
+                            lease.session_binding_ttl(),
                         )
                         .await;
                 }
@@ -1304,7 +1348,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let service_tier_changed = observation_state
             .observe_upstream_service_tier(decoder.response_service_tier());
         let timing_changed = observation_state
-            .observe_timing_signals(timing_signals, output_started_at);
+            .observe_timing_signals(timing_signals, context.timing_started_at());
         let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
         let rate_limits_changed = if updates.is_empty() {
             false
@@ -1355,7 +1399,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             && observation_state.mark_completed(terminal_response_is_incomplete(&events));
         if response_transport == CodexBackendTransport::WebSocket
             && completed && terminal_failure.is_none()
-            && let Some(key) = session_affinity_key.as_ref()
+            && let Some(key) = transport_affinity_key.as_ref()
         {
             session_transport_recovery.websocket_succeeded(key);
         }
@@ -1364,11 +1408,13 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             if lease.is_diagnostic() {
                 selector.record_diagnostic_success(&active_account).await;
             } else {
-                selector
-                    .record_success(
+                    selector
+                        .record_success_with_parent_binding(
                         &active_account,
                         session_affinity_key.as_ref(),
-                        lease.affinity_expected_account_id(),
+                            lease.affinity_expected_binding(),
+                        lease.guardian_parent_record_key(),
+                        lease.session_binding_ttl(),
                     )
                     .await;
             }

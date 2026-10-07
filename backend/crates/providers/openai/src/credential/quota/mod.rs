@@ -65,9 +65,11 @@ const PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 *
 const QUOTA_RESET_GRACE: Duration = Duration::from_secs(2 * 60);
 /// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限。
 const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
-// 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
+const INITIAL_QUOTA_SYNC_MAX_START_DELAY: Duration = Duration::from_secs(10 * 60);
+// 5xx 上游拒绝的短退避重试预算；每次在 1s 到 3s 内随机退避。
 const QUOTA_FETCH_5XX_MAX_RETRIES: u32 = 2;
 const QUOTA_FETCH_5XX_BASE_DELAY: Duration = Duration::from_secs(1);
+const QUOTA_FETCH_5XX_MAX_DELAY: Duration = Duration::from_secs(3);
 const WARMUP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const WARMUP_STREAM_MAX_BYTES: usize = 256 * 1024;
 
@@ -305,6 +307,7 @@ pub struct CodexCredentialQuotaService {
     request_tuning: Option<RequestTuningHandle>,
     scheduling: CodexQuotaSchedulingProjection,
     reset_consume_locks: Mutex<HashMap<ProviderAccountId, Arc<Mutex<()>>>>,
+    initial_sync_delays: Arc<dyn Fn() -> Duration + Send + Sync>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,6 +329,7 @@ struct CodexQuotaProjectionState {
     next_version: u64,
     entries: BTreeMap<ProviderAccountId, CodexQuotaSchedulingEntry>,
     last_periodic_refresh_at: BTreeMap<ProviderAccountId, CodexQuotaRefreshAttempt>,
+    initial_refresh_not_before: BTreeMap<ProviderAccountId, tokio::time::Instant>,
 }
 
 struct CodexQuotaRefreshAttempt {
@@ -384,6 +388,7 @@ impl CodexQuotaSchedulingProjection {
         for account_id in account_ids {
             state.entries.remove(account_id);
             state.last_periodic_refresh_at.remove(account_id);
+            state.initial_refresh_not_before.remove(account_id);
         }
     }
 
@@ -636,6 +641,12 @@ impl CodexCredentialQuotaService {
             request_tuning: None,
             scheduling: CodexQuotaSchedulingProjection::default(),
             reset_consume_locks: Mutex::new(HashMap::new()),
+            initial_sync_delays: Arc::new(|| {
+                crate::jitter::uniform_delay(
+                    crate::jitter::random_u64(),
+                    INITIAL_QUOTA_SYNC_MAX_START_DELAY,
+                )
+            }),
         }
     }
 
@@ -1036,6 +1047,15 @@ impl CodexCredentialQuotaService {
         self.scheduling.invalidate(account_ids);
     }
 
+    #[doc(hidden)]
+    pub fn with_initial_sync_delays(
+        mut self,
+        delays: Arc<dyn Fn() -> Duration + Send + Sync>,
+    ) -> Self {
+        self.initial_sync_delays = delays;
+        self
+    }
+
     pub async fn synchronize(&self) -> Result<CodexQuotaSyncSummary, CodexCredentialQuotaError> {
         let accounts = self.repository.list_for_provider().await?;
         let mut summary = CodexQuotaSyncSummary::default();
@@ -1056,7 +1076,11 @@ impl CodexCredentialQuotaService {
             .into_iter()
             .map(|observation| observation.account_id)
             .collect::<BTreeSet<_>>();
-        let initial = Self::initial_quota_sync_accounts(&accounts, &observed_ids, now);
+        let initial = self.initial_quota_sync_accounts(&accounts, &observed_ids, now);
+        let mut pending_initial = initial
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<BTreeSet<_>>();
         let periodic = self
             .scheduling
             .reserve_periodic_refreshes(accounts, &snapshots, now);
@@ -1085,7 +1109,7 @@ impl CodexCredentialQuotaService {
             match self.fetch_usage(&client, &account).await {
                 Ok(FetchedCodexQuota { account, value }) => {
                     // 单账号解析或落库失败只影响该账号；其余账号继续同步。
-                    if let Err(error) = self
+                    match self
                         .apply_fetched_quota(
                             &account,
                             &value,
@@ -1095,12 +1119,17 @@ impl CodexCredentialQuotaService {
                         )
                         .await
                     {
-                        summary.transient += 1;
-                        tracing::warn!(
-                            account_id = %account.id(),
-                            error = %error,
-                            "OpenAI quota synchronization skipped one account"
-                        );
+                        Ok(()) => {
+                            pending_initial.remove(account.id());
+                        }
+                        Err(error) => {
+                            summary.transient += 1;
+                            tracing::warn!(
+                                account_id = %account.id(),
+                                error = %error,
+                                "OpenAI quota synchronization skipped one account"
+                            );
+                        }
                     }
                 }
                 Err(CodexQuotaFetchError::InvalidCredential) => {
@@ -1141,22 +1170,63 @@ impl CodexCredentialQuotaService {
                 }
             }
         }
+        let mut state = self
+            .scheduling
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = tokio::time::Instant::now();
+        for id in pending_initial {
+            state
+                .initial_refresh_not_before
+                .insert(id, now + (self.initial_sync_delays)());
+        }
         Ok(summary)
     }
 
     /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
     fn initial_quota_sync_accounts(
+        &self,
         accounts: &[ProviderAccount],
         observed_ids: &BTreeSet<ProviderAccountId>,
         now: SystemTime,
     ) -> Vec<ProviderAccount> {
-        accounts
+        let candidates = accounts
             .iter()
             .filter(|account| {
                 !observed_ids.contains(account.id()) && eligible_initial_quota_sync(account, now)
             })
-            .take(INITIAL_QUOTA_SYNC_BATCH)
             .cloned()
+            .collect::<Vec<_>>();
+        let candidate_ids = candidates
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<BTreeSet<_>>();
+        let mut state = self
+            .scheduling
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .initial_refresh_not_before
+            .retain(|id, _| candidate_ids.contains(id));
+        let now = tokio::time::Instant::now();
+        // Draw once per account, including candidates beyond this cycle's batch limit.
+        for account in &candidates {
+            state
+                .initial_refresh_not_before
+                .entry(account.id().clone())
+                .or_insert_with(|| now + (self.initial_sync_delays)());
+        }
+        candidates
+            .into_iter()
+            .filter(|account| {
+                state
+                    .initial_refresh_not_before
+                    .get(account.id())
+                    .is_some_and(|due| *due <= now)
+            })
+            .take(INITIAL_QUOTA_SYNC_BATCH)
             .collect()
     }
 
@@ -1836,7 +1906,7 @@ async fn fetch_usage_with_5xx_retry(
             return result;
         }
         attempt += 1;
-        let delay = QUOTA_FETCH_5XX_BASE_DELAY.saturating_mul(attempt);
+        let delay = random_duration_between(QUOTA_FETCH_5XX_BASE_DELAY, QUOTA_FETCH_5XX_MAX_DELAY);
         tracing::warn!(
             account_id = %prepared.account.id(),
             retry_attempt = attempt,
@@ -1866,6 +1936,23 @@ fn observed_account_plan(current: Option<&str>, observed: Option<&str>) -> Optio
     (!generalized).then_some(plan)
 }
 
+fn random_duration_between(minimum: Duration, maximum_exclusive: Duration) -> Duration {
+    if maximum_exclusive <= minimum {
+        return minimum;
+    }
+    let span = maximum_exclusive.saturating_sub(minimum);
+    let span_millis = u64::try_from(span.as_millis()).unwrap_or(u64::MAX);
+    if span_millis == 0 {
+        return minimum;
+    }
+    let mut random = [0_u8; 8];
+    let offset = if getrandom::fill(&mut random).is_ok() {
+        u64::from_le_bytes(random) % span_millis
+    } else {
+        0
+    };
+    minimum.saturating_add(Duration::from_millis(offset))
+}
 fn eligible_periodic_quota_refresh(account: &ProviderAccount, now: SystemTime) -> bool {
     account.enabled() && access_token_is_current(account, now)
 }

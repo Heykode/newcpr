@@ -29,6 +29,7 @@ export const usageRecordColumns: ConfigurableTableColumn<UsageDisplayRecord>[] =
   { key: 'billing', label: '费用', kind: 'numeric', size: 'lg' },
   { key: 'clientApiKeyName', label: 'Key 名称', kind: 'identity', size: 'lg', emptyText: '—' },
   { key: 'latency', label: '延迟', kind: 'numeric', size: 'xl' },
+  { key: 'performance', label: '性能', kind: 'numeric', size: 'lg' },
   { key: 'createdAtDisplay', label: '时间', kind: 'datetime' },
   { key: 'clientIp', label: 'IP', kind: 'custom', size: '3xl' },
   { key: 'userAgent', label: 'User-Agent', kind: 'custom', size: '4xl' },
@@ -38,6 +39,7 @@ export const usageRecordColumns: ConfigurableTableColumn<UsageDisplayRecord>[] =
 export const opsErrorColumns: ConfigurableTableColumn<OpsErrorRow>[] = [
   { key: 'clientApiKeyName', label: 'Key 名称', kind: 'identity', size: 'lg', emptyText: '—' },
   { key: 'accountId', label: '账号', kind: 'identity', size: '3xl', emptyText: '未知账号', hideable: false },
+  { key: 'accountPlanType', label: '套餐', kind: 'status', size: 'sm' },
   { key: 'provider', label: '平台/类型', kind: 'custom', size: 'sm' },
   { key: 'message', label: '错误', kind: 'custom', size: '4xl', hideable: false },
   { key: 'upstreamSendState', label: '发送状态', kind: 'custom', size: 'xl' },

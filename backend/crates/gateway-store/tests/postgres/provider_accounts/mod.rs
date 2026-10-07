@@ -232,6 +232,7 @@ async fn custom_names_and_excel_omission_survive_reimport_rotation_and_credentia
         repository
             .import_provider_accounts(ImportProviderAccounts {
                 settings: Some(AccountImportSettings {
+                    template_proxy_mode: None,
                     excel_recovery: None,
                     purchase_cost: None,
                     clear_outbound_proxy: false,
@@ -622,6 +623,7 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
     let Some(database) = TestDatabase::create("provider_account_quota_batch").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     for id in ["acct_quota_a", "acct_quota_b", "acct_quota_empty"] {
         repository
@@ -672,7 +674,7 @@ async fn core_quota_batch_reads_only_observed_accounts_in_one_contract_call() {
     );
     assert_eq!(
         current_revision(&database.pool).await,
-        1,
+        initial_revision,
         "quota observation is runtime state, not a global configuration mutation"
     );
 
@@ -1397,6 +1399,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
     let Some(database) = TestDatabase::create("provider_account_terminal_list").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let now = Utc::now();
 
@@ -1511,7 +1514,7 @@ async fn terminal_admin_list_filters_and_sorts_before_pagination_with_retained_u
         )
         .await
         .expect("sort accounts by retained usage");
-    assert_eq!(usage_page.config_revision.get(), 1);
+    assert_eq!(usage_page.config_revision.get(), initial_revision);
     assert_eq!(usage_page.total, 6);
     assert_eq!(usage_page.summary.total, 6);
     assert_eq!(usage_page.summary.normal, 1);
@@ -1988,6 +1991,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let Some(database) = TestDatabase::create("provider_account_terminal_mutation").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     PgProviderAccountRepository::new(database.pool.clone())
         .insert_provider_account(account("acct_terminal_mutation", "user-terminal-mutation"))
         .await
@@ -2026,7 +2030,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         )
         .await
         .expect("disable account atomically");
-    assert_eq!(result.config_revision.get(), 2);
+    assert_eq!(result.config_revision.get(), initial_revision + 1);
     let enabled: bool = sqlx::query_scalar(
         "select enabled from provider_accounts where id = 'acct_terminal_mutation'",
     )
@@ -2044,7 +2048,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         )
         .await
         .expect("delete disabled account atomically");
-    assert_eq!(revision.get(), 3);
+    assert_eq!(revision.get(), initial_revision + 2);
     assert_eq!(
         account_count(&database.pool, "acct_terminal_mutation").await,
         0
@@ -2061,7 +2065,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
         vec![
             (
                 "update".to_owned(),
-                2,
+                i64::try_from(initial_revision + 1).expect("revision"),
                 vec![
                     "enabled".to_owned(),
                     "concurrency_limit".to_owned(),
@@ -2069,7 +2073,11 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
                     "groups".to_owned(),
                 ],
             ),
-            ("delete".to_owned(), 3, Vec::new()),
+            (
+                "delete".to_owned(),
+                i64::try_from(initial_revision + 2).expect("revision"),
+                Vec::new(),
+            ),
         ]
     );
 
@@ -2177,6 +2185,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
     let Some(database) = TestDatabase::create("provider_account_recovery").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let mut seeded = account("acct_recovery", "user-recovery");
     seeded.enabled = false;
@@ -2286,7 +2295,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
         .await
         .expect("enable account scheduling");
 
-    assert_eq!(enabled.config_revision.get(), 2);
+    assert_eq!(enabled.config_revision.get(), initial_revision + 1);
     assert!(
         repository
             .load_provider_account("acct_recovery")
@@ -2323,7 +2332,7 @@ async fn account_enable_preserves_facts_and_explicit_recovery_clears_them() {
         .await
         .expect("recover account");
 
-    assert_eq!(result.config_revision.get(), 3);
+    assert_eq!(result.config_revision.get(), initial_revision + 2);
     let current = sqlx::query_as::<_, RecoveredAccountRow>(
         "select enabled, credential_state, quota_access_state, quota_evidence,
                 last_error_message, provider_quota_json, concurrency_limit, weight,
@@ -2366,6 +2375,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
     let Some(database) = TestDatabase::create("provider_account_batch_update").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     for (account_id, upstream_user_id) in [
         ("acct_batch_a", "user-batch-a"),
@@ -2424,7 +2434,7 @@ async fn terminal_batch_update_replaces_state_and_groups_once_or_rolls_back_ever
         .await
         .expect("batch update accounts");
 
-    assert_eq!(result.config_revision.get(), 2);
+    assert_eq!(result.config_revision.get(), initial_revision + 1);
     assert_eq!(result.account_ids.len(), 2);
     let scheduling: Vec<(bool, Option<i64>, i16, bool)> = sqlx::query_as(
         "select enabled, concurrency_limit, weight, turn_state_injection_enabled
@@ -2520,6 +2530,7 @@ async fn terminal_admin_delete_removes_enabled_accounts_in_one_transaction() {
     let Some(database) = TestDatabase::create("provider_account_enabled_delete").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     for (account_id, upstream_user_id) in [
         ("acct_enabled_delete_a", "user-enabled-delete-a"),
@@ -2547,7 +2558,7 @@ async fn terminal_admin_delete_removes_enabled_accounts_in_one_transaction() {
         .await
         .expect("delete enabled account atomically");
 
-    assert_eq!(revision.get(), 2);
+    assert_eq!(revision.get(), initial_revision + 1);
     assert_eq!(
         account_count(&database.pool, "acct_enabled_delete_a").await
             + account_count(&database.pool, "acct_enabled_delete_b").await,
@@ -2561,6 +2572,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
     let Some(database) = TestDatabase::create("provider_account_admin_upsert").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let scope = ProviderAccountAdminScope {
         provider_kind: "openai".to_owned(),
@@ -2601,7 +2613,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         .expect("update the same imported identity");
     assert_eq!(imported.account_ids, ["acct_admin_upsert"]);
     let revision = imported.config_revision;
-    assert_eq!(revision.get(), 3);
+    assert_eq!(revision.get(), initial_revision + 2);
     let row: (
         String,
         serde_json::Value,
@@ -2635,7 +2647,7 @@ async fn admin_import_updates_the_same_verified_identity_without_rebinding_it() 
         })
         .await
         .expect_err("an existing account ID must not be rebound");
-    assert_eq!(current_revision(&database.pool).await, 3);
+    assert_eq!(current_revision(&database.pool).await, initial_revision + 2);
 
     database.close().await;
 }
@@ -2667,6 +2679,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
         .commit_authorization(
             AuthorizationCommit {
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    template_proxy_mode: None,
                     excel_recovery: None,
                     purchase_cost: None,
                     clear_outbound_proxy: false,
@@ -2864,6 +2877,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     let Some(database) = TestDatabase::create("provider_account_core_refresh").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     repository
         .insert_provider_account(NewProviderAccount {
@@ -3031,7 +3045,7 @@ async fn core_refresh_cas_updates_profile_and_credential_under_one_revision() {
     assert_eq!(unchanged.2, 2);
     assert_eq!(
         current_revision(&database.pool).await,
-        1,
+        initial_revision,
         "credential refresh advances only credential_revision"
     );
 
@@ -3043,6 +3057,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
     let Some(database) = TestDatabase::create("provider_account_admin").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     let scope = ProviderAccountAdminScope {
         provider_kind: "openai".to_owned(),
@@ -3061,7 +3076,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         })
         .await
         .expect("import provider accounts");
-    assert_eq!(imported.config_revision.get(), 2);
+    assert_eq!(imported.config_revision.get(), initial_revision + 1);
     let ready: (bool, String) =
         sqlx::query_as("select enabled, credential_state from provider_accounts where id = $1")
             .bind("acct_admin_a")
@@ -3094,7 +3109,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         })
         .await
         .expect_err("duplicate batch row must roll back the entire import");
-    assert_eq!(current_revision(&database.pool).await, 2);
+    assert_eq!(current_revision(&database.pool).await, initial_revision + 1);
     assert_eq!(
         account_count(&database.pool, "acct_admin_transient").await,
         0
@@ -3121,7 +3136,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             ..
         }
     ));
-    assert_eq!(current_revision(&database.pool).await, 2);
+    assert_eq!(current_revision(&database.pool).await, initial_revision + 1);
 
     sqlx::query(
         "update provider_accounts
@@ -3147,7 +3162,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         })
         .await
         .expect("rotate provider account");
-    assert_eq!(rotation.config_revision.get(), 3);
+    assert_eq!(rotation.config_revision.get(), initial_revision + 2);
     assert_eq!(rotation.credential_revision.get(), 2);
     let restored: (String, String, Option<String>) = sqlx::query_as(
         "select credential_state, upstream_user_id, upstream_account_id
@@ -3191,7 +3206,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             ..
         }
     ));
-    assert_eq!(current_revision(&database.pool).await, 3);
+    assert_eq!(current_revision(&database.pool).await, initial_revision + 2);
     let unchanged: (String, serde_json::Value, i64, String, Option<String>) = sqlx::query_as(
         "select name, provider_credentials_json, credential_revision,
                 upstream_user_id, upstream_account_id
@@ -3234,7 +3249,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         })
         .await
         .expect("disable provider account");
-    assert_eq!(revision.get(), 4);
+    assert_eq!(revision.get(), initial_revision + 3);
     let exports = repository
         .export_provider_accounts(
             scope.clone(),
@@ -3254,7 +3269,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
         })
         .await
         .expect("delete selected accounts regardless of enabled state");
-    assert_eq!(revision.get(), 5);
+    assert_eq!(revision.get(), initial_revision + 4);
     assert_eq!(account_count(&database.pool, "acct_admin_a").await, 0);
     assert_eq!(account_count(&database.pool, "acct_admin_b").await, 0);
     let audit_count: i64 = sqlx::query_scalar("select count(*) from admin_audit_events")
@@ -3272,6 +3287,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
     let Some(database) = TestDatabase::create("provider_account_group_assignment").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     sqlx::query(
         "insert into account_groups
          (id, name, description, color, enabled, created_at, updated_at)
@@ -3295,7 +3311,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
         })
         .await
         .expect("import account without a group");
-    assert_eq!(imported.config_revision.get(), 2);
+    assert_eq!(imported.config_revision.get(), initial_revision + 1);
     assert!(
         account_group_ids(&database.pool, "acct_grouped_import")
             .await
@@ -3360,7 +3376,7 @@ async fn provider_account_import_and_reauthorization_preserve_existing_membershi
         .expect("reauthorization preserves groups atomically");
     assert_eq!(
         reauthorized.config_revision.get(),
-        u64::try_from(revision_before_reauthorization + 1).expect("revision")
+        revision_before_reauthorization + 1
     );
     assert_eq!(
         account_group_ids(&database.pool, "acct_grouped_import").await,
@@ -3721,11 +3737,13 @@ async fn seed_model_request(
     Ok(())
 }
 
-async fn current_revision(pool: &sqlx::PgPool) -> i64 {
-    sqlx::query_scalar("select config_revision from runtime_settings where id = 1")
-        .fetch_one(pool)
-        .await
-        .expect("load config revision")
+async fn current_revision(pool: &sqlx::PgPool) -> u64 {
+    let revision: i64 =
+        sqlx::query_scalar("select config_revision from runtime_settings where id = 1")
+            .fetch_one(pool)
+            .await
+            .expect("load config revision");
+    u64::try_from(revision).expect("valid config revision")
 }
 
 async fn account_count(pool: &sqlx::PgPool, account_id: &str) -> i64 {
@@ -3856,6 +3874,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     let Some(database) = TestDatabase::create("import_settings").await else {
         return;
     };
+    let initial_revision = current_revision(&database.pool).await;
     let repository = PgProviderAccountRepository::new(database.pool.clone());
     repository
         .insert_provider_account(account("acct_existing_settings", "existing-settings-user"))
@@ -3874,6 +3893,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     )
     .unwrap();
     let settings = AccountImportSettings {
+        template_proxy_mode: None,
         excel_recovery: None,
         purchase_cost: None,
         clear_outbound_proxy: false,
@@ -3910,7 +3930,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         })
         .await
         .expect("import with settings");
-    assert_eq!(result.config_revision.get(), 2);
+    assert_eq!(result.config_revision.get(), initial_revision + 1);
     for id in ["acct_new_settings", "acct_existing_settings"] {
         let row: (bool, Option<i64>, i16, bool) = sqlx::query_as(
             "select enabled, concurrency_limit, weight, turn_state_injection_enabled from provider_accounts where id = $1",
@@ -3972,7 +3992,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         })
         .await;
     assert!(failed.is_err());
-    assert_eq!(current_revision(&database.pool).await, 2);
+    assert_eq!(current_revision(&database.pool).await, initial_revision + 1);
     assert_eq!(
         account_count(&database.pool, "acct_rollback_settings").await,
         0
@@ -4009,6 +4029,7 @@ async fn account_import_state_setting_preserves_omission_and_applies_explicit_va
     .enumerate()
     {
         let settings = AccountImportSettings {
+            template_proxy_mode: None,
             excel_recovery: None,
             purchase_cost: None,
             clear_outbound_proxy: false,

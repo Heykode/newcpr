@@ -39,6 +39,7 @@ pub struct ExecutionBufferStats {
 }
 
 struct ExecutionBufferState {
+    maximum_queued_items: usize,
     maximum_queued_bytes: usize,
     queued_items: AtomicUsize,
     queued_bytes: AtomicUsize,
@@ -49,8 +50,9 @@ struct ExecutionBufferState {
 }
 
 impl ExecutionBufferState {
-    fn new(maximum_queued_bytes: NonZeroUsize) -> Self {
+    fn new(maximum_queued_items: NonZeroUsize, maximum_queued_bytes: NonZeroUsize) -> Self {
         Self {
+            maximum_queued_items: maximum_queued_items.get(),
             maximum_queued_bytes: maximum_queued_bytes.get(),
             queued_items: AtomicUsize::new(0),
             queued_bytes: AtomicUsize::new(0),
@@ -61,17 +63,36 @@ impl ExecutionBufferState {
         }
     }
 
-    fn reserve(&self, bytes: usize) -> bool {
+    fn reserve(&self, bytes: usize, critical: bool) -> bool {
+        let item_limit = self.maximum_queued_items.saturating_add(if critical {
+            self.maximum_queued_items / 4
+        } else {
+            0
+        });
+        let byte_limit = self.maximum_queued_bytes.saturating_add(if critical {
+            self.maximum_queued_bytes / 4
+        } else {
+            0
+        });
+        if self
+            .queued_items
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |items| {
+                items.checked_add(1).filter(|items| *items <= item_limit)
+            })
+            .is_err()
+        {
+            return false;
+        }
         let reserved = self
             .queued_bytes
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
-                    .filter(|next| *next <= self.maximum_queued_bytes)
+                    .filter(|next| *next <= byte_limit)
             })
             .is_ok();
-        if reserved {
-            self.queued_items.fetch_add(1, Ordering::Relaxed);
+        if !reserved {
+            self.queued_items.fetch_sub(1, Ordering::AcqRel);
         }
         reserved
     }
@@ -124,7 +145,7 @@ fn saturating_increment(counter: &AtomicU64, increment: u64) {
 /// 等待 PostgreSQL，也不会看到 Store 错误。启动恢复仍直接访问底层 Store。
 pub struct BufferedExecutionStore<S: ?Sized> {
     inner: Arc<S>,
-    sender: mpsc::Sender<QueuedExecutionObservation>,
+    sender: mpsc::UnboundedSender<QueuedExecutionObservation>,
     state: Arc<ExecutionBufferState>,
 }
 
@@ -156,8 +177,8 @@ impl<S: ?Sized> BufferedExecutionStore<S> {
         capacity: NonZeroUsize,
         maximum_queued_bytes: NonZeroUsize,
     ) -> (Self, ExecutionObservationWriter<S>) {
-        let (sender, receiver) = mpsc::channel(capacity.get());
-        let state = Arc::new(ExecutionBufferState::new(maximum_queued_bytes));
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let state = Arc::new(ExecutionBufferState::new(capacity, maximum_queued_bytes));
         (
             Self {
                 inner: Arc::clone(&inner),
@@ -182,9 +203,12 @@ impl<S: ?Sized> BufferedExecutionStore<S> {
             .estimated_bytes()
             .saturating_add(write.request_id().map_or(0, str::len))
             .max(1);
-        if !self.state.reserve(estimated_bytes) {
+        if !self.state.reserve(estimated_bytes, write.is_critical()) {
             self.state.record_dropped(1);
             let stats = self.state.snapshot();
+            if !stats.dropped_total.is_power_of_two() {
+                return;
+            }
             tracing::warn!(
                 operation = write.operation(),
                 request_id = ?write.request_id(),
@@ -198,18 +222,18 @@ impl<S: ?Sized> BufferedExecutionStore<S> {
         }
         let queued =
             QueuedExecutionObservation::new(write, estimated_bytes, Arc::clone(&self.state));
-        match self.sender.try_send(queued) {
+        match self.sender.send(queued) {
             Ok(()) => self.state.record_enqueued(),
             Err(error) => {
-                let (reason, queued) = match error {
-                    mpsc::error::TrySendError::Full(queued) => ("full", queued),
-                    mpsc::error::TrySendError::Closed(queued) => ("closed", queued),
-                };
+                let (reason, queued) = ("closed", error.0);
                 let operation = queued.operation();
                 let request_id = queued.request_id().map(ToOwned::to_owned);
                 drop(queued);
                 self.state.record_dropped(1);
                 let stats = self.state.snapshot();
+                if !stats.dropped_total.is_power_of_two() {
+                    return;
+                }
                 tracing::warn!(
                     operation,
                     request_id = ?request_id,
@@ -237,6 +261,15 @@ where
         self.inner.maintain_request(request_id, deadline)
     }
 
+    async fn record_operational_failure(
+        &self,
+        failure: gateway_core::diagnostics::OperationalFailure,
+    ) -> Result<(), StoreError> {
+        self.enqueue(ExecutionObservationWrite::OperationalFailure(Box::new(
+            failure,
+        )));
+        Ok(())
+    }
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
         self.enqueue(ExecutionObservationWrite::Create(Box::new(request)));
         Ok(())
@@ -327,7 +360,7 @@ where
 /// 由 Host 监督的单消费者，保证同一请求的观测命令按入队顺序落库。
 pub struct ExecutionObservationWriter<S: ?Sized> {
     inner: Arc<S>,
-    receiver: Mutex<mpsc::Receiver<QueuedExecutionObservation>>,
+    receiver: Mutex<mpsc::UnboundedReceiver<QueuedExecutionObservation>>,
     state: Arc<ExecutionBufferState>,
 }
 
@@ -404,7 +437,7 @@ where
 }
 
 async fn drain_on_shutdown<S>(
-    receiver: &mut mpsc::Receiver<QueuedExecutionObservation>,
+    receiver: &mut mpsc::UnboundedReceiver<QueuedExecutionObservation>,
     store: &S,
     state: &ExecutionBufferState,
 ) where
@@ -496,6 +529,7 @@ impl Drop for QueuedExecutionObservation {
 }
 
 enum ExecutionObservationWrite {
+    OperationalFailure(Box<gateway_core::diagnostics::OperationalFailure>),
     Create(Box<NewModelRequest>),
     Attempt(Box<AttemptRecord>),
     CreateWithAttempt(Box<(NewModelRequest, AttemptRecord)>),
@@ -518,8 +552,18 @@ enum ExecutionObservationWrite {
 }
 
 impl ExecutionObservationWrite {
+    fn is_critical(&self) -> bool {
+        match self {
+            Self::OperationalFailure(_) | Self::IntermediateFailure(_) | Self::ProbeFailure(_) => {
+                true
+            }
+            Self::Finalize(finalization) => finalization.error.is_some(),
+            _ => false,
+        }
+    }
     const fn operation(&self) -> &'static str {
         match self {
+            Self::OperationalFailure(_) => "record_operational_failure",
             Self::Create(_) => "create_model_request",
             Self::Attempt(_) => "record_attempt",
             Self::CreateWithAttempt(_) => "create_model_request_with_attempt",
@@ -534,6 +578,7 @@ impl ExecutionObservationWrite {
 
     fn request_id(&self) -> Option<&str> {
         match self {
+            Self::OperationalFailure(failure) => failure.correlation_id.as_deref(),
             Self::Create(request) => Some(request.id.as_str()),
             Self::Attempt(attempt) => Some(attempt.request_id.as_str()),
             Self::CreateWithAttempt(write) => Some(write.0.id.as_str()),
@@ -548,6 +593,17 @@ impl ExecutionObservationWrite {
 
     fn estimated_bytes(&self) -> usize {
         size_of::<Self>().saturating_add(match self {
+            Self::OperationalFailure(failure) => size_of::<
+                gateway_core::diagnostics::OperationalFailure,
+            >()
+            .saturating_add(text_bytes([
+                Some(failure.message.as_str()),
+                failure.correlation_id.as_deref(),
+                failure.provider_kind.as_ref().map(|kind| kind.as_str()),
+                failure.account_id.as_ref().map(|id| id.as_str()),
+                failure.upstream_code.as_ref().map(|code| code.as_str()),
+                failure.details.as_ref().map(|details| details.as_str()),
+            ])),
             Self::Create(request) => new_request_bytes(request),
             Self::Attempt(attempt) => attempt_bytes(attempt),
             Self::CreateWithAttempt(write) => {
@@ -580,6 +636,11 @@ impl ExecutionObservationWrite {
                         error.client_error_code(),
                         error.client_error_type(),
                     ])
+                    .saturating_add(
+                        gateway_core::error::ErrorSource::estimated_chain_bytes(
+                            std::error::Error::source(error),
+                        ),
+                    )
                 });
                 text_bytes([
                     Some(finalization.request_id.as_str()),
@@ -594,6 +655,8 @@ impl ExecutionObservationWrite {
                     finalization.provider_metadata_json.as_deref(),
                     finalization.diagnostic_trace_json.as_deref(),
                     finalization.provider_error_code.as_deref(),
+                    finalization.raw_upstream_error.as_deref(),
+                    finalization.error_details.as_deref(),
                 ])
                 .saturating_add(error_bytes)
                 .saturating_add(size_of::<ModelRequestFinalization>())
@@ -606,6 +669,7 @@ impl ExecutionObservationWrite {
         S: ExecutionStore + ?Sized,
     {
         match self {
+            Self::OperationalFailure(failure) => store.record_operational_failure(*failure).await,
             Self::Create(request) => store.create_model_request(*request).await,
             Self::Attempt(attempt) => store.record_attempt(*attempt).await,
             Self::CreateWithAttempt(write) => {
@@ -705,6 +769,11 @@ fn provider_error_bytes(error: &ProviderError) -> usize {
         }
     }
     bytes
+        .saturating_add(error.diagnostic().map_or(0, |d| d.as_str().len()))
+        .saturating_add(error.raw_upstream_error().map_or(0, |e| e.as_str().len()))
+        .saturating_add(gateway_core::error::ErrorSource::estimated_chain_bytes(
+            std::error::Error::source(error),
+        ))
 }
 
 fn text_bytes<const N: usize>(values: [Option<&str>; N]) -> usize {

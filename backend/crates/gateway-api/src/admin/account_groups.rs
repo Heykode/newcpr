@@ -70,6 +70,8 @@ impl ListAccountGroupsQuery {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateAccountGroupRequest {
+    #[serde(default)]
+    fast_mode: gateway_core::account::FastMode,
     name: String,
     description: Option<String>,
     color: String,
@@ -80,6 +82,7 @@ struct CreateAccountGroupRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateAccountGroupRequest {
+    fast_mode: Option<gateway_core::account::FastMode>,
     id: String,
     name: String,
     description: Option<String>,
@@ -96,6 +99,7 @@ struct AccountGroupIdRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountGroupView {
+    fast_mode: gateway_core::account::FastMode,
     id: String,
     name: String,
     description: Option<String>,
@@ -137,6 +141,7 @@ struct AccountGroupUsageView {
 impl From<AccountGroupRecord> for AccountGroupView {
     fn from(record: AccountGroupRecord) -> Self {
         Self {
+            fast_mode: record.fast_mode,
             id: record.id.to_string(),
             name: record.name,
             description: record.description,
@@ -274,6 +279,7 @@ where
             .create(
                 &auth.context().mutation_context(),
                 CreateAccountGroup {
+                    fast_mode: request.fast_mode,
                     name: request.name,
                     description: request.description,
                     color: group_color(&request.color)?,
@@ -301,6 +307,7 @@ where
             .update(
                 &auth.context().mutation_context(),
                 UpdateAccountGroup {
+                    fast_mode: request.fast_mode,
                     id: group_id(request.id)?,
                     name: request.name,
                     description: request.description,

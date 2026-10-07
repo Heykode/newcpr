@@ -887,6 +887,7 @@ fn group_record() -> AccountGroupRecord {
         color: AccountGroupColor::parse("#2563EBFF").expect("color"),
         enabled: true,
         disable_fast: false,
+        fast_mode: Default::default(),
         member_count: 2,
         provider_counts: BTreeMap::from([("openai".to_owned(), 2)]),
         client_key_count: 1,

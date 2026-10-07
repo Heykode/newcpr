@@ -11,6 +11,7 @@ use gateway_core::{
         budget::{ClientBudgetCharge, ClientBudgetPort, ClientBudgetStatus},
     },
     error::GatewayErrorKind,
+    metering::Decimal,
     policy::{ClientApiKeyId, RateLimits},
 };
 use gateway_store::postgres::{
@@ -152,6 +153,77 @@ async fn window_rollover_is_shanghai_midnight_and_seven_days_with_late_settlemen
     assert_eq!(reset.daily_used_usd.canonical(), "0");
     assert_eq!(reset.weekly_used_usd.canonical(), "0");
     assert!(reset.weekly_resets_at.is_some());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn duplicate_and_old_settlements_do_not_roll_expired_windows_forward() {
+    let Some(database) = TestDatabase::create("budgets_duplicate_rollover").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    let first = charge("key", "original", "0.4");
+    store.settle(first.clone()).await.unwrap();
+    sqlx::query(
+        "update client_key_budget_windows set
+        daily_start = daily_start - interval '1 day', daily_end = daily_start,
+        weekly_start = daily_start - interval '7 days', weekly_end = daily_start
+        where client_api_key_id = 'key'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let read_window = || {
+        sqlx::query_as::<
+            _,
+            (
+                DateTime<Utc>,
+                DateTime<Utc>,
+                DateTime<Utc>,
+                DateTime<Utc>,
+                String,
+                String,
+            ),
+        >(
+            "select daily_start, daily_end, weekly_start, weekly_end,
+         daily_used_usd::text, weekly_used_usd::text from client_key_budget_windows
+         where client_api_key_id = 'key'",
+        )
+    };
+    let before = read_window().fetch_one(&database.pool).await.unwrap();
+    store.settle(first).await.unwrap();
+    assert_eq!(
+        read_window().fetch_one(&database.pool).await.unwrap(),
+        before
+    );
+
+    store
+        .settle(ClientBudgetCharge {
+            completed_at: (before.2 - chrono::Duration::seconds(1)).into(),
+            ..charge("key", "old", "0.2")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        read_window().fetch_one(&database.pool).await.unwrap(),
+        before
+    );
+
+    store.settle(charge("key", "current", "0.1")).await.unwrap();
+    let after = read_window().fetch_one(&database.pool).await.unwrap();
+    assert_eq!(after.0, before.1);
+    assert_eq!(after.2, before.3);
+    assert_eq!(after.0.timestamp().rem_euclid(86400), 16 * 3600);
+    assert_eq!((after.1 - after.0).num_hours(), 24);
+    assert_eq!((after.3 - after.2).num_hours(), 168);
+    assert_eq!(after.4.parse::<Decimal>().unwrap().canonical(), "0.1");
+    assert_eq!(after.5.parse::<Decimal>().unwrap().canonical(), "0.1");
+    let events: i64 = sqlx::query_scalar("select count(*) from client_key_charge_events")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(events, 3);
     database.close().await;
 }
 

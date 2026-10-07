@@ -155,12 +155,15 @@ function mountOnboarding(t, api = {}, globals = {}) {
 test('2FA enrollment submits one durable intent and clears secrets after acceptance', async (t) => {
   const h = mountOnboarding(t)
   h.input('openai', 'two_fa', 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP')
+  h.state.createForm.value.importTemplate = { id: 'ignored-template', revision: 1, config: { enabled: false } }
   Object.assign(h.state.createForm.value, { applyExcel: true, excelEnabled: true, excel403Action: 'disable_excel', proxyMode: 'proxy', proxyId: 'proxy-fixture', replaceExisting2fa: true })
   await h.state.handleCreate()
   assert.equal(h.submissions.length, 0)
   assert.equal(h.enrollments.length, 1)
   assert.equal(h.enrollments[0].outboundProxyId, 'proxy-fixture')
   assert.equal(h.enrollments[0].replaceExisting, true)
+  assert.equal('template' in h.enrollments[0], false)
+  assert.equal(h.enrollments[0].settings.enabled, true)
   assert.equal(h.enrollments[0].settings.excel403Action, 'disable_excel')
   assert.equal(h.enrollments[0].settings.excelCacheCreationAsInput, true)
   assert.deepEqual([...h.state.enrollmentIds.value], ['relogin-new'])
@@ -181,6 +184,65 @@ test('failed enrollment preserves the form without assuming the account was crea
   assert.equal(h.state.showCreateModal.value, true)
   assert.equal(h.state.enrollmentIds.value.length, 0)
   assert.equal(h.reloads(), 0)
+})
+
+test('credential imports freeze shared template selection without copying its configuration', async (t) => {
+  const h = mountOnboarding(t)
+  h.input('openai', 'access_token', 'first-token\nsecond-token')
+  const template = { id: 'shared-template', revision: 7, config: { enabled: false, groupIds: ['group-a'] } }
+  h.state.createForm.value.importTemplate = template
+  Object.assign(h.state.createForm.value, { customName: 'Batch name', proxyMode: 'proxy', proxyId: 'ignored-manual-proxy' })
+  await h.state.handleCreate()
+  assert.equal(h.submissions.length, 1)
+  for (const item of h.submissions[0].items) {
+    assert.deepEqual(item.template, { id: 'shared-template', revision: 7 })
+    assert.equal('config' in item.template, false)
+    assert.equal('outboundProxyId' in item, false)
+    assert.equal('overwrite' in item, false)
+    assert.equal(item.settings.customName, 'Batch name')
+  }
+  template.revision = 8
+  assert.equal(h.submissions[0].items[0].template.revision, 7)
+  h.state.clearCreate()
+  assert.equal(h.state.createForm.value.importTemplate, null)
+})
+
+test('omitted template retains manual settings and template-only changes get a new submission ID', async (t) => {
+  const h = mountOnboarding(t, {
+    create: async () => {
+      throw new Error('response unavailable')
+    },
+  })
+  h.input('openai', 'access_token', 'synthetic-input')
+  Object.assign(h.state.createForm.value, { weight: '29', proxyMode: 'proxy', proxyId: 'proxy-input' })
+  await h.state.handleCreate()
+  assert.equal('template' in h.submissions[0].items[0], false)
+  assert.equal(h.submissions[0].items[0].settings.weight, 29)
+  assert.equal(h.submissions[0].items[0].outboundProxyId, 'proxy-input')
+  h.state.createForm.value.importTemplate = { id: 'shared-template', revision: 1, config: {} }
+  await h.state.handleCreate()
+  await h.state.handleCreate()
+  assert.notEqual(h.submissions[0].submissionId, h.submissions[1].submissionId)
+  assert.equal(h.submissions[1].submissionId, h.submissions[2].submissionId)
+  h.state.createForm.value.importTemplate.revision = 2
+  await h.state.handleCreate()
+  assert.notEqual(h.submissions[2].submissionId, h.submissions[3].submissionId)
+})
+
+test('mixed imports reject OpenAI-only template State before submitting any items', async (t) => {
+  const h = mountOnboarding(t)
+  h.input('batch', 'json', JSON.stringify({ documents: [
+    { provider: 'openai', document: {} },
+    { provider: 'xai', document: {} },
+  ] }))
+  h.state.createForm.value.importTemplate = { id: 'state-template', revision: 1, config: { turnStateInjectionEnabled: true } }
+  await h.state.handleCreate()
+  assert.equal(h.submissions.length, 0)
+  assert.equal(h.state.showCreateModal.value, true)
+  assert.equal(h.notifications.errors.length, 1)
+  h.state.createForm.value.importTemplate.config.turnStateInjectionEnabled = false
+  await h.state.handleCreate()
+  assert.equal(h.submissions[0].items.length, 2)
 })
 
 function mountTasks(t, api = {}) {
@@ -594,6 +656,7 @@ test('OAuth creation and existing-account relogin keep their original APIs and s
   for (const provider of ['openai', 'xai']) {
     const h = mountOnboarding(t)
     h.input(provider, 'oauth')
+    h.state.createForm.value.importTemplate = { id: 'ignored-template', revision: 1, config: { enabled: false } }
     h.state.createForm.value.turnStateInjectionEnabled = true
     h.state.createForm.value.customName = '  OAuth batch  '
     await h.state.handleAuthorizeOAuth()

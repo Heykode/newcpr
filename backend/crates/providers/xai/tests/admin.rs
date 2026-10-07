@@ -81,7 +81,9 @@ async fn xai_quota_catalog_worker_treats_empty_account_pool_as_idle() {
         .await
         .expect("xAI bundle");
 
-    assert_eq!(run_quota_catalog_cycle(&mut bundle).await, Ok(()));
+    run_quota_catalog_cycle(&mut bundle)
+        .await
+        .expect("empty account pool stays idle");
 }
 
 #[tokio::test]

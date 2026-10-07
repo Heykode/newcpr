@@ -288,7 +288,7 @@ pub struct ModelRequestFinalization {
     pub error_kind: Option<String>,
     pub provider_error_code: Option<String>,
     pub error_message: Option<String>,
-    pub raw_upstream_error: Option<String>,
+    pub error_details: Option<String>,
     pub continuation_unavailable_reason: Option<String>,
     pub upstream_connection_id: Option<String>,
     pub upstream_connection_exit_reason: Option<String>,
@@ -503,7 +503,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.continuation.requested)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("insert model request"))?;
+        .map_err(|error| postgres_unavailable("insert model request").with_source(error))?;
         Ok(())
     }
 
@@ -592,7 +592,9 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(request.continuation.requested)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("insert model request with first attempt"))?;
+        .map_err(|error| {
+            postgres_unavailable("insert model request with first attempt").with_source(error)
+        })?;
         Ok(())
     }
 
@@ -654,7 +656,7 @@ impl ModelRequestRepository for PgExecutionStore {
         )?)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("begin model request attempt"))?
+        .map_err(|error| postgres_unavailable("begin model request attempt").with_source(error))?
         .ok_or(StoreError::Conflict {
             entity: ENTITY,
             id: attempt.model_request_id,
@@ -677,7 +679,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(state.as_str())
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("mark upstream send state"))?;
+        .map_err(|error| postgres_unavailable("mark upstream send state").with_source(error))?;
         Ok(result.rows_affected() == 1)
     }
 
@@ -700,7 +702,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(client_status_code.map(i32::from))
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("mark downstream committed"))?;
+        .map_err(|error| postgres_unavailable("mark downstream committed").with_source(error))?;
         Ok(result.rows_affected() == 1)
     }
 
@@ -719,7 +721,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(i32::from(client_status_code))
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("record client status code"))?;
+        .map_err(|error| postgres_unavailable("record client status code").with_source(error))?;
         Ok(result.rows_affected() == 1)
     }
 
@@ -934,7 +936,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.websocket_pool)
         .bind(finalization.service_tier)
         .bind(finalization.provider_metadata_json.map(sqlx::types::Json))
-        .bind(finalization.raw_upstream_error)
+        .bind(finalization.error_details)
         .bind(finalization.continuation_unavailable_reason)
         .bind(finalization.upstream_connection_id)
         .bind(finalization.upstream_connection_exit_reason)
@@ -951,7 +953,7 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(finalization.billing_snapshot_json)
         .fetch_one(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("finalize model request"))?;
+        .map_err(|error| postgres_unavailable("finalize model request").with_source(error))?;
         Ok(finalized == 1)
     }
 
@@ -972,7 +974,9 @@ impl ModelRequestRepository for PgExecutionStore {
         .bind(now)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("recover expired model requests"))?;
+        .map_err(|error| {
+            postgres_unavailable("recover expired model requests").with_source(error)
+        })?;
         Ok(ModelRequestRecoveryReport {
             requests: result.rows_affected(),
         })
@@ -981,6 +985,26 @@ impl ModelRequestRepository for PgExecutionStore {
 
 #[async_trait]
 impl ExecutionStore for PgExecutionStore {
+    async fn record_operational_failure(
+        &self,
+        failure: gateway_core::diagnostics::OperationalFailure,
+    ) -> Result<(), CoreStoreError> {
+        use super::{OpsEvent, OpsEventLevel, OpsEventRepository, PgOpsEventRepository};
+        PgOpsEventRepository::new(self.pool.clone()).append_ops_event(OpsEvent {
+            id: Uuid::now_v7().to_string(), model_request_id: None, attempt_index: None,
+            level: OpsEventLevel::Warning, component: failure.component.to_owned(),
+            operation: failure.operation.to_owned(),
+            provider_kind: failure.provider_kind.map(|kind| kind.as_str().to_owned()),
+            provider_account_id: failure.account_id.as_ref().map(|id| id.as_str().to_owned()),
+            provider_account_ref: failure.account_id.map(|id| id.as_str().to_owned()),
+            upstream_model_id: None, failure_kind: failure.kind.to_owned(), upstream_send_state: None,
+            raw_upstream_error: failure.details.map(gateway_core::error::ErrorDetails::into_string),
+            status_code: failure.upstream_status, provider_error_code: failure.upstream_code.map(|code| code.as_str().to_owned()),
+            retry_after_ms: None, upstream_request_id: None, latency_ms: None,
+            message: serde_json::json!({"correlationId": failure.correlation_id, "message": failure.message}).to_string(),
+            created_at: failure.occurred_at.into(),
+        }).await.map_err(core_store_error)
+    }
     fn maintain_request(
         &self,
         request_id: &ModelRequestId,
@@ -1016,7 +1040,7 @@ impl ExecutionStore for PgExecutionStore {
                     .bind(ttl_ms)
                     .fetch_one(&pool)
                     .await
-                    .map_err(|_| postgres_unavailable("renew model request recovery lease"))
+                    .map_err(|error| postgres_unavailable("renew model request recovery lease").with_source(error))
                 })
             },
         ))
@@ -1134,9 +1158,7 @@ impl ExecutionStore for PgExecutionStore {
                     .map(|model| model.as_str().to_owned()),
                 failure_kind: error.kind().as_str().to_owned(),
                 upstream_send_state: Some(error.send_state().as_str().to_owned()),
-                raw_upstream_error: error
-                    .raw_upstream_error()
-                    .map(|raw| raw.as_str().to_owned()),
+                raw_upstream_error: error.error_details(),
                 status_code: error.upstream_status().or(failure.upstream_status_code),
                 provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
                 retry_after_ms,
@@ -1184,9 +1206,7 @@ impl ExecutionStore for PgExecutionStore {
                 upstream_model_id: Some(failure.upstream_model_id.as_str().to_owned()),
                 failure_kind: error.kind().as_str().to_owned(),
                 upstream_send_state: Some(error.send_state().as_str().to_owned()),
-                raw_upstream_error: error
-                    .raw_upstream_error()
-                    .map(|raw| raw.as_str().to_owned()),
+                raw_upstream_error: error.error_details(),
                 status_code: error.upstream_status(),
                 provider_error_code,
                 retry_after_ms,
@@ -1297,7 +1317,9 @@ impl ExecutionStore for PgExecutionStore {
                 error_kind,
                 provider_error_code: finalization.provider_error_code,
                 error_message,
-                raw_upstream_error: finalization.raw_upstream_error,
+                error_details: finalization
+                    .error_details
+                    .or(finalization.raw_upstream_error),
                 continuation_unavailable_reason,
                 upstream_connection_id,
                 upstream_connection_exit_reason,
@@ -1405,7 +1427,7 @@ fn core_store_error(error: StoreError) -> CoreStoreError {
             CoreStoreErrorKind::InvalidData
         }
     };
-    CoreStoreError::new(kind)
+    CoreStoreError::caused_by(kind, error)
 }
 
 fn new_model_request_row(request: CoreNewModelRequest) -> NewModelRequest {

@@ -67,6 +67,41 @@ where
         .route("/api/admin", any(admin_not_found))
         .route("/api/admin/{*path}", any(admin_not_found))
         .layer(middleware::map_response(no_store))
+        .layer(middleware::from_fn(record_failure))
+}
+
+async fn record_failure(
+    diagnostics: Option<
+        axum::Extension<std::sync::Arc<dyn gateway_core::diagnostics::OperationalDiagnostics>>,
+    >,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let correlation_id = request
+        .extensions()
+        .get::<tower_http::request_id::RequestId>()
+        .and_then(|id| id.header_value().to_str().ok())
+        .map(str::to_owned);
+    let mut response = next.run(request).await;
+    let details = response
+        .extensions_mut()
+        .remove::<gateway_core::error::ErrorDetails>();
+    if response.status().is_server_error()
+        && let Some(axum::Extension(diagnostics)) = diagnostics
+    {
+        let mut failure = gateway_core::diagnostics::OperationalFailure::new(
+            "admin_api",
+            "admin_request",
+            "admin_request_failed",
+            "Administrator request failed",
+        );
+        failure.correlation_id = correlation_id;
+        failure.details = details;
+        if diagnostics.record_failure(failure).await.is_err() {
+            tracing::warn!("Administrator failure diagnostic was not recorded");
+        }
+    }
+    response
 }
 
 async fn method_not_allowed() -> AdminError {

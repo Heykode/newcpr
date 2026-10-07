@@ -103,7 +103,7 @@ impl RetentionRepository for PgRetentionRepository {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("load retention settings"))?
+        .map_err(|error| postgres_unavailable("load retention settings").with_source(error))?
         .ok_or_else(|| StoreError::NotFound {
             entity: "runtime settings",
             id: "1".to_owned(),

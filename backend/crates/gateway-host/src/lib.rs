@@ -178,6 +178,13 @@ impl HostBundle {
         Ok(())
     }
 
+    pub fn set_operational_diagnostics(
+        &self,
+        diagnostics: Arc<dyn gateway_core::diagnostics::OperationalDiagnostics>,
+    ) {
+        self.workers.set_operational_diagnostics(diagnostics);
+    }
+
     /// 进程唯一阻塞点；返回前完成 HTTP drain 与 worker join。
     pub async fn serve(self, router: Router) -> Result<(), HostError> {
         let result = serve_router(

@@ -14,10 +14,12 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
+import { userAgentOsVersion, withUserAgentOsVersion } from '../composables/userAgentOsVersion'
 import { sampleSource, userAgentSampleClients, userAgentSampleOptions, userAgentSamples } from './outbound-user-agent-samples'
 
 const settings = ref<OutboundUserAgentSettings | null>(null)
@@ -60,6 +62,14 @@ function applySample(id: string) {
   error.value = ''
   preview.value = null
 }
+const osVersion = computed({
+  get: () => userAgentOsVersion(displayedInput.value) ?? '',
+  set: (value: string) => {
+    const updated = withUserAgentOsVersion(custom.value, value)
+    if (updated !== null)
+      custom.value = updated
+  },
+})
 
 function populate(value: OutboundUserAgentSettings) {
   settings.value = value
@@ -228,6 +238,17 @@ useIntervalFn(() => void load(false, true), 30_000)
       />
     </BaseFormItem>
 
+    <div class="mt-3 flex flex-wrap gap-4">
+      <BaseFormItem label="系统版本">
+        <BaseInput
+          v-model="osVersion"
+          aria-label="OpenAI 出站系统版本"
+          :disabled="useDefault || busy || !settings || userAgentOsVersion(displayedInput) === null"
+          maxlength="128"
+          spellcheck="false"
+        />
+      </BaseFormItem>
+    </div>
     <div class="mt-3 flex flex-wrap gap-3">
       <BaseButton :loading="checking" :disabled="busy || !settings" @click="check">
         检查格式并预览

@@ -7,6 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
 
@@ -18,6 +19,8 @@ const refreshConcurrency = defineModel<string>('refreshConcurrency', { required:
 const requestIntervalMs = defineModel<string>('requestIntervalMs', { required: true })
 const responsesMaxDecompressedBodyBytes = defineModel<string>('responsesMaxDecompressedBodyBytes', { required: true })
 const disableFast = defineModel<boolean>('disableFast', { required: true })
+const openaiSessionBindingTtlHours = defineModel<string>('openaiSessionBindingTtlHours', { required: true })
+const openaiAccountAffinity = defineModel<string>('openaiAccountAffinity', { required: true })
 const requestTuning = defineModel<RequestTuning>('requestTuning', { required: true })
 const advancedOpen = ref(false)
 const customLocation = computed({
@@ -70,6 +73,23 @@ const tuningValues = {
     description="请求节奏、并发、重试和账号切换为共用参数，Excel 请求继续遵循；原生 Codex 连接参数另列。"
   >
     <BaseForm class="max-w-6xl sm:grid-cols-2">
+      <BaseFormItem label="OpenAI 账号亲和模式">
+        <BaseSegmented
+          v-model="openaiAccountAffinity"
+          label="OpenAI 账号亲和模式"
+          :options="[{ label: '严格', value: 'strict' }, { label: '宽松', value: 'relaxed' }]"
+        />
+      </BaseFormItem>
+      <BaseFormItem label="OpenAI 会话账号绑定时长（小时）">
+        <BaseInput
+          v-model="openaiSessionBindingTtlHours"
+          aria-label="OpenAI 会话账号绑定时长（小时）"
+          type="number"
+          min="1"
+          max="720"
+          step="1"
+        />
+      </BaseFormItem>
       <BaseFormItem
         label="单账号默认最大并发"
         description="账号未单独设置时使用的并发上限"

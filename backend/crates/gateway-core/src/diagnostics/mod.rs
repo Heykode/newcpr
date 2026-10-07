@@ -1,6 +1,8 @@
 //! 有界、请求局部的诊断证据；不参与路由、重试或客户端协议决策。
 
 mod capture;
+mod failure;
+pub use failure::{ExecutionDiagnostics, OperationalDiagnostics, OperationalFailure};
 pub mod request_capture;
 mod selection;
 mod stream;

@@ -26,6 +26,7 @@ fn admin_auth_state_rejects_invalid_ttl_boundaries() {
         admin_user_id: "admin".to_owned(),
         expires_at: Utc::now() - chrono::Duration::seconds(1),
         credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
+        absolute_expires_at: None,
     };
     let runtime = tokio::runtime::Runtime::new().expect("test runtime");
     let Some((repository, _connection, _namespace)) = runtime.block_on(admin_auth_repository())
@@ -51,6 +52,7 @@ async fn admin_auth_state_keeps_fixed_ttl_and_opaque_keys() {
         admin_user_id: "default-admin".to_owned(),
         expires_at: Utc::now() + chrono::Duration::seconds(60),
         credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
+        absolute_expires_at: None,
     };
 
     repository
@@ -117,6 +119,65 @@ async fn admin_auth_repository()
     let repository = RedisAdminAuthStateRepository::new(connection.clone(), &namespace)
         .expect("valid test namespace");
     Some((repository, connection, namespace))
+}
+
+#[tokio::test]
+async fn admin_renewal_cas_preserves_newer_expiry_and_cannot_revive_deleted_sessions() {
+    let Some((repository, _, _)) = admin_auth_repository().await else {
+        return;
+    };
+    let original = AdminSessionRecord {
+        admin_user_id: "admin".to_owned(),
+        credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
+        expires_at: Utc::now() + chrono::Duration::seconds(30),
+        absolute_expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+    };
+    repository
+        .store_admin_session("renew", &original)
+        .await
+        .unwrap();
+    let longer = original.expires_at + chrono::Duration::minutes(10);
+    let renewed = repository
+        .renew_admin_session("renew", &original, longer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renewed.expires_at, longer);
+    let stale = repository
+        .renew_admin_session(
+            "renew",
+            &original,
+            original.expires_at + chrono::Duration::minutes(1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stale, renewed);
+    assert!(
+        repository
+            .renew_admin_session(
+                "renew",
+                &renewed,
+                original.absolute_expires_at.unwrap() + chrono::Duration::seconds(1)
+            )
+            .await
+            .is_err()
+    );
+    repository.delete_admin_session("renew").await.unwrap();
+    assert!(
+        repository
+            .renew_admin_session("renew", &original, longer)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        repository
+            .load_admin_session("renew")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

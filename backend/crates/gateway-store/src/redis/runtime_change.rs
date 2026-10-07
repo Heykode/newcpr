@@ -54,24 +54,24 @@ impl RuntimeChangeRepository for RedisRuntimeChangeRepository {
             .client
             .get_connection_manager()
             .await
-            .map_err(|_| redis_unavailable("connect runtime change publisher"))?;
+            .map_err(|error| {
+                redis_unavailable("connect runtime change publisher").with_source(error)
+            })?;
         connection
             .publish::<_, _, i64>(&self.channel, payload)
             .await
-            .map_err(|_| redis_unavailable("publish runtime change"))?;
+            .map_err(|error| redis_unavailable("publish runtime change").with_source(error))?;
         Ok(())
     }
 
     async fn subscribe_runtime_changes(&self) -> StoreResult<RuntimeChangeSubscription> {
-        let mut pubsub = self
-            .client
-            .get_async_pubsub()
-            .await
-            .map_err(|_| redis_unavailable("connect runtime change subscriber"))?;
+        let mut pubsub = self.client.get_async_pubsub().await.map_err(|error| {
+            redis_unavailable("connect runtime change subscriber").with_source(error)
+        })?;
         pubsub
             .subscribe(&self.channel)
             .await
-            .map_err(|_| redis_unavailable("subscribe runtime changes"))?;
+            .map_err(|error| redis_unavailable("subscribe runtime changes").with_source(error))?;
         let stream = pubsub.into_on_message().map(|message| {
             let payload = message
                 .get_payload::<String>()

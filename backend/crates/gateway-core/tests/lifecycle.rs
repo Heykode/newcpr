@@ -6,6 +6,38 @@ use gateway_core::lifecycle::{Deadline, REQUEST_LEASE_TTL};
 use std::time::{Duration, SystemTime};
 
 #[test]
+fn abandoned_cancellation_futures_release_their_waiters() {
+    use futures::FutureExt;
+
+    let token = CancellationToken::new();
+    assert!(token.cancelled().now_or_never().is_none());
+    let allocations = allocation_counter::measure(|| {
+        for _ in 0..10_000 {
+            assert!(token.cancelled().now_or_never().is_none());
+        }
+    });
+    assert_eq!(allocations.count_current, 0);
+    assert_eq!(allocations.bytes_current, 0);
+    assert!(!token.is_cancelled());
+    token.cancel();
+    assert!(token.cancelled().now_or_never().is_some());
+}
+
+#[test]
+fn cancellation_wakes_all_registered_and_later_listeners() {
+    use futures::FutureExt;
+    let token = CancellationToken::new();
+    let mut first = Box::pin(token.cancelled());
+    let mut second = Box::pin(token.cancelled());
+    assert!(first.as_mut().now_or_never().is_none());
+    assert!(second.as_mut().now_or_never().is_none());
+    token.cancel();
+    assert!(first.now_or_never().is_some());
+    assert!(second.now_or_never().is_some());
+    assert!(token.cancelled().now_or_never().is_some());
+}
+
+#[test]
 fn ordinary_deadline_is_absent_but_lease_is_bounded() {
     let deadline = Deadline::default();
     assert_eq!(deadline.at(), None);

@@ -64,6 +64,15 @@ fn openai_wire_event(canonical: Vec<GatewayEvent>, event_type: &str, data: Value
 }
 
 #[test]
+fn http_missing_stream_defaults_to_json_delivery_without_rewriting_the_wire_body() {
+    let body = json!({"model": "smart-code", "input": "hello"});
+    let decoded = generate_request(body.clone());
+    assert!(!decoded.metadata().stream());
+    assert_eq!(Value::Object(openai_wire_body(&decoded).clone()), body);
+    assert!(!openai_protocol_context(&decoded).contains_key("use_websocket"));
+}
+
+#[test]
 fn decoder_should_preserve_the_openai_body_and_only_derive_stable_routing_facts() {
     let request_body = json!({
         "model": "smart-code",

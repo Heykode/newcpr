@@ -95,6 +95,7 @@ pub(crate) async fn responses(
         "ingressRequestId": ingress_id.as_ref().and_then(|Extension(id)| id.header_value().to_str().ok()),
     }), headers.iter().map(|(name, value)| (name.as_str(), value.as_bytes())));
     trace.capture("client.request.body", &body);
+    drop(body);
     let request_id = started.request_id;
     let StartedExecution {
         stream, session, ..

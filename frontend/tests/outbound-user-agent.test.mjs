@@ -20,6 +20,26 @@ const sampleModule = load(readFileSync(new URL('../src/views/settings/components
   './outbound-user-agent-samples.json': catalog,
 })
 
+test('OS editor changes only the version and preserves the existing custom UA contract', async () => {
+  const app = harness(view({ mode: 'qx-compatible', userAgent: customQx }))
+  try {
+    await app.state.load(true)
+    app.state.osVersion.value = '6.12.8'
+    assert.equal(app.state.displayedInput.value, customQx.replace('6.8.0', '6.12.8'))
+    assert.equal(app.state.useDefault.value, false)
+    app.state.osVersion.value = 'invalid; injected'
+    assert.equal(app.state.displayedInput.value, customQx.replace('6.8.0', '6.12.8'))
+    await app.state.save()
+    assert.equal(app.requests[0].userAgent, customQx.replace('6.8.0', '6.12.8'))
+    assert.equal(app.requests[0].mode, 'custom')
+    assert.equal(Object.hasOwn(app.requests[0], 'tlsProfile'), false)
+    assert.equal(Object.hasOwn(app.requests[0], 'sessionPolicy'), false)
+  }
+  finally {
+    app.stop()
+  }
+})
+
 function load(text, dependencies) {
   const { outputText } = ts.transpileModule(text, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
@@ -80,6 +100,8 @@ function harness(initial = view(), overrides = {}) {
     '@/components/base/BaseButton.vue': {},
     '@/components/base/BaseCard.vue': {},
     '@/components/base/BaseCheckbox.vue': {},
+    '@/components/base/BaseInput.vue': {},
+    '../composables/userAgentOsVersion': load(readFileSync(new URL('../src/views/settings/composables/userAgentOsVersion.ts', import.meta.url), 'utf8'), {}),
     '@/components/base/BaseForm/FormItem.vue': {},
     '@/components/base/BaseSelect.vue': {},
     '@/components/base/BaseTextarea.vue': {},

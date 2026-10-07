@@ -72,7 +72,9 @@ impl ClientAdmissionRecoveryRepository for PgClientAdmissionRecoveryRepository {
         .bind(window_started_at)
         .fetch_all(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("load client admission recovery"))?;
+        .map_err(|error| {
+            postgres_unavailable("load client admission recovery").with_source(error)
+        })?;
         let mut recoveries = BTreeMap::<String, ClientAdmissionRecovery>::new();
         for (client_api_key_ref, model_request_id, started_at, deadline_at, outcome) in rows {
             let recovery = recoveries

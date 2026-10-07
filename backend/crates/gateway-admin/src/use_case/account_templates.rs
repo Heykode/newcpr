@@ -1,10 +1,11 @@
-//! One template catalog for existing-account settings and create-only relogin imports.
+//! One template catalog for account settings, credential imports and relogin.
 
 use super::{accounts::AccountsService, map_store_error};
 use crate::{
     model::{
         AdminError, MutationContext,
-        accounts::{AccountsUpdateResult, BatchUpdateAccounts},
+        accounts::{AccountsUpdateResult, BatchUpdateAccounts, ImportTemplateProxyMode},
+        provider_credentials::ImportCredentials,
         proxies::AccountProxySelection,
         relogin_templates::{
             ReloginTemplate, ReloginTemplateConfig, ReloginTemplateSelection, validate_template_id,
@@ -32,6 +33,11 @@ pub trait AccountTemplatesService: Send + Sync {
         &self,
         selection: ReloginTemplateSelection,
     ) -> Result<ReloginTemplate, AdminError>;
+    async fn prepare_import(
+        &self,
+        command: ImportCredentials,
+        selection: ReloginTemplateSelection,
+    ) -> Result<ImportCredentials, AdminError>;
     async fn apply(
         &self,
         account_ids: Vec<String>,
@@ -136,6 +142,32 @@ impl AccountTemplatesService for DefaultAccountTemplatesService {
         }
         template.config.settings()?;
         Ok(template)
+    }
+
+    async fn prepare_import(
+        &self,
+        mut command: ImportCredentials,
+        selection: ReloginTemplateSelection,
+    ) -> Result<ImportCredentials, AdminError> {
+        let template = self.resolve(selection).await?;
+        self.store()?
+            .validate_template_references(&template.config)
+            .await
+            .map_err(template_error)?;
+        let mut settings = template.config.settings()?;
+        settings.template_proxy_mode = Some(if template.config.preserve_outbound_proxy {
+            ImportTemplateProxyMode::Preserve
+        } else {
+            ImportTemplateProxyMode::Replace
+        });
+        // Names and purchase records are import inputs, never template settings.
+        if let Some(input) = command.settings {
+            settings.custom_name = input.custom_name;
+            settings.purchase_cost = input.purchase_cost;
+        }
+        command.settings = Some(settings);
+        command.outbound_proxy_id = template.config.outbound_proxy_id;
+        Ok(command)
     }
 
     async fn apply(

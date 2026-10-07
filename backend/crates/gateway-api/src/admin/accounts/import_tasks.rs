@@ -153,20 +153,18 @@ where
     let fingerprint = Sha256::digest(&encoded).into();
     drop(encoded);
     let context = auth.context().mutation_context();
-    let items = request
-        .items
-        .into_iter()
-        .map(|item| {
-            let (provider, command) = item.into_command(context.clone())?;
-            let provider = ProviderKind::new(match provider {
-                AccountProvider::OpenAi => "openai",
-                AccountProvider::Xai => "xai",
-            })
-            .map_err(|_| WireValidationError::new("provider"))?;
-            Ok(ImportTaskInput { provider, command })
+    let mut items = Vec::with_capacity(request.items.len());
+    for item in request.items {
+        let (provider, command) = item
+            .into_command(context.clone(), state.admin_services().account_templates())
+            .await?;
+        let provider = ProviderKind::new(match provider {
+            AccountProvider::OpenAi => "openai",
+            AccountProvider::Xai => "xai",
         })
-        .collect::<Result<Vec<_>, WireValidationError>>()
-        .map_err(map_wire_error)?;
+        .map_err(|_| map_wire_error(WireValidationError::new("provider")))?;
+        items.push(ImportTaskInput { provider, command });
+    }
     let task = state
         .admin_services()
         .import_tasks()

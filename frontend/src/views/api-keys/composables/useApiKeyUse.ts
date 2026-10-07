@@ -1,6 +1,6 @@
 import type { Ref, ShallowRef } from 'vue'
 import type { getApiKeys } from '@/api'
-import { computed, shallowRef } from 'vue'
+import { computed, onScopeDispose, shallowRef } from 'vue'
 
 import { API_BASE_URL } from '@/api/constants'
 import { buildCodexCcSwitchImportDeeplink } from '../utils/ccswitchImport'
@@ -74,6 +74,10 @@ export function useApiKeyUse(options: {
     if (!showUseKeyModal.value)
       selectedUseKey.value = null
   }
+
+  onScopeDispose(() => {
+    selectedUseKey.value = null
+  })
 
   return {
     showUseKeyModal,

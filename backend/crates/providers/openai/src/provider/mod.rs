@@ -54,9 +54,9 @@ use uuid::Uuid;
 use crate::credential::{
     CodexAccountFailure, CodexCredentialCatalogError, CodexCredentialCatalogService,
     CodexCredentialLease, CodexCredentialQuotaService, CodexCredentialRefreshOutcome,
-    CodexCredentialRefreshService, CodexCredentialSelector, CodexCyberPolicyScope,
-    CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError, RuntimeCodexCookie,
-    SelectCodexCredential, SelectCodexProviderEndpointCredential,
+    CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
+    CodexCyberPolicyScope, CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError,
+    RuntimeCodexCookie, SelectCodexCredential, SelectCodexProviderEndpointCredential,
     derive_codex_cyber_policy_session_key, derive_codex_endpoint_session_affinity,
     derive_codex_session_affinity, derive_previous_response_id_hash,
 };
@@ -88,11 +88,11 @@ use crate::transport::usage::normalize_service_tier;
 use crate::transport::websocket::{CodexWebSocketExchangeError, PreviousResponseUnavailableReason};
 use crate::transport::{
     CODEX_ALPHA_SEARCH_PATH, CODEX_IMAGE_EDITS_PATH, CODEX_IMAGE_GENERATIONS_PATH,
-    CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry, CodexBackendClient,
-    CodexBackendJsonResponse, CodexBackendStreamingResponse, CodexBackendTransport,
-    CodexClientError, CodexRateLimitUpdates, CodexRequestContext, CodexResponseMetadata,
-    CodexResponseMetadataUpdates, CodexTransportMetrics, CodexUpstreamDiagnostics,
-    CodexWebSocketPool, endpoint_url,
+    CODEX_REALTIME_CALLS_PATH, CODEX_RESPONSES_PATH, CodexAccountSelectionTelemetry,
+    CodexBackendClient, CodexBackendJsonResponse, CodexBackendStreamingResponse,
+    CodexBackendTransport, CodexClientError, CodexRateLimitUpdates, CodexRequestContext,
+    CodexResponseMetadata, CodexResponseMetadataUpdates, CodexTransportMetrics,
+    CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
 };
 
 mod cache_diagnostics;
@@ -100,10 +100,12 @@ mod compact;
 mod excel;
 mod execution;
 mod failure;
+mod live;
 mod observation;
 mod quality_probe;
 mod request_proxy;
 mod workers;
+pub(crate) use live::{CodexLiveGateway, CodexLiveRegistry};
 
 use excel::prepare_excel;
 use execution::*;
@@ -118,8 +120,6 @@ const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const HTTP_JSON_TRANSPORT: &str = "http_json";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
-// 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照。
-const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
 const QUOTA_FAILURE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
 pub const OFFICIAL_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
@@ -148,6 +148,7 @@ pub struct CodexProvider {
     image_generations_url: Url,
     image_edits_url: Url,
     search_url: Url,
+    live_calls_url: Url,
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
     stream_max_retries: u32,
@@ -156,6 +157,8 @@ pub struct CodexProvider {
     session_proxy_pool:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyPool>>,
     excel_image_relay: Arc<crate::transport::excel::image_relay::ImageRelay>,
+    live_registry: Arc<CodexLiveRegistry>,
+    live_gateway: Option<Arc<CodexLiveGateway>>,
 }
 
 impl CodexProvider {
@@ -240,6 +243,8 @@ impl CodexProvider {
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let search_url = Url::parse(&endpoint_url(&base_url, CODEX_ALPHA_SEARCH_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
+        let live_calls_url = Url::parse(&endpoint_url(&base_url, CODEX_REALTIME_CALLS_PATH))
+            .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let location = profile.snapshot().location;
         let client = CodexBackendClient::new(http, base_url, profile)
             .with_websocket_pool(websocket_pool)
@@ -257,6 +262,7 @@ impl CodexProvider {
             image_generations_url,
             image_edits_url,
             search_url,
+            live_calls_url,
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
             stream_max_retries: _stream_max_retries,
@@ -265,11 +271,25 @@ impl CodexProvider {
             excel_image_relay: Arc::new(crate::transport::excel::image_relay::ImageRelay::new(
                 None,
             )),
+            live_registry: Arc::new(CodexLiveRegistry::default()),
+            live_gateway: None,
         })
     }
 
     pub(crate) fn with_session_identity(mut self, identity: CodexSessionIdentity) -> Self {
         self.session_identity = Some(identity);
+        self
+    }
+
+    /// 绑定 Live 语音支持：call 注册表 + 账号级 sideband 网关。
+    /// 需要凭据仓库句柄；未绑定时不暴露 sideband 与 hangup 能力。
+    pub(crate) fn with_live_support(mut self, repository: CodexCredentialRepository) -> Self {
+        let gateway = Arc::new(CodexLiveGateway::new(
+            Arc::clone(&self.live_registry),
+            repository,
+            self.client.clone(),
+        ));
+        self.live_gateway = Some(gateway);
         self
     }
 }
@@ -297,6 +317,12 @@ impl Provider for CodexProvider {
 
     fn name(&self) -> &'static str {
         PROVIDER_NAME
+    }
+
+    fn live_gateway(&self) -> Option<Arc<dyn gateway_core::live::LiveGateway>> {
+        self.live_gateway
+            .clone()
+            .map(|gateway| gateway as Arc<dyn gateway_core::live::LiveGateway>)
     }
 
     fn catalog_generation(&self) -> ProviderCatalogGeneration {
@@ -344,7 +370,8 @@ impl Provider for CodexProvider {
                     _ => None,
                 },
                 continuation: ContinuationRequestObservation {
-                    affinity_hash: affinity.map(|affinity| affinity.persistence_hash().to_owned()),
+                    affinity_hash: affinity
+                        .and_then(|affinity| affinity.persistence_hash().map(ToOwned::to_owned)),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -363,7 +390,7 @@ impl Provider for CodexProvider {
         let previous_response_id = encoded.previous_response_id();
         let continuation = ContinuationRequestObservation {
             affinity_hash: derive_codex_session_affinity(&encoded, client_api_key_id)
-                .map(|affinity| affinity.persistence_hash().to_owned()),
+                .and_then(|affinity| affinity.persistence_hash().map(ToOwned::to_owned)),
             previous_response_id_hash: previous_response_id.map(|response_id| {
                 derive_previous_response_id_hash(response_id, client_api_key_id)
             }),
@@ -383,8 +410,9 @@ impl Provider for CodexProvider {
     async fn query_model_capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
-        let snapshot = self.catalog.synchronize().await.map_err(|_| {
+        let snapshot = self.catalog.synchronize().await.map_err(|error| {
             provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                .with_source(error)
         })?;
         let mut accounts = snapshot.model_catalog_accounts();
         Ok(snapshot
@@ -452,6 +480,11 @@ impl Provider for CodexProvider {
         if let Operation::Compact(compact) = request.operation() {
             return self.execute_compact(compact, candidate, context).await;
         }
+        if let Operation::ProviderHttp(request) = request.operation() {
+            return self
+                .execute_live_call(request.clone(), candidate.upstream_model(), context)
+                .await;
+        }
         let Operation::Generate(generate) = request.operation() else {
             return Err(provider_error(
                 ProviderErrorKind::Unsupported,
@@ -481,7 +514,18 @@ impl Provider for CodexProvider {
             context.request_id().as_str(),
         )?;
         // 编码已生成独立请求；HTTP、WS 与重试在头部和计量之前共用此策略。
-        upstream_request.apply_fast_policy(context.disable_fast());
+        let supports_priority = candidate.model_presentation().is_some_and(|model| {
+            model
+                .service_tiers()
+                .iter()
+                .any(|tier| tier.id() == "priority")
+        });
+        let fast_mode = if context.disable_fast() {
+            gateway_core::account::FastMode::Disabled
+        } else {
+            candidate.account_scope().fast_mode()
+        };
+        upstream_request.apply_fast_policy(fast_mode, supports_priority);
         let client_key_id = context.client_api_key_ref().as_str();
         if previous_session
             .as_ref()
@@ -539,11 +583,26 @@ impl Provider for CodexProvider {
                 crate::transport::request::clear_turn_state(&mut upstream_request);
             }
         }
-        let session_affinity =
-            derive_codex_session_affinity(&upstream_request, context.client_api_key_ref());
+        let session_affinity = derive_codex_session_affinity(
+            &upstream_request,
+            context.client_api_key_ref(),
+        )
+        .map(|affinity| {
+            affinity.with_policy(context.account_selection_policy().openai_account_affinity())
+        });
+        // Restored and native owners take precedence over a client turn alias.
+        let session_affinity = if previous_session.is_some()
+            || continuation_requested
+            || context.continuation_attempt() != ContinuationAttempt::None
+        {
+            session_affinity.map(CodexSessionAffinity::with_advisory_turn_alias)
+        } else {
+            self.resolve_turn_affinity(session_affinity, &context)
+                .await?
+        };
         let cyber_policy_session_key =
             derive_codex_cyber_policy_session_key(&upstream_request, context.client_api_key_ref());
-        let guardian = upstream_request.subagent_kind().as_deref() == Some("guardian");
+        let guardian = upstream_request.guardian_parent_thread_id().is_some();
 
         let selection_started_at = Instant::now();
         let lease = self
@@ -553,10 +612,10 @@ impl Provider for CodexProvider {
                     upstream_model: upstream_model.as_str(),
                     request_url: &self.responses_url,
                     attempt: &context,
-                    session_affinity_key: session_affinity.as_ref().map(|affinity| affinity.key()),
-                    reserved_concurrency: if upstream_request.subagent_kind().as_deref()
-                        == Some("guardian")
-                    {
+                    session_affinity_key: session_affinity
+                        .as_ref()
+                        .and_then(CodexSessionAffinity::key),
+                    reserved_concurrency: if guardian {
                         0
                     } else {
                         context
@@ -587,8 +646,6 @@ impl Provider for CodexProvider {
         {
             return Err(continuation_replay_required_error("upstream_changed"));
         }
-        // 首字计时的起点：账号选择完成之后、上游建立之前。
-        let output_started_at = Instant::now();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
         let state_owner_cross_account = context
@@ -730,9 +787,11 @@ impl Provider for CodexProvider {
         let requirement = transport_requirement(&upstream_request);
         let requested_transport = selected_transport(&upstream_request);
         let session_http_fallback = requirement.allows_pre_send_http_fallback()
-            && session_affinity
-                .as_ref()
-                .is_some_and(|affinity| self.session_transport_recovery.uses_http(affinity.key()));
+            && session_affinity.as_ref().is_some_and(|affinity| {
+                affinity
+                    .transport_key()
+                    .is_some_and(|key| self.session_transport_recovery.uses_http(key))
+            });
         let transport = if requirement.requires_websocket() {
             CodexProviderTransport::PreferWebSocket
         } else if context.transport() == AttemptTransport::Fallback || session_http_fallback {
@@ -774,7 +833,11 @@ impl Provider for CodexProvider {
         let session_affinity_key_hash = session_affinity
             .as_ref()
             .map(|affinity| affinity.key_hash().to_owned());
-        let session_affinity_key = session_affinity.map(CodexSessionAffinity::into_key);
+        let transport_affinity_key = session_affinity
+            .as_ref()
+            .and_then(CodexSessionAffinity::transport_key)
+            .cloned();
+        let session_affinity_key = session_affinity.and_then(CodexSessionAffinity::into_key);
         let request_tuning = context.request_tuning();
         let websocket_retry_count = match context.transport() {
             AttemptTransport::Retry(retry_index) => retry_index.get(),
@@ -816,9 +879,9 @@ impl Provider for CodexProvider {
             quota: Arc::clone(&self.quota),
             catalog: Arc::clone(&self.catalog),
             lease: Arc::clone(&lease),
-            output_started_at,
             session_affinity_key,
             session_affinity_key_hash,
+            transport_affinity_key,
             session_transport_recovery: self.session_transport_recovery.clone(),
             websocket_retry_count,
             stream_max_retries: if self.request_tuning.is_some() {

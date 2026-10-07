@@ -2205,6 +2205,21 @@ fn initialized_account_scope(account_id: &str) -> Arc<FrozenAccountScope> {
     ))
 }
 
+pub(crate) async fn initialized_test_provider(
+    accounts: Arc<MemoryAccountStore>,
+    base_url: String,
+) -> Arc<dyn gateway_core::engine::provider::Provider> {
+    let mut config = valid_config();
+    config.config.api.base_url = base_url;
+    provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(accounts, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("initialized provider")
+    .core_provider()
+}
+
 pub(super) fn provider_ports() -> ProviderStorePorts {
     provider_ports_with(
         Arc::new(MemoryAccountStore::default()),
@@ -2736,14 +2751,10 @@ mod errors {
     }
 
     #[tokio::test]
-    async fn manual_refresh_preserves_banned_evidence_without_promoting_401_to_terminal() {
+    async fn manual_refresh_classifies_deactivation_and_401_rejection_without_leaking_details() {
         for (status, kind, message) in [
             (400, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
-            (
-                401,
-                Kind::BadGateway,
-                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
-            ),
+            (401, Kind::Invalid, "刷新令牌已失效，请重新授权"),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -2778,33 +2789,28 @@ mod errors {
             (
                 401,
                 "refresh_token_reused",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌已被使用，请重新授权",
             ),
             (
                 401,
                 "refresh_token_expired",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌已过期，请重新授权",
             ),
             (
                 401,
                 "refresh_token_invalidated",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌已被撤销，请重新授权",
             ),
             (
                 401,
                 "token_expired",
-                Kind::BadGateway,
+                Kind::Invalid,
                 "刷新令牌不可用，请重新授权",
             ),
-            (
-                401,
-                "unknown",
-                Kind::BadGateway,
-                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
-            ),
+            (401, "unknown", Kind::Invalid, "刷新令牌已失效，请重新授权"),
             (
                 400,
                 "refresh_token_reused",

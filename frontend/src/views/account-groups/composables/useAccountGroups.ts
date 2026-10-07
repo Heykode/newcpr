@@ -1,4 +1,4 @@
-import type { AccountGroup, ApiKey } from '@/api'
+import type { AccountGroup, ApiKey, GroupFastMode } from '@/api'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 
@@ -21,6 +21,7 @@ import { formatDateTime } from '@/utils/date'
 import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
 export interface AccountGroupFormValue {
+  fastMode: GroupFastMode
   name: string
   description: string
   color: string
@@ -59,6 +60,7 @@ export function useAccountGroups() {
 
   const groups = computed(() => query.items.value.map(group => ({
     ...group,
+    fastMode: group.fastMode ?? (group.disableFast ? 'disabled' : 'default'),
     updatedAtDisplay: formatDateTime(group.updatedAt),
   })))
   const pagination = computed(() => ({
@@ -114,6 +116,7 @@ export function useAccountGroups() {
   function openEdit(group: AccountGroup) {
     editingGroup.value = group
     form.value = {
+      fastMode: group.fastMode ?? (group.disableFast ? 'disabled' : 'default'),
       name: group.name,
       description: group.description ?? '',
       color: group.color,
@@ -139,21 +142,17 @@ export function useAccountGroups() {
     await savingAction.run(async () => {
       const updating = Boolean(editingGroup.value)
       const description = form.value.description.trim() || null
+      const fastMode = form.value.fastMode
       if (editingGroup.value) {
-        await updateAccountGroup({
-          id: editingGroup.value.id,
-          name,
-          description,
-          color,
-          disableFast: form.value.disableFast,
-        })
+        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode })
       }
       else {
         await createAccountGroup({
+          fastMode,
           name,
           description,
           color,
-          disableFast: form.value.disableFast,
+          disableFast: fastMode === 'disabled',
         })
       }
       showFormModal.value = false
@@ -321,10 +320,5 @@ export function useAccountGroups() {
 }
 
 function emptyForm(): AccountGroupFormValue {
-  return {
-    name: '',
-    description: '',
-    color: DEFAULT_ACCOUNT_GROUP_COLOR,
-    disableFast: false,
-  }
+  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default', disableFast: false }
 }

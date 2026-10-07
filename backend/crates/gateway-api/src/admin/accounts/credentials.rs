@@ -73,6 +73,7 @@ impl AccountImportSettingsRequest {
         self,
     ) -> Result<gateway_admin::model::accounts::AccountImportSettings, WireValidationError> {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
+            template_proxy_mode: None,
             excel_recovery: self.excel_recovery,
             purchase_cost: self.purchase_cost,
             clear_outbound_proxy: self.clear_outbound_proxy,
@@ -101,6 +102,8 @@ impl AccountImportSettingsRequest {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<gateway_admin::model::relogin_templates::ReloginTemplateSelection>,
     pub outbound_proxy_id: Option<String>,
     pub settings: Option<AccountImportSettingsRequest>,
     pub provider: String,
@@ -133,24 +136,40 @@ impl AccountImportRequest {
         Ok(())
     }
 
-    pub(super) fn into_command(
+    pub(super) async fn into_command(
         self,
         context: gateway_admin::model::MutationContext,
-    ) -> Result<(AccountProvider, ImportCredentials), WireValidationError> {
-        self.validate()?;
-        let provider = AccountProvider::parse(&self.provider)?;
-        Ok((
-            provider,
-            ImportCredentials {
-                outbound_proxy_id: self.outbound_proxy_id,
-                settings: self
-                    .settings
-                    .map(AccountImportSettingsRequest::into_settings)
-                    .transpose()?,
-                context,
-                document: provider_document(self.data, "data")?,
-            },
-        ))
+        templates: &dyn gateway_admin::AccountTemplatesService,
+    ) -> Result<(AccountProvider, ImportCredentials), AdminError> {
+        self.validate().map_err(map_wire_error)?;
+        let provider = AccountProvider::parse(&self.provider).map_err(map_wire_error)?;
+        let mut command = ImportCredentials {
+            outbound_proxy_id: self.outbound_proxy_id,
+            settings: self
+                .settings
+                .map(AccountImportSettingsRequest::into_settings)
+                .transpose()
+                .map_err(map_wire_error)?,
+            context,
+            document: provider_document(self.data, "data").map_err(map_wire_error)?,
+        };
+        if let Some(selection) = self.template {
+            command = templates
+                .prepare_import(command, selection)
+                .await
+                .map_err(map_service_error)?;
+        }
+        if provider != AccountProvider::OpenAi
+            && command
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.turn_state_injection_enabled == Some(true))
+        {
+            return Err(map_wire_error(WireValidationError::new(
+                "turnStateInjectionEnabled",
+            )));
+        }
+        Ok((provider, command))
     }
 }
 

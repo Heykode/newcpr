@@ -101,11 +101,12 @@ impl ObservabilityQueryBudget {
                 );
                 Ok(permit)
             }
-            Ok(Err(_)) => Err(StoreError::Unavailable {
+            Ok(Err(error)) => Err(StoreError::Unavailable {
+                source: Some(error.into()),
                 backend: StoreBackend::PostgreSql,
                 message: "observability PostgreSQL connection budget is closed".to_owned(),
             }),
-            Err(_) => {
+            Err(error) => {
                 tracing::warn!(
                     query_class = "observability",
                     operation,
@@ -114,6 +115,7 @@ impl ObservabilityQueryBudget {
                     "PostgreSQL query budget exhausted"
                 );
                 Err(StoreError::Unavailable {
+                    source: Some(error.into()),
                     backend: StoreBackend::PostgreSql,
                     message: "observability PostgreSQL connection budget is exhausted".to_owned(),
                 })

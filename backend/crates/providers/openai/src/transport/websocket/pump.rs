@@ -836,7 +836,7 @@ fn log_pump_exit(
             connection_idle_ms = observation.idle_ms(),
             pump_exit_detail = detail,
             upstream_close_code = ?upstream_close.and_then(CodexWebSocketCloseError::code),
-            upstream_error_raw,
+            upstream_error_raw_bytes = upstream_error_raw.len(),
             upstream_error_raw_present = upstream_close.is_some_and(|close| close.reason().is_some()),
             backpressure_events,
             "Responses WebSocket pump received close frame"

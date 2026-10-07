@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import type { ApiKeyBudgetPeriod, getApiKeys } from '@/api'
-import { ref, shallowRef, watch } from 'vue'
+import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import {
   createApiKey,
   deleteApiKey,
@@ -280,6 +280,11 @@ export function useApiKeyMutations(options: {
       form.value = emptyForm()
     }
   }
+
+  onScopeDispose(() => {
+    createdKey.value = ''
+    createdKeyName.value = ''
+  })
 
   return {
     deletingCount,

@@ -123,6 +123,15 @@ impl ApiBundle {
         self
     }
 
+    #[must_use]
+    pub fn with_operational_diagnostics(
+        mut self,
+        diagnostics: Arc<dyn gateway_core::diagnostics::OperationalDiagnostics>,
+    ) -> Self {
+        self.router = self.router.layer(axum::Extension(diagnostics));
+        self
+    }
+
     pub fn router(self) -> Router {
         self.router
     }

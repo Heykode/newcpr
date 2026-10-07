@@ -651,6 +651,8 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
         .lock()
         .expect("ops errors")
         .push(OpsError {
+            provider_account_plan_type: Some("pro".to_owned()),
+            provider_account_plan_type_display: Some("Pro".to_owned()),
             client_api_key_name: Some("test-client".to_owned()),
             source: "model_request".to_owned(),
             event_id: "err_snapshot".to_owned(),
@@ -730,6 +732,7 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "kind": value["data"]["items"][0]["kind"],
             "accountId": value["data"]["items"][0]["accountId"],
             "accountLabel": value["data"]["items"][0]["metadata"]["accountLabel"],
+            "accountPlanType": value["data"]["items"][0]["accountPlanType"],
             "clientStatusCode": value["data"]["items"][0]["clientStatusCode"],
             "route": value["data"]["items"][0]["route"],
             "requestedModel": value["data"]["items"][0]["requestedModel"],
@@ -749,6 +752,7 @@ async fn ops_errors_should_keep_account_label_and_authentication_contract() {
             "kind": "model_request",
             "accountId": "acct_err",
             "accountLabel": "err@example.invalid",
+            "accountPlanType": "pro",
             "clientStatusCode": 502,
             "route": "/v1/responses",
             "requestedModel": "gpt-5.4",

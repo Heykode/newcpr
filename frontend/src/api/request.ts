@@ -20,7 +20,12 @@ export interface RequestOptions {
   timeout?: number
 }
 
-type RequestConfig = AxiosRequestConfig & RequestOptions
+type RequestConfig = AxiosRequestConfig & Omit<RequestOptions, 'signal'> & {
+  sessionGeneration?: number
+  recoveryCount?: number
+  authRetried?: boolean
+  transientRetried?: boolean
+}
 
 const http: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -30,6 +35,14 @@ const http: AxiosInstance = axios.create({
 
 let unauthorizedHandled = false
 let unauthorizedHandler: (() => void | Promise<void>) | undefined
+let sessionRecoveryHandler: (() => Promise<boolean>) | undefined
+let recovery: Promise<boolean> | undefined
+let generation = 0
+let successfulRecoveries = 0
+
+export function setSessionRecoveryHandler(handler: () => Promise<boolean>) {
+  sessionRecoveryHandler = handler
+}
 
 export function setUnauthorizedHandler(handler: () => void | Promise<void>) {
   unauthorizedHandler = handler
@@ -39,8 +52,15 @@ export function resetUnauthorizedHandling() {
   unauthorizedHandled = false
 }
 
+export function invalidatePendingRequests() {
+  generation += 1
+  recovery = undefined
+  successfulRecoveries = 0
+  resetUnauthorizedHandling()
+}
+
 function isAuthenticationRequest(url?: string) {
-  return Boolean(url?.includes('/api/admin/auth/login') || url?.includes('/api/admin/auth/status'))
+  return ['/api/admin/auth/login', '/api/admin/auth/status', '/api/admin/auth/refresh', '/api/admin/auth/logout'].includes(url ?? '')
 }
 
 function handleUnauthorizedOnce() {
@@ -51,6 +71,13 @@ function handleUnauthorizedOnce() {
     unauthorizedHandled = false
   })
 }
+
+http.interceptors.request.use((config) => {
+  const tracked = config as typeof config & RequestConfig
+  tracked.sessionGeneration ??= generation
+  tracked.recoveryCount ??= successfulRecoveries
+  return config
+})
 
 http.interceptors.response.use(
   (response: AxiosResponse<unknown>) => {
@@ -64,11 +91,47 @@ http.interceptors.response.use(
   },
 )
 
-function rejectRequest(error: ApiError, config?: AxiosRequestConfig & Pick<RequestOptions, 'silent'>) {
+async function rejectRequest(error: ApiError, config?: RequestConfig): Promise<never | AxiosResponse<unknown>> {
   if (error.kind === 'cancelled' || config?.signal?.aborted)
     return Promise.reject(error)
 
-  const sessionExpired = error.status === 401 && !isAuthenticationRequest(config?.url)
+  if (config?.sessionGeneration !== undefined && config.sessionGeneration !== generation)
+    return Promise.reject(error)
+  const sessionExpired = error.status === 401 && error.code === 40101 && !isAuthenticationRequest(config?.url)
+  if (sessionExpired && config && !config.authRetried && sessionRecoveryHandler) {
+    try {
+      if (!recovery && config.recoveryCount === successfulRecoveries) {
+        const expectedGeneration = generation
+        const pending = sessionRecoveryHandler().then((authenticated) => {
+          if (generation !== expectedGeneration)
+            return false
+          if (authenticated)
+            successfulRecoveries += 1
+          return authenticated
+        }).finally(() => {
+          if (recovery === pending)
+            recovery = undefined
+        })
+        recovery = pending
+      }
+      const authenticated = config.recoveryCount !== successfulRecoveries || await recovery
+      if (authenticated && !config.signal?.aborted && config.sessionGeneration === generation)
+        return http.request({ ...config, authRetried: true } as RequestConfig)
+    }
+    catch (cause) {
+      // Temporary renewal failure does not prove the administrator logged out.
+      return Promise.reject(cause)
+    }
+  }
+  if (config?.sessionGeneration !== undefined && config.sessionGeneration !== generation)
+    return Promise.reject(error)
+  const method = config?.method?.toUpperCase() ?? 'GET'
+  if (config && !config.transientRetried && ['GET', 'HEAD'].includes(method)
+    && (error.status === 0 || [502, 503, 504].includes(error.status))) {
+    await new Promise(resolve => setTimeout(resolve, 200))
+    if (!config.signal?.aborted && config.sessionGeneration === generation)
+      return http.request({ ...config, transientRetried: true } as RequestConfig)
+  }
   const alreadyHandled = sessionExpired && unauthorizedHandled
   if (sessionExpired)
     handleUnauthorizedOnce()

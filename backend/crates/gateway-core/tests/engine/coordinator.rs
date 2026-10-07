@@ -66,6 +66,7 @@ struct FinalState {
     image_generation_succeeded: Option<bool>,
     provider_error_code: Option<String>,
     raw_upstream_error: Option<String>,
+    error_details: Option<String>,
     retry_after_ms: Option<u64>,
     latency_ms: Option<u64>,
     client_response_id: Option<String>,
@@ -243,6 +244,7 @@ impl ExecutionStore for FakeStore {
                 image_generation_succeeded: finalization.image_generation_succeeded,
                 provider_error_code: finalization.provider_error_code,
                 raw_upstream_error: finalization.raw_upstream_error,
+                error_details: finalization.error_details,
                 retry_after_ms: finalization.retry_after_ms,
                 latency_ms: finalization.timings.latency_ms,
                 client_response_id: finalization.client_response_id,
@@ -2193,6 +2195,7 @@ fn account_wait_native_exit_respects_exact_owner_and_client_replay_dispositions(
         for kind in [
             ProviderErrorKind::AccountCapacityUnavailable,
             ProviderErrorKind::NoEligibleAccount,
+            ProviderErrorKind::QuotaExhausted,
         ] {
             assert_account_wait_native_exit_stops(
                 ProviderError::new(kind, UpstreamSendState::NotSent)
@@ -2211,6 +2214,18 @@ fn account_wait_expired_budget_does_not_reopen_native_recovery() {
             UpstreamSendState::NotSent,
         ),
         true,
+    );
+}
+
+#[test]
+fn prohibited_local_quota_failure_cannot_reopen_native_recovery() {
+    assert_account_wait_native_exit_stops(
+        ProviderError::new(
+            ProviderErrorKind::QuotaExhausted,
+            UpstreamSendState::NotSent,
+        )
+        .with_retry_prohibited(),
+        false,
     );
 }
 
@@ -4091,6 +4106,68 @@ fn transient_rejection() -> ProviderError {
 }
 
 #[test]
+fn explicit_retry_prohibition_overrides_rotation_transient_and_transport_recovery() {
+    for error in [
+        transient_rejection(),
+        transient_rejection().with_pre_delivery_transport_fallback(),
+        transient_rejection().with_pre_delivery_retry(),
+    ] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let (coordinator, store, provider) = coordinator(vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(error.with_retry_prohibited())],
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        assert!(
+            matches!(block_on(session.collect_uncommitted()), Err(EngineError::Provider(error)) if error.retry_is_prohibited())
+        );
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        assert_eq!(
+            store.state.lock().unwrap().finalizations[0].attempt_count,
+            1
+        );
+    }
+}
+
+#[test]
+fn retry_after_is_not_truncated_to_local_backoff_cap() {
+    for error in [
+        transient_rejection(),
+        transient_rejection().with_pre_delivery_transport_fallback(),
+    ] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let (coordinator, _, provider) = coordinator(vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(error.with_retry_after(Duration::from_secs(30)))],
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_millis(20)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        assert!(matches!(
+            block_on(session.collect_uncommitted()),
+            Err(EngineError::Deadline)
+        ));
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn transient_retries_back_off_on_the_same_account_then_rotate_with_a_fresh_budget() {
     let operation = generate_operation();
     let route_plan = plan(&operation);
@@ -4485,6 +4562,7 @@ fn final_account_exhaustion_discards_retryable_unauthorized_atomic_events() {
     for local_kind in [
         ProviderErrorKind::AccountCapacityUnavailable,
         ProviderErrorKind::NoEligibleAccount,
+        ProviderErrorKind::QuotaExhausted,
     ] {
         let operation = generate_operation();
         let route_plan = plan(&operation);
@@ -4893,6 +4971,7 @@ fn delivery_failure_keeps_pending_provider_error_and_raw_upstream_facts() {
             .with_upstream_code(OpaqueUpstreamValue::new("quota_original"))
             .with_upstream_request_id(OpaqueUpstreamValue::new("request-original"))
             .with_raw_upstream_error(RawUpstreamError::new("original upstream error"))
+            .with_source(std::io::Error::other("protected-provider-cause"))
             .with_atomic_client_events(vec![ProviderEvent::wire(
                 ProtocolWireEvent::json(
                     "openai",
@@ -4938,6 +5017,17 @@ fn delivery_failure_keeps_pending_provider_error_and_raw_upstream_facts() {
         assert_eq!(
             finalization.raw_upstream_error.as_deref(),
             Some("original upstream error")
+        );
+        let details: Value =
+            serde_json::from_str(finalization.error_details.as_deref().unwrap()).unwrap();
+        assert_eq!(details["upstream"], "original upstream error");
+        assert_eq!(details["causes"]["messages"][0], "protected-provider-cause");
+        assert!(
+            !finalization
+                .diagnostic_trace_json
+                .as_deref()
+                .unwrap_or_default()
+                .contains("protected-provider-cause")
         );
         assert_eq!(finalization.upstream_status_code, Some(429));
         assert_eq!(

@@ -245,3 +245,4 @@ fn client_visible_upstream_error_should_preserve_opaque_structured_fields() {
     assert_eq!(detail.error_type(), Some(error_type.as_str()));
     assert!(!format!("{detail:?}").contains(&message));
 }
+mod details;

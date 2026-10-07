@@ -34,6 +34,8 @@ pub struct SnapshotSettingsFacts {
     request_location: Option<crate::account::RequestLocation>,
     max_concurrent_per_account: u32,
     openai_guardian_reserved_concurrency: u32,
+    openai_session_binding_ttl_hours: u32,
+    openai_account_affinity: crate::account::AccountAffinity,
     request_interval_ms: u64,
     rotation_strategy: String,
     model_mappings: BTreeMap<String, String>,
@@ -93,6 +95,9 @@ impl SnapshotSettingsFacts {
                 super::DEFAULT_RESPONSES_MAX_DECOMPRESSED_BODY_BYTES,
             max_concurrent_per_account,
             openai_guardian_reserved_concurrency: 0,
+            openai_session_binding_ttl_hours:
+                crate::account::DEFAULT_OPENAI_SESSION_BINDING_TTL_HOURS,
+            openai_account_affinity: crate::account::AccountAffinity::Strict,
             request_location: None,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
@@ -144,6 +149,21 @@ impl SnapshotSettingsFacts {
         self.openai_guardian_reserved_concurrency = reserved;
         self
     }
+
+    #[must_use]
+    pub const fn with_openai_session_binding_ttl_hours(mut self, hours: u32) -> Self {
+        self.openai_session_binding_ttl_hours = hours;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_openai_account_affinity(
+        mut self,
+        mode: crate::account::AccountAffinity,
+    ) -> Self {
+        self.openai_account_affinity = mode;
+        self
+    }
 }
 
 /// Store 读取到的一个启用 Client API Key 策略事实。
@@ -178,7 +198,7 @@ pub struct SnapshotAccountGroupFacts {
     id: AccountGroupId,
     name: String,
     enabled: bool,
-    disable_fast: bool,
+    fast_mode: crate::account::FastMode,
 }
 
 impl SnapshotAccountGroupFacts {
@@ -188,13 +208,23 @@ impl SnapshotAccountGroupFacts {
             id,
             name,
             enabled,
-            disable_fast: false,
+            fast_mode: crate::account::FastMode::Default,
         }
     }
 
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
+        self.fast_mode = if disable_fast {
+            crate::account::FastMode::Disabled
+        } else {
+            crate::account::FastMode::Default
+        };
+        self
+    }
+
+    #[must_use]
+    pub const fn with_fast_mode(mut self, fast_mode: crate::account::FastMode) -> Self {
+        self.fast_mode = fast_mode;
         self
     }
 }
@@ -584,10 +614,17 @@ async fn compile_runtime_snapshot(
         Duration::from_millis(facts.settings.request_interval_ms),
     )
     .with_smart_scheduling(request_tuning.smart_scheduling)
+    .with_openai_account_affinity(facts.settings.openai_account_affinity)
+    .with_openai_session_binding_ttl(
+        crate::account::parse_openai_session_binding_ttl_hours(
+            facts.settings.openai_session_binding_ttl_hours,
+        )
+        .ok_or(RuntimeSnapshotCompileError::InvalidData)?,
+    )
     .with_openai_guardian_reserved_concurrency(facts.settings.openai_guardian_reserved_concurrency);
     let mut client_policies = Vec::with_capacity(facts.client_policies.len());
     for policy in facts.client_policies {
-        let mut disable_fast = false;
+        let mut fast_mode = crate::account::FastMode::Default;
         let account_scope = if policy.group_ids.is_empty() {
             FrozenAccountScope::new(
                 Arc::clone(&account_directory),
@@ -605,7 +642,7 @@ async fn compile_runtime_snapshot(
                     .get(&group_id)
                     .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
                 // 禁用分组仅影响选号；Key 仍继承该分组的 Fast 限制。
-                disable_fast |= group.disable_fast;
+                fast_mode = fast_mode.merge(group.fast_mode);
                 bound_groups.push(RoutingGroupSnapshot::new(
                     group.id.clone(),
                     group.name.clone(),
@@ -625,7 +662,7 @@ async fn compile_runtime_snapshot(
         client_policies.push(ClientPolicy::new(
             policy.key_id,
             policy.plaintext_key,
-            Arc::new(account_scope.with_disable_fast(disable_fast)),
+            Arc::new(account_scope.with_fast_mode(fast_mode)),
             true,
             policy.limits,
         ));
@@ -1157,6 +1194,11 @@ impl RuntimeSnapshot {
             };
             candidates.push(ProviderCandidate {
                 provider: provider.clone(),
+                model_presentation: self
+                    .provider_model_presentations
+                    .get(provider)
+                    .and_then(|models| models.get(&upstream_model))
+                    .cloned(),
                 upstream_model: Some(upstream_model),
                 emulated_features,
                 account_scope: Arc::clone(&account_scope),
@@ -1202,6 +1244,7 @@ impl RuntimeSnapshot {
     pub fn plan_provider_endpoint(
         &self,
         provider: &ProviderKind,
+        upstream_model: Option<&UpstreamModelId>,
         operation: &Operation,
         account_scope: Arc<FrozenAccountScope>,
         context: &RoutingContext,
@@ -1221,7 +1264,8 @@ impl RuntimeSnapshot {
         }
         let candidate = ProviderCandidate {
             provider: provider.clone(),
-            upstream_model: None,
+            model_presentation: None,
+            upstream_model: upstream_model.cloned(),
             emulated_features: BTreeSet::new(),
             account_scope: Arc::clone(&account_scope),
         };

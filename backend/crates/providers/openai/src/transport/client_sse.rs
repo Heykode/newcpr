@@ -1175,14 +1175,21 @@ async fn read_model_catalog_body(response: ReqwestResponse) -> CodexClientResult
 }
 
 fn websocket_connection_profile(headers: &HeaderMap) -> String {
-    let identity = ["originator", "user-agent", X_OPENAI_MEMGEN_REQUEST_HEADER]
-        .map(|name| {
-            headers
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or_default()
-        })
-        .join("\0");
+    let identity = [
+        "originator",
+        "user-agent",
+        "version",
+        X_OPENAI_MEMGEN_REQUEST_HEADER,
+        "x-codex-guardian",
+        "x-openai-internal-codex-residency",
+    ]
+    .map(|name| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+    })
+    .join("\0");
     // Opening headers are immutable. Separate threads cannot share their opening;
     // exact continuations still resolve the original owner.
     let session = headers

@@ -246,6 +246,7 @@ impl AdminHarness {
         }
         gateway_admin::initialize(
             AdminConfig {
+                session_absolute_ttl_minutes: 30 * 24 * 60,
                 session_ttl_minutes: self.session_ttl_minutes,
                 default_username: "admin".to_owned(),
                 default_password: InitialAdminPassword::new(self.default_password),
@@ -286,6 +287,15 @@ struct BootstrapAuthStore {
 
 #[async_trait]
 impl AuthStore for BootstrapAuthStore {
+    async fn renew_session(
+        &self,
+        _: &str,
+        _: &AdminSession,
+        _: chrono::DateTime<Utc>,
+    ) -> AdminStoreResult<Option<AdminSession>> {
+        Err(unavailable("admin session"))
+    }
+
     async fn change_password(
         &self,
         _: &str,

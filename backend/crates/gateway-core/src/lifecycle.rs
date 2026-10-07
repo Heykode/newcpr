@@ -1,20 +1,18 @@
 //! Host 与 API 之间的连接注册、drain 与取消契约。
 
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use std::time::{Duration, SystemTime};
 
-use futures::{
-    channel::oneshot,
-    future::{BoxFuture, pending},
-};
+use event_listener::Event;
+use futures::future::{BoxFuture, pending};
 use futures_timer::Delay;
 
 struct CancellationState {
     cancelled: AtomicBool,
-    waiters: Mutex<Vec<oneshot::Sender<()>>>,
+    event: Event,
 }
 
 /// 可克隆的请求、任务与连接取消信号。
@@ -41,7 +39,7 @@ impl CancellationToken {
     pub fn new() -> Self {
         Self(Arc::new(CancellationState {
             cancelled: AtomicBool::new(false),
-            waiters: Mutex::new(Vec::new()),
+            event: Event::new(),
         }))
     }
 
@@ -49,13 +47,7 @@ impl CancellationToken {
         if self.0.cancelled.swap(true, Ordering::AcqRel) {
             return;
         }
-        let waiters = {
-            let mut guard = lock_unpoisoned(&self.0.waiters);
-            std::mem::take(&mut *guard)
-        };
-        for waiter in waiters {
-            let _ = waiter.send(());
-        }
+        self.0.event.notify(usize::MAX);
     }
 
     #[must_use]
@@ -67,22 +59,13 @@ impl CancellationToken {
         if self.is_cancelled() {
             return;
         }
-        let (sender, receiver) = oneshot::channel();
-        {
-            let mut waiters = lock_unpoisoned(&self.0.waiters);
-            if self.is_cancelled() {
-                return;
-            }
-            waiters.push(sender);
+        // Dropping a losing select branch also unregisters its listener.
+        let listener = self.0.event.listen();
+        if self.is_cancelled() {
+            return;
         }
-        let _ = receiver.await;
+        listener.await;
     }
-}
-
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// 进程已进入 drain，新连接不得再注册。

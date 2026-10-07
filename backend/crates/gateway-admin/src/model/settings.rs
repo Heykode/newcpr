@@ -293,6 +293,8 @@ pub use gateway_core::account::RotationStrategy;
 /// 完整运行设置事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub openai_session_binding_ttl_hours: u32,
     pub config_revision: Revision,
     pub disable_fast: bool,
     pub turn_state_injection_enabled: bool,
@@ -331,6 +333,8 @@ pub struct ReplaceRuntimeSettings {
     pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub turn_state_probe_concurrency: Option<u32>,
     pub responses_max_decompressed_body_bytes: Option<u64>,
+    pub openai_account_affinity: Option<gateway_core::account::AccountAffinity>,
+    pub openai_session_binding_ttl_hours: Option<u32>,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,

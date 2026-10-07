@@ -1,6 +1,6 @@
 //! 请求认证时冻结的账号范围与目录，不依赖路由选择器。
 
-use super::ProviderAccountId;
+use super::{FastMode, ProviderAccountId};
 use crate::identity::ProviderKind;
 use crate::validation::{IdentifierError, RoutingError};
 use std::{
@@ -249,7 +249,7 @@ impl ClientRoutingScope {
 pub struct FrozenAccountScope {
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
-    disable_fast: bool,
+    fast_mode: FastMode,
     quality_model_account: Option<ProviderAccountId>,
 }
 
@@ -262,20 +262,35 @@ impl FrozenAccountScope {
         Self {
             directory,
             client_scope,
-            disable_fast: false,
+            fast_mode: FastMode::Default,
             quality_model_account: None,
         }
     }
 
     #[must_use]
     pub const fn with_disable_fast(mut self, disable_fast: bool) -> Self {
-        self.disable_fast = disable_fast;
+        self.fast_mode = if disable_fast {
+            FastMode::Disabled
+        } else {
+            FastMode::Default
+        };
         self
     }
 
     #[must_use]
     pub const fn disable_fast(&self) -> bool {
-        self.disable_fast
+        matches!(self.fast_mode, FastMode::Disabled)
+    }
+
+    #[must_use]
+    pub const fn with_fast_mode(mut self, fast_mode: FastMode) -> Self {
+        self.fast_mode = fast_mode;
+        self
+    }
+
+    #[must_use]
+    pub const fn fast_mode(&self) -> FastMode {
+        self.fast_mode
     }
 
     /// Only the trusted fixed-account quality entry may ignore local model policy.

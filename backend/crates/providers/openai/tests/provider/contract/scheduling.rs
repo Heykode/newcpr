@@ -1,5 +1,7 @@
 use super::*;
-use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
+use gateway_core::provider_ports::{
+    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionAlias,
+};
 
 #[tokio::test]
 async fn retired_state_flags_do_not_gate_either_selector_or_bypass_model_restrictions() {
@@ -194,6 +196,60 @@ async fn bound(affinity: &MemorySessionAffinity, key: &str) -> ProviderAccountId
         .await
         .expect("load")
         .expect("bound")
+}
+
+#[tokio::test]
+async fn turn_alias_is_atomic_and_keeps_binding_keys_separate() {
+    let affinity = MemorySessionAffinity::default();
+    let provider = ProviderKind::new("openai").expect("provider");
+    let alias_key = ProviderSessionAffinityKey::try_new("turn-alias").expect("alias key");
+    let session_key = ProviderSessionAffinityKey::try_new("root-session").expect("session key");
+    let other_session_key =
+        ProviderSessionAffinityKey::try_new("other-session").expect("other session key");
+    let alias = ProviderSessionAlias::new(session_key.clone(), true);
+    let other_alias = ProviderSessionAlias::new(other_session_key, true);
+
+    assert!(
+        affinity
+            .bind_alias(&provider, &alias_key, &alias, Duration::from_secs(60))
+            .await
+            .expect("bind alias")
+    );
+    assert_eq!(affinity.alias_count(), 1);
+    assert_eq!(
+        affinity
+            .load_alias(&provider, &alias_key)
+            .await
+            .expect("load alias"),
+        Some(alias.clone())
+    );
+    assert!(
+        affinity
+            .bind_alias(&provider, &alias_key, &alias, Duration::from_secs(60))
+            .await
+            .expect("renew alias")
+    );
+    assert!(
+        !affinity
+            .bind_alias(&provider, &alias_key, &other_alias, Duration::from_secs(60),)
+            .await
+            .expect("reject conflicting alias")
+    );
+    assert_eq!(
+        affinity
+            .load_alias(&provider, &alias_key)
+            .await
+            .expect("load unchanged alias"),
+        Some(alias)
+    );
+    assert_eq!(affinity.binding_count(), 0);
+    assert_eq!(
+        affinity
+            .load(&provider, &session_key)
+            .await
+            .expect("load ordinary binding"),
+        None
+    );
 }
 
 async fn local_server() -> MockServer {
@@ -749,6 +805,24 @@ fn waiting_provider_with_exclusions(
     base_url: String,
     exclusions: Arc<MemorySessionExclusions>,
 ) -> CodexProvider {
+    waiting_provider_with_affinity_and_limit(
+        store,
+        leases,
+        base_url,
+        exclusions,
+        Arc::new(MemorySessionAffinity::default()),
+        NonZeroU32::MIN,
+    )
+}
+
+pub(super) fn waiting_provider_with_affinity_and_limit(
+    store: &Arc<MemoryAccountStore>,
+    leases: Arc<TestLeaseCoordinator>,
+    base_url: String,
+    exclusions: Arc<MemorySessionExclusions>,
+    affinity: Arc<MemorySessionAffinity>,
+    limit: NonZeroU32,
+) -> CodexProvider {
     let profile = wire_profile();
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
     let catalog = Arc::new(CodexCredentialCatalogService::new(
@@ -770,7 +844,7 @@ fn waiting_provider_with_exclusions(
         ProviderKind::new("openai").unwrap(),
         store.repository(),
         leases,
-        Arc::new(MemorySessionAffinity::default()),
+        affinity,
         exclusions,
         Arc::clone(&quota),
         Arc::clone(&feedback),
@@ -779,8 +853,8 @@ fn waiting_provider_with_exclusions(
     .with_account_concurrency(gateway_core::runtime::AccountConcurrencyHandle::new(
         ConfigRevision::new(1).unwrap(),
         BTreeMap::from([
-            ("acct_scope_old".to_owned(), NonZeroU32::MIN),
-            ("acct_scope_new".to_owned(), NonZeroU32::MIN),
+            ("acct_scope_old".to_owned(), limit),
+            ("acct_scope_new".to_owned(), limit),
         ]),
     ));
     CodexProvider::new(

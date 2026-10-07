@@ -14,8 +14,9 @@ impl CodexProvider {
         let client = self.client_for_request(context)?;
         let source = account.request_proxy_source();
         if source == RequestProxySource::Account {
-            return client.for_account(account).map_err(|_| {
+            return client.for_account(account).map_err(|error| {
                 provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                    .with_source(error)
             });
         }
         let unavailable = |reason: &str| {
@@ -45,9 +46,9 @@ impl CodexProvider {
         };
         let exit = pool
             .acquire(source, route, &scope, transient)
-            .map_err(|e| unavailable(&e.to_string()))?;
+            .map_err(|error| unavailable(&error.to_string()).with_source(error))?;
         client
             .for_session_proxy(account, exit)
-            .map_err(|_| unavailable("client_unavailable"))
+            .map_err(|error| unavailable("client_unavailable").with_source(error))
     }
 }

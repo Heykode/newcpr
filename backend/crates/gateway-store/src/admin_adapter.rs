@@ -92,6 +92,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
             .map_err(|error| admin_store_error("runtime settings", error))?;
         let replacement = postgres::ControlPlaneReplacement {
             settings: postgres::RuntimeSettingsUpdate {
+                openai_account_affinity: command.openai_account_affinity,
                 admin_api_key: current.settings.admin_api_key,
                 disable_fast: command.disable_fast,
                 excel_default_models: command
@@ -128,6 +129,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     .account_warmup_model
                     .unwrap_or(current.settings.account_warmup_model),
                 request_interval_ms: command.request_interval_ms,
+                openai_session_binding_ttl_hours: command.openai_session_binding_ttl_hours,
                 rotation_strategy: command.rotation_strategy.as_str().to_owned(),
                 model_mappings: store_model_mappings(command.model_mappings),
                 min_codex_desktop_version: command.min_codex_desktop_version,
@@ -155,6 +157,8 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "refresh_concurrency".to_owned(),
                     "max_concurrent_per_account".to_owned(),
                     "request_interval_ms".to_owned(),
+                    "openai_session_binding_ttl_hours".to_owned(),
+                    "openai_account_affinity".to_owned(),
                     "rotation_strategy".to_owned(),
                     "min_codex_desktop_version".to_owned(),
                     "min_codex_cli_version".to_owned(),
@@ -281,6 +285,8 @@ pub(crate) fn admin_runtime_settings(
         account_warmup_schedule_time: settings.account_warmup_schedule_time,
         account_warmup_model: settings.account_warmup_model,
         request_interval_ms: settings.request_interval_ms,
+        openai_session_binding_ttl_hours: settings.openai_session_binding_ttl_hours,
+        openai_account_affinity: settings.openai_account_affinity,
         rotation_strategy,
         min_codex_desktop_version: settings.min_codex_desktop_version,
         min_codex_cli_version: settings.min_codex_cli_version,
@@ -370,8 +376,9 @@ impl AuthStore for AdminAuthStoreAdapter {
             .map(|session| {
                 session.map(|record| AdminSession {
                     admin_user_id: record.admin_user_id,
-                    expires_at: record.expires_at,
                     credential_fingerprint: record.credential_fingerprint,
+                    expires_at: record.expires_at,
+                    absolute_expires_at: record.absolute_expires_at,
                 })
             })
             .map_err(|error| admin_store_error("admin session", error))
@@ -387,8 +394,9 @@ impl AuthStore for AdminAuthStoreAdapter {
             session_id,
             &redis::AdminSessionRecord {
                 admin_user_id: session.admin_user_id.clone(),
-                expires_at: session.expires_at,
                 credential_fingerprint: session.credential_fingerprint.clone(),
+                expires_at: session.expires_at,
+                absolute_expires_at: session.absolute_expires_at,
             },
         )
         .await
@@ -401,11 +409,41 @@ impl AuthStore for AdminAuthStoreAdapter {
             .map(|session| {
                 session.map(|record| AdminSession {
                     admin_user_id: record.admin_user_id,
-                    expires_at: record.expires_at,
                     credential_fingerprint: record.credential_fingerprint,
+                    expires_at: record.expires_at,
+                    absolute_expires_at: record.absolute_expires_at,
                 })
             })
             .map_err(|error| admin_store_error("admin session", error))
+    }
+
+    async fn renew_session(
+        &self,
+        session_id: &str,
+        expected: &AdminSession,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<Option<AdminSession>> {
+        redis::AdminAuthStateRepository::renew_admin_session(
+            &self.state,
+            session_id,
+            &redis::AdminSessionRecord {
+                admin_user_id: expected.admin_user_id.clone(),
+                credential_fingerprint: expected.credential_fingerprint.clone(),
+                expires_at: expected.expires_at,
+                absolute_expires_at: expected.absolute_expires_at,
+            },
+            expires_at,
+        )
+        .await
+        .map(|session| {
+            session.map(|record| AdminSession {
+                admin_user_id: record.admin_user_id,
+                credential_fingerprint: record.credential_fingerprint,
+                expires_at: record.expires_at,
+                absolute_expires_at: record.absolute_expires_at,
+            })
+        })
+        .map_err(|error| admin_store_error("admin session renewal", error))
     }
 
     async fn append_audit_event(&self, event: AdminAuditModel) -> AdminStoreResult<()> {

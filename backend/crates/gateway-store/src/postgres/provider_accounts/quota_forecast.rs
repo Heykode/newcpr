@@ -45,7 +45,9 @@ pub(super) async fn load_learning_usage(
                 .bind(range.end)
                 .fetch_one(pool)
                 .await
-                .map_err(|_| postgres_unavailable("load monitor learning usage"))
+                .map_err(|error| {
+                    postgres_unavailable("load monitor learning usage").with_source(error)
+                })
         })
         .await
         .map_err(|error| admin_store_error(ENTITY, error))?;
@@ -83,7 +85,9 @@ pub(super) async fn load_history(
                 .bind(MAX_FORECAST_HISTORY_POINTS as i32)
                 .fetch_all(pool)
                 .await
-                .map_err(|_| postgres_unavailable("load quota forecast history"))
+                .map_err(|error| {
+                    postgres_unavailable("load quota forecast history").with_source(error)
+                })
         })
         .await
         .map_err(|error| admin_store_error(ENTITY, error))?;

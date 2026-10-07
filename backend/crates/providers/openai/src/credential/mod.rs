@@ -19,7 +19,7 @@ mod types;
 pub(crate) use affinity::{
     CodexSessionAffinity, derive_codex_compact_session_affinity,
     derive_codex_cyber_policy_session_key, derive_codex_endpoint_session_affinity,
-    derive_codex_session_affinity, derive_previous_response_id_hash,
+    derive_codex_session_affinity, derive_live_session_affinity, derive_previous_response_id_hash,
 };
 pub(crate) use oauth::oauth_owner_ref;
 pub(crate) use types::{candidate_oauth_metadata, parse_access_token_expiration};

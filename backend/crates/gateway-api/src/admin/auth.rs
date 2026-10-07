@@ -226,6 +226,7 @@ where
     Router::new()
         .route("/api/admin/auth/login", post(login::<S>))
         .route("/api/admin/auth/status", get(session_status::<S>))
+        .route("/api/admin/auth/refresh", post(refresh_session::<S>))
         .route("/api/admin/auth/logout", post(logout::<S>))
         .route("/api/admin/auth/password", post(change_password::<S>))
 }
@@ -293,19 +294,57 @@ where
         AdminEnvelope::ok(AdminLoginData::new(session.expires_at.to_rfc3339())),
     )
     .into_response();
-    let max_age = (session.expires_at - chrono::Utc::now())
-        .num_seconds()
-        .max(0);
+    set_session_cookie(
+        &mut response,
+        &headers,
+        &session.session_id,
+        session.expires_at,
+    )?;
+    Ok(response)
+}
+
+fn set_session_cookie(
+    response: &mut Response,
+    headers: &HeaderMap,
+    session_id: &str,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), AdminError> {
+    let max_age = (expires_at - chrono::Utc::now()).num_seconds().max(0);
     let cookie = format!(
         "{ADMIN_SESSION_COOKIE}={}; {}; Max-Age={max_age}; Expires={}",
-        session.session_id,
-        admin_session_cookie_attrs(&headers),
-        session.expires_at.format("%a, %d %b %Y %H:%M:%S GMT")
+        session_id,
+        admin_session_cookie_attrs(headers),
+        expires_at.format("%a, %d %b %Y %H:%M:%S GMT")
     );
     response.headers_mut().insert(
         SET_COOKIE,
         HeaderValue::from_str(&cookie).map_err(|_| AdminError::internal())?,
     );
+    Ok(())
+}
+
+async fn refresh_session<S>(
+    State(state): State<S>,
+    headers: HeaderMap,
+) -> Result<Response, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let id = admin_session_cookie(&headers);
+    let session = state
+        .admin_services()
+        .auth()
+        .renew_session(id.as_deref())
+        .await
+        .map_err(super::wire::map_admin_service_error)?;
+    let mut response = AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(AdminSessionStatusData::new(session.is_some())),
+    )
+    .into_response();
+    if let (Some(id), Some(session)) = (id, session) {
+        set_session_cookie(&mut response, &headers, &id, session.expires_at)?;
+    }
     Ok(response)
 }
 
@@ -321,7 +360,7 @@ where
         .auth()
         .validate_session(admin_session_cookie(&headers).as_deref())
         .await
-        .map_err(|_| AdminError::internal())?;
+        .map_err(|error| AdminError::internal().with_source(error))?;
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(AdminSessionStatusData::new(authenticated)),
@@ -360,6 +399,9 @@ fn admin_session_cookie(headers: &HeaderMap) -> Option<String> {
 fn map_login_error(error: LoginError) -> AdminError {
     match error {
         LoginError::InvalidCredentials => AdminError::invalid_admin_credentials(),
-        LoginError::Unavailable => AdminError::internal(),
+        LoginError::Unavailable(source) => match source {
+            Some(source) => AdminError::internal().with_source(source),
+            None => AdminError::internal(),
+        },
     }
 }

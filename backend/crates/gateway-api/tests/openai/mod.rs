@@ -3,6 +3,7 @@ mod compact;
 mod endpoint;
 mod error;
 mod images;
+mod live;
 mod models;
 mod responses;
 mod router;

@@ -32,6 +32,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocation-counter"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "beb9e990c0a33699f1984d85a6abead615ccc72dd8130bf3e15dcabe2ca149c9"
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -526,6 +532,7 @@ dependencies = [
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
@@ -1598,11 +1605,13 @@ dependencies = [
 name = "gateway-core"
 version = "0.1.0"
 dependencies = [
+ "allocation-counter",
  "async-trait",
  "base64 0.23.1",
  "bytes",
  "chrono",
  "chrono-tz",
+ "event-listener",
  "futures",
  "futures-timer",
  "semver",
@@ -1652,6 +1661,7 @@ name = "gateway-protocol"
 version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
+ "httpdate",
  "serde",
  "serde_json",
  "sha2 0.11.0",

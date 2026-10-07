@@ -131,6 +131,16 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 | `POST` | `/v1/images/edits` | JSON 原样转发；multipart 文件转换为现有 JSON 图片输入 |
 | `GET` | `/v1/models` | 返回当前 Client Key 账号范围内各 Provider 的可用公开模型并集；有两种响应形态，见下 |
 | `GET` | `/v1/models/{model_id}` | 返回 OpenAI 兼容的单模型详情 |
+| `POST` | `/v1/live`、`/v1/realtime`、`/v1/realtime/calls` | Codex Live 语音通话引导，支持 JSON、SDP 和 multipart |
+| `GET` | `/v1/live/{call_id}`、`/v1/realtime/calls/{call_id}` | 通话 sideband WebSocket |
+| `POST` | `/v1/realtime/calls/{call_id}/hangup` | 挂断当前 Key 所属通话 |
+
+Live 通话引导继续校验 Key、模型与账号范围并复用既有准入。后续操作绑定原账号和
+创建通话的 Key，复核当前账号权限，使用当前凭据与出口，并保留通话创建时的画像。
+`GET /v1/realtime?call_id=...` 是 sideband 别名；不带 call ID 的直接连接不受支持。
+Live 引导正文最多 16 MiB，音频本身通过 WebRTC 连接上游，不经本网关中继。
+通话登记保存在当前进程，重启后不能恢复该登记；翻译、独立转写、client secrets、
+旧版 sessions 和 SIP 控制返回 501，不代表支持完整的公共 Realtime API。
 
 Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-openai-subagent` 请求头携带子代理类型；
 网关不提供独立的子代理请求路径。
@@ -293,7 +303,8 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 
 OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足错误时，代理在允许安全重放且
 尚未交付输出的前提下，先做最多 3 次同账号指数退避，再通过现有调度换号。默认间隔从 500ms 开始，
-上游 `Retry-After` 参与退避计算，单次等待不超过 8 秒；重试同时受请求总尝试次数和截止时间约束。
+无有效上游提示时，默认指数退避单次不超过 8 秒；有效 `Retry-After`（秒数或 HTTP 日期，
+包括 0）优先。重试仍受既有次数、活动租约、取消和交付边界约束，不新增换号预算。
 容量不足不扣 Smart 账号健康分，不触发 Provider 全局熔断，也不作为账号额度耗尽写入冷却状态。
 最终交付的上游错误仍按上述透明边界保留原始状态码、错误码和正文。
 明确额度耗尽继续走现有账号隔离与安全换号流程，
@@ -305,6 +316,7 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 | --- | --- | --- | --- |
 | `POST` | `/api/admin/auth/login` | `{ username?, password }` | 创建管理员会话并设置 Cookie |
 | `GET` | `/api/admin/auth/status` | 无 | 返回当前 Cookie 是否已认证 |
+| `POST` | `/api/admin/auth/refresh` | 无 | 检查 Cookie 并按需续期，返回 `authenticated`，有效时更新 Cookie |
 | `POST` | `/api/admin/auth/logout` | 无 | 删除当前会话并清除 Cookie |
 | `POST` | `/api/admin/auth/password` | `{ currentPassword, newPassword }` | 仅管理员会话可修改密码，成功后撤销所有旧后台会话 |
 
@@ -314,6 +326,10 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 密码与安全审计在一个 PostgreSQL 事务中提交，并检查原密码哈希未被并发修改。
 后台会话绑定已加盐密码哈希的摘要，密码更改后旧会话即使仍在 Redis 中也不再通过认证。
 不含该摘要的旧版后台会话需要重新登录；管理员／客户端 API Key、上游账号 Cookie 和凭据不受影响。
+
+续期不能超过登录时确定的绝对有效期，且必须通过当前密码摘要校验和 Redis 原子比较。
+旧会话没有绝对有效期字段时仅检查、不延长；过期、退出或改密撤销的会话不能复活。
+前端活跃检查使用 refresh，登录、退出和续期按先后次序处理，旧请求不能覆盖新认证状态。
 
 ## 5. 账号
 
@@ -614,9 +630,14 @@ RT-only 使用同一形状，只提交 `refreshToken`。不得把真实 token �
 | `GET` | `/api/admin/accounts/import-tasks/detail?taskId=...` | 任务摘要及逐条结果 |
 | `POST` | `/api/admin/accounts/import-tasks/stop` | `{ taskId }`，跳过未开始项，在途项继续完成 |
 
-每项复用同步导入的 `{ provider, data, settings?, outboundProxyId? }`，不改变账号识别、
+每项复用同步导入的 `{ provider, data, settings?, outboundProxyId?, template? }`，不改变账号识别、
 设备复用、导入事务、设置或套餐同步。JSON 文档保持整体，不在前端擅自拆开内部账号；
 因此“条目成功数”与“已入库账号数”可以不同。OAuth 和重新授权仍走原接口。
+
+`template` 为已有账号模板的 `{ id, revision }`。服务端校验并冻结所选版本，模板更新
+冲突时不猜测新版配置。选中模板后同时应用于新账号与本次更新的已有账号，不选则维持
+原导入规则；保留独立账号名称、采购成本和既有身份。模板代理可保留、直连或指定，
+复用原账号模板库，不额外增加“覆盖已有账号”的开关。
 
 任务请求最多 4 MiB、1–200 项；进程内共用 3 个执行槽位、最多 8 个活跃任务和
 100 个保留任务。任务间轮转，已完成结果保留 1 小时。相同管理员及 `submissionId`
@@ -853,6 +874,11 @@ PostgreSQL 或 Redis。管理端只在用户打开弹窗或点击刷新时调用
 | `POST` | `/api/admin/account-groups/disable` | `{ id }` | 禁用；已绑定 Key 保持受限，不回退到全部账号 |
 | `POST` | `/api/admin/account-groups/delete` | `{ id }` | 删除未被 Client Key 引用的组 |
 
+创建和更新支持 `fastMode: "default" | "enabled" | "disabled"`，分别为跟随客户端、
+开启和关闭。多分组以关闭优先，其次开启；全局 Fast 关闭仍优先。
+旧 `disableFast` 字段继续兼容：创建时旧字段为 true 保留关闭意图；更新时显式
+`fastMode` 优先，否则旧 true/false 映射为关闭/默认，两字段均省略则保留原设置。
+
 列表数据为 `{ items, page, configRevision }`，其中 item 返回 `memberCount`、按 Provider 聚合的
 `providerCounts` 和 `clientKeyCount`。查询分组成员使用账号列表的 `groupId` 筛选，
 不提供独立的分组成员路由；账号的 Provider 不代表整个分组的 Provider。
@@ -986,6 +1012,9 @@ modelMappings
 refreshMarginSeconds
 refreshConcurrency
 maxConcurrentPerAccount
+openaiGuardianReservedConcurrency
+openaiSessionBindingTtlHours
+openaiAccountAffinity
 requestIntervalMs
 rotationStrategy
 minCodexDesktopVersion
@@ -998,6 +1027,13 @@ requestTuning
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+三个 OpenAI 调度参数位于设置顶层，不放在 `requestTuning`：Guardian 预留并发默认 0；
+会话绑定有效期默认 24 小时、范围 1–720；亲和模式默认 `strict`，可选 `relaxed`。
+严格模式子线程跟随根绑定；宽松模式可建立独立子绑定，不改写根绑定。两者都不能
+覆盖原生续接的账号归属、账号授权、配额和并发限制。旧客户端省略新参数时保留数据库值。
+刷新提前量默认 300 秒，升级仅把历史 3600 秒值改成 300；其他值不覆盖。
+后台刷新按账号增加稳定错峰，请求内提前量不变；这不会重置账号的设备身份或出口。
 
 新增的独立参数同样位于 `requestTuning`：
 

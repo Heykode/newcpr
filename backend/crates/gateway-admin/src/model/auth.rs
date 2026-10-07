@@ -65,12 +65,12 @@ pub struct LoginResult {
 }
 
 /// 登录状态机可被 API 精确映射的失败类型。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum LoginError {
     #[error("invalid administrator credentials")]
     InvalidCredentials,
     #[error("administrator authentication is unavailable")]
-    Unavailable,
+    Unavailable(#[source] Option<gateway_core::error::ErrorSource>),
 }
 
 /// Redis 中可恢复的管理员会话。
@@ -79,6 +79,7 @@ pub struct AdminSession {
     pub admin_user_id: String,
     pub expires_at: DateTime<Utc>,
     pub credential_fingerprint: String,
+    pub absolute_expires_at: Option<DateTime<Utc>>,
 }
 
 /// 修改后台管理员密码；不得记录明文密码。

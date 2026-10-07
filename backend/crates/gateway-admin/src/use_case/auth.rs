@@ -27,6 +27,10 @@ use super::map_store_error;
 /// API 鉴权与管理员登录消费的统一服务。
 #[async_trait]
 pub trait AuthService: Send + Sync {
+    async fn renew_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Option<AdminSession>, AdminError>;
     async fn change_password(
         &self,
         session_id: Option<&str>,
@@ -51,14 +55,37 @@ const MAX_SESSION_TTL_MINUTES: i64 = 366 * 24 * 60;
 pub(crate) struct DefaultAuthService {
     default_admin_user_id: String,
     session_ttl: Duration,
+    session_absolute_ttl: Duration,
     store: Arc<dyn AuthStore>,
 }
 
 impl DefaultAuthService {
+    async fn current_session(&self, session_id: &str) -> Result<Option<AdminSession>, AdminError> {
+        let Some(session) = self
+            .store
+            .load_session(session_id)
+            .await
+            .map_err(|error| map_store_error(error, "administrator session"))?
+            .filter(session_valid)
+        else {
+            return Ok(None);
+        };
+        let hash = self
+            .store
+            .load_password_hash(&session.admin_user_id)
+            .await
+            .map_err(|error| map_store_error(error, "administrator"))?;
+        // Keep the current PostgreSQL password hash authoritative for revocation.
+        Ok(hash
+            .filter(|hash| password_fingerprint(hash) == session.credential_fingerprint)
+            .map(|_| session))
+    }
+
     #[must_use]
     pub(crate) fn new(
         default_admin_user_id: impl Into<String>,
         session_ttl_minutes: u64,
+        session_absolute_ttl_minutes: u64,
         store: Arc<dyn AuthStore>,
     ) -> Self {
         let minutes = i64::try_from(session_ttl_minutes)
@@ -67,6 +94,11 @@ impl DefaultAuthService {
         Self {
             default_admin_user_id: default_admin_user_id.into(),
             session_ttl: Duration::minutes(minutes),
+            session_absolute_ttl: Duration::minutes(
+                i64::try_from(session_absolute_ttl_minutes)
+                    .unwrap_or(MAX_SESSION_TTL_MINUTES)
+                    .clamp(1, MAX_SESSION_TTL_MINUTES),
+            ),
             store,
         }
     }
@@ -90,6 +122,32 @@ impl DefaultAuthService {
 
 #[async_trait]
 impl AuthService for DefaultAuthService {
+    async fn renew_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Option<AdminSession>, AdminError> {
+        let Some(session_id) = session_id else {
+            return Ok(None);
+        };
+        let Some(session) = self.current_session(session_id).await? else {
+            return Ok(None);
+        };
+        let Some(absolute) = session.absolute_expires_at else {
+            return Ok(Some(session));
+        };
+        let now = Utc::now();
+        let expiry = (now + self.session_ttl).min(absolute);
+        let interval = (self.session_ttl / 4).min(Duration::minutes(1));
+        if expiry <= session.expires_at || session.expires_at - now > self.session_ttl - interval {
+            return Ok(Some(session));
+        }
+        self.store
+            .renew_session(session_id, &session, expiry)
+            .await
+            .map(|session| session.filter(session_valid))
+            .map_err(|error| map_store_error(error, "administrator session renewal"))
+    }
+
     async fn change_password(
         &self,
         session_id: Option<&str>,
@@ -103,7 +161,7 @@ impl AuthService for DefaultAuthService {
                 .map_err(|error| map_store_error(error, "administrator session"))?,
             None => None,
         }
-        .filter(|session| session.expires_at > Utc::now())
+        .filter(session_valid)
         .ok_or_else(|| AdminError::new(AdminErrorKind::Unauthorized, "请先登录"))?;
         let hash = self
             .store
@@ -168,24 +226,10 @@ impl AuthService for DefaultAuthService {
         let Some(session_id) = session_id else {
             return Ok(None);
         };
-        let Some(session) = self
-            .store
-            .load_session(session_id)
-            .await
-            .map_err(|error| map_store_error(error, "administrator session"))?
-            .filter(|session| session.expires_at > Utc::now())
-        else {
-            return Ok(None);
-        };
-        let hash = self
-            .store
-            .load_password_hash(&session.admin_user_id)
-            .await
-            .map_err(|error| map_store_error(error, "administrator"))?;
-        // PostgreSQL 的当前哈希是撤销权威，不依赖 Redis 删除成功。
-        Ok(hash
-            .filter(|hash| password_fingerprint(hash) == session.credential_fingerprint)
-            .map(|_| session.admin_user_id))
+        Ok(self
+            .current_session(session_id)
+            .await?
+            .map(|session| session.admin_user_id))
     }
 
     async fn verify_admin_api_key(&self, key: &str) -> Result<bool, AdminError> {
@@ -216,14 +260,18 @@ impl AuthService for DefaultAuthService {
             .store
             .load_password_hash(&self.default_admin_user_id)
             .await
-            .map_err(|_| LoginError::Unavailable)?
+            .map_err(|error| LoginError::Unavailable(Some(error.into())))?
             .ok_or(LoginError::InvalidCredentials)?;
-        if !verify_admin_password(&command.password, &hash).map_err(|_| LoginError::Unavailable)? {
+        if !verify_admin_password(&command.password, &hash)
+            .map_err(|error| LoginError::Unavailable(Some(error.into())))?
+        {
             return Err(LoginError::InvalidCredentials);
         }
 
         let session_id = random_session_token();
-        let expires_at = Utc::now() + self.session_ttl;
+        let now = Utc::now();
+        let absolute_expires_at = now + self.session_absolute_ttl;
+        let expires_at = (now + self.session_ttl).min(absolute_expires_at);
         self.store
             .store_session(
                 &session_id,
@@ -231,18 +279,22 @@ impl AuthService for DefaultAuthService {
                     admin_user_id: self.default_admin_user_id.clone(),
                     expires_at,
                     credential_fingerprint: password_fingerprint(&hash),
+                    absolute_expires_at: Some(absolute_expires_at),
                 },
             )
             .await
-            .map_err(|_| LoginError::Unavailable)?;
-        if self
+            .map_err(|error| LoginError::Unavailable(Some(error.into())))?;
+        if let Err(error) = self
             .store
             .append_audit_event(self.auth_audit("admin.login", Utc::now()))
             .await
-            .is_err()
         {
-            let _ = self.store.delete_session(&session_id).await;
-            return Err(LoginError::Unavailable);
+            let source = gateway_core::error::ErrorSource::new(error);
+            let source = match self.store.delete_session(&session_id).await {
+                Ok(_) => source,
+                Err(cleanup) => source.with_cleanup(cleanup),
+            };
+            return Err(LoginError::Unavailable(Some(source)));
         }
         Ok(LoginResult {
             session_id,
@@ -272,6 +324,14 @@ impl AuthService for DefaultAuthService {
         }
         Ok(())
     }
+}
+
+fn session_valid(session: &AdminSession) -> bool {
+    let now = Utc::now();
+    session.expires_at > now
+        && session
+            .absolute_expires_at
+            .is_none_or(|expiry| expiry > now)
 }
 
 fn hash_admin_password(password: &str) -> Result<String, AdminError> {

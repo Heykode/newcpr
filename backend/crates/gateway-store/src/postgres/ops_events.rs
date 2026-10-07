@@ -169,7 +169,7 @@ impl OpsEventRepository for PgOpsEventRepository {
         .bind(event.created_at)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("append ops event"))?;
+        .map_err(|error| postgres_unavailable("append ops event").with_source(error))?;
         Ok(())
     }
 }

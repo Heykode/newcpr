@@ -11,6 +11,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
+import AccountPlanBadge from '@/views/accounts/components/AccountPlanBadge.vue'
 import { useOpsErrorsTable } from '../composables/useOpsErrorsTable'
 import { opsErrorColumns } from '../constants'
 import { opsErrorSummary } from '../utils/opsErrorPresentation'
@@ -147,6 +148,15 @@ function upstreamSendStateText(value: string | null | undefined) {
             :provider="String(row.provider || '')"
             :authentication-kind="row.authenticationKind"
           />
+        </template>
+        <template #accountPlanType="{ row }">
+          <AccountPlanBadge
+            v-if="row.accountPlanType"
+            :plan-type="row.accountPlanType"
+            :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType"
+            size="sm"
+          />
+          <span v-else class="text-cp-text-quaternary">—</span>
         </template>
         <template #message="{ row }">
           <div class="min-w-0 py-0.5" :title="row.message || opsErrorSummary(row)">

@@ -290,6 +290,7 @@ struct FailureFinalization {
     upstream_request_id: Option<String>,
     provider_error_code: Option<String>,
     raw_upstream_error: Option<String>,
+    error_details: Option<String>,
     retry_after_ms: Option<u64>,
     observation: ModelRequestFailureObservation,
 }
@@ -866,6 +867,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                error_details: None,
                 observation: ModelRequestFailureObservation::default(),
             })
             .await?;
@@ -1029,12 +1031,15 @@ where
                     if self.prepare_unavailable_native_continuation_replay(&error) {
                         return Ok(Some(PullOutcome::AttemptDiscarded));
                     }
-                    if matches!(
-                        error.kind(),
-                        ProviderErrorKind::AccountCapacityUnavailable
-                            | ProviderErrorKind::NoEligibleAccount
-                            | ProviderErrorKind::ProviderInfrastructureUnavailable
-                    ) && !self.account_wait_budget.is_exhausted()
+                    if !error.retry_is_prohibited()
+                        && matches!(
+                            error.kind(),
+                            ProviderErrorKind::AccountCapacityUnavailable
+                                | ProviderErrorKind::NoEligibleAccount
+                                | ProviderErrorKind::QuotaExhausted
+                                | ProviderErrorKind::ProviderInfrastructureUnavailable
+                        )
+                        && !self.account_wait_budget.is_exhausted()
                         && error.send_state() == UpstreamSendState::NotSent
                         && matches!(
                             self.continuation_attempt,
@@ -1044,11 +1049,14 @@ where
                     {
                         return Ok(Some(PullOutcome::AttemptDiscarded));
                     }
-                    if matches!(
-                        error.kind(),
-                        ProviderErrorKind::AccountCapacityUnavailable
-                            | ProviderErrorKind::NoEligibleAccount
-                    ) && let Some(last_failure) = self.last_retryable_failure.take()
+                    if !error.retry_is_prohibited()
+                        && matches!(
+                            error.kind(),
+                            ProviderErrorKind::AccountCapacityUnavailable
+                                | ProviderErrorKind::NoEligibleAccount
+                                | ProviderErrorKind::QuotaExhausted
+                        )
+                        && let Some(last_failure) = self.last_retryable_failure.take()
                     {
                         if last_failure.kind() == ProviderErrorKind::Unauthorized {
                             // 本地账号池已耗尽时，之前账号的认证 401 不能继续冒充
@@ -1075,6 +1083,7 @@ where
                         error.kind(),
                         ProviderErrorKind::AccountCapacityUnavailable
                             | ProviderErrorKind::NoEligibleAccount
+                            | ProviderErrorKind::QuotaExhausted
                             | ProviderErrorKind::ProviderInfrastructureUnavailable
                     ) && error.send_state() == UpstreamSendState::NotSent)
                     {
@@ -1102,6 +1111,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                error_details: None,
                 observation: ModelRequestFailureObservation::default(),
             })
             .await?;
@@ -1136,6 +1146,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                error_details: None,
                 observation: ModelRequestFailureObservation::default(),
             })
             .await?;
@@ -1160,6 +1171,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                error_details: None,
                 observation: ModelRequestFailureObservation::default(),
             })
             .await?;
@@ -1187,6 +1199,7 @@ where
                 provider_error_code: None,
                 raw_upstream_error: None,
                 retry_after_ms: None,
+                error_details: None,
                 observation: ModelRequestFailureObservation::default(),
             })
             .await?;
@@ -1390,7 +1403,10 @@ where
                     && !self.delivery_pending
                     && attempt_send_state != UpstreamSendState::Ambiguous =>
             {
-                Some((AttemptTransport::Fallback, Duration::ZERO))
+                Some((
+                    AttemptTransport::Fallback,
+                    error.retry_after().unwrap_or_default(),
+                ))
             }
             _ => None,
         };
@@ -1413,7 +1429,9 @@ where
                     .or_default();
                 if *retries < max_retries.get() {
                     let multiplier = 1_u32.checked_shl(*retries).unwrap_or(u32::MAX);
-                    let delay = initial_delay.saturating_mul(multiplier).min(max_delay);
+                    let delay = error
+                        .retry_after()
+                        .unwrap_or_else(|| initial_delay.saturating_mul(multiplier).min(max_delay));
                     *retries = retries.saturating_add(1);
                     Some(delay)
                 } else {
@@ -1433,6 +1451,7 @@ where
                 .contains(current.metadata.provider_account_id());
         let recovery_probe = matches!(&self.operation, Operation::Generate(generate) if generate.excel_recovery_revision().is_some());
         let retryable = !recovery_probe
+            && !error.retry_is_prohibited()
             && (continuation_retry
                 || same_account_retry
                 || ordinary_retry
@@ -1554,7 +1573,8 @@ where
         send_state: UpstreamSendState,
         provider_proved_replay_safe: bool,
     ) -> bool {
-        if self.account_selection.required_account().is_some()
+        if error.retry_is_prohibited()
+            || self.account_selection.required_account().is_some()
             || self.continuation_attempt == ContinuationAttempt::None
             || self.downstream_committed_at.is_some()
             || self.delivery_pending
@@ -1610,7 +1630,8 @@ where
     /// 对应 Provider 的会话状态时才进入恢复；是否保留 native handle、执行 probe
     /// 或使用完整 transcript，由 Provider 自己的协议边界决定。
     fn prepare_unavailable_native_continuation_replay(&mut self, error: &ProviderError) -> bool {
-        if self.account_selection.required_account().is_some()
+        if error.retry_is_prohibited()
+            || self.account_selection.required_account().is_some()
             || self.account_wait_budget.is_exhausted()
             || (self.plan.request_tuning().account_busy_wait_enabled
                 && matches!(
@@ -1625,6 +1646,7 @@ where
                 error.kind(),
                 ProviderErrorKind::NoEligibleAccount
                     | ProviderErrorKind::AccountCapacityUnavailable
+                    | ProviderErrorKind::QuotaExhausted
             )
         {
             return false;
@@ -1711,6 +1733,7 @@ where
                 error: None,
                 provider_error_code: None,
                 raw_upstream_error: None,
+                error_details: None,
                 failure_observation: ModelRequestFailureObservation::default(),
                 retry_after_ms: None,
                 usage: self.observation.usage.clone(),
@@ -1754,6 +1777,7 @@ where
             upstream_status_code: error.upstream_status(),
             upstream_request_id: error.upstream_request_id().map(|id| id.as_str().to_owned()),
             provider_error_code: error.upstream_code().map(|code| code.as_str().to_owned()),
+            error_details: error.error_details(),
             raw_upstream_error: error
                 .raw_upstream_error()
                 .map(|raw| raw.as_str().to_owned()),
@@ -1818,6 +1842,7 @@ where
             provider_error_code: None,
             raw_upstream_error: None,
             retry_after_ms: None,
+            error_details: None,
             observation: ModelRequestFailureObservation::default(),
         })
         .await
@@ -1878,6 +1903,12 @@ where
                     .map(str::to_owned),
                 provider_metadata_json,
                 diagnostic_trace_json: self.trace.snapshot().map(|value| value.to_string()),
+                error_details: finalization.error_details.or_else(|| {
+                    finalization
+                        .error
+                        .error_details()
+                        .map(|details| details.into_string())
+                }),
                 error: Some(finalization.error),
                 provider_error_code: finalization.provider_error_code,
                 raw_upstream_error: finalization.raw_upstream_error,
@@ -2228,17 +2259,5 @@ fn duration_ms(duration: Duration) -> u64 {
 }
 
 fn record_trace_error(trace: &TraceContext, error: &ProviderError) {
-    trace.record("attempt.failed", json!({
-        "kind": error.kind().as_str(), "sendState": format!("{:?}", error.send_state()),
-        "diagnostic": error.diagnostic().map(|diagnostic| json!({
-            "stage": diagnostic.stage(), "code": diagnostic.code(), "message": diagnostic.as_str(),
-        })),
-        "upstreamStatus": error.upstream_status(),
-        "upstreamRequestId": error.upstream_request_id().map(|id| id.as_str()),
-        "upstreamCode": error.upstream_code().map(|code| code.as_str()),
-        "rawError": error.raw_upstream_error().map(|raw| {
-            let value = serde_json::from_str(raw.as_str()).unwrap_or_else(|_| json!(raw.as_str()));
-            crate::diagnostics::diagnostic_json(&value)
-        }),
-    }));
+    trace.record_provider_failure(error);
 }

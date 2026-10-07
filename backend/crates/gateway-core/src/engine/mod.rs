@@ -813,6 +813,8 @@ pub struct ModelRequestFinalization {
     pub provider_error_code: Option<String>,
     /// Provider 返回的原始错误正文或 WebSocket close/error frame。
     pub raw_upstream_error: Option<String>,
+    /// 受控来源链详情；原始正文另留给既有捕获消费者。
+    pub error_details: Option<String>,
     pub failure_observation: ModelRequestFailureObservation,
     pub retry_after_ms: Option<u64>,
     pub usage: Usage,
@@ -831,6 +833,14 @@ pub struct RecoveryReport {
 /// `model_requests` 与必要 `ops_events` 的唯一 Core port。
 #[async_trait]
 pub trait ExecutionStore: Send + Sync {
+    /// Implementations must enqueue without waiting on diagnostic storage.
+    async fn record_operational_failure(
+        &self,
+        _failure: crate::diagnostics::OperationalFailure,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     fn maintain_request(
         &self,
         _request_id: &ModelRequestId,

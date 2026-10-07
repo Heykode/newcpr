@@ -105,8 +105,14 @@ impl fmt::Debug for InitialAdminPassword {
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     pub session_ttl_minutes: u64,
+    #[serde(default = "default_absolute_session_ttl_minutes")]
+    pub session_absolute_ttl_minutes: u64,
     pub default_username: String,
     pub default_password: InitialAdminPassword,
+}
+
+fn default_absolute_session_ttl_minutes() -> u64 {
+    30 * 24 * 60
 }
 
 impl AdminConfig {
@@ -125,6 +131,13 @@ impl AdminConfig {
             return Err(AdminConfigError::InvalidField("admin.session_ttl_minutes"));
         }
         let password = self.default_password.expose().trim();
+        if self.session_absolute_ttl_minutes == 0
+            || i64::try_from(self.session_absolute_ttl_minutes).is_err()
+        {
+            return Err(AdminConfigError::InvalidField(
+                "admin.session_absolute_ttl_minutes",
+            ));
+        }
         if password.len() < MINIMUM_INITIAL_PASSWORD_BYTES
             || password.contains('$')
             || WEAK_INITIAL_PASSWORDS.contains(&password.to_ascii_lowercase().as_str())
@@ -140,6 +153,10 @@ impl fmt::Debug for AdminConfig {
         formatter
             .debug_struct("AdminConfig")
             .field("session_ttl_minutes", &self.session_ttl_minutes)
+            .field(
+                "session_absolute_ttl_minutes",
+                &self.session_absolute_ttl_minutes,
+            )
             .field("default_username", &self.default_username)
             .field("default_password", &"[REDACTED]")
             .finish()
@@ -393,6 +410,7 @@ pub async fn initialize_with_timezone(
     let auth = Arc::new(DefaultAuthService::new(
         config.default_username,
         config.session_ttl_minutes,
+        config.session_absolute_ttl_minutes,
         store.auth(),
     ));
     auth.ensure_default_admin(config.default_password.expose())

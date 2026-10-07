@@ -69,6 +69,8 @@ export type RequestTuningOverrides = {
   [Key in keyof RequestTuning]?: RequestTuning[Key] | null
 }
 
+export type AccountAffinity = 'strict' | 'relaxed'
+
 export interface RuntimeSettings {
   excelDefaultModels?: string[]
   disableFast?: boolean
@@ -77,6 +79,7 @@ export interface RuntimeSettings {
   turnStateProbeProxyId?: string | null
   turnStateProbeConcurrency?: number
   responsesMaxDecompressedBodyBytes?: number
+  openaiAccountAffinity: AccountAffinity
   modelMappings: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number
@@ -86,6 +89,7 @@ export interface RuntimeSettings {
   accountWarmupScheduleTime: string
   accountWarmupModel: string | null
   requestIntervalMs: number
+  openaiSessionBindingTtlHours: number
   rotationStrategy: RotationStrategy
   minCodexDesktopVersion: string | null
   minCodexCliVersion: string | null

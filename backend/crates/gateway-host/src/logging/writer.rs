@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ pub(super) struct RotatingLogWriter {
     date: NaiveDate,
     segment: usize,
     bytes_written: u64,
-    file: File,
+    file: BufWriter<File>,
     health: Arc<LogHealth>,
     timezone: DeploymentTimeZone,
 }
@@ -61,7 +61,7 @@ impl RotatingLogWriter {
             date,
             segment,
             bytes_written,
-            file,
+            file: BufWriter::with_capacity(64 * 1024, file),
             health,
             timezone,
         };
@@ -88,7 +88,7 @@ impl RotatingLogWriter {
         let previous = self
             .directory
             .join(log_file_name(self.prefix, self.date, self.segment));
-        self.file.sync_all()?;
+        self.sync()?;
         let segment = if day_changed {
             managed_log_files(&self.directory, self.prefix)?
                 .into_iter()
@@ -104,10 +104,10 @@ impl RotatingLogWriter {
             .join(log_file_name(self.prefix, date, segment));
         let file = open_log_segment(&path)?;
         // Commit rotation state only after opening the new file succeeds.
-        self.file = file;
+        self.file = BufWriter::with_capacity(64 * 1024, file);
         self.date = date;
         self.segment = segment;
-        self.bytes_written = self.file.metadata()?.len();
+        self.bytes_written = self.file.get_ref().metadata()?.len();
         if let Err(error) = compress_log_file(&previous) {
             self.health.maintenance_failed(error.kind());
         }
@@ -122,7 +122,8 @@ impl RotatingLogWriter {
     }
 
     pub(super) fn sync(&mut self) -> io::Result<()> {
-        self.file.sync_all()
+        self.file.flush()?;
+        self.file.get_ref().sync_all()
     }
 }
 
@@ -130,7 +131,7 @@ impl Write for RotatingLogWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         self.rotate_if_required(buffer.len())?;
         if let Err(error) = self.file.write_all(buffer) {
-            self.bytes_written = self.file.metadata()?.len();
+            self.bytes_written = self.file.get_ref().metadata()?.len();
             return Err(error);
         }
         self.bytes_written = self.bytes_written.saturating_add(buffer.len() as u64);

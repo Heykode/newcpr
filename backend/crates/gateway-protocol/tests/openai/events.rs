@@ -415,6 +415,33 @@ fn retry_after_should_read_case_insensitive_header_array() {
 }
 
 #[test]
+fn retry_after_headers_preserve_zero_dates_and_nested_priority() {
+    for (payload, expected) in [
+        (
+            json!({"error": {"resets_in_seconds": 90}, "headers": {"Retry-After": "0"}}),
+            0,
+        ),
+        (
+            json!({"error": {"headers": {"retry-after": ["12"]}}, "headers": {"retry-after": "30"}}),
+            12,
+        ),
+        (
+            json!({"headers": {"Retry-After": "Thu, 01 Jan 1970 00:00:00 GMT"}}),
+            0,
+        ),
+        (
+            json!({"error": {"resets_in_seconds": 90}, "headers": {"Retry-After": "invalid"}}),
+            90,
+        ),
+    ] {
+        assert_eq!(
+            retry_after_seconds_from_body(&payload.to_string()),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn retry_after_should_round_fractional_seconds_up() {
     let body = json!({
         "response": {

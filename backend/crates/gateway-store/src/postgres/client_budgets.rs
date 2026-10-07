@@ -29,14 +29,14 @@ pub(super) async fn reset_client_key_budget(
     let mut transaction = pool
         .begin()
         .await
-        .map_err(|_| postgres_unavailable("begin budget reset"))?;
+        .map_err(|error| postgres_unavailable("begin budget reset").with_source(error))?;
     // 与准入和结算使用相同的 Key 行锁，锁定后再确定重置时间。
     let exists =
         sqlx::query_scalar::<_, String>("select id from client_api_keys where id = $1 for update")
             .bind(command.id.as_str())
             .fetch_optional(&mut *transaction)
             .await
-            .map_err(|_| postgres_unavailable("lock budget reset key"))?;
+            .map_err(|error| postgres_unavailable("lock budget reset key").with_source(error))?;
     if exists.is_none() {
         return Err(StoreError::NotFound {
             entity: "client API key",
@@ -67,7 +67,7 @@ pub(super) async fn reset_client_key_budget(
     .bind(reset_at)
     .execute(&mut *transaction)
     .await
-    .map_err(|_| postgres_unavailable("reset client budget"))?;
+    .map_err(|error| postgres_unavailable("reset client budget").with_source(error))?;
     let mut fields = Vec::new();
     if daily {
         fields.extend(["daily_used_usd".to_owned(), "daily_start".to_owned()]);
@@ -89,7 +89,7 @@ pub(super) async fn reset_client_key_budget(
     transaction
         .commit()
         .await
-        .map_err(|_| postgres_unavailable("commit budget reset"))
+        .map_err(|error| postgres_unavailable("commit budget reset").with_source(error))
 }
 
 pub struct PgClientBudgetStore {
@@ -151,7 +151,7 @@ impl PgClientBudgetStore {
                 .map_err(|_| unavailable())?,
         };
         let now = Utc::now();
-        advance_windows(&mut tx, key_id.as_str(), now)
+        advance_windows(&mut tx, key_id.as_str(), now, now)
             .await
             .map_err(|_| unavailable())?;
         if limits.is_limited() {
@@ -220,7 +220,7 @@ async fn settle_in_transaction(
     key: &str,
     charge: &ClientBudgetCharge,
 ) -> Result<(), sqlx::Error> {
-    advance_windows(tx, key, Utc::now()).await?;
+    let completed_at = DateTime::<Utc>::from(charge.completed_at);
     // 仅在请求结束时写入费用；请求 ID 冲突时不重复累计。
     let changed = sqlx::query(
         "insert into client_key_charge_events (request_id, client_api_key_id, amount_usd, completed_at)
@@ -230,16 +230,17 @@ async fn settle_in_transaction(
     .bind(charge.request_id.as_str())
     .bind(key)
     .bind(charge.amount_usd.canonical())
-    .bind(DateTime::<Utc>::from(charge.completed_at))
+    .bind(completed_at)
     .execute(&mut **tx)
     .await?
     .rows_affected();
     if changed == 1 {
+        advance_windows(tx, key, Utc::now(), completed_at).await?;
         sqlx::query("update client_key_budget_windows set
                 daily_used_usd = daily_used_usd + case when $3 >= daily_start and $3 < daily_end then $2::text::numeric else 0 end,
                 weekly_used_usd = weekly_used_usd + case when $3 >= weekly_start and $3 < weekly_end then $2::text::numeric else 0 end
                 where client_api_key_id = $1")
-                .bind(key).bind(charge.amount_usd.canonical()).bind(DateTime::<Utc>::from(charge.completed_at))
+                .bind(key).bind(charge.amount_usd.canonical()).bind(completed_at)
                 .execute(&mut **tx).await?;
     }
     Ok(())
@@ -268,19 +269,20 @@ async fn advance_windows(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,
     now: DateTime<Utc>,
+    used_at: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query("insert into client_key_budget_windows
         (client_api_key_id, daily_start, daily_end, weekly_start, weekly_end)
         select $1, day, day + interval '24 hours', day, day + interval '168 hours'
         from (select date_trunc('day', $2::timestamptz at time zone 'Asia/Shanghai') at time zone 'Asia/Shanghai' as day) d
         on conflict (client_api_key_id) do update set
-            daily_start = case when client_key_budget_windows.daily_end <= $2 then excluded.daily_start else client_key_budget_windows.daily_start end,
-            daily_end = case when client_key_budget_windows.daily_end <= $2 then excluded.daily_end else client_key_budget_windows.daily_end end,
-            daily_used_usd = case when client_key_budget_windows.daily_end <= $2 then 0 else client_key_budget_windows.daily_used_usd end,
-            weekly_start = case when client_key_budget_windows.weekly_end <= $2 then excluded.weekly_start else client_key_budget_windows.weekly_start end,
-            weekly_end = case when client_key_budget_windows.weekly_end <= $2 then excluded.weekly_end else client_key_budget_windows.weekly_end end,
-            weekly_used_usd = case when client_key_budget_windows.weekly_end <= $2 then 0 else client_key_budget_windows.weekly_used_usd end")
-        .bind(key).bind(now).execute(&mut **tx).await?;
+            daily_start = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then greatest(excluded.daily_start, client_key_budget_windows.daily_start) else client_key_budget_windows.daily_start end,
+            daily_end = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then excluded.daily_end else client_key_budget_windows.daily_end end,
+            daily_used_usd = case when client_key_budget_windows.daily_end <= $2 and client_key_budget_windows.daily_start <= $3 then 0 else client_key_budget_windows.daily_used_usd end,
+            weekly_start = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then greatest(excluded.weekly_start, client_key_budget_windows.weekly_start) else client_key_budget_windows.weekly_start end,
+            weekly_end = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then excluded.weekly_end else client_key_budget_windows.weekly_end end,
+            weekly_used_usd = case when client_key_budget_windows.weekly_end <= $2 and client_key_budget_windows.weekly_start <= $3 then 0 else client_key_budget_windows.weekly_used_usd end")
+        .bind(key).bind(now).bind(used_at).execute(&mut **tx).await?;
     Ok(())
 }
 
@@ -307,13 +309,13 @@ pub(super) async fn load_client_key_budgets(
     .bind(ids)
     .fetch_all(pool)
     .await
-    .map_err(|_| postgres_unavailable("load client budgets"))?;
+    .map_err(|error| postgres_unavailable("load client budgets").with_source(error))?;
     let mut budgets = BTreeMap::new();
     for row in rows {
         let parse = |field| -> StoreResult<Decimal> {
             row.get::<String, _>(field)
                 .parse()
-                .map_err(|_| postgres_unavailable("decode client budget"))
+                .map_err(|error| postgres_unavailable("decode client budget").with_source(error))
         };
         budgets.insert(
             row.get::<String, _>("id"),

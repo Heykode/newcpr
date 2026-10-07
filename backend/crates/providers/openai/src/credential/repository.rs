@@ -52,7 +52,7 @@ impl CodexCredentialRepository {
         let mut data = CodexCredentialCodec::decode_complete(&current.credential)?;
         let oauth = data
             .oauth_mut()
-            .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
+            .ok_or(CredentialRepositoryError::InvalidCredentialData(None))?;
         oauth.access_token = secret.access_token.expose_secret().to_owned();
         oauth.refresh_token = secret
             .refresh_token
@@ -72,7 +72,7 @@ impl CodexCredentialRepository {
             access_token_expires_at,
             next_refresh_at,
         )
-        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
+        .map_err(|source| CredentialRepositoryError::InvalidCredentialData(Some(source.into())))?
         .preserving_profile()
         .with_account_state(CredentialState::Ready, SystemTime::now(), None, None);
         cas_revision(self.store.compare_and_swap_credential(update).await?)
@@ -102,7 +102,7 @@ impl CodexCredentialRepository {
             account.access_token_expires_at(),
             Some(next_refresh_at),
         )
-        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
+        .map_err(|source| CredentialRepositoryError::InvalidCredentialData(Some(source.into())))?
         .preserving_profile()
         .preserving_turn_state_binding();
         if let Some(error_reason) = error_reason {
@@ -119,8 +119,9 @@ impl CodexCredentialRepository {
     pub async fn list_for_provider(
         &self,
     ) -> Result<Vec<ProviderAccount>, CredentialRepositoryError> {
-        let provider = ProviderKind::new(PROVIDER_NAME)
-            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        let provider = ProviderKind::new(PROVIDER_NAME).map_err(|source| {
+            CredentialRepositoryError::InvalidCredentialData(Some(source.into()))
+        })?;
         self.store
             .list_for_provider(&provider)
             .await
@@ -142,7 +143,7 @@ impl CodexCredentialRepository {
         loaded: &LoadedCredential,
     ) -> Result<CodexRuntimeCredential, CredentialRepositoryError> {
         if loaded.account.provider().as_str() != PROVIDER_NAME {
-            return Err(CredentialRepositoryError::InvalidCredentialData);
+            return Err(CredentialRepositoryError::InvalidCredentialData(None));
         }
         CodexCredentialCodec::decode(&loaded.credential).map_err(Into::into)
     }
@@ -152,14 +153,14 @@ impl CodexCredentialRepository {
         account: &ProviderAccount,
     ) -> Result<CodexRuntimeCredential, CredentialRepositoryError> {
         if account.provider().as_str() != PROVIDER_NAME {
-            return Err(CredentialRepositoryError::InvalidCredentialData);
+            return Err(CredentialRepositoryError::InvalidCredentialData(None));
         }
         let loaded = self
             .store
             .load_credential(account.id(), account.revision())
             .await?;
         if loaded.account != *account {
-            return Err(CredentialRepositoryError::RevisionConflict);
+            return Err(CredentialRepositoryError::RevisionConflict(None));
         }
         self.decode_runtime_credential(&loaded)
     }
@@ -202,7 +203,7 @@ impl CodexCredentialRepository {
             account.access_token_expires_at(),
             account.next_refresh_at(),
         )
-        .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?
+        .map_err(|source| CredentialRepositoryError::InvalidCredentialData(Some(source.into())))?
         .preserving_profile();
         if preserve_binding {
             update = update.preserving_turn_state_binding();
@@ -297,34 +298,33 @@ fn cas_revision(
 ) -> Result<CredentialRevision, CredentialRepositoryError> {
     match outcome {
         CredentialCasOutcome::Updated(revision) => Ok(revision),
-        CredentialCasOutcome::Conflict => Err(CredentialRepositoryError::RevisionConflict),
+        CredentialCasOutcome::Conflict => Err(CredentialRepositoryError::RevisionConflict(None)),
     }
 }
 
 #[derive(Debug, Error)]
 pub enum CredentialRepositoryError {
     #[error("Codex credential data is invalid")]
-    InvalidCredentialData,
+    InvalidCredentialData(#[source] Option<gateway_core::error::ErrorSource>),
     #[error("Codex credential revision conflict")]
-    RevisionConflict,
+    RevisionConflict(#[source] Option<gateway_core::error::ErrorSource>),
     #[error("provider account store is unavailable")]
-    Store,
+    Store(#[source] gateway_core::error::StoreError),
 }
 
 impl From<gateway_core::error::StoreError> for CredentialRepositoryError {
     fn from(error: gateway_core::error::StoreError) -> Self {
         match error.kind() {
-            gateway_core::error::StoreErrorKind::Conflict => Self::RevisionConflict,
-            gateway_core::error::StoreErrorKind::Unavailable
-            | gateway_core::error::StoreErrorKind::InvalidState
-            | gateway_core::error::StoreErrorKind::InvalidData => Self::Store,
-            _ => Self::Store,
+            gateway_core::error::StoreErrorKind::Conflict => {
+                Self::RevisionConflict(Some(error.into()))
+            }
+            _ => Self::Store(error),
         }
     }
 }
 
 impl From<CodexCredentialDataError> for CredentialRepositoryError {
-    fn from(_: CodexCredentialDataError) -> Self {
-        Self::InvalidCredentialData
+    fn from(error: CodexCredentialDataError) -> Self {
+        Self::InvalidCredentialData(Some(error.into()))
     }
 }

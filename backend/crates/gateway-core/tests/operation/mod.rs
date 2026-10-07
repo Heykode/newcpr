@@ -224,3 +224,4 @@ fn image_request_should_preserve_generation_and_edit_payloads_opaque() {
     );
     assert!(!format!("{edit:?}").contains("data:image/png"));
 }
+mod provider_http;

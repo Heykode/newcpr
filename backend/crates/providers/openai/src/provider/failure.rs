@@ -397,11 +397,8 @@ pub(super) fn log_raw_upstream_body(
         upstream_error_kind = error_kind,
         upstream_status_code = status_code.unwrap_or_default(),
         upstream_status_code_present = status_code.is_some(),
-        upstream_error_code = upstream_code.unwrap_or_default(),
         upstream_error_code_present = upstream_code.is_some(),
-        upstream_error_type = upstream_type.unwrap_or_default(),
         upstream_error_type_present = upstream_type.is_some(),
-        upstream_error_raw,
         upstream_error_raw_bytes = upstream_error_raw.len(),
         "OpenAI upstream returned an error payload"
     );
@@ -501,7 +498,10 @@ pub(super) fn schedule_authoritative_quota_refresh_after_failure(
     let quota = Arc::clone(quota);
     let account_id = account.id().clone();
     drop(tokio::spawn(async move {
-        tokio::time::sleep(QUOTA_FAILURE_REFRESH_DELAY).await;
+        tokio::time::sleep(crate::jitter::quota_failure_refresh_delay(
+            crate::jitter::random_u64(),
+        ))
+        .await;
         match tokio::time::timeout(
             QUOTA_FAILURE_REFRESH_TIMEOUT,
             quota.refresh_account_after_failure(&account_id),
@@ -607,6 +607,10 @@ pub(super) fn apply_websocket_recovery_policy(
     failure: &mut MappedProviderFailure,
     context: WebSocketRecoveryContext<'_>,
 ) {
+    // Flex 拒绝必须直达客户端，不能转换成传输回退。
+    if failure.error.retry_is_prohibited() {
+        return;
+    }
     // 明确账号拒绝走已有换号路径，容量拒绝走请求内退避；两者都不消耗 WS 传输预算。
     if failure.error.replay_is_safe()
         && (failure.account_failure.is_some()
@@ -935,7 +939,7 @@ pub(super) fn map_client_error(
     if let Some(failure) = error.upstream_failure() {
         return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
     }
-    let mut failure = match error {
+    let mut failure = match &error {
         CodexClientError::Upstream { .. } => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Protocol,
             UpstreamSendState::Sent,
@@ -975,8 +979,9 @@ pub(super) fn map_client_error(
                 uncertain_state,
             )
             .with_status(status.as_u16());
-            if let Some(request_id) = diagnostics.request_id {
-                error = error.with_upstream_request_id(OpaqueUpstreamValue::new(request_id));
+            if let Some(request_id) = &diagnostics.request_id {
+                error =
+                    error.with_upstream_request_id(OpaqueUpstreamValue::new(request_id.clone()));
             }
             MappedProviderFailure::plain(error)
         }
@@ -999,7 +1004,7 @@ pub(super) fn map_client_error(
             let mut failure = MappedProviderFailure::plain(continuation_replay_required_error(
                 continuation_unavailable_reason.unwrap_or("scope_unavailable"),
             ));
-            if let Some(client_visible_error) = websocket_client_visible_error(&error) {
+            if let Some(client_visible_error) = websocket_client_visible_error(error) {
                 failure.error = failure
                     .error
                     .with_client_visible_upstream_error(client_visible_error);
@@ -1008,10 +1013,10 @@ pub(super) fn map_client_error(
         }
         CodexClientError::WebSocket(error) => {
             let close_code = error.close_before_terminal().and_then(|close| close.code());
-            let client_visible_error = websocket_client_visible_error(&error);
+            let client_visible_error = websocket_client_visible_error(error);
             let mut failure = MappedProviderFailure::plain(provider_error(
-                websocket_error_kind(&error),
-                websocket_send_state(&error),
+                websocket_error_kind(error),
+                websocket_send_state(error),
             ));
             if close_code == Some(1009) {
                 failure.error = failure
@@ -1090,6 +1095,26 @@ pub(super) fn map_client_error(
             .error
             .with_connection_observation(connection_observation);
     }
+    // Preserve causes only in protected details; request URLs may contain credentials.
+    let error = match error {
+        CodexClientError::Http(source) => CodexClientError::Http(source.without_url()),
+        CodexClientError::HttpJson(source) => CodexClientError::HttpJson(source.without_url()),
+        CodexClientError::ErrorBodyRead {
+            source,
+            status,
+            diagnostics,
+            transport,
+            transport_metrics,
+        } => CodexClientError::ErrorBodyRead {
+            source: source.without_url(),
+            status,
+            diagnostics,
+            transport,
+            transport_metrics,
+        },
+        error => error,
+    };
+    failure.error = failure.error.with_source(error);
     failure.observation = observation;
     failure
 }
@@ -1402,6 +1427,9 @@ pub(super) fn map_upstream_failure(
         provider_error_kind(category)
     };
     let mut error = provider_error(error_kind, send_state);
+    if category == CodexFailureCategory::FlexUnavailable {
+        error = error.with_retry_prohibited();
+    }
     error = error.with_raw_upstream_error(RawUpstreamError::new(failure.raw_body.clone()));
     if let Some(message) = failure.client_message.as_ref() {
         error = error.with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
@@ -1466,13 +1494,10 @@ pub(super) fn map_upstream_failure(
     let status = error
         .upstream_status()
         .map_or_else(|| "none".to_owned(), |status| status.to_string());
-    let code = error
-        .upstream_code()
-        .map_or_else(|| "none".to_owned(), |code| code.as_str().to_owned());
     let kind = error.kind().as_str();
     error = error.with_diagnostic(
         ProviderDiagnostic::new(format!(
-            "OpenAI upstream failure: kind={}, status={status}, code={code}",
+            "OpenAI upstream failure: kind={}, status={status}",
             kind
         ))
         .with_classification("upstream", "upstream_rejected"),
@@ -1527,6 +1552,7 @@ pub(super) const fn provider_error_kind(category: CodexFailureCategory) -> Provi
         CodexFailureCategory::QuotaExhausted => ProviderErrorKind::QuotaExhausted,
         CodexFailureCategory::CloudflareChallenge
         | CodexFailureCategory::CloudflarePathBlocked
+        | CodexFailureCategory::FlexUnavailable
         | CodexFailureCategory::Unavailable => ProviderErrorKind::Unavailable,
         CodexFailureCategory::CapacityUnavailable => ProviderErrorKind::UpstreamCapacityUnavailable,
         CodexFailureCategory::InvalidRequest => ProviderErrorKind::InvalidRequest,
@@ -1582,6 +1608,7 @@ pub(super) fn account_failure(
         | CodexFailureCategory::PermissionDenied
         | CodexFailureCategory::Timeout
         | CodexFailureCategory::CapacityUnavailable
+        | CodexFailureCategory::FlexUnavailable
         | CodexFailureCategory::Unavailable
         | CodexFailureCategory::Transport => None,
     }

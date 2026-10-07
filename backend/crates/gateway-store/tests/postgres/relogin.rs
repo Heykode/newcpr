@@ -48,6 +48,222 @@ fn entry(id: &str, email: &str) -> ReloginEntry {
 }
 
 #[tokio::test]
+async fn shared_template_import_settings_apply_to_new_and_existing_accounts() {
+    use gateway_admin::model::relogin_templates::{ReloginTemplate, ReloginTemplateConfig};
+    let Some(database) = TestDatabase::create("template_import_settings").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    let catalog = PgReloginStore::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("template-existing", "existing-user"))
+        .await
+        .unwrap();
+    let config: ReloginTemplateConfig = serde_json::from_value(serde_json::json!({
+        "name": "Import defaults", "enabled": false, "weight": 23,
+        "concurrencyLimit": 4, "groupIds": [], "outboundProxyId": null,
+        "turnStateInjectionEnabled": true,
+        "modelAccess": {"mode": "denylist", "models": ["model-template"]},
+        "responsesUpstream": "excel", "excelModelsFollowGlobal": true,
+        "excelCacheCreationAsInput": false, "excelIgnoreEncryptedContent": true
+    }))
+    .unwrap();
+    let template = ReloginTemplate {
+        id: "template-import".into(),
+        revision: 1,
+        config,
+    };
+    catalog.save_template(&template, None).await.unwrap();
+    let frozen = catalog.templates().await.unwrap().remove(0);
+    let result = repository
+        .import_provider_accounts(ImportProviderAccounts {
+            settings: Some(frozen.config.settings().unwrap()),
+            outbound_proxy: None,
+            scope: ProviderAccountAdminScope {
+                provider_kind: "openai".into(),
+            },
+            accounts: vec![
+                account("template-new", "new-user"),
+                account("template-candidate", "existing-user"),
+            ],
+            audit: audit("template-import", "import", "provider_accounts"),
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.account_ids, ["template-new", "template-existing"]);
+    for id in ["template-new", "template-existing"] {
+        let row: (bool, Option<i64>, i16, bool, String, bool, bool) = sqlx::query_as(
+            "select enabled, concurrency_limit, weight, turn_state_injection_enabled,
+                    responses_upstream, excel_cache_creation_as_input, excel_ignore_encrypted_content
+             from provider_accounts where id=$1"
+        ).bind(id).fetch_one(&database.pool).await.unwrap();
+        assert_eq!(row, (false, Some(4), 23, true, "excel".into(), false, true));
+        let current = repository.load_provider_account(id).await.unwrap().unwrap();
+        assert_eq!(
+            Some(current.summary.model_access),
+            frozen.config.model_access
+        );
+    }
+    // Later template edits are not a binding to imported accounts.
+    let mut updated = frozen.clone();
+    updated.revision = 2;
+    updated.config.weight = 31;
+    updated.config.concurrency_limit = None;
+    updated.config.turn_state_injection_enabled = None;
+    updated.config.model_access = None;
+    updated.config.responses_upstream = None;
+    updated.config.excel_models_follow_global = None;
+    updated.config.excel_cache_creation_as_input = None;
+    updated.config.excel_ignore_encrypted_content = None;
+    catalog.save_template(&updated, Some(1)).await.unwrap();
+    for (index, settings) in [None, Some(updated.config.settings().unwrap())]
+        .into_iter()
+        .enumerate()
+    {
+        repository
+            .import_provider_accounts(ImportProviderAccounts {
+                settings,
+                outbound_proxy: None,
+                scope: ProviderAccountAdminScope {
+                    provider_kind: "openai".into(),
+                },
+                accounts: vec![account("template-reimport", "existing-user")],
+                audit: audit(
+                    &format!("template-reimport-{index}"),
+                    "import",
+                    "provider_accounts",
+                ),
+            })
+            .await
+            .unwrap();
+        let row: (Option<i64>, i16, bool, String, bool) = sqlx::query_as(
+            "select concurrency_limit, weight, turn_state_injection_enabled, responses_upstream,
+                    excel_ignore_encrypted_content from provider_accounts where id='template-existing'"
+        ).fetch_one(&database.pool).await.unwrap();
+        assert_eq!(
+            row,
+            (
+                if index == 0 { Some(4) } else { None },
+                if index == 0 { 23 } else { 31 },
+                true,
+                "excel".into(),
+                true
+            )
+        );
+        assert_eq!(
+            Some(
+                repository
+                    .load_provider_account("template-existing")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .summary
+                    .model_access
+            ),
+            frozen.config.model_access
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn import_template_proxy_choice_overrides_document_proxy_without_changing_ordinary_imports() {
+    use gateway_admin::model::{
+        accounts::ImportTemplateProxyMode, proxies::ImportProxyBinding,
+        relogin_templates::ReloginTemplateConfig,
+    };
+    use gateway_core::account::OutboundProxy;
+    let Some(database) = TestDatabase::create("template_import_proxy").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    sqlx::query("insert into outbound_proxies (id,name,proxy_url,last_test_success) values ('template-proxy','Template proxy','http://127.0.0.1:18082/',true)")
+        .execute(&database.pool).await.unwrap();
+    for (index, (mode, saved, expected_existing, expected_new)) in [
+        (
+            None,
+            false,
+            Some("http://127.0.0.1:18081/"),
+            Some("http://127.0.0.1:18081/"),
+        ),
+        (
+            Some(ImportTemplateProxyMode::Preserve),
+            false,
+            Some("http://127.0.0.1:18080/"),
+            Some("http://127.0.0.1:18081/"),
+        ),
+        (Some(ImportTemplateProxyMode::Replace), false, None, None),
+        (
+            Some(ImportTemplateProxyMode::Replace),
+            true,
+            Some("http://127.0.0.1:18082/"),
+            Some("http://127.0.0.1:18082/"),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let existing_id = format!("template-proxy-existing-{index}");
+        let existing_user = format!("template-proxy-user-{index}");
+        let new_id = format!("template-proxy-new-{index}");
+        let mut seed = account(&existing_id, &existing_user);
+        seed.outbound_proxy = Some(OutboundProxy::parse("http://127.0.0.1:18080").unwrap());
+        repository.insert_provider_account(seed).await.unwrap();
+        let config: ReloginTemplateConfig = serde_json::from_value(serde_json::json!({
+            "name": "Proxy template", "enabled": true, "weight": 1,
+            "concurrencyLimit": null, "groupIds": [], "outboundProxyId": if saved { Some("template-proxy") } else { None },
+            "preserveOutboundProxy": mode == Some(ImportTemplateProxyMode::Preserve)
+        })).unwrap();
+        let mut settings = config.settings().unwrap();
+        settings.template_proxy_mode = mode;
+        if mode.is_none() {
+            settings.clear_outbound_proxy = false;
+        }
+        let mut candidates = vec![
+            account(&format!("template-proxy-candidate-{index}"), &existing_user),
+            account(&new_id, &new_id),
+        ];
+        for candidate in &mut candidates {
+            candidate.outbound_proxy =
+                Some(OutboundProxy::parse("http://127.0.0.1:18081").unwrap());
+        }
+        repository
+            .import_provider_accounts(ImportProviderAccounts {
+                settings: Some(settings),
+                outbound_proxy: saved.then(|| ImportProxyBinding {
+                    id: "template-proxy".into(),
+                    proxy: OutboundProxy::parse("http://127.0.0.1:18082").unwrap(),
+                }),
+                scope: ProviderAccountAdminScope {
+                    provider_kind: "openai".into(),
+                },
+                accounts: candidates,
+                audit: audit(
+                    &format!("template-proxy-import-{index}"),
+                    "import",
+                    "provider_accounts",
+                ),
+            })
+            .await
+            .unwrap();
+        for (id, expected) in [(&existing_id, expected_existing), (&new_id, expected_new)] {
+            let actual: Option<String> =
+                sqlx::query_scalar("select outbound_proxy_url from provider_accounts where id=$1")
+                    .bind(id)
+                    .fetch_one(&database.pool)
+                    .await
+                    .unwrap();
+            let expected = expected.map(|url| OutboundProxy::parse(url).unwrap());
+            assert_eq!(
+                actual.as_deref(),
+                expected.as_ref().map(OutboundProxy::expose_url)
+            );
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn relogin_workspace_wait_and_selected_queue_survive_store_restart() {
     use gateway_admin::model::relogin::{ReloginWorkspaceChoice, ReloginWorkspaceMode};
     let Some(database) = TestDatabase::create("relogin_workspace_wait").await else {

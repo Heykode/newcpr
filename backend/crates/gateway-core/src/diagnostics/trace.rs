@@ -142,6 +142,18 @@ impl TraceContext {
         self.push(stage, data, false);
     }
 
+    /// 这里只投影稳定诊断；来源链和上游正文保留给受控详情通道。
+    pub fn record_provider_failure(&self, error: &crate::error::ProviderError) {
+        self.record("attempt.failed", json!({
+            "kind": error.kind().as_str(), "sendState": format!("{:?}", error.send_state()),
+            "diagnostic": error.diagnostic().map(|diagnostic| json!({
+                "stage": diagnostic.stage(), "code": diagnostic.code(), "message": diagnostic.as_str(),
+            })),
+            "upstreamStatus": error.upstream_status(),
+            "upstreamRequestId": error.upstream_request_id().map(|id| id.as_str()),
+        }));
+    }
+
     /// 同一个头部边界只采集一次：默认脱敏，显式开启 dump 时另存完整字节。
     /// facts 必须为调用方构造的安全对象；仅受控诊断头可明文保留，完整头部另存 dump。
     pub fn headers<'a>(
@@ -308,11 +320,31 @@ impl TraceContext {
         let Some(state) = &self.state else { return };
         let mut encoded = serde_json::to_vec(&data).unwrap_or_default();
         if encoded.len() > MAX_DATA_BYTES {
+            let original = data;
             data = json!({"truncated": true, "summary": body_fingerprint(&encoded),
-                "eventType": data.get("eventType"), "body": data.get("body"),
-                "jsonValid": data.get("jsonValid"),
-                "cacheUsage": data.get("cacheUsage"),
+                "eventType": original.get("eventType"), "body": original.get("body"),
+                "jsonValid": original.get("jsonValid"),
+                "cacheUsage": original.get("cacheUsage"),
             });
+            if stage == "attempt.failed" {
+                data = json!({"truncated": true, "summary": body_fingerprint(&encoded)});
+                for key in ["kind", "sendState"] {
+                    if let Some(value) = original.get(key).and_then(Value::as_str) {
+                        data[key] = json!(super::capture::bounded(value, 64));
+                    }
+                }
+                data["upstreamStatus"] =
+                    json!(original.get("upstreamStatus").and_then(Value::as_u64));
+                if let Some(diagnostic) = original.get("diagnostic").and_then(Value::as_object) {
+                    let mut kept = json!({});
+                    for (key, limit) in [("stage", 96), ("code", 96), ("message", 256)] {
+                        if let Some(value) = diagnostic.get(key).and_then(Value::as_str) {
+                            kept[key] = json!(super::capture::bounded(value, limit));
+                        }
+                    }
+                    data["diagnostic"] = kept;
+                }
+            }
             encoded = serde_json::to_vec(&data).unwrap_or_default();
         }
         let mut state = state

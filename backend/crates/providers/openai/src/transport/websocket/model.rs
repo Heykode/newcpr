@@ -114,6 +114,21 @@ impl CodexWebSocketRequest {
 }
 
 impl CodexWebSocketConnection {
+    pub(crate) fn live(
+        endpoint: impl Into<String>,
+        headers: Vec<(String, String)>,
+        outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+        egress_source: Option<Ipv6Addr>,
+    ) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            headers,
+            outbound_proxy,
+            egress_source,
+            session_proxy: None,
+        }
+    }
+
     /// 构造待打开的 WebSocket 连接描述。
     pub fn new(endpoint: impl Into<String>, headers: Vec<(String, String)>) -> Self {
         Self {

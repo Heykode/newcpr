@@ -159,6 +159,7 @@ impl ReloginTemplateConfig {
             }
         }
         Ok(AccountImportSettings {
+            template_proxy_mode: None,
             excel_recovery: self.excel_recovery,
             purchase_cost: None,
             clear_outbound_proxy: !self.preserve_outbound_proxy && self.outbound_proxy_id.is_none(),

@@ -124,20 +124,24 @@ pub struct StartExecution {
 pub struct StartProviderExecution {
     pub client: AuthenticatedClient,
     pub provider: ProviderKind,
+    pub upstream_model: Option<UpstreamModelId>,
     pub operation: Operation,
     pub metadata: ExecutionRequestMetadata,
 }
 
 enum ExecutionTarget {
     Model(PublicModelId),
-    ProviderEndpoint(ProviderKind),
+    ProviderEndpoint {
+        provider: ProviderKind,
+        upstream_model: Option<UpstreamModelId>,
+    },
 }
 
 impl ExecutionTarget {
     fn into_public_model(self) -> Option<PublicModelId> {
         match self {
             Self::Model(model) => Some(model),
-            Self::ProviderEndpoint(_) => None,
+            Self::ProviderEndpoint { .. } => None,
         }
     }
 }
@@ -215,6 +219,12 @@ pub trait ExecutionService: Send + Sync {
         &self,
         request: StartProviderExecution,
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>>;
+
+    /// 返回 Provider 注册表中首个声明 Live sideband 能力的网关。
+    /// `None` 表示当前组合不含语音 sideband；协议 adapter 据此回退到稳定 501。
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        None
+    }
 }
 
 /// 成功认证后的 API Key 使用事实接收器。
@@ -351,12 +361,16 @@ impl DefaultExecutionService {
         let StartProviderExecution {
             client,
             provider,
+            upstream_model,
             operation,
             metadata,
         } = request;
         self.start_inner_with_target(PendingStartExecution {
             client,
-            target: ExecutionTarget::ProviderEndpoint(provider),
+            target: ExecutionTarget::ProviderEndpoint {
+                provider,
+                upstream_model,
+            },
             operation,
             metadata,
         })
@@ -387,14 +401,16 @@ impl DefaultExecutionService {
             .await?;
         let account_scope = Arc::clone(request.client.policy.account_scope());
         let plan = match &request.target {
-            ExecutionTarget::ProviderEndpoint(provider) => {
-                request.client.snapshot.plan_provider_endpoint(
-                    provider,
-                    &request.operation,
-                    account_scope,
-                    &routing_context,
-                )
-            }
+            ExecutionTarget::ProviderEndpoint {
+                provider,
+                upstream_model,
+            } => request.client.snapshot.plan_provider_endpoint(
+                provider,
+                upstream_model.as_ref(),
+                &request.operation,
+                account_scope,
+                &routing_context,
+            ),
             ExecutionTarget::Model(public_model) => request.client.snapshot.plan(
                 public_model,
                 &request.operation,
@@ -597,6 +613,7 @@ impl DefaultExecutionService {
                             amount_usd: crate::metering::Decimal::ZERO,
                             completed_at: SystemTime::now(),
                         },
+                        self.observations.as_ref(),
                     )
                     .await;
                 }
@@ -634,6 +651,7 @@ impl DefaultExecutionService {
             renewal: None,
             armed: false,
             port: Arc::clone(&self.admissions),
+            observations: Arc::clone(&self.observations),
             client_api_key_id: key.clone(),
             model_request_id: request_id.clone(),
         };
@@ -668,9 +686,9 @@ impl DefaultExecutionService {
             pin_mut!(acquire, timeout, cancelled);
             let decision = select_biased! {
                 () = cancelled => return Err(GatewayError::new(GatewayErrorKind::Cancelled, "request admission was cancelled")),
-                result = acquire => result.map_err(|_| GatewayError::new(
+                result = acquire => result.map_err(|source| GatewayError::new(
                     GatewayErrorKind::NoAvailableProvider, "request admission is temporarily unavailable",
-                ))?,
+                ).with_source(source))?,
                 _ = timeout => return Err(if ticket.is_some() { super::key_wait::timeout() } else {
                     GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")
                 }),
@@ -1093,7 +1111,7 @@ impl DefaultExecutionService {
                 failure_kind = provider_error.kind().as_str(),
                 send_state = ?provider_error.send_state(),
                 upstream_status = ?provider_error.upstream_status(),
-                provider_error_code = ?provider_error.upstream_code().map(|code| code.as_str()),
+                provider_error_code_present = provider_error.upstream_code().is_some(),
                 latency_ms,
                 "账号连接测试失败"
             );
@@ -1310,6 +1328,12 @@ impl ExecutionService for DefaultExecutionService {
     ) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {
         Box::pin(async move { self.start_provider_endpoint_inner(request).await })
     }
+
+    fn live_gateway(&self) -> Option<Arc<dyn crate::live::LiveGateway>> {
+        self.providers
+            .iter()
+            .find_map(|provider| provider.live_gateway())
+    }
 }
 
 impl AccountProbe for DefaultExecutionService {
@@ -1425,13 +1449,25 @@ struct AdmissionLease {
     renewal: Option<Box<dyn LeaseGuard>>,
     armed: bool,
     port: Arc<dyn ClientAdmissionPort>,
+    observations: Arc<dyn ExecutionStore>,
     client_api_key_id: ClientApiKeyId,
     model_request_id: ModelRequestId,
 }
 
-async fn settle_budget(port: &dyn ClientBudgetPort, charge: ClientBudgetCharge) {
+async fn settle_budget(
+    port: &dyn ClientBudgetPort,
+    charge: ClientBudgetCharge,
+    observations: &dyn ExecutionStore,
+) {
+    let request_id = charge.request_id.clone();
     if let Err(error) = port.settle(charge).await {
-        tracing::error!(%error, "Client budget settlement failed; storage will retry on the next request");
+        record_resource_failure(
+            observations,
+            &request_id,
+            "settle_client_budget",
+            "Client budget settlement failed; storage will retry on the next request",
+            error,
+        );
     }
 }
 
@@ -1443,7 +1479,13 @@ impl AdmissionLease {
             .release(&self.client_api_key_id, &self.model_request_id)
             .await
         {
-            tracing::warn!(%error, "Client admission 释放失败，依赖租约 TTL 收敛");
+            record_resource_failure(
+                self.observations.as_ref(),
+                &self.model_request_id,
+                "release_client_admission",
+                "Client admission release failed; lease TTL remains active",
+                error,
+            );
         }
         self.armed = false;
     }
@@ -1500,7 +1542,7 @@ impl DefaultExecutionSession {
             // 或 detach 继续同一个 future，既不丢失费用，也不重启已完成的结算。
             self.cleanup = Some(Box::pin(async move {
                 if let Some(budget) = budget {
-                    settle_budget(budget.as_ref(), charge).await;
+                    settle_budget(budget.as_ref(), charge, admission.observations.as_ref()).await;
                 }
                 admission.release().await;
             }));
@@ -1784,6 +1826,10 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
             GatewayError::new(GatewayErrorKind::Timeout, "request deadline elapsed")
         }
         EngineError::Provider(provider) => GatewayError::from_provider(provider),
+        EngineError::Store(source) => {
+            GatewayError::new(GatewayErrorKind::Internal, "request execution failed")
+                .with_source(source.clone())
+        }
         EngineError::EmptyRoutingPlan | EngineError::ProviderNotRegistered { .. } => {
             GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
@@ -1791,5 +1837,36 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
             )
         }
         _ => GatewayError::new(GatewayErrorKind::Internal, "request execution failed"),
+    }
+}
+
+fn record_resource_failure(
+    observations: &dyn ExecutionStore,
+    request_id: &ModelRequestId,
+    operation: &'static str,
+    message: &'static str,
+    source: impl Into<crate::error::ErrorSource>,
+) {
+    let mut failure = crate::diagnostics::OperationalFailure::new(
+        "core",
+        operation,
+        "resource_unavailable",
+        message,
+    );
+    failure.correlation_id = Some(request_id.as_str().to_owned());
+    failure.details = crate::error::ErrorDetails::capture(Some(&source.into()), None, false);
+    // The production port enqueues synchronously. A stalled diagnostics adapter must
+    // not delay budget cleanup or keep admission ownership alive.
+    if !matches!(
+        observations
+            .record_operational_failure(failure)
+            .now_or_never(),
+        Some(Ok(()))
+    ) {
+        tracing::warn!(
+            request_id = request_id.as_str(),
+            operation,
+            "resource diagnostic could not be recorded"
+        );
     }
 }

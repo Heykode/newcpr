@@ -199,7 +199,7 @@ async fn excel_policy_upgrade_preserves_existing_choices_and_pause_diagnostics()
 }
 
 #[tokio::test]
-async fn encrypted_omission_upgrade_defaults_off_without_changing_accounts_or_settings() {
+async fn encrypted_omission_upgrade_preserves_accounts_and_unrelated_settings() {
     let old = sqlx::migrate::Migrator {
         migrations: super::TEST_MIGRATOR
             .iter()
@@ -222,7 +222,7 @@ async fn encrypted_omission_upgrade_defaults_off_without_changing_accounts_or_se
             .fetch_one(&database.pool)
             .await
             .unwrap();
-    let settings_before: serde_json::Value =
+    let mut settings_before: serde_json::Value =
         sqlx::query_scalar("select to_jsonb(s) from runtime_settings s")
             .fetch_one(&database.pool)
             .await
@@ -267,9 +267,34 @@ async fn encrypted_omission_upgrade_defaults_off_without_changing_accounts_or_se
         ("account_warmup_model", serde_json::Value::Null),
         ("account_warmup_schedule_time", serde_json::json!("08:00")),
         ("account_warmup_cursor", serde_json::Value::Null),
+        ("openai_session_binding_ttl_hours", serde_json::json!(24)),
+        ("openai_account_affinity", serde_json::json!("strict")),
     ] {
         assert_eq!(settings.remove(field), Some(default), "{field} default");
     }
+    let previous = settings_before.as_object_mut().unwrap();
+    assert_eq!(
+        previous.remove("refresh_margin_seconds"),
+        Some(serde_json::json!(3600))
+    );
+    assert_eq!(
+        settings.remove("refresh_margin_seconds"),
+        Some(serde_json::json!(300))
+    );
+    let previous_revision = previous
+        .remove("config_revision")
+        .unwrap()
+        .as_i64()
+        .unwrap();
+    assert_eq!(
+        settings.remove("config_revision"),
+        Some(serde_json::json!(previous_revision + 1))
+    );
+    let updated_before: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(previous.remove("updated_at").unwrap()).unwrap();
+    let updated_after: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(settings.remove("updated_at").unwrap()).unwrap();
+    assert!(updated_after >= updated_before);
     assert_eq!(settings_before, settings_after);
     sqlx::query("update provider_accounts set excel_ignore_encrypted_content=true")
         .execute(&database.pool)

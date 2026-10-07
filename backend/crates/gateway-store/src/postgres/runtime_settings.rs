@@ -20,6 +20,8 @@ use gateway_admin::model::settings::RequestTuningOverrides;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub openai_session_binding_ttl_hours: u32,
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
     pub disable_fast: bool,
@@ -92,6 +94,8 @@ impl fmt::Debug for RuntimeSettings {
 
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
+    pub openai_account_affinity: Option<gateway_core::account::AccountAffinity>,
+    pub openai_session_binding_ttl_hours: Option<u32>,
     pub admin_api_key: Option<String>,
     pub disable_fast: Option<bool>,
     pub turn_state_injection_enabled: Option<bool>,
@@ -149,6 +153,9 @@ impl fmt::Debug for RuntimeSettingsUpdate {
 impl RuntimeSettingsUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         if self.refresh_margin_seconds == 0
+            || self.openai_session_binding_ttl_hours.is_some_and(|hours| {
+                gateway_core::account::parse_openai_session_binding_ttl_hours(hours).is_none()
+            })
             || self.refresh_concurrency == 0
             || self.max_concurrent_per_account == 0
             || self.turn_state_probe_concurrency.is_some_and(|value| {
@@ -211,16 +218,13 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
         &self,
         update: RuntimeSettingsUpdate,
     ) -> StoreResult<Revision> {
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin runtime settings update"))?;
+        let mut transaction = self.pool.begin().await.map_err(|error| {
+            postgres_unavailable("begin runtime settings update").with_source(error)
+        })?;
         let revision = update_runtime_settings_in_transaction(&mut transaction, &update).await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| postgres_unavailable("commit runtime settings update"))?;
+        transaction.commit().await.map_err(|error| {
+            postgres_unavailable("commit runtime settings update").with_source(error)
+        })?;
         Ok(revision)
     }
 }
@@ -233,12 +237,12 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                     openai_guardian_reserved_concurrency,
-                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
+                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, openai_session_binding_ttl_hours, openai_account_affinity
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
     .await
-    .map_err(|_| postgres_unavailable("load runtime settings"))?
+    .map_err(|error| postgres_unavailable("load runtime settings").with_source(error))?
     .ok_or_else(|| StoreError::NotFound {
         entity: "runtime settings",
         id: "1".to_owned(),
@@ -257,7 +261,9 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
         Box::pin(async move {
             super::outbound_user_agent::load_user_agent_override(&self.pool, provider_kind)
                 .await
-                .map_err(|_| provider_unavailable("load outbound user-agent"))
+                .map_err(|error| {
+                    provider_unavailable("load outbound user-agent").with_source(error)
+                })
         })
     }
 
@@ -267,7 +273,7 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
         Box::pin(async move {
             let settings = RuntimeSettingsRepository::load_runtime_settings(self)
                 .await
-                .map_err(|_| provider_unavailable("load refresh policy"))?;
+                .map_err(|error| provider_unavailable("load refresh policy").with_source(error))?;
             let concurrency = NonZeroU32::new(settings.refresh_concurrency)
                 .ok_or_else(|| provider_invalid("decode refresh policy"))?;
             ProviderRefreshPolicy::try_new(
@@ -327,12 +333,12 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, request_tuning_json, updated_at, turn_state_probe_concurrency,
                 openai_guardian_reserved_concurrency,
-                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
+                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model, openai_session_binding_ttl_hours, openai_account_affinity
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("load runtime settings in transaction"))?
+    .map_err(|error| postgres_unavailable("load runtime settings in transaction").with_source(error))?
     .ok_or_else(|| StoreError::NotFound {
         entity: "runtime settings",
         id: "1".to_owned(),
@@ -409,6 +415,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                  account_warmup_enabled = $23,
                  account_warmup_schedule_time = $24,
                  account_warmup_model = $25,
+                 openai_session_binding_ttl_hours = coalesce($26, openai_session_binding_ttl_hours),
+                 openai_account_affinity = coalesce($27, openai_account_affinity),
                  updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -441,9 +449,11 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.account_warmup_enabled)
     .bind(&update.account_warmup_schedule_time)
     .bind(update.account_warmup_model.as_deref())
+    .bind(update.openai_session_binding_ttl_hours.map(i64::from))
+    .bind(update.openai_account_affinity.map(|mode| mode.as_str()))
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
+    .map_err(|error| postgres_unavailable("update runtime settings in transaction").with_source(error))?
     .ok_or_else(|| StoreError::NotFound {
         entity: "runtime settings",
         id: "1".to_owned(),
@@ -462,7 +472,9 @@ pub(crate) async fn bump_config_revision_in_transaction(
     )
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("bump config revision in transaction"))?
+    .map_err(|error| {
+        postgres_unavailable("bump config revision in transaction").with_source(error)
+    })?
     .ok_or_else(|| StoreError::NotFound {
         entity: "runtime settings",
         id: "1".to_owned(),
@@ -484,7 +496,9 @@ pub(crate) async fn update_admin_api_key_in_transaction(
     .bind(admin_api_key.as_deref())
     .execute(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("update admin api key in transaction"))?;
+    .map_err(|error| {
+        postgres_unavailable("update admin api key in transaction").with_source(error)
+    })?;
     Ok(())
 }
 
@@ -516,10 +530,19 @@ struct RuntimeSettingsRow {
     account_warmup_enabled: bool,
     account_warmup_schedule_time: String,
     account_warmup_model: Option<String>,
+    openai_session_binding_ttl_hours: i64,
+    openai_account_affinity: String,
 }
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
     Ok(RuntimeSettings {
+        openai_account_affinity: gateway_core::account::AccountAffinity::parse(
+            &row.openai_account_affinity,
+        )
+        .ok_or_else(|| StoreError::InvalidData {
+            entity: "runtime settings",
+            message: "invalid account affinity".to_owned(),
+        })?,
         config_revision: Revision::new(to_u64(row.config_revision)?)?,
         admin_api_key: row.admin_api_key,
         disable_fast: row.disable_fast,
@@ -551,6 +574,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         account_warmup_schedule_time: row.account_warmup_schedule_time,
         account_warmup_model: row.account_warmup_model,
         updated_at: row.updated_at,
+        openai_session_binding_ttl_hours: to_u32(row.openai_session_binding_ttl_hours)?,
     })
 }
 

@@ -1,4 +1,23 @@
-use gateway_protocol::openai::is_transport_managed_request_header;
+use gateway_protocol::openai::{is_transport_managed_request_header, parse_retry_after_seconds};
+
+#[test]
+fn retry_after_accepts_seconds_and_http_dates_without_accepting_invalid_durations() {
+    for (value, expected) in [
+        ("0", Some(0)),
+        (" 120 ", Some(120)),
+        ("Thu, 01 Jan 1970 00:00:00 GMT", Some(0)),
+        ("", None),
+        ("-1", None),
+        ("1.5", None),
+        ("unknown", None),
+        ("18446744073709551616", None),
+    ] {
+        assert_eq!(parse_retry_after_seconds(value), expected, "{value}");
+    }
+    let future =
+        httpdate::fmt_http_date(std::time::SystemTime::now() + std::time::Duration::from_secs(60));
+    assert!((59..=60).contains(&parse_retry_after_seconds(&future).unwrap()));
+}
 
 #[test]
 fn transport_headers_should_include_proxy_namespaces_and_compression() {

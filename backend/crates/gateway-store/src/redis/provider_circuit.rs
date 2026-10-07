@@ -101,7 +101,7 @@ impl ProviderCircuitRepository for RedisProviderCircuitRepository {
             .key(self.key(provider_kind)?)
             .invoke_async(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("read provider circuit"))?;
+            .map_err(|error| redis_unavailable("read provider circuit").with_source(error))?;
         if allow == 1 {
             Ok(ProviderCircuitDecision::Allow)
         } else {
@@ -123,7 +123,7 @@ impl ProviderCircuitRepository for RedisProviderCircuitRepository {
             .arg(duration_ms)
             .invoke_async(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("observe provider failure"))?;
+            .map_err(|error| redis_unavailable("observe provider failure").with_source(error))?;
         let failure_count = failures
             .parse()
             .map_err(|_| invalid("Redis returned an invalid failure count"))?;
@@ -145,7 +145,7 @@ impl ProviderCircuitRepository for RedisProviderCircuitRepository {
             .arg(self.key(provider_kind)?)
             .query_async::<i64>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("reset provider circuit"))?;
+            .map_err(|error| redis_unavailable("reset provider circuit").with_source(error))?;
         Ok(())
     }
 }

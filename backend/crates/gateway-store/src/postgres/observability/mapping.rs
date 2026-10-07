@@ -735,6 +735,8 @@ pub(crate) fn admin_ops_error(error: OpsErrorRecord) -> admin_observability::Ops
         provider_account_ref: error.provider_account_ref,
         provider_account_name: error.provider_account_name,
         provider_account_email: error.provider_account_email,
+        provider_account_plan_type: error.provider_account_plan_type,
+        provider_account_plan_type_display: None,
         provider_account_authentication_kind: error.provider_account_authentication_kind,
         upstream_model_id: error.upstream_model_id,
         upstream_transport: error.upstream_transport,
@@ -863,7 +865,9 @@ pub(crate) fn usage_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<
         provider_metadata_json: get::<Option<serde_json::Value>>(row, "provider_observation_json")?
             .map(|value| serde_json::to_string(&value))
             .transpose()
-            .map_err(|_| postgres_unavailable("encode provider observation"))?,
+            .map_err(|error| {
+                postgres_unavailable("encode provider observation").with_source(error)
+            })?,
         attempt_count: to_u32(get(row, "attempt_count")?)?,
         upstream_send_state: get(row, "upstream_send_state")?,
         downstream_committed_at: get(row, "downstream_committed_at")?,
@@ -938,6 +942,7 @@ pub(crate) fn ops_error_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<Ops
         provider_account_ref: get(row, "provider_account_ref")?,
         provider_account_name: get(row, "provider_account_name")?,
         provider_account_email: get(row, "provider_account_email")?,
+        provider_account_plan_type: get(row, "provider_account_plan_type")?,
         provider_account_authentication_kind: get(row, "provider_account_authentication_kind")?,
         upstream_model_id: get(row, "upstream_model_id")?,
         upstream_transport: get(row, "upstream_transport")?,

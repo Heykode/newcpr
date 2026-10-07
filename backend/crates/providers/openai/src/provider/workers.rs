@@ -89,6 +89,10 @@ pub(crate) fn worker_contributions(
             quota_refresh_policy.interval(),
             Box::new(OpenAiCatalogTask {
                 catalog: Arc::clone(&catalog),
+                success_tail_jitter: Duration::from_millis(
+                    u64::try_from(quota_refresh_policy.interval().as_millis() / 5)
+                        .unwrap_or_default(),
+                ),
             }),
         )?),
         WorkerContribution::Registration(WorkerRegistration::try_new(
@@ -147,7 +151,7 @@ impl ScheduledTask for OpenAiOAuthRefreshTask {
             }
             let outcomes = self.service.refresh_due().await.map_err(|error| {
                 tracing::error!(error = %error, "OpenAI OAuth refresh cycle failed");
-                WorkerTaskError::safe("OpenAI OAuth refresh failed")
+                WorkerTaskError::safe("OpenAI OAuth refresh failed").with_source(error)
             })?;
             let mut refreshed = 0_u64;
             let mut invalidated = 0_u64;
@@ -219,6 +223,7 @@ pub(super) struct OpenAiWarmupTask {
 
 pub(super) struct OpenAiCatalogTask {
     catalog: Arc<CodexCredentialCatalogService>,
+    success_tail_jitter: Duration,
 }
 
 pub(super) struct OpenAiCatalogEtagTask {
@@ -271,7 +276,8 @@ impl ScheduledTask for OpenAiQuotaTask {
                         error = %error,
                         "OpenAI quota synchronization failed"
                     );
-                    return Err(WorkerTaskError::safe("OpenAI quota synchronization failed"));
+                    return Err(WorkerTaskError::safe("OpenAI quota synchronization failed")
+                        .with_source(error));
                 }
             }
             Ok(())
@@ -360,16 +366,39 @@ impl ScheduledTask for OpenAiCatalogTask {
                 return Ok(());
             }
             match self.catalog.refresh_catalogs().await {
-                Ok(_) | Err(CodexCredentialCatalogError::NoEligibleCredential) => Ok(()),
+                Ok(_) => {
+                    let delay = random_duration(self.success_tail_jitter);
+                    tokio::select! {
+                        () = context.cancellation().cancelled() => {}
+                        () = tokio::time::sleep(delay) => {}
+                    }
+                    Ok(())
+                }
+                Err(CodexCredentialCatalogError::NoEligibleCredential) => Ok(()),
                 Err(error) => {
                     tracing::warn!(error = %error, "OpenAI model catalog refresh failed");
-                    Err(WorkerTaskError::safe(
-                        "OpenAI model catalog synchronization failed",
-                    ))
+                    Err(
+                        WorkerTaskError::safe("OpenAI model catalog synchronization failed")
+                            .with_source(error),
+                    )
                 }
             }
         })
     }
+}
+
+fn random_duration(max_exclusive: Duration) -> Duration {
+    let max_millis = u64::try_from(max_exclusive.as_millis()).unwrap_or(u64::MAX);
+    if max_millis == 0 {
+        return Duration::ZERO;
+    }
+    let mut random = [0_u8; 8];
+    let offset = if getrandom::fill(&mut random).is_ok() {
+        u64::from_le_bytes(random) % max_millis
+    } else {
+        0
+    };
+    Duration::from_millis(offset)
 }
 
 impl DaemonTask for OpenAiCatalogEtagTask {

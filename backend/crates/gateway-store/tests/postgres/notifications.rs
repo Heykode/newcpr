@@ -35,6 +35,7 @@ async fn group(pool: &sqlx::PgPool) -> AccountGroupId {
                 description: None,
                 color: AccountGroupColor::parse("#2563EBFF").unwrap(),
                 disable_fast: false,
+                fast_mode: Default::default(),
             },
             &context(),
         )

@@ -49,6 +49,65 @@ fn input() -> Value {
 }
 
 #[tokio::test]
+async fn import_template_selection_is_strict_and_unavailable_catalog_never_queues() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (selection, status) in [
+        (
+            json!({"id": "template-a"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"id": "template-a", "revision": 1, "overwrite": true}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"id": "template-a", "revision": 0}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"id": "template-a", "revision": 1}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        let mut request = input();
+        request["items"][0]["template"] = selection;
+        for (path, body) in [
+            ("/api/admin/accounts/import", request["items"][0].clone()),
+            ("/api/admin/accounts/import-tasks", request),
+        ] {
+            assert_eq!(
+                send(&fixture, "POST", path, body, true).await.0,
+                status,
+                "{path}"
+            );
+        }
+    }
+    let (_, list) = send(
+        &fixture,
+        "GET",
+        "/api/admin/accounts/import-tasks",
+        Value::Null,
+        true,
+    )
+    .await;
+    assert_eq!(list["data"]["items"], json!([]));
+}
+
+#[test]
+fn omitted_import_template_preserves_the_wire_fingerprint_and_null_means_omission() {
+    use gateway_api::admin::accounts::AccountImportRequest;
+    let body = input()["items"][0].clone();
+    let original: AccountImportRequest = serde_json::from_value(body.clone()).unwrap();
+    let mut with_null = body;
+    with_null["template"] = Value::Null;
+    let with_null: AccountImportRequest = serde_json::from_value(with_null).unwrap();
+    let serialized = serde_json::to_value(&original).unwrap();
+    assert!(serialized.get("template").is_none());
+    assert_eq!(serialized, serde_json::to_value(&with_null).unwrap());
+}
+
+#[tokio::test]
 async fn accepts_lists_restores_stops_and_deduplicates_without_echoing_credentials() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.insert_session("valid-session");
