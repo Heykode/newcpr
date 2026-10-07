@@ -11,6 +11,7 @@ const REQUEST_ERROR_SELECT: &str = "select 'model_request'::text as source,
        mr.endpoint, mr.provider_kind, mr.provider_account_ref,
        mr.provider_account_name_snapshot as provider_account_name,
        mr.provider_account_email_snapshot as provider_account_email,
+       account.plan_type as provider_account_plan_type,
        mr.provider_account_authentication_kind_snapshot
          as provider_account_authentication_kind,
        mr.upstream_model_id, mr.upstream_transport,
@@ -34,6 +35,7 @@ const REQUEST_ERROR_SELECT: &str = "select 'model_request'::text as source,
        mr.completed_at as occurred_at,
        'model_request:' || mr.id as stable_sort_id
 from model_requests mr
+left join provider_accounts account on account.id = mr.provider_account_ref
 left join client_api_keys ck on ck.id = mr.client_api_key_ref
 where true";
 
@@ -44,6 +46,7 @@ const OPS_EVENT_SELECT: &str = "select 'ops_event'::text as source,
        mr.endpoint, oe.provider_kind, oe.provider_account_ref,
        oe.provider_account_name_snapshot as provider_account_name,
        oe.provider_account_email_snapshot as provider_account_email,
+       account.plan_type as provider_account_plan_type,
        oe.provider_account_authentication_kind_snapshot
          as provider_account_authentication_kind,
        oe.upstream_model_id, null::text as upstream_transport, oe.failure_kind,
@@ -67,6 +70,7 @@ const OPS_EVENT_SELECT: &str = "select 'ops_event'::text as source,
        oe.created_at as occurred_at,
        'ops_event:' || oe.id as stable_sort_id
 from ops_events oe
+left join provider_accounts account on account.id = oe.provider_account_ref
 left join model_requests mr on mr.id = oe.model_request_id
 left join client_api_keys ck on ck.id = mr.client_api_key_ref
 where true";
@@ -92,7 +96,7 @@ pub(crate) async fn list_ops_errors(
         .build()
         .fetch_all(pool)
         .await
-        .map_err(|_| postgres_unavailable("list ops errors"))?;
+        .map_err(|error| postgres_unavailable("list ops errors").with_source(error))?;
     let items = rows
         .iter()
         .map(ops_error_from_row)
@@ -123,7 +127,7 @@ pub(crate) async fn count_ops_errors(
         .build_query_scalar::<i64>()
         .fetch_one(pool)
         .await
-        .map_err(|_| postgres_unavailable("count ops errors"))?;
+        .map_err(|error| postgres_unavailable("count ops errors").with_source(error))?;
     to_u64(total)
 }
 
@@ -145,20 +149,27 @@ fn push_request_error_predicates(
         ("mr.id", &filter.request_id),
         ("mr.provider_account_ref", &filter.provider_account_ref),
         ("mr.provider_kind", &filter.provider_kind),
-        ("mr.upstream_transport", &filter.transport),
+        (
+            "coalesce(mr.upstream_transport, mr.client_transport)",
+            &filter.transport,
+        ),
         ("mr.upstream_request_id", &filter.upstream_request_id),
     ] {
         push_text_equality(statement, column, value);
     }
     push_operation_filter(statement, filter, "mr");
     push_response_id_filter(statement, "mr.client_response_id", filter);
-    push_text_equality(statement, "mr.upstream_model_id", &filter.model);
+    push_text_equality(
+        statement,
+        "coalesce(mr.upstream_model_id, mr.requested_model_id)",
+        &filter.model,
+    );
     if let Some(index) = filter.attempt_index {
         statement.push(" and nullif(mr.attempt_count, 0) = ");
         statement.push_bind(i32::try_from(index).unwrap_or(i32::MAX));
     }
     if let Some(status) = filter.status_code {
-        statement.push(" and mr.upstream_status_code = ");
+        statement.push(" and coalesce(mr.upstream_status_code, mr.client_status_code) = ");
         statement.push_bind(i32::from(status));
     }
     if let Some(search) = &filter.search {

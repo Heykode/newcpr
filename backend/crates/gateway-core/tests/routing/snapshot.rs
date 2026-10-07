@@ -656,6 +656,146 @@ fn disable_fast_uses_bound_groups_and_global_policy_without_changing_scope() {
     }
 }
 
+#[test]
+fn fast_modes_merge_without_overriding_global_disable_or_account_scope() {
+    use gateway_core::account::FastMode;
+    let group_id =
+        gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
+    let second_group =
+        gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000002").unwrap();
+    let account_id = ProviderAccountId::new("acct_fast").unwrap();
+    for global in [false, true] {
+        for mode in [FastMode::Default, FastMode::Enabled, FastMode::Disabled] {
+            let facts = SnapshotFacts::new(
+                revision(1),
+                revision(1),
+                SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                    .with_disable_fast(global),
+                vec![SnapshotClientPolicyFacts::new(
+                    ClientApiKeyId::new("key_fast").unwrap(),
+                    PlaintextClientApiKey::new("sk_fast").unwrap(),
+                    vec![group_id.clone(), second_group.clone()],
+                    RateLimits::unlimited(),
+                )],
+                vec![
+                    SnapshotAccountGroupFacts::new(group_id.clone(), "Fast".to_owned(), true)
+                        .with_fast_mode(FastMode::Enabled),
+                    SnapshotAccountGroupFacts::new(
+                        second_group.clone(),
+                        "Policy only".to_owned(),
+                        false,
+                    )
+                    .with_fast_mode(mode),
+                ],
+                vec![SnapshotProviderAccountFacts::new(
+                    account_id.clone(),
+                    "alpha",
+                )],
+                vec![SnapshotAccountGroupMemberFacts::new(
+                    group_id.clone(),
+                    account_id.clone(),
+                )],
+            );
+            let snapshot = block_on(
+                RuntimeSnapshotCompiler::new(
+                    Arc::new(TestSnapshotStore::new(Ok(facts))),
+                    Arc::new(TestCatalog::Unavailable),
+                )
+                .compile(),
+            )
+            .unwrap();
+            let scope = snapshot.client_policies().next().unwrap().account_scope();
+            assert!(scope.allows(&account_id));
+            assert_eq!(scope.fast_mode(), FastMode::Enabled.merge(mode));
+            let plan = snapshot
+                .plan(
+                    &PublicModelId::new("unlisted-model").unwrap(),
+                    &super::operation(),
+                    Arc::clone(scope),
+                    &gateway_core::routing::RoutingContext::default(),
+                )
+                .unwrap();
+            assert_eq!(plan.disable_fast(), global || mode == FastMode::Disabled);
+        }
+    }
+}
+
+#[test]
+fn affinity_ttl_and_guardian_policy_are_validated_and_frozen_together() {
+    use gateway_core::account::{AccountAffinity, parse_openai_session_binding_ttl_hours};
+    for (hours, affinity) in [
+        (1, AccountAffinity::Relaxed),
+        (24, AccountAffinity::Strict),
+        (720, AccountAffinity::Strict),
+    ] {
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            SnapshotSettingsFacts::new(5, 42, "smart", BTreeMap::new(), None, None)
+                .with_openai_guardian_reserved_concurrency(2)
+                .with_openai_session_binding_ttl_hours(hours)
+                .with_openai_account_affinity(affinity),
+            Vec::new(),
+            Vec::new(),
+            vec![SnapshotProviderAccountFacts::new(
+                ProviderAccountId::new("acct_policy").unwrap(),
+                "alpha",
+            )],
+            Vec::new(),
+        );
+        let snapshot = block_on(
+            RuntimeSnapshotCompiler::new(
+                Arc::new(TestSnapshotStore::new(Ok(facts))),
+                Arc::new(TestCatalog::Unavailable),
+            )
+            .compile(),
+        )
+        .unwrap();
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new("unlisted-model").unwrap(),
+                &super::operation(),
+                snapshot.all_account_scope(),
+                &gateway_core::routing::RoutingContext::default(),
+            )
+            .unwrap();
+        let policy = plan.account_selection_policy();
+        assert_eq!(
+            policy.openai_session_binding_ttl(),
+            parse_openai_session_binding_ttl_hours(hours).unwrap()
+        );
+        assert_eq!(policy.openai_account_affinity(), affinity);
+        assert_eq!(policy.openai_guardian_reserved_concurrency(), 2);
+        assert_eq!(
+            policy.request_interval(),
+            std::time::Duration::from_millis(42)
+        );
+    }
+    for hours in [0, 721, u32::MAX] {
+        assert!(parse_openai_session_binding_ttl_hours(hours).is_none());
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None)
+                .with_openai_session_binding_ttl_hours(hours),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(matches!(
+            block_on(
+                RuntimeSnapshotCompiler::new(
+                    Arc::new(TestSnapshotStore::new(Ok(facts))),
+                    Arc::new(TestCatalog::NoProviders),
+                )
+                .compile()
+            ),
+            Err(RuntimeSnapshotCompileError::InvalidData)
+        ));
+    }
+}
+
 fn account_concurrency_facts(default_limit: u32, override_limit: Option<u32>) -> SnapshotFacts {
     SnapshotFacts::new(
         revision(1),

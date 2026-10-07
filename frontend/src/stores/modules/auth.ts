@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { login as apiLogin, logout as apiLogout, getAuthStatus } from '@/api'
-import { ApiError, resetUnauthorizedHandling } from '@/api/request'
+import { login as apiLogin, logout as apiLogout, refreshAuthSession } from '@/api'
+import { ApiError, invalidatePendingRequests, resetUnauthorizedHandling } from '@/api/request'
 
 export type AuthCheckResult = 'authenticated' | 'unauthenticated' | 'unavailable'
 
@@ -13,6 +13,8 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
   let revision = 0
   let pendingCheck: Promise<AuthCheckResult> | undefined
+  let transition: Promise<void> = Promise.resolve()
+  let refreshBarrier: Promise<void> = Promise.resolve()
 
   function currentResult(): AuthCheckResult {
     return isAuthenticated.value ? 'authenticated' : sessionChecked.value ? 'unauthenticated' : 'unavailable'
@@ -25,12 +27,14 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function checkAuth(): Promise<AuthCheckResult> {
+    if (loading.value)
+      return transition.then(currentResult)
     if (pendingCheck)
       return pendingCheck
     const checkedRevision = revision
     pendingCheck = (async (): Promise<AuthCheckResult> => {
       try {
-        const status = await getAuthStatus({ silent: true })
+        const status = await refreshAuthSession({ silent: true })
         if (checkedRevision !== revision)
           return currentResult()
         if (typeof status?.authenticated !== 'boolean')
@@ -61,45 +65,63 @@ export const useAuthStore = defineStore('auth', () => {
           pendingCheck = undefined
       }
     })()
+    refreshBarrier = Promise.allSettled([refreshBarrier, pendingCheck]).then(() => {})
     return pendingCheck
   }
 
-  async function login(payload: Parameters<typeof apiLogin>[0]) {
+  function beginTransition<T>(action: (expectedRevision: number) => Promise<T>): Promise<T> {
+    invalidatePendingRequests()
+    // Finish older cookie-changing calls before login/logout can set a new cookie.
+    const prior = Promise.allSettled([transition, refreshBarrier])
     invalidatePendingCheck()
-    try {
-      loading.value = true
-      await apiLogin(payload)
-
-      isAuthenticated.value = true
-      sessionChecked.value = true
-      resetUnauthorizedHandling()
-
-      return true
-    }
-    catch {
-      isAuthenticated.value = false
-      return false
-    }
-    finally {
-      loading.value = false
-    }
+    const expectedRevision = revision
+    loading.value = true
+    const pending = prior.then(() => action(expectedRevision)).finally(() => {
+      if (revision === expectedRevision)
+        loading.value = false
+    })
+    transition = pending.then(() => {}, () => {})
+    return pending
   }
 
-  async function logout() {
-    invalidatePendingCheck()
-    try {
-      await apiLogout({ silent: true })
-    }
-    catch {
-      // 忽略登出错误
-    }
-    finally {
-      isAuthenticated.value = false
-      sessionChecked.value = true
-    }
+  function login(payload: Parameters<typeof apiLogin>[0]) {
+    return beginTransition(async (expectedRevision) => {
+      try {
+        await apiLogin(payload)
+        if (revision !== expectedRevision)
+          return false
+        isAuthenticated.value = true
+        sessionChecked.value = true
+        resetUnauthorizedHandling()
+        return true
+      }
+      catch {
+        if (revision === expectedRevision)
+          isAuthenticated.value = false
+        return false
+      }
+    })
+  }
+
+  function logout() {
+    return beginTransition(async (expectedRevision) => {
+      try {
+        await apiLogout({ silent: true })
+      }
+      catch {
+        // Preserve local logout even when the server cannot confirm revocation.
+      }
+      finally {
+        if (revision === expectedRevision) {
+          isAuthenticated.value = false
+          sessionChecked.value = true
+        }
+      }
+    })
   }
 
   function invalidateSession() {
+    invalidatePendingRequests()
     invalidatePendingCheck()
     isAuthenticated.value = false
     sessionChecked.value = true

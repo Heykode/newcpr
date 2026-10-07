@@ -24,7 +24,10 @@ export interface AccountGroupUsage {
   retainedTotalUsd: string
 }
 
+export type GroupFastMode = 'default' | 'enabled' | 'disabled'
+
 export interface AccountGroup extends AccountGroupRef {
+  fastMode: GroupFastMode
   description: string | null
   disableFast: boolean
   memberCount: number
@@ -64,6 +67,7 @@ interface AccountGroupListParams {
 }
 
 interface AccountGroupCreateParam {
+  fastMode: GroupFastMode
   name: string
   description: string | null
   color: string
@@ -71,6 +75,7 @@ interface AccountGroupCreateParam {
 }
 
 interface AccountGroupUpdateParam {
+  fastMode?: GroupFastMode
   id: string
   name: string
   description: string | null

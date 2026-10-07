@@ -270,12 +270,12 @@ fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
         UpstreamSendState::NotSent,
     ));
 
-    assert_eq!(
+    assert_gateway_contract(
         gateway_error_from_engine(&error),
         GatewayError::new(
             GatewayErrorKind::AccountCapacityUnavailable,
-            "all eligible upstream accounts are temporarily busy"
-        )
+            "all eligible upstream accounts are temporarily busy",
+        ),
     );
 }
 
@@ -318,12 +318,12 @@ fn provider_infrastructure_failure_should_have_a_distinct_client_contract() {
         UpstreamSendState::NotSent,
     ));
 
-    assert_eq!(
+    assert_gateway_contract(
         gateway_error_from_engine(&error),
         GatewayError::new(
             GatewayErrorKind::ProviderInfrastructureUnavailable,
-            "provider account infrastructure is temporarily unavailable"
-        )
+            "provider account infrastructure is temporarily unavailable",
+        ),
     );
 }
 
@@ -334,12 +334,12 @@ fn no_eligible_provider_account_should_map_to_service_unavailable() {
         UpstreamSendState::NotSent,
     ));
 
-    assert_eq!(
+    assert_gateway_contract(
         gateway_error_from_engine(&error),
         GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
-            "no upstream provider is currently available for this request"
-        )
+            "no upstream provider is currently available for this request",
+        ),
     );
 }
 
@@ -444,12 +444,12 @@ fn engine_provider_runtime_failures_should_collapse_to_safe_unavailability() {
     ] {
         let error = EngineError::Provider(ProviderError::new(kind, UpstreamSendState::Ambiguous));
 
-        assert_eq!(
+        assert_gateway_contract(
             gateway_error_from_engine(&error),
             GatewayError::new(
                 GatewayErrorKind::UpstreamUnavailable,
-                "upstream service is unavailable"
-            )
+                "upstream service is unavailable",
+            ),
         );
     }
 }
@@ -458,9 +458,9 @@ fn engine_provider_runtime_failures_should_collapse_to_safe_unavailability() {
 fn engine_store_error_should_collapse_to_safe_internal_error() {
     let error = EngineError::Store(StoreError::new(StoreErrorKind::Unavailable));
 
-    assert_eq!(
+    assert_gateway_contract(
         gateway_error_from_engine(&error),
-        GatewayError::new(GatewayErrorKind::Internal, "gateway execution failed")
+        GatewayError::new(GatewayErrorKind::Internal, "gateway execution failed"),
     );
 }
 #[test]
@@ -485,6 +485,14 @@ fn openai_error_response_should_preserve_only_safe_contract_fields() {
             }),
         )
     );
+}
+
+fn assert_gateway_contract(actual: GatewayError, expected: GatewayError) {
+    assert_eq!(actual.kind(), expected.kind());
+    assert_eq!(actual.safe_message(), expected.safe_message());
+    assert_eq!(actual.client_message(), expected.client_message());
+    assert_eq!(actual.client_error_code(), expected.client_error_code());
+    assert_eq!(actual.client_error_type(), expected.client_error_type());
 }
 
 #[tokio::test]

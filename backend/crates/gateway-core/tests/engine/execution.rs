@@ -1073,6 +1073,37 @@ fn settlement_failure_keeps_provider_error_and_releases_concurrency_once() {
 }
 
 use async_trait::async_trait;
+
+#[test]
+fn stalled_operational_diagnostics_do_not_hold_admission_or_replace_provider_failure() {
+    use futures::FutureExt;
+    for stall in [false, true] {
+        let admissions = Arc::new(Admissions::default());
+        let budget = Arc::new(Budget {
+            active: admissions.active.clone(),
+            fail_settlement: true,
+            ..Default::default()
+        });
+        let store = Arc::new(TrackingExecutionStore {
+            stall_operational_diagnostics: stall,
+            ..Default::default()
+        });
+        let service = early_failure_service(store.clone(), admissions.clone(), budget.clone());
+        let mut started =
+            block_on(service.start(request(&service, ClientTransport::WebSocket))).unwrap();
+        let outcome = started
+            .session
+            .next_event()
+            .now_or_never()
+            .expect("diagnostics must not wait");
+        assert!(matches!(outcome, Err(EngineError::Provider(_))));
+        assert_zero_cleanup_completed(&admissions, &budget, &store, &started.request_id);
+        let failures = store.operational_failures.lock().unwrap();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].operation, "settle_client_budget");
+        assert!(failures[0].details.is_some());
+    }
+}
 use bytes::Bytes;
 use futures::{channel::oneshot, executor::block_on, future::BoxFuture};
 use gateway_core::account::{AccountSelectionPolicy, ProviderAccountId, RotationStrategy};
@@ -1825,6 +1856,7 @@ fn assert_provider_endpoint_observation(model: Option<&str>) {
     ));
 
     let mut started = block_on(service.start_provider_endpoint(StartProviderExecution {
+        upstream_model: None,
         client,
         provider: ProviderKind::new("openai").expect("provider"),
         operation,
@@ -2191,6 +2223,8 @@ struct TrackingExecutionStore {
     creates: AtomicUsize,
     finalizes: AtomicUsize,
     fail_probe_observation: AtomicBool,
+    operational_failures: Mutex<Vec<gateway_core::diagnostics::OperationalFailure>>,
+    stall_operational_diagnostics: bool,
 }
 
 impl TrackingExecutionStore {
@@ -2245,6 +2279,16 @@ impl TrackingExecutionStore {
 
 #[async_trait]
 impl ExecutionStore for TrackingExecutionStore {
+    async fn record_operational_failure(
+        &self,
+        failure: gateway_core::diagnostics::OperationalFailure,
+    ) -> Result<(), StoreError> {
+        self.operational_failures.lock().unwrap().push(failure);
+        if self.stall_operational_diagnostics {
+            futures::future::pending::<()>().await;
+        }
+        Ok(())
+    }
     async fn create_model_request(&self, request: NewModelRequest) -> Result<(), StoreError> {
         self.touch();
         self.creates.fetch_add(1, Ordering::SeqCst);

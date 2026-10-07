@@ -481,17 +481,24 @@ pub enum WorkerDefinitionError {
 }
 
 /// 不暴露基础设施原文或 lease resource 的错误。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
 pub struct WorkerLeaseError {
     message: String,
+    source: Option<crate::error::ErrorSource>,
 }
 
 impl WorkerLeaseError {
     #[must_use]
+    pub fn with_source(mut self, source: impl Into<crate::error::ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+    #[must_use]
     pub fn safe(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            source: None,
         }
     }
 
@@ -502,17 +509,35 @@ impl WorkerLeaseError {
 }
 
 /// 不暴露 Provider 原文或存储细节的后台任务错误。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
 pub struct WorkerTaskError {
     message: String,
+    source: Option<crate::error::ErrorSource>,
 }
 
 impl WorkerTaskError {
     #[must_use]
+    pub fn with_source(mut self, source: impl Into<crate::error::ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_cleanup(mut self, cleanup: impl Into<crate::error::ErrorSource>) -> Self {
+        self.source = Some(crate::error::ErrorSource::cleanup(self.source, cleanup));
+        self
+    }
+
+    #[must_use]
+    pub fn error_details(&self) -> Option<crate::error::ErrorDetails> {
+        crate::error::ErrorDetails::capture(self.source.as_ref(), None, false)
+    }
+    #[must_use]
     pub fn safe(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            source: None,
         }
     }
 

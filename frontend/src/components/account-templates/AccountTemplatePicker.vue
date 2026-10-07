@@ -1,18 +1,22 @@
 <script setup lang="ts">
 import type { AccountTemplate } from '@/api/modules/account-templates'
-import { computed, onMounted, onScopeDispose, shallowRef } from 'vue'
+import { Settings2 } from '@lucide/vue'
+import { computed, onMounted, onScopeDispose, shallowRef, watch } from 'vue'
 import { getAccountTemplates } from '@/api/modules/account-templates'
 import { ipv6EgressModes } from '@/api/modules/ipv6-egress'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
+import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
 import { useProxyCatalog } from '@/composables/useProxyCatalog'
 import { errorMessage } from '@/utils/async'
 import { accountExcel403Action, excel403ActionLabel } from '@/utils/excel-settings'
+import AccountTemplatesModal from './AccountTemplatesModal.vue'
 
-withDefaults(defineProps<{ disabled: boolean, label?: string }>(), { label: '新增账号模板' })
+withDefaults(defineProps<{ disabled: boolean, label?: string, manage?: boolean }>(), { label: '新增账号模板', manage: false })
 const selected = defineModel<AccountTemplate | null>({ required: true })
+const managing = shallowRef(false)
 const rows = shallowRef<AccountTemplate[]>([])
 const loading = shallowRef(true)
 const error = shallowRef('')
@@ -34,6 +38,8 @@ const value = computed({
 })
 const groupNames = computed(() => selected.value?.config.groupIds.map(id => groups.value.find(group => group.id === id)?.name ?? `未识别分组 (${id})`).join('、') || '无分组')
 const proxyName = computed(() => {
+  if (selected.value?.config.preserveOutboundProxy)
+    return '保持原代理'
   const id = selected.value?.config.outboundProxyId
   return id ? proxies.value.find(proxy => proxy.id === id)?.name ?? `未识别代理 (${id})` : '直连'
 })
@@ -66,13 +72,22 @@ async function load() {
   }
 }
 onMounted(load)
+watch(managing, (open) => {
+  if (!open)
+    void load()
+})
 onScopeDispose(() => controller?.abort())
 </script>
 
 <template>
   <div class="my-4 min-w-0 border-y border-cp-border py-4">
     <BaseFormItem :label="label">
-      <BaseSelect v-model="value" class="w-full" :options="options" :disabled="disabled || loading" :aria-label="label" />
+      <div class="flex min-w-0 items-center gap-2">
+        <BaseSelect v-model="value" class="min-w-0 flex-1" :options="options" :disabled="disabled || loading" :aria-label="label" />
+        <BaseIconButton v-if="manage" label="管理账号模板" :disabled="disabled" @click="managing = true">
+          <Settings2 :size="16" />
+        </BaseIconButton>
+      </div>
     </BaseFormItem>
     <p v-if="error" class="mb-0 break-words text-cp-sm text-cp-error" role="alert">
       {{ error }}
@@ -85,6 +100,14 @@ onScopeDispose(() => controller?.abort())
     </p>
     <dl v-if="selected" class="mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-cp-sm">
       <dt>模板版本</dt><dd>{{ selected.revision }}</dd>
+      <template v-if="selected.config.turnStateInjectionEnabled != null">
+        <dt>State</dt><dd>{{ selected.config.turnStateInjectionEnabled ? '开启' : '关闭' }}</dd>
+      </template>
+      <template v-if="selected.config.modelAccess">
+        <dt>模型限制</dt><dd class="min-w-0 break-all">
+          {{ selected.config.modelAccess.mode === 'all' ? '不限制' : `${selected.config.modelAccess.mode === 'allowlist' ? '白名单' : '黑名单'}：${selected.config.modelAccess.models.join(', ')}` }}
+        </dd>
+      </template>
       <dt>IPv6 出口策略</dt><dd>{{ egressLabel }}</dd>
       <template v-if="selected.config.excelIgnoreEncryptedContent != null">
         <dt>忽略加密历史</dt><dd>{{ selected.config.excelIgnoreEncryptedContent ? '开启（有损省略）' : '关闭' }}</dd>
@@ -143,5 +166,6 @@ onScopeDispose(() => controller?.abort())
         {{ proxyName }}
       </dd>
     </dl>
+    <AccountTemplatesModal v-if="manage" v-model="managing" />
   </div>
 </template>

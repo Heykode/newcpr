@@ -60,6 +60,7 @@ const {
   openaiGuardianReservedConcurrencyValue,
   requestIntervalMsValue,
   responsesMaxDecompressedBodyBytesValue,
+  openaiSessionBindingTtlHoursValue,
   minCodexDesktopVersionError,
   minCodexCliVersionError,
   saveSettings,
@@ -147,6 +148,8 @@ watch(
         <NotificationChannelsCard />
 
         <RuntimeSettingsCard
+          v-model:openai-account-affinity="form.openaiAccountAffinity"
+          v-model:openai-session-binding-ttl-hours="openaiSessionBindingTtlHoursValue"
           v-model:max-concurrent-per-account="maxConcurrentPerAccountValue"
           v-model:openai-guardian-reserved-concurrency="openaiGuardianReservedConcurrencyValue"
           v-model:refresh-margin-seconds="refreshMarginSecondsValue"

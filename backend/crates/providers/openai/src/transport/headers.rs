@@ -16,6 +16,31 @@ use super::request::generate_upstream_service_tier;
 
 const CODEX_RESIDENCY_HEADER: &str = "x-openai-internal-codex-residency";
 
+pub(super) fn is_managed_identity_header(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization"
+            | "x-api-key"
+            | "x-openai-actor-authorization"
+            | "cookie"
+            | "cookie2"
+            | "chatgpt-account-id"
+            | "chatgpt-project-id"
+            | "openai-organization"
+            | "openai-project"
+            | "x-openai-account-routing-override"
+            | "x-openai-fedramp"
+            | "x-codex-installation-id"
+            | "originator"
+            | "user-agent"
+            | "version"
+            | "x-openai-internal-codex-residency"
+            | "x-oai-attestation"
+            | "x-oai-is"
+            | "x-oai-is-update"
+    )
+}
+
 /// 构造 Codex Core 为模型请求设置的稳定身份请求头。
 pub fn build_codex_model_headers(
     profile: &CodexWireProfile,
@@ -183,27 +208,18 @@ impl CodexBackendClient {
         insert_optional_protocol_header(&mut headers, "x-codex-routing-hint", Some(&routing_hint));
         for name in request.passthrough_headers.keys() {
             // 身份与传输字段只由画像/正文生成；其余协议头保留原始多值字节。
-            if matches!(
-                name.as_str(),
-                "originator"
-                    | "user-agent"
-                    | "version"
-                    | "authorization"
-                    | "chatgpt-account-id"
-                    | "cookie"
-                    | "x-openai-internal-codex-residency"
-                    | "openai-beta"
-                    | "accept"
-                    | "content-type"
-                    | "content-encoding"
-                    | "x-codex-routing-hint"
-                    | "x-codex-installation-id"
-                    | "x-codex-turn-id"
-                    | "x-oai-attestation"
-                    | "x-oai-is"
-                    | "x-oai-is-update"
-                    | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
-            ) {
+            if is_managed_identity_header(name.as_str())
+                || matches!(
+                    name.as_str(),
+                    "openai-beta"
+                        | "accept"
+                        | "content-type"
+                        | "content-encoding"
+                        | "x-codex-routing-hint"
+                        | "x-codex-turn-id"
+                        | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
+                )
+            {
                 continue;
             }
             headers.remove(name);
@@ -254,7 +270,7 @@ fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-pub(super) fn websocket_header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
+pub(crate) fn websocket_header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
     let mut pairs = header_pairs(headers);
     // WebSocket opening 的 HeaderMap 先由业务头构造，再被 tungstenite 插入协议头；
     // 这里复现官方 HeaderMap 交给 tungstenite 时的迭代顺序，最终序列化后的

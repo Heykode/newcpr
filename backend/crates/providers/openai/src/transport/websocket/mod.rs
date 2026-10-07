@@ -6,6 +6,7 @@ mod coordinator;
 mod error;
 mod exchange;
 mod handshake;
+mod live;
 mod model;
 mod pool;
 mod pump;
@@ -42,5 +43,6 @@ pub(crate) use self::{
         execute_prepared_response_create_request_stream, post_send_ambiguous,
         prepare_response_create_request_with_pool,
     },
+    live::{connect_live_sideband, into_live_relay},
     pool::CodexWebSocketRouting,
 };

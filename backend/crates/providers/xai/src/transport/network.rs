@@ -331,7 +331,7 @@ impl ReqwestGrokInferenceTransport {
     fn client_for(
         &self,
         binding: &GrokSessionBinding,
-    ) -> Result<(Client, GrokInferenceClientCacheStatus), GrokInferenceTransportError> {
+    ) -> Result<(Client, GrokInferenceClientCacheStatus), Box<GrokInferenceTransportError>> {
         let unbound_client = {
             let mut clients = self
                 .clients
@@ -396,7 +396,8 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                     .map(|header| (header.name(), header.value().expose().as_bytes())),
             );
             trace.capture("upstream.request.body", request.body());
-            let (client, client_cache_status) = self.client_for(request.binding())?;
+            let (client, client_cache_status) =
+                self.client_for(request.binding()).map_err(|error| *error)?;
             let mut builder = client
                 .post(request.endpoint().clone())
                 .body(request.body().to_vec());
@@ -448,7 +449,7 @@ impl GrokInferenceTransport for ReqwestGrokInferenceTransport {
                             UpstreamSendState::Sent,
                         )
                         .with_transport_metrics(transport_metrics)),
-                        Err(error) => Err(classify_inference_stream_error(&error)
+                        Err(error) => Err(classify_inference_stream_error(error)
                             .with_transport_metrics(transport_metrics)),
                     };
                     std::future::ready(Some(item))
@@ -1056,6 +1057,7 @@ fn classify_inference_reqwest_error(error: reqwest::Error) -> GrokInferenceTrans
     };
     GrokInferenceTransportError::new(kind, send_state)
         .with_diagnostic(inference_http_diagnostic(&error))
+        .with_source(error.without_url())
 }
 
 fn classify_model_catalog_reqwest_error(error: reqwest::Error) -> GrokModelCatalogTransportError {
@@ -1080,7 +1082,7 @@ fn classify_billing_reqwest_error(error: reqwest::Error) -> GrokBillingTransport
     GrokBillingTransportError::new(kind)
 }
 
-fn classify_inference_stream_error(error: &reqwest::Error) -> GrokInferenceTransportError {
+fn classify_inference_stream_error(error: reqwest::Error) -> GrokInferenceTransportError {
     GrokInferenceTransportError::new(
         if error.is_timeout() {
             GrokInferenceTransportErrorKind::Timeout
@@ -1089,7 +1091,8 @@ fn classify_inference_stream_error(error: &reqwest::Error) -> GrokInferenceTrans
         },
         UpstreamSendState::Sent,
     )
-    .with_diagnostic(inference_http_diagnostic(error))
+    .with_diagnostic(inference_http_diagnostic(&error))
+    .with_source(error.without_url())
 }
 
 async fn classify_inference_status(
@@ -1101,14 +1104,21 @@ async fn classify_inference_status(
     let http_version = upstream_http_version(response.version());
     let request_id = upstream_request_id(&response);
     let status_code = status.as_u16();
-    let body = match collect_bounded(response, MAX_ERROR_BODY_BYTES).await {
-        Ok(BoundedBody::Body(body)) => body,
-        Ok(BoundedBody::TooLarge) | Err(_) => {
+    let (body, body_error) = match collect_bounded(response, MAX_ERROR_BODY_BYTES).await {
+        Ok(BoundedBody::Body(body)) => (body, None),
+        Ok(BoundedBody::TooLarge) => {
             trace.record(
                 "capture.gap",
-                serde_json::json!({"reason": "error_body_unavailable_or_too_large"}),
+                serde_json::json!({"reason": "error_body_too_large"}),
             );
-            Vec::new()
+            (Vec::new(), None)
+        }
+        Err(error) => {
+            trace.record(
+                "capture.gap",
+                serde_json::json!({"reason": "error_body_read_failed"}),
+            );
+            (Vec::new(), Some(error))
         }
     };
     trace.capture("upstream.error.body", &body);
@@ -1146,6 +1156,14 @@ async fn classify_inference_status(
         .with_status(status_code)
         .with_response_facts(http_version, request_id)
         .redact_sensitive_context("upstream response body");
+    if !body.is_empty() {
+        error = error.with_raw_upstream_error(gateway_core::error::RawUpstreamError::new(
+            String::from_utf8_lossy(&body).into_owned(),
+        ));
+    }
+    if let Some(source) = body_error {
+        error = error.with_source(source.without_url());
+    }
     let upstream_code = if status == StatusCode::BAD_REQUEST && reasoning_decode_failed(&metadata) {
         Some("reasoning_decode_failed".to_owned())
     } else {

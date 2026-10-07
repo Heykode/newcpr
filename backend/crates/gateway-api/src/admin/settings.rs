@@ -40,6 +40,8 @@ pub struct RuntimeSettingsView {
     pub turn_state_probe_proxy_id: Option<String>,
     pub turn_state_probe_concurrency: u32,
     pub responses_max_decompressed_body_bytes: u64,
+    pub openai_account_affinity: gateway_core::account::AccountAffinity,
+    pub openai_session_binding_ttl_hours: u32,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -71,6 +73,10 @@ pub struct UpdateRuntimeSettingsRequest {
     pub turn_state_probe_proxy_id: Option<Option<String>>,
     pub turn_state_probe_concurrency: Option<u32>,
     pub responses_max_decompressed_body_bytes: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_account_affinity")]
+    pub openai_account_affinity: Option<gateway_core::account::AccountAffinity>,
+    #[serde(default, deserialize_with = "deserialize_session_binding_ttl_hours")]
+    pub openai_session_binding_ttl_hours: Option<u32>,
     pub model_mappings: ModelMappings,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u64,
@@ -89,6 +95,22 @@ pub struct UpdateRuntimeSettingsRequest {
     pub audit_retention_days: u64,
     #[serde(default)]
     pub request_tuning: RequestTuningOverrides,
+}
+
+fn deserialize_account_affinity<'de, D>(
+    deserializer: D,
+) -> Result<Option<gateway_core::account::AccountAffinity>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    gateway_core::account::AccountAffinity::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_session_binding_ttl_hours<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    u32::deserialize(deserializer).map(Some)
 }
 
 impl UpdateRuntimeSettingsRequest {
@@ -121,6 +143,11 @@ impl UpdateRuntimeSettingsRequest {
             return Err(WireValidationError::new(
                 "responsesMaxDecompressedBodyBytes",
             ));
+        }
+        if self.openai_session_binding_ttl_hours.is_some_and(|hours| {
+            gateway_core::account::parse_openai_session_binding_ttl_hours(hours).is_none()
+        }) {
+            return Err(WireValidationError::new("openaiSessionBindingTtlHours"));
         }
         for (value, field) in [
             (self.refresh_margin_seconds, "refreshMarginSeconds"),
@@ -196,6 +223,8 @@ impl UpdateRuntimeSettingsRequest {
                 .transpose()
                 .map_err(|_| WireValidationError::new("turnStateModels"))?,
             responses_max_decompressed_body_bytes: self.responses_max_decompressed_body_bytes,
+            openai_account_affinity: self.openai_account_affinity,
+            openai_session_binding_ttl_hours: self.openai_session_binding_ttl_hours,
             model_mappings: domain_model_mappings(self.model_mappings)?,
             refresh_margin_seconds: self.refresh_margin_seconds,
             refresh_concurrency: u32::try_from(self.refresh_concurrency)
@@ -242,6 +271,8 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
                 .map(|model| model.as_str().to_owned())
                 .collect(),
             responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
+            openai_account_affinity: settings.openai_account_affinity,
+            openai_session_binding_ttl_hours: settings.openai_session_binding_ttl_hours,
             model_mappings: wire_model_mappings(settings.model_mappings),
             refresh_margin_seconds: settings.refresh_margin_seconds,
             refresh_concurrency: u64::from(settings.refresh_concurrency),

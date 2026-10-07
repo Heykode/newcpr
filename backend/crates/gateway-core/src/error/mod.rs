@@ -1,5 +1,10 @@
 //! 网关核心使用的稳定错误分类。
 
+mod details;
+mod source;
+pub use details::ErrorDetails;
+pub use source::ErrorSource;
+
 use std::fmt;
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -114,7 +119,7 @@ pub enum PreDeliveryRetry {
         max_retries: NonZeroU32,
         /// 指数退避的起始间隔。
         initial_delay: Duration,
-        /// 单次等待上限，避免上游提示把请求拖入长时间等待。
+        /// 本地退避上限；上游 Retry-After 不受此上限截断。
         max_delay: Duration,
     },
     /// 固定本次账号，并按 Provider 给出的序号重试当前传输。
@@ -426,6 +431,7 @@ impl fmt::Debug for ClientVisibleUpstreamResponse {
 /// 必须与本错误一起完成重试判断的协议事件。Core 会在任何持久化或日志记录前取走
 /// 这些事件，不能把它们当作诊断上下文使用。
 pub struct ProviderError {
+    source: Option<ErrorSource>,
     kind: ProviderErrorKind,
     send_state: UpstreamSendState,
     upstream_status: Option<u16>,
@@ -435,6 +441,7 @@ pub struct ProviderError {
     continuation_recovery_disposition: Option<ContinuationRecoveryDisposition>,
     failure_observation: Option<Box<ProviderErrorFailureObservation>>,
     replay_safe: bool,
+    retry_prohibited: bool,
     pre_delivery_retry: Option<Box<PreDeliveryRetry>>,
     credential_recovery_required: bool,
     retry_same_account: bool,
@@ -462,10 +469,26 @@ struct ProviderErrorFailureObservation {
 struct AtomicClientEvents(Vec<ProviderEvent>);
 
 impl ProviderError {
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    #[must_use]
+    pub fn error_details(&self) -> Option<String> {
+        ErrorDetails::capture(
+            self.source.as_ref(),
+            self.raw_upstream_error(),
+            self.sensitive_context_was_redacted(),
+        )
+        .map(ErrorDetails::into_string)
+    }
     /// 创建 Provider 错误。
     #[must_use]
     pub const fn new(kind: ProviderErrorKind, send_state: UpstreamSendState) -> Self {
         Self {
+            source: None,
             kind,
             send_state,
             upstream_status: None,
@@ -475,6 +498,7 @@ impl ProviderError {
             continuation_recovery_disposition: None,
             failure_observation: None,
             replay_safe: false,
+            retry_prohibited: false,
             pre_delivery_retry: None,
             credential_recovery_required: false,
             retry_same_account: false,
@@ -570,6 +594,18 @@ impl ProviderError {
     pub const fn with_replay_safe(mut self) -> Self {
         self.replay_safe = true;
         self
+    }
+
+    /// Provider 明确禁止本请求的任何重试或传输回退。
+    #[must_use]
+    pub const fn with_retry_prohibited(mut self) -> Self {
+        self.retry_prohibited = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn retry_is_prohibited(&self) -> bool {
+        self.retry_prohibited
     }
 
     /// 原地标记 Provider 已证明本次失败可从已交付的状态检查点安全恢复。
@@ -856,6 +892,7 @@ impl ProviderError {
 impl Clone for ProviderError {
     fn clone(&self) -> Self {
         Self {
+            source: self.source.clone(),
             kind: self.kind,
             send_state: self.send_state,
             upstream_status: self.upstream_status,
@@ -865,6 +902,7 @@ impl Clone for ProviderError {
             continuation_recovery_disposition: self.continuation_recovery_disposition,
             failure_observation: self.failure_observation.clone(),
             replay_safe: self.replay_safe,
+            retry_prohibited: self.retry_prohibited,
             pre_delivery_retry: self.pre_delivery_retry.clone(),
             credential_recovery_required: self.credential_recovery_required,
             retry_same_account: self.retry_same_account,
@@ -905,6 +943,7 @@ impl fmt::Debug for ProviderError {
             )
             .field("connection_observation", &self.connection_observation())
             .field("replay_safe", &self.replay_safe)
+            .field("retry_prohibited", &self.retry_prohibited)
             .field("pre_delivery_retry", &self.pre_delivery_retry)
             .field(
                 "credential_recovery_required",
@@ -954,7 +993,11 @@ impl fmt::Display for ProviderError {
     }
 }
 
-impl std::error::Error for ProviderError {}
+impl std::error::Error for ProviderError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_deref().map(|source| source as _)
+    }
+}
 
 /// 对客户端协议稳定的网关错误分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1015,13 +1058,14 @@ impl GatewayErrorKind {
 }
 
 /// 协议无关、可安全暴露的网关错误。
-#[derive(Clone, PartialEq, Eq, Error)]
+#[derive(Clone, Error)]
 #[error("{message}")]
 pub struct GatewayError {
+    source: Option<ErrorSource>,
     kind: GatewayErrorKind,
     message: &'static str,
     diagnostic: Option<Box<ProviderDiagnostic>>,
-    client_visible_upstream_error: Option<ClientVisibleUpstreamError>,
+    client_visible_upstream_error: Option<Box<ClientVisibleUpstreamError>>,
     client_details: Option<Box<GatewayClientErrorDetails>>,
 }
 
@@ -1032,10 +1076,21 @@ struct GatewayClientErrorDetails {
 }
 
 impl GatewayError {
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    #[must_use]
+    pub fn error_details(&self) -> Option<ErrorDetails> {
+        ErrorDetails::capture(self.source.as_ref(), None, false)
+    }
     /// 使用静态安全消息创建错误。
     #[must_use]
     pub const fn new(kind: GatewayErrorKind, message: &'static str) -> Self {
         Self {
+            source: None,
             kind,
             message,
             diagnostic: None,
@@ -1117,6 +1172,10 @@ impl GatewayError {
                 "upstream service is unavailable",
             ),
         };
+        let gateway = match &error.source {
+            Some(source) => gateway.with_source(source.clone()),
+            None => gateway,
+        };
         let gateway = match error.diagnostic() {
             Some(diagnostic) => gateway.with_diagnostic(diagnostic.clone()),
             None => gateway,
@@ -1137,7 +1196,7 @@ impl GatewayError {
     /// 附加只供请求方协议展示的结构化上游错误。
     #[must_use]
     pub fn with_client_visible_upstream_error(mut self, error: ClientVisibleUpstreamError) -> Self {
-        self.client_visible_upstream_error = Some(error);
+        self.client_visible_upstream_error = Some(Box::new(error));
         self
     }
 
@@ -1164,7 +1223,7 @@ impl GatewayError {
     #[must_use]
     pub fn client_message(&self) -> &str {
         self.client_visible_upstream_error
-            .as_ref()
+            .as_deref()
             .map_or(self.message, ClientVisibleUpstreamError::message)
     }
 
@@ -1172,7 +1231,7 @@ impl GatewayError {
     #[must_use]
     pub fn client_error_type(&self) -> Option<&str> {
         self.client_visible_upstream_error
-            .as_ref()
+            .as_deref()
             .and_then(ClientVisibleUpstreamError::error_type)
     }
 
@@ -1181,14 +1240,14 @@ impl GatewayError {
     pub fn client_error_param(&self) -> Option<&str> {
         self.client_visible_upstream_error
             .as_ref()
-            .and_then(ClientVisibleUpstreamError::param)
+            .and_then(|error| error.param())
     }
 
     /// 返回原上游结构化 error code；没有时调用方应回退稳定网关 code。
     #[must_use]
     pub fn client_error_code(&self) -> Option<&str> {
         self.client_visible_upstream_error
-            .as_ref()
+            .as_deref()
             .and_then(ClientVisibleUpstreamError::code)
             .or_else(|| {
                 self.client_details
@@ -1234,17 +1293,26 @@ pub enum StoreErrorKind {
 }
 
 /// Core port 返回的脱敏存储错误。
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Error)]
 #[error("execution store failed: {kind:?}")]
 pub struct StoreError {
     kind: StoreErrorKind,
+    source: Option<ErrorSource>,
 }
 
 impl StoreError {
     /// 创建不携带数据库正文的 store 错误。
     #[must_use]
     pub const fn new(kind: StoreErrorKind) -> Self {
-        Self { kind }
+        Self { kind, source: None }
+    }
+
+    #[must_use]
+    pub fn caused_by(kind: StoreErrorKind, source: impl Into<ErrorSource>) -> Self {
+        Self {
+            kind,
+            source: Some(source.into()),
+        }
     }
 
     /// 返回稳定错误分类。

@@ -215,13 +215,11 @@ pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequir
 
 /// 单个 Responses 事件对计时系统提供的稳定语义信号。
 ///
-/// `protocol_progress` 只说明上游仍在工作，不能替代首字；`output_start` 标记首个会
-/// 开启客户端输出的非前导事件（结构帧也算）；其余字段分别标记客户端可消费的
-/// 输出、reasoning 输出与正文输出。
+/// `protocol_progress` 只说明上游仍在工作，不能替代首字；其余字段分别标记
+/// 客户端可消费的语义输出、reasoning 输出与正文输出
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResponseEventSignals {
     pub protocol_progress: bool,
-    pub output_start: bool,
     pub semantic_output: bool,
     pub reasoning_output: bool,
     pub text_output: bool,
@@ -229,22 +227,13 @@ pub struct ResponseEventSignals {
 
 /// 从已解析的 Responses 事件提取计时语义。
 ///
-/// `output_start` 在任意非前导、非失败事件上置位（含结构帧
-/// `response.output_item.added`/`content_part.added`），用于开启首字计时；前导帧
-/// （`response.created`/`response.in_progress`）与失败帧不置位。语义输出仍要求
-/// 实际携带文本、工具参数、推理或图片结果，`response.output_item.done` 与终态帧
-/// 只有携带语义内容才算。
+/// 生命周期与空结构帧不算首字，文本、推理、工具参数、图片结果或工具执行
+/// 才算语义输出；终态帧只在携带语义内容时计入
 pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> ResponseEventSignals {
     let mut signals = ResponseEventSignals {
         protocol_progress: !matches!(event_type, Some("response.failed" | "error")),
         ..ResponseEventSignals::default()
     };
-    signals.output_start = event_type.is_some_and(|event_type| {
-        !matches!(
-            event_type,
-            "response.created" | "response.in_progress" | "response.failed" | "error"
-        )
-    });
     match event_type {
         Some("response.output_text.delta") => {
             signals.text_output = non_empty_string(value.get("delta"));
@@ -631,21 +620,35 @@ impl CodexResponsesRequest {
         self.body.get("service_tier").and_then(Value::as_str)
     }
 
-    /// 只覆盖顶层 Fast 请求，显式使用官方标准档退出值。
-    pub(crate) fn apply_fast_policy(&mut self, disable_fast: bool) {
-        if disable_fast
-            && self.service_tier().is_some_and(|tier| {
-                let tier = tier.trim();
-                tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
-            })
-        {
-            self.body.insert(
-                "service_tier".to_owned(),
-                Value::String("default".to_owned()),
-            );
-        }
+    /// Only change the top-level tier; enabling Fast requires catalog evidence.
+    pub(crate) fn apply_fast_policy(
+        &mut self,
+        mode: gateway_core::account::FastMode,
+        supports_priority: bool,
+    ) -> bool {
+        use gateway_core::account::FastMode;
+        let tier = self.service_tier().map(str::trim);
+        let target = match mode {
+            FastMode::Disabled
+                if tier.is_some_and(|tier| {
+                    tier.eq_ignore_ascii_case("priority") || tier.eq_ignore_ascii_case("fast")
+                }) =>
+            {
+                "default"
+            }
+            FastMode::Enabled
+                if supports_priority
+                    && (matches!(self.body.get("service_tier"), None | Some(Value::Null))
+                        || tier.is_some_and(|tier| tier.eq_ignore_ascii_case("default"))) =>
+            {
+                "priority"
+            }
+            _ => return false,
+        };
+        self.body
+            .insert("service_tier".to_owned(), Value::String(target.to_owned()));
+        true
     }
-
     /// 前一个 response ID。
     pub fn previous_response_id(&self) -> Option<&str> {
         self.body
@@ -713,6 +716,63 @@ impl CodexResponsesRequest {
             })
     }
 
+    /// 仅识别协议完整且无冲突的 Guardian/review 子请求。
+    ///
+    /// 该值只用于本地调度偏好。任何元数据冲突、空值、非目标模型或未明确声明
+    /// Guardian/review 的请求都会退回既有调度，不会扩大账号亲和范围。
+    pub(crate) fn guardian_parent_thread_id(&self) -> Option<String> {
+        if self.model() != "codex-auto-review" {
+            return None;
+        }
+
+        let mut subagent_kinds = Vec::new();
+        let mut parent_thread_ids = Vec::new();
+        let mut metadata = Vec::new();
+
+        Self::append_turn_metadata(&mut metadata, self.turn_metadata.as_deref())?;
+        for key in ["turn_metadata", "turnMetadata", "x-codex-turn-metadata"] {
+            if let Some(value) = self.body.get(key) {
+                Self::append_body_turn_metadata(&mut metadata, value)?;
+            }
+        }
+        let client_metadata = match self.client_metadata() {
+            Some(value) => Some(value.as_object()?),
+            None => None,
+        };
+        if let Some(client_metadata) = client_metadata {
+            for key in ["turn_metadata", "turnMetadata", "x-codex-turn-metadata"] {
+                if let Some(value) = client_metadata.get(key) {
+                    Self::append_body_turn_metadata(&mut metadata, value)?;
+                }
+            }
+        }
+        for metadata in &metadata {
+            let object = metadata.as_object()?;
+            Self::append_required_string(&mut subagent_kinds, object.get("subagent_kind"))?;
+            for key in ["parent_thread_id", "parentThreadId"] {
+                Self::append_required_string(&mut parent_thread_ids, object.get(key))?;
+            }
+        }
+
+        Self::append_required_string(
+            &mut subagent_kinds,
+            client_metadata.and_then(|metadata| metadata.get("x-openai-subagent")),
+        )?;
+        for key in ["parent_thread_id", "parentThreadId"] {
+            Self::append_required_string(
+                &mut parent_thread_ids,
+                client_metadata.and_then(|metadata| metadata.get(key)),
+            )?;
+            Self::append_required_string(&mut parent_thread_ids, self.body.get(key))?;
+        }
+        Self::append_optional_string(&mut parent_thread_ids, self.parent_thread_id.as_deref())?;
+        let subagent_kind = Self::consistent_value(&subagent_kinds)?;
+        if !matches!(subagent_kind.as_str(), "guardian" | "review") {
+            return None;
+        }
+        Self::consistent_value(&parent_thread_ids)
+    }
+
     /// 设置 / 合并 client metadata。
     pub fn set_client_metadata(&mut self, client_metadata: Option<Value>) {
         match client_metadata {
@@ -723,6 +783,54 @@ impl CodexResponsesRequest {
                 self.body.remove("client_metadata");
             }
         }
+    }
+
+    fn append_turn_metadata(values: &mut Vec<Value>, raw: Option<&str>) -> Option<()> {
+        let Some(raw) = raw else {
+            return Some(());
+        };
+        let value: Value = serde_json::from_str(raw).ok()?;
+        value.as_object()?;
+        values.push(value);
+        Some(())
+    }
+
+    fn append_body_turn_metadata(values: &mut Vec<Value>, raw: &Value) -> Option<()> {
+        let value = match raw {
+            Value::String(raw) => serde_json::from_str(raw).ok()?,
+            Value::Object(_) => raw.clone(),
+            _ => return None,
+        };
+        value.as_object()?;
+        values.push(value);
+        Some(())
+    }
+
+    fn append_required_string(values: &mut Vec<String>, value: Option<&Value>) -> Option<()> {
+        let Some(value) = value else {
+            return Some(());
+        };
+        Self::append_optional_string(values, Some(value.as_str()?))
+    }
+
+    fn append_optional_string(values: &mut Vec<String>, value: Option<&str>) -> Option<()> {
+        let Some(value) = value else {
+            return Some(());
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        values.push(value.to_owned());
+        Some(())
+    }
+
+    fn consistent_value(values: &[String]) -> Option<String> {
+        let value = values.first()?.clone();
+        values
+            .iter()
+            .all(|candidate| candidate == &value)
+            .then_some(value)
     }
 
     /// 替换客户端原本提供的账号身份字段；无法安全重建时删除该字段。

@@ -1224,4 +1224,5 @@ fn elapsed_quota_reset_does_not_fabricate_recovery() {
         .expect("healthy candidate available");
     assert_eq!(selected.candidate().account.id().as_str(), "acct_healthy");
 }
+mod fast_mode;
 mod smart_scheduling;

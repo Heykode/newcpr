@@ -177,7 +177,7 @@ impl CredentialStateRepository for RedisCredentialStateRepository {
             .arg(ttl_ms)
             .invoke_async::<i64>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("cache credential state"))?;
+            .map_err(|error| redis_unavailable("cache credential state").with_source(error))?;
         Ok(written == 1)
     }
 
@@ -199,7 +199,7 @@ impl CredentialStateRepository for RedisCredentialStateRepository {
             .arg("observed_at_ms")
             .query_async(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("read credential state"))?;
+            .map_err(|error| redis_unavailable("read credential state").with_source(error))?;
         let (Some(revision), Some(enabled), Some(credential_state), Some(observed_at_ms)) = values
         else {
             return Ok(None);
@@ -227,7 +227,7 @@ impl CredentialStateRepository for RedisCredentialStateRepository {
             .arg(self.key(provider_account_id)?)
             .query_async::<i64>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("clear credential state"))?;
+            .map_err(|error| redis_unavailable("clear credential state").with_source(error))?;
         Ok(removed == 1)
     }
 }
@@ -261,7 +261,9 @@ impl ProviderCatalogCacheRepository for RedisCredentialStateRepository {
             .arg(ttl_ms)
             .query_async::<()>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("replace provider catalog cache"))?;
+            .map_err(|error| {
+                redis_unavailable("replace provider catalog cache").with_source(error)
+            })?;
         Ok(())
     }
 
@@ -274,7 +276,7 @@ impl ProviderCatalogCacheRepository for RedisCredentialStateRepository {
             .arg(self.catalog_key(key)?)
             .query_async::<Option<Vec<u8>>>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("read provider catalog cache"))?;
+            .map_err(|error| redis_unavailable("read provider catalog cache").with_source(error))?;
         let Some(payload) = payload else {
             return Ok(None);
         };
@@ -309,7 +311,7 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
             )
             .await
             .map(|_| ())
-            .map_err(|_| provider_unavailable("replace credential state"))
+            .map_err(|error| provider_unavailable("replace credential state").with_source(error))
         })
     }
 
@@ -322,7 +324,9 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
             let cached =
                 CredentialStateRepository::read_credential_state(self, account_id.as_str())
                     .await
-                    .map_err(|_| provider_unavailable("read credential state"))?;
+                    .map_err(|error| {
+                        provider_unavailable("read credential state").with_source(error)
+                    })?;
             cached
                 .map(|state| {
                     let account_id = ProviderAccountId::new(state.provider_account_id)
@@ -350,7 +354,7 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
         Box::pin(async move {
             CredentialStateRepository::clear_credential_state(self, account_id.as_str())
                 .await
-                .map_err(|_| provider_unavailable("clear credential state"))
+                .map_err(|error| provider_unavailable("clear credential state").with_source(error))
         })
     }
 
@@ -364,16 +368,18 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
                 .ok()
                 .filter(|millis| *millis > 0)
                 .ok_or_else(|| provider_invalid("record refresh backoff"))?;
-            let key = self
-                .backoff_key(account_id.as_str())
-                .map_err(|_| provider_unavailable("record refresh backoff"))?;
+            let key = self.backoff_key(account_id.as_str()).map_err(|error| {
+                provider_unavailable("record refresh backoff").with_source(error)
+            })?;
             let mut connection = self.connection.clone();
             let count = Script::new(RECORD_REFRESH_BACKOFF_SCRIPT)
                 .key(key)
                 .arg(window_millis)
                 .invoke_async::<i64>(&mut connection)
                 .await
-                .map_err(|_| provider_unavailable("record refresh backoff"))?;
+                .map_err(|error| {
+                    provider_unavailable("record refresh backoff").with_source(error)
+                })?;
             Ok(u32::try_from(count).unwrap_or(u32::MAX))
         })
     }
@@ -383,15 +389,17 @@ impl ProviderCredentialStatePort for RedisCredentialStateRepository {
         account_id: &'a ProviderAccountId,
     ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async move {
-            let key = self
-                .backoff_key(account_id.as_str())
-                .map_err(|_| provider_unavailable("clear refresh backoff"))?;
+            let key = self.backoff_key(account_id.as_str()).map_err(|error| {
+                provider_unavailable("clear refresh backoff").with_source(error)
+            })?;
             let mut connection = self.connection.clone();
             redis::cmd("DEL")
                 .arg(key)
                 .query_async::<i64>(&mut connection)
                 .await
-                .map_err(|_| provider_unavailable("clear refresh backoff"))?;
+                .map_err(|error| {
+                    provider_unavailable("clear refresh backoff").with_source(error)
+                })?;
             Ok(())
         })
     }
@@ -420,7 +428,7 @@ impl ProviderCatalogCachePort for RedisCredentialStateRepository {
                 ttl_seconds,
             )
             .await
-            .map_err(|_| provider_unavailable("replace catalog cache"))
+            .map_err(|error| provider_unavailable("replace catalog cache").with_source(error))
         })
     }
 
@@ -436,7 +444,7 @@ impl ProviderCatalogCachePort for RedisCredentialStateRepository {
             };
             ProviderCatalogCacheRepository::get_provider_catalog(self, &key)
                 .await
-                .map_err(|_| provider_unavailable("read catalog cache"))
+                .map_err(|error| provider_unavailable("read catalog cache").with_source(error))
         })
     }
 }

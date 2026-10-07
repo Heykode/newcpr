@@ -49,15 +49,28 @@ pub enum ProviderAdminErrorKind {
 /// `message` 是 Provider 局部诊断，可能包含原始上游正文；通用管理用例不得自动把它作为公开文案。
 /// 只有明确拥有原始诊断合同的调用方才能读取，`Debug` 始终只记录是否存在。
 /// `public_message` 则是明确标记为可公开的静态提示，不允许携带动态上游材料。
-#[derive(Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, thiserror::Error)]
 #[error("provider admin operation failed: {kind:?}")]
 pub struct ProviderAdminError {
+    source: Option<gateway_core::error::ErrorSource>,
     kind: ProviderAdminErrorKind,
     message: Option<String>,
     public_message: Option<&'static str>,
     relogin_stop_reason: Option<crate::model::relogin::ReloginStopReason>,
     relogin_workspace_choices: Vec<crate::model::relogin::ReloginWorkspaceChoice>,
 }
+
+impl PartialEq for ProviderAdminError {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.message == other.message
+            && self.public_message == other.public_message
+            && self.relogin_stop_reason == other.relogin_stop_reason
+            && self.relogin_workspace_choices == other.relogin_workspace_choices
+    }
+}
+
+impl Eq for ProviderAdminError {}
 
 impl std::fmt::Debug for ProviderAdminError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -77,8 +90,15 @@ impl std::fmt::Debug for ProviderAdminError {
 
 impl ProviderAdminError {
     #[must_use]
+    pub fn with_source(mut self, source: impl Into<gateway_core::error::ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    #[must_use]
     pub const fn new(kind: ProviderAdminErrorKind) -> Self {
         Self {
+            source: None,
             kind,
             message: None,
             public_message: None,

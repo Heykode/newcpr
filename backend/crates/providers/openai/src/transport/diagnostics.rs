@@ -35,6 +35,7 @@ const PERSISTABLE_UPSTREAM_CODES: &[&str] = &[
     "billing_limit",
     "cyber_policy",
     "deactivated_workspace",
+    "flex_unavailable",
     "identity_verification_required",
     "insufficient_quota",
     "invalid_api_key",
@@ -100,6 +101,8 @@ pub enum CodexFailureCategory {
     QuotaExhausted,
     CloudflareChallenge,
     CloudflarePathBlocked,
+    /// Flex 容量不足是当前请求的终止错误，不冷却账号或自动重放。
+    FlexUnavailable,
     InvalidRequest,
     PermissionDenied,
     Timeout,
@@ -240,6 +243,9 @@ impl CodexUpstreamFailure {
     /// 返回该拒绝是否允许换号重放。
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {
+        if matches!(self.category, CodexFailureCategory::FlexUnavailable) {
+            return false;
+        }
         match self.send_phase {
             CodexUpstreamSendPhase::BeforePayload => true,
             CodexUpstreamSendPhase::Ambiguous => false,
@@ -457,6 +463,10 @@ fn classify_upstream_failure(
     let identity_authorization = normalized(identity_authorization_error);
     let message = fields.message.to_ascii_lowercase();
     let body = body.to_ascii_lowercase();
+
+    if code == "flex_unavailable" {
+        return CodexFailureCategory::FlexUnavailable;
+    }
 
     // 容量拒绝可能带 400/429/503；仅用结构化错误字段识别，不能扫描任意正文。
     if is_capacity_error(

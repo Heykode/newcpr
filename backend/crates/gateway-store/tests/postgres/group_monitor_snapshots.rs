@@ -35,6 +35,7 @@ async fn seed(repo: &PgAccountGroupRepository) -> Vec<AccountGroupId> {
                 description: None,
                 color: AccountGroupColor::parse("#16A34AFF").expect("color"),
                 disable_fast: false,
+                fast_mode: Default::default(),
             },
             &context(),
         )
@@ -202,6 +203,7 @@ async fn monitor_snapshot_config_changes_retain_previous_values_and_deletion_rem
             description: None,
             color: AccountGroupColor::parse("#2563EBFF").expect("color"),
             disable_fast: None,
+            fast_mode: None,
         },
         &context(),
     )

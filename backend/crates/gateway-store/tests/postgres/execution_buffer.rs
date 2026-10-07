@@ -103,6 +103,36 @@ impl ExecutionStore for RecordingStore {
 }
 
 #[tokio::test]
+async fn successful_traffic_cannot_consume_reserved_failure_capacity() {
+    let inner = Arc::new(RecordingStore::default());
+    let (store, writer) =
+        BufferedExecutionStore::with_capacity(inner, NonZeroUsize::new(4).unwrap());
+    let id = ModelRequestId::new("req_failure_reserve").unwrap();
+    for _ in 0..5 {
+        store
+            .mark_send_state(&id, UpstreamSendState::Sent)
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.stats().queued_items, 4);
+    assert_eq!(store.stats().dropped_total, 1);
+    store
+        .record_operational_failure(gateway_core::diagnostics::OperationalFailure::new(
+            "test",
+            "enqueue",
+            "unavailable",
+            "failure-reserve",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(store.stats().queued_items, 5);
+    assert_eq!(store.stats().dropped_total, 1);
+    drop(writer);
+    assert_eq!(store.stats().queued_items, 0);
+    assert_eq!(store.stats().queued_bytes, 0);
+}
+
+#[tokio::test]
 async fn full_observation_queue_never_waits_for_the_database() {
     let inner = Arc::new(RecordingStore::default());
     let (store, _writer) = BufferedExecutionStore::with_capacity(
@@ -129,6 +159,30 @@ async fn full_observation_queue_never_waits_for_the_database() {
     assert!(inner.operations.lock().expect("operations lock").is_empty());
     assert_eq!(store.stats().queued_items, 1);
     assert_eq!(store.stats().dropped_total, 1);
+}
+
+#[tokio::test]
+async fn finalization_budget_counts_legacy_error_material_and_source_details() {
+    for legacy in [true, false] {
+        let inner = Arc::new(RecordingStore::default());
+        let (store, _writer) = BufferedExecutionStore::with_limits(
+            inner,
+            NonZeroUsize::new(4).unwrap(),
+            NonZeroUsize::new(4_096).unwrap(),
+        );
+        let request = accepted_request("req_finalization_material_budget");
+        let mut finalization = early_failure(&request);
+        let material = Some("synthetic diagnostic material".repeat(4_096));
+        if legacy {
+            finalization.raw_upstream_error = material;
+        } else {
+            finalization.error_details = material;
+        }
+        store.finalize_model_request(finalization).await.unwrap();
+        assert_eq!(store.stats().queued_items, 0);
+        assert_eq!(store.stats().queued_bytes, 0);
+        assert_eq!(store.stats().dropped_total, 1);
+    }
 }
 
 #[tokio::test]

@@ -133,6 +133,125 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
 }
 
 #[tokio::test]
+async fn zero_attempt_errors_remain_filterable_without_inventing_upstream_or_usage_facts() {
+    let Some(database) = TestDatabase::create("observability_zero_attempt").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    sqlx::query("delete from ops_events where model_request_id = 'req_observe_failed'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "update model_requests set attempt_count = 0, upstream_send_state = 'not_sent',
+         provider_account_id = null, provider_account_ref = null,
+         provider_account_name_snapshot = null, provider_account_email_snapshot = null,
+         provider_account_authentication_kind_snapshot = null,
+         upstream_model_id = null, upstream_transport = null, upstream_status_code = null,
+         upstream_request_id = null, client_status_code = 503, error_kind = 'no_eligible_account',
+         error_message = 'No eligible account', input_tokens = null, cached_tokens = null,
+         image_generation_requested = false, image_generation_succeeded = null
+         where id = 'req_observe_failed'",
+    )
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let repository = observability_repository(&database.pool);
+    let range =
+        ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    let filter = OpsErrorFilter {
+        request_id: Some("req_observe_failed".to_owned()),
+        model: Some("public-model".to_owned()),
+        transport: Some("http_sse".to_owned()),
+        status_code: Some(503),
+        ..OpsErrorFilter::default()
+    };
+    let errors = repository
+        .list_ops_errors(OpsErrorQuery {
+            range,
+            filter,
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(errors.total, 1);
+    assert_eq!(errors.items.len(), 1);
+    let error = &errors.items[0];
+    assert_eq!(error.attempt_index, None);
+    assert_eq!(error.upstream_status_code, None);
+    assert_eq!(error.upstream_request_id, None);
+    assert_eq!(error.provider_account_ref, None);
+    let detail = repository
+        .usage_record_detail("req_observe_failed")
+        .await
+        .unwrap();
+    assert_eq!(detail.request.attempt_count, 0);
+    assert!(detail.attempts.is_empty());
+    let usage = repository
+        .list_usage_records(UsageRecordQuery {
+            range,
+            filter: UsageRecordFilter {
+                request_id: Some("req_observe_failed".to_owned()),
+                ..UsageRecordFilter::default()
+            },
+            current_page: 1,
+            page_size: ObservabilityPageSize::new(10).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        usage.total, 0,
+        "execution failures are not completed billable usage"
+    );
+    assert!(usage.items.is_empty());
+    database.close().await;
+}
+
+#[tokio::test]
+async fn ops_errors_show_current_plan_but_preserve_historical_account_labels() {
+    let Some(database) = TestDatabase::create("ops_current_plan").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    let repository = observability_repository(&database.pool);
+    let range =
+        ObservabilityRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1)).unwrap();
+    for plan in [Some("pro"), Some("plus"), None] {
+        if plan == Some("plus") {
+            sqlx::query("update provider_accounts set plan_type = 'plus', name = 'Renamed' where id = 'acct_observe'")
+                .execute(&database.pool).await.unwrap();
+        } else if plan.is_none() {
+            sqlx::query("delete from provider_accounts where id = 'acct_observe'")
+                .execute(&database.pool)
+                .await
+                .unwrap();
+        }
+        let errors = repository
+            .list_ops_errors(OpsErrorQuery {
+                range,
+                filter: OpsErrorFilter::default(),
+                current_page: 1,
+                page_size: ObservabilityPageSize::new(10).unwrap(),
+            })
+            .await
+            .unwrap();
+        assert!(!errors.items.is_empty());
+        for error in errors.items {
+            assert_eq!(error.provider_account_plan_type.as_deref(), plan);
+            assert_eq!(error.provider_account_name.as_deref(), Some("primary"));
+            assert_eq!(
+                error.provider_account_email.as_deref(),
+                Some("account@example.invalid")
+            );
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn usage_page_should_always_return_total() {
     let Some(database) = TestDatabase::create("usage_page_with_total").await else {
         return;

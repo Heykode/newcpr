@@ -11,7 +11,7 @@ import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { isRecord } from '@/utils/object'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
-import { accountImportSettings, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
+import { accountImportSettings, accountImportTemplate, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type ImportProvider = 'openai' | 'xai'
@@ -103,8 +103,9 @@ export function useAccountOnboarding(options: {
         const items = documents.map(entry => ({
           provider: entry.provider,
           data: entry.document,
+          ...(createForm.value.importTemplate ? { template: accountImportTemplate(createForm.value, entry.provider) } : {}),
           settings: accountImportSettings(createForm.value, entry.provider),
-          outboundProxyId: createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
+          outboundProxyId: !createForm.value.importTemplate && createForm.value.proxyMode === 'proxy' ? createForm.value.proxyId.trim() : undefined,
         }))
         const encoded = JSON.stringify(items, (_key, value: unknown) => isRecord(value)
           ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))

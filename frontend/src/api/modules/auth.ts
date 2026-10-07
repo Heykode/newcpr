@@ -35,6 +35,14 @@ export function getAuthStatus(options: RequestOptions = {}) {
   })
 }
 
+export function refreshAuthSession(options: RequestOptions = {}) {
+  return request<AuthStatusResponse>({
+    url: '/api/admin/auth/refresh',
+    method: 'POST',
+    ...options,
+  })
+}
+
 export function logout(options: RequestOptions = {}) {
   return request<LogoutResponse>({
     url: '/api/admin/auth/logout',

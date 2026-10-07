@@ -12,6 +12,7 @@ use gateway_admin::{
     ports::store::{AccountGroupStore, AdminStoreErrorKind, ClientKeyStore},
 };
 use gateway_core::{
+    account::FastMode,
     policy::{ClientApiKeyId, RateLimits},
     routing::AccountGroupId,
 };
@@ -39,6 +40,7 @@ async fn monitor_reuses_key_bindings_and_includes_ungrouped_quota_peers() {
                     name: id.to_owned(),
                     description: None,
                     color: group_color("#2563EBFF"),
+                    fast_mode: FastMode::Default,
                     disable_fast: false,
                 },
                 &context("monitor-groups"),
@@ -77,9 +79,8 @@ async fn monitor_reuses_key_bindings_and_includes_ungrouped_quota_peers() {
 }
 
 #[tokio::test]
-async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot_facts() {
+async fn fast_mode_group_updates_keep_legacy_sql_and_snapshot_facts_in_sync() {
     use gateway_admin::model::account_groups::UpdateAccountGroup;
-    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
     let Some(database) = TestDatabase::create("disable_fast_group").await else {
         return;
     };
@@ -92,13 +93,28 @@ async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot
                 name: "Fast policy".to_owned(),
                 description: None,
                 color: group_color("#2563EBFF"),
+                fast_mode: FastMode::Default,
                 disable_fast: true,
             },
             &context("create-fast"),
         )
         .await
         .unwrap();
-    for (value, expected) in [(None, true), (Some(false), false), (Some(true), true)] {
+    for (fast_mode, disable_fast, expected) in [
+        (None, None, FastMode::Disabled),
+        (None, Some(false), FastMode::Default),
+        (None, Some(true), FastMode::Disabled),
+        (Some(FastMode::Enabled), Some(true), FastMode::Enabled),
+        (None, None, FastMode::Enabled),
+        (None, Some(false), FastMode::Default),
+        (Some(FastMode::Disabled), Some(false), FastMode::Disabled),
+        (Some(FastMode::Default), Some(true), FastMode::Default),
+        (None, None, FastMode::Default),
+        (Some(FastMode::Enabled), None, FastMode::Enabled),
+        (None, Some(true), FastMode::Disabled),
+        (Some(FastMode::Default), None, FastMode::Default),
+        (Some(FastMode::Disabled), None, FastMode::Disabled),
+    ] {
         let mutation = repository
             .update_account_group(
                 UpdateAccountGroup {
@@ -106,32 +122,163 @@ async fn disable_fast_group_updates_preserve_omitted_values_and_publish_snapshot
                     name: "Renamed policy".to_owned(),
                     description: None,
                     color: group_color("#2563EBFF"),
-                    disable_fast: value,
+                    fast_mode,
+                    disable_fast,
                 },
                 &context("update-fast"),
             )
             .await
             .unwrap();
-        assert_eq!(mutation.record.unwrap().disable_fast, expected);
-        let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
-            .load_runtime_snapshot()
-            .await
-            .unwrap();
-        assert_eq!(
-            snapshot.config_revision.get(),
-            mutation.config_revision.get()
-        );
-        assert_eq!(
-            snapshot
-                .account_groups
-                .iter()
-                .find(|group| group.id == id)
-                .unwrap()
-                .disable_fast,
-            expected
-        );
+        let record = mutation.record.expect("updated group");
+        assert_eq!(record.fast_mode, expected);
+        assert_eq!(record.disable_fast, expected == FastMode::Disabled);
+        assert_group_fast_policy(&database, &id, expected, mutation.config_revision.get()).await;
     }
     database.close().await;
+}
+
+#[tokio::test]
+async fn fast_mode_group_creation_preserves_legacy_opt_out_and_publishes_snapshot() {
+    let Some(database) = TestDatabase::create("fast_create").await else {
+        return;
+    };
+    let repository = PgAccountGroupRepository::new(database.pool.clone());
+    for (index, (fast_mode, disable_fast, expected)) in [
+        (FastMode::Default, false, FastMode::Default),
+        (FastMode::Default, true, FastMode::Disabled),
+        (FastMode::Enabled, false, FastMode::Enabled),
+        (FastMode::Enabled, true, FastMode::Disabled),
+        (FastMode::Disabled, false, FastMode::Disabled),
+        (FastMode::Disabled, true, FastMode::Disabled),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = group_id(&format!("grp_{index:032x}"));
+        let mutation = repository
+            .create_account_group(
+                NewAccountGroup {
+                    id: id.clone(),
+                    name: format!("Fast policy {index}"),
+                    description: None,
+                    color: group_color("#2563EBFF"),
+                    fast_mode,
+                    disable_fast,
+                },
+                &context("create-fast-policy"),
+            )
+            .await
+            .expect("create Fast policy");
+        let record = mutation.record.expect("created group");
+        assert_eq!(record.fast_mode, expected);
+        assert_eq!(record.disable_fast, expected == FastMode::Disabled);
+        assert_group_fast_policy(&database, &id, expected, mutation.config_revision.get()).await;
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn fast_mode_migration_preserves_legacy_groups_and_defaults_new_groups() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 64)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let Some(database) = TestDatabase::create_with_migrator("fast_upgrade", &old).await else {
+        return;
+    };
+    for (id, disable_fast) in [(MIXED_GROUP, true), (EMPTY_GROUP, false)] {
+        sqlx::query(
+            "insert into account_groups
+             (id, name, description, color, enabled, disable_fast, created_at, updated_at)
+             values ($1, $1, 'Legacy policy', '#2563EBFF', false, $2, now(), now())",
+        )
+        .bind(id)
+        .bind(disable_fast)
+        .execute(&database.pool)
+        .await
+        .expect("seed pre-FastMode group");
+    }
+    let before: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(g) from account_groups g order by id")
+            .fetch_all(&database.pool)
+            .await
+            .expect("legacy group records");
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+    let after: Vec<serde_json::Value> =
+        sqlx::query_scalar("select to_jsonb(g) - 'fast_mode' from account_groups g order by id")
+            .fetch_all(&database.pool)
+            .await
+            .expect("upgraded group records without added column");
+    assert_eq!(after, before, "all legacy fields must survive migration");
+    let revision = current_revision(&database.pool).await;
+    for (id, expected) in [
+        (MIXED_GROUP, FastMode::Disabled),
+        (EMPTY_GROUP, FastMode::Default),
+    ] {
+        assert_group_fast_policy(&database, &group_id(id), expected, revision).await;
+    }
+    let fresh_id = group_id("grp_00000000000000000000000000000003");
+    sqlx::query(
+        "insert into account_groups (id, name, color, created_at, updated_at)
+         values ($1, 'Schema default', '#2563EBFF', now(), now())",
+    )
+    .bind(fresh_id.as_str())
+    .execute(&database.pool)
+    .await
+    .expect("insert group using schema defaults");
+    assert_group_fast_policy(&database, &fresh_id, FastMode::Default, revision).await;
+    let error = sqlx::query("update account_groups set fast_mode = 'invalid' where id = $1")
+        .bind(fresh_id.as_str())
+        .execute(&database.pool)
+        .await
+        .expect_err("invalid FastMode must violate SQL constraint");
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
+    assert_group_fast_policy(&database, &fresh_id, FastMode::Default, revision).await;
+    database.close().await;
+}
+
+async fn assert_group_fast_policy(
+    database: &TestDatabase,
+    id: &AccountGroupId,
+    expected: FastMode,
+    revision: u64,
+) {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+
+    let persisted: (String, bool) =
+        sqlx::query_as("select fast_mode, disable_fast from account_groups where id = $1")
+            .bind(id.as_str())
+            .fetch_one(&database.pool)
+            .await
+            .expect("persisted Fast policy");
+    assert_eq!(
+        persisted,
+        (expected.as_str().to_owned(), expected == FastMode::Disabled)
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .expect("runtime group snapshot");
+    assert_eq!(snapshot.config_revision.get(), revision);
+    let group = snapshot
+        .account_groups
+        .iter()
+        .find(|group| &group.id == id)
+        .expect("snapshot group");
+    assert_eq!(group.fast_mode, expected);
+    assert_eq!(group.disable_fast, expected == FastMode::Disabled);
 }
 
 #[tokio::test]
@@ -165,6 +312,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
                 name: "Mixed Production".to_owned(),
                 description: Some("cross-provider".to_owned()),
                 color: group_color("#2563EBFF"),
+                fast_mode: FastMode::Default,
                 disable_fast: false,
             },
             &context("create-mixed"),
@@ -178,6 +326,7 @@ async fn groups_aggregate_cross_provider_members_and_key_bindings_without_multip
                 name: "Empty Pool".to_owned(),
                 description: None,
                 color: group_color("#06B6D4CC"),
+                fast_mode: FastMode::Default,
                 disable_fast: false,
             },
             &context("create-empty"),
@@ -373,6 +522,7 @@ async fn group_costs_should_include_statusless_websocket_but_reject_statusless_h
                 name: "Statusless Costs".to_owned(),
                 description: None,
                 color: group_color("#06B6D4CC"),
+                fast_mode: FastMode::Default,
                 disable_fast: false,
             },
             &context("create-statusless-cost-group"),
@@ -460,6 +610,7 @@ async fn monitor_snapshot_uses_completion_window_shared_costs_and_durable_identi
                     name: id.to_owned(),
                     description: None,
                     color: group_color("#2563EBFF"),
+                    fast_mode: FastMode::Default,
                     disable_fast: false,
                 },
                 &context(id),
@@ -594,6 +745,7 @@ async fn list_and_monitor_attribute_all_scopes_to_current_serving_memberships_on
                     name: id.to_owned(),
                     description: None,
                     color: group_color("#2563EBFF"),
+                    fast_mode: FastMode::Default,
                     disable_fast: false,
                 },
                 &context(id),

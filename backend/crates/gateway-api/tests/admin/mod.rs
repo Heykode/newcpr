@@ -71,7 +71,7 @@ use gateway_admin::{
 };
 use gateway_api::admin::AdminSessionState;
 use gateway_core::{
-    account::{AccountStatusFacts, CredentialState, ProviderAccountId, QuotaState},
+    account::{AccountStatusFacts, CredentialState, FastMode, ProviderAccountId, QuotaState},
     engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     policy::{ClientApiKeyId, RateLimits},
     routing::{ConfigRevision, ProviderKind, PublicModelId, UpstreamModelId},
@@ -181,6 +181,7 @@ impl AdminTestFixture {
         ];
         let bundle = gateway_admin::initialize(
             AdminConfig {
+                session_absolute_ttl_minutes: 30 * 24 * 60,
                 session_ttl_minutes: 60,
                 default_username: "admin_1".to_owned(),
                 default_password: InitialAdminPassword::new("strong-admin-password"),
@@ -274,6 +275,7 @@ impl MemoryAuthStore {
             session_id.to_owned(),
             AdminSession {
                 admin_user_id: "admin_1".to_owned(),
+                absolute_expires_at: None,
                 expires_at: Utc::now() + Duration::hours(1),
                 credential_fingerprint: {
                     use base64::Engine as _;
@@ -306,6 +308,25 @@ impl MemoryAuthStore {
 
 #[async_trait]
 impl AuthStore for MemoryAuthStore {
+    async fn renew_session(
+        &self,
+        id: &str,
+        expected: &AdminSession,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> AdminStoreResult<Option<AdminSession>> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let Some(current) = sessions
+            .get_mut(id)
+            .filter(|session| session.expires_at > Utc::now())
+        else {
+            return Ok(None);
+        };
+        if current == expected {
+            current.expires_at = expires_at;
+        }
+        Ok(Some(current.clone()))
+    }
+
     async fn change_password(
         &self,
         _: &str,
@@ -422,6 +443,12 @@ impl SettingsStore for MemorySettingsStore {
     ) -> AdminStoreResult<RuntimeSettings> {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
+            openai_account_affinity: command
+                .openai_account_affinity
+                .unwrap_or(settings.openai_account_affinity),
+            openai_session_binding_ttl_hours: command
+                .openai_session_binding_ttl_hours
+                .unwrap_or(settings.openai_session_binding_ttl_hours),
             turn_state_probe_proxy_id: command
                 .turn_state_probe_proxy_id
                 .unwrap_or_else(|| settings.turn_state_probe_proxy_id.clone()),
@@ -526,6 +553,7 @@ impl MemoryAccountGroupStore {
                     color: group_color("#2563ebff"),
                     enabled: true,
                     disable_fast: false,
+                    fast_mode: Default::default(),
                     member_count: 2,
                     provider_counts: BTreeMap::from([
                         ("openai".to_owned(), 1),
@@ -548,6 +576,7 @@ impl MemoryAccountGroupStore {
                     color: group_color("#64748B80"),
                     enabled: false,
                     disable_fast: false,
+                    fast_mode: Default::default(),
                     member_count: 0,
                     provider_counts: BTreeMap::new(),
                     client_key_count: 0,
@@ -728,13 +757,19 @@ impl AccountGroupStore for MemoryAccountGroupStore {
     ) -> AdminStoreResult<AccountGroupMutation> {
         let mut state = self.state.lock().expect("account groups");
         let now = Utc::now();
+        let fast_mode = if command.disable_fast {
+            FastMode::Disabled
+        } else {
+            command.fast_mode
+        };
         let record = AccountGroupRecord {
             id: command.id.clone(),
             name: command.name,
             description: command.description,
             color: command.color,
             enabled: true,
-            disable_fast: command.disable_fast,
+            disable_fast: fast_mode == FastMode::Disabled,
+            fast_mode,
             member_count: 0,
             provider_counts: BTreeMap::new(),
             client_key_count: 0,
@@ -761,8 +796,17 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         record.name = command.name;
         record.description = command.description;
         record.color = command.color;
-        if let Some(disable_fast) = command.disable_fast {
-            record.disable_fast = disable_fast;
+        if let Some(fast_mode) = command.fast_mode.or_else(|| {
+            command.disable_fast.map(|disabled| {
+                if disabled {
+                    FastMode::Disabled
+                } else {
+                    FastMode::Default
+                }
+            })
+        }) {
+            record.fast_mode = fast_mode;
+            record.disable_fast = fast_mode == FastMode::Disabled;
         }
         record.updated_at = Utc::now();
         mutation(&mut state, command.id, true)
@@ -1491,6 +1535,8 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        openai_account_affinity: Default::default(),
+        openai_session_binding_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: 3,

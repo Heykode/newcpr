@@ -58,6 +58,7 @@ async fn purchase_import_applies_per_account_preserves_omission_and_rolls_back_i
     };
     let repo = PgProviderAccountRepository::new(db.pool.clone());
     let mut settings = AccountImportSettings {
+        template_proxy_mode: None,
         excel_recovery: None,
         purchase_cost: Some(AccountPurchaseUpdate {
             amount_cny: Some("50.125".into()),

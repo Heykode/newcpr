@@ -22,12 +22,13 @@ pub enum ConflictKind {
 }
 
 /// Store adapter 的稳定错误边界。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum StoreError {
     #[error("{backend:?} store is unavailable: {message}")]
     Unavailable {
         backend: StoreBackend,
         message: String,
+        source: Option<gateway_core::error::ErrorSource>,
     },
     #[error("{entity} {id} was not found")]
     NotFound { entity: &'static str, id: String },
@@ -45,6 +46,16 @@ pub enum StoreError {
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
+
+impl StoreError {
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<gateway_core::error::ErrorSource>) -> Self {
+        if let Self::Unavailable { source: saved, .. } = &mut self {
+            *saved = Some(source.into());
+        }
+        self
+    }
+}
 pub(crate) fn store_revision(revision: AdminRevision) -> AdminStoreResult<Revision> {
     Revision::new(revision.get()).map_err(|error| admin_store_error("config revision", error))
 }
@@ -122,7 +133,7 @@ pub(crate) fn admin_store_error(resource: &'static str, error: StoreError) -> Ad
         StoreError::InvalidData { .. } => AdminStoreErrorKind::Invalid,
         StoreError::Unavailable { .. } => AdminStoreErrorKind::Unavailable,
     };
-    AdminStoreError::new(kind, resource, "store operation failed")
+    AdminStoreError::new(kind, resource, "store operation failed").with_source(error)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -264,6 +275,7 @@ pub(crate) fn postgres_unavailable(operation: &'static str) -> StoreError {
     StoreError::Unavailable {
         backend: StoreBackend::PostgreSql,
         message: operation.to_owned(),
+        source: None,
     }
 }
 
@@ -271,5 +283,6 @@ pub(crate) fn redis_unavailable(operation: &'static str) -> StoreError {
     StoreError::Unavailable {
         backend: StoreBackend::Redis,
         message: operation.to_owned(),
+        source: None,
     }
 }

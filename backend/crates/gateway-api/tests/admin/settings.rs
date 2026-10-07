@@ -82,6 +82,8 @@ fn update_body() -> Value {
             "accountBusyWaitFallbackTimeoutSeconds": 31
         }
     });
+    body["openaiAccountAffinity"] = json!("strict");
+    body["openaiSessionBindingTtlHours"] = json!(24);
     body["openaiGuardianReservedConcurrency"] = json!(0);
     body["accountWarmupEnabled"] = json!(false);
     body["accountWarmupScheduleTime"] = json!("08:00");
@@ -96,6 +98,111 @@ fn update_body() -> Value {
     body["requestTuning"]["excelImageTotalBytes"] = Value::Null;
     body["requestTuning"]["excelImageMaxCount"] = Value::Null;
     body
+}
+
+#[test]
+fn account_affinity_rejects_invalid_values_and_preserves_omission() {
+    use gateway_core::account::AccountAffinity;
+    let mut old_body = update_body();
+    old_body
+        .as_object_mut()
+        .unwrap()
+        .remove("openaiAccountAffinity");
+    let omitted: UpdateRuntimeSettingsRequest = serde_json::from_value(old_body).unwrap();
+    assert_eq!(omitted.openai_account_affinity, None);
+    for (value, mode) in [
+        ("strict", AccountAffinity::Strict),
+        ("relaxed", AccountAffinity::Relaxed),
+    ] {
+        let mut body = update_body();
+        body["openaiAccountAffinity"] = json!(value);
+        let parsed: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        parsed.validate().unwrap();
+        assert_eq!(parsed.openai_account_affinity, Some(mode));
+    }
+    for invalid in [
+        json!(null),
+        json!("unknown"),
+        json!("Strict"),
+        json!(" relaxed "),
+        json!(1),
+        json!(true),
+    ] {
+        let mut body = update_body();
+        body["openaiAccountAffinity"] = invalid;
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+    }
+}
+
+#[tokio::test]
+async fn account_affinity_saves_and_old_api_clients_keep_the_saved_mode() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let router = app(fixture.state());
+    let loaded = router
+        .clone()
+        .oneshot(request(Method::GET, "/api/admin/settings", None))
+        .await
+        .unwrap();
+    assert_eq!(loaded.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(loaded).await["data"]["openaiAccountAffinity"],
+        "strict"
+    );
+    let mut body = update_body();
+    body["openaiAccountAffinity"] = json!("relaxed");
+    let mut old_body = update_body();
+    old_body
+        .as_object_mut()
+        .unwrap()
+        .remove("openaiAccountAffinity");
+    for body in [body, old_body] {
+        let saved = router
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(saved).await["data"]["openaiAccountAffinity"],
+            "relaxed"
+        );
+    }
+}
+
+#[test]
+fn session_binding_ttl_rejects_null_and_out_of_range_values_but_preserves_omission() {
+    let mut old_body = update_body();
+    old_body
+        .as_object_mut()
+        .unwrap()
+        .remove("openaiSessionBindingTtlHours");
+    let omitted: UpdateRuntimeSettingsRequest = serde_json::from_value(old_body).unwrap();
+    assert_eq!(omitted.openai_session_binding_ttl_hours, None);
+    for invalid in [
+        json!(null),
+        json!(0),
+        json!(721),
+        json!(-1),
+        json!(1.5),
+        json!("24"),
+    ] {
+        let mut body = update_body();
+        body["openaiSessionBindingTtlHours"] = invalid;
+        let parsed = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body);
+        assert!(parsed.is_err() || parsed.unwrap().validate().is_err());
+    }
+    for hours in [1, 24, 720] {
+        let mut body = update_body();
+        body["openaiSessionBindingTtlHours"] = json!(hours);
+        let parsed: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        parsed.validate().unwrap();
+        assert_eq!(parsed.openai_session_binding_ttl_hours, Some(hours));
+    }
 }
 
 #[test]
@@ -347,6 +454,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     let settings = RuntimeSettings {
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: 3,
+        openai_account_affinity: Default::default(),
+        openai_session_binding_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),
         disable_fast: false,
         turn_state_injection_enabled: false,
@@ -471,6 +580,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         },
         "updatedAt": "2026-08-02T10:30:00Z"
     });
+    expected["openaiAccountAffinity"] = json!("strict");
+    expected["openaiSessionBindingTtlHours"] = json!(24);
     expected["openaiGuardianReservedConcurrency"] = json!(0);
     expected["accountWarmupEnabled"] = json!(false);
     expected["accountWarmupScheduleTime"] = json!("08:00");
@@ -512,6 +623,8 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .cloned()
         .collect();
     let settings = RuntimeSettings {
+        openai_account_affinity: Default::default(),
+        openai_session_binding_ttl_hours: 24,
         config_revision: Revision::new(7).expect("revision"),
         turn_state_probe_proxy_id: request.turn_state_probe_proxy_id.clone().flatten(),
         turn_state_probe_concurrency: request.turn_state_probe_concurrency.unwrap_or(3),

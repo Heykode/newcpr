@@ -164,6 +164,59 @@ fn login_command_debug_should_redact_password() {
 }
 
 #[test]
+fn provider_admin_error_preserves_relogin_context_and_restricted_source() {
+    use gateway_admin::{
+        model::{
+            AdminError,
+            relogin::{ReloginStopReason, ReloginWorkspaceChoice},
+        },
+        ports::provider::{ProviderAdminError, ProviderAdminErrorKind},
+    };
+    use std::error::Error as _;
+
+    let choices = vec![ReloginWorkspaceChoice {
+        id: "workspace-synthetic".to_owned(),
+        name: "Synthetic workspace".to_owned(),
+        plan_type: "business".to_owned(),
+    }];
+    let base = ProviderAdminError::new(ProviderAdminErrorKind::Unavailable)
+        .with_message("synthetic-provider-body")
+        .with_public_message("Provider temporarily unavailable")
+        .with_relogin_stop_reason(ReloginStopReason::WorkspaceUnavailable)
+        .with_relogin_workspace_choices(choices.clone());
+    let error = base
+        .clone()
+        .with_source(std::io::Error::other("synthetic-private-cause"));
+    assert_eq!(
+        error, base,
+        "diagnostic sources do not alter error identity"
+    );
+    assert_eq!(error.relogin_workspace_choices(), choices);
+    assert_eq!(
+        error.relogin_stop_reason(),
+        Some(ReloginStopReason::WorkspaceUnavailable)
+    );
+    assert_eq!(
+        error.source().unwrap().to_string(),
+        "synthetic-private-cause"
+    );
+    for display in [format!("{error:?}"), error.to_string()] {
+        assert!(!display.contains("synthetic-private-cause"));
+        assert!(!display.contains("synthetic-provider-body"));
+    }
+    let mapped = AdminError::internal("Provider temporarily unavailable").with_source(error);
+    assert_eq!(mapped.to_string(), "Provider temporarily unavailable");
+    assert!(
+        mapped
+            .error_details()
+            .unwrap()
+            .as_str()
+            .contains("synthetic-private-cause")
+    );
+    assert!(!format!("{mapped:?}").contains("synthetic-private-cause"));
+}
+
+#[test]
 fn all_store_capability_traits_should_be_object_safe() {
     fn assert_object_safe<T: ?Sized + Send + Sync>() {}
 

@@ -22,6 +22,25 @@ struct MemoryAuthStore {
 
 #[async_trait]
 impl AuthStore for MemoryAuthStore {
+    async fn renew_session(
+        &self,
+        id: &str,
+        expected: &AdminSession,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> AdminStoreResult<Option<AdminSession>> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let Some(current) = sessions
+            .get_mut(id)
+            .filter(|session| session.expires_at > Utc::now())
+        else {
+            return Ok(None);
+        };
+        if current == expected {
+            current.expires_at = expires_at;
+        }
+        Ok(Some(current.clone()))
+    }
+
     async fn change_password(
         &self,
         _: &str,
@@ -151,6 +170,154 @@ async fn repeated_default_initialization_should_not_replace_password() {
             })
             .await
             .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn renewal_preserves_fingerprint_obeys_absolute_expiry_and_never_revives_logout() {
+    let store = std::sync::Arc::new(MemoryAuthStore::default());
+    let services = super::AdminHarness::new().auth(store.clone()).build().await;
+    let login = services
+        .auth()
+        .login(LoginCommand {
+            username: None,
+            password: "strong-test-password".to_owned(),
+        })
+        .await
+        .unwrap();
+    let original = store
+        .load_session(&login.session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let unchanged = services
+        .auth()
+        .renew_session(Some(&login.session_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged, original, "throttle early renewal writes");
+    let absolute = Utc::now() + TimeDelta::minutes(10);
+    let session = AdminSession {
+        expires_at: Utc::now() + TimeDelta::seconds(30),
+        absolute_expires_at: Some(absolute),
+        ..original
+    };
+    store
+        .store_session(&login.session_id, &session)
+        .await
+        .unwrap();
+    let renewed = services
+        .auth()
+        .renew_session(Some(&login.session_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renewed.expires_at, absolute);
+    assert_eq!(renewed.absolute_expires_at, Some(absolute));
+    assert_eq!(
+        renewed.credential_fingerprint,
+        session.credential_fingerprint
+    );
+    services.auth().logout(&login.session_id).await.unwrap();
+    assert!(
+        services
+            .auth()
+            .renew_session(Some(&login.session_id))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .renew_session(&login.session_id, &session, absolute)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn renewal_keeps_legacy_expiry_and_rejects_missing_fingerprint_or_expired_sessions() {
+    let store = std::sync::Arc::new(MemoryAuthStore::default());
+    let services = super::AdminHarness::new().auth(store.clone()).build().await;
+    let login = services
+        .auth()
+        .login(LoginCommand {
+            username: None,
+            password: "strong-test-password".to_owned(),
+        })
+        .await
+        .unwrap();
+    let original = store
+        .load_session(&login.session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let legacy = AdminSession {
+        expires_at: Utc::now() + TimeDelta::seconds(30),
+        absolute_expires_at: None,
+        ..original.clone()
+    };
+    store.store_session("legacy", &legacy).await.unwrap();
+    assert_eq!(
+        services.auth().renew_session(Some("legacy")).await.unwrap(),
+        Some(legacy)
+    );
+    for (id, expires_at, absolute_expires_at, fingerprint) in [
+        (
+            "missing-fingerprint",
+            original.expires_at,
+            original.absolute_expires_at,
+            String::new(),
+        ),
+        (
+            "idle-expired",
+            Utc::now() - TimeDelta::seconds(1),
+            original.absolute_expires_at,
+            original.credential_fingerprint.clone(),
+        ),
+        (
+            "absolute-expired",
+            original.expires_at,
+            Some(Utc::now() - TimeDelta::seconds(1)),
+            original.credential_fingerprint.clone(),
+        ),
+    ] {
+        store
+            .store_session(
+                id,
+                &AdminSession {
+                    expires_at,
+                    absolute_expires_at,
+                    credential_fingerprint: fingerprint,
+                    ..original.clone()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            services
+                .auth()
+                .renew_session(Some(id))
+                .await
+                .unwrap()
+                .is_none(),
+            "{id}"
+        );
+        assert!(
+            !services.auth().validate_session(Some(id)).await.unwrap(),
+            "{id}"
+        );
+    }
+    *store.password_hash.lock().unwrap() = Some("changed-password-hash".to_owned());
+    assert!(
+        services
+            .auth()
+            .renew_session(Some(&login.session_id))
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 

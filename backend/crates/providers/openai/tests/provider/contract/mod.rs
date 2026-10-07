@@ -69,10 +69,13 @@ const OFFICIAL_FIXTURE: &[u8] =
     include_bytes!("../../transport/fixtures/official_models_snapshot.json");
 
 mod affinity;
+mod affinity_modes;
 mod cache_diagnostics;
 mod compact;
 mod excel_encrypted_content;
+mod fast_mode;
 mod generate_compat;
+mod guardian;
 mod identity_isolation;
 mod precommit;
 mod quota_continuation;
@@ -82,6 +85,7 @@ mod reasoning_replay;
 mod request_alignment;
 mod scheduling;
 mod streamed_errors;
+mod turn_affinity;
 mod ws_message_compatibility;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
     "event: response.completed\n",
@@ -173,7 +177,10 @@ fn provider_with_affinity(
     provider_with_affinity_and_base_url(store, session_affinity, OFFICIAL_CODEX_BASE_URL.to_owned())
 }
 
-fn provider_with_base_url(store: &Arc<MemoryAccountStore>, base_url: String) -> CodexProvider {
+pub(super) fn provider_with_base_url(
+    store: &Arc<MemoryAccountStore>,
+    base_url: String,
+) -> CodexProvider {
     provider_with_base_url_and_retry_budget(
         store,
         base_url,
@@ -309,7 +316,7 @@ fn provider_and_quota_with_profile(
     (provider, quota)
 }
 
-async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
+pub(super) async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
     create_account_with_enabled(store, id, true).await;
 }
 
@@ -428,8 +435,16 @@ fn http_generate_operation() -> Operation {
 }
 
 fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest {
+    planned_request_with_model(provider_name, operation, "gpt-5.4")
+}
+
+fn planned_request_with_model(
+    provider_name: &str,
+    operation: Operation,
+    model: &str,
+) -> ProviderRequest {
     let provider = ProviderKind::new(provider_name).expect("provider");
-    let upstream_model = UpstreamModelId::new("gpt-5.4").expect("upstream model");
+    let upstream_model = UpstreamModelId::new(model).expect("upstream model");
     let public_model = PublicModelId::new(upstream_model.as_str()).expect("public model");
     let account_scope = Arc::new(FrozenAccountScope::new(
         Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
@@ -483,6 +498,7 @@ fn planned_provider_endpoint_request(provider_name: &str, operation: Operation) 
     let plan = snapshot
         .plan_provider_endpoint(
             &provider,
+            None,
             &operation,
             account_scope,
             &RoutingContext::default(),
@@ -556,7 +572,7 @@ fn contract_account_scope() -> Arc<FrozenAccountScope> {
     ))
 }
 
-fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
+pub(super) fn context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
     context_with_account_scope(request_id, cancellation, contract_account_scope())
 }
 
@@ -565,6 +581,25 @@ fn context_with_account_scope(
     cancellation: CancellationToken,
     account_scope: Arc<FrozenAccountScope>,
 ) -> AttemptContext {
+    context_with_policy(request_id, cancellation, account_scope, account_policy())
+}
+
+fn relaxed_context(request_id: &str, cancellation: CancellationToken) -> AttemptContext {
+    context_with_policy(
+        request_id,
+        cancellation,
+        contract_account_scope(),
+        account_policy()
+            .with_openai_account_affinity(gateway_core::account::AccountAffinity::Relaxed),
+    )
+}
+
+fn context_with_policy(
+    request_id: &str,
+    cancellation: CancellationToken,
+    account_scope: Arc<FrozenAccountScope>,
+    policy: gateway_core::account::AccountSelectionPolicy,
+) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new(request_id).expect("request id"),
@@ -572,7 +607,7 @@ fn context_with_account_scope(
         ),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
-        account_policy(),
+        policy,
         AccountAttemptContext::new(BTreeSet::<ProviderAccountId>::new(), None, None)
             .with_account_scope(account_scope),
         None,
@@ -1749,7 +1784,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let root_stream = provider
         .execute(
             planned_request("openai", root.clone()),
-            context("req_cross_endpoint_root", CancellationToken::new()),
+            relaxed_context("req_cross_endpoint_root", CancellationToken::new()),
         )
         .await
         .expect("root selection");
@@ -1763,7 +1798,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let first = provider
         .execute(
             planned_request("openai", generation.clone()),
-            context("req_cross_endpoint_first", CancellationToken::new()),
+            relaxed_context("req_cross_endpoint_first", CancellationToken::new()),
         )
         .await
         .expect("first selection");
@@ -1812,7 +1847,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let mut same = provider
         .execute(
             planned_provider_endpoint_request("openai", search.clone()),
-            context("req_cross_endpoint_search", CancellationToken::new()),
+            relaxed_context("req_cross_endpoint_search", CancellationToken::new()),
         )
         .await
         .expect("search selection");
@@ -1835,7 +1870,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let mut fallback = provider
         .execute(
             planned_provider_endpoint_request("openai", search),
-            context("req_cross_endpoint_busy", CancellationToken::new()),
+            relaxed_context("req_cross_endpoint_busy", CancellationToken::new()),
         )
         .await
         .expect("busy fallback");
@@ -1860,7 +1895,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
     let resumed = provider
         .execute(
             planned_request("openai", generation.clone()),
-            context("req_cross_endpoint_resumed", CancellationToken::new()),
+            relaxed_context("req_cross_endpoint_resumed", CancellationToken::new()),
         )
         .await
         .expect("resumed responses");
@@ -1897,7 +1932,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         let selected_image = provider
             .execute(
                 planned_provider_endpoint_request("openai", image),
-                context("req_cross_endpoint_image", CancellationToken::new()),
+                relaxed_context("req_cross_endpoint_image", CancellationToken::new()),
             )
             .await
             .expect("image selection");
@@ -1911,7 +1946,7 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         let root_stream = provider
             .execute(
                 planned_request("openai", root),
-                context(
+                relaxed_context(
                     "req_cross_endpoint_root_after_child",
                     CancellationToken::new(),
                 ),
@@ -5287,17 +5322,11 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
             thread_id,
             turn_metadata,
         ));
-        keys.push(
-            provider
-                .request_observation(&operation, &client_key)
-                .continuation
-                .affinity_hash
-                .expect("affinity hash"),
-        );
+        let lookup_count = affinity.lookup_keys().len();
         let stream = provider
             .execute(
                 planned_request("openai", operation),
-                context(request_id, CancellationToken::new()),
+                relaxed_context(request_id, CancellationToken::new()),
             )
             .await
             .expect("prepare provider stream");
@@ -5305,6 +5334,7 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
             stream.metadata().provider_account_id().as_str(),
             "acct_thread_spawn_affinity"
         );
+        keys.push(affinity.lookup_keys()[lookup_count].clone());
         drop(stream);
     }
 
@@ -5329,16 +5359,36 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
             Some("child-one"),
             Some(thread_spawn),
         ));
+        let lookup_count = affinity.lookup_keys().len();
+        let stream = provider
+            .execute(
+                planned_request("openai", operation),
+                AttemptContext::new(
+                    RequestAttemptContext::new(
+                        ModelRequestId::new("req_thread_spawn_scope").unwrap(),
+                        client_key,
+                    ),
+                    NonZeroU32::MIN,
+                    SystemTime::now() + Duration::from_secs(30),
+                    account_policy().with_openai_account_affinity(
+                        gateway_core::account::AccountAffinity::Relaxed,
+                    ),
+                    AccountAttemptContext::new(BTreeSet::new(), None, None)
+                        .with_account_scope(contract_account_scope()),
+                    None,
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("independent client/root child binding");
         assert_ne!(
-            provider
-                .request_observation(&operation, &client_key)
-                .continuation
-                .affinity_hash
-                .as_ref(),
-            Some(&keys[2]),
+            affinity.lookup_keys()[lookup_count],
+            keys[2],
             "child identity stays scoped to both root and client"
         );
+        drop(stream);
     }
+    assert_eq!(affinity.binding_count(), 5);
 }
 
 #[tokio::test]
@@ -5378,7 +5428,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     let mut parent = parent_provider
         .execute(
             planned_request("openai", operation("parent-session")),
-            context("req_parent_running", CancellationToken::new()),
+            relaxed_context("req_parent_running", CancellationToken::new()),
         )
         .await
         .expect("parent selection");
@@ -5424,7 +5474,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     let child = provider
         .execute(
             planned_request("openai", operation("child-one")),
-            context("req_child_inherit", CancellationToken::new()),
+            relaxed_context("req_child_inherit", CancellationToken::new()),
         )
         .await
         .expect("initial child selection");
@@ -5445,7 +5495,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
         let mut child = provider
             .execute(
                 planned_request("openai", operation(thread)),
-                context("req_child_busy", CancellationToken::new()),
+                relaxed_context("req_child_busy", CancellationToken::new()),
             )
             .await
             .expect("child busy fallback");
@@ -5486,7 +5536,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
         let stream = provider
             .execute(
                 planned_request("openai", operation(thread)),
-                context("req_after_parent_completion", CancellationToken::new()),
+                relaxed_context("req_after_parent_completion", CancellationToken::new()),
             )
             .await
             .expect("selection after parent completion");
@@ -5497,7 +5547,11 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
         );
         drop(stream);
     }
-    assert_eq!(affinity.binding_count(), 4);
+    assert_eq!(
+        affinity.binding_count(),
+        7,
+        "four thread bindings and three successful Guardian parent records"
+    );
     let requests = server.received_requests().await.expect("child requests");
     assert_eq!(requests.len(), 2);
     for request in requests {
@@ -5545,7 +5599,7 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
                     "openai",
                     Operation::Generate(generate_with_session_context("root", thread, None)),
                 ),
-                context("req_seed_child_failure", CancellationToken::new()),
+                relaxed_context("req_seed_child_failure", CancellationToken::new()),
             )
             .await
             .expect("initial binding");
@@ -5571,7 +5625,7 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
     let mut child = provider
         .execute(
             planned_provider_endpoint_request("openai", search),
-            context("req_failed_child", CancellationToken::new()),
+            relaxed_context("req_failed_child", CancellationToken::new()),
         )
         .await
         .expect("child fallback selection");
@@ -5596,7 +5650,7 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
                     "openai",
                     Operation::Generate(generate_with_session_context("root", thread, None)),
                 ),
-                context("req_after_child_failure", CancellationToken::new()),
+                relaxed_context("req_after_child_failure", CancellationToken::new()),
             )
             .await
             .expect("binding after failure");

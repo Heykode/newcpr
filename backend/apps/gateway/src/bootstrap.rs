@@ -79,6 +79,7 @@ pub async fn run() -> Result<(), BootstrapError> {
     let mut store =
         gateway_store::initialize(store.with_log_files(host.log_file_maintenance())).await?;
     host.report_startup_ready("Store");
+    host.set_operational_diagnostics(store.operational_diagnostics());
     let request_tuning = RequestTuningHandle::default();
     let provider_ports = store
         .provider_ports()
@@ -131,7 +132,8 @@ pub async fn run() -> Result<(), BootstrapError> {
         host.connection_lifecycle(),
         timezone,
     )?
-    .with_image_relay(openai.image_relay());
+    .with_image_relay(openai.image_relay())
+    .with_operational_diagnostics(store.operational_diagnostics());
     host.report_startup_ready("API");
 
     let mut plan = store.take_worker_contributions();

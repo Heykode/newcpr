@@ -149,7 +149,7 @@ impl AdminSecurityAuditRepository for PgAdminSecurityAuditRepository {
             .bind(admin_user_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|_| postgres_unavailable("read admin password hash"))
+            .map_err(|error| postgres_unavailable("read admin password hash").with_source(error))
     }
 
     async fn create_password_hash_if_absent(
@@ -168,7 +168,7 @@ impl AdminSecurityAuditRepository for PgAdminSecurityAuditRepository {
         .bind(password_hash)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("create admin password hash"))?;
+        .map_err(|error| postgres_unavailable("create admin password hash").with_source(error))?;
         Ok(result.rows_affected() == 1)
     }
 
@@ -193,7 +193,7 @@ impl AdminSecurityAuditRepository for PgAdminSecurityAuditRepository {
         .bind(event.created_at)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("append admin audit event"))?;
+        .map_err(|error| postgres_unavailable("append admin audit event").with_source(error))?;
         Ok(())
     }
 }
@@ -234,7 +234,9 @@ pub(crate) async fn insert_admin_audit_event(
     .bind(event.created_at)
     .execute(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("append admin audit event in transaction"))?;
+    .map_err(|error| {
+        postgres_unavailable("append admin audit event in transaction").with_source(error)
+    })?;
     Ok(())
 }
 

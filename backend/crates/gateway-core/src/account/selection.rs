@@ -42,6 +42,43 @@ impl RotationStrategy {
     }
 }
 
+/// 根会话与子线程共享账号绑定的冻结策略。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountAffinity {
+    Relaxed,
+    #[default]
+    Strict,
+}
+
+impl AccountAffinity {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Relaxed => "relaxed",
+            Self::Strict => "strict",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "relaxed" => Some(Self::Relaxed),
+            "strict" => Some(Self::Strict),
+            _ => None,
+        }
+    }
+}
+
+pub const DEFAULT_OPENAI_SESSION_BINDING_TTL_HOURS: u32 = 24;
+
+#[must_use]
+pub fn parse_openai_session_binding_ttl_hours(hours: u32) -> Option<Duration> {
+    (1..=720)
+        .contains(&hours)
+        .then(|| Duration::from_secs(u64::from(hours) * 3_600))
+}
+
 /// 从 `runtime_settings` 冻结到一次请求计划的账号调度策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSelectionPolicy {
@@ -50,6 +87,8 @@ pub struct AccountSelectionPolicy {
     max_concurrent_per_account: NonZeroU32,
     request_interval: Duration,
     openai_guardian_reserved_concurrency: u32,
+    openai_session_binding_ttl: Duration,
+    openai_account_affinity: AccountAffinity,
 }
 
 impl AccountSelectionPolicy {
@@ -65,6 +104,10 @@ impl AccountSelectionPolicy {
             max_concurrent_per_account,
             request_interval,
             openai_guardian_reserved_concurrency: 0,
+            openai_session_binding_ttl: Duration::from_secs(
+                DEFAULT_OPENAI_SESSION_BINDING_TTL_HOURS as u64 * 3_600,
+            ),
+            openai_account_affinity: AccountAffinity::Strict,
         }
     }
 
@@ -77,6 +120,28 @@ impl AccountSelectionPolicy {
     #[must_use]
     pub const fn openai_guardian_reserved_concurrency(self) -> u32 {
         self.openai_guardian_reserved_concurrency
+    }
+
+    #[must_use]
+    pub const fn with_openai_session_binding_ttl(mut self, ttl: Duration) -> Self {
+        self.openai_session_binding_ttl = ttl;
+        self
+    }
+
+    #[must_use]
+    pub const fn openai_session_binding_ttl(self) -> Duration {
+        self.openai_session_binding_ttl
+    }
+
+    #[must_use]
+    pub const fn with_openai_account_affinity(mut self, mode: AccountAffinity) -> Self {
+        self.openai_account_affinity = mode;
+        self
+    }
+
+    #[must_use]
+    pub const fn openai_account_affinity(self) -> AccountAffinity {
+        self.openai_account_affinity
     }
 
     #[must_use]

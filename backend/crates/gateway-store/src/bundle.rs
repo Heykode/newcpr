@@ -9,6 +9,7 @@ use super::*;
 pub struct StoreBundle {
     admin_ports: AdminStorePorts,
     core_ports: CoreStorePorts,
+    operational_diagnostics: Arc<dyn gateway_core::diagnostics::OperationalDiagnostics>,
     provider_ports: ProviderStorePorts,
     worker_leader_lease: Arc<dyn WorkerLeaderLeasePort>,
     health_probes: Vec<Arc<dyn HealthProbe>>,
@@ -16,6 +17,12 @@ pub struct StoreBundle {
 }
 
 impl StoreBundle {
+    pub fn operational_diagnostics(
+        &self,
+    ) -> Arc<dyn gateway_core::diagnostics::OperationalDiagnostics> {
+        self.operational_diagnostics.clone()
+    }
+
     #[must_use]
     pub fn admin_ports(&self) -> AdminStorePorts {
         self.admin_ports.clone()
@@ -57,11 +64,11 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         config.pool.acquire_timeout(),
     )?;
     let redis_client = ::redis::Client::open(config.redis_url()?)
-        .map_err(|_| redis_unavailable("create Redis client"))?;
+        .map_err(|error| redis_unavailable("create Redis client").with_source(error))?;
     let redis_connection = redis_client
         .get_connection_manager()
         .await
-        .map_err(|_| redis_unavailable("connect Redis manager"))?;
+        .map_err(|error| redis_unavailable("connect Redis manager").with_source(error))?;
 
     let provider_accounts = Arc::new(postgres::PgProviderAccountRepository::new(pool.clone()));
     let cooldowns = Arc::new(redis::RedisCredentialCooldownRepository::new(
@@ -167,6 +174,9 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
     let (execution, execution_writer) =
         postgres::BufferedExecutionStore::new(Arc::clone(&execution_repository));
     let execution = Arc::new(execution);
+    let operational_diagnostics = Arc::new(gateway_core::diagnostics::ExecutionDiagnostics(
+        execution.clone(),
+    ));
     let (client_key_usage, client_key_usage_writer) =
         postgres::PgClientApiKeyUsageSink::new(pool.clone());
     let admissions: Arc<dyn gateway_core::engine::admission::ClientAdmissionPort> =
@@ -274,6 +284,7 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         ));
     }
     Ok(StoreBundle {
+        operational_diagnostics,
         admin_ports,
         core_ports,
         provider_ports,

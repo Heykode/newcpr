@@ -16,7 +16,7 @@ const tables = [
     storage: 'codex-proxy:table-columns:usage-records',
     hidden: { key: 'model', label: '模型' },
     required: ['账号', '操作'],
-    columns: ['accountEmail', 'provider', 'model', 'reasoningEffort', 'route', 'upstreamTransport', 'clientTransport', 'turnState', 'tokenDetails', 'billing', 'latency', 'createdAtDisplay', 'clientIp', 'userAgent', 'actions'],
+    columns: ['accountEmail', 'provider', 'model', 'reasoningEffort', 'route', 'upstreamTransport', 'clientTransport', 'tokenDetails', 'billing', 'clientApiKeyName', 'latency', 'performance', 'createdAtDisplay', 'clientIp', 'userAgent', 'actions'],
   },
   {
     id: 'errors',
@@ -27,7 +27,7 @@ const tables = [
     storage: 'codex-proxy:table-columns:ops-errors',
     hidden: { key: 'route', label: '端点' },
     required: ['账号', '错误', '操作'],
-    columns: ['accountId', 'provider', 'message', 'upstreamSendState', 'model', 'route', 'createdAtDisplay', 'requestId', 'clientIp', 'userAgent', 'actions'],
+    columns: ['clientApiKeyName', 'accountId', 'accountPlanType', 'provider', 'message', 'upstreamSendState', 'model', 'route', 'createdAtDisplay', 'requestId', 'clientIp', 'userAgent', 'actions'],
   },
 ]
 
@@ -72,11 +72,13 @@ function fixtures() {
       totalTokens: 160,
     }).flatMap(([key, value]) => [[key, value], [`${key}Display`, String(value)]])),
     billing: null,
-    latencyDetails: { firstTokenMs: 100, firstEventMs: 80 },
-    firstTokenLatencyMs: 100,
+    latencyDetails: index === 1 ? { firstTokenMs: 100, firstEventMs: 80 } : { firstEventMs: 80 },
+    firstTokenLatencyMs: index === 1 ? 234 : null,
   }))
   const errors = [1, 2].map(index => ({
     ...common,
+    accountPlanType: index === 1 ? 'pro' : null,
+    accountPlanTypeDisplay: index === 1 ? 'Pro' : null,
     id: `ops_columns_${index}`,
     requestId: `req_columns_${index}`,
     clientApiKeyId: null,
@@ -180,8 +182,7 @@ function fixtures() {
       storageFault: false,
       skipped: 0,
     }],
-    ['/api/admin/request-captures/by-request', []],
-    ['/api/admin/auth/status', { authenticated: true }],
+    ['/api/admin/auth/refresh', { authenticated: true }],
     ['/api/admin/system/version', {
       version: 'synthetic',
       gitSha: 'synthetic',
@@ -218,12 +219,13 @@ async function isolateNetwork(context, base, report) {
     const method = request.method()
     const path = url.pathname.replace(/^\/dev(?=\/api\/)/, '')
     const signature = `${method} ${url.origin}${path}`
-    if (url.origin !== base.origin || !['GET', 'HEAD'].includes(method)) {
+    const refresh = path === '/api/admin/auth/refresh' && method === 'POST'
+    if (url.origin !== base.origin || (!['GET', 'HEAD'].includes(method) && !refresh)) {
       report.blocked.push(signature)
       return route.abort('blockedbyclient')
     }
     // Never let an unmocked API call reach Vite's backend proxy.
-    if (data.has(path) && method === 'GET') {
+    if (data.has(path) && (method === 'GET' || refresh)) {
       report.api.push(path)
       return route.fulfill({ json: { code: 200, message: 'ok', data: data.get(path) } })
     }
@@ -260,6 +262,15 @@ async function assertColumns(page, table, hidden = false) {
   assert.equal(await activeTable(page).locator('tbody tr').count(), 2)
   for (const row of await activeTable(page).locator('tbody tr').all())
     assert.deepEqual(await row.locator('td[data-column-key]').evaluateAll(cells => cells.map(cell => cell.dataset.columnKey)), expected)
+  const rows = activeTable(page).locator('tbody tr')
+  if (table.id === 'success') {
+    assert.match(await rows.nth(0).locator('[data-column-key="performance"]').textContent() ?? '', /40 tok\/s\s*TTFT\s+234 ms/)
+    assert.match(await rows.nth(1).locator('[data-column-key="performance"]').textContent() ?? '', /\u2014\s*TTFT\s+\u2014/)
+  }
+  else {
+    assert.equal((await rows.nth(0).locator('[data-column-key="accountPlanType"]').textContent())?.trim(), 'Pro')
+    assert.equal((await rows.nth(1).locator('[data-column-key="accountPlanType"]').textContent())?.trim(), '\u2014')
+  }
 }
 
 async function selectTable(page, table, hidden = false) {

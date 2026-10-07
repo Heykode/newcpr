@@ -615,6 +615,15 @@ impl FakeAuthStore {
 
 #[async_trait]
 impl AuthStore for FakeAuthStore {
+    async fn renew_session(
+        &self,
+        _: &str,
+        _: &gateway_admin::model::auth::AdminSession,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<Option<gateway_admin::model::auth::AdminSession>> {
+        Ok(None)
+    }
+
     async fn change_password(
         &self,
         _: &str,

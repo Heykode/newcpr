@@ -47,17 +47,38 @@ pub enum AdminErrorKind {
 }
 
 /// 不携带基础设施细节、可安全返回给管理员的管理用例错误。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
 pub struct AdminError {
+    source: Option<gateway_core::error::ErrorSource>,
     kind: AdminErrorKind,
     message: String,
 }
 
+// Diagnostic causes do not change the public error identity used by read models.
+impl PartialEq for AdminError {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.message == other.message
+    }
+}
+
+impl Eq for AdminError {}
+
 impl AdminError {
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<gateway_core::error::ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    #[must_use]
+    pub fn error_details(&self) -> Option<gateway_core::error::ErrorDetails> {
+        gateway_core::error::ErrorDetails::capture(self.source.as_ref(), None, false)
+    }
     #[must_use]
     pub fn new(kind: AdminErrorKind, message: impl Into<String>) -> Self {
         Self {
+            source: None,
             kind,
             message: message.into(),
         }

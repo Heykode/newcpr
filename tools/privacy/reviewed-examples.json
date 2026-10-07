@@ -2046,5 +2046,77 @@
     "file_sha256": "ffe117c8cb3c0efd022d236d0be2881cfa61dfc4cc559d2d2ee2292b936a1a39",
     "line_sha256": "c85204f4407a8fb3204045ad397ed644fc6cb87825bfac0e6e809b0324b82079",
     "reason": "Reviewed synthetic documentation-domain proxy credentials in an in-memory provider credential serialization test; no network request or production credential is used."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 108,
+    "file_sha256": "e84a0c0133f8e1b86b804658b0946ddfd41dd81b130f991b7e16c32b4562e229",
+    "line_sha256": "05d89b4df3a4f65f2e9099ae7ccd18b0f07bc27a3581c139da0ef893ab85b149",
+    "reason": "Independently re-reviewed unchanged IPv6 source-category fixture after refresh-policy tests were appended; this assertion parses a synthetic mapped documentation address without network access."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 109,
+    "file_sha256": "e84a0c0133f8e1b86b804658b0946ddfd41dd81b130f991b7e16c32b4562e229",
+    "line_sha256": "126f7e34cdcf2e64e4165af6d03bceb76dc979de37bd316e3032c0b0164d7fcb",
+    "reason": "Independently re-reviewed unchanged link-local IPv6 rejection fixture; a locally parsed address category, not a deployment endpoint."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 110,
+    "file_sha256": "e84a0c0133f8e1b86b804658b0946ddfd41dd81b130f991b7e16c32b4562e229",
+    "line_sha256": "abf54a266f9141c37476c644e9c9a11de98856acf1241ba8b563d7d7e6b5c838",
+    "reason": "Independently re-reviewed unchanged multicast IPv6 rejection fixture; the test does not send packets."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 111,
+    "file_sha256": "e84a0c0133f8e1b86b804658b0946ddfd41dd81b130f991b7e16c32b4562e229",
+    "line_sha256": "3205b3a46a19d6eb2fea5855b6f7792ada9cf87e5ceb7af955077f4a4b8a5e3d",
+    "reason": "Independently re-reviewed unchanged site-local IPv6 rejection fixture; a reserved category used solely for source validation."
+  },
+  {
+    "path": "backend/crates/gateway-core/tests/provider_ports/mod.rs",
+    "rule": "non-example-ip",
+    "line": 118,
+    "file_sha256": "e84a0c0133f8e1b86b804658b0946ddfd41dd81b130f991b7e16c32b4562e229",
+    "line_sha256": "866bff72cf6ad4b537e5f863f4ded96b3cf59862650e132cbcde1167ef1d25a6",
+    "reason": "Independently re-reviewed unchanged documentation and unique-local IPv6 category fixtures; these are parsed locally and do not identify an actual host."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 72,
+    "file_sha256": "e3735f10f825dfb3060c2744bbbd24c91142d40cedc236972a2fc308fc5eefbb",
+    "line_sha256": "e08f3e5adfbd37e055a284d9e81db7a0ca0b59c809eb7c60cd2f91ebc8cb95f9",
+    "reason": "Re-reviewed byte-identical unsigned mock JWT in the loopback OAuth form test; this migration changes only terminal refresh assertions elsewhere in the file."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 382,
+    "file_sha256": "e3735f10f825dfb3060c2744bbbd24c91142d40cedc236972a2fc308fc5eefbb",
+    "line_sha256": "866aaa0977c3b9fa9b43fe03981074ea2d58b2b0eefb046ffd37628fb4fe5f05",
+    "reason": "Re-reviewed byte-identical unsigned mock JWT returned by isolated proxy fixtures, not a real refresh or identity token."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 417,
+    "file_sha256": "e3735f10f825dfb3060c2744bbbd24c91142d40cedc236972a2fc308fc5eefbb",
+    "line_sha256": "9de12eaf8ba8b0e4858b4328471402834f850fcf52eeb8962f910183467f1026",
+    "reason": "Re-reviewed byte-identical unsigned mock JWT used to check live profile refresh on an ephemeral loopback MockServer."
+  },
+  {
+    "path": "backend/crates/providers/openai/tests/credential/token_client.rs",
+    "rule": "gitleaks:generic-api-key",
+    "line": 533,
+    "file_sha256": "e3735f10f825dfb3060c2744bbbd24c91142d40cedc236972a2fc308fc5eefbb",
+    "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
+    "reason": "Re-reviewed byte-identical unsigned mock JWT in the bounded token-response parser test; all response credentials are explicit synthetic fixtures."
   }
 ]

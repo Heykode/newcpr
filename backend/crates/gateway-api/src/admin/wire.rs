@@ -165,6 +165,7 @@ impl AdminErrorBody {
 pub struct AdminError {
     status: StatusCode,
     body: AdminErrorBody,
+    details: Option<gateway_core::error::ErrorDetails>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -255,6 +256,7 @@ impl AdminError {
         Self {
             status,
             body: AdminErrorBody::new(code, message),
+            details: None,
         }
     }
 
@@ -314,6 +316,14 @@ impl AdminError {
         Self::from_spec(INTERNAL)
     }
 
+    pub(crate) fn with_source(
+        mut self,
+        source: impl Into<gateway_core::error::ErrorSource>,
+    ) -> Self {
+        self.details = gateway_core::error::ErrorDetails::capture(Some(&source.into()), None, true);
+        self
+    }
+
     pub fn bad_gateway() -> Self {
         Self::from_spec(BAD_GATEWAY)
     }
@@ -353,12 +363,17 @@ pub(crate) fn map_admin_service_error(error: gateway_admin::model::AdminError) -
     {
         response.body.message = error.message().to_owned();
     }
+    response.details = error.error_details();
     response
 }
 
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
-        (self.status, Json(self.body)).into_response()
+        let mut response = (self.status, Json(self.body)).into_response();
+        if let Some(details) = self.details {
+            response.extensions_mut().insert(details);
+        }
+        response
     }
 }
 

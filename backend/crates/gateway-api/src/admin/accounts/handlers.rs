@@ -199,8 +199,11 @@ where
     S: AdminSessionState + Send + Sync,
 {
     let (provider, command) = request
-        .into_command(auth.context().mutation_context())
-        .map_err(map_wire_error)?;
+        .into_command(
+            auth.context().mutation_context(),
+            state.admin_services().account_templates(),
+        )
+        .await?;
     let result = match provider {
         AccountProvider::OpenAi => {
             state

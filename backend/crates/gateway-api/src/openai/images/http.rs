@@ -118,7 +118,7 @@ async fn handle_image_request(
         Err(error) => return gateway_error_response(&error),
     };
     let started = match service
-        .start_provider_endpoint(client, operation, client_ip, user_agent, endpoint)
+        .start_provider_endpoint(client, operation, None, client_ip, user_agent, endpoint)
         .await
     {
         Ok(started) => started,

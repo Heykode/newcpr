@@ -1,5 +1,5 @@
 import type { rotationOptions } from '../constants'
-import type { RequestTuning } from '@/api/modules/settings'
+import type { AccountAffinity, RequestTuning } from '@/api/modules/settings'
 import { computed, reactive, ref, shallowRef } from 'vue'
 
 import { getSettings, updateSettings } from '@/api'
@@ -61,6 +61,7 @@ export function useSettingsForm() {
     excelDefaultModels: DEFAULT_EXCEL_MODELS_INPUT,
     disableFast: false,
     responsesMaxDecompressedBodyBytes: 64 * 1024 * 1024,
+    openaiAccountAffinity: 'strict' as AccountAffinity,
     refreshMarginSeconds: null as number | null,
     refreshConcurrency: null as number | null,
     maxConcurrentPerAccount: null as number | null,
@@ -69,6 +70,7 @@ export function useSettingsForm() {
     accountWarmupScheduleTime: '08:00',
     accountWarmupModel: '',
     requestIntervalMs: null as number | null,
+    openaiSessionBindingTtlHours: null as number | null,
     rotationStrategy: '' as RotationStrategy | '',
     minCodexDesktopVersion: '',
     minCodexCliVersion: '',
@@ -80,7 +82,7 @@ export function useSettingsForm() {
 
   const excelImages = useExcelImageSettings(computed(() => form.requestTuning))
 
-  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'openaiGuardianReservedConcurrency') {
+  function numericModel(key: 'refreshMarginSeconds' | 'refreshConcurrency' | 'maxConcurrentPerAccount' | 'requestIntervalMs' | 'openaiGuardianReservedConcurrency' | 'openaiSessionBindingTtlHours') {
     return computed({
       get: () => (form[key] === null ? '' : String(form[key])),
       set: (value: string) => {
@@ -107,6 +109,7 @@ export function useSettingsForm() {
         form.responsesMaxDecompressedBodyBytes = parsed
     },
   })
+  const openaiSessionBindingTtlHoursValue = numericModel('openaiSessionBindingTtlHours')
   const minCodexDesktopVersionError = computed(() => versionError(form.minCodexDesktopVersion))
   const minCodexCliVersionError = computed(() => versionError(form.minCodexCliVersion))
 
@@ -120,6 +123,7 @@ export function useSettingsForm() {
     form.disableFast = data.disableFast ?? false
     form.responsesMaxDecompressedBodyBytes
       = data.responsesMaxDecompressedBodyBytes ?? 64 * 1024 * 1024
+    form.openaiAccountAffinity = data.openaiAccountAffinity ?? 'strict'
     form.refreshMarginSeconds = data.refreshMarginSeconds
     form.refreshConcurrency = data.refreshConcurrency
     form.maxConcurrentPerAccount = data.maxConcurrentPerAccount
@@ -128,6 +132,7 @@ export function useSettingsForm() {
     form.accountWarmupScheduleTime = data.accountWarmupScheduleTime ?? '08:00'
     form.accountWarmupModel = data.accountWarmupModel ?? ''
     form.requestIntervalMs = data.requestIntervalMs
+    form.openaiSessionBindingTtlHours = data.openaiSessionBindingTtlHours ?? 24
     form.rotationStrategy = data.rotationStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
@@ -209,6 +214,15 @@ export function useSettingsForm() {
     const excelDefaultModels = parseExcelModels(form.excelDefaultModels)
     if (excelDefaultModels === null) {
       toast.warning('Excel 模型名称不合法，或超过 64 个')
+      return
+    }
+    if (form.openaiAccountAffinity !== 'strict' && form.openaiAccountAffinity !== 'relaxed') {
+      toast.warning('请选择有效的账号亲和模式')
+      return
+    }
+    const ttlHours = form.openaiSessionBindingTtlHours
+    if (ttlHours === null || !Number.isInteger(ttlHours) || ttlHours < 1 || ttlHours > 720) {
+      toast.warning('会话账号绑定时长须为 1 至 720 小时的整数')
       return
     }
     const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, requestIntervalMs, rotationStrategy } = form
@@ -338,6 +352,8 @@ export function useSettingsForm() {
         accountWarmupScheduleTime: form.accountWarmupScheduleTime.trim(),
         accountWarmupModel: accountWarmupModel || null,
         requestIntervalMs,
+        openaiSessionBindingTtlHours: ttlHours,
+        openaiAccountAffinity: form.openaiAccountAffinity,
         rotationStrategy,
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
         minCodexCliVersion: form.minCodexCliVersion.trim() || null,
@@ -381,6 +397,7 @@ export function useSettingsForm() {
     openaiGuardianReservedConcurrencyValue,
     requestIntervalMsValue,
     responsesMaxDecompressedBodyBytesValue,
+    openaiSessionBindingTtlHoursValue,
     minCodexDesktopVersionError,
     minCodexCliVersionError,
     saveSettings,

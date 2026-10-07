@@ -32,6 +32,9 @@ async fn list_route_should_keep_camel_case_group_and_page_wire() {
     assert_eq!(value["data"]["configRevision"], 7);
     assert_eq!(value["data"]["items"][0]["id"], PRIMARY_GROUP_ID);
     assert_eq!(value["data"]["items"][0]["memberCount"], 2);
+    assert_eq!(value["data"]["items"][0]["fastMode"], "default");
+    assert_eq!(value["data"]["items"][0]["disableFast"], false);
+    assert!(value["data"]["items"][0].get("fast_mode").is_none());
     assert_eq!(value["data"]["items"][0]["providerCounts"]["openai"], 1);
     assert_eq!(value["data"]["items"][0]["clientKeyCount"], 2);
     assert_eq!(value["data"]["items"][0]["accountSummary"]["available"], 1);
@@ -73,6 +76,8 @@ async fn create_route_should_create_an_empty_group() {
     assert_eq!(value["data"]["record"]["name"], "Gamma routing");
     assert_eq!(value["data"]["record"]["memberCount"], 0);
     assert_eq!(value["data"]["record"]["color"], "#A855F780");
+    assert_eq!(value["data"]["record"]["fastMode"], "default");
+    assert_eq!(value["data"]["record"]["disableFast"], false);
     assert_eq!(value["data"]["configRevision"], 8);
 }
 
@@ -98,6 +103,205 @@ async fn update_route_should_replace_group_fields() {
     assert_eq!(value["data"]["record"]["name"], "Renamed routing");
     assert!(value["data"]["record"]["description"].is_null());
     assert_eq!(value["data"]["record"]["color"], "#F43F5ECC");
+}
+
+#[tokio::test]
+async fn create_route_accepts_fast_mode_and_legacy_disable_fast() {
+    for (policy, expected) in [
+        (json!({"disableFast": false}), "default"),
+        (json!({"disableFast": true}), "disabled"),
+        (json!({"fastMode": "default"}), "default"),
+        (json!({"fastMode": "enabled"}), "enabled"),
+        (json!({"fastMode": "disabled"}), "disabled"),
+        (
+            json!({"fastMode": "default", "disableFast": true}),
+            "disabled",
+        ),
+        (
+            json!({"fastMode": "enabled", "disableFast": true}),
+            "disabled",
+        ),
+        (
+            json!({"fastMode": "disabled", "disableFast": false}),
+            "disabled",
+        ),
+    ] {
+        let fixture = authenticated_fixture().await;
+        let mut body = json!({"name": "Fast policy", "color": "#2563EBFF"});
+        body.as_object_mut()
+            .unwrap()
+            .extend(policy.as_object().unwrap().clone());
+        let response = request(
+            router(&fixture),
+            Method::POST,
+            "/api/admin/account-groups/create",
+            Some(body),
+            true,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED, "{policy}");
+        let value = response_json(response).await;
+        assert_eq!(value["data"]["record"]["fastMode"], expected, "{policy}");
+        assert_eq!(
+            value["data"]["record"]["disableFast"],
+            expected == "disabled",
+            "{policy}"
+        );
+        let listed = response_json(
+            request(
+                router(&fixture),
+                Method::GET,
+                "/api/admin/account-groups?search=Fast",
+                None,
+                true,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(listed["data"]["items"][0]["fastMode"], expected, "{policy}");
+        assert_eq!(
+            listed["data"]["items"][0]["disableFast"],
+            expected == "disabled",
+            "{policy}"
+        );
+        assert_eq!(
+            listed["data"]["configRevision"],
+            value["data"]["configRevision"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn update_route_preserves_omissions_and_prefers_explicit_fast_mode_over_legacy_flag() {
+    let fixture = authenticated_fixture().await;
+    for (policy, expected) in [
+        (json!({"disableFast": true}), "disabled"),
+        (json!({}), "disabled"),
+        (json!({"disableFast": false}), "default"),
+        (
+            json!({"fastMode": "enabled", "disableFast": true}),
+            "enabled",
+        ),
+        (json!({}), "enabled"),
+        (json!({"fastMode": null, "disableFast": null}), "enabled"),
+        (json!({"disableFast": false}), "default"),
+        (
+            json!({"fastMode": "disabled", "disableFast": false}),
+            "disabled",
+        ),
+        (
+            json!({"fastMode": "default", "disableFast": true}),
+            "default",
+        ),
+        (json!({}), "default"),
+        (json!({"fastMode": "enabled"}), "enabled"),
+        (json!({"disableFast": true}), "disabled"),
+        (json!({"fastMode": "default"}), "default"),
+        (json!({"fastMode": "disabled"}), "disabled"),
+    ] {
+        let mut body = json!({
+            "id": PRIMARY_GROUP_ID,
+            "name": "Fast policy",
+            "description": null,
+            "color": "#2563EBFF"
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(policy.as_object().unwrap().clone());
+        let response = request(
+            router(&fixture),
+            Method::POST,
+            "/api/admin/account-groups/update",
+            Some(body),
+            true,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{policy}");
+        let value = response_json(response).await;
+        assert_eq!(value["data"]["record"]["fastMode"], expected, "{policy}");
+        assert_eq!(
+            value["data"]["record"]["disableFast"],
+            expected == "disabled",
+            "{policy}"
+        );
+        let listed = response_json(
+            request(
+                router(&fixture),
+                Method::GET,
+                "/api/admin/account-groups?search=Fast",
+                None,
+                true,
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(listed["data"]["items"][0]["fastMode"], expected, "{policy}");
+        assert_eq!(
+            listed["data"]["items"][0]["disableFast"],
+            expected == "disabled",
+            "{policy}"
+        );
+        assert_eq!(
+            listed["data"]["configRevision"],
+            value["data"]["configRevision"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn mutation_routes_reject_invalid_fast_mode_without_changing_groups() {
+    let fixture = authenticated_fixture().await;
+    let before = response_json(
+        request(
+            router(&fixture),
+            Method::GET,
+            "/api/admin/account-groups",
+            None,
+            true,
+        )
+        .await,
+    )
+    .await;
+    for action in ["create", "update"] {
+        for (fast_mode, status) in [
+            (json!("invalid"), StatusCode::UNPROCESSABLE_ENTITY),
+            (json!("Enabled"), StatusCode::UNPROCESSABLE_ENTITY),
+            (json!(true), StatusCode::BAD_REQUEST),
+            (json!(1), StatusCode::BAD_REQUEST),
+            (json!({}), StatusCode::BAD_REQUEST),
+        ] {
+            let mut body = json!({
+                "name": "Invalid Fast policy",
+                "color": "#2563EBFF",
+                "disableFast": true,
+                "fastMode": fast_mode
+            });
+            if action == "update" {
+                body["id"] = json!(PRIMARY_GROUP_ID);
+            }
+            let response = request(
+                router(&fixture),
+                Method::POST,
+                &format!("/api/admin/account-groups/{action}"),
+                Some(body),
+                true,
+            )
+            .await;
+            assert_eq!(response.status(), status, "{action}: {fast_mode}");
+        }
+    }
+    let after = response_json(
+        request(
+            router(&fixture),
+            Method::GET,
+            "/api/admin/account-groups",
+            None,
+            true,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(after["data"], before["data"]);
 }
 
 #[tokio::test]

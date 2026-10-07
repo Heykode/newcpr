@@ -1,8 +1,107 @@
 //! 通过 quota 服务验证周期复核与 reset 宽限期，不依赖内部调度状态。
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::*;
+
+#[tokio::test]
+async fn initial_observation_draws_one_stable_deadline_per_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    for id in ["acct_stagger_a", "acct_stagger_b", "acct_stagger_c"] {
+        create_account(&store, id).await;
+    }
+    let server = MockServer::start().await;
+    mount_usage(
+        &server,
+        json!({"rate_limit":{"allowed":true,"primary_window":{"used_percent":5}}}),
+    )
+    .await;
+    let draws = Arc::new(AtomicUsize::new(0));
+    let counter = draws.clone();
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri())
+        .with_initial_sync_delays(Arc::new(move || {
+            Duration::from_secs(60 * (counter.fetch_add(1, Ordering::SeqCst) as u64 + 1))
+        }));
+    tokio::time::pause();
+    for _ in 0..3 {
+        assert_eq!(service.synchronize().await.unwrap().updated, 0);
+    }
+    assert_eq!(draws.load(Ordering::SeqCst), 3);
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    assert_eq!(service.synchronize().await.unwrap().updated, 1);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    tokio::time::pause();
+    assert_eq!(service.synchronize().await.unwrap().updated, 0);
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    assert_eq!(service.synchronize().await.unwrap().updated, 1);
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    assert_eq!(service.synchronize().await.unwrap().updated, 1);
+    assert_eq!(draws.load(Ordering::SeqCst), 3);
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn failed_initial_observation_is_rescheduled_instead_of_retried_every_scan() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_stagger_retry").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    let draws = Arc::new(AtomicUsize::new(0));
+    let counter = draws.clone();
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri())
+        .with_initial_sync_delays(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Duration::from_secs(60)
+        }));
+    tokio::time::pause();
+    service.synchronize().await.unwrap();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    assert_eq!(service.synchronize().await.unwrap().transient, 1);
+    assert_eq!(draws.load(Ordering::SeqCst), 2);
+    tokio::time::pause();
+    for _ in 0..3 {
+        assert_eq!(service.synchronize().await.unwrap().transient, 0);
+    }
+    assert_eq!(draws.load(Ordering::SeqCst), 2);
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    mount_usage(&server, json!({"rate_limit":{"allowed":true}})).await;
+    assert_eq!(service.synchronize().await.unwrap().updated, 1);
+    assert_eq!(draws.load(Ordering::SeqCst), 2);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn initial_batch_limit_does_not_starve_later_accounts() {
+    let store = Arc::new(MemoryAccountStore::default());
+    for index in 0..101 {
+        create_account(&store, &format!("acct_stagger_{index:03}")).await;
+    }
+    let server = MockServer::start().await;
+    mount_usage(&server, json!({"rate_limit":{"allowed":true}})).await;
+    let draws = Arc::new(AtomicUsize::new(0));
+    let counter = draws.clone();
+    let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri())
+        .with_initial_sync_delays(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Duration::ZERO
+        }));
+    assert_eq!(service.synchronize().await.unwrap().updated, 100);
+    assert_eq!(draws.load(Ordering::SeqCst), 101);
+    assert_eq!(service.synchronize().await.unwrap().updated, 1);
+    assert_eq!(draws.load(Ordering::SeqCst), 101);
+    assert_eq!(server.received_requests().await.unwrap().len(), 101);
+}
 
 async fn mount_usage(server: &MockServer, value: serde_json::Value) {
     server.reset().await;

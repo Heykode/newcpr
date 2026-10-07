@@ -19,6 +19,7 @@ export const accountGroupColumns = defineTableColumns<AccountGroup>([
   { key: 'identity', label: '分组', kind: 'identity' },
   { key: 'color', label: '颜色', kind: 'status', size: 'sm' },
   { key: 'enabled', label: '状态', kind: 'status' },
+  { key: 'fastMode', label: 'Fast', kind: 'status' },
   { key: 'accountCount', label: '账号数', kind: 'custom' },
   { key: 'capacity', label: '容量', kind: 'custom', size: 'md' },
   { key: 'usage', label: '用量', kind: 'custom' },

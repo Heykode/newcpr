@@ -73,9 +73,9 @@ pub async fn connect_and_migrate(
         return Err(postgres_unavailable("connect PostgreSQL"));
     }
     pool_config.validate()?;
-    let connect_options = database_url
-        .parse::<PgConnectOptions>()
-        .map_err(|_| postgres_unavailable("parse PostgreSQL connection options"))?;
+    let connect_options = database_url.parse::<PgConnectOptions>().map_err(|error| {
+        postgres_unavailable("parse PostgreSQL connection options").with_source(error)
+    })?;
     let migration_pool = PgPoolOptions::new()
         .max_connections(1)
         .connect_with(
@@ -84,12 +84,15 @@ pub async fn connect_and_migrate(
                 .application_name("codex-proxy-rs:migration"),
         )
         .await
-        .map_err(|_| postgres_unavailable("connect PostgreSQL for migrations"))?;
+        .map_err(|error| {
+            postgres_unavailable("connect PostgreSQL for migrations").with_source(error)
+        })?;
     if let Err(error) = MIGRATOR.run(&migration_pool).await {
         migration_pool.close().await;
         return Err(StoreError::Unavailable {
             backend: StoreBackend::PostgreSql,
-            message: format!("apply PostgreSQL migrations: {error}"),
+            message: "apply PostgreSQL migrations".to_owned(),
+            source: Some(error.into()),
         });
     }
     migration_pool.close().await;
@@ -123,7 +126,7 @@ pub async fn connect_and_migrate(
         })
         .connect_with(connect_options.application_name("codex-proxy-rs"))
         .await
-        .map_err(|_| postgres_unavailable("connect PostgreSQL"))?;
+        .map_err(|error| postgres_unavailable("connect PostgreSQL").with_source(error))?;
     Ok(pool)
 }
 
@@ -208,11 +211,9 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
         replacement: ControlPlaneReplacement,
     ) -> StoreResult<ControlPlaneSnapshot> {
         replacement.settings.validate()?;
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin control plane replacement"))?;
+        let mut transaction = self.pool.begin().await.map_err(|error| {
+            postgres_unavailable("begin control plane replacement").with_source(error)
+        })?;
         let result = async {
             let revision =
                 update_runtime_settings_in_transaction(&mut transaction, &replacement.settings)
@@ -224,17 +225,15 @@ impl ControlPlaneRepository for PgControlPlaneRepository {
         .await;
         match result {
             Ok(snapshot) => {
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|_| postgres_unavailable("commit control plane replacement"))?;
+                transaction.commit().await.map_err(|error| {
+                    postgres_unavailable("commit control plane replacement").with_source(error)
+                })?;
                 Ok(snapshot)
             }
             Err(error) => {
-                transaction
-                    .rollback()
-                    .await
-                    .map_err(|_| postgres_unavailable("rollback control plane replacement"))?;
+                transaction.rollback().await.map_err(|error| {
+                    postgres_unavailable("rollback control plane replacement").with_source(error)
+                })?;
                 Err(error)
             }
         }
@@ -310,11 +309,9 @@ impl PgControlPlaneRepository {
         mutation: ControlPlaneMutation,
         mut audit: AdminAuditEvent,
     ) -> StoreResult<Revision> {
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin targeted control plane mutation"))?;
+        let mut transaction = self.pool.begin().await.map_err(|error| {
+            postgres_unavailable("begin targeted control plane mutation").with_source(error)
+        })?;
         let result = async {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
             match mutation {
@@ -366,10 +363,10 @@ impl PgControlPlaneRepository {
         .await;
         match result {
             Ok(revision) => {
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|_| postgres_unavailable("commit targeted control plane mutation"))?;
+                transaction.commit().await.map_err(|error| {
+                    postgres_unavailable("commit targeted control plane mutation")
+                        .with_source(error)
+                })?;
                 Ok(revision)
             }
             Err(error) => {

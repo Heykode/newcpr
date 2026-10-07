@@ -42,7 +42,14 @@ pub(crate) async fn standalone_search(
         Err(error) => return gateway_error_response(&error),
     };
     let started = match service
-        .start_provider_endpoint(client, operation, client_ip, user_agent, "/v1/alpha/search")
+        .start_provider_endpoint(
+            client,
+            operation,
+            None,
+            client_ip,
+            user_agent,
+            "/v1/alpha/search",
+        )
         .await
     {
         Ok(started) => started,

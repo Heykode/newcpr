@@ -440,7 +440,7 @@ fn suppress_rejection_recovery(failure: &mut MappedProviderFailure) {
 
 fn suppress_recovery_with_kind(failure: &mut MappedProviderFailure, kind: ProviderErrorKind) {
     let old = &failure.error;
-    let mut error = provider_error(kind, old.send_state());
+    let mut error = provider_error(kind, old.send_state()).with_source(old.clone());
     if kind == ProviderErrorKind::RateLimited
         && let Some(delay) = old.retry_after()
     {
@@ -553,6 +553,7 @@ pub(super) fn classify_failure(
     // Preserve the upstream evidence, but not Codex's status-only retry/cooldown policy.
     let old = &failure.error;
     let mut error = provider_error(kind, old.send_state())
+        .with_source(old.clone())
         .with_upstream_code(OpaqueUpstreamValue::new(code))
         .with_client_visible_upstream_error(detail.clone())
         .with_diagnostic(
@@ -1169,6 +1170,26 @@ mod tests {
                     bytes::Bytes::from_static(b"test body"),
                 )),
         )
+    }
+
+    #[test]
+    fn excel_reclassification_preserves_the_original_error_source() {
+        for semantic in [false, true] {
+            let mut failure = rejection("workspace_not_allowed");
+            failure.error = failure
+                .error
+                .with_source(std::io::Error::other("synthetic Excel failure source"));
+            let failure = classify_stream_failure(failure, true, semantic);
+            let mut source = std::error::Error::source(&failure.error);
+            let mut found = false;
+            while let Some(error) = source {
+                found |= error.to_string() == "synthetic Excel failure source";
+                source = error.source();
+            }
+            assert!(found, "semantic={semantic}: original error source was lost");
+            assert!(failure.error.pre_delivery_retry().is_none());
+            assert!(failure.account_failure.is_none());
+        }
     }
 
     #[test]

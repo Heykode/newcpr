@@ -23,6 +23,8 @@ pub use gateway_core::account::{
 /// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {
+    /// Internal template intent; None retains ordinary document import precedence.
+    pub template_proxy_mode: Option<ImportTemplateProxyMode>,
     pub excel_recovery: Option<super::excel_recovery::ExcelRecoveryConfig>,
     pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub clear_outbound_proxy: bool,
@@ -43,6 +45,12 @@ pub struct AccountImportSettings {
     pub weight: AccountWeight,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportTemplateProxyMode {
+    Preserve,
+    Replace,
 }
 
 /// Local display metadata, never provider identity or credential material.

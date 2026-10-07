@@ -148,6 +148,25 @@ fn codex_semantics_should_detect_ultra_preset_from_proactive_multi_agent() {
     assert!(!semantics.compact);
 }
 
+#[test]
+fn codex_semantics_observes_numeric_effort_without_mutating_the_request() {
+    for (effort, expected) in [
+        (json!(0), Some("0")),
+        (json!(32768), Some("32768")),
+        (json!(" high "), Some("high")),
+        (json!(-1), None),
+        (json!(1.5), None),
+        (json!(null), None),
+        (json!({"budget": 32768}), None),
+    ] {
+        let body = object(json!({"reasoning": {"effort": effort}}));
+        let original = body.clone();
+        let semantics = codex_responses_request_semantics(&body, &Map::new());
+        assert_eq!(semantics.reasoning_effort.as_deref(), expected);
+        assert_eq!(body, original);
+    }
+}
+
 fn object(value: Value) -> Map<String, Value> {
     let Value::Object(object) = value else {
         panic!("test value must be an object");

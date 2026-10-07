@@ -21,7 +21,7 @@ pub(crate) async fn load_user_agent_override(
     .bind(provider_kind.as_str())
     .fetch_optional(pool)
     .await
-    .map_err(|_| postgres_unavailable("load outbound user-agent"))?;
+    .map_err(|error| postgres_unavailable("load outbound user-agent").with_source(error))?;
     match row {
         None => Ok(ProviderUserAgentOverride::Default),
         Some((mode, None)) if mode == "default" => Ok(ProviderUserAgentOverride::Default),
@@ -54,11 +54,9 @@ impl PgControlPlaneRepository {
             }
         };
         validate_custom(custom)?;
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin outbound user-agent update"))?;
+        let mut transaction = self.pool.begin().await.map_err(|error| {
+            postgres_unavailable("begin outbound user-agent update").with_source(error)
+        })?;
         let revision = bump_config_revision_in_transaction(&mut transaction).await?;
         sqlx::query(
             "insert into provider_outbound_user_agents
@@ -73,12 +71,11 @@ impl PgControlPlaneRepository {
         .bind(custom)
         .execute(&mut *transaction)
         .await
-        .map_err(|_| postgres_unavailable("save outbound user-agent"))?;
+        .map_err(|error| postgres_unavailable("save outbound user-agent").with_source(error))?;
         append_admin_audit_event_in_transaction(&mut transaction, audit, revision).await?;
-        transaction
-            .commit()
-            .await
-            .map_err(|_| postgres_unavailable("commit outbound user-agent update"))?;
+        transaction.commit().await.map_err(|error| {
+            postgres_unavailable("commit outbound user-agent update").with_source(error)
+        })?;
         Ok(revision)
     }
 }

@@ -29,7 +29,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(account.as_str())
         .fetch_one(&self.pool)
         .await
-        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))
+        .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))
     }
 
     async fn initialize_device_registry(
@@ -133,7 +133,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             .bind(i64::from(query.limit().get()))
             .fetch_all(&self.pool)
             .await
-            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+            .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
         rows.into_iter()
             .map(account_record_from_row)
             .map(|record| {
@@ -194,11 +194,10 @@ impl ProviderAccountStore for PgProviderAccountRepository {
             CREDENTIALS_MAX_BYTES,
         )
         .map_err(core_store_error)?;
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        let mut transaction =
+            self.pool.begin().await.map_err(|error| {
+                CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error)
+            })?;
         let credentials = match self
             .prepare_credential_device(
                 &mut transaction,
@@ -278,14 +277,14 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(preserve_turn_state_binding)
         .fetch_optional(&mut *transaction)
         .await
-        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
         self.retain_turn_state(&mut transaction, state_owner)
             .await
             .map_err(core_store_error)?;
         transaction
             .commit()
             .await
-            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+            .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
         match next {
             Some(next) => Ok(CredentialCasOutcome::Updated(
                 CoreCredentialRevision::new(to_u64(next).map_err(core_store_error)?)
@@ -315,7 +314,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(account_ids)
         .fetch_all(&self.pool)
         .await
-        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
         rows.into_iter()
             .map(|row| {
                 let account_id = row
@@ -533,16 +532,15 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         {
             return Ok(false);
         }
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+        let mut transaction =
+            self.pool.begin().await.map_err(|error| {
+                CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error)
+            })?;
         // Match the admin lock order: configuration row, then account row.
         sqlx::query("select config_revision from runtime_settings where id = 1 for update")
             .execute(&mut *transaction)
             .await
-            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+            .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
         let changed = sqlx::query(
             "update provider_accounts
              set enabled = case when $3 = 'pause_account' then false else enabled end,
@@ -561,7 +559,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         .bind(account.excel_403_action().as_str())
         .execute(&mut *transaction)
         .await
-        .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?
+        .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?
         .rows_affected()
             > 0;
         if changed {
@@ -576,7 +574,9 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 .bind(model)
                 .execute(&mut *transaction)
                 .await
-                .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+                .map_err(|error| {
+                    CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error)
+                })?;
             }
             bump_config_revision_in_transaction(&mut transaction)
                 .await
@@ -585,7 +585,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         transaction
             .commit()
             .await
-            .map_err(|_| CoreStoreError::new(CoreStoreErrorKind::Unavailable))?;
+            .map_err(|error| CoreStoreError::caused_by(CoreStoreErrorKind::Unavailable, error))?;
         Ok(changed)
     }
 

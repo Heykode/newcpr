@@ -314,10 +314,12 @@ pub enum GrokInferenceTransportErrorKind {
     Cancelled,
 }
 
-/// 已分类的 transport 错误，绝不包含上游响应体。
-#[derive(Clone, PartialEq, Eq)]
+/// 稳定分类与受保护的底层诊断分别承载。
+#[derive(Clone)]
 pub struct GrokInferenceTransportError {
     kind: GrokInferenceTransportErrorKind,
+    source: Option<gateway_core::error::ErrorSource>,
+    raw_upstream_error: Option<Box<gateway_core::error::RawUpstreamError>>,
     diagnostic: Option<Box<ProviderDiagnostic>>,
     send_state: UpstreamSendState,
     status: Option<u16>,
@@ -337,6 +339,8 @@ impl GrokInferenceTransportError {
     pub const fn new(kind: GrokInferenceTransportErrorKind, send_state: UpstreamSendState) -> Self {
         Self {
             kind,
+            source: None,
+            raw_upstream_error: None,
             diagnostic: None,
             send_state,
             status: None,
@@ -365,6 +369,23 @@ impl GrokInferenceTransportError {
     #[must_use]
     pub fn diagnostic(&self) -> Option<&ProviderDiagnostic> {
         self.diagnostic.as_deref()
+    }
+
+    #[must_use]
+    pub fn with_source(mut self, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        self.source = Some(gateway_core::error::ErrorSource::new(source));
+        self
+    }
+
+    #[must_use]
+    pub fn with_raw_upstream_error(mut self, raw: gateway_core::error::RawUpstreamError) -> Self {
+        self.raw_upstream_error = Some(Box::new(raw));
+        self
+    }
+
+    #[must_use]
+    pub fn raw_upstream_error(&self) -> Option<&gateway_core::error::RawUpstreamError> {
+        self.raw_upstream_error.as_deref()
     }
 
     /// 附着合法的 HTTP 状态码。
@@ -533,7 +554,11 @@ impl fmt::Display for GrokInferenceTransportError {
     }
 }
 
-impl std::error::Error for GrokInferenceTransportError {}
+impl std::error::Error for GrokInferenceTransportError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_deref().map(|source| source as _)
+    }
+}
 
 /// 推理 transport 返回的 future。
 pub type GrokInferenceTransportFuture<'a> = Pin<

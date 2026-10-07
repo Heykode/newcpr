@@ -901,9 +901,23 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
         })
         .await
         .expect("select first account");
+    let admission_renewals = affinity.renewal_ttls();
+    assert!(
+        admission_renewals.is_empty(),
+        "initial claim already sets the TTL"
+    );
+    assert_eq!(
+        affinity.claim_ttls(),
+        vec![Duration::from_secs(24 * 60 * 60)]
+    );
     selector
         .record_success(first.account(), Some(&key), first.account_id())
         .await;
+    assert_eq!(
+        affinity.renewal_ttls(),
+        admission_renewals,
+        "same-owner completion does not extend retention"
+    );
     let first_account = first.account_id().clone();
 
     let second_attempt = attempt(BTreeSet::new());
@@ -937,8 +951,64 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
     );
     assert_eq!(
         affinity.renewal_ttls(),
-        vec![Duration::from_secs(24 * 60 * 60); 2],
-        "successful response and next selection both renew the binding"
+        vec![Duration::from_secs(24 * 60 * 60)],
+        "only admission renews a same-owner binding; completion does not renew it again"
+    );
+}
+
+#[tokio::test]
+async fn admitted_requests_use_their_frozen_binding_retention() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::clone(&affinity),
+    );
+    let key = ProviderSessionAffinityKey::try_new("frozen-retention").unwrap();
+    let request_url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+    let old_policy =
+        account_policy().with_openai_session_binding_ttl(Duration::from_secs(48 * 3600));
+    let new_policy =
+        account_policy().with_openai_session_binding_ttl(Duration::from_secs(720 * 3600));
+    for policy in [old_policy, new_policy, old_policy] {
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_frozen_retention").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            ),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(30),
+            policy,
+            AccountAttemptContext::new(BTreeSet::new(), None, None)
+                .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        );
+        let lease = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: Some(&key),
+                reserved_concurrency: 0,
+                guardian: false,
+            })
+            .await
+            .unwrap();
+        drop(lease);
+    }
+    assert_eq!(
+        affinity.claim_ttls(),
+        vec![old_policy.openai_session_binding_ttl()]
+    );
+    assert_eq!(
+        affinity.renewal_ttls(),
+        vec![
+            new_policy.openai_session_binding_ttl(),
+            old_policy.openai_session_binding_ttl(),
+        ]
     );
 }
 
@@ -1741,10 +1811,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_status_to_the_coordi
         )
         .expect_err("the selector must surface the unavailable native account");
 
-    assert!(matches!(
-        error,
-        CredentialSelectionError::NoEligibleCredential
-    ));
+    assert!(matches!(error, CredentialSelectionError::QuotaExhausted));
 }
 
 #[test]
@@ -1815,10 +1882,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
         )
         .expect_err("the selector must surface the quota-limited native account");
 
-    assert!(matches!(
-        error,
-        CredentialSelectionError::NoEligibleCredential
-    ));
+    assert!(matches!(error, CredentialSelectionError::QuotaExhausted));
 }
 
 #[test]
@@ -2475,10 +2539,10 @@ async fn corrupt_required_native_and_replay_owner_candidates_never_switch_accoun
                     assert!(!owner_lost);
                     assert!(matches!(
                         *source,
-                        CredentialSelectionError::InvalidCredential
+                        CredentialSelectionError::InvalidCredential(_)
                     ));
                 }
-                CredentialSelectionError::InvalidCredential if !waiting => {}
+                CredentialSelectionError::InvalidCredential(_) if !waiting => {}
                 error => panic!("unexpected pinned failure: {error}"),
             }
             assert_eq!(store.account("acct_original"), Some(original));
@@ -2973,7 +3037,7 @@ async fn disabled_corrupt_diagnostic_does_not_fall_back_or_enable_the_account() 
     );
     assert!(matches!(
         capacity_select(&selector, &attempt, None).await,
-        Err(CredentialSelectionError::InvalidCredential)
+        Err(CredentialSelectionError::InvalidCredential(_))
     ));
     assert_eq!(store.account("acct_primary"), Some(original));
     let requests = leases.requests.lock().unwrap();

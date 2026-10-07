@@ -6,6 +6,152 @@ use gateway_admin::model::{
     AdminErrorKind, proxies::AccountProxySelection, relogin_templates::ReloginTemplateConfig,
 };
 
+fn import_command() -> gateway_admin::model::provider_credentials::ImportCredentials {
+    use gateway_admin::model::provider_credentials::{ImportCredentials, ProviderDocument};
+    ImportCredentials {
+        context: context("template-import"),
+        outbound_proxy_id: Some("proxy-input".into()),
+        settings: None,
+        document: ProviderDocument::new(gateway_core::account::OpaqueProviderData::new(
+            serde_json::Map::new(),
+        )),
+    }
+}
+
+#[tokio::test]
+async fn import_templates_freeze_the_complete_config_without_mutating_accounts() {
+    let h = Harness::new(vec![account_record("openai")]).await;
+    let service = h.services.account_templates();
+    let mut config = template_config();
+    config.model_access = Some(
+        serde_json::from_value(serde_json::json!({
+            "mode": "denylist", "models": ["model-template"]
+        }))
+        .unwrap(),
+    );
+    config.egress_mode = Some(None);
+    config.responses_upstream = Some(gateway_core::account::ResponsesUpstream::Excel);
+    config.excel_models_follow_global = Some(true);
+    config.excel_ignore_encrypted_content = Some(true);
+    config.excel_cache_creation_as_input = Some(false);
+    let template = service.save_template(None, config.clone()).await.unwrap();
+    let mut command = import_command();
+    let mut settings = template_config().settings().unwrap();
+    settings.custom_name = Some("Imported batch".into());
+    let purchase = gateway_admin::model::account_purchase::AccountPurchaseUpdate {
+        amount_cny: Some("50.125".into()),
+        cycle_start: Some(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+    };
+    settings.purchase_cost = Some(purchase.clone());
+    settings.weight = gateway_core::account::AccountWeight::new(99).unwrap();
+    command.settings = Some(settings);
+    let prepared = service
+        .prepare_import(command, template_selection(&template))
+        .await
+        .unwrap();
+    let mut expected = config.settings().unwrap();
+    expected.template_proxy_mode =
+        Some(gateway_admin::model::accounts::ImportTemplateProxyMode::Replace);
+    expected.custom_name = Some("Imported batch".into());
+    expected.purchase_cost = Some(purchase);
+    assert_eq!(prepared.settings, Some(expected.clone()));
+    assert_eq!(prepared.outbound_proxy_id, None);
+    assert!(h.accounts.import_settings().is_empty());
+    assert!(h.accounts.batch_updates.lock().unwrap().is_empty());
+
+    config.weight = 41;
+    service
+        .save_template(Some(template_selection(&template)), config)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.settings,
+        Some(expected),
+        "queued settings are frozen"
+    );
+    assert_eq!(
+        service
+            .prepare_import(import_command(), template_selection(&template))
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminErrorKind::Conflict
+    );
+}
+
+#[tokio::test]
+async fn import_templates_keep_legacy_optional_fields_and_explicit_proxy_semantics() {
+    let h = Harness::new(vec![]).await;
+    let service = h.services.account_templates();
+    for (name, preserve, proxy) in [
+        ("Direct", false, None),
+        ("Preserve", true, None),
+        ("Saved", false, Some("proxy-template".to_owned())),
+    ] {
+        let mut config = template_config();
+        config.name = name.into();
+        config.preserve_outbound_proxy = preserve;
+        config.outbound_proxy_id = proxy.clone();
+        config.turn_state_injection_enabled = None;
+        config.concurrency_limit = None;
+        config.group_ids.clear();
+        let template = service.save_template(None, config.clone()).await.unwrap();
+        let prepared = service
+            .prepare_import(import_command(), template_selection(&template))
+            .await
+            .unwrap();
+        let mut expected = config.settings().unwrap();
+        expected.template_proxy_mode = Some(if preserve {
+            gateway_admin::model::accounts::ImportTemplateProxyMode::Preserve
+        } else {
+            gateway_admin::model::accounts::ImportTemplateProxyMode::Replace
+        });
+        assert_eq!(prepared.settings, Some(expected));
+        assert_eq!(prepared.outbound_proxy_id, proxy);
+        let settings = prepared.settings.unwrap();
+        assert_eq!(
+            settings.clear_outbound_proxy,
+            !preserve && config.outbound_proxy_id.is_none()
+        );
+        assert_eq!(settings.turn_state_injection_enabled, None);
+        assert_eq!(settings.model_access, None);
+        assert_eq!(settings.responses_upstream, None);
+    }
+}
+
+#[tokio::test]
+async fn import_templates_fail_closed_on_invalid_references_or_deleted_versions() {
+    let h = Harness::new(vec![]).await;
+    let service = h.services.account_templates();
+    let template = service
+        .save_template(None, template_config())
+        .await
+        .unwrap();
+    *h.store.invalid_template_references.lock().unwrap() = true;
+    assert_eq!(
+        service
+            .prepare_import(import_command(), template_selection(&template))
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminErrorKind::Invalid
+    );
+    *h.store.invalid_template_references.lock().unwrap() = false;
+    service
+        .delete_template(template_selection(&template))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .prepare_import(import_command(), template_selection(&template))
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminErrorKind::Conflict
+    );
+    assert!(h.accounts.import_settings().is_empty());
+}
+
 #[test]
 fn template_model_access_preserves_legacy_values_and_rejects_invalid_policies() {
     let legacy = serde_json::to_value(template_config()).unwrap();

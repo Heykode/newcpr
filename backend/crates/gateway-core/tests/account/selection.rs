@@ -537,3 +537,28 @@ fn smart_selector_should_treat_unknown_quota_as_neutral() {
 
     assert_eq!(smart_selection_ids(&candidates), ["acct_unknown"; 20]);
 }
+#[test]
+fn account_affinity_policy_is_strict_by_default_and_rejects_unknown_values() {
+    use gateway_core::account::{AccountAffinity, AccountSelectionPolicy, RotationStrategy};
+    let policy = AccountSelectionPolicy::new(
+        RotationStrategy::Smart,
+        std::num::NonZeroU32::MIN,
+        std::time::Duration::ZERO,
+    );
+    assert_eq!(policy.openai_account_affinity(), AccountAffinity::Strict);
+    assert_eq!(
+        policy.openai_session_binding_ttl(),
+        std::time::Duration::from_secs(24 * 3600)
+    );
+    for mode in [AccountAffinity::Strict, AccountAffinity::Relaxed] {
+        assert_eq!(AccountAffinity::parse(mode.as_str()), Some(mode));
+        assert_eq!(
+            serde_json::from_value::<AccountAffinity>(serde_json::json!(mode.as_str())).unwrap(),
+            mode
+        );
+    }
+    for invalid in ["", "Strict", "sticky", "strict "] {
+        assert!(AccountAffinity::parse(invalid).is_none());
+        assert!(serde_json::from_value::<AccountAffinity>(serde_json::json!(invalid)).is_err());
+    }
+}

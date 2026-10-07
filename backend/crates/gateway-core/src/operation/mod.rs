@@ -28,6 +28,8 @@ pub enum OperationKind {
     Search,
     /// 客户端显式请求的上下文压缩，不是自动生成步骤。
     Compact,
+    /// Provider 自有的账号认证 HTTP 端点。
+    ProviderHttp,
 }
 
 impl OperationKind {
@@ -39,6 +41,7 @@ impl OperationKind {
             Self::GenerateImage => "generate_image",
             Self::Search => "search",
             Self::Compact => "compact",
+            Self::ProviderHttp => "provider_http",
         }
     }
 }
@@ -590,6 +593,168 @@ impl CompactRequest {
     }
 }
 
+/// 原生 HTTP 端点的原始正文；Core 不解释其内容。
+#[derive(Clone, PartialEq, Eq)]
+pub struct RawHttpPayload {
+    protocol: String,
+    body: Bytes,
+}
+
+impl RawHttpPayload {
+    pub fn new(protocol: impl Into<String>, body: Bytes) -> Result<Self, OperationError> {
+        let protocol = protocol.into();
+        validate_text(&protocol, 64, true, None).map_err(|_| OperationError::EmptyField {
+            field: "raw_http_payload protocol",
+        })?;
+        Ok(Self { protocol, body })
+    }
+
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+    pub const fn body(&self) -> &Bytes {
+        &self.body
+    }
+}
+
+impl fmt::Debug for RawHttpPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RawHttpPayload")
+            .field("protocol", &self.protocol)
+            .field("body", &"<not included in Debug>")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHttpMethod {
+    Get,
+    Post,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderHttpHeader {
+    name: String,
+    value: Bytes,
+}
+
+impl ProviderHttpHeader {
+    pub fn new(name: impl Into<String>, value: Bytes) -> Self {
+        Self {
+            name: name.into(),
+            value,
+        }
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub const fn value(&self) -> &Bytes {
+        &self.value
+    }
+}
+
+impl fmt::Debug for ProviderHttpHeader {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderHttpHeader")
+            .field("name", &self.name)
+            .field("value", &"<not included in Debug>")
+            .finish()
+    }
+}
+
+/// Only a fixed Provider endpoint name, bounded query, and bounded protocol headers are accepted.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderHttpRequest {
+    endpoint: String,
+    method: ProviderHttpMethod,
+    query: Option<String>,
+    headers: Vec<ProviderHttpHeader>,
+    payload: RawHttpPayload,
+}
+
+impl ProviderHttpRequest {
+    pub fn new(
+        endpoint: impl Into<String>,
+        method: ProviderHttpMethod,
+        query: Option<String>,
+        headers: Vec<ProviderHttpHeader>,
+        payload: RawHttpPayload,
+    ) -> Result<Self, OperationError> {
+        let endpoint = endpoint.into();
+        let valid_endpoint = !endpoint.is_empty()
+            && endpoint.len() <= 64
+            && endpoint != "."
+            && endpoint != ".."
+            && endpoint
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+        let valid_query = query.as_ref().is_none_or(|value| {
+            value.len() <= 8 * 1024 && !value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+        });
+        let valid_headers = headers.len() <= 64
+            && headers
+                .iter()
+                .try_fold(0_usize, |total, header| {
+                    let name = header.name.as_bytes();
+                    let value = header.value.as_ref();
+                    (!name.is_empty()
+                        && name.len() <= 128
+                        && name
+                            .iter()
+                            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+                        && value.len() <= 8 * 1024
+                        && !value.iter().any(|byte| matches!(byte, b'\r' | b'\n' | 0)))
+                    .then_some(())
+                    .and_then(|()| total.checked_add(name.len() + value.len()))
+                    .filter(|total| *total <= 32 * 1024)
+                })
+                .is_some();
+        if !valid_endpoint || !valid_query || !valid_headers {
+            return Err(OperationError::EmptyField {
+                field: "provider_http_request",
+            });
+        }
+        Ok(Self {
+            endpoint,
+            method,
+            query,
+            headers,
+            payload,
+        })
+    }
+
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+    pub const fn method(&self) -> ProviderHttpMethod {
+        self.method
+    }
+    pub fn query(&self) -> Option<&str> {
+        self.query.as_deref()
+    }
+    pub fn headers(&self) -> &[ProviderHttpHeader] {
+        &self.headers
+    }
+    pub const fn payload(&self) -> &RawHttpPayload {
+        &self.payload
+    }
+}
+
+impl fmt::Debug for ProviderHttpRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderHttpRequest")
+            .field("endpoint", &self.endpoint)
+            .field("method", &self.method)
+            .field("query", &self.query.as_ref().map(|_| "<present>"))
+            .field("header_count", &self.headers.len())
+            .field("payload", &self.payload)
+            .finish()
+    }
+}
+
 /// 网关内部业务请求；不包含任何客户端 wire 或 Provider SDK 类型。
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]
@@ -602,6 +767,8 @@ pub enum Operation {
     Search(StandaloneSearchRequest),
     /// 显式上下文压缩。
     Compact(CompactRequest),
+    /// Provider 原生 HTTP 端点。
+    ProviderHttp(ProviderHttpRequest),
 }
 
 impl Operation {
@@ -629,6 +796,7 @@ impl Operation {
             Self::GenerateImage(_) => OperationKind::GenerateImage,
             Self::Search(_) => OperationKind::Search,
             Self::Compact(_) => OperationKind::Compact,
+            Self::ProviderHttp(_) => OperationKind::ProviderHttp,
         }
     }
 
@@ -640,6 +808,7 @@ impl Operation {
             Self::GenerateImage(_) => CapabilityRequirements::new(OperationKind::GenerateImage),
             Self::Search(_) => CapabilityRequirements::new(OperationKind::Search),
             Self::Compact(_) => CapabilityRequirements::new(OperationKind::Compact),
+            Self::ProviderHttp(_) => CapabilityRequirements::new(OperationKind::ProviderHttp),
         }
     }
 
@@ -649,7 +818,7 @@ impl Operation {
         match self {
             Self::Generate(request) => request.image_generation_requested(),
             Self::GenerateImage(_) => true,
-            Self::Search(_) | Self::Compact(_) => false,
+            Self::Search(_) | Self::Compact(_) | Self::ProviderHttp(_) => false,
         }
     }
 
@@ -658,7 +827,9 @@ impl Operation {
     pub fn provider_session_state(&self, provider: &str) -> Option<&ProviderSessionState> {
         match self {
             Self::Generate(request) => request.provider_session_state(provider),
-            Self::GenerateImage(_) | Self::Search(_) | Self::Compact(_) => None,
+            Self::GenerateImage(_) | Self::Search(_) | Self::Compact(_) | Self::ProviderHttp(_) => {
+                None
+            }
         }
     }
 }

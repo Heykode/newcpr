@@ -47,14 +47,14 @@ function authHarness() {
     pinia,
     vue,
     '@/api': {
-      getAuthStatus: () => {
+      refreshAuthSession: () => {
         requests += 1
         return getStatus()
       },
       login: async () => ({}),
       logout: async () => ({}),
     },
-    '@/api/request': { ApiError, resetUnauthorizedHandling: () => {} },
+    '@/api/request': { ApiError, invalidatePendingRequests: () => {}, resetUnauthorizedHandling: () => {} },
   })
   return {
     store: module.useAuthStore(pinia.createPinia()),
@@ -146,12 +146,12 @@ test('old checks cannot override login, logout or explicit invalidation', async 
     const response = deferred()
     h.status(() => response.promise)
     const pending = h.store.checkAuth()
-    if (action === 'login')
-      await h.store.login({ username: 'admin', password: 'synthetic-password' })
-    else
-      await h.store[action]()
+    const transition = action === 'login'
+      ? h.store.login({ username: 'admin', password: 'synthetic-password' })
+      : h.store[action]()
     response.resolve({ authenticated: action !== 'login' })
-    assert.equal(await pending, action === 'login' ? 'authenticated' : 'unauthenticated')
+    await pending
+    await transition
     assert.equal(h.store.isAuthenticated, action === 'login')
     assert.equal(h.store.sessionChecked, true)
   }

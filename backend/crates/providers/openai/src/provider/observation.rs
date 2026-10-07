@@ -178,9 +178,8 @@ impl OpenAiResponseObservationState {
         started_at: Instant,
     ) -> bool {
         let mut changed = false;
-        // 首个非前导输出事件（结构帧也算）开启首字计时；
-        // 真实语义首字由 first_reasoning_ms / first_text_ms 单独观测。
-        if signals.output_start {
+        // 复用协议层的语义输出判定，空结构帧不能代替首字
+        if signals.semantic_output {
             changed |= insert_first_timing(&mut self.timings.first_token_ms, started_at);
         }
         if signals.reasoning_output {
@@ -867,14 +866,20 @@ pub(super) fn map_request_error(error: CodexRequestEncodeError) -> ProviderError
 }
 
 pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
-    match error {
+    let error = match error {
         CredentialSelectionError::PinnedAccount { source, owner_lost } => {
-            map_selection_error(*source).with_continuation_recovery_disposition(if owner_lost {
-                ContinuationRecoveryDisposition::ClientReplayRequired
-            } else {
-                ContinuationRecoveryDisposition::RetryExactConnection
-            })
+            return map_selection_error(*source).with_continuation_recovery_disposition(
+                if owner_lost {
+                    ContinuationRecoveryDisposition::ClientReplayRequired
+                } else {
+                    ContinuationRecoveryDisposition::RetryExactConnection
+                },
+            );
         }
+        error => error,
+    };
+    let mapped = match &error {
+        CredentialSelectionError::PinnedAccount { .. } => unreachable!("pinned selection was unwrapped"),
         CredentialSelectionError::Cancelled => {
             provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent)
         }
@@ -897,7 +902,7 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
                 UpstreamSendState::NotSent,
             );
             match retry_after {
-                Some(retry) => error.with_retry_after(retry),
+                Some(retry) => error.with_retry_after(*retry),
                 None => error,
             }
         }
@@ -905,13 +910,23 @@ pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderEr
             ProviderErrorKind::NoEligibleAccount,
             UpstreamSendState::NotSent,
         ),
-        CredentialSelectionError::InvalidCredential
+        CredentialSelectionError::QuotaExhausted => provider_error(
+            ProviderErrorKind::QuotaExhausted,
+            UpstreamSendState::NotSent,
+        )
+        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+            "All eligible accounts have exhausted their quota. Retry after quota resets or add an available account.",
+            Some("usage_limit_reached".to_owned()),
+            Some("usage_limit_reached".to_owned()),
+        )),
+        CredentialSelectionError::InvalidCredential(_)
         | CredentialSelectionError::AccountSnapshotChanged
-        | CredentialSelectionError::Store
-        | CredentialSelectionError::Coordinator
-        | CredentialSelectionError::CookiePolicy => provider_error(
+        | CredentialSelectionError::Store(_)
+        | CredentialSelectionError::Coordinator(_)
+        | CredentialSelectionError::CookiePolicy(_) => provider_error(
             ProviderErrorKind::ProviderInfrastructureUnavailable,
             UpstreamSendState::NotSent,
         ),
-    }
+    };
+    mapped.with_source(error)
 }

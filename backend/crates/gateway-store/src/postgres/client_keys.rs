@@ -372,7 +372,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
             .build()
             .fetch_all(&self.pool)
             .await
-            .map_err(|_| postgres_unavailable("list client API keys"))?;
+            .map_err(|error| postgres_unavailable("list client API keys").with_source(error))?;
         let mut items = rows
             .iter()
             .map(client_record_from_row)
@@ -406,7 +406,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("reveal client API key"))?
+        .map_err(|error| postgres_unavailable("reveal client API key").with_source(error))?
         .map(client_secret_from_row)
         .transpose()
     }
@@ -449,7 +449,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("get client API key"))?
+        .map_err(|error| postgres_unavailable("get client API key").with_source(error))?
         .as_ref()
         .map(client_record_from_row)
         .transpose()?;
@@ -483,7 +483,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         .bind(timestamps)
         .execute(&self.pool)
         .await
-        .map_err(|_| postgres_unavailable("touch client API keys"))?;
+        .map_err(|error| postgres_unavailable("touch client API keys").with_source(error))?;
         Ok(result.rows_affected())
     }
 }
@@ -1003,7 +1003,7 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     .bind(key.budget.weekly_usd.canonical())
     .execute(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("insert client API key in transaction"))?;
+    .map_err(|error| postgres_unavailable("insert client API key in transaction").with_source(error))?;
     replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await?;
     Ok(())
 }
@@ -1030,7 +1030,9 @@ pub(crate) async fn update_client_api_key_in_transaction(
     .bind(key.weekly_limit_usd.map(|amount| amount.canonical()))
     .execute(&mut **transaction)
     .await
-    .map_err(|_| postgres_unavailable("update client API key in transaction"))?;
+    .map_err(|error| {
+        postgres_unavailable("update client API key in transaction").with_source(error)
+    })?;
     require_changed(result.rows_affected(), &key.id)?;
     replace_client_api_key_groups_in_transaction(transaction, &key.id, &key.group_ids).await
 }
@@ -1047,7 +1049,9 @@ pub(crate) async fn set_client_api_key_enabled_in_transaction(
             .bind(enabled)
             .execute(&mut **transaction)
             .await
-            .map_err(|_| postgres_unavailable("set client API key state in transaction"))?;
+            .map_err(|error| {
+                postgres_unavailable("set client API key state in transaction").with_source(error)
+            })?;
     require_changed(result.rows_affected(), id)
 }
 
@@ -1060,7 +1064,9 @@ pub(crate) async fn delete_client_api_key_in_transaction(
         .bind(id)
         .execute(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("delete client API key in transaction"))?;
+        .map_err(|error| {
+            postgres_unavailable("delete client API key in transaction").with_source(error)
+        })?;
     require_changed(result.rows_affected(), id)
 }
 
@@ -1088,7 +1094,9 @@ async fn replace_client_api_key_groups_in_transaction(
         .bind(group_ids)
         .fetch_one(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("validate client API key groups"))?;
+        .map_err(|error| {
+            postgres_unavailable("validate client API key groups").with_source(error)
+        })?;
         if usize::try_from(count).ok() != Some(group_ids.len()) {
             return Err(StoreError::NotFound {
                 entity: "account group",
@@ -1100,7 +1108,7 @@ async fn replace_client_api_key_groups_in_transaction(
         .bind(key_id)
         .execute(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("delete client API key groups"))?;
+        .map_err(|error| postgres_unavailable("delete client API key groups").with_source(error))?;
     if !group_ids.is_empty() {
         sqlx::query(
             "insert into client_api_key_groups
@@ -1111,7 +1119,7 @@ async fn replace_client_api_key_groups_in_transaction(
         .bind(group_ids)
         .execute(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("insert client API key groups"))?;
+        .map_err(|error| postgres_unavailable("insert client API key groups").with_source(error))?;
     }
     Ok(())
 }
@@ -1203,7 +1211,7 @@ async fn count_client_api_keys(pool: &PgPool, search: Option<&str>) -> StoreResu
         .build_query_scalar::<i64>()
         .fetch_one(pool)
         .await
-        .map_err(|_| postgres_unavailable("count client API keys"))?;
+        .map_err(|error| postgres_unavailable("count client API keys").with_source(error))?;
     to_u64(count)
 }
 
@@ -1266,7 +1274,7 @@ async fn load_client_key_memberships(
     .bind(ids)
     .fetch_all(pool)
     .await
-    .map_err(|_| postgres_unavailable("load client API key memberships"))?;
+    .map_err(|error| postgres_unavailable("load client API key memberships").with_source(error))?;
     let mut groups = BTreeMap::<String, Vec<ClientApiKeyGroupRecord>>::new();
     let mut providers = BTreeMap::<String, BTreeSet<String>>::new();
     for row in rows {

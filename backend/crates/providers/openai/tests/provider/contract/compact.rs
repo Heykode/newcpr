@@ -281,7 +281,7 @@ async fn compact_respects_account_scope_and_client_session_affinity() {
     );
     let stream = provider
         .execute(
-            planned_request("openai", operation),
+            planned_request("openai", operation.clone()),
             context("req_compact_affinity", CancellationToken::new()),
         )
         .await
@@ -297,6 +297,29 @@ async fn compact_respects_account_scope_and_client_session_affinity() {
             .await
             .expect("requests")
             .is_empty()
+    );
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(COMPACT_RESPONSE, "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation),
+            context("req_compact_complete", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    let admission_renewals = affinity.renewal_ttls();
+    assert!(!admission_renewals.is_empty());
+    while let Some(event) = stream.next().await {
+        event.expect("compact response");
+    }
+    assert_eq!(
+        affinity.renewal_ttls(),
+        admission_renewals,
+        "HTTP JSON completion must not extend a same-owner binding"
     );
 }
 

@@ -10,7 +10,7 @@ mod snapshot;
 mod subscription;
 
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use chrono::{TimeZone as _, Utc};
 use gateway_core::account::{
@@ -75,6 +75,7 @@ fn quota_service_with_base_url(
         base_url,
         Arc::new(crate::support::MemoryCooldownPort::new()),
     )
+    .with_initial_sync_delays(Arc::new(|| Duration::ZERO))
 }
 
 async fn create_account(store: &Arc<MemoryAccountStore>, account_id: &str) {
@@ -161,7 +162,8 @@ async fn global_qx_service(
             .expect("client"),
         format!("{}/backend-api", server.uri()),
         Arc::new(crate::support::MemoryCooldownPort::new()),
-    );
+    )
+    .with_initial_sync_delays(Arc::new(|| Duration::ZERO));
     (store, service, desktop_ua)
 }
 

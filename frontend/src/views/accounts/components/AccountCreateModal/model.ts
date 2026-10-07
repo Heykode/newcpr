@@ -1,4 +1,5 @@
 import type { AccountModelAccess } from '@/api'
+import type { AccountTemplate } from '@/api/modules/account-templates'
 import type { Excel403Action } from '@/utils/excel-settings'
 import type { RequestProxySource } from '@/utils/request-proxy-source'
 import { accountEgressPatch } from '@/utils/account-egress'
@@ -14,6 +15,7 @@ export type AccountImportMode = 'oauth' | 'access_token' | 'refresh_token' | 'js
 export type AccountImportInputMode = Exclude<AccountImportMode, 'oauth'>
 
 export interface AccountCreateForm {
+  importTemplate: AccountTemplate | null
   purchaseAmount: string
   purchaseCycleStart: string
   customName: string
@@ -46,6 +48,7 @@ export interface AccountCreateForm {
 
 export function emptyAccountCreateForm(): AccountCreateForm {
   return {
+    importTemplate: null,
     purchaseAmount: '',
     purchaseCycleStart: '',
     customName: '',
@@ -112,4 +115,13 @@ export function accountImportSettings(form: AccountCreateForm, provider = form.p
     groupIds: [...new Set(form.groupIds)],
     ...(form.modelAccess ? { modelAccess: { ...form.modelAccess, models: [...form.modelAccess.models] } } : {}),
   }
+}
+
+export function accountImportTemplate(form: AccountCreateForm, provider: string) {
+  const template = form.importTemplate
+  if (!template)
+    return undefined
+  if (provider !== 'openai' && template.config.turnStateInjectionEnabled === true)
+    throw new Error('所选模板的 State 设置仅支持 OpenAI 账号')
+  return { id: template.id, revision: template.revision }
 }

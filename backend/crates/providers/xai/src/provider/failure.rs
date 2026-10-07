@@ -527,6 +527,12 @@ pub(super) fn map_transport_error_with_state(
     if error.sensitive_context_was_redacted() {
         mapped = mapped.redact_sensitive_context("upstream transport context");
     }
+    if let Some(raw) = error.raw_upstream_error().cloned() {
+        mapped = mapped.with_raw_upstream_error(raw);
+    }
+    if std::error::Error::source(&error).is_some() {
+        mapped = mapped.with_source(error);
+    }
     mapped
 }
 

@@ -67,7 +67,8 @@ async fn excel_zero_usage_refresh_clears_only_the_cooldown_observed_before_fetch
                 reqwest::Client::builder().no_proxy().build().unwrap(),
                 server.uri(),
                 cooldowns.clone(),
-            );
+            )
+            .with_initial_sync_delays(Arc::new(|| Duration::ZERO));
             if worker {
                 assert_eq!(service.synchronize().await.unwrap().updated, 1);
             } else {

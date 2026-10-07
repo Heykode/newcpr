@@ -1294,6 +1294,8 @@ impl SettingsStore for StaticSettingsStore {
             account_warmup_model: None,
             request_interval_ms: 0,
             rotation_strategy: RotationStrategy::Smart,
+            openai_account_affinity: Default::default(),
+            openai_session_binding_ttl_hours: 24,
             min_codex_desktop_version: None,
             min_codex_cli_version: None,
             usage_retention_days: 30,
@@ -4108,6 +4110,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        template_proxy_mode: None,
         excel_recovery: None,
         purchase_cost: None,
         clear_outbound_proxy: false,

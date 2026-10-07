@@ -372,7 +372,7 @@ impl CodexCredentialRefreshService {
                     .await
             }
             Err(RefreshFailure::Transport { message, upstream }) => {
-                // 上游瞬态（401/429/5xx/超时/畸形响应等）保留现有凭据、
+                // 上游瞬态（429/5xx/超时/畸形响应等）保留现有凭据、
                 // 记录最近一次失败并推进有界退避。
                 self.defer_refresh(
                     &due.account,
@@ -394,13 +394,15 @@ impl CodexCredentialRefreshService {
         CodexCredentialRefreshError,
     > {
         let now = SystemTime::now();
-        let provider = ProviderKind::new(PROVIDER_NAME)
-            .map_err(|_| CredentialRepositoryError::InvalidCredentialData)?;
+        let provider = ProviderKind::new(PROVIDER_NAME).map_err(|source| {
+            CredentialRepositoryError::InvalidCredentialData(Some(source.into()))
+        })?;
         let limit = NonZeroU32::new(MAX_REFRESH_BATCH)
-            .ok_or(CredentialRepositoryError::InvalidCredentialData)?;
+            .ok_or(CredentialRepositoryError::InvalidCredentialData(None))?;
         let query = ProviderRefreshQuery::new(
             provider,
-            now.checked_add(policy.margin()).unwrap_or(now),
+            now.checked_add(policy.margin().saturating_mul(2))
+                .unwrap_or(now),
             now.checked_sub(REFRESH_RECOVERY_WINDOW)
                 .unwrap_or(SystemTime::UNIX_EPOCH),
             now,
@@ -411,6 +413,21 @@ impl CodexCredentialRefreshService {
         let mut due = Vec::with_capacity(candidates.len());
         let mut failures = Vec::new();
         for loaded in candidates {
+            if !loaded.account.needs_authentication_refresh()
+                && loaded
+                    .account
+                    .access_token_expires_at()
+                    .is_some_and(|expires_at| {
+                        expires_at > now
+                            && !policy.is_refresh_due_for_account(
+                                loaded.account.id(),
+                                expires_at,
+                                now,
+                            )
+                    })
+            {
+                continue;
+            }
             let account_id = loaded.account.id().to_string();
             match self.repository.decode_runtime_credential(&loaded) {
                 Ok(runtime)
@@ -515,7 +532,7 @@ impl CodexCredentialRefreshService {
                     credential_revision: revision.get(),
                 })
             }
-            Err(CredentialRepositoryError::RevisionConflict) => {
+            Err(CredentialRepositoryError::RevisionConflict(_)) => {
                 Ok(CodexCredentialRefreshOutcome::Stale {
                     account_id: due.account.id().to_string(),
                 })
@@ -539,7 +556,7 @@ impl CodexCredentialRefreshService {
         } = failure;
         match self.repository.load_runtime_credential(account).await {
             Ok(_) => {}
-            Err(CredentialRepositoryError::RevisionConflict) => {
+            Err(CredentialRepositoryError::RevisionConflict(_)) => {
                 return Ok(CodexCredentialRefreshOutcome::Stale {
                     account_id: account.id().to_string(),
                 });
@@ -581,7 +598,7 @@ impl CodexCredentialRefreshService {
                 );
                 Ok(outcome)
             }
-            Err(CredentialRepositoryError::RevisionConflict) => {
+            Err(CredentialRepositoryError::RevisionConflict(_)) => {
                 Ok(CodexCredentialRefreshOutcome::Stale {
                     account_id: account.id().to_string(),
                 })
@@ -656,7 +673,7 @@ impl CodexCredentialRefreshService {
                     account_id: account.id().to_string(),
                 })
             }
-            Err(CredentialRepositoryError::RevisionConflict) => {
+            Err(CredentialRepositoryError::RevisionConflict(_)) => {
                 Ok(CodexCredentialRefreshOutcome::Stale {
                     account_id: account.id().to_string(),
                 })

@@ -120,7 +120,7 @@ async fn audit_failure_should_revoke_new_session_before_returning_it() {
     let fixture = AdminTestFixture::new().await;
     fixture.auth.fail_audit(true);
 
-    assert_eq!(
+    assert!(matches!(
         fixture
             .services
             .auth()
@@ -130,9 +130,80 @@ async fn audit_failure_should_revoke_new_session_before_returning_it() {
             })
             .await
             .expect_err("audit failure rejects login"),
-        LoginError::Unavailable
-    );
+        LoginError::Unavailable(Some(_))
+    ));
     assert_eq!(fixture.auth.session_count(), 0);
+}
+
+#[tokio::test]
+async fn login_failure_records_internal_diagnostics_without_exposing_sources_in_response() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{HeaderValue, Request, StatusCode, header},
+    };
+    use gateway_core::diagnostics::{OperationalDiagnostics, OperationalFailure};
+    use std::sync::{Arc, Mutex};
+    use tower::ServiceExt as _;
+
+    #[derive(Default)]
+    struct Diagnostics(Mutex<Vec<OperationalFailure>>);
+
+    #[async_trait::async_trait]
+    impl OperationalDiagnostics for Diagnostics {
+        async fn record_failure(
+            &self,
+            failure: OperationalFailure,
+        ) -> Result<(), gateway_core::error::StoreError> {
+            self.0.lock().unwrap().push(failure);
+            Ok(())
+        }
+    }
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.fail_audit(true);
+    let diagnostics = Arc::new(Diagnostics::default());
+    let recorder: Arc<dyn OperationalDiagnostics> = diagnostics.clone();
+    let app = gateway_api::admin::router::<super::AdminTestState>()
+        .layer(axum::Extension(recorder))
+        .with_state(fixture.state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .extension(tower_http::request_id::RequestId::new(
+                    HeaderValue::from_static("synthetic-login-error"),
+                ))
+                .body(Body::from(
+                    json!({"password": "strong-admin-password"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        response
+            .extensions()
+            .get::<gateway_core::error::ErrorDetails>()
+            .is_none()
+    );
+    let body =
+        String::from_utf8(to_bytes(response.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+    assert!(!body.contains("sourceChain"));
+    assert!(!body.contains("auth audit"));
+    assert!(!body.contains("strong-admin-password"));
+    let failures = diagnostics.0.lock().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].component, "admin_api");
+    assert_eq!(
+        failures[0].correlation_id.as_deref(),
+        Some("synthetic-login-error")
+    );
+    assert!(failures[0].details.is_some());
+    assert!(failures[0].account_id.is_none());
+    assert!(failures[0].upstream_status.is_none());
 }
 
 #[tokio::test]
@@ -309,6 +380,26 @@ async fn login_cookie_should_persist_until_server_expiry_and_remain_revocable() 
             serde_json::from_slice(&to_bytes(status.into_body(), 4096).await.unwrap()).unwrap();
         assert_eq!(body["data"]["authenticated"], true);
 
+        let refresh_request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/auth/refresh")
+                .header(header::COOKIE, cookie_pair)
+                .body(Body::empty())
+                .unwrap()
+        };
+        let refreshed = app.clone().oneshot(refresh_request()).await.unwrap();
+        assert_eq!(refreshed.status(), StatusCode::OK);
+        assert!(
+            refreshed.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .contains("HttpOnly")
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(refreshed.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["data"]["authenticated"], true);
+
         let logout = app
             .clone()
             .oneshot(
@@ -330,6 +421,11 @@ async fn login_cookie_should_persist_until_server_expiry_and_remain_revocable() 
         let status = app.clone().oneshot(status_request()).await.unwrap();
         let body: serde_json::Value =
             serde_json::from_slice(&to_bytes(status.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["data"]["authenticated"], false);
+        let refreshed = app.clone().oneshot(refresh_request()).await.unwrap();
+        assert!(!refreshed.headers().contains_key(header::SET_COOKIE));
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(refreshed.into_body(), 4096).await.unwrap()).unwrap();
         assert_eq!(body["data"]["authenticated"], false);
     }
 }

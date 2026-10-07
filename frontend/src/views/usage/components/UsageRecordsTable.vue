@@ -16,6 +16,7 @@ import UsageBillingCell from './UsageBillingCell.vue'
 import UsageClientIpCell from './UsageClientIpCell.vue'
 import UsageLatencyCell from './UsageLatencyCell.vue'
 import UsageModelCell from './UsageModelCell.vue'
+import UsagePerformanceCell from './UsagePerformanceCell.vue'
 import UsageReasoningEffortCell from './UsageReasoningEffortCell.vue'
 import UsageTokenCell from './UsageTokenCell.vue'
 import UsageTransportBadge from './UsageTransportBadge.vue'
@@ -135,6 +136,10 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
 
     <template #latency="{ row }">
       <UsageLatencyCell :record="row" />
+    </template>
+
+    <template #performance="{ row }">
+      <UsagePerformanceCell :record="row" />
     </template>
 
     <template v-if="$slots.actions" #actions="scope">

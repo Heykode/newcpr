@@ -113,6 +113,50 @@ test('Excel global defaults fill omission without replacing saved or explicitly 
   }
 })
 
+test('affinity and binding TTL roundtrip without changing smart scheduling or reserved concurrency', async () => {
+  const query = mountSettings({ ...settings(), openaiGuardianReservedConcurrency: 2 })
+  try {
+    await query.state.loadSettings()
+    assert.equal(query.state.form.openaiAccountAffinity, 'strict')
+    assert.equal(query.state.form.openaiSessionBindingTtlHours, 24)
+    for (const mode of ['relaxed', 'strict']) {
+      for (const hours of [1, 48, 720]) {
+        query.state.form.openaiAccountAffinity = mode
+        query.state.form.openaiSessionBindingTtlHours = hours
+        await query.state.saveSettings()
+        await query.state.loadSettings()
+        const saved = query.requests.at(-1)
+        assert.equal(saved.openaiAccountAffinity, mode)
+        assert.equal(saved.openaiSessionBindingTtlHours, hours)
+        assert.equal(query.state.form.openaiAccountAffinity, mode)
+        assert.equal(query.state.form.openaiSessionBindingTtlHours, hours)
+        assert.equal(saved.rotationStrategy, 'smart')
+        assert.equal(saved.openaiGuardianReservedConcurrency, 2)
+        assert.equal(Object.hasOwn(saved.requestTuning, 'openaiGuardianReservedConcurrency'), false)
+      }
+    }
+  }
+  finally { query.stop() }
+})
+
+test('invalid affinity or binding TTL never submits a settings update', async () => {
+  const warnings = []
+  const query = mountSettings(settings(), value => warnings.push(value))
+  try {
+    await query.state.loadSettings()
+    query.state.form.openaiAccountAffinity = 'unknown'
+    await query.state.saveSettings()
+    query.state.form.openaiAccountAffinity = 'strict'
+    for (const invalid of [0, 721, 1.5, Number.NaN, null]) {
+      query.state.form.openaiSessionBindingTtlHours = invalid
+      await query.state.saveSettings()
+    }
+    assert.equal(query.requests.length, 0)
+    assert.equal(warnings.length, 6)
+  }
+  finally { query.stop() }
+})
+
 function mountSettings(initial, onWarning = assert.fail) {
   let saved = structuredClone(initial)
   const requests = []
@@ -362,7 +406,6 @@ test('key queue bounds round trip and invalid values cannot be saved', async () 
     }
   }
 })
-
 test('runtime settings load and save without a global WS opening limit', async () => {
   for (const legacy of [false, true]) {
     const initial = {

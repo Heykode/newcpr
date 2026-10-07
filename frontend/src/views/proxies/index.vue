@@ -34,7 +34,7 @@ const { items: proxies, loading } = query
 const pagination = computed(() => ({ currentPage: query.page.value, pageSize: query.pageSize.value, total: query.total.value }))
 const columns = defineTableColumns<OutboundProxyRecord>([
   { key: 'identity', label: '代理', kind: 'identity' },
-  { key: 'exitIp', label: '出口 IP', kind: 'custom' },
+  { key: 'exitIp', label: '出口 IP', kind: 'custom', size: 'xl' },
   { key: 'location', label: '地区 / 时区', kind: 'custom' },
   { key: 'latency', label: '耗时', kind: 'custom', size: 'sm' },
   { key: 'accounts', label: '关联账号', kind: 'custom', size: 'sm' },
@@ -223,17 +223,17 @@ onMounted(() => void query.execute())
               </div>
             </template>
             <template #exitIp="{ row }">
-              <div v-if="row.lastTest?.exitIpv4 && row.lastTest?.exitIpv6" class="flex flex-col gap-0.5 font-mono text-cp-xs">
+              <div v-if="row.lastTest?.exitIpv4 && row.lastTest?.exitIpv6" class="flex min-w-0 flex-col gap-0.5 font-mono text-cp-xs">
                 <span class="truncate" :title="`IPv4: ${row.lastTest.exitIpv4}`">{{ row.lastTest.exitIpv4 }}</span>
                 <span class="truncate" :title="`IPv6: ${row.lastTest.exitIpv6}`">{{ row.lastTest.exitIpv6 }}</span>
               </div>
-              <div v-else-if="row.lastTest?.exitIpv4" class="font-mono text-cp-xs" :title="`IPv4: ${row.lastTest.exitIpv4}`">
+              <div v-else-if="row.lastTest?.exitIpv4" class="block truncate font-mono text-cp-xs" :title="`IPv4: ${row.lastTest.exitIpv4}`">
                 {{ row.lastTest.exitIpv4 }}
               </div>
-              <div v-else-if="row.lastTest?.exitIpv6" class="font-mono text-cp-xs" :title="`IPv6: ${row.lastTest.exitIpv6}`">
+              <div v-else-if="row.lastTest?.exitIpv6" class="block truncate font-mono text-cp-xs" :title="`IPv6: ${row.lastTest.exitIpv6}`">
                 {{ row.lastTest.exitIpv6 }}
               </div>
-              <span v-else-if="row.lastTest?.exitIp" class="break-all font-mono text-cp-xs">{{ row.lastTest.exitIp }}</span>
+              <span v-else-if="row.lastTest?.exitIp" class="block truncate font-mono text-cp-xs" :title="row.lastTest.exitIp">{{ row.lastTest.exitIp }}</span>
               <span v-else class="text-cp-text-quaternary">-</span>
             </template>
             <template #latency="{ row }">

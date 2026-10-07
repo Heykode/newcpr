@@ -11,6 +11,67 @@ use serde_json::{Value, json};
 use super::TestDatabase;
 
 #[tokio::test]
+async fn refresh_margin_migration_updates_only_historical_default_and_preserves_settings() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 63)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for (margin, expected) in [(3_600_i64, 300_i64), (300, 300), (900, 900)] {
+        let Some(database) =
+            TestDatabase::create_with_migrator("refresh_default_upgrade", &old).await
+        else {
+            return;
+        };
+        sqlx::query(
+            "update runtime_settings set refresh_margin_seconds = $1,
+             openai_guardian_reserved_concurrency = 2, rotation_strategy = 'sticky'
+             where id = 1",
+        )
+        .bind(margin)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let before: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        let after: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(after["refresh_margin_seconds"], expected);
+        assert_eq!(after["openai_session_binding_ttl_hours"], 24);
+        assert_eq!(after["openai_account_affinity"], "strict");
+        assert_eq!(
+            after["config_revision"].as_i64().unwrap(),
+            before["config_revision"].as_i64().unwrap() + i64::from(margin == 3_600)
+        );
+        for (field, value) in before.as_object().unwrap() {
+            if matches!(
+                field.as_str(),
+                "refresh_margin_seconds" | "config_revision" | "updated_at"
+            ) {
+                continue;
+            }
+            assert_eq!(
+                &after[field], value,
+                "migration changed unrelated setting {field}"
+            );
+        }
+        database.close().await;
+    }
+}
+
+#[tokio::test]
 async fn warmup_cursor_is_atomic_durable_and_monotonic_across_configuration_updates() {
     use gateway_core::provider_ports::ProviderRuntimePolicyPort as _;
     let Some(database) = TestDatabase::create("warmup_cursor").await else {
@@ -69,6 +130,8 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
         turn_state_probe_proxy_id: None,
         turn_state_probe_concurrency: None,
+        openai_account_affinity: None,
+        openai_session_binding_ttl_hours: None,
         admin_api_key: None,
         disable_fast: None,
         turn_state_injection_enabled: None,
@@ -373,6 +436,93 @@ async fn legacy_probe_proxy_is_preserved_but_never_resolved_by_runtime_snapshot(
         .await
         .unwrap();
     database.close().await;
+}
+
+#[tokio::test]
+async fn account_affinity_defaults_strict_and_round_trips_through_settings_and_snapshot() {
+    use gateway_core::account::AccountAffinity;
+    let Some(db) = TestDatabase::create("account_affinity").await else {
+        return;
+    };
+    let settings = PgRuntimeSettingsRepository::new(db.pool.clone());
+    assert_eq!(
+        settings
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .openai_account_affinity,
+        AccountAffinity::Strict
+    );
+    for mode in [AccountAffinity::Relaxed, AccountAffinity::Strict] {
+        let before = settings.load_runtime_settings().await.unwrap();
+        let mut update = settings_with_margin(300);
+        update.openai_account_affinity = Some(mode);
+        settings.update_runtime_settings(update).await.unwrap();
+        settings
+            .update_runtime_settings(settings_with_margin(300))
+            .await
+            .unwrap();
+        let loaded = settings.load_runtime_settings().await.unwrap();
+        assert_eq!(loaded.openai_account_affinity, mode);
+        assert!(loaded.config_revision > before.config_revision);
+        let snapshot = PgRuntimeSnapshotRepository::new(db.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.settings.openai_account_affinity, mode);
+        assert_eq!(loaded.openai_session_binding_ttl_hours, 24);
+    }
+    assert!(
+        sqlx::query("update runtime_settings set openai_account_affinity = 'invalid' where id = 1")
+            .execute(&db.pool)
+            .await
+            .is_err()
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn binding_ttl_round_trips_and_old_settings_clients_do_not_reset_it() {
+    let Some(db) = TestDatabase::create("binding_ttl").await else {
+        return;
+    };
+    let settings = PgRuntimeSettingsRepository::new(db.pool.clone());
+    assert_eq!(
+        settings
+            .load_runtime_settings()
+            .await
+            .unwrap()
+            .openai_session_binding_ttl_hours,
+        24
+    );
+    for hours in [1, 48, 720] {
+        let mut update = settings_with_margin(300);
+        update.openai_session_binding_ttl_hours = Some(hours);
+        settings.update_runtime_settings(update).await.unwrap();
+        settings
+            .update_runtime_settings(settings_with_margin(300))
+            .await
+            .unwrap();
+        assert_eq!(
+            settings
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .openai_session_binding_ttl_hours,
+            hours
+        );
+        let snapshot = PgRuntimeSnapshotRepository::new(db.pool.clone())
+            .load_runtime_snapshot()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.settings.openai_session_binding_ttl_hours, hours);
+    }
+    for hours in [0, 721] {
+        let mut update = settings_with_margin(300);
+        update.openai_session_binding_ttl_hours = Some(hours);
+        assert!(update.validate().is_err());
+    }
+    db.close().await;
 }
 
 #[test]

@@ -254,11 +254,32 @@ export function usageTokenDetails(record: UsageCommonRecord) {
   return record.tokenDetails
 }
 
+export type UsagePerformanceRecord = Pick<UsageCommonRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'> & {
+  tokenDetails: Pick<UsageDisplayRecord['tokenDetails'], 'outputTokens'> | null
+}
+
+export function usagePerformanceDetails(record: UsagePerformanceRecord) {
+  const firstTokenMs = usageFirstTokenMs(record)
+  const totalMs = durationValue(record.latencyMs)
+  const outputTokens = record.tokenDetails?.outputTokens
+  const throughput = typeof outputTokens === 'number'
+    && Number.isFinite(outputTokens)
+    && outputTokens > 0
+    && firstTokenMs !== null
+    && totalMs !== null
+    && totalMs > firstTokenMs
+    ? outputTokens * 1000 / (totalMs - firstTokenMs)
+    : null
+
+  return {
+    throughputDisplay: throughput === null ? '—' : `${formatCompactNumber(throughput)} tok/s`,
+    firstTokenDisplay: formatDuration(firstTokenMs),
+  }
+}
+
 export function usageLatencyDetails(record: UsageCommonRecord) {
   const latencyDetails = record.latencyDetails
-  const firstTokenMs = durationValue(
-    record.firstTokenLatencyMs ?? latencyDetails?.firstTokenMs,
-  )
+  const firstTokenMs = usageFirstTokenMs(record)
   const firstEventMs = durationValue(latencyDetails?.firstEventMs)
   const totalMs = durationValue(record.latencyMs)
   const firstReasoningMs = durationValue(latencyDetails?.firstReasoningMs)
@@ -350,6 +371,16 @@ export function visibleResponseText(record: UsageViewModel) {
 
 function durationValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: value >= 100 ? 0 : 1,
+  }).format(value)
+}
+
+function usageFirstTokenMs(record: Pick<UsageCommonRecord, 'firstTokenLatencyMs' | 'latencyDetails'>) {
+  return durationValue(record.firstTokenLatencyMs ?? record.latencyDetails?.firstTokenMs)
 }
 
 function extractInputText(body: unknown) {

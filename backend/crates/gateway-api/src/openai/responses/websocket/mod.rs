@@ -253,6 +253,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
             .session
             .trace()
             .capture("client.request.body", payload.as_bytes());
+        drop(payload);
 
         if forward_execution(&mut connection, started, &mut replay).await
             == ForwardOutcome::Disconnect

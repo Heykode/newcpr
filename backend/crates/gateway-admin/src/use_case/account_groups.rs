@@ -141,6 +141,7 @@ impl AccountGroupService for DefaultAccountGroupService {
             self.store
                 .create_account_group(
                     NewAccountGroup {
+                        fast_mode: command.fast_mode,
                         id,
                         name: command.name,
                         description: command.description,

@@ -833,19 +833,19 @@ fn classify_refresh_failure(status: StatusCode, body: &[u8]) -> RefreshFailure {
         .as_ref()
         .and_then(RefreshErrorResponse::code)
         .map(str::to_ascii_lowercase);
-    // 生产策略故意与官方 Codex 的“任意 401 立即终态”不同：
-    // 显式 401 先进入有界恢复退避，避免瞬时授权故障直接失效账号。
-    if status == StatusCode::UNAUTHORIZED {
-        return RefreshFailure::Transport {
-            message,
-            upstream: upstream(),
-        };
-    }
-    // 非 401 响应仍与官方一致：三个明确的 RT 原因是永久失败。
+    // 三个明确的 RT 终态原因优先于 HTTP 状态判断；上游可能用 401 返回它们。
     if matches!(
         normalized_code.as_deref(),
         Some("refresh_token_expired" | "refresh_token_reused" | "refresh_token_invalidated")
     ) {
+        return RefreshFailure::InvalidGrant {
+            message,
+            upstream: upstream(),
+        };
+    }
+    // 与官方 Codex 一致：刷新端点的任意 401 都表示凭据被拒绝，立即终态。
+    // 429/5xx/超时/畸形响应仍走瞬态恢复，不在这里扩大终态范围。
+    if status == StatusCode::UNAUTHORIZED {
         return RefreshFailure::InvalidGrant {
             message,
             upstream: upstream(),

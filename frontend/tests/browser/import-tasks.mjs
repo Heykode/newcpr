@@ -94,6 +94,9 @@ async function main() {
       }
       data = summarize(job)
     }
+    else if (path === '/api/admin/auth/refresh' && request.method() === 'POST') {
+      data = { authenticated: true }
+    }
     else if (request.method() !== 'GET') {
       unexpected.push(`${request.method()} ${path}`)
       return route.fulfill({ status: 405, json: { message: 'Unexpected synthetic mutation' } })
@@ -115,8 +118,30 @@ async function main() {
     else if (path === '/api/admin/account-groups' || path === '/api/admin/proxies') {
       data = emptyPage
     }
+    else if (path === '/api/admin/accounts/reset-credits/batches') {
+      data = []
+    }
+    else if (path === '/api/admin/ipv6-egress') {
+      data = { revision: 1, defaultMode: 'unchanged', addresses: [], accountOverrides: {}, fixedBindings: {} }
+    }
     else if (path === '/api/admin/relogin') {
       data = { ...emptyPage, items: [] }
+    }
+    else if (path === '/api/admin/relogin/templates') {
+      data = [{
+        id: 'template-import',
+        revision: 3,
+        config: {
+          name: 'Synthetic import template',
+          enabled: false,
+          concurrencyLimit: 4,
+          weight: 23,
+          groupIds: [],
+          outboundProxyId: null,
+          preserveOutboundProxy: true,
+          modelAccess: { mode: 'denylist', models: ['model-template'] },
+        },
+      }]
     }
     else if (path === '/api/admin/system/version') {
       data = { version: 'test', hasUpdate: false, deploymentMode: 'test', updateWarning: null }
@@ -178,6 +203,19 @@ async function main() {
     await page.getByRole('button', { name: '继续导入', exact: true }).click()
     await page.getByRole('radio', { name: 'RT', exact: true }).click()
     await page.getByRole('textbox', { name: 'Refresh Token', exact: true }).fill('synthetic-first\nsynthetic-second')
+    await page.getByRole('button', { name: '管理账号模板', exact: true }).click()
+    const templateManager = page.getByRole('dialog', { name: '账号模板', exact: true })
+    await templateManager.getByText('Synthetic import template', { exact: true }).waitFor()
+    assert.equal(await templateManager.getByRole('button', { name: '新建模板', exact: true }).isEnabled(), true)
+    assert.equal(await templateManager.getByRole('button', { name: '编辑模板', exact: true }).isEnabled(), true)
+    assert.equal(await templateManager.getByRole('button', { name: '删除模板', exact: true }).isEnabled(), true)
+    await templateManager.getByRole('contentinfo').getByRole('button', { name: '关闭', exact: true }).click()
+    await templateManager.waitFor({ state: 'hidden' })
+    await page.getByRole('combobox', { name: '导入账号模板', exact: true }).click()
+    await page.getByRole('option', { name: 'Synthetic import template', exact: true }).click()
+    await page.getByText('保持原代理', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('checkbox', { name: /覆盖/ }).count(), 0)
+    await screenshots('import-template-selection', '导入账号')
     const submit = page.getByRole('button', { name: '创建导入任务', exact: true })
     await submit.evaluate((button) => {
       button.click()
@@ -200,6 +238,8 @@ async function main() {
       { accounts: [{ refreshToken: 'synthetic-second' }] },
     ])
     assert.ok(submissions[0].items.every(item => !Object.hasOwn(item.settings, 'turnStateInjectionEnabled')))
+    for (const item of submissions[0].items)
+      assert.deepEqual(item.template, { id: 'template-import', revision: 3 })
     await screenshots('running')
 
     await closeTasks()
@@ -247,6 +287,7 @@ async function main() {
     await page.getByRole('heading', { name: '导入任务', exact: true }).waitFor()
     assert.equal(jobs.size, 2)
     assert.equal(Object.hasOwn(submissions[2].items[0].settings, 'turnStateInjectionEnabled'), false)
+    assert.equal(Object.hasOwn(submissions[2].items[0], 'template'), false, 'new imports start without a template')
     const batches = page.getByRole('combobox', { name: '切换导入任务' })
     await batches.click()
     await page.getByRole('option').filter({ hasText: '2 个条目' }).click()

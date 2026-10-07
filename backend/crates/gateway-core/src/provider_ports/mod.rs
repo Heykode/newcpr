@@ -54,9 +54,10 @@ pub enum ProviderStoreErrorKind {
 }
 
 /// Provider 存储端口的脱敏错误。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("provider store {operation} failed: {kind:?}")]
 pub struct ProviderStoreError {
+    source: Option<crate::error::ErrorSource>,
     kind: ProviderStoreErrorKind,
     operation: &'static str,
 }
@@ -64,7 +65,30 @@ pub struct ProviderStoreError {
 impl ProviderStoreError {
     #[must_use]
     pub const fn new(kind: ProviderStoreErrorKind, operation: &'static str) -> Self {
-        Self { kind, operation }
+        Self {
+            kind,
+            operation,
+            source: None,
+        }
+    }
+
+    #[must_use]
+    pub fn caused_by(
+        kind: ProviderStoreErrorKind,
+        operation: &'static str,
+        source: impl Into<crate::error::ErrorSource>,
+    ) -> Self {
+        Self {
+            kind,
+            operation,
+            source: Some(source.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<crate::error::ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
     }
 
     #[must_use]
@@ -343,6 +367,137 @@ impl fmt::Debug for ProviderSessionAffinityKey {
     }
 }
 
+/// A fencing token for one generation of a provider session binding.
+///
+/// The token changes when a session moves to a different account. A request
+/// that started under an older generation must not be able to overwrite the
+/// newer binding when it completes late.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BindingToken(String);
+
+impl BindingToken {
+    pub fn new(value: impl Into<String>) -> Result<Self, ProviderStoreError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > 64
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+        {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "validate provider session affinity binding token",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::now_v7().simple().to_string())
+    }
+
+    #[must_use]
+    pub fn legacy() -> Self {
+        Self("legacy".to_owned())
+    }
+
+    #[must_use]
+    pub fn expose_to_store(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for BindingToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BindingToken([OPAQUE])")
+    }
+}
+
+/// The account and fencing token observed atomically for one affinity key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProviderSessionAffinityBinding {
+    account_id: ProviderAccountId,
+    token: BindingToken,
+}
+
+/// A client-scoped turn reference that points at a session binding.
+///
+/// The alias deliberately stores only the target session key and whether the
+/// request is allowed to follow that session, with an optional root for policy
+/// changes. It never stores an account ID,
+/// so an account migration remains visible to later requests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSessionAlias {
+    session_key: ProviderSessionAffinityKey,
+    follow_only: bool,
+    root_session_key: Option<ProviderSessionAffinityKey>,
+}
+
+impl ProviderSessionAlias {
+    #[must_use]
+    pub const fn new(session_key: ProviderSessionAffinityKey, follow_only: bool) -> Self {
+        Self {
+            session_key,
+            follow_only,
+            root_session_key: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn session_key(&self) -> &ProviderSessionAffinityKey {
+        &self.session_key
+    }
+
+    #[must_use]
+    pub const fn follow_only(&self) -> bool {
+        self.follow_only
+    }
+
+    #[must_use]
+    pub fn with_root_session_key(mut self, root: Option<ProviderSessionAffinityKey>) -> Self {
+        self.root_session_key = root;
+        self
+    }
+
+    #[must_use]
+    pub const fn root_session_key(&self) -> Option<&ProviderSessionAffinityKey> {
+        self.root_session_key.as_ref()
+    }
+}
+
+impl ProviderSessionAffinityBinding {
+    #[must_use]
+    pub fn new(account_id: ProviderAccountId, token: BindingToken) -> Self {
+        Self { account_id, token }
+    }
+
+    #[must_use]
+    pub fn legacy(account_id: ProviderAccountId) -> Self {
+        Self::new(account_id, BindingToken::legacy())
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub const fn token(&self) -> &BindingToken {
+        &self.token
+    }
+}
+
+impl fmt::Debug for ProviderSessionAffinityBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderSessionAffinityBinding")
+            .field("account_id", &self.account_id)
+            .field("token", &self.token)
+            .finish()
+    }
+}
+
 /// 可丢失的会话到账号偏好；Provider 负责先把原始会话标识哈希为不透明键。
 pub trait ProviderSessionAffinityPort: Send + Sync {
     fn load<'a>(
@@ -384,6 +539,108 @@ pub trait ProviderSessionAffinityPort: Send + Sync {
         replacement_account_id: &'a ProviderAccountId,
         ttl: Duration,
     ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>>;
+
+    /// Loads the account and its binding generation atomically.
+    ///
+    /// The default keeps older provider test doubles and stores compatible by
+    /// treating an account-only value as a legacy generation. Redis overrides
+    /// this to retain the persisted token.
+    fn load_binding<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionAffinityBinding>, ProviderStoreError>> {
+        Box::pin(async move {
+            self.load(provider_kind, key)
+                .await
+                .map(|binding| binding.map(ProviderSessionAffinityBinding::legacy))
+        })
+    }
+
+    /// Binds a complete account generation.
+    fn bind_binding<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        binding: &'a ProviderSessionAffinityBinding,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async move {
+            self.bind(provider_kind, key, binding.account_id(), ttl)
+                .await
+        })
+    }
+
+    /// Claims an unbound key or returns the complete existing generation.
+    fn claim_or_load_binding<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        candidate: &'a ProviderSessionAffinityBinding,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderSessionAffinityBinding, ProviderStoreError>> {
+        Box::pin(async move {
+            self.claim_or_load(provider_kind, key, candidate.account_id(), ttl)
+                .await
+                .map(ProviderSessionAffinityBinding::legacy)
+        })
+    }
+
+    /// Renews only an existing matching generation, never recreating an expired binding.
+    /// Older adapters conservatively skip renewal until they implement an atomic check.
+    fn renew_binding<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _key: &'a ProviderSessionAffinityKey,
+        _expected: &'a ProviderSessionAffinityBinding,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    /// Replaces a binding only when both account and generation still match.
+    fn compare_and_bind_binding<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        key: &'a ProviderSessionAffinityKey,
+        expected: &'a ProviderSessionAffinityBinding,
+        replacement: &'a ProviderSessionAffinityBinding,
+        ttl: Duration,
+    ) -> BoxFuture<'a, Result<ProviderSessionAffinityBinding, ProviderStoreError>> {
+        Box::pin(async move {
+            self.compare_and_bind(
+                provider_kind,
+                key,
+                expected.account_id(),
+                replacement.account_id(),
+                ttl,
+            )
+            .await
+            .map(ProviderSessionAffinityBinding::legacy)
+        })
+    }
+
+    /// Loads a turn alias. The default keeps older stores and test doubles
+    /// compatible until they opt into alias persistence.
+    fn load_alias<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _alias: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionAlias>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Stores an alias only when it is new or points at the same session.
+    /// Conflicting aliases must not overwrite an existing target.
+    fn bind_alias<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        _alias: &'a ProviderSessionAffinityKey,
+        _session: &'a ProviderSessionAlias,
+        _ttl: Duration,
+    ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
+        Box::pin(async { Ok(false) })
+    }
 
     fn clear<'a>(
         &'a self,
@@ -942,6 +1199,33 @@ impl ProviderRefreshPolicy {
     ) -> bool {
         match access_token_expires_at.duration_since(observed_at) {
             Ok(remaining) => remaining <= self.margin,
+            Err(_) => true,
+        }
+    }
+
+    /// 后台扫描在配置窗口上增加稳定的 `[0, margin]` 账号偏移，不修改账号事实。
+    #[must_use]
+    pub fn account_refresh_window(self, account_id: &ProviderAccountId) -> Duration {
+        let offset_seconds = stable_factor(
+            account_id.as_str(),
+            "refresh-stagger",
+            0,
+            u32::try_from(self.margin.as_secs()).unwrap_or(u32::MAX),
+        );
+        self.margin
+            .saturating_add(Duration::from_secs(u64::from(offset_seconds)))
+    }
+
+    /// 按账号稳定错峰后的提前刷新判断；请求链路仍使用未扩展的配置窗口。
+    #[must_use]
+    pub fn is_refresh_due_for_account(
+        self,
+        account_id: &ProviderAccountId,
+        access_token_expires_at: SystemTime,
+        observed_at: SystemTime,
+    ) -> bool {
+        match access_token_expires_at.duration_since(observed_at) {
+            Ok(remaining) => remaining <= self.account_refresh_window(account_id),
             Err(_) => true,
         }
     }

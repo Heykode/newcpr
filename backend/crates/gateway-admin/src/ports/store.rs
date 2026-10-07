@@ -60,15 +60,21 @@ pub enum AdminStoreErrorKind {
 }
 
 /// 隐藏数据库实现细节的持久化错误。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[error("{resource} store operation failed: {message}")]
 pub struct AdminStoreError {
+    source: Option<gateway_core::error::ErrorSource>,
     kind: AdminStoreErrorKind,
     resource: &'static str,
     message: String,
 }
 
 impl AdminStoreError {
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<gateway_core::error::ErrorSource>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
     #[must_use]
     pub fn new(
         kind: AdminStoreErrorKind,
@@ -79,6 +85,7 @@ impl AdminStoreError {
             kind,
             resource,
             message: message.into(),
+            source: None,
         }
     }
 
@@ -376,6 +383,12 @@ pub trait AuthStore: Send + Sync {
     -> AdminStoreResult<()>;
 
     async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>>;
+    async fn renew_session(
+        &self,
+        session_id: &str,
+        expected: &AdminSession,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> AdminStoreResult<Option<AdminSession>>;
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
 }

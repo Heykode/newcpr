@@ -71,7 +71,7 @@ fn map_store_error(error: AdminStoreError, resource: &'static str) -> AdminError
         AdminErrorKind::Unavailable => "依赖服务暂不可用",
         _ => "服务内部错误",
     };
-    AdminError::new(kind, message)
+    AdminError::new(kind, message).with_source(error)
 }
 
 fn map_provider_error(
@@ -102,7 +102,7 @@ fn map_provider_error(
         AdminErrorKind::Internal => "服务内部错误",
         _ => "Provider 操作失败",
     };
-    AdminError::new(kind, error.public_message().unwrap_or(message))
+    AdminError::new(kind, error.public_message().unwrap_or(message)).with_source(error)
 }
 
 async fn publish_committed(

@@ -184,7 +184,7 @@ impl RedisCredentialCooldownRepository {
                 .invoke_async::<i64>(&mut connection)
                 .await
         }
-        .map_err(|_| redis_unavailable("cache credential cooldown"))?;
+        .map_err(|error| redis_unavailable("cache credential cooldown").with_source(error))?;
         Ok(written == 1)
     }
 
@@ -209,7 +209,9 @@ impl RedisCredentialCooldownRepository {
                 .await
         };
         let (present, revision, until_ms, observation_token): (i64, String, String, String) =
-            result.map_err(|_| redis_unavailable("read credential cooldown"))?;
+            result.map_err(|error| {
+                redis_unavailable("read credential cooldown").with_source(error)
+            })?;
         if present == 0 {
             return Ok(None);
         }
@@ -251,7 +253,7 @@ impl RedisCredentialCooldownRepository {
                 .invoke_async::<i64>(&mut connection)
                 .await
         }
-        .map_err(|_| redis_unavailable("invalidate credential cooldown"))?;
+        .map_err(|error| redis_unavailable("invalidate credential cooldown").with_source(error))?;
         Ok(removed == 1)
     }
 
@@ -261,7 +263,9 @@ impl RedisCredentialCooldownRepository {
             .key(self.active_index_key())
             .invoke_async::<Vec<String>>(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("list active credential cooldowns"))?;
+            .map_err(|error| {
+                redis_unavailable("list active credential cooldowns").with_source(error)
+            })?;
         if values.len() % 2 != 0 {
             return Err(invalid("active cooldown index is invalid"));
         }
@@ -362,7 +366,9 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
                 .arg(100)
                 .query_async(&mut connection)
                 .await
-                .map_err(|_| redis_unavailable("scan account cooldown keys"))?;
+                .map_err(|error| {
+                    redis_unavailable("scan account cooldown keys").with_source(error)
+                })?;
             keys.extend(found);
             cursor = next;
             if cursor == 0 {
@@ -376,13 +382,17 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             .arg(keys)
             .query_async(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("delete account cooldown keys"))?;
+            .map_err(|error| {
+                redis_unavailable("delete account cooldown keys").with_source(error)
+            })?;
         let index_removed: i64 = redis::cmd("ZREM")
             .arg(self.active_index_key())
             .arg(provider_account_id)
             .query_async(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("remove active account cooldown"))?;
+            .map_err(|error| {
+                redis_unavailable("remove active account cooldown").with_source(error)
+            })?;
         Ok(removed > 0 || index_removed > 0)
     }
 }
@@ -427,7 +437,9 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
             };
             CredentialCooldownRepository::cache_credential_cooldown(self, &record)
                 .await
-                .map_err(|_| provider_unavailable("cache credential cooldown"))
+                .map_err(|error| {
+                    provider_unavailable("cache credential cooldown").with_source(error)
+                })
         })
     }
 
@@ -442,7 +454,7 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                 Some(account_id.as_str()),
             )
             .await
-            .map_err(|_| provider_unavailable("read credential cooldown"))?
+            .map_err(|error| provider_unavailable("read credential cooldown").with_source(error))?
             .map(|record| {
                 let revision = CredentialRevision::new(record.revision.get())
                     .map_err(|_| provider_invalid("decode credential cooldown"))?;
@@ -469,7 +481,7 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                 revision,
             )
             .await
-            .map_err(|_| provider_unavailable("clear credential cooldown"))
+            .map_err(|error| provider_unavailable("clear credential cooldown").with_source(error))
         })
     }
 
@@ -488,7 +500,9 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                 None,
             )
             .await
-            .map_err(|_| provider_unavailable("cache scoped credential cooldown"))
+            .map_err(|error| {
+                provider_unavailable("cache scoped credential cooldown").with_source(error)
+            })
         })
     }
 
@@ -505,7 +519,9 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                 None,
             )
             .await
-            .map_err(|_| provider_unavailable("read scoped credential cooldown"))?
+            .map_err(|error| {
+                provider_unavailable("read scoped credential cooldown").with_source(error)
+            })?
             .map(|record| {
                 Ok(ProviderScopedCooldown::new(
                     account_id.clone(),
@@ -535,7 +551,9 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
                 None,
             )
             .await
-            .map_err(|_| provider_unavailable("clear scoped credential cooldown"))
+            .map_err(|error| {
+                provider_unavailable("clear scoped credential cooldown").with_source(error)
+            })
         })
     }
 
@@ -546,7 +564,9 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
         Box::pin(async move {
             self.delete_account_cooldowns(account_id.as_str())
                 .await
-                .map_err(|_| provider_unavailable("clear all credential cooldowns"))
+                .map_err(|error| {
+                    provider_unavailable("clear all credential cooldowns").with_source(error)
+                })
         })
     }
 }

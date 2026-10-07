@@ -42,11 +42,9 @@ impl PgProviderAccountRepository {
             .write()
             .map_err(|_| invalid("provider device codecs are unavailable"))?
             .insert(codec.provider_kind().to_owned(), Arc::clone(&codec));
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin provider device backfill"))?;
+        let mut transaction = self.pool.begin().await.map_err(|error| {
+            postgres_unavailable("begin provider device backfill").with_source(error)
+        })?;
         lock_device_mutation(&mut transaction).await?;
         let rows = sqlx::query(
             "select upstream_user_id, upstream_account_id, provider_credentials_json
@@ -57,7 +55,9 @@ impl PgProviderAccountRepository {
         .bind(codec.provider_kind())
         .fetch_all(&mut *transaction)
         .await
-        .map_err(|_| postgres_unavailable("load existing provider devices"))?;
+        .map_err(|error| {
+            postgres_unavailable("load existing provider devices").with_source(error)
+        })?;
         for row in rows {
             let user: String = get(&row, "upstream_user_id")?;
             let account: Option<String> = get(&row, "upstream_account_id")?;
@@ -74,10 +74,9 @@ impl PgProviderAccountRepository {
             )
             .await?;
         }
-        transaction
-            .commit()
-            .await
-            .map_err(|_| postgres_unavailable("commit provider device backfill"))?;
+        transaction.commit().await.map_err(|error| {
+            postgres_unavailable("commit provider device backfill").with_source(error)
+        })?;
         Ok(())
     }
 
@@ -113,7 +112,9 @@ impl PgProviderAccountRepository {
         .bind(account)
         .fetch_optional(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("lock existing provider device"))?;
+        .map_err(|error| {
+            postgres_unavailable("lock existing provider device").with_source(error)
+        })?;
         let current = row.as_ref().map(row_credential).transpose()?;
         bind_material(
             transaction,
@@ -155,7 +156,9 @@ impl PgProviderAccountRepository {
         .bind(to_i64(expected_revision)?)
         .fetch_optional(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("load bound provider device for credential CAS"))?;
+        .map_err(|error| {
+            postgres_unavailable("load bound provider device for credential CAS").with_source(error)
+        })?;
         if let Some(row) = row {
             let provider: String = get(&row, "provider_kind")?;
             if let Some(codec) = self.device_codecs.get(&provider)? {
@@ -187,7 +190,9 @@ impl PgProviderAccountRepository {
                 .bind(sqlx::types::Json(current.expose_to_provider()))
                 .fetch_optional(&mut **transaction)
                 .await
-                .map_err(|_| postgres_unavailable("lock bound provider credential"))?;
+                .map_err(|error| {
+                    postgres_unavailable("lock bound provider credential").with_source(error)
+                })?;
                 if locked.is_none() {
                     return Err(StoreError::Conflict {
                         entity: ENTITY,
@@ -236,7 +241,9 @@ impl PgProviderAccountRepository {
         .bind(to_i64(expected_revision)?)
         .fetch_optional(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("lock provider device for rotation"))?
+        .map_err(|error| {
+            postgres_unavailable("lock provider device for rotation").with_source(error)
+        })?
         .ok_or_else(|| StoreError::Conflict {
             entity: ENTITY,
             id: account_id.to_owned(),
@@ -336,7 +343,9 @@ impl PgProviderAccountRepository {
         .bind(account_ids)
         .fetch_all(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("lock provider devices for deletion"))?;
+        .map_err(|error| {
+            postgres_unavailable("lock provider devices for deletion").with_source(error)
+        })?;
         for row in rows {
             let provider: String = get(&row, "provider_kind")?;
             let Some(codec) = self.device_codecs.get(&provider)? else {
@@ -419,7 +428,7 @@ async fn lock_device_mutation(transaction: &mut Transaction<'_, Postgres>) -> St
     )
         .execute(&mut **transaction)
         .await
-        .map_err(|_| postgres_unavailable("lock provider device mutation"))?;
+        .map_err(|error| postgres_unavailable("lock provider device mutation").with_source(error))?;
     Ok(())
 }
 

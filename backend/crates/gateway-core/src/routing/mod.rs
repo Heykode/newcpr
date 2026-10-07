@@ -769,11 +769,17 @@ pub struct RoutingContext {
 pub struct ProviderCandidate {
     provider: ProviderKind,
     upstream_model: Option<UpstreamModelId>,
+    model_presentation: Option<ModelPresentation>,
     emulated_features: BTreeSet<Feature>,
     account_scope: Arc<FrozenAccountScope>,
 }
 
 impl ProviderCandidate {
+    #[must_use]
+    pub const fn model_presentation(&self) -> Option<&ModelPresentation> {
+        self.model_presentation.as_ref()
+    }
+
     #[must_use]
     pub const fn provider(&self) -> &ProviderKind {
         &self.provider

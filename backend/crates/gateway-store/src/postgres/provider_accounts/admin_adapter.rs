@@ -168,7 +168,10 @@ impl PgAdminAccountStore {
                     .bind(ends)
                     .fetch_all(&self.pool)
                     .await
-                    .map_err(|_| postgres_unavailable("load provider account quota window usage"))
+                    .map_err(|error| {
+                        postgres_unavailable("load provider account quota window usage")
+                            .with_source(error)
+                    })
             })
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
@@ -293,7 +296,10 @@ impl PgAdminAccountStore {
             if settings.purchase_cost.is_some() {
                 changed_fields.push("purchase_cost".to_owned());
             }
-            if settings.clear_outbound_proxy {
+            if settings.clear_outbound_proxy
+                || settings.template_proxy_mode
+                    == Some(gateway_admin::model::accounts::ImportTemplateProxyMode::Replace)
+            {
                 changed_fields.push("outbound_proxy".to_owned());
             }
             if settings.egress_mode.is_some() {
@@ -758,7 +764,9 @@ impl AccountStore for PgAdminAccountStore {
                     .bind(ids)
                     .fetch_all(&self.pool)
                     .await
-                    .map_err(|_| postgres_unavailable("load account cumulative costs"))
+                    .map_err(|error| {
+                        postgres_unavailable("load account cumulative costs").with_source(error)
+                    })
                 })
                 .await
                 .map_err(|error| admin_store_error(ENTITY, error))?;

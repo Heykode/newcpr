@@ -232,6 +232,17 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
+        // Live claim ownership and frozen header profiles are private state;
+        // keep their tests private instead of exporting mutation hooks.
+        (
+            "crates/providers/openai",
+            Some("provider/live.rs" | "transport/client_live.rs"),
+            Item::Mod(module),
+        ) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         ("crates/providers/openai", Some("transport/excel/mod.rs"), Item::Mod(module)) => {
             matches!(
                 module.ident.to_string().as_str(),
@@ -603,7 +614,7 @@ fn private_inline_tests_do_not_allow_other_production_modules_or_functions() {
 }
 
 #[test]
-fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
+fn excel_and_live_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     let owner = "crates/providers/openai";
     for name in ["tool_compat_tests", "image_tests", "history_tests"] {
         let file = Path::new("transport/excel/mod.rs");
@@ -625,6 +636,8 @@ fn excel_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
     }
     for relative in [
         "provider/excel.rs",
+        "provider/live.rs",
+        "transport/client_live.rs",
         "transport/excel/catalog.rs",
         "transport/excel/history_messages.rs",
         "transport/excel/repair.rs",

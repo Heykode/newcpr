@@ -346,3 +346,14 @@ fn validator_should_accept_reasoning_and_tool_call_stream() {
 
     assert_eq!(validator.finish(), Ok(()));
 }
+#[test]
+fn opaque_http_body_is_preserved_without_claiming_json_or_exposing_debug_data() {
+    let body = bytes::Bytes::from_static(b"v=0\r\nopaque-sdp-fixture\r\n");
+    let event =
+        gateway_core::event::ProtocolWireEvent::raw_http_body("openai", body.clone()).unwrap();
+    assert_eq!(event.raw_http_body_bytes(), Some(&body));
+    assert!(event.raw_json_body().is_none());
+    assert!(!event.has_json_data());
+    assert!(!format!("{event:?}").contains("opaque-sdp-fixture"));
+    assert_eq!(event.into_raw_http_body(), Some(body));
+}

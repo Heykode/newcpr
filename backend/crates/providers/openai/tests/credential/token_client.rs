@@ -793,7 +793,7 @@ async fn generic_invalid_grant_should_remain_transient_like_official_codex() {
 }
 
 #[tokio::test]
-async fn unauthorized_should_preserve_upstream_details_and_remain_retryable() {
+async fn unauthorized_should_be_terminal_with_upstream_details() {
     let body = r#"{
         "error": {
             "message": "Invalid refresh token.",
@@ -804,8 +804,8 @@ async fn unauthorized_should_preserve_upstream_details_and_remain_retryable() {
     }"#;
     let failure = refresh_failure(401, body).await;
 
-    let RefreshFailure::Transport { message, upstream } = failure else {
-        panic!("production policy gives every 401 a bounded recovery window");
+    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
+        panic!("every refresh endpoint 401 must be terminal");
     };
     assert_eq!(message.as_deref(), Some("Invalid refresh token."));
     let upstream = upstream.expect("complete upstream failure");
@@ -816,19 +816,20 @@ async fn unauthorized_should_preserve_upstream_details_and_remain_retryable() {
 }
 
 #[tokio::test]
-async fn unauthorized_should_back_off_even_with_a_recognized_refresh_code() {
+async fn unauthorized_should_be_terminal_with_a_recognized_refresh_code() {
     let failure = refresh_failure(
         401,
         r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
     )
     .await;
 
-    assert_transport_failure(
-        &failure,
-        401,
-        Some("Refresh token expired."),
-        r#"{"error":{"code":"refresh_token_expired","message":"Refresh token expired."}}"#,
-    );
+    let RefreshFailure::InvalidGrant { message, upstream } = failure else {
+        panic!("recognized refresh-token terminal code must invalidate even on 401");
+    };
+    assert_eq!(message.as_deref(), Some("Refresh token expired."));
+    let upstream = upstream.expect("complete upstream failure");
+    assert_eq!(upstream.status(), 401);
+    assert_eq!(upstream.code(), Some("refresh_token_expired"));
 }
 
 #[tokio::test]
