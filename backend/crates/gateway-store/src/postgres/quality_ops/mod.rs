@@ -275,7 +275,8 @@ impl PgQualityOpsStore {
         }
         let row = if let Some(id) = id {
             let row = sqlx::query(
-                "update quality_rules set config=$3,enabled=$4,next_run_at=$5,
+                "update quality_rules set config=$3,enabled=$4,
+                 next_run_at=case when $4 and not enabled then now() else $5 end,
                  source_template=coalesce($7,source_template),
                  recovery=case when config->>'model' is distinct from $3->>'model'
                     or config->>'detectionMode' is distinct from $3->>'detectionMode'
@@ -305,7 +306,8 @@ impl PgQualityOpsStore {
         } else {
             sqlx::query(
                 "insert into quality_rules(id,account_id,config,enabled,next_run_at,source_template)
-                 values($1,$2,$3,$4,$5,$6) on conflict(account_id) do nothing returning *",
+                 values($1,$2,$3,$4,case when $4 then now() else $5 end,$6)
+                 on conflict(account_id) do nothing returning *",
             )
             .bind(uuid::Uuid::now_v7().to_string())
             .bind(&config.account_id)

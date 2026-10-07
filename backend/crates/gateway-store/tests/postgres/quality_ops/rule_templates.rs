@@ -50,8 +50,17 @@ async fn seconds_templates_round_trip_without_changing_legacy_schedules() {
     assert!(!rule.pending);
     let loaded = store.rules().await.unwrap();
     assert_eq!(loaded[0].config.interval_seconds, Some(17));
+    assert!(loaded[0].next_run_at <= Utc::now());
+    let claim = store.claim().await.unwrap().unwrap();
+    store
+        .finish(&claim, next, vec![answer(QualityVerdict::Correct)])
+        .await
+        .unwrap();
+    assert!(store.claim().await.unwrap().is_none());
     assert_eq!(
-        loaded[0].next_run_at.timestamp_millis(),
+        store.rules().await.unwrap()[0]
+            .next_run_at
+            .timestamp_millis(),
         next.timestamp_millis()
     );
     let templates = store.templates().await.unwrap();
@@ -177,10 +186,8 @@ async fn rule_template_application_preserves_accounts_and_history_and_survives_c
         .unwrap();
     assert_ne!(original.id, second.id);
     assert!(!original.pending);
-    assert!(
-        store.claim().await.unwrap().is_none(),
-        "applying never queues a run"
-    );
+    assert!(original.next_run_at <= Utc::now());
+    assert!(second.next_run_at <= Utc::now());
     assert_eq!(accounts_snapshot(&db).await, before);
     let old_run = scheduled_round(&store, &original, &[QualityVerdict::Correct]).await;
     let mut changed = template.config.clone();

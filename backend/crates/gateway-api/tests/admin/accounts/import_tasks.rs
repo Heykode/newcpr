@@ -104,7 +104,55 @@ fn omitted_import_template_preserves_the_wire_fingerprint_and_null_means_omissio
     let with_null: AccountImportRequest = serde_json::from_value(with_null).unwrap();
     let serialized = serde_json::to_value(&original).unwrap();
     assert!(serialized.get("template").is_none());
+    assert!(serialized.get("templateSettingsOverride").is_none());
     assert_eq!(serialized, serde_json::to_value(&with_null).unwrap());
+}
+
+#[test]
+fn prefilled_template_import_requires_both_selection_and_final_settings() {
+    use gateway_api::admin::accounts::AccountImportRequest;
+    let mut body = input()["items"][0].clone();
+    body["templateSettingsOverride"] = json!(true);
+    let parse = |body: Value| serde_json::from_value::<AccountImportRequest>(body).unwrap();
+    assert!(parse(body.clone()).validate().is_err());
+    body["template"] = json!({"id":"template-a","revision":1});
+    assert!(parse(body.clone()).validate().is_err());
+    body["settings"] = json!({"enabled":true,"weight":31,"concurrencyLimit":null,"groupIds":[]});
+    assert!(parse(body.clone()).validate().is_ok());
+    let snapshot = serde_json::to_value(parse(body.clone())).unwrap();
+    assert_eq!(snapshot["templateSettingsOverride"], true);
+    assert_eq!(snapshot["settings"]["weight"], 31);
+    body["template"] = Value::Null;
+    assert!(parse(body).validate().is_err());
+}
+
+#[tokio::test]
+async fn prefilled_import_still_requires_an_available_template_catalog_before_queueing() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let mut request = input();
+    request["items"][0]["templateSettingsOverride"] = json!(true);
+    request["items"][0]["template"] = json!({"id":"template-a","revision":1});
+    request["items"][0]["settings"] =
+        json!({"enabled":true,"weight":31,"concurrencyLimit":null,"groupIds":[]});
+    for (path, body) in [
+        ("/api/admin/accounts/import", request["items"][0].clone()),
+        ("/api/admin/accounts/import-tasks", request),
+    ] {
+        assert_eq!(
+            send(&fixture, "POST", path, body, true).await.0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    let (_, list) = send(
+        &fixture,
+        "GET",
+        "/api/admin/accounts/import-tasks",
+        Value::Null,
+        true,
+    )
+    .await;
+    assert_eq!(list["data"]["items"], json!([]));
 }
 
 #[tokio::test]

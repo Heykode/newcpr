@@ -52,6 +52,13 @@ jobs, cost accounting, log cleanup and existing template catalog.
 - Import templates reuse the existing catalog and freeze the selected revision.
   Selected templates apply to both inserted and updated accounts. Omission keeps
   the original import semantics; no extra overwrite checkbox is required.
+  New first-step prefill clients send `templateSettingsOverride:true` with both
+  selection and final settings. Validate the template revision but do not overlay
+  its original config onto edited fields. Final group/proxy references are validated
+  by the ordinary import path. Derive the internal import proxy mode from the final
+  explicit proxy/clear choice; otherwise preserve. Absent/false flag keeps legacy
+  template application and the old idempotency fingerprint. The legacy State-only
+  template field retains existing handling without reintroducing the retired UI.
 - Keep database/wire `raw_upstream_error` / `rawUpstreamError`. Protected error
   details may contain a source chain. Core accepts legacy raw details as fallback;
   bounded queues count both fields and ordinary logs must not emit raw bodies.

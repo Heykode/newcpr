@@ -1,5 +1,24 @@
 # Account Management Contracts
 
+## First-Step Import Templates
+
+- The template picker belongs to `AccountSetupFields`, before editable settings,
+  not the credential-entry step. Selection copies scheduling/groups and present
+  optional model/Excel fields; it never replaces account name or purchase metadata.
+- Preserve partial legacy exits through a draft/patch snapshot until the visible
+  exit changes. Do not turn omitted IPv6/source settings into global inheritance.
+  Keep proxy IDs distinct from redacted endpoints and reject incompatible provider exits.
+- Final visible edits are authoritative. Credential imports send the frozen template
+  selection plus `templateSettingsOverride:true` and final settings/proxy. No-template
+  imports retain old semantics. Clearing selection keeps the filled draft but stops
+  applying the template; reopen resets it. Do not display an obsolete template summary
+  beside edited form values.
+- OAuth/2FA reuse prefilled settings through their existing APIs, not template-import
+  flags. Reauthorization remains settings-free; 2FA existing-account behavior remains
+  credential-only. Do not restore the retired State control.
+- Verify form/submission regressions and `browser/account-import-template.mjs` with
+  synthetic data on desktop/mobile, including manual edits, back/reopen and final payload.
+
 ## Codex Credit Visibility
 
 - Render `quota.credits` in both the account-list usage cell and ordinary quota panel.

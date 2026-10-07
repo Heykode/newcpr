@@ -176,8 +176,8 @@ async fn template_threshold_snapshot_and_complete_application_are_atomic() {
     let before = snapshot(&db).await;
     assert_eq!(before["account"], before_save["account"]);
     assert!(
-        store.claim().await.unwrap().is_none(),
-        "save must not enqueue a run"
+        rule.next_run_at <= Utc::now(),
+        "new monitoring is immediately due"
     );
     for verdict in [RequestError, Unknown] {
         assert!(

@@ -5,7 +5,6 @@ import type { AccountGroup } from '@/api'
 import { Openai, Xai } from '@boxicons/vue'
 import { Copy, LayoutGrid, Settings2 } from '@lucide/vue'
 import { computed } from 'vue'
-import AccountTemplatePicker from '@/components/account-templates/AccountTemplatePicker.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
@@ -175,13 +174,6 @@ function continueToImport() {
           :placeholder="view.importInput.placeholder"
           :uploadable="view.importInput.uploadable"
           :nowrap="mode === 'two_fa'"
-          :disabled="busy"
-        />
-        <AccountTemplatePicker
-          v-if="open && !reauthorizing && mode !== 'oauth' && mode !== 'two_fa'"
-          v-model="form.importTemplate"
-          label="导入账号模板"
-          manage
           :disabled="busy"
         />
         <BaseCheckbox

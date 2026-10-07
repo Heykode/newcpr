@@ -545,6 +545,7 @@ export interface AccountImportSettings {
 
 interface AccountImportParam {
   template?: import('./account-templates').AccountTemplateSelection
+  templateSettingsOverride?: boolean
   outboundProxyId?: string
   settings?: AccountImportSettings
   provider: string

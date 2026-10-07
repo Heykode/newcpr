@@ -19,6 +19,63 @@ fn import_command() -> gateway_admin::model::provider_credentials::ImportCredent
 }
 
 #[tokio::test]
+async fn prefilled_import_keeps_edited_settings_exit_and_template_revision_fence() {
+    use gateway_admin::model::accounts::ImportTemplateProxyMode;
+    let h = Harness::new(vec![]).await;
+    let service = h.services.account_templates();
+    let mut config = template_config();
+    config.enabled = false;
+    config.weight = 9;
+    let template = service.save_template(None, config).await.unwrap();
+    for (proxy, clear, mode) in [
+        (
+            Some("edited-proxy"),
+            false,
+            ImportTemplateProxyMode::Replace,
+        ),
+        (None, true, ImportTemplateProxyMode::Replace),
+        (None, false, ImportTemplateProxyMode::Preserve),
+    ] {
+        let mut command = import_command();
+        let mut settings = template_config().settings().unwrap();
+        settings.weight = gateway_core::account::AccountWeight::new(31).unwrap();
+        settings.enabled = true;
+        settings.clear_outbound_proxy = clear;
+        settings.egress_mode = Some(None);
+        command.outbound_proxy_id = proxy.map(str::to_owned);
+        command.settings = Some(settings.clone());
+        let prepared = service
+            .prepare_prefilled_import(command, template_selection(&template))
+            .await
+            .unwrap();
+        settings.template_proxy_mode = Some(mode);
+        assert_eq!(prepared.settings, Some(settings));
+        assert_eq!(prepared.outbound_proxy_id.as_deref(), proxy);
+    }
+    assert!(h.accounts.import_settings().is_empty());
+    assert!(
+        service
+            .prepare_prefilled_import(import_command(), template_selection(&template))
+            .await
+            .is_err()
+    );
+    let mut command = import_command();
+    command.settings = Some(template_config().settings().unwrap());
+    service
+        .delete_template(template_selection(&template))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .prepare_prefilled_import(command, template_selection(&template))
+            .await
+            .unwrap_err()
+            .kind(),
+        AdminErrorKind::Conflict
+    );
+}
+
+#[tokio::test]
 async fn import_templates_freeze_the_complete_config_without_mutating_accounts() {
     let h = Harness::new(vec![account_record("openai")]).await;
     let service = h.services.account_templates();

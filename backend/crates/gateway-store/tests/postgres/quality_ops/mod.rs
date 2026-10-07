@@ -76,6 +76,100 @@ fn answer(verdict: QualityVerdict) -> QualityAnswer {
 }
 
 #[tokio::test]
+async fn quality_initial_activation_is_due_now_but_edits_and_completion_use_the_schedule() {
+    let Some(db) = TestDatabase::create("quality_first_activation").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let next = Utc::now() + Duration::seconds(120);
+    let mut cfg = config("acct_quality_a");
+    cfg.interval_seconds = Some(120);
+    let created = store.save(None, None, cfg, next, &context()).await.unwrap();
+    assert!(created.next_run_at <= Utc::now());
+    let (first, duplicate) = tokio::join!(store.claim(), store.claim());
+    let claims: Vec<_> = [first.unwrap(), duplicate.unwrap()]
+        .into_iter()
+        .flatten()
+        .collect();
+    assert_eq!(claims.len(), 1);
+    store
+        .finish(&claims[0], next, vec![answer(QualityVerdict::Correct)])
+        .await
+        .unwrap();
+    assert!(store.claim().await.unwrap().is_none());
+    let mut cfg = created.config.clone();
+    cfg.prompt = "edited question".into();
+    let edited = store
+        .save(
+            Some(&created.id),
+            Some(created.revision),
+            cfg,
+            next,
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        edited.next_run_at.timestamp_millis(),
+        next.timestamp_millis()
+    );
+    assert!(store.claim().await.unwrap().is_none());
+    let mut cfg = edited.config.clone();
+    cfg.enabled = false;
+    let paused = store
+        .save(
+            Some(&edited.id),
+            Some(edited.revision),
+            cfg,
+            next,
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(store.claim().await.unwrap().is_none());
+    let mut cfg = paused.config.clone();
+    cfg.enabled = true;
+    let enabled = store
+        .save(
+            Some(&paused.id),
+            Some(paused.revision),
+            cfg,
+            next,
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(enabled.next_run_at <= Utc::now());
+    let claim = store.claim().await.unwrap().unwrap();
+    assert_eq!(claim.rule.id, created.id);
+    assert!(store.claim().await.unwrap().is_none());
+
+    let mut cfg = config("acct_quality_b");
+    cfg.enabled = false;
+    let disabled = store.save(None, None, cfg, next, &context()).await.unwrap();
+    assert_eq!(
+        disabled.next_run_at.timestamp_millis(),
+        next.timestamp_millis()
+    );
+    assert!(store.claim().await.unwrap().is_none());
+    let mut cfg = disabled.config.clone();
+    cfg.enabled = true;
+    let enabled = store
+        .save(
+            Some(&disabled.id),
+            Some(disabled.revision),
+            cfg,
+            next,
+            &context(),
+        )
+        .await
+        .unwrap();
+    let claim = store.claim().await.unwrap().unwrap();
+    assert_eq!(claim.rule.id, enabled.id);
+    db.close().await;
+}
+
+#[tokio::test]
 async fn quality_claims_are_globally_bounded_and_results_are_lazy() {
     let Some(db) = TestDatabase::create("quality_claims").await else {
         return;

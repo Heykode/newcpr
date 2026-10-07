@@ -86,7 +86,8 @@ scope, cached_account_models for aggregate scopes.
 - Empty group means all, `ungrouped` means no group, otherwise use a real group ID.
   Reuse account-list status semantics and active runtime cooldowns. OAuth/OpenAI only.
 - One-minute reconciliation pages account candidates and owned updates by 100, without
-  model requests. New rules start at the next configured occurrence, not immediately.
+  model requests. New enabled rules become due immediately in the shared save
+  transaction and run through the existing leased worker queue.
 - Shared configuration lock + parent config/filter/revision check + child CAS prevent
   stale propagation. Existing independent/other-group rules are not adopted.
 - Deleting a child leaves a NULL-rule membership tombstone; deleting the actual account
@@ -145,7 +146,10 @@ scope, cached_account_models for aggregate scopes.
 - Account list responses include nullable qualityMonitoring with ruleId/revision,
   enabled/running/pending, nextRunAt, lastStatus/lastRunAt/lastAction and sourceTemplate.
   Read once for the current page; no per-account browser polling or model-path query.
-- Saving/applying schedules the next configured occurrence without immediate execution.
+- Creating an enabled rule or changing disabled to enabled makes it due immediately.
+  Ordinary enabled-rule edits use the next configured occurrence; disabled rules stay
+  unscheduled. This is owned by `PgQualityOpsStore::save_checked`, covering direct,
+  template and group paths. Do not issue upstream requests from the save handler.
   Provider compatibility, account settings, quality ownership and probes are unchanged.
 
 ### 4. Validation & Error Matrix
@@ -181,7 +185,9 @@ scope, cached_account_models for aggregate scopes.
   legacy five-field Cron and timezone contract, never silently migrate old rules.
   Seconds take precedence over retained Cron fields. `next_run` is shared by save,
   template application and completion; checked timestamp addition rejects overflow.
-  Delay begins at save/completion, not at the previous start. Keep five-second worker
+  Initial enabled rules and disabled-to-enabled transitions are due immediately;
+  ordinary edits and subsequent rounds retain the delay from save/completion, not
+  from the previous start. Keep five-second worker
   scans, global admission, no-overlap and revision fences unchanged; actual starts
   may be later. Old strict-deserialization binaries cannot read seconds configs;
   reconcile configs before downgrade. No schema migration is required.
