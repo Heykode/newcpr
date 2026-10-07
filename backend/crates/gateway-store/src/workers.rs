@@ -1,6 +1,7 @@
 //! Worker 贡献、调度定义与健康探针。
 
 use super::*;
+use gateway_core::{lifecycle::CancellationToken, task::DaemonTask};
 
 pub(crate) fn store_worker_contributions(
     execution: Arc<postgres::PgExecutionStore>,
@@ -39,16 +40,8 @@ pub(crate) fn store_worker_contributions(
         WorkerContribution::Registration(
             WorkerRegistration::try_new(
                 retention_id,
-                WorkerRunnable::Scheduled {
-                    schedule: WorkerSchedule::try_new(
-                        Duration::from_secs(2),
-                        Duration::from_secs(1),
-                        Duration::from_secs(60),
-                        Duration::from_secs(60),
-                        Duration::from_secs(30),
-                    )
-                    .map_err(worker_definition_error)?,
-                    lease: None,
+                WorkerRunnable::Daemon {
+                    restart: ops_flush_restart,
                     task: Box::new(RetentionTask { retention }),
                 },
             )
@@ -167,19 +160,12 @@ pub(crate) struct RetentionTask {
     retention: Arc<postgres::PgLogCleanupStore>,
 }
 
-impl ScheduledTask for RetentionTask {
-    fn run_cycle(
+impl DaemonTask for RetentionTask {
+    fn run(
         &self,
-        context: WorkerCycleContext,
+        cancellation: CancellationToken,
     ) -> futures::future::BoxFuture<'_, Result<(), WorkerTaskError>> {
-        Box::pin(async move {
-            tokio::select! {
-                () = context.cancellation().cancelled() => return Ok(()),
-                result = self.retention.run_batch() => result
-                    .map_err(|_| WorkerTaskError::safe("retention cleanup failed"))?,
-            }
-            Ok(())
-        })
+        self.retention.run(cancellation)
     }
 }
 

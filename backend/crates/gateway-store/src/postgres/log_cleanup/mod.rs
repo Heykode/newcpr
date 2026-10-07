@@ -1,5 +1,6 @@
 //! One durable cleanup job; row locks serialize manual and scheduled maintenance.
 mod runner;
+mod worker;
 
 use crate::request_capture::CaptureManager;
 use async_trait::async_trait;
@@ -14,12 +15,14 @@ use gateway_admin::{
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::sync::Arc;
+use tokio::sync::Notify;
 
 pub struct PgLogCleanupStore {
     pool: PgPool,
     files: Option<Arc<dyn LogFileMaintenance>>,
     captures: Option<Arc<CaptureManager>>,
     instance_id: String,
+    wakeup: Notify,
 }
 
 type StateRow = (i64, Value, Option<DateTime<Utc>>, Option<Value>);
@@ -61,6 +64,7 @@ impl PgLogCleanupStore {
             files,
             captures,
             instance_id,
+            wakeup: Notify::new(),
         }
     }
 
@@ -271,7 +275,9 @@ impl LogCleanupStore for PgLogCleanupStore {
         sqlx::query("update request_capture_config set config=jsonb_set(config,'{retentionDays}',to_jsonb($1::int)) where singleton")
             .bind(command.config.captures.retention_days as i32).execute(&mut *tx).await.map_err(unavailable)?;
         Self::audit(&mut tx, context, "log_cleanup.configure", "settings").await?;
-        tx.commit().await.map_err(unavailable)
+        tx.commit().await.map_err(unavailable)?;
+        self.wakeup.notify_one();
+        Ok(())
     }
 
     async fn start(
@@ -295,6 +301,7 @@ impl LogCleanupStore for PgLogCleanupStore {
         Self::save_job(&mut tx, &job).await?;
         Self::audit(&mut tx, context, "log_cleanup.start", &job.id).await?;
         tx.commit().await.map_err(unavailable)?;
+        self.wakeup.notify_one();
         Ok(job)
     }
 
@@ -308,6 +315,8 @@ impl LogCleanupStore for PgLogCleanupStore {
         job.status = CleanupJobStatus::Cancelled;
         Self::save_job(&mut tx, &job).await?;
         Self::audit(&mut tx, context, "log_cleanup.cancel", id).await?;
-        tx.commit().await.map_err(unavailable)
+        tx.commit().await.map_err(unavailable)?;
+        self.wakeup.notify_one();
+        Ok(())
     }
 }

@@ -1,4 +1,5 @@
 mod retention;
+mod worker;
 
 use super::TestDatabase;
 use chrono::{Duration, Utc};
