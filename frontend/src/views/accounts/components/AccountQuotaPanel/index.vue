@@ -9,6 +9,7 @@ import { DEFAULT_EXCEL_MODELS } from '@/utils/excel-defaults'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountPlanBadge from '../AccountPlanBadge.vue'
 import AccountProfileModal from '../AccountProfileModal/index.vue'
+import AccountQuotaCredits from './Credits.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import AccountResetCredits from './ResetCredits.vue'
 
@@ -80,6 +81,11 @@ const profileOpen = shallowRef(false)
     </div>
 
     <div class="grid min-h-0 gap-3">
+      <AccountQuotaCredits
+        v-if="account.provider === 'openai'"
+        class="max-sm:w-[calc(100vw-5.5rem)]"
+        :credits="account.quota.credits"
+      />
       <AccountQuotaPanelEntry
         v-for="entry in quotaEntries"
         :key="entry.key"

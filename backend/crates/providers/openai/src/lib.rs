@@ -183,6 +183,7 @@ async fn initialize_with_request_tuning_mode(
         ports.cooldowns(),
     )
     .with_request_tuning(request_tuning.clone())
+    .with_session_proxy_pool(ports.session_proxy_pool())
     .with_runtime_policy(Arc::clone(&runtime_policy));
     let quota = Arc::new(match &egress_runtime {
         Some(runtime) => quota.with_egress_runtime(Arc::clone(runtime)),

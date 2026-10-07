@@ -25,6 +25,7 @@ use gateway_core::account::{
     QuotaAccessChange, QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaObservationTouch,
     QuotaState, QuotaWriteOutcome,
 };
+use gateway_core::provider_ports::session_proxy::{RequestProxySource, SessionProxyPool};
 use gateway_core::provider_ports::{
     ProviderCooldown, ProviderCooldownPort, ProviderRuntimePolicyPort,
 };
@@ -121,12 +122,16 @@ fn observe_warmup_events(events: Vec<SseEvent>, terminal: &mut WarmupTerminal) {
 
 async fn consume_warmup_sse(
     response: &mut CodexBackendStreamingResponse,
+    client: &CodexBackendClient,
 ) -> Result<(), &'static str> {
     let mut decoder = SseEventDecoder::default();
     let mut terminal = WarmupTerminal::Missing;
     let mut received_bytes = 0_usize;
     while let Some(chunk) = response.body.next().await {
-        let chunk = chunk.map_err(|_| "stream_read_failed")?;
+        let chunk = chunk.map_err(|error| {
+            client.report_session_proxy_stream_error(&error);
+            "stream_read_failed"
+        })?;
         received_bytes = received_bytes.saturating_add(chunk.len());
         if received_bytes > WARMUP_STREAM_MAX_BYTES {
             return Err("stream_size_limit_exceeded");
@@ -142,7 +147,10 @@ async fn consume_warmup_sse(
         observe_warmup_events(events, &mut terminal);
     }
     match terminal {
-        WarmupTerminal::Completed => Ok(()),
+        WarmupTerminal::Completed => {
+            client.report_session_proxy_completed();
+            Ok(())
+        }
         WarmupTerminal::Missing => Err("completion_event_missing"),
         WarmupTerminal::Failed => Err("response_failed"),
     }
@@ -297,6 +305,7 @@ fn upstream_error_code(error: &CodexClientError) -> Option<String> {
 
 pub struct CodexCredentialQuotaService {
     egress_runtime: Option<Arc<CodexEgressRuntime>>,
+    session_proxy_pool: Option<Arc<dyn SessionProxyPool>>,
     repository: CodexCredentialRepository,
     store: Arc<dyn ProviderAccountStore>,
     profile: CodexWireProfileState,
@@ -631,6 +640,7 @@ impl CodexCredentialQuotaService {
     ) -> Self {
         Self {
             egress_runtime: None,
+            session_proxy_pool: None,
             store: Arc::clone(repository.store()),
             repository,
             profile,
@@ -653,6 +663,12 @@ impl CodexCredentialQuotaService {
     #[must_use]
     pub fn with_egress_runtime(mut self, runtime: Arc<CodexEgressRuntime>) -> Self {
         self.egress_runtime = Some(runtime);
+        self
+    }
+
+    #[must_use]
+    pub fn with_session_proxy_pool(mut self, pool: Option<Arc<dyn SessionProxyPool>>) -> Self {
+        self.session_proxy_pool = pool;
         self
     }
 
@@ -697,6 +713,44 @@ impl CodexCredentialQuotaService {
             Some(runtime) => client.with_egress_runtime(Arc::clone(runtime)),
             None => client,
         }
+    }
+
+    fn warmup_client(
+        &self,
+        client: &CodexBackendClient,
+        account: &ProviderAccount,
+        request_id: &str,
+    ) -> Result<CodexBackendClient, CodexCredentialQuotaError> {
+        let unavailable = |reason: &str| CodexCredentialQuotaError::Upstream {
+            detail: format!("warmup account exit is unavailable: account_proxy_{reason}"),
+            status: Some(503),
+            code: Some(format!("account_proxy_{reason}")),
+        };
+        let source = account.request_proxy_source();
+        if source == RequestProxySource::Account {
+            return client
+                .for_account(account)
+                .map_err(|_| unavailable("client_unavailable"));
+        }
+        let pool = self
+            .session_proxy_pool
+            .as_ref()
+            .ok_or_else(|| unavailable("manager_unavailable"))?;
+        // A background warmup has no downstream session. Its transient lease must
+        // not replace or retain a user's existing session-to-exit binding.
+        let scope =
+            serde_json::json!(["account-warmup-v1", account.id().as_str(), request_id]).to_string();
+        let lease = pool
+            .acquire(
+                source,
+                gateway_core::account::ResponsesUpstream::Codex,
+                &scope,
+                true,
+            )
+            .map_err(|error| unavailable(&error.to_string()))?;
+        client
+            .for_session_proxy(account, lease)
+            .map_err(|_| unavailable("client_unavailable"))
     }
 
     /// Execute the official account warmup request using the account's existing
@@ -792,7 +846,7 @@ impl CodexCredentialQuotaService {
             );
             body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
             let request = CodexResponsesRequest::from_body(body);
-            let account_client = match client.for_account(&account) {
+            let account_client = match self.warmup_client(&client, &account, &request_id) {
                 Ok(client) => client,
                 Err(error) => {
                     tracing::warn!(account_id = %account.id(), error = %error, "OpenAI warmup account client construction failed");
@@ -812,7 +866,7 @@ impl CodexCredentialQuotaService {
                     .await
                     .map_err(|error| format!("request: {error}"))?;
                 let observed_at = response.rate_limit_observed_at;
-                let terminal = consume_warmup_sse(&mut response)
+                let terminal = consume_warmup_sse(&mut response, &account_client)
                     .await
                     .map_err(str::to_owned);
                 let headers = response.rate_limit_headers.clone();
@@ -823,6 +877,7 @@ impl CodexCredentialQuotaService {
                 terminal.map(|()| (observed_at, headers, updates))
             })
             .await;
+            drop(account_client);
 
             match result {
                 Ok(Ok((observed_at, headers, updates))) => {

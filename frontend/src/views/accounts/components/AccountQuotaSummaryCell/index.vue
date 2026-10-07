@@ -4,6 +4,7 @@ import type { AccountRow } from '../../constants'
 import { computed } from 'vue'
 import { useUiClock } from '@/composables/useUiClock'
 import { groupedAccountQuotaWindows, visibleSummaryQuotaWindows } from '../../constants'
+import AccountQuotaCredits from '../AccountQuotaPanel/Credits.vue'
 import AccountUsageWindow from '../AccountUsageWindow/index.vue'
 import AccountQuotaSummaryEntry from './Entry.vue'
 import { weeklyForecastPresentation } from './forecast'
@@ -76,6 +77,11 @@ const accountTypeLabel = computed(() => {
       </div>
     </template>
     <AccountUsageWindow v-else variant="compact" />
+    <AccountQuotaCredits
+      v-if="account.provider === 'openai'"
+      :credits="account.quota.credits"
+      compact
+    />
     <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[10px] font-emphasis text-cp-text-tertiary">
       <span
         v-if="summaryEntries.length > 0"
