@@ -186,7 +186,6 @@ struct ConnectionStats {
     command_queue_high_water: AtomicUsize,
     command_backpressure_count: AtomicU64,
     ping_received_count: AtomicU64,
-    pong_written_count: AtomicU64,
     ping_written_count: AtomicU64,
     pong_received_count: AtomicU64,
     last_read_ms: AtomicU64,
@@ -501,7 +500,6 @@ impl ResponsesWebSocketConnection {
                 .command_backpressure_count
                 .load(Ordering::Relaxed),
             ping_received_count = self.stats.ping_received_count.load(Ordering::Relaxed),
-            pong_written_count = self.stats.pong_written_count.load(Ordering::Relaxed),
             ping_written_count = self.stats.ping_written_count.load(Ordering::Relaxed),
             pong_received_count = self.stats.pong_received_count.load(Ordering::Relaxed),
             read_idle_ms,
@@ -567,7 +565,7 @@ where
 
 #[expect(clippy::too_many_arguments)]
 async fn run_pump<S, E>(
-    mut socket: S,
+    socket: S,
     mut commands: mpsc::Receiver<ConnectionCommand>,
     incoming: mpsc::Sender<PendingConnectionEvent>,
     exited: oneshot::Sender<PumpExitReason>,
@@ -581,140 +579,151 @@ async fn run_pump<S, E>(
     S: Stream<Item = Result<Message, E>> + Sink<Message, Error = E> + Unpin,
     E: fmt::Display,
 {
-    let event_slots = Arc::new(Semaphore::new(INBOUND_EVENT_BUFFER));
-    let deadline = tokio::time::sleep_until(opened_at + config.max_age);
-    tokio::pin!(deadline);
-    let mut deadline_elapsed = false;
-    let mut heartbeat = tokio::time::interval_at(
-        opened_at + DOWNSTREAM_PING_INTERVAL,
-        DOWNSTREAM_PING_INTERVAL,
-    );
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut ping_sequence = 0_u64;
-    let reason = loop {
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => break PumpExitReason::LifecycleShutdown,
-            () = &mut deadline, if !deadline_elapsed => {
-                deadline_elapsed = true;
-                expired.store(true, Ordering::Release);
-                // 满队列本身已能唤醒空闲协调层；到期标志仍阻止启动下一轮。
-                // 不能因无法追加 Expired 通知而中断正在收尾的响应。
-                match emit_incoming(&incoming, &event_slots, ConnectionEvent::Expired) {
-                    Ok(()) | Err(PumpExitReason::InboundOverload) => {}
-                    Err(reason) => break reason,
+    let (mut writer, mut reader) = socket.split();
+    // Both halves belong to this task. A blocked write cannot hide close or cancellation.
+    let read = async {
+        let event_slots = Arc::new(Semaphore::new(INBOUND_EVENT_BUFFER));
+        let deadline = tokio::time::sleep_until(opened_at + config.max_age);
+        tokio::pin!(deadline);
+        let mut deadline_elapsed = false;
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut deadline, if !deadline_elapsed => {
+                    deadline_elapsed = true;
+                    expired.store(true, Ordering::Release);
+                    // Expiry prevents the next request without interrupting the active response.
+                    match emit_incoming(&incoming, &event_slots, ConnectionEvent::Expired) {
+                        Ok(()) | Err(PumpExitReason::InboundOverload) => {}
+                        Err(reason) => break reason,
+                    }
+                }
+                message = reader.next() => {
+                    if matches!(&message, Some(Ok(_))) {
+                        stats.record_read(opened_at);
+                    }
+                    let event = match message {
+                        Some(Ok(Message::Text(payload))) => Some(ConnectionEvent::Text(payload.to_string())),
+                        Some(Ok(Message::Binary(_))) => Some(ConnectionEvent::Binary),
+                        Some(Ok(Message::Ping(_))) => {
+                            // Axum/tungstenite queues Pong and flushes it when reading continues.
+                            stats.ping_received_count.fetch_add(1, Ordering::Relaxed);
+                            None
+                        }
+                        Some(Ok(Message::Pong(_))) => {
+                            stats.pong_received_count.fetch_add(1, Ordering::Relaxed);
+                            None
+                        }
+                        Some(Ok(Message::Close(_))) => break PumpExitReason::ClientClose,
+                        Some(Err(error)) => {
+                            tracing::info!(
+                                websocket_connection_id = %connection_id,
+                                error = %error,
+                                "Responses WebSocket receive failed"
+                            );
+                            break PumpExitReason::ReadError;
+                        }
+                        None => break PumpExitReason::PeerEof,
+                    };
+                    if let Some(event) = event
+                        && let Err(reason) = emit_incoming(&incoming, &event_slots, event)
+                    {
+                        break reason;
+                    }
                 }
             }
-            command = commands.recv() => {
-                let Some(command) = command else {
-                    break PumpExitReason::CoordinatorDropped;
-                };
-                let ConnectionCommand {
-                    message,
-                    context,
-                    acknowledged,
-                } = command;
-                let closing = matches!(message, Message::Close(_));
-                let result = socket.send(message).await.map_err(|error| {
-                    let message = error.to_string();
+        }
+    };
+    let write = async {
+        let mut heartbeat = tokio::time::interval_at(
+            opened_at + DOWNSTREAM_PING_INTERVAL,
+            DOWNSTREAM_PING_INTERVAL,
+        );
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut ping_sequence = 0_u64;
+        loop {
+            let command = tokio::select! {
+                biased;
+                command = commands.recv() => {
+                    let Some(command) = command else {
+                        break PumpExitReason::CoordinatorDropped;
+                    };
+                    Some(command)
+                }
+                _ = heartbeat.tick() => None,
+            };
+            let (message, acknowledgement) = if let Some(command) = command {
+                (
+                    command.message,
+                    Some((command.context, command.acknowledged)),
+                )
+            } else {
+                ping_sequence = ping_sequence.wrapping_add(1);
+                (
+                    Message::Ping(ping_sequence.to_be_bytes().to_vec().into()),
+                    None,
+                )
+            };
+            let closing = matches!(message, Message::Close(_));
+            let result = match timeout(config.write_timeout, writer.send(message)).await {
+                Ok(Ok(())) => {
+                    stats.record_write(opened_at);
+                    if acknowledgement.is_none() {
+                        stats.ping_written_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(())
+                }
+                Ok(Err(error)) => Err(ConnectionWriteError::Transport {
+                    message: error.to_string(),
+                }),
+                Err(_) => Err(ConnectionWriteError::Timeout {
+                    timeout: config.write_timeout,
+                }),
+            };
+            let failure = result.as_ref().err().map(|error| match error {
+                ConnectionWriteError::Timeout { .. } => PumpExitReason::WriteTimeout,
+                ConnectionWriteError::Transport { .. } => PumpExitReason::WriteError,
+                ConnectionWriteError::Closed => PumpExitReason::PumpStopped,
+            });
+            if let Some((context, acknowledged)) = acknowledgement {
+                if let Err(error) = &result {
                     tracing::debug!(
                         websocket_connection_id = %connection_id,
                         request_id = context.request_id.as_deref().unwrap_or(""),
                         frame_phase = context.phase.as_str(),
-                        error = %message,
+                        error = %error,
                         "Responses WebSocket pump transport write failed"
                     );
-                    ConnectionWriteError::Transport { message }
-                });
-                let failed = result.is_err();
-                if !failed {
-                    stats.record_write(opened_at);
                 }
                 let _ = acknowledged.send(result);
-                if failed {
-                    break PumpExitReason::WriteError;
-                }
-                if closing {
-                    break PumpExitReason::ServerClose;
-                }
             }
-            // 官方 Codex WsStream 在独立 pump 中回复 Pong，且不将控制帧交给业务流。
-            // 这里只为下游链路保活，不设置 Pong deadline，也不延长业务请求预算。
-            _ = heartbeat.tick() => {
-                ping_sequence = ping_sequence.wrapping_add(1);
-                let ping = Message::Ping(ping_sequence.to_be_bytes().to_vec().into());
-                let result = tokio::select! {
-                    biased;
-                    () = cancellation.cancelled() => break PumpExitReason::LifecycleShutdown,
-                    result = timeout(config.write_timeout, socket.send(ping)) => result,
-                };
-                match result {
-                    Ok(Ok(())) => {
-                        stats.ping_written_count.fetch_add(1, Ordering::Relaxed);
-                        stats.record_write(opened_at);
-                    }
-                    Ok(Err(error)) => {
-                        tracing::info!(
-                            websocket_connection_id = %connection_id,
-                            error = %error,
-                            "Responses WebSocket Ping write failed"
-                        );
-                        break PumpExitReason::WriteError;
-                    }
-                    Err(_) => break PumpExitReason::WriteTimeout,
-                }
+            if let Some(reason) = failure {
+                break reason;
             }
-            message = socket.next() => {
-                if matches!(&message, Some(Ok(_))) {
-                    stats.record_read(opened_at);
-                }
-                match message {
-                    Some(Ok(Message::Text(payload))) => {
-                        if let Err(reason) = emit_incoming(&incoming, &event_slots, ConnectionEvent::Text(payload.to_string())) {
-                            break reason;
-                        }
-                    }
-                    Some(Ok(Message::Binary(_))) => {
-                        if let Err(reason) = emit_incoming(&incoming, &event_slots, ConnectionEvent::Binary) {
-                            break reason;
-                        }
-                    }
-                    Some(Ok(Message::Ping(payload))) => {
-                        stats.ping_received_count.fetch_add(1, Ordering::Relaxed);
-                        match timeout(config.write_timeout, socket.send(Message::Pong(payload))).await {
-                            Ok(Ok(())) => {
-                                stats.pong_written_count.fetch_add(1, Ordering::Relaxed);
-                                stats.record_write(opened_at);
-                            }
-                            Ok(Err(error)) => {
-                                tracing::info!(
-                                    websocket_connection_id = %connection_id,
-                                    error = %error,
-                                    "Responses WebSocket Pong write failed"
-                                );
-                                break PumpExitReason::WriteError;
-                            }
-                            Err(_) => break PumpExitReason::WriteTimeout,
-                        }
-                    }
-                    Some(Ok(Message::Pong(_))) => {
-                        stats.pong_received_count.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Some(Ok(Message::Close(_))) => break PumpExitReason::ClientClose,
-                    Some(Err(error)) => {
-                        tracing::info!(
-                            websocket_connection_id = %connection_id,
-                            error = %error,
-                            "Responses WebSocket receive failed"
-                        );
-                        break PumpExitReason::ReadError;
-                    }
-                    None => break PumpExitReason::PeerEof,
-                }
-            },
+            if closing {
+                break PumpExitReason::ServerClose;
+            }
         }
     };
-    // 退出不能排在待执行请求之后，也不能因业务队列已满而丢失。
+    let reason = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => PumpExitReason::LifecycleShutdown,
+        reason = read => reason,
+        reason = write => reason,
+    };
+    if reason == PumpExitReason::ClientClose {
+        // Reading Close queues the acknowledgement. Flush it once, without waiting
+        // for the ordinary five-minute write budget or sending a duplicate Close.
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {}
+            result = timeout(Duration::from_secs(1), writer.flush()) => {
+                if !matches!(result, Ok(Ok(()))) {
+                    tracing::debug!(websocket_connection_id = %connection_id, "Responses WebSocket close acknowledgement could not be flushed");
+                }
+            }
+        }
+    }
     let _ = exited.send(reason);
     tracing::debug!(
         websocket_connection_id = %connection_id,

@@ -376,3 +376,29 @@ fn transport_should_require_websocket_for_store_false_warmup() {
     );
     assert!(transport_requirement(&request).requires_websocket());
 }
+#[test]
+fn structural_response_starts_timing_but_not_semantic_delivery() {
+    for event in [
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.completed",
+    ] {
+        let signals = response_event_signals(Some(event), &serde_json::json!({"type":event}));
+        assert!(signals.output_start, "{event}");
+        assert!(!signals.semantic_output, "{event}");
+        assert!(!signals.text_output);
+        assert!(!signals.reasoning_output);
+    }
+    for event in [
+        "",
+        "response.created",
+        "response.in_progress",
+        "keepalive",
+        "codex.rate_limits",
+        "response.failed",
+        "error",
+    ] {
+        let signals = response_event_signals(Some(event), &serde_json::json!({"type":event}));
+        assert!(!signals.output_start, "{event}");
+    }
+}

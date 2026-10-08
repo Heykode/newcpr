@@ -31,6 +31,8 @@ export function getAuthStatus(options: RequestOptions = {}) {
   return request<AuthStatusResponse>({
     url: '/api/admin/auth/status',
     method: 'GET',
+    timeout: 10_000,
+    silent: true,
     ...options,
   })
 }

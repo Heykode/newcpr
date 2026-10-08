@@ -47,6 +47,7 @@ impl RotationStrategy {
 #[serde(rename_all = "snake_case")]
 pub enum AccountAffinity {
     Relaxed,
+    Preferred,
     #[default]
     Strict,
 }
@@ -56,6 +57,7 @@ impl AccountAffinity {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Relaxed => "relaxed",
+            Self::Preferred => "preferred",
             Self::Strict => "strict",
         }
     }
@@ -64,6 +66,7 @@ impl AccountAffinity {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "relaxed" => Some(Self::Relaxed),
+            "preferred" => Some(Self::Preferred),
             "strict" => Some(Self::Strict),
             _ => None,
         }

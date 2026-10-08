@@ -6,6 +6,111 @@ use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAf
 
 const TURN: &str = "turn_child_endpoint";
 
+#[tokio::test]
+async fn connection_local_replay_has_no_selection_or_affinity_side_effects() {
+    use gateway_core::engine::continuation::NativeContinuationScope;
+    for existing in [false, true] {
+        for state_scope in [false, true] {
+            for attempt in [
+                ContinuationAttempt::ReplayOwner,
+                ContinuationAttempt::ReplayAny,
+            ] {
+                let store = Arc::new(MemoryAccountStore::default());
+                create_account(&store, "acct_subagent_a").await;
+                let affinity = Arc::new(MemorySessionAffinity::default());
+                let leases = Arc::new(TestLeaseCoordinator::default());
+                let upstream = MockServer::start().await;
+                let provider = provider_with_affinity_and_base_url_and_leases(
+                    &store,
+                    affinity.clone(),
+                    upstream.uri(),
+                    leases.clone(),
+                );
+                if existing {
+                    seed_child_turn(&provider).await;
+                }
+                let before = (
+                    affinity.binding_count(),
+                    affinity.alias_count(),
+                    affinity.lookup_keys(),
+                    affinity.claim_ttls(),
+                    affinity.renewal_ttls(),
+                    leases.requests.lock().unwrap().len(),
+                );
+                let mut generation = generate_with_session_context("root", Some("child"), None);
+                if state_scope {
+                    generation = generation.with_provider_session_state(
+                        ProviderSessionState::new(
+                            "openai",
+                            Map::from_iter([
+                                ("account_id".to_owned(), json!("acct_subagent_a")),
+                                ("conversation_id".to_owned(), json!("lc_preflight")),
+                                ("continuation_scope".to_owned(), json!("connection_local")),
+                            ]),
+                        )
+                        .unwrap(),
+                    );
+                }
+                let account = ProviderAccountId::new("acct_subagent_a").unwrap();
+                let provider_kind = ProviderKind::new("openai").unwrap();
+                let key = ClientApiKeyId::new("key_openai_contract").unwrap();
+                let pin = NativeContinuationPin::new(
+                    PreviousResponseId::new("resp_client"),
+                    PreviousResponseId::new("resp_upstream"),
+                    key.clone(),
+                    provider_kind.clone(),
+                    account.clone(),
+                )
+                .with_scope(if state_scope {
+                    NativeContinuationScope::Persisted
+                } else {
+                    NativeContinuationScope::ConnectionLocal
+                });
+                let attempt = AttemptContext::new(
+                    RequestAttemptContext::new(ModelRequestId::new("req_preflight").unwrap(), key),
+                    NonZeroU32::new(2).unwrap(),
+                    SystemTime::now() + Duration::from_secs(30),
+                    account_policy(),
+                    AccountAttemptContext::new(
+                        BTreeSet::new(),
+                        None,
+                        Some(ProviderAccountStateOwner::new(provider_kind, account)),
+                    )
+                    .with_account_scope(contract_account_scope()),
+                    Some(ContinuationBinding::Pinned(pin)),
+                    CancellationToken::new(),
+                )
+                .with_continuation_attempt(attempt);
+                let error = provider
+                    .execute(
+                        planned_request("openai", Operation::Generate(generation)),
+                        attempt,
+                    )
+                    .await
+                    .err()
+                    .unwrap();
+                assert_eq!(
+                    error.kind(),
+                    ProviderErrorKind::ContinuationRecoveryRequired
+                );
+                assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+                assert_eq!(
+                    before,
+                    (
+                        affinity.binding_count(),
+                        affinity.alias_count(),
+                        affinity.lookup_keys(),
+                        affinity.claim_ttls(),
+                        affinity.renewal_ttls(),
+                        leases.requests.lock().unwrap().len()
+                    )
+                );
+                assert!(upstream.received_requests().await.unwrap().is_empty());
+            }
+        }
+    }
+}
+
 async fn seed_child_turn(provider: &CodexProvider) {
     let generation = generate_with_session_context("root", Some("child"), None);
     let payload = generation
@@ -107,23 +212,26 @@ async fn image_turn_alias_conflicting_root_is_rejected_before_send() {
 }
 
 #[tokio::test]
-async fn child_turn_alias_with_lost_root_cannot_create_a_new_binding() {
+async fn child_turn_alias_with_lost_root_atomically_claims_a_new_binding() {
     let (provider, affinity, _leases, upstream) = fixture().await;
     let key = ProviderSessionAffinityKey::try_new(affinity.lookup_keys()[0].clone()).unwrap();
     affinity
         .clear(&ProviderKind::new("openai").unwrap(), &key)
         .await
         .unwrap();
-    let error = provider
+    let stream = provider
         .execute(
             planned_provider_endpoint_request("openai", image(None)),
             context("req_lost_alias_root", CancellationToken::new()),
         )
         .await
-        .err()
-        .expect("lost root must not be reassigned");
-    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
-    assert_eq!(affinity.binding_count(), 0);
+        .expect("missing binding can be claimed through its retained session alias");
+    assert_eq!(
+        stream.metadata().provider_account_id().as_str(),
+        "acct_subagent_b"
+    );
+    assert_eq!(affinity.binding_count(), 1);
+    assert_eq!(affinity.alias_count(), 1);
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 

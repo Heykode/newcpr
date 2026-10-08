@@ -82,6 +82,8 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
    required account、Native、ReplayOwner 的硬绑定不得自行换号。
 2. fallback 前必须先尝试可立即执行的合法账号。仅调用
    `select_for_capacity_wait` 不证明已经满足“全忙”；Provider 负责完成此判断。
+   可选 Preferred 模式先尝试 Ready 候选，不先进入软绑定的 sticky 队列；
+   required/native 硬绑定不变，不能借 Preferred 绕过所属账号等待。
 3. fallback 一次只持有一个账号的等待租约。队列满可有界扫描其他 Busy 候选，
    成功入队后固定目标，不承诺严格 FIFO 或其他账号空闲后立即迁移。
 4. 目标失格或终检冲突，先释放所有权再有界重选；当前外层最多三轮。

@@ -652,7 +652,9 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
         } else {
             None
         };
-        if allows_account_state_mutation && let Some(key) = request.session_affinity_key.as_ref() {
+        if allows_account_state_mutation
+            && request.context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred
+            && let Some(key) = request.session_affinity_key.as_ref() {
             // JSON 已完整接收；在首个 yield 前提交亲和迁移，避免下游取消漏掉更新。
             request.selector.update_session_affinity_binding(
                 key,
@@ -1258,7 +1260,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     selector
                         .record_success_with_parent_binding(
                             &active_account,
-                            session_affinity_key.as_ref(),
+                            session_affinity_key.as_ref().filter(|_| context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred),
                             lease.affinity_expected_binding(),
                             lease.guardian_parent_record_key(),
                             lease.session_binding_ttl(),
@@ -1411,7 +1413,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     selector
                         .record_success_with_parent_binding(
                         &active_account,
-                        session_affinity_key.as_ref(),
+                        session_affinity_key.as_ref().filter(|_| context.account_selection_policy().openai_account_affinity() != gateway_core::account::AccountAffinity::Preferred),
                             lease.affinity_expected_binding(),
                         lease.guardian_parent_record_key(),
                         lease.session_binding_ttl(),

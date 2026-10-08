@@ -237,7 +237,12 @@ impl Stream for TestSocket {
     type Item = Result<Message, TestSocketError>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.incoming.poll_recv(context)
+        let message = self.incoming.poll_recv(context);
+        // Match the real Axum/tungstenite transport's automatic control frames.
+        if let Poll::Ready(Some(Ok(Message::Ping(payload)))) = &message {
+            self.written.send(Message::Pong(payload.clone())).unwrap();
+        }
+        message
     }
 }
 
@@ -322,6 +327,11 @@ async fn pump_replies_to_ping_with_the_same_pong_payload() {
         panic!("pump wrote a non-Pong control frame");
     };
     assert_eq!(payload.as_ref(), &[1, 2, 3]);
+    tokio::task::yield_now().await;
+    assert!(
+        written.try_recv().is_err(),
+        "pump must not duplicate the transport Pong"
+    );
     drop(connection);
 }
 
@@ -501,6 +511,40 @@ async fn stalled_write_times_out_at_three_hundred_seconds_and_aborts_the_pump() 
         matches!(error, ConnectionWriteError::Timeout { timeout } if timeout == Duration::from_secs(300))
             && dropped.load(Ordering::Acquire)
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_write_still_observes_peer_close_and_lifecycle_cancellation() {
+    for peer_close in [false, true] {
+        let PumpHarness {
+            mut connection,
+            incoming,
+            written: _written,
+            dropped,
+            cancellation,
+        } = test_connection(true);
+        let sender = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            if peer_close {
+                incoming.send(Ok(Message::Close(None))).unwrap();
+            } else {
+                cancellation.cancel();
+            }
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            connection.send_text(
+                "stalled".to_owned(),
+                WriteContext::connection(FramePhase::Data),
+            ),
+        )
+        .await
+        .expect("close or cancellation cannot wait for the write timeout");
+        assert!(result.is_err());
+        sender.await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(dropped.load(Ordering::Acquire));
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -774,6 +818,44 @@ async fn start_active_response() -> (
     }
 
     (trace, socket, server)
+}
+
+#[tokio::test]
+async fn real_peer_receives_one_pong_and_a_close_acknowledgement() {
+    let (trace, mut socket, server) = start_active_response().await;
+    let payload = vec![3, 1, 4];
+    socket
+        .send(ClientMessage::Ping(payload.clone().into()))
+        .await
+        .expect("send Ping");
+    let pong = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("Pong timeout")
+        .expect("connection open")
+        .expect("valid Pong");
+    assert_eq!(pong, ClientMessage::Pong(payload.into()));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), socket.next())
+            .await
+            .is_err(),
+        "the transport must not send a second manual Pong"
+    );
+    socket.close(None).await.expect("send Close");
+    let close = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("Close acknowledgement timeout")
+        .expect("receive Close acknowledgement")
+        .expect("valid Close acknowledgement");
+    assert!(matches!(close, ClientMessage::Close(_)));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !trace.cancelled.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("active request cancelled after peer Close");
+    server.abort();
+    let _ = server.await;
 }
 
 #[tokio::test]

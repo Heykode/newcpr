@@ -265,10 +265,9 @@ export function usagePerformanceDetails(record: UsagePerformanceRecord) {
   const throughput = typeof outputTokens === 'number'
     && Number.isFinite(outputTokens)
     && outputTokens > 0
-    && firstTokenMs !== null
     && totalMs !== null
-    && totalMs > firstTokenMs
-    ? outputTokens * 1000 / (totalMs - firstTokenMs)
+    && totalMs > 0
+    ? outputTokens * 1000 / totalMs
     : null
 
   return {

@@ -8,7 +8,7 @@ use gateway_admin::{
     model::backup::{
         BackupRecordSeed, BackupStatus, BackupTriggerKind, UpdateBackupScheduleCommand, code,
     },
-    ports::backup::{BackupRepository, DatabaseDumpPort, DumpRequest},
+    ports::backup::{BackupRepository, DatabaseDumpPort, DumpRequest, StatusTransitionUpdate},
 };
 use gateway_core::lifecycle::CancellationToken;
 
@@ -55,6 +55,68 @@ async fn backup_task_runs_full_dump_upload_verify_pipeline() {
         .object(&seed.object_key)
         .expect("uploaded object exists");
     assert_eq!(stored.as_slice(), DUMP_CONTENT);
+    assert!(dump.inspect_staging(&seed.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn recovered_backups_clean_staging_after_verified_completion() {
+    for (status, uploaded) in [
+        (BackupStatus::Dumping, false),
+        (BackupStatus::Uploading, false),
+        (BackupStatus::Uploading, true),
+    ] {
+        let repository = Arc::new(FakeBackupRepository::new(configured_settings()));
+        let dump = Arc::new(FakeDumpPort::new());
+        let objects = Arc::new(FakeObjectStore::new());
+        let seed = BackupRecordSeed {
+            id: backup_id("recover-complete"),
+            trigger_kind: BackupTriggerKind::Manual,
+            scheduled_at: None,
+            object_key: "codex/2026/10/08/recover-complete.dump".to_owned(),
+            expires_at: None,
+        };
+        repository.insert_backup_record(seed.clone()).await.unwrap();
+        let cancellation = CancellationToken::new();
+        let archive = dump
+            .dump(DumpRequest {
+                backup_id: seed.id.clone(),
+                cancellation: cancellation.clone(),
+            })
+            .await
+            .unwrap();
+        repository.force_status(&seed.id, BackupStatus::Dumping);
+        if status == BackupStatus::Uploading {
+            repository
+                .transition_status(
+                    &seed.id,
+                    BackupStatus::Dumping,
+                    BackupStatus::Uploading,
+                    StatusTransitionUpdate {
+                        size_bytes: Some(archive.size_bytes),
+                        sha256: Some(archive.sha256.clone()),
+                        ..Default::default()
+                    },
+                    Utc::now(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        if uploaded {
+            objects
+                .objects
+                .lock()
+                .unwrap()
+                .insert(seed.object_key.clone(), DUMP_CONTENT.to_vec());
+        }
+        BackupTask::new(repository.clone(), dump.clone(), objects.clone())
+            .run_cycle(&cancellation)
+            .await
+            .unwrap();
+        assert_eq!(repository.all_records()[0].status, BackupStatus::Completed);
+        assert_eq!(objects.object(&seed.object_key).unwrap(), DUMP_CONTENT);
+        assert!(dump.inspect_staging(&seed.id).await.unwrap().is_none());
+    }
 }
 
 #[tokio::test]

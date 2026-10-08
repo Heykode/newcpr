@@ -14,6 +14,7 @@ const initial = {
   maxConcurrentPerAccount: 5,
   requestIntervalMs: 25,
   rotationStrategy: 'smart',
+  openaiAccountAffinity: 'strict',
   minCodexDesktopVersion: null,
   minCodexCliVersion: null,
   usageRetentionDays: 31,
@@ -136,6 +137,10 @@ async function main() {
         const common = page.getByRole('region', { name: '通用与 Codex 配置', exact: true })
         const excel = page.getByRole('region', { name: 'Excel 配置', exact: true })
         await common.waitFor({ state: 'visible' })
+        const affinity = common.getByRole('radiogroup', { name: 'OpenAI 账号亲和模式', exact: true })
+        assert.equal(await affinity.getByRole('radio', { name: '严格', exact: true }).isChecked(), true)
+        await affinity.getByRole('radio', { name: '优先', exact: true }).click()
+        assert.equal(await affinity.getByRole('radio', { name: '优先', exact: true }).isChecked(), true)
         await page.getByRole('button', { name: '共享重试与原生连接高级参数' }).click()
         assert.equal(await page.getByRole('spinbutton', { name: '同账号传输失败重试次数', exact: true }).inputValue(), '7')
         assert.equal(await page.getByRole('spinbutton', { name: '单个请求最多切换账号次数', exact: true }).inputValue(), '4')
@@ -180,6 +185,7 @@ async function main() {
         assert.equal(saved.requestTuning.rateLimitCooldownSeconds, 37)
         assert.equal(saved.requestTuning.excelImageTransport.publicUrl, 'https://synthetic-images.example.com')
         assert.equal(saved.rotationStrategy, initial.rotationStrategy)
+        assert.equal(saved.openaiAccountAffinity, 'preferred')
         assert.equal(await size.inputValue(), '20.5')
         await page.evaluate(() => document.fonts.ready)
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)

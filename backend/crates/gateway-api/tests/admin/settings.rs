@@ -113,6 +113,7 @@ fn account_affinity_rejects_invalid_values_and_preserves_omission() {
     for (value, mode) in [
         ("strict", AccountAffinity::Strict),
         ("relaxed", AccountAffinity::Relaxed),
+        ("preferred", AccountAffinity::Preferred),
     ] {
         let mut body = update_body();
         body["openaiAccountAffinity"] = json!(value);

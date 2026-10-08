@@ -92,7 +92,22 @@ fn raw_sse_passthrough_should_drop_rate_limit_control_without_timing_side_effect
 
     assert!(events.is_empty());
     assert!(!signals.protocol_progress);
+    assert!(!signals.output_start);
     assert!(!signals.semantic_output);
+}
+
+#[test]
+fn decoder_preserves_structural_timing_without_committing_semantic_output() {
+    let mut decoder = CodexCanonicalDecoder::new("fallback");
+    decoder
+        .push(b"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"content\":[]}}\n\n")
+        .expect("decode structural timing event");
+    let signals = decoder.take_timing_signals();
+    assert!(signals.output_start);
+    assert!(!signals.semantic_output);
+    assert!(!signals.reasoning_output);
+    assert!(!signals.text_output);
+    assert!(!decoder.take_timing_signals().output_start);
 }
 
 #[test]

@@ -550,7 +550,11 @@ fn account_affinity_policy_is_strict_by_default_and_rejects_unknown_values() {
         policy.openai_session_binding_ttl(),
         std::time::Duration::from_secs(24 * 3600)
     );
-    for mode in [AccountAffinity::Strict, AccountAffinity::Relaxed] {
+    for mode in [
+        AccountAffinity::Strict,
+        AccountAffinity::Relaxed,
+        AccountAffinity::Preferred,
+    ] {
         assert_eq!(AccountAffinity::parse(mode.as_str()), Some(mode));
         assert_eq!(
             serde_json::from_value::<AccountAffinity>(serde_json::json!(mode.as_str())).unwrap(),

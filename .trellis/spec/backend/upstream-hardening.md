@@ -118,3 +118,35 @@ Wrong: acquire capacity before verifying a stale account snapshot.
 
 Correct: verify first, then reserve once; bounded re-read must not consume
 the request interval or replace a hard continuation owner.
+
+## 8. Timing, Reads And Resource Ownership
+
+- `ResponseEventSignals.output_start` is an observation boundary, not delivery
+  permission. Merge it in `CodexCanonicalDecoder` before passing it to Provider
+  observation. Keep semantic, reasoning and text boundaries independent. Test
+  structural-only frames through both real HTTP/SSE and WS, including a delayed
+  request origin and subsequent content. A protocol-only unit test is insufficient.
+- Usage-row throughput divides output tokens by total request milliseconds,
+  matching the existing SQL aggregates; absent TTFT must not hide valid throughput.
+- Dashboard counts and capacity share one minimal account-facts snapshot. Reuse
+  the existing status resolver, including disabled-account priority. Bounded
+  Redis reads (128 per batch) preserve every result and order; they are not a
+  model-request concurrency limit. Synthetic account IDs must use `acct_`.
+- HTTP drain keeps writer workers and managed egress alive. Then stop/join the
+  workers under the existing deadline and stop egress. Dropping the host or its
+  shutdown future must cancel/abort owned tasks, including handles already moved
+  into a join loop. Use isolated child processes for global logging/signal tests.
+- The downstream WS read/write futures belong to one managed pump task. Blocked
+  writes cannot hide cancellation or Close; tungstenite owns automatic Pong and
+  Close acknowledgements. Preserve heartbeat, queue sizes, delivery acknowledgements
+  and active-response expiry behavior. Verify single Pong and Close over real TCP.
+- Backup export creates its private partial file before spawning, owns process
+  cancellation through both stdout copy and child wait, and removes only the
+  partial file on drop. Completed files stay available for recovery. Multipart
+  SDK futures are owned by the upload future, never detached workers; cancellation
+  drops part retries before remote abort. Recovered completion also cleans staging.
+- Reset-card mutex entries live while an active consumer or waiter owns them.
+  Release the final strong reference under the map mutex before removing its
+  dead weak entry; otherwise concurrent drops can leak indexes or split locks.
+- Empty budget windows (`end <= start`) expose zero current usage and no reset
+  timestamp. Do not change settlement, historical ledger or reset locking.

@@ -69,7 +69,7 @@ export type RequestTuningOverrides = {
   [Key in keyof RequestTuning]?: RequestTuning[Key] | null
 }
 
-export type AccountAffinity = 'strict' | 'relaxed'
+export type AccountAffinity = 'strict' | 'preferred' | 'relaxed'
 
 export interface RuntimeSettings {
   excelDefaultModels?: string[]

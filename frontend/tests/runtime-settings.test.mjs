@@ -119,7 +119,7 @@ test('affinity and binding TTL roundtrip without changing smart scheduling or re
     await query.state.loadSettings()
     assert.equal(query.state.form.openaiAccountAffinity, 'strict')
     assert.equal(query.state.form.openaiSessionBindingTtlHours, 24)
-    for (const mode of ['relaxed', 'strict']) {
+    for (const mode of ['relaxed', 'strict', 'preferred']) {
       for (const hours of [1, 48, 720]) {
         query.state.form.openaiAccountAffinity = mode
         query.state.form.openaiSessionBindingTtlHours = hours

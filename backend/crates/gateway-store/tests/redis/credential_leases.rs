@@ -18,6 +18,35 @@ fn credential_lease_rejects_zero_ttl() {
     assert!(request.validate().is_err());
 }
 
+#[tokio::test]
+async fn batched_runtime_signals_preserve_every_account_and_input_order() {
+    let Some((repository, _connection, _namespace)) = repository().await else {
+        return;
+    };
+    let ids = (0..257)
+        .rev()
+        .map(|index| format!("batched_{index}"))
+        .collect::<Vec<_>>();
+    let guard = acquired(
+        repository
+            .try_acquire_bounded_lease(&scheduling_request(
+                &ids[128],
+                "batch_owner",
+                2,
+                Duration::ZERO,
+            ))
+            .await
+            .unwrap(),
+    );
+    let signals = repository.credential_runtime_signals(&ids).await.unwrap();
+    assert_eq!(signals.len(), ids.len());
+    for (index, signal) in signals.iter().enumerate() {
+        assert_eq!(signal.resource_id, ids[index]);
+        assert_eq!(signal.in_flight, u32::from(index == 128));
+    }
+    assert!(guard.release().await.unwrap());
+}
+
 #[test]
 fn scheduling_lease_rejects_zero_concurrency() {
     let request = scheduling_request("acct_invalid", "worker-invalid", 0, Duration::ZERO);

@@ -216,7 +216,7 @@ export function useSettingsForm() {
       toast.warning('Excel 模型名称不合法，或超过 64 个')
       return
     }
-    if (form.openaiAccountAffinity !== 'strict' && form.openaiAccountAffinity !== 'relaxed') {
+    if (form.openaiAccountAffinity !== 'strict' && form.openaiAccountAffinity !== 'relaxed' && form.openaiAccountAffinity !== 'preferred') {
       toast.warning('请选择有效的账号亲和模式')
       return
     }

@@ -30,6 +30,13 @@ sha256sum --check --strict .frozen-sha256
 CI 还会检查是否遗漏新 SQL 文件，并在 PR 中检查清单只增不改。
 遇到 checksum 不一致，先核对运行版本和文件来源；不要修改数据库中的 checksum 来绕过校验。
 
+## 亲和模式升级兼容
+
+`0068_preferred_account_affinity.sql` 仅扩大亲和模式的允许值，保留现有
+Strict/Relaxed 设置和 Strict 默认值，不改账号、身份、出口或调度权重。
+管理员保存 Preferred 后，旧二进制不能读取这个新枚举；回退必须先停服、
+明确恢复兼容模式，并按照迁移感知的部署方案处理，不能直接回滚镜像。
+
 ## 本地测试库
 
 `gateway-store` 的 PG/Redis 集成测试需要以下环境变量，未设置时在本地

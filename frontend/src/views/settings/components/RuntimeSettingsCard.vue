@@ -77,7 +77,7 @@ const tuningValues = {
         <BaseSegmented
           v-model="openaiAccountAffinity"
           label="OpenAI 账号亲和模式"
-          :options="[{ label: '严格', value: 'strict' }, { label: '宽松', value: 'relaxed' }]"
+          :options="[{ label: '严格', value: 'strict' }, { label: '优先', value: 'preferred' }, { label: '宽松', value: 'relaxed' }]"
         />
       </BaseFormItem>
       <BaseFormItem label="OpenAI 会话账号绑定时长（小时）">

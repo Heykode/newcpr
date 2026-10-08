@@ -15,40 +15,23 @@ export const authPlugin: Plugin = {
         await router.replace({ name: 'login' })
     })
     setSessionRecoveryHandler(async () => {
-      const result = await authStore.checkAuth()
+      const result = await authStore.refreshSession()
       if (result === 'unavailable')
         throw new Error(authStore.sessionCheckError)
       return result === 'authenticated'
     })
-    let lastAttempt = 0
-    async function restore(force = false) {
-      if (document.visibilityState !== 'visible' || authStore.loading || !authStore.isAuthenticated)
+    async function restore() {
+      if (document.visibilityState !== 'visible' || authStore.loading || authStore.sessionChecked)
         return
-      if (!force && Date.now() - lastAttempt < 60_000)
-        return
-      lastAttempt = Date.now()
-      const result = await authStore.checkAuth()
-      if (result === 'unauthenticated' && !authStore.loading) {
-        authStore.invalidateSession()
-        await router.replace({ name: 'login' })
-      }
-    }
-    const activity = () => {
-      void restore().catch(() => {})
+      await router.replace(router.currentRoute.value.fullPath)
     }
     const resume = () => {
-      void restore(true).catch(() => {})
+      void restore().catch(() => {})
     }
-    document.addEventListener('pointerdown', activity, { passive: true })
-    document.addEventListener('keydown', activity)
-    document.addEventListener('scroll', activity, { passive: true, capture: true })
     document.addEventListener('visibilitychange', resume)
     window.addEventListener('focus', resume)
     window.addEventListener('online', resume)
     app.onUnmount(() => {
-      document.removeEventListener('pointerdown', activity)
-      document.removeEventListener('keydown', activity)
-      document.removeEventListener('scroll', activity, true)
       document.removeEventListener('visibilitychange', resume)
       window.removeEventListener('focus', resume)
       window.removeEventListener('online', resume)

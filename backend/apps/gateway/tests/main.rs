@@ -180,6 +180,12 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
+        // Lock reclamation needs private weak-reference counts, not a public test API.
+        ("crates/providers/openai", Some("credential/quota/reset_locks.rs"), Item::Mod(module)) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // Judge parsing/Cron calculation and SQL usage predicates stay private;
         // only their owner-local regression modules may access these details.
         ("crates/gateway-admin", Some("use_case/quality_ops/mod.rs"), Item::Mod(module))
@@ -559,6 +565,34 @@ fn quota_reset_private_tests_require_exact_owner_and_do_not_expose_test_apis() {
         "#[cfg(any(test, feature = \"production\"))] mod reset_tests {}",
         "#[cfg(test)] #[path = \"fixture.rs\"] mod reset_tests {}",
         "#[cfg_attr(test, path = \"fixture.rs\")] mod reset_tests;",
+    ] {
+        let item: Item = syn::parse_str(source).unwrap();
+        assert!(!is_audited_private_test(owner, path, &item), "{source}");
+    }
+}
+
+#[test]
+fn quota_reset_lock_tests_require_exact_private_owner() {
+    let owner = "crates/providers/openai";
+    let path = Path::new("credential/quota/reset_locks.rs");
+    let item: Item = syn::parse_str("#[cfg(test)] mod tests {}").unwrap();
+    assert!(is_audited_private_test(owner, path, &item));
+    assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+    assert!(!is_audited_private_test(
+        owner,
+        Path::new("credential/quota/mod.rs"),
+        &item
+    ));
+    for source in [
+        "mod tests {}",
+        "#[cfg(test)] mod tests;",
+        "#[cfg(test)] pub(crate) mod tests {}",
+        "#[cfg(test)] pub mod tests {}",
+        "#[cfg(test)] mod other {}",
+        "#[cfg(test)] pub fn test_api() {}",
+        "#[cfg(any(test, feature = \"production\"))] mod tests {}",
+        "#[cfg(test)] #[path = \"fixture.rs\"] mod tests {}",
+        "#[cfg_attr(test, path = \"fixture.rs\")] mod tests;",
     ] {
         let item: Item = syn::parse_str(source).unwrap();
         assert!(!is_audited_private_test(owner, path, &item), "{source}");

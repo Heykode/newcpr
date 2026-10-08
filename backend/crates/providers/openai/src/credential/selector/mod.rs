@@ -713,6 +713,8 @@ impl CodexCredentialSelector {
                 excluded_accounts: excluded.clone(),
                 preferred_account: preferred.clone(),
                 preferred_account_overrides_weight: pinned_account.is_some()
+                    || policy.openai_account_affinity()
+                        == gateway_core::account::AccountAffinity::Preferred
                     || policy.preferred_account_overrides_weight(),
                 round_robin_cursor,
                 eligibility: if diagnostic {
@@ -840,8 +842,10 @@ impl CodexCredentialSelector {
                         drop(guard);
                         return Err(CredentialSelectionError::AccountSnapshotChanged);
                     }
-                    let renew_existing_binding =
-                        observed_affinity_account.as_ref() == Some(account.id());
+                    let renew_existing_binding = observed_affinity_binding.is_some()
+                        && (observed_affinity_account.as_ref() == Some(account.id())
+                            || policy.openai_account_affinity()
+                                == gateway_core::account::AccountAffinity::Preferred);
                     let initial_affinity_claim = if !diagnostic
                         && observed_affinity_account.is_none()
                         && let Some(key) = request.session_affinity_key
@@ -1092,9 +1096,9 @@ impl CodexCredentialSelector {
         {
             match self.lookup_session_affinity(key).await {
                 SessionAffinityLookup::Bound(_) => {}
-                SessionAffinityLookup::Missing => {
-                    return Err(CredentialSelectionError::NoEligibleCredential);
-                }
+                // A retained alias names the session, not an account. Selection will
+                // atomically claim a missing binding while preserving any winning owner.
+                SessionAffinityLookup::Missing => {}
                 SessionAffinityLookup::Unavailable => {
                     return Err(CredentialSelectionError::Coordinator(None));
                 }

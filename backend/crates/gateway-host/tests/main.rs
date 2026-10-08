@@ -4,5 +4,6 @@ mod logging;
 mod notifications;
 mod proxy_probe;
 mod serve;
+mod support;
 mod system_update;
 mod workers;

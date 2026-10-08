@@ -38,16 +38,59 @@ pub(crate) fn account_status_projection(
 /// 都视为没有冷却，不污染持久账号状态。凭据轮换不会解除上游对同一账号的限流。
 pub(crate) async fn load_rate_limited_until(
     cooldowns: Option<&dyn ProviderCooldownPort>,
-    accounts: &[ProviderAccountSummary],
+    accounts: &[ProviderAccountStatus],
     now: SystemTime,
 ) -> BTreeMap<String, SystemTime> {
     let Some(cooldowns) = cooldowns else {
         return BTreeMap::new();
     };
-    let reads = accounts.iter().map(|account| async move {
-        let account_id = ProviderAccountId::new(account.id.clone()).ok()?;
-        let cooldown = cooldowns.read(&account_id).await.ok().flatten()?;
-        (cooldown.until() > now).then(|| (account.id.clone(), cooldown.until()))
-    });
-    join_all(reads).await.into_iter().flatten().collect()
+    let mut result = BTreeMap::new();
+    for batch in accounts.chunks(crate::redis::ACCOUNT_STATE_READ_CONCURRENCY) {
+        let reads = batch.iter().map(|account| async move {
+            let account_id = ProviderAccountId::new(account.id.clone()).ok()?;
+            let cooldown = cooldowns.read(&account_id).await.ok().flatten()?;
+            (cooldown.until() > now).then(|| (account.id.clone(), cooldown.until()))
+        });
+        result.extend(join_all(reads).await.into_iter().flatten());
+    }
+    result
+}
+
+/// Dashboard does not need identity documents, model lists or proxy locations.
+pub(crate) struct ProviderAccountStatus {
+    pub id: String,
+    pub concurrency_limit: Option<gateway_core::account::AccountConcurrencyLimit>,
+    pub facts: AccountStatusFacts,
+}
+
+pub(crate) async fn load_account_statuses(
+    pool: &sqlx::PgPool,
+) -> crate::StoreResult<Vec<ProviderAccountStatus>> {
+    use super::rows::{account_status_facts_from_row, get};
+    let rows = sqlx::query(
+        "select id, enabled, concurrency_limit, credential_state, access_token_expires_at,
+                quota_access_state, quota_evidence, quota_access_observed_at, quota_reset_at,
+                last_error_reason, last_error_message
+         from provider_accounts",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| crate::postgres_unavailable("load account status facts"))?;
+    rows.iter()
+        .map(|row| {
+            let concurrency_limit = get::<Option<i64>>(row, "concurrency_limit")?
+                .map(|value| {
+                    u32::try_from(value)
+                        .ok()
+                        .and_then(gateway_core::account::AccountConcurrencyLimit::new)
+                        .ok_or_else(|| super::invalid("invalid concurrency_limit"))
+                })
+                .transpose()?;
+            Ok(ProviderAccountStatus {
+                id: get(row, "id")?,
+                concurrency_limit,
+                facts: account_status_facts_from_row(row)?,
+            })
+        })
+        .collect()
 }

@@ -301,6 +301,11 @@ impl CodexCredentialSelector {
                     || request
                         .attempt
                         .account_selection_policy()
+                        .openai_account_affinity()
+                        == gateway_core::account::AccountAffinity::Preferred
+                    || request
+                        .attempt
+                        .account_selection_policy()
                         .preferred_account_overrides_weight(),
                 round_robin_cursor: scheduling.round_robin_cursor(),
                 eligibility: if request.attempt.is_quality_retest() {
@@ -379,6 +384,12 @@ impl CodexCredentialSelector {
                         })
                 });
             if let Some(original) = original.as_ref()
+                && (state.pinned.is_some()
+                    || request
+                        .attempt
+                        .account_selection_policy()
+                        .openai_account_affinity()
+                        != gateway_core::account::AccountAffinity::Preferred)
                 && !sticky_tried.contains(original)
                 && candidates.iter().any(|candidate| {
                     candidate.account.id() == original
@@ -1199,7 +1210,13 @@ impl CodexCredentialSelector {
         );
         // All fallible credential/capacity validation precedes affinity mutation.
         // A losing initial CAS only observes the existing winner; it cannot bind this account.
-        let renew_existing_binding = state.observed_affinity.as_ref() == Some(id);
+        let renew_existing_binding = state.observed_affinity_binding.is_some()
+            && (state.observed_affinity.as_ref() == Some(id)
+                || request
+                    .attempt
+                    .account_selection_policy()
+                    .openai_account_affinity()
+                    == gateway_core::account::AccountAffinity::Preferred);
         if state.observed_affinity.is_none()
             && let Some(key) = request.session_affinity_key
             && let Some(effective) = self
