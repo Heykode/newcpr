@@ -41,25 +41,13 @@ function base(overrides = {}) {
 }
 const rule = (id, config = base()) => ({ id, revision: 8, config })
 
-test('healthy threshold changes require explicit selection and only apply to native probe recovery actions', () => {
-  const probe = base({ detectionMode: 'state_probe', failureAction: 'enable_excel', excelRecoveryThreshold: 2 })
-  assert.equal(applyQualityPatch(probe, { model: 'changed' }).excelRecoveryThreshold, 2)
-  assert.equal(applyQualityPatch(probe, { excelRecoveryThreshold: 5 }).excelRecoveryThreshold, 5)
-  assert.equal(applyQualityPatch(base(), { excelRecoveryThreshold: 5 }).excelRecoveryThreshold, undefined)
-  assert.deepEqual(plain(buildQualityPatch(['excelRecoveryThreshold'], probe)), { excelRecoveryThreshold: 2 })
-  assert.deepEqual(plain(buildQualityPatch(['model'], probe)), { model: probe.model })
-})
-
-test('native recovery is explicitly opted in and never applied to answer or unrelated rules', () => {
-  const probe = base({ detectionMode: 'state_probe', failureAction: 'enable_excel' })
-  assert.equal(applyQualityPatch(probe, { model: 'changed' }).disableExcelOnNativeRecovery, false)
-  const enabled = applyQualityPatch(probe, { disableExcelOnNativeRecovery: true })
-  assert.equal(enabled.disableExcelOnNativeRecovery, true)
-  assert.equal(enabled.autoRestore, false)
-  assert.equal(applyQualityPatch(enabled, { detectionMode: 'answer' }).disableExcelOnNativeRecovery, false)
-  assert.equal(applyQualityPatch(enabled, { failureAction: 'none' }).disableExcelOnNativeRecovery, false)
-  assert.equal(applyQualityPatch(base(), { disableExcelOnNativeRecovery: true }).disableExcelOnNativeRecovery, false)
-  assert.deepEqual(plain(buildQualityPatch(['disableExcelOnNativeRecovery'], enabled)), { disableExcelOnNativeRecovery: true })
+test('legacy Excel-only recovery fields are preserved but no longer offered for bulk editing', () => {
+  const probe = base({ detectionMode: 'state_probe', failureAction: 'enable_excel', excelRecoveryThreshold: 2, disableExcelOnNativeRecovery: true })
+  const edited = applyQualityPatch(probe, { model: 'changed', excelRecoveryThreshold: 5, disableExcelOnNativeRecovery: false })
+  assert.equal(edited.excelRecoveryThreshold, 2)
+  assert.equal(edited.disableExcelOnNativeRecovery, true)
+  assert.deepEqual(plain(buildQualityPatch(['excelRecoveryThreshold', 'disableExcelOnNativeRecovery'], probe)), {})
+  assert.equal(applyQualityPatch(probe, { failureAction: 'none' }).disableExcelOnNativeRecovery, false)
 })
 
 test('only checked fields are included and account identity cannot be patched', () => {
@@ -109,7 +97,7 @@ test('template action reuses threshold and preserves each unselected template', 
   const next = applyQualityPatch(source, { excelFailureThreshold: 6, autoRestore: true })
   assert.deepEqual(plain(next.failureTemplate), template)
   assert.equal(next.excelFailureThreshold, 6)
-  assert.equal(next.autoRestore, false)
+  assert.equal(next.autoRestore, true)
   assert.throws(() => applyQualityPatch(base(), { failureAction: 'apply_account_template' }), /请选择/)
   assert.equal('failureTemplate' in applyQualityPatch(source, { failureAction: 'none' }), false)
   const replacement = { ...template, revision: 4 }

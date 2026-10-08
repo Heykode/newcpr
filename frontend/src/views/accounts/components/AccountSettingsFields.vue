@@ -29,6 +29,7 @@ withDefaults(defineProps<{
   excelAvailable?: boolean
   encryptedContentAvailable?: boolean
   nameAvailable?: boolean
+  knownModelCatalog?: boolean
   modelAccessAvailable?: boolean
   preserveModelAccess?: boolean
 }>(), { preserveProxy: true, batch: false, excelAvailable: false, nameAvailable: false, modelAccessAvailable: false, preserveModelAccess: false })
@@ -230,6 +231,7 @@ const updateProxy = defineModel<boolean>('updateProxy', { default: false })
       v-if="modelAccessAvailable"
       v-model="modelAccess"
       :account-id="accountId"
+      :known-model-catalog="knownModelCatalog"
       :disabled="disabled || (batch && !updateModelAccess)"
       :allow-preserve="preserveModelAccess"
     >

@@ -756,6 +756,9 @@ impl Provider for CodexProvider {
             crate::transport::request::compatibility::normalize_custom_history_ids(
                 upstream_request.body_mut(),
             );
+            crate::transport::request::compatibility::normalize_message_history_ids(
+                upstream_request.body_mut(),
+            );
             crate::transport::request::normalize_reasoning_replay(upstream_request.body_mut());
         }
         // Preserve the established identity/affinity inputs above. Only the

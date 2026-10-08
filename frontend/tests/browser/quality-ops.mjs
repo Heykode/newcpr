@@ -81,6 +81,7 @@ async function main() {
     }
     let rules = [{ id: 'quality-rule', revision: 1, config, nextRunAt: now, running: false, pending: false, lastStatus: 'correct', lastRunAt: now }]
     const run = { id: 'quality-run', ruleId: 'quality-rule', accountId: config.accountId, model: config.model, status: 'correct', startedAt: now, finishedAt: now, correct: 2, incorrect: 0, unknown: 0, requestErrors: 0 }
+    let historyRows = [run]
     let enqueues = 0
     let saves = 0
     let failHistory = false
@@ -154,7 +155,7 @@ async function main() {
       if (url.pathname.endsWith('/runs') && failHistory)
         return route.fulfill({ status: 503, json: { code: 503, message: 'fixture history unavailable', data: null } })
       if (url.pathname.endsWith('/runs'))
-        return fulfill(route, [run])
+        return fulfill(route, historyRows)
       if (url.pathname.endsWith('/detail')) {
         return fulfill(route, { ...run, answers: [{
           ...(run.detectionMode === 'state_probe'
@@ -464,17 +465,13 @@ async function main() {
     await page.getByRole('option', { name: template.config.name, exact: true }).click()
     await creation.getByText('开启（有损省略）', { exact: true }).waitFor()
     await creation.getByText('关闭Excel模式', { exact: true }).waitFor()
-    assert.equal(await creation.getByRole('switch', { name: '后续整轮通过后自动恢复', exact: true }).count(), 0)
+    const autoRestore = creation.getByRole('switch', { name: '后续整轮通过后自动恢复', exact: true })
+    await autoRestore.locator('..').click()
+    assert.equal(await autoRestore.isChecked(), true)
     assert.equal(await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).inputValue(), '2')
     await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).fill('3')
-    const nativeRecovery = creation.getByRole('checkbox', { name: '原生通道恢复正常后自动关闭 Excel', exact: true })
-    assert.equal(await nativeRecovery.isChecked(), true)
-    assert.equal(await creation.getByRole('spinbutton', { name: '连续正常阈值', exact: true }).inputValue(), '2')
-    await creation.getByRole('spinbutton', { name: '连续正常阈值', exact: true }).fill('4')
-    await nativeRecovery.locator('..').click()
-    assert.equal(await nativeRecovery.isChecked(), false)
-    await nativeRecovery.locator('..').click()
-    assert.equal(await nativeRecovery.isChecked(), true)
+    assert.equal(await creation.getByRole('checkbox', { name: '原生通道恢复正常后自动关闭 Excel', exact: true }).count(), 0)
+    assert.equal(await creation.getByRole('spinbutton', { name: '连续正常阈值', exact: true }).count(), 0)
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
       assert.ok(await creation.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
@@ -488,10 +485,10 @@ async function main() {
     assert.equal(rules[2].config.repetitions, 1)
     assert.equal(rules[2].config.failureAction, 'apply_account_template')
     assert.deepEqual(rules[2].config.failureTemplate, template)
-    assert.equal(rules[2].config.autoRestore, false)
-    assert.equal(rules[2].config.disableExcelOnNativeRecovery, true)
+    assert.equal(rules[2].config.autoRestore, true)
+    assert.equal(rules[2].config.disableExcelOnNativeRecovery, false)
     assert.equal(rules[2].config.excelFailureThreshold, 3)
-    assert.equal(rules[2].config.excelRecoveryThreshold, 4)
+    assert.equal(rules[2].config.excelRecoveryThreshold, 2)
     Object.assign(run, { config: rules[2].config, detectionMode: 'state_probe', status: 'incorrect', correct: 0, incorrect: 1, action: 'template_applied_probe_paused' })
     rules[2].config.enabled = false
     rules[2].lastAction = 'template_applied_probe_paused'
@@ -560,11 +557,11 @@ async function main() {
     assert.equal(await bulk.locator('input[type=checkbox]:checked').count(), 0)
     await bulk.getByRole('checkbox', { name: '修改连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).locator('..').click()
     await bulk.getByRole('spinbutton', { name: '连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).fill('5')
-    await bulk.getByRole('checkbox', { name: '修改连续正常阈值（状态探针恢复后关闭 Excel）', exact: true }).locator('..').click()
-    await bulk.getByRole('spinbutton', { name: '连续正常阈值（状态探针恢复后关闭 Excel）', exact: true }).fill('6')
-    await bulk.getByRole('checkbox', { name: '修改自动恢复（不适用于应用模板或旧版开启 Excel）', exact: true }).locator('..').click()
-    await bulk.getByRole('switch', { name: '自动恢复（不适用于应用模板或旧版开启 Excel）', exact: true }).locator('..').click()
-    assert.equal(await bulk.getByRole('switch', { name: '自动恢复（不适用于应用模板或旧版开启 Excel）', exact: true }).isChecked(), true)
+    await bulk.getByRole('checkbox', { name: '修改后续整轮通过后自动恢复（不适用于旧版开启 Excel）', exact: true }).locator('..').click()
+    const bulkRestore = bulk.getByRole('switch', { name: '后续整轮通过后自动恢复（不适用于旧版开启 Excel）', exact: true })
+    if (!await bulkRestore.isChecked())
+      await bulkRestore.locator('..').click()
+    assert.equal(await bulk.getByRole('switch', { name: '后续整轮通过后自动恢复（不适用于旧版开启 Excel）', exact: true }).isChecked(), true)
     await bulk.getByRole('checkbox', { name: '修改异常处置账号模板（仅应用模板规则）', exact: true }).locator('..').click()
     await bulk.getByRole('combobox', { name: '异常处置账号模板', exact: true }).click()
     await page.getByRole('option', { name: template.config.name, exact: true }).click()
@@ -577,8 +574,8 @@ async function main() {
     await bulk.getByRole('button', { name: '保存所选字段', exact: true }).click()
     await bulk.getByText(/待处理 0 条/).waitFor()
     assert.equal(rules[2].config.excelFailureThreshold, 5)
-    assert.equal(rules[2].config.excelRecoveryThreshold, 6)
-    assert.equal(rules[2].config.autoRestore, false)
+    assert.equal(rules[2].config.excelRecoveryThreshold, 2)
+    assert.equal(rules[2].config.autoRestore, true)
     assert.equal(rules[2].config.enabled, false)
     assert.deepEqual(rules[2].config.failureTemplate, template)
     await bulk.getByRole('button', { name: '关闭', exact: true }).last().click()
@@ -604,6 +601,34 @@ async function main() {
     await editor.getByRole('button', { name: '保存', exact: true }).click()
     await editor.waitFor({ state: 'hidden' })
     assert.equal(rules[2].config.failureAction, 'enable_excel')
+    // Long account/history lists scroll independently within the desktop panels.
+    rules = Array.from({ length: 50 }, (_, index) => ({ ...rules[0], id: `scroll-rule-${index}` }))
+    historyRows = Array.from({ length: 100 }, (_, index) => ({ ...run, id: `scroll-run-${index}` }))
+    await page.getByRole('button', { name: '刷新', exact: true }).click()
+    await page.locator('.quality-rule').first().waitFor()
+    await page.waitForFunction(() => document.querySelectorAll('.quality-run-panel tbody tr').length === 100)
+    const list = page.locator('.quality-rule-list')
+    const records = page.locator('.quality-run-panel')
+    await list.scrollIntoViewIfNeeded()
+    const bounds = await page.locator('.quality-monitor-panels').boundingBox()
+    assert.ok(bounds && bounds.height <= 701)
+    for (const panel of [list, records]) {
+      assert.ok(await panel.evaluate(element => element.scrollHeight > element.clientHeight))
+    }
+    const listBox = await list.boundingBox()
+    assert.ok(listBox)
+    await page.mouse.move(listBox.x + 40, listBox.y + 40)
+    await page.mouse.wheel(0, 500)
+    await page.waitForFunction(() => document.querySelector('.quality-rule-list').scrollTop > 0)
+    assert.equal(await records.evaluate(element => element.scrollTop), 0)
+    const leftScroll = await list.evaluate(element => element.scrollTop)
+    const recordBox = await records.boundingBox()
+    assert.ok(recordBox)
+    await page.mouse.move(recordBox.x + 60, recordBox.y + 40)
+    await page.mouse.wheel(0, 500)
+    await page.waitForFunction(() => document.querySelector('.quality-run-panel').scrollTop > 0)
+    assert.equal(await list.evaluate(element => element.scrollTop), leftScroll)
+    await page.screenshot({ path: `${output}/quality-independent-scroll.png`, fullPage: true, animations: 'disabled' })
     assert.deepEqual(errors, [])
     process.stdout.write('Quality UI: legacy rules, probe modes, thresholds, selective bulk edits, refresh failure, partial retry, catalogs, schedules and 1440/390/320px layouts passed.\n')
   }

@@ -844,7 +844,7 @@ where
             .as_ref()
             .is_some_and(|retry| retry.transport_recovery);
         if !is_transport_recovery && self.routing_attempts >= self.plan.max_attempts().get() {
-            return Err(EngineError::EmptyRoutingPlan);
+            return self.finish_exhausted_routing().await;
         }
         if let Some(recovery) = pending_retry.as_ref()
             && !recovery.delay.is_zero()
@@ -862,6 +862,9 @@ where
             }
         }
         let Some(candidate) = self.plan.candidates().get(self.candidate_index).cloned() else {
+            if self.last_retryable_failure.is_some() {
+                return self.finish_exhausted_routing().await;
+            }
             let error = GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
                 "no upstream Provider is available",
@@ -909,7 +912,7 @@ where
             && self.last_selected_account.is_some()
             && self.account_switches >= self.plan.request_tuning().max_account_switches
         {
-            return Err(EngineError::EmptyRoutingPlan);
+            return self.finish_exhausted_routing().await;
         }
         let account_context = match &self.account_selection {
             AccountSelection::Diagnostic(account) => AccountAttemptContext::diagnostic(
@@ -1074,19 +1077,7 @@ where
                             self.finish_provider_error(&error).await?;
                             return Err(provider_engine_error(error));
                         }
-                        let send_state = self.current_send_state();
-                        let mut events = std::mem::take(&mut self.last_retryable_failure_events);
-                        if !events.is_empty() {
-                            self.observe_atomic_terminal_events(&mut events);
-                            self.budget_attempt_already_counted = true;
-                            return Ok(Some(PullOutcome::TerminalFailure {
-                                events,
-                                error: last_failure,
-                                send_state,
-                            }));
-                        }
-                        self.finish_provider_error(&last_failure).await?;
-                        return Err(provider_engine_error(last_failure));
+                        return self.finish_retained_failure(last_failure).await;
                     }
                     if !(matches!(
                         error.kind(),
@@ -1755,6 +1746,32 @@ where
         )
         .await;
         Ok(())
+    }
+
+    async fn finish_exhausted_routing(&mut self) -> Result<Option<PullOutcome>, EngineError> {
+        let Some(error) = self.last_retryable_failure.take() else {
+            return Err(EngineError::EmptyRoutingPlan);
+        };
+        self.finish_retained_failure(error).await
+    }
+
+    async fn finish_retained_failure(
+        &mut self,
+        error: ProviderError,
+    ) -> Result<Option<PullOutcome>, EngineError> {
+        let send_state = self.current_send_state();
+        let mut events = std::mem::take(&mut self.last_retryable_failure_events);
+        if !events.is_empty() {
+            self.observe_atomic_terminal_events(&mut events);
+            self.budget_attempt_already_counted = true;
+            return Ok(Some(PullOutcome::TerminalFailure {
+                events,
+                error,
+                send_state,
+            }));
+        }
+        self.finish_provider_error(&error).await?;
+        Err(provider_engine_error(error))
     }
 
     async fn finish_provider_error(&mut self, error: &ProviderError) -> Result<(), EngineError> {

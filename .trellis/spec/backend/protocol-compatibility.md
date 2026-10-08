@@ -443,8 +443,20 @@ events, then use the existing encoder and single execution finalization.
 - Convert string input during encoding on a copy, before account selection.
   The existing string/list content-anchor equivalence must keep routing,
   session and cache identity unchanged. Preserve the original protocol payload.
-- Do not locally validate, delete or rewrite item IDs. Preserve call_id links,
-  references, encrypted history, compaction and unknown shapes.
+- Preserve call_id links, references, encrypted history, compaction and unknown shapes.
+  On the selected OAuth send copy only, `normalize_message_history_ids` repairs the
+  rejected `item_` prefix to `msg_` for complete stateless `type=message` items.
+  Require a recognized role and content, a unique source ID, no target collision,
+  an ASCII alphanumeric/underscore/hyphen suffix and a resulting length at most 64.
+  Stored/conversation/previous-response histories and unknown input item types are
+  excluded. Duplicate/reference IDs, reasoning IDs and tool IDs remain untouched.
+  Account selection, identity derivation and the client's original body precede this repair.
+- `normalize_plaintext_reasoning` may move nonempty content consisting solely of
+  `{type: reasoning_text, text: string}` parts into an absent/null/empty summary.
+  Preserve order/text; do not overwrite existing summaries or drop unknown fields.
+  Only missing/null/empty ciphertext permits this conversion. An unreferenced `rs_`
+  ID is removed in stateless mode to avoid an impossible store lookup; explicit
+  store=true retains it. Never alter the encrypted reasoning ID or ciphertext.
 - Create only client_metadata["x-codex-installation-id"]. Replace existing
   installation_id/installationId aliases but never create missing aliases.
   Keep the selected durable installation, credential version and all session,
@@ -470,3 +482,24 @@ events, then use the existing encoder and single execution finalization.
   evidence of stable identity. Require canonical response completion.
 - Removing a legacy alias on a subsequent request must reuse the same eligible
   socket; a different client key or account must not reuse it.
+
+### Request error classification and retry exhaustion
+
+- `CodexUpstreamFailure` parses `error.param` for HTTP and streamed failures.
+  Structured parameter rejection codes, or `invalid_request_error` with a non-model
+  parameter, take precedence over broad model wording for 400/422 or statusless
+  stream errors. Explicit authentication/429 handling remains intact.
+- No model-effort mapping or silent downgrade is introduced. The actual upstream
+  remains authoritative; supported efforts pass through unchanged. Invalid parameters
+  must not update account/model health or supply account-rotation replay proof.
+- Statusless `invalid_request_error` retains request scope after specific auth,
+  model, quota and capacity classification. Unknown tool/parameter capabilities are
+  not manufactured by deleting the user's options.
+- Core routing/account-switch exhaustion consumes `last_retryable_failure` via
+  the same `finish_retained_failure` path as empty account selection. Preserve raw
+  response, status and atomic terminal events exactly once, without another attempt.
+  Cancellation/deadline and unrelated provider infrastructure errors keep their own
+  semantics; existing replay-proof gates and retry budgets are unchanged.
+- Tests cover typed HTTP classification, HTTP-SSE/WS parameter failures and unchanged
+  account health, original response bodies, atomic terminal delivery, complete message
+  IDs versus references/opaque history, and lossless versus unrecognized reasoning parts.

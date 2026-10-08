@@ -462,3 +462,43 @@ fn diagnostic_wire_dump_preserves_binary_bytes_and_numbers_every_fragment() {
         assert_eq!(value, expected);
     }
 }
+
+#[test]
+fn parameter_rejections_are_not_model_or_account_failures() {
+    for body in [
+        r#"{"error":{"code":"unsupported_value","type":"invalid_request_error","param":"reasoning.effort","message":"Unsupported value: minimal is not supported with this model."}}"#,
+        r#"{"error":{"type":"invalid_request_error","param":"frequency_penalty","message":"Parameter is not supported by this model."}}"#,
+        r#"{"error":{"type":"invalid_request_error","param":"tools[0]","message":"Tool is not supported with this model."}}"#,
+    ] {
+        let failure = CodexUpstreamFailure::from_response(
+            reqwest::StatusCode::BAD_REQUEST,
+            body,
+            None,
+            &CodexUpstreamDiagnostics::default(),
+            None,
+            &[],
+            &[],
+            CodexUpstreamSendPhase::AfterPayload,
+        );
+        assert_eq!(failure.category(), CodexFailureCategory::InvalidRequest);
+        assert!(!failure.replay_is_safe());
+    }
+    assert_eq!(
+        classify(
+            400,
+            r#"{"error":{"code":"model_not_supported","param":"model","message":"This model is not supported."}}"#
+        ),
+        CodexFailureCategory::ModelUnsupported,
+    );
+}
+
+#[test]
+fn parameter_hints_do_not_override_explicit_authentication_failure() {
+    assert_eq!(
+        classify(
+            401,
+            r#"{"error":{"code":"unsupported_value","type":"invalid_request_error","param":"reasoning.effort","message":"token expired"}}"#
+        ),
+        CodexFailureCategory::CredentialExpired
+    );
+}

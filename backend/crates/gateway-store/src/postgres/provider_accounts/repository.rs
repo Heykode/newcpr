@@ -1330,6 +1330,9 @@ pub(crate) async fn apply_account_template_in_transaction(
         },
     )
     .await?;
+    if let Some(config) = settings.excel_recovery {
+        super::excel_recovery::update(transaction, &ids, config).await?;
+    }
     replace_account_group_assignments_in_transaction(transaction, &ids, &settings.group_ids).await
 }
 

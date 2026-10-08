@@ -76,8 +76,12 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
 1. 合格原绑定账号 Busy 时优先 sticky 等待。软亲和另允许请求间隔为唯一阻塞时，
    在原间隔截止前等待；去除间隔后必须 Ready，且截止必须早于现有共享等待预算。
    间隔长于请求或 sticky 窗口时直接重选，不得先启动一个不会使用的等待窗口。
-   不把间隔重新分类为 Busy，不为硬绑定或 fallback 新增间隔等待。
-   间隔被其他请求延后、账号变忙或失格时释放租约后正常重选；不持续追逐新截止。
+   不把间隔重新分类为 Busy，fallback 不新增间隔等待。
+   固定账号（required、Native/ReplayOwner、strict 根线程跟随）也允许使用既有 sticky
+   队列等待请求间隔；并发与间隔同时阻塞仍可等待，但停用、额度、权限等其他阻塞不能入队。
+   固定账号入队后，间隔被竞争请求延后或账号转 Busy 时继续等，始终受同一共享截止限制，
+   不重开窗口、不换账号；队满和取消仍沿现有错误退出。
+   软亲和仍在间隔被其他请求延后、账号变忙或失格时释放租约后正常重选；不持续追逐新截止。
    软亲和队列满可转正常选择；
    required account、Native、ReplayOwner 的硬绑定不得自行换号。
 2. fallback 前必须先尝试可立即执行的合法账号。仅调用
@@ -250,3 +254,11 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 `tests/credential/contract.rs`、`tests/provider/contract/scheduling.rs` 等受影响测试模块。
 表格是验收要求，不表示每行已获实证。真实隔离 PG/Redis 不可用导致的 skip 不能计为通过；
 定向测试不能代替 workspace、协议、生命周期和性能验收。
+
+## 请求间隔修复回归
+
+- `credential::contract::pinned_interval_wait_preserves_owner_and_releases_on_cancel_or_full`
+  覆盖固定账号就绪、取消、队满、停用、间隔推进、并发叠加与共享超时；所有分支等待租约归零。
+- `provider::contract::affinity_modes::strict_child_waits_for_root_request_interval_without_switching_accounts`
+  从公开 Provider 入口建立根绑定，再让子线程遇间隔，确认只使用根账号且不创建独立绑定。
+- 原软亲和短间隔、过长间隔、质量检查专用等待、Native owner 及容量限制回归必须继续通过。

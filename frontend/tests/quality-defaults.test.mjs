@@ -24,7 +24,7 @@ test('new rules and templates share reference probe defaults without applying a 
   assert.equal(config.repetitions, 1)
   assert.equal(config.excelFailureThreshold, 2)
   assert.equal(config.excelRecoveryThreshold, 2)
-  assert.equal(config.disableExcelOnNativeRecovery, true)
+  assert.equal(config.disableExcelOnNativeRecovery, false)
   assert.equal(config.failureAction, 'none')
   assert.equal(config.failureTemplate, null)
   config.failureGroupIds.push('fixture')

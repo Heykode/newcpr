@@ -4,6 +4,8 @@ import type { AccountModelAccess } from '@/api'
 import { RefreshCw, Search } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { getAccountModels, refreshAccountModels } from '@/api'
+import { getQualityModels } from '@/api/modules/quality-ops'
+import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
@@ -15,11 +17,16 @@ import { accountModelAccessError, accountModelIdError } from '../utils/modelAcce
 
 const props = withDefaults(defineProps<{
   accountId?: string
+  knownModelCatalog?: boolean
   disabled?: boolean
   allowPreserve?: boolean
-}>(), { disabled: false, allowPreserve: false })
+}>(), { disabled: false, allowPreserve: false, knownModelCatalog: false })
 const model = defineModel<AccountModelAccess | undefined>({ required: true })
 const catalog = ref<Array<{ id: string, label: string }>>([])
+const nextPage = ref<number | null>(1)
+const partialCatalog = ref(false)
+const retryAppend = ref(false)
+const useKnownCatalog = computed(() => !props.accountId && props.knownModelCatalog)
 const search = ref('')
 const inputError = ref('')
 const request = useRequestState()
@@ -78,20 +85,38 @@ function addModel() {
     search.value = ''
 }
 
-async function load(refresh = false) {
+async function load(refresh = false, append = false) {
   const accountId = props.accountId
-  if (!accountId || !restricted.value || props.disabled)
+  if ((!accountId && !useKnownCatalog.value) || !restricted.value || props.disabled || loading.value)
+    return
+  const page = append ? nextPage.value : 1
+  if (page === null)
     return
   const requestId = request.start()
   try {
-    const result = await (refresh ? refreshAccountModels : getAccountModels)(
-      { accountId },
-      { signal: request.signal, silent: true },
-    )
-    if (request.isCurrent(requestId))
-      catalog.value = result.models
+    if (useKnownCatalog.value) {
+      const result = await getQualityModels({}, page, { signal: request.signal, silent: true })
+      if (request.isCurrent(requestId)) {
+        const entries = new Map((append ? catalog.value : []).map(item => [item.id, item]))
+        for (const item of result.models)
+          entries.set(item.id, { id: item.id, label: item.name })
+        catalog.value = [...entries.values()]
+        nextPage.value = result.nextPage
+        partialCatalog.value = (append && partialCatalog.value) || result.failedAccounts > 0
+      }
+    }
+    else if (accountId) {
+      const result = await (refresh ? refreshAccountModels : getAccountModels)(
+        { accountId },
+        { signal: request.signal, silent: true },
+      )
+      if (request.isCurrent(requestId))
+        catalog.value = result.models
+    }
   }
   catch (cause) {
+    if (request.isCurrent(requestId))
+      retryAppend.value = append
     request.fail(requestId, cause)
   }
   finally {
@@ -99,9 +124,11 @@ async function load(refresh = false) {
   }
 }
 
-watch([() => props.accountId, restricted, () => props.disabled], () => {
+watch([() => props.accountId, () => props.knownModelCatalog, restricted, () => props.disabled], () => {
   request.invalidate()
   catalog.value = []
+  nextPage.value = 1
+  partialCatalog.value = false
   search.value = ''
   inputError.value = ''
   error.value = ''
@@ -118,7 +145,7 @@ watch(search, () => {
     <BaseFormItem label="模型限制">
       <template #extra>
         <slot name="extra" />
-        <BaseIconButton v-if="restricted && accountId" label="刷新模型" size="sm" :loading="loading" :disabled="disabled" @click="load(true)">
+        <BaseIconButton v-if="restricted && (accountId || useKnownCatalog)" label="刷新模型" size="sm" :loading="loading" :disabled="disabled" @click="load(true)">
           <template #loading>
             <RefreshCw class="size-3.5 animate-spin motion-reduce:animate-none" />
           </template>
@@ -133,6 +160,9 @@ watch(search, () => {
           <Search class="size-4" aria-hidden="true" />
         </template>
       </BaseInput>
+      <p v-if="useKnownCatalog" class="m-0 text-cp-xs text-cp-text-tertiary">
+        可勾选已有账号的已知模型，也可输入完整模型 ID 后按回车添加。列表不代表每个账号都支持所有模型。
+      </p>
       <p v-if="inputError" class="m-0 text-cp-xs text-cp-error-text" role="alert">
         {{ inputError }}
       </p>
@@ -144,7 +174,7 @@ watch(search, () => {
           :class="model?.models.includes(item.id) ? 'bg-cp-primary-container text-cp-primary-on-container' : 'bg-cp-fill-quaternary text-cp-text-secondary hover:bg-cp-fill-tertiary hover:text-cp-text'"
           :model-value="model?.models.includes(item.id) ?? false"
           :label="item.id"
-          :title="item.unavailable && accountId ? '当前目录未返回' : undefined"
+          :title="item.unavailable && (accountId || useKnownCatalog) ? '当前目录未返回，仍可保存' : undefined"
           show-label
           :disabled="disabled"
           @update:model-value="select(item.id, $event)"
@@ -155,8 +185,14 @@ watch(search, () => {
       </p>
       <BaseEmpty v-else-if="!error" :title="search ? '无匹配模型' : '暂无模型'" :icon="search ? Search : undefined" size="sm" surface="none" />
       <p v-if="error" class="m-0 text-cp-xs text-cp-error-text" role="alert">
-        模型列表加载失败，请重试
+        模型列表加载失败，已选模型仍保留，可重试或手动输入。
       </p>
+      <p v-if="useKnownCatalog && partialCatalog" class="m-0 text-cp-xs text-cp-text-tertiary" role="status">
+        部分账号的模型目录暂不可用，已显示读取成功的模型，仍可手动添加。
+      </p>
+      <BaseButton v-if="useKnownCatalog && (nextPage !== null || error)" :loading="loading" :disabled="disabled" @click="load(false, error ? retryAppend : true)">
+        {{ error ? '重试加载模型' : '加载更多模型' }}
+      </BaseButton>
     </template>
   </div>
 </template>

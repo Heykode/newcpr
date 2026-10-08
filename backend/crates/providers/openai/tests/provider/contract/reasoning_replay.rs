@@ -1,98 +1,116 @@
 use super::*;
 
 #[tokio::test]
-async fn streamed_invalid_prompt_is_request_scoped_for_http_and_ws() {
-    for websocket in [false, true] {
-        let failure = json!({
-            "type":"response.failed",
-            "response":{"id":"resp_prompt","status":"failed","error":{
-                "code":"invalid_prompt","message":"unsupported prompt",
-                "type":"invalid_request_error"
-            }}
-        });
-        let http = MockServer::start().await;
-        let (url, server) = if websocket {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let url = format!("http://{}", listener.local_addr().unwrap());
-            let server = tokio::spawn(async move {
-                let (stream, _) = listener.accept().await.unwrap();
-                let mut socket = accept_codex_test_websocket(stream).await;
-                socket.next().await.unwrap().unwrap();
-                socket
-                    .send(Message::Text(failure.to_string().into()))
-                    .await
-                    .unwrap();
+async fn streamed_parameter_errors_are_request_scoped_for_http_and_ws() {
+    for (code, param, message) in [
+        (
+            "invalid_prompt",
+            serde_json::Value::Null,
+            "unsupported prompt",
+        ),
+        (
+            "unsupported_value",
+            json!("reasoning.effort"),
+            "This reasoning effort is not supported with this model",
+        ),
+        (
+            "unsupported_parameter",
+            json!("frequency_penalty"),
+            "Parameter is not supported by this model",
+        ),
+    ] {
+        for websocket in [false, true] {
+            let failure = json!({
+                "type":"response.failed",
+                "response":{"id":"resp_prompt","status":"failed","error":{
+                    "code":code,"message":message,"param":param,
+                    "type":"invalid_request_error"
+                }}
             });
-            (url, Some(server))
-        } else {
-            Mock::given(method("POST"))
-                .and(path("/codex/responses"))
-                .respond_with(ResponseTemplate::new(200).set_body_raw(
-                    format!("event: response.failed\ndata: {failure}\n\n"),
-                    "text/event-stream",
-                ))
-                .expect(1)
-                .mount(&http)
-                .await;
-            (http.uri(), None)
-        };
-        let store = Arc::new(MemoryAccountStore::default());
-        create_account(&store, "acct_provider_contract").await;
-        let provider = provider_with_base_url_and_retry_budget(&store, url, 0);
-        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object(
-                "openai",
-                json!({
-                    "model":"gpt-5.4","input":"hello"
-                })
-                .as_object()
+            let http = MockServer::start().await;
+            let (url, server) = if websocket {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut socket = accept_codex_test_websocket(stream).await;
+                    socket.next().await.unwrap().unwrap();
+                    socket
+                        .send(Message::Text(failure.to_string().into()))
+                        .await
+                        .unwrap();
+                });
+                (url, Some(server))
+            } else {
+                Mock::given(method("POST"))
+                    .and(path("/codex/responses"))
+                    .respond_with(ResponseTemplate::new(200).set_body_raw(
+                        format!("event: response.failed\ndata: {failure}\n\n"),
+                        "text/event-stream",
+                    ))
+                    .expect(1)
+                    .mount(&http)
+                    .await;
+                (http.uri(), None)
+            };
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            let provider = provider_with_base_url_and_retry_budget(&store, url, 0);
+            let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object(
+                    "openai",
+                    json!({
+                        "model":"gpt-5.4","input":"hello"
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )
                 .unwrap()
-                .clone(),
-            )
-            .unwrap()
-            .with_context(Map::from_iter([(
-                "use_websocket".to_owned(),
-                json!(websocket),
-            )])),
-        ));
-        let mut stream = provider
-            .execute(
-                planned_request("openai", operation),
-                context("req_invalid_prompt", CancellationToken::new()),
-            )
-            .await
-            .unwrap();
-        let error = loop {
-            match timeout(Duration::from_secs(5), stream.next())
+                .with_context(Map::from_iter([(
+                    "use_websocket".to_owned(),
+                    json!(websocket),
+                )])),
+            ));
+            let mut stream = provider
+                .execute(
+                    planned_request("openai", operation),
+                    context("req_invalid_prompt", CancellationToken::new()),
+                )
                 .await
-                .unwrap()
-            {
-                Some(Ok(_)) => {}
-                Some(Err(error)) => break error,
-                None => panic!("invalid_prompt must fail the request"),
-            }
-        };
-        assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
-        assert!(!error.allows_pre_delivery_retry());
-        assert!(!provider_openai::openai_failure_affects_account_score(
-            &error
-        ));
-        assert_eq!(
-            error.client_visible_upstream_error().unwrap().code(),
-            Some("invalid_prompt")
-        );
-        assert_eq!(
-            store
-                .account("acct_provider_contract")
-                .unwrap()
-                .credential_state(),
-            CredentialState::Ready
-        );
-        if let Some(server) = server {
-            timeout(Duration::from_secs(5), server)
-                .await
-                .unwrap()
                 .unwrap();
+            let error = loop {
+                match timeout(Duration::from_secs(5), stream.next())
+                    .await
+                    .unwrap()
+                {
+                    Some(Ok(_)) => {}
+                    Some(Err(error)) => break error,
+                    None => panic!("invalid_prompt must fail the request"),
+                }
+            };
+            assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+            assert!(!error.allows_pre_delivery_retry());
+            assert!(!provider_openai::openai_failure_affects_account_score(
+                &error
+            ));
+            assert_eq!(
+                error.client_visible_upstream_error().unwrap().code(),
+                Some(code)
+            );
+            assert_eq!(
+                store
+                    .account("acct_provider_contract")
+                    .unwrap()
+                    .credential_state(),
+                CredentialState::Ready
+            );
+            if let Some(server) = server {
+                timeout(Duration::from_secs(5), server)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
         }
     }
 }
@@ -129,6 +147,7 @@ async fn reasoning_replay_preserves_unrelated_fields_and_plaintext_on_http_and_w
             .shift_remove("status");
     }
     expected[0].as_object_mut().unwrap().shift_remove("content");
+    expected[19] = json!({"type":"reasoning", "summary":[{"type":"summary_text","text":"replay"}]});
     expected
         .as_array_mut()
         .unwrap()
@@ -253,4 +272,58 @@ async fn capture_with_store(input: Value, websocket: bool, qx: bool, stored: boo
         original["client_metadata"]["extension"]
     );
     actual
+}
+
+#[tokio::test]
+async fn message_ids_are_normalized_without_changing_references_tools_or_ciphertext() {
+    let input = json!([
+        {"type":"message","id":"item_history","role":"assistant","content":[{"type":"output_text","text":"hello"}],"extension":{"id":"item_nested"}},
+        {"type":"message","id":"msg_valid","role":"user","content":"keep"},
+        {"type":"reasoning","id":"item_cipher","encrypted_content":"opaque-cipher","summary":[]},
+        {"type":"message","id":"item_referenced","role":"assistant","content":"referenced"},
+        {"type":"item_reference","id":"item_referenced"},
+        {"type":"message","id":"item_collision","role":"assistant","content":"collision"},
+        {"type":"message","id":"msg_collision","role":"assistant","content":"existing"},
+        {"type":"message","id":"item_lookup"},
+        {"type":"function_call","id":"item_call","call_id":"call_original","name":"echo","arguments":"{}"},
+        {"type":"function_call_output","call_id":"call_original","output":"ok"},
+        {"type":"message","id":"item_duplicate","role":"user","content":"a"},
+        {"type":"message","id":"item_duplicate","role":"user","content":"b"}
+    ]);
+    for websocket in [false, true] {
+        for stored in [false, true] {
+            let actual = capture_with_store(input.clone(), websocket, false, stored).await;
+            let mut expected = input.clone();
+            if !stored {
+                expected[0]["id"] = json!("msg_history");
+            }
+            assert_eq!(actual["input"], expected);
+        }
+    }
+}
+
+#[tokio::test]
+async fn plaintext_reasoning_only_moves_when_every_part_can_be_preserved() {
+    let input = json!([
+        {"type":"reasoning","id":"rs_plain","summary":[],"content":[{"type":"reasoning_text","text":"first"},{"type":"reasoning_text","text":"second"}]},
+        {"type":"reasoning","summary":[{"type":"summary_text","text":"existing"}],"content":[{"type":"reasoning_text","text":"different"}]},
+        {"type":"reasoning","content":[{"type":"reasoning_text","text":"keep","extension":true}]},
+        {"type":"reasoning","content":[{"type":"reasoning_text","text":"keep"},{"type":"future_part","value":1}]},
+        {"type":"reasoning","id":"rs_referenced","content":[{"type":"reasoning_text","text":"reference"}]},
+        {"type":"item_reference","id":"rs_referenced"}
+    ]);
+    for websocket in [false, true] {
+        for stored in [false, true] {
+            let actual = capture_with_store(input.clone(), websocket, false, stored).await;
+            let mut expected = input.clone();
+            expected[0].as_object_mut().unwrap().remove("content");
+            expected[0]["summary"] = json!([
+                {"type":"summary_text","text":"first"},{"type":"summary_text","text":"second"}
+            ]);
+            if !stored {
+                expected[0].as_object_mut().unwrap().remove("id");
+            }
+            assert_eq!(actual["input"], expected);
+        }
+    }
 }

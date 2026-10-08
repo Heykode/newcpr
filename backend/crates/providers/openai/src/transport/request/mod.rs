@@ -141,6 +141,12 @@ pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
     let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return;
     };
+    let mut id_counts = std::collections::BTreeMap::<String, usize>::new();
+    for item in input.iter() {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            *id_counts.entry(id.to_owned()).or_default() += 1;
+        }
+    }
     input.retain_mut(|item| {
         let Some(item) = item.as_object_mut() else {
             return true;
@@ -165,7 +171,15 @@ pub(crate) fn normalize_reasoning_replay(body: &mut Map<String, Value>) {
             return false;
         }
         item.shift_remove("status");
-        // Preserve plaintext-only history; only encrypted replay makes it redundant.
+        // Referenced IDs must remain resolvable; opaque and nonempty summaries stay untouched.
+        if item
+            .get("id")
+            .and_then(Value::as_str)
+            .is_none_or(|id| id_counts.get(id) == Some(&1))
+        {
+            compatibility::normalize_plaintext_reasoning(item, stateless);
+        }
+        // Only encrypted replay makes any remaining plaintext redundant.
         if item
             .get("encrypted_content")
             .and_then(Value::as_str)

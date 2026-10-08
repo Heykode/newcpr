@@ -188,6 +188,7 @@ pub(super) async fn apply(
             return Ok("excel_blocked_model");
         }
     }
+    let before = super::template_recovery::snapshot(tx, &claim.rule.config.account_id).await?;
     // A settings conflict must still persist the quality result, without partial mutations.
     sqlx::query("savepoint quality_template_apply")
         .execute(&mut **tx)
@@ -248,13 +249,6 @@ pub(super) async fn apply(
     )
     .await
     .map_err(unavailable)?;
-    if excel
-        && row
-            .try_get::<String, _>("responses_upstream")
-            .map_err(unavailable)?
-            != "excel"
-    {
-        policy::record_excel_ownership(tx, claim).await?;
-    }
+    super::template_recovery::record(tx, claim, before).await?;
     Ok("template_applied")
 }
