@@ -20,7 +20,7 @@ import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { formatDateTime } from '@/utils/date'
 import { newQualityConfig, qualityConfigDraft } from './defaults'
-import { failureActionOptions, usesFailureThreshold } from './failure-actions'
+import { failureActionOptions, failureThreshold, setFailureThreshold, usesFailureThreshold } from './failure-actions'
 import { qualityEffortOptions } from './model-choices'
 import QualityBulkEditor from './QualityBulkEditor.vue'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
@@ -116,6 +116,7 @@ const actions: Record<string, string> = {
   excel_blocked_model: '检测模型未配置为 Excel 模型，未改动账号',
   excel_blocked_account: '账号当前不可用，未开启 Excel',
   excel_threshold_pending: '连续异常尚未达到阈值，未执行处置',
+  failure_configuration_changed: '账号配置已变化，未执行处置',
   excel_streak_reset: '本轮正常，连续异常计数已清零',
 }
 const deleteTarget = ref<QualityRule | null>(null)
@@ -819,7 +820,7 @@ onBeforeUnmount(() => {
               <span class="truncate font-mono text-cp-sm text-cp-text-secondary" :title="rule.config.model">{{ rule.config.model }}</span>
               <span class="text-xs text-cp-text-secondary">{{ modeLabel(rule.config.detectionMode) }}</span>
               <span v-if="rule.sourceTemplate" class="truncate text-xs text-cp-text-secondary" :title="`版本 ${rule.sourceTemplate.revision}`">来源模板：{{ rule.sourceTemplate.name }}</span>
-              <span v-if="usesFailureThreshold(rule.config.failureAction)" class="text-xs tabular-nums text-cp-text-secondary">连续异常 {{ rule.excelFailureStreak ?? 0 }}/{{ rule.config.excelFailureThreshold ?? 1 }} 轮</span>
+              <span v-if="usesFailureThreshold(rule.config.failureAction)" class="text-xs tabular-nums text-cp-text-secondary">连续异常 {{ rule.excelFailureStreak ?? 0 }}/{{ failureThreshold(rule.config) }} 轮</span>
               <span v-if="rule.config.failureAction === 'apply_account_template'" class="truncate text-xs text-cp-text-secondary">模板：{{ rule.config.failureTemplate?.config.name ?? '未选择' }}</span>
               <span class="mt-1 flex items-center gap-1.5 text-xs" :class="ruleStatusColor(rule)"><span class="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />{{ rule.running ? '检测中' : rule.pending ? '已排队' : !rule.config.enabled ? '已暂停' : verdictLabel(rule.lastStatus, rule.config.detectionMode) }}</span>
               <span class="text-xs text-cp-text-secondary">下次 {{ rule.config.enabled ? formatDateTime(rule.nextRunAt) : '—' }}</span>
@@ -1083,7 +1084,7 @@ onBeforeUnmount(() => {
           </p>
           <div v-if="usesFailureThreshold(draft.failureAction)" class="grid gap-2 text-cp-sm">
             <span>连续异常多少轮后执行处置</span>
-            <BaseNumberInput v-model="draft.excelFailureThreshold" label="连续异常阈值" :min="1" :max="100" />
+            <BaseNumberInput :model-value="failureThreshold(draft)" label="连续异常阈值" :min="1" :max="100" @update:model-value="setFailureThreshold(draft, $event)" />
             <p class="text-xs text-cp-text-secondary">
               明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。
             </p>

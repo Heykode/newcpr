@@ -61,6 +61,15 @@ export function confirmResetBatch(id: string) {
 export function getResetBatches(options: RequestOptions = {}) {
   return request<ResetBatch[]>({ url: `${base}/batches`, method: 'GET', ...options })
 }
+export interface ResetHistoryPage {
+  items: ResetBatch[]
+  accountNames: Record<string, string>
+  before: string
+  hasMore: boolean
+}
+export function getResetHistory(params: { page: number, search: string, before?: string }, options: RequestOptions = {}) {
+  return request<ResetHistoryPage>({ url: `${base}/history`, method: 'GET', params, ...options })
+}
 export function retryResetBatch(id: string, accountId: string) {
   return request<void>({ url: `${base}/retry`, method: 'POST', data: { id, accountId }, silent: true })
 }

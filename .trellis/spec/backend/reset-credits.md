@@ -1,5 +1,13 @@
 # Reset Credit Consumption
 
+- Admin-only `/accounts/reset-credits/history?page=1&search=...&before=...` returns ten
+  confirmed batches per page, account display names and hasMore. It is separate from the
+  active-job poll endpoint (recent thirty plus pending). Search is a literal substring of
+  account ID/name/custom name/email; deleted accounts remain searchable by ID. The server
+  cutoff excludes subsequently created batches. Reading history never refreshes or redeems.
+- UI shows multiple batches, account search and paging, preserving original batch/account
+  IDs for explicit unknown-result retries. Query-only inventory and consumption remain separate.
+
 - Single-account and batch consumption both pass through `AccountsService.consume_reset_credit`.
   Preserve existing credential refresh and provider transport. Do not introduce model scheduling,
   alternate egress, fingerprint changes or transport retries.

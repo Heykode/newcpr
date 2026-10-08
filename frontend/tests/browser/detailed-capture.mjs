@@ -41,6 +41,7 @@ async function main() {
       let clears = 0
       let storedBytes = 960
       let recordCount = 3
+      let job = null
       const cutoffAt = '2026-01-01T00:00:00Z'
       const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
       await page.route('**/dev/**', async (route) => {
@@ -57,21 +58,17 @@ async function main() {
           }
           return fulfill(route, { config, globalActive: config.enabled && config.globalErrors, storageFault: false, skipped: 0, storedBytes, recordCount })
         }
-        if (url.pathname.endsWith('/request-captures/clear')) {
+        if (url.pathname.endsWith('/log-cleanup'))
+          return fulfill(route, { job })
+        if (url.pathname.endsWith('/log-cleanup/captures/start')) {
           clears++
           const body = route.request().postDataJSON()
           assert.equal(body.confirmed, true)
           if (clears === 1)
             return route.fulfill({ status: 503, json: { code: 503, message: 'Fixture cleanup uncertain', data: null } })
-          if (clears === 2) {
-            assert.equal(body.cutoffAt, undefined)
-            return fulfill(route, { cutoffAt, removedRecords: 2, removedBytes: 640, complete: false })
-          }
-          assert.equal(clears, 3, 'uncertain cleanup must not be retried automatically')
-          assert.equal(body.cutoffAt, cutoffAt, 'all cleanup batches share the first server cutoff')
-          storedBytes = 320
-          recordCount = 1
-          return fulfill(route, { cutoffAt, removedRecords: 1, removedBytes: 320, complete: true })
+          assert.equal(clears, 2, 'no browser-owned delete loop or automatic retry')
+          job = { id: 'cleanup-fixture', captureOnly: true, status: 'running', removed: 2, cutoffAt }
+          return fulfill(route, job)
         }
         if (url.pathname.endsWith('/request-captures/by-request')) {
           lookups++
@@ -164,13 +161,22 @@ async function main() {
       assert.equal(clears, 0)
       await settings.getByRole('button', { name: '清理采集材料', exact: true }).click()
       await settings.getByRole('button', { name: '确认清理', exact: true }).click()
-      await settings.getByText(/清理结果未确认，可能已清理部分材料/).waitFor()
+      await settings.getByText(/Fixture cleanup uncertain/).waitFor()
       await page.waitForTimeout(100)
       assert.equal(clears, 1)
       await settings.getByRole('button', { name: '清理采集材料', exact: true }).click()
       await settings.getByRole('button', { name: '确认清理', exact: true }).click()
-      await settings.getByText(/清理完成，已清理 3 条采集材料/).waitFor()
-      assert.equal(clears, 3)
+      await settings.getByText(/后台清理中，已移除 2 条采集材料/).waitFor()
+      await settings.getByRole('button', { name: '关闭', exact: true }).last().click()
+      await settings.waitFor({ state: 'detached' })
+      await page.reload()
+      await page.getByText(/后台清理中，已移除 2 条采集材料/).waitFor()
+      job = { ...job, status: 'succeeded', removed: 3 }
+      storedBytes = 320
+      recordCount = 1
+      await page.getByRole('button', { name: '采集容量与保留时间', exact: true }).click()
+      await settings.getByText(/清理完成，已移除 3 条采集材料/).waitFor()
+      assert.equal(clears, 2)
       assert.equal(config.enabled, false, 'clearing must not change the saved capture switch')
       assert.equal(config.quotaPolicy, 'overwrite')
       await settings.getByText(/已存 1 条材料/).waitFor()

@@ -20,6 +20,172 @@ fn context() -> MutationContext {
     }
 }
 
+#[tokio::test]
+async fn capture_terminal_evidence_survives_fragment_limit_and_redacts_untrusted_text() {
+    let Some(db) = TestDatabase::create("capture_evidence").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&db, directory.path()).await;
+    enable(&manager).await;
+    let observer = manager.start("evidence-fixture", "key", &[]).unwrap();
+    observer.fact(
+        "account.selection",
+        1,
+        &json!({"selectedAccountId":"capture-owner"}),
+    );
+    for _ in 0..513 {
+        observer.body("upstream.chunk", 1, None, b"data: {}\n\n");
+    }
+    observer.fact(
+        "transport.selected",
+        1,
+        &json!({"decision":"ws_reused","requirement":"new_chain"}),
+    );
+    observer.fact(
+        "upstream.read.failed",
+        1,
+        &json!({"failureReason":"normal_close","error":"PRIVATE_FIXTURE","connectionAgeMs":123}),
+    );
+    observer.fact("attempt.failed", 1, &json!({"kind":"protocol","sendState":"Ambiguous","diagnostic":{"code":"websocket_close_1000","message":"PRIVATE_FIXTURE"}}));
+    observer.fact(
+        "retry.decided",
+        1,
+        &json!({"retryable":false,"downstreamCommitted":true,"sendState":"Ambiguous"}),
+    );
+    observer.fact("request.finished", 0, &json!({"outcome":"Incomplete"}));
+    drop(observer);
+    let record = wait_request(&manager, "evidence-fixture").await;
+    assert!(record.incomplete);
+    let text = tokio::fs::read_to_string(directory.path().join(format!("{}.jsonl", record.id)))
+        .await
+        .unwrap();
+    for required in [
+        "diagnostic.evidence",
+        "ws_reused",
+        "normal_close",
+        "closeCode\":1000",
+        "downstreamCommitted\":true",
+        "fragment_limit",
+        "request.finished",
+    ] {
+        assert!(text.contains(required), "{required}");
+    }
+    assert!(!text.contains("PRIVATE_FIXTURE"));
+    cancel.cancel();
+    worker.await.unwrap();
+    db.close().await;
+}
+
+#[tokio::test]
+async fn capture_clear_background_job_resumes_without_changing_settings_or_new_material() {
+    use gateway_admin::{model::log_cleanup::*, ports::log_cleanup::LogCleanupStore};
+    use gateway_store::postgres::PgLogCleanupStore;
+    let Some(db) = TestDatabase::create("capture_background").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&db, directory.path()).await;
+    let task = enable(&manager).await;
+    let old = seed_capture(&db, directory.path(), &task.id, "old-fixture").await;
+    let store = PgLogCleanupStore::new(db.pool.clone(), None, Some(manager.clone()));
+    let settings = store.state().await.unwrap();
+    let capture_settings = manager.settings().await.unwrap();
+    let started = store.start_capture_clear(&context()).await.unwrap();
+    assert!(started.capture_only);
+    assert_eq!(
+        store.start_capture_clear(&context()).await.unwrap().id,
+        started.id
+    );
+    let new = seed_capture(&db, directory.path(), &task.id, "new-fixture").await;
+    drop(store);
+    let store = PgLogCleanupStore::new(db.pool.clone(), None, Some(manager.clone()));
+    for _ in 0..8 {
+        store.run_batch().await.unwrap();
+    }
+    let state = store.state().await.unwrap();
+    assert_eq!(state.job.unwrap().status, CleanupJobStatus::Succeeded);
+    assert_eq!(
+        serde_json::to_value(state.config).unwrap(),
+        serde_json::to_value(settings.config).unwrap()
+    );
+    assert_eq!(state.revision, settings.revision);
+    assert!(!directory.path().join(format!("{}.jsonl", old.id)).exists());
+    assert!(directory.path().join(format!("{}.jsonl", new.id)).exists());
+    assert_eq!(
+        manager.settings().await.unwrap().config,
+        capture_settings.config
+    );
+    assert_eq!(manager.for_request("new-fixture").await.unwrap().len(), 1);
+    cancel.cancel();
+    worker.await.unwrap();
+    db.close().await;
+}
+
+#[tokio::test]
+async fn capture_evidence_has_a_bounded_tail_and_survives_shared_budget_exhaustion() {
+    let Some(db) = TestDatabase::create("capture_evidence_budget").await else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let (manager, cancel, worker) = setup(&db, directory.path()).await;
+    enable(&manager).await;
+    let observer = manager.start("budget-fixture", "key", &[]).unwrap();
+    observer.fact(
+        "account.selection",
+        1,
+        &json!({"selectedAccountId":"capture-owner"}),
+    );
+    observer.body("upstream.chunk", 1, None, &vec![b'x'; 65 * 1024 * 1024]);
+    for _ in 0..70 {
+        observer.fact(
+            "retry.decided",
+            1,
+            &json!({"retryable":true,"sendState":"NotSent"}),
+        );
+    }
+    observer.fact(
+        "account.selection",
+        2,
+        &json!({"selectedAccountId":"unrelated-owner"}),
+    );
+    observer.fact(
+        "attempt.failed",
+        2,
+        &json!({"kind":"unauthorized","upstreamStatus":401}),
+    );
+    observer.fact("attempt.failed", 1, &json!({"kind":"protocol","diagnostic":{"code":"invalid_encrypted_content","message":"DO_NOT_COPY"}}));
+    observer.fact("request.finished", 0, &json!({"outcome":"Failed"}));
+    drop(observer);
+    let record = wait_request(&manager, "budget-fixture").await;
+    assert!(record.incomplete);
+    let text = tokio::fs::read_to_string(directory.path().join(format!("{}.jsonl", record.id)))
+        .await
+        .unwrap();
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["stage"] == "diagnostic.evidence")
+            .count(),
+        64
+    );
+    assert!(text.contains("shared_buffer_budget"));
+    assert!(text.contains("evidence_tail_limit"));
+    assert!(text.contains("invalid_encrypted_content"));
+    assert!(!text.contains("DO_NOT_COPY"));
+    assert!(
+        !text.contains("unauthorized"),
+        "account-scoped evidence must not include another attempt"
+    );
+    cancel.cancel();
+    worker.await.unwrap();
+    db.close().await;
+}
+
 async fn clean_capture_records(
     database: &TestDatabase,
     manager: Arc<CaptureManager>,

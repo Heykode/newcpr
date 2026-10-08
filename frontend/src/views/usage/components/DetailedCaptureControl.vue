@@ -2,25 +2,26 @@
 import type { CaptureConfig, CaptureSettings } from '@/api/modules/request-capture'
 import { RefreshCw, Settings2, Trash2 } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { clearCapturedErrors, configureRequestCaptures, getCaptureSettings } from '@/api/modules/request-capture'
+import { configureRequestCaptures, getCaptureSettings } from '@/api/modules/request-capture'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
+import { useCaptureCleanup } from '../composables/useCaptureCleanup'
 
 const settings = ref<CaptureSettings | null>(null)
 const draft = ref<CaptureConfig | null>(null)
 const open = ref(false)
 const loading = ref(false)
 const saving = ref(false)
-const clearing = ref(false)
 const confirmClear = ref(false)
-const stopClearing = ref(false)
-const clearedRecords = ref(0)
-const notice = ref('')
-const busy = computed(() => saving.value || clearing.value)
+const cleanup = useCaptureCleanup(() => {
+  void load()
+})
+const { running: clearing, occupied, notice, error: cleanupError, busy: cleanupBusy } = cleanup
+const busy = computed(() => saving.value || cleanupBusy.value)
 const policies = [{ label: '满了停止采集', value: 'stop' }, { label: '循环覆盖最旧材料', value: 'overwrite' }]
 const switchValue = ref(false)
 const error = ref('')
@@ -83,41 +84,8 @@ async function save(config: CaptureConfig) {
 async function clearMaterials() {
   if (busy.value || !confirmClear.value)
     return
-  clearing.value = true
   confirmClear.value = false
-  stopClearing.value = false
-  clearedRecords.value = 0
-  notice.value = ''
-  error.value = ''
-  let cutoffAt: string | undefined
-  let complete = false
-  let failure = ''
-  try {
-    while (!complete && !stopClearing.value) {
-      if (!alive)
-        break
-      const result = await clearCapturedErrors({ confirmed: true, ...(cutoffAt ? { cutoffAt } : {}) })
-      if (!alive)
-        return
-      clearedRecords.value += result.removedRecords
-      cutoffAt = result.cutoffAt
-      complete = result.complete
-      if (complete)
-        break
-    }
-  }
-  catch {
-    failure = '清理结果未确认，可能已清理部分材料。请刷新查看后再操作，不会自动重试。'
-  }
-  finally {
-    if (alive) {
-      await load()
-      clearing.value = false
-      error.value = failure || error.value
-      if (!failure)
-        notice.value = `${complete ? '清理完成' : '已停止清理'}，已清理 ${clearedRecords.value} 条采集材料。使用明细和普通错误日志保留。`
-    }
-  }
+  await cleanup.start()
 }
 function toggle(value: boolean) {
   if (settings.value && !loading.value && !busy.value) {
@@ -130,7 +98,7 @@ function edit() {
     return
   draft.value = { ...settings.value.config, quotaPolicy: settings.value.config.quotaPolicy ?? 'stop' }
   confirmClear.value = false
-  notice.value = ''
+  void cleanup.refresh()
   open.value = true
 }
 function selectPolicy(value: string) {
@@ -156,6 +124,8 @@ onBeforeUnmount(() => {
     <span v-if="settings?.storageFault" role="alert" class="text-cp-xs text-cp-error-text">采集存储异常，已停采</span>
     <span v-else-if="enabled && !settings?.globalActive" role="status" class="text-cp-xs text-cp-warning-text">详细采集已暂停，可清理材料、扩大容量或改为循环覆盖后保存</span>
     <span v-if="error" role="alert" class="text-cp-xs text-cp-error-text">{{ error }}</span>
+    <span v-if="clearing" role="status" class="text-cp-xs text-cp-text-secondary">{{ notice }}</span>
+    <span v-if="cleanupError && !open" role="alert" class="text-cp-xs text-cp-error-text">{{ cleanupError }}</span>
     <BaseModal v-model="open" title="详细错误采集" size="sm" :dismissible="!busy">
       <form v-if="draft" class="grid min-w-0 gap-4" @submit.prevent="valid && !busy && save({ ...draft })">
         <div class="grid gap-2">
@@ -180,7 +150,7 @@ onBeforeUnmount(() => {
           全局设置。采集正文可能包含敏感对话和文件内容，仅管理员可访问。
         </p>
         <div class="grid gap-2 border-t border-cp-border pt-3">
-          <BaseButton v-if="!confirmClear && !clearing" variant="soft" :disabled="busy || loading || settings?.storageFault" @click="confirmClear = true">
+          <BaseButton v-if="!confirmClear && !clearing" variant="soft" :disabled="busy || occupied || loading || settings?.storageFault" @click="confirmClear = true">
             <Trash2 class="size-4" />清理采集材料
           </BaseButton>
           <template v-if="confirmClear">
@@ -197,15 +167,15 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-if="clearing">
-            <p role="status" class="m-0 text-cp-xs">
-              正在清理，已移除 {{ clearedRecords }} 条材料…
-            </p>
-            <BaseButton variant="soft" :disabled="stopClearing" @click="stopClearing = true">
-              {{ stopClearing ? '完成当前批次后停止' : '停止清理' }}
+            <BaseButton variant="soft" :disabled="cleanupBusy" @click="cleanup.stop">
+              停止清理
             </BaseButton>
           </template>
           <p v-if="notice" role="status" class="m-0 text-cp-xs text-cp-text-secondary">
             {{ notice }}
+          </p>
+          <p v-if="cleanupError" role="alert" class="m-0 text-cp-xs text-cp-error-text">
+            {{ cleanupError }}
           </p>
         </div>
         <p v-if="error" role="alert" class="m-0 text-cp-sm text-cp-error-text">
@@ -213,7 +183,7 @@ onBeforeUnmount(() => {
         </p>
         <div class="flex flex-wrap justify-end gap-2">
           <BaseButton variant="soft" :disabled="busy" @click="open = false">
-            取消
+            关闭
           </BaseButton>
           <BaseButton type="submit" :loading="saving" :disabled="!valid || clearing || confirmClear">
             保存

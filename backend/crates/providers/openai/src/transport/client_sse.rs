@@ -68,6 +68,7 @@ impl CodexBackendClient {
             egress_route: None,
             egress_account: None,
             attempt_pinned: false,
+            recovery_route: None,
             forced_pool_key: None,
             request_tuning: None,
             timezone: gateway_core::time::DeploymentTimeZone::default(),
@@ -573,8 +574,36 @@ impl CodexBackendClient {
         pool_account_id: Option<&str>,
     ) -> CodexClientResult<PreparedResponseTransport> {
         let mut client = self.clone();
-        client.profile = self.profile.frozen();
-        client.prepare_egress_attempt(request, context, pool_account_id)?;
+        if let Some(pinned) = self.recovery_route.as_ref().and_then(|pin| pin.get()) {
+            client.profile = pinned.profile.clone();
+            client.egress_route = pinned.egress.clone();
+            client.forced_pool_key = pinned.pool_key.clone();
+            client.attempt_pinned = true;
+            if let Some((runtime, account)) = client
+                .egress_runtime
+                .as_ref()
+                .zip(client.egress_account.as_ref())
+            {
+                runtime.check_account(account.id())?;
+            }
+            if let Some(route) = &client.egress_route {
+                client
+                    .egress_runtime
+                    .as_ref()
+                    .ok_or(super::egress::CodexEgressError::Unavailable)?
+                    .check(route)?;
+            }
+        } else {
+            client.profile = self.profile.frozen();
+            client.prepare_egress_attempt(request, context, pool_account_id)?;
+            if let Some(pin) = &self.recovery_route {
+                let _ = pin.set(RecoveryAttemptRoute {
+                    profile: client.profile.clone(),
+                    egress: client.egress_route.clone(),
+                    pool_key: client.forced_pool_key.clone(),
+                });
+            }
+        }
         let mut prepared = client
             .prepare_response_transport_inner(request, context, pool_account_id)
             .await?;

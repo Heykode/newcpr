@@ -134,7 +134,7 @@ impl CaptureManager {
         Ok(())
     }
 
-    pub(super) async fn clear_stored(
+    pub(crate) async fn clear_stored(
         &self,
         input: ClearCaptures,
         context: &MutationContext,

@@ -5,7 +5,7 @@ use gateway_admin::model::request_capture::{CaptureScope, CaptureTask};
 use gateway_core::diagnostics::request_capture::{RequestCaptureFactory, RequestCaptureObserver};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering},
@@ -19,6 +19,13 @@ const RECORD_LIMIT: usize = 128 * 1024 * 1024;
 const MAX_FRAGMENTS: usize = 512;
 const MAX_SESSIONS: usize = 256;
 const MAX_ATTEMPTS: usize = 256;
+
+const CONTENTION: u16 = 1;
+const FRAGMENT_LIMIT: u16 = 2;
+const RECORD_BYTE_LIMIT: u16 = 4;
+const SHARED_BUDGET: u16 = 8;
+const ATTEMPT_LIMIT: u16 = 16;
+const EVIDENCE_LIMIT: u16 = 32;
 
 pub(super) struct ActiveTask {
     pub task: CaptureTask,
@@ -67,6 +74,7 @@ pub(super) struct Fragment {
 #[derive(Default)]
 struct Observations {
     fragments: Vec<Fragment>,
+    evidence: VecDeque<super::evidence::Evidence>,
     accounts: BTreeMap<u32, String>,
     completed: BTreeSet<u32>,
     failed_accounts: BTreeSet<String>,
@@ -83,6 +91,8 @@ pub(super) struct CaptureBundle {
     pub accounts: BTreeSet<String>,
     pub incomplete: bool,
     pub incomplete_tasks: u16,
+    pub evidence: VecDeque<super::evidence::Evidence>,
+    pub omission_reasons: Vec<&'static str>,
 }
 
 struct Session {
@@ -92,6 +102,7 @@ struct Session {
     state: Mutex<Observations>,
     incomplete: AtomicBool,
     incomplete_tasks: AtomicU16,
+    omissions: AtomicU16,
 }
 
 impl RequestCaptureFactory for CaptureManager {
@@ -143,6 +154,7 @@ impl RequestCaptureFactory for CaptureManager {
             state: Mutex::new(Observations::default()),
             incomplete: AtomicBool::new(false),
             incomplete_tasks: AtomicU16::new(0),
+            omissions: AtomicU16::new(0),
         }))
     }
 }
@@ -167,6 +179,7 @@ impl RequestCaptureObserver for Session {
             return;
         }
         let Ok(mut state) = self.state.try_lock() else {
+            self.omissions.fetch_or(CONTENTION, Ordering::Relaxed);
             self.incomplete.store(true, Ordering::Release);
             return;
         };
@@ -186,13 +199,19 @@ impl RequestCaptureObserver for Session {
         if task_mask == 0 {
             return;
         }
-        if state.fragments.len() >= MAX_FRAGMENTS
-            || bytes.len() > RECORD_LIMIT.saturating_sub(state.bytes)
-        {
+        if state.fragments.len() >= MAX_FRAGMENTS {
+            self.omissions.fetch_or(FRAGMENT_LIMIT, Ordering::Relaxed);
+            self.incomplete.store(true, Ordering::Release);
+            return;
+        }
+        if bytes.len() > RECORD_LIMIT.saturating_sub(state.bytes) {
+            self.omissions
+                .fetch_or(RECORD_BYTE_LIMIT, Ordering::Relaxed);
             self.incomplete.store(true, Ordering::Release);
             return;
         }
         let Some(reservation) = self.manager.budget.reserve(bytes.len().saturating_add(512)) else {
+            self.omissions.fetch_or(SHARED_BUDGET, Ordering::Relaxed);
             self.incomplete.store(true, Ordering::Release);
             return;
         };
@@ -209,10 +228,7 @@ impl RequestCaptureObserver for Session {
     }
 
     fn fact(&self, stage: &'static str, attempt: u32, data: &Value) {
-        if matches!(
-            stage,
-            "excel.transport" | "excel.transport.failed" | "upstream.business_result"
-        ) {
+        if matches!(stage, "excel.transport" | "excel.transport.failed") {
             // Fixed-label diagnostic facts only. Never copy arbitrary error text.
             let mut summary = json!({"stage":stage,"attempt":attempt});
             for key in ["phase", "cause", "outcome"] {
@@ -262,14 +278,44 @@ impl RequestCaptureObserver for Session {
             return;
         }
         let Ok(mut state) = self.state.try_lock() else {
+            self.omissions.fetch_or(CONTENTION, Ordering::Relaxed);
             self.incomplete.store(true, Ordering::Release);
             return;
         };
+        if let Some(body) = super::evidence::summary(stage, attempt, data) {
+            let account = state.accounts.get(&attempt).cloned();
+            let mut task_mask = 0;
+            for (index, task) in self.tasks.iter().enumerate() {
+                if !task.accepts() {
+                    self.incomplete_tasks
+                        .fetch_or(1 << index, Ordering::Relaxed);
+                } else if task.task.scope != CaptureScope::Account
+                    || account.as_deref() == Some(task.task.target_id.as_str())
+                    || (attempt == 0 && stage == "request.finished")
+                {
+                    task_mask |= 1 << index;
+                }
+            }
+            if task_mask != 0 {
+                if state.evidence.len() == super::evidence::LIMIT {
+                    state.evidence.pop_front();
+                    self.omissions.fetch_or(EVIDENCE_LIMIT, Ordering::Relaxed);
+                    self.incomplete.store(true, Ordering::Release);
+                }
+                state.evidence.push_back(super::evidence::Evidence {
+                    attempt,
+                    account,
+                    task_mask,
+                    body,
+                });
+            }
+        }
         if stage == "account.selection" {
             if let Some(account) = data["selectedAccountId"].as_str() {
                 if state.accounts.len() < MAX_ATTEMPTS || state.accounts.contains_key(&attempt) {
                     state.accounts.insert(attempt, account.to_owned());
                 } else {
+                    self.omissions.fetch_or(ATTEMPT_LIMIT, Ordering::Relaxed);
                     self.incomplete.store(true, Ordering::Release);
                 }
             }
@@ -295,14 +341,6 @@ impl RequestCaptureObserver for Session {
             state.error = true;
             if let Some(account) = state.accounts.get(&attempt).cloned() {
                 state.failed_accounts.insert(account);
-            }
-            drop(state);
-            // Retain only a bounded summary, never raw error text or headers.
-            let summary = json!({"stage":stage,"attempt":attempt,
-                "errorKind":data.get("kind").or_else(|| data.get("errorKind")),
-                "upstreamStatus":data.get("upstreamStatus")});
-            if let Ok(bytes) = serde_json::to_vec(&summary) {
-                self.body("downstream.event", attempt, None, &bytes);
             }
         }
     }
@@ -339,6 +377,21 @@ impl Drop for Session {
         if tasks.is_empty() {
             return;
         }
+        let omissions = self.omissions.load(Ordering::Acquire);
+        let mut omission_reasons: Vec<_> = [
+            (CONTENTION, "buffer_contention"),
+            (FRAGMENT_LIMIT, "fragment_limit"),
+            (RECORD_BYTE_LIMIT, "record_byte_limit"),
+            (SHARED_BUDGET, "shared_buffer_budget"),
+            (ATTEMPT_LIMIT, "attempt_limit"),
+            (EVIDENCE_LIMIT, "evidence_tail_limit"),
+        ]
+        .into_iter()
+        .filter_map(|(flag, name)| (omissions & flag != 0).then_some(name))
+        .collect();
+        if !state.finished {
+            omission_reasons.push("request_unfinished");
+        }
         let bundle = CaptureBundle {
             request_id: self.request_id.clone(),
             tasks,
@@ -347,6 +400,8 @@ impl Drop for Session {
             accounts: state.accounts.values().cloned().collect(),
             incomplete,
             incomplete_tasks: self.incomplete_tasks.load(Ordering::Acquire),
+            evidence: std::mem::take(&mut state.evidence),
+            omission_reasons,
         };
         if self.manager.sender.try_send(bundle).is_err() {
             self.manager.skipped.fetch_add(1, Ordering::Relaxed);

@@ -196,6 +196,17 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
+        // Recovery digest/TTL state and selected-request effort observation are
+        // private owner details, not public production test APIs.
+        (
+            "crates/providers/openai",
+            Some("provider/encrypted_history.rs" | "transport/request/compatibility.rs"),
+            Item::Mod(module),
+        ) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // The trusted probe logging marker must stay private; test both ordinary
         // and internal-probe error projection without exporting a logging API.
         ("crates/providers/openai", Some("provider/failure.rs"), Item::Mod(module)) => {
@@ -457,6 +468,48 @@ fn private_test_allowlist_requires_exact_owner_name_and_test_only_gate() {
     ] {
         let item: Item = syn::parse_str(source).unwrap();
         assert!(!is_audited_private_test(owner, path, &item), "{source}");
+    }
+}
+
+#[test]
+fn native_recovery_private_tests_require_exact_owner_and_test_only_gate() {
+    let owner = "crates/providers/openai";
+    let item: Item = syn::parse_str("#[cfg(test)] mod tests {}").unwrap();
+    for relative in [
+        "provider/encrypted_history.rs",
+        "transport/request/compatibility.rs",
+    ] {
+        let path = Path::new(relative);
+        assert!(is_audited_private_test(owner, path, &item));
+        assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+        assert!(!is_audited_private_test(
+            owner,
+            Path::new("provider/other.rs"),
+            &item
+        ));
+        for source in [
+            "mod tests {}",
+            "#[cfg(test)] mod other {}",
+            "#[cfg(test)] pub mod tests {}",
+            "#[cfg(test)] pub(crate) mod tests {}",
+            "#[cfg(test)] mod tests;",
+            "#[cfg(test)] fn tests() {}",
+            "#[cfg(any(test, feature = \"production\"))] mod tests {}",
+            "#[cfg(test)] #[path = \"other.rs\"] mod tests {}",
+            "#[cfg_attr(test, path = \"other.rs\")] mod tests {}",
+            "#[cfg(test)] #[cfg_attr(unix, path = \"other.rs\")] mod tests {}",
+        ] {
+            let item: Item = syn::parse_str(source).unwrap();
+            assert!(
+                !is_audited_private_test(owner, path, &item),
+                "{relative}: {source}"
+            );
+        }
+        let syntax = syn::parse_file(
+            "#[cfg(test)] mod tests {} impl Handle { #[cfg(test)] fn hidden_hook() {} }",
+        )
+        .unwrap();
+        assert!(has_unaudited_test_hooks(owner, path, &syntax));
     }
 }
 

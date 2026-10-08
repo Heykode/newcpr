@@ -7,6 +7,25 @@ use serde_json::{Map, Value};
 
 struct LocalSchema;
 
+/// Sub2API compatibility alias, applied only to the selected native OAuth request.
+pub(crate) fn normalize_minimal_effort(request: &mut super::CodexResponsesRequest) {
+    let Some(reasoning) = request
+        .body_mut()
+        .get_mut("reasoning")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if reasoning
+        .get("effort")
+        .and_then(Value::as_str)
+        .is_some_and(|effort| effort.trim() == "minimal")
+    {
+        reasoning.insert("effort".into(), Value::String("none".into()));
+        request.requested_reasoning_effort = Some("minimal".into());
+    }
+}
+
 impl Retrieve for LocalSchema {
     fn retrieve(&self, _: &Uri<String>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         Err("external schemas are disabled".into())
@@ -231,5 +250,68 @@ pub(crate) fn normalize_plaintext_reasoning(item: &mut Map<String, Value>, state
             .is_some_and(|id| id.starts_with("rs_"))
     {
         item.remove("id");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn minimal_alias_has_no_model_allowlist_and_keeps_other_reasoning_fields() {
+        for model in ["gpt-5.6-sol", "gpt-6.1-sol", "future-model"] {
+            let body = json!({"model": model, "input": "test", "reasoning": {
+                "effort": " minimal ", "summary": "auto", "future_field": true
+            }});
+            let mut request =
+                super::super::CodexResponsesRequest::from_body(body.as_object().unwrap().clone());
+            normalize_minimal_effort(&mut request);
+            assert_eq!(
+                request.body()["reasoning"],
+                json!({
+                    "effort": "none", "summary": "auto", "future_field": true
+                })
+            );
+            assert_eq!(
+                request.requested_reasoning_effort.as_deref(),
+                Some("minimal")
+            );
+            normalize_minimal_effort(&mut request);
+            assert_eq!(
+                request.requested_reasoning_effort.as_deref(),
+                Some("minimal")
+            );
+            assert_eq!(body["reasoning"]["effort"], " minimal ");
+        }
+    }
+
+    #[test]
+    fn minimal_alias_does_not_invent_defaults_or_change_other_efforts() {
+        for reasoning in [
+            json!(null),
+            json!({}),
+            json!({"summary": "auto"}),
+            json!({"effort": "none"}),
+            json!({"effort": "low"}),
+            json!({"effort": "medium"}),
+            json!({"effort": "high"}),
+            json!({"effort": "xhigh"}),
+            json!({"effort": "max"}),
+            json!({"effort": "future-effort"}),
+        ] {
+            let mut request = super::super::CodexResponsesRequest::from_body(
+                json!({"model": "synthetic", "reasoning": reasoning})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            normalize_minimal_effort(&mut request);
+            assert_eq!(request.body()["reasoning"], reasoning);
+            assert!(request.requested_reasoning_effort.is_none());
+        }
+        let mut request = super::super::CodexResponsesRequest::from_body(Map::new());
+        normalize_minimal_effort(&mut request);
+        assert!(request.body().is_empty());
     }
 }

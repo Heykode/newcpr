@@ -28,6 +28,8 @@ pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
 /// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
 #[derive(Clone)]
 pub struct CodexResponsesRequest {
+    /// Original effort for diagnostics when the native compatibility alias is applied.
+    pub(crate) requested_reasoning_effort: Option<String>,
     pub(crate) quality_probe: Option<gateway_core::operation::quality_probe::QualityProbeStep>,
     /// Trusted recovery expectation, never read from or serialized into client JSON.
     pub(crate) excel_recovery_nonce: Option<String>,
@@ -514,6 +516,7 @@ impl CodexResponsesRequest {
     /// 协议默认值仅由类型化访问器在本地解释，不写回上游正文。
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
+            requested_reasoning_effort: None,
             excel: None,
             quality_probe: None,
             excel_recovery_nonce: None,

@@ -91,6 +91,20 @@ test('Excel threshold applies only to Excel actions and never enables automatic 
   assert.equal(applyQualityPatch(next, { autoRestore: true }).autoRestore, false)
 })
 
+test('pause and remove thresholds are explicit while old hidden Excel values stay ignored', () => {
+  for (const failureAction of ['disable_scheduling', 'remove_groups']) {
+    const old = base({ failureAction, excelFailureThreshold: 7 })
+    assert.equal(actions.failureThreshold(old), 1)
+    const edited = applyQualityPatch(old, { excelFailureThreshold: 4 })
+    assert.equal(edited.failureThreshold, 4)
+    assert.equal(edited.excelFailureThreshold, 7)
+    assert.equal(actions.failureThreshold(edited), 4)
+    actions.setFailureThreshold(edited, 5)
+    assert.equal(edited.failureThreshold, 5)
+    assert.equal(actions.failureThreshold(applyQualityPatch(edited, { model: 'new' })), 5)
+  }
+})
+
 test('template action reuses threshold and preserves each unselected template', () => {
   const template = { id: 'template-a', revision: 3, config: { name: 'Excel', responsesUpstream: 'excel', egressMode: 'random_ipv6_reuse' } }
   const source = base({ failureAction: 'apply_account_template', failureTemplate: template })

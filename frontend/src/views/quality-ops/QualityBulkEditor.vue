@@ -13,7 +13,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { buildQualityPatch, qualityEditableFields, saveQualityBatch } from './batch-edit'
-import { failureActionOptions } from './failure-actions'
+import { failureActionOptions, failureThreshold } from './failure-actions'
 import { qualityEffortOptions } from './model-choices'
 import QualityCatalogPicker from './QualityCatalogPicker.vue'
 import QualityDrawer from './QualityDrawer.vue'
@@ -56,7 +56,7 @@ const labels: Record<QualityEditableField, string> = {
   failureTemplate: '异常处置账号模板（仅应用模板规则）',
   failureGroupIds: '处置分组（仅移出分组规则）',
   autoRestore: '后续整轮通过后自动恢复（不适用于旧版开启 Excel）',
-  excelFailureThreshold: '连续异常阈值（模板或旧版开启 Excel 规则）',
+  excelFailureThreshold: '连续异常多少轮后执行处置',
 }
 const fields = ref<QualityEditableField[]>([])
 const draft = ref<QualityRuleConfig>({ ...props.defaultConfig, failureGroupIds: [] })
@@ -87,7 +87,7 @@ watch(open, (value) => {
   if (!value)
     return
   const first = props.rules.find(rule => props.selectedIds.includes(rule.id))?.config ?? props.defaultConfig
-  draft.value = { ...props.defaultConfig, ...first, excelRecoveryThreshold: first.excelRecoveryThreshold ?? 1, intervalSeconds: first.intervalSeconds ?? DEFAULT_QUALITY_INTERVAL_SECONDS, failureGroupIds: [...first.failureGroupIds] }
+  draft.value = { ...props.defaultConfig, ...first, excelFailureThreshold: failureThreshold(first), excelRecoveryThreshold: first.excelRecoveryThreshold ?? 1, intervalSeconds: first.intervalSeconds ?? DEFAULT_QUALITY_INTERVAL_SECONDS, failureGroupIds: [...first.failureGroupIds] }
   fields.value = []
   pending.value = [...props.selectedIds]
   names.value = Object.fromEntries(props.rules.map(rule => [rule.id, props.accountName(rule.config.accountId)]))

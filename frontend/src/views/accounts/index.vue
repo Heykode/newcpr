@@ -97,7 +97,7 @@ const {
   batches: resetBatches,
   current: resetBatch,
   activeCount: resetActiveCount,
-  selectedBatchId: resetSelectedBatchId,
+  viewingPreview: resetViewingPreview,
   resetType,
   typeOptions: resetTypeOptions,
 } = resetCredits
@@ -468,7 +468,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           <template #account-templates>
             <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.refreshSelected">
               <RefreshCw class="size-4" />
-              刷新重置次数
+              查询可用次数
             </BaseButton>
             <BaseButton v-if="selectedIds.size" variant="secondary" :disabled="resetBusy" @click="resetCredits.prepare(false)">
               <RotateCcw class="size-4" />
@@ -753,7 +753,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <AccountResetBatchModal
       v-model="resetOpen"
       v-model:reset-type="resetType"
-      v-model:selected-batch-id="resetSelectedBatchId"
+      :previewing="resetViewingPreview"
       :batch="resetBatch"
       :batches="resetBatches"
       :accounts="accounts"

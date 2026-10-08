@@ -237,6 +237,45 @@ impl ResetCreditsStore for PgResetCreditsStore {
         values.into_iter().map(decode).collect()
     }
 
+    async fn history(&self, query: ResetHistoryQuery) -> AdminStoreResult<ResetHistoryPage> {
+        query.validate().map_err(unavailable)?;
+        let before = query.before.unwrap_or_else(Utc::now);
+        let values: Vec<Value> = sqlx::query_scalar(
+            "select b.document from account_reset_batches b
+             where b.document->>'confirmed'='true' and b.created_at <= $1
+             and ($2='' or exists (
+               select 1 from jsonb_array_elements(b.document->'items') i
+               left join provider_accounts a on a.id=i->>'accountId'
+               where strpos(lower(concat_ws(' ',i->>'accountId',a.name,a.custom_name,a.email)),lower($2))>0))
+             order by b.created_at desc,b.id desc limit 11 offset $3"
+        ).bind(before).bind(query.search.trim()).bind(i64::from(query.page - 1) * 10)
+            .fetch_all(&self.0).await.map_err(unavailable)?;
+        let has_more = values.len() > 10;
+        let items: Vec<ResetBatch> = values
+            .into_iter()
+            .take(10)
+            .map(decode)
+            .collect::<AdminStoreResult<_>>()?;
+        let ids: Vec<_> = items
+            .iter()
+            .flat_map(|batch| batch.items.iter().map(|item| item.account_id.as_str()))
+            .collect();
+        let names: Vec<(String, String)> = sqlx::query_as(
+            "select id,coalesce(nullif(custom_name,''),nullif(email,''),name,id)
+             from provider_accounts where id=any($1::text[])",
+        )
+        .bind(&ids)
+        .fetch_all(&self.0)
+        .await
+        .map_err(unavailable)?;
+        Ok(ResetHistoryPage {
+            items,
+            account_names: names.into_iter().collect(),
+            before,
+            has_more,
+        })
+    }
+
     async fn confirm(&self, id: Uuid, context: &MutationContext) -> AdminStoreResult<ResetBatch> {
         let mut tx = self.locked().await?;
         let mut batch = Self::read_batch(&mut tx, id).await?;
