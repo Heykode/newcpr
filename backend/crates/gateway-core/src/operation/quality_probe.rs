@@ -29,6 +29,7 @@ pub enum StateProbeReason {
     ExcelEnabled,
     UnsupportedAccount,
     RequestFailed,
+    UpstreamOverloaded,
     Cancelled,
     RepeatedAttempt,
 }

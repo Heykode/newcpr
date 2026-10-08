@@ -150,6 +150,13 @@ impl AccountProbeError {
         self.gateway.client_error_code()
     }
 
+    /// Only a structured, explicit overload code qualifies; generic 503/429 do not.
+    #[must_use]
+    pub fn is_upstream_overloaded(&self) -> bool {
+        self.kind() == GatewayErrorKind::UpstreamUnavailable
+            && self.client_error_code() == Some("server_is_overloaded")
+    }
+
     #[must_use]
     pub const fn upstream_response(&self) -> Option<&AccountProbeUpstreamResponse> {
         self.upstream_response.as_ref()

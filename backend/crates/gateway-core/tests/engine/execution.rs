@@ -3119,3 +3119,111 @@ mod quality_trace {
         });
     }
 }
+
+#[test]
+fn quality_overload_code_survives_http_and_stream_failures_in_both_modes() {
+    struct FailingQualityProvider {
+        code: &'static str,
+        streaming: bool,
+    }
+    #[async_trait]
+    impl Provider for FailingQualityProvider {
+        fn name(&self) -> &'static str {
+            "openai"
+        }
+        fn catalog_generation(&self) -> ProviderCatalogGeneration {
+            ProviderCatalogGeneration::default()
+        }
+        async fn query_model_capabilities(
+            &self,
+        ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+            Ok(Vec::new())
+        }
+        async fn execute(
+            &self,
+            request: ProviderRequest,
+            context: AttemptContext,
+        ) -> Result<ProviderStream, ProviderError> {
+            assert!(context.is_quality_check());
+            let error = ProviderError::new(
+                ProviderErrorKind::Unavailable,
+                gateway_core::upstream::UpstreamSendState::Sent,
+            )
+            .with_client_visible_upstream_error(
+                gateway_core::error::ClientVisibleUpstreamError::new(
+                    "synthetic upstream failure",
+                    Some(self.code.into()),
+                    None,
+                ),
+            );
+            if !self.streaming {
+                return Err(error);
+            }
+            let metadata = ProviderCallMetadata::new(
+                request.candidate().provider().clone(),
+                request.candidate().upstream_model().unwrap().clone(),
+                ProviderAccountId::new("acct_start").unwrap(),
+                UpstreamTransport::new("http_sse").unwrap(),
+            );
+            Ok(ProviderStream::new(
+                metadata,
+                futures::stream::iter(vec![Err(error)]),
+                (),
+            ))
+        }
+    }
+    for code in [
+        "server_is_overloaded",
+        "server_error",
+        "usage_limit_reached",
+        "token_revoked",
+    ] {
+        for streaming in [false, true] {
+            let providers =
+                ProviderRegistry::new([
+                    Arc::new(FailingQualityProvider { code, streaming }) as Arc<dyn Provider>
+                ])
+                .unwrap();
+            let scope = account_scope(&ProviderKind::new("openai").unwrap(), "acct_start");
+            let service = DefaultExecutionService::new(
+                RuntimeSnapshotHandle::new(
+                    start_snapshot().with_account_directory(Arc::clone(scope.directory())),
+                ),
+                Arc::new(TrackingExecutionStore::default()),
+                providers,
+                Arc::new(UnusedAdmissions),
+                Arc::new(UnusedCircuits),
+                Arc::new(UnusedContinuation),
+                Arc::new(RecordingClientApiKeyUsage::default()),
+            );
+            let request = AccountProbeRequest {
+                account_id: ProviderAccountId::new("acct_start").unwrap(),
+                provider_kind: ProviderKind::new("openai").unwrap(),
+                upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
+                operation: start_operation(),
+            };
+            let error = block_on(service.quality_retest(
+                request.clone(),
+                gateway_core::lifecycle::CancellationToken::new(),
+            ))
+            .unwrap_err();
+            assert_eq!(
+                error.is_upstream_overloaded(),
+                code == "server_is_overloaded",
+                "code={code}, streaming={streaming}, error={error:?}"
+            );
+            let report = block_on(
+                service.state_probe(request, gateway_core::lifecycle::CancellationToken::new()),
+            );
+            assert_eq!(
+                report.reason
+                    == gateway_core::operation::quality_probe::StateProbeReason::UpstreamOverloaded,
+                code == "server_is_overloaded"
+            );
+            assert_eq!(
+                report.verdict,
+                gateway_core::operation::quality_probe::StateProbeVerdict::Inconclusive
+            );
+        }
+    }
+}

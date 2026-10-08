@@ -14,6 +14,8 @@ struct Recovery {
     remaining: Vec<Membership>,
     user: Option<String>,
     workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overload_streak: Option<super::overload_streak::OverloadStreak>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
@@ -64,6 +66,7 @@ pub(super) async fn apply(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     claim: &QualityClaim,
     status: &str,
+    overload_trigger: bool,
 ) -> AdminStoreResult<Option<&'static str>> {
     if status != "correct" && status != "incorrect" {
         return Ok(None);
@@ -73,7 +76,7 @@ pub(super) async fn apply(
         config.failure_action,
         QualityFailureAction::EnableExcel | QualityFailureAction::ApplyAccountTemplate
     ) {
-        return apply_excel_threshold(tx, claim, status).await;
+        return apply_excel_threshold(tx, claim, status, overload_trigger).await;
     }
     let value: serde_json::Value =
         sqlx::query_scalar("select recovery from quality_rules where id=$1")
@@ -269,6 +272,7 @@ async fn apply_excel_threshold(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     claim: &QualityClaim,
     status: &str,
+    overload_trigger: bool,
 ) -> AdminStoreResult<Option<&'static str>> {
     if action_scope(tx, &claim.rule.config.account_id).await? != claim.action_scope {
         return Ok(Some("excel_blocked_configuration_changed"));
@@ -323,7 +327,7 @@ async fn apply_excel_threshold(
     .execute(&mut **tx)
     .await
     .map_err(unavailable)?;
-    if count < claim.rule.config.excel_failure_threshold {
+    if !overload_trigger && count < claim.rule.config.excel_failure_threshold {
         return Ok(Some("excel_threshold_pending"));
     }
     if claim.rule.config.failure_action == QualityFailureAction::ApplyAccountTemplate {

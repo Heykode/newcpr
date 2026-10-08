@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, stream};
 use gateway_core::{
     account::ProviderAccountId,
-    engine::probe::{AccountProbe, AccountProbeRequest, AccountProbeResult},
+    engine::probe::{AccountProbe, AccountProbeError, AccountProbeRequest, AccountProbeResult},
     lifecycle::CancellationToken,
     operation::{GenerateRequest, Operation, ProtocolPayload},
     routing::{AccountGroupId, UpstreamModelId},
@@ -41,6 +41,42 @@ pub struct QualityOpsService {
     runtime: Arc<dyn AccountRuntimeStore>,
     providers: ProviderAdminRegistry,
     probe: Arc<dyn AccountProbe>,
+}
+
+/// Keep only the trusted failure category; never persist the upstream body.
+#[derive(Debug)]
+enum QualityRequestError {
+    Failed(AdminError),
+    Overloaded,
+}
+
+impl From<AdminError> for QualityRequestError {
+    fn from(error: AdminError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl QualityRequestError {
+    fn from_probe(error: AccountProbeError) -> Self {
+        if error.is_upstream_overloaded() {
+            Self::Overloaded
+        } else {
+            Self::Failed(AdminError::bad_gateway(format!(
+                "请求失败：{:?}",
+                error.kind()
+            )))
+        }
+    }
+
+    fn failure(self) -> (QualityVerdict, String) {
+        match self {
+            Self::Overloaded => (
+                QualityVerdict::Overloaded,
+                "上游服务器过载，纳入连续异常判定".into(),
+            ),
+            Self::Failed(error) => (QualityVerdict::RequestError, error.message().to_owned()),
+        }
+    }
 }
 
 pub fn next_run(
@@ -472,9 +508,9 @@ impl QualityOpsService {
         effort: Option<&str>,
         judge_group: Option<&str>,
         cancellation: CancellationToken,
-    ) -> Result<AccountProbeResult, AdminError> {
+    ) -> Result<AccountProbeResult, QualityRequestError> {
         if cancellation.is_cancelled() {
-            return Err(AdminError::unavailable("检测已取消"));
+            return Err(AdminError::unavailable("检测已取消").into());
         }
         let item = self
             .accounts
@@ -489,7 +525,7 @@ impl QualityOpsService {
                 .iter()
                 .any(|group| group.id.as_str() == id && group.enabled)
         }) {
-            return Err(AdminError::unavailable("判题账号已不在启用的指定分组"));
+            return Err(AdminError::unavailable("判题账号已不在启用的指定分组").into());
         }
         let provider_kind = item.account.provider_kind;
         let provider = self
@@ -533,10 +569,7 @@ impl QualityOpsService {
         } else {
             self.probe.quality_retest(request, cancellation).await
         };
-        result.map_err(|error| {
-            // Persist stable classification, not upstream bodies which may contain secrets.
-            AdminError::bad_gateway(format!("请求失败：{:?}", error.kind()))
-        })
+        result.map_err(QualityRequestError::from_probe)
     }
 
     async fn judge(
@@ -656,7 +689,7 @@ impl QualityOpsService {
                             }
                         }
                         Err(error) => {
-                            answer.reason = error.message().to_owned();
+                            (answer.verdict, answer.reason) = error.failure();
                         }
                     }
                     answer
@@ -732,15 +765,17 @@ impl QualityOpsService {
             StateProbeReason::ExcelEnabled => "账号已开启Excel模式，状态探针不适用",
             StateProbeReason::UnsupportedAccount => "账号不支持状态探针",
             StateProbeReason::RequestFailed => "请求失败或响应未完整结束",
+            StateProbeReason::UpstreamOverloaded => "上游服务器过载，纳入连续异常判定",
             StateProbeReason::Cancelled => "检测已取消",
             StateProbeReason::RepeatedAttempt => "发生重试，本轮证据不可比较",
         }
         .to_owned();
         QualityAnswer {
-            verdict: match report.verdict {
-                StateProbeVerdict::Healthy => QualityVerdict::Correct,
-                StateProbeVerdict::Degraded => QualityVerdict::Incorrect,
-                StateProbeVerdict::Inconclusive => QualityVerdict::Unknown,
+            verdict: match (report.reason, report.verdict) {
+                (StateProbeReason::UpstreamOverloaded, _) => QualityVerdict::Overloaded,
+                (_, StateProbeVerdict::Healthy) => QualityVerdict::Correct,
+                (_, StateProbeVerdict::Degraded) => QualityVerdict::Incorrect,
+                (_, StateProbeVerdict::Inconclusive) => QualityVerdict::Unknown,
             },
             probe: Some(report),
             index: 1,
@@ -828,6 +863,53 @@ fn judge_request_prompt(instructions: &str, reference: &str, answer: &str) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_request_failure_only_classifies_explicit_overload() {
+        use gateway_core::error::{ClientVisibleUpstreamError, GatewayError, GatewayErrorKind};
+        for (code, kind, overloaded) in [
+            (
+                Some("server_is_overloaded"),
+                GatewayErrorKind::UpstreamUnavailable,
+                true,
+            ),
+            (
+                Some("server_error"),
+                GatewayErrorKind::UpstreamUnavailable,
+                false,
+            ),
+            (None, GatewayErrorKind::UpstreamUnavailable, false),
+            (
+                Some("usage_limit_reached"),
+                GatewayErrorKind::RateLimited,
+                false,
+            ),
+            (
+                Some("token_revoked"),
+                GatewayErrorKind::UpstreamUnavailable,
+                false,
+            ),
+            (
+                Some("server_is_overloaded"),
+                GatewayErrorKind::Timeout,
+                false,
+            ),
+        ] {
+            let error = GatewayError::new(kind, "server_is_overloaded in text is not evidence")
+                .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                    "private body",
+                    code.map(str::to_owned),
+                    None,
+                ));
+            let (verdict, reason) = QualityRequestError::from_probe(error.into()).failure();
+            assert_eq!(matches!(verdict, QualityVerdict::Overloaded), overloaded);
+            assert!(!reason.contains("private body"));
+        }
+        // A judgment payload cannot introduce a failure of the tested account.
+        assert!(
+            parse_judgment(r#"{"verdict":"overloaded","reason":"server_is_overloaded"}"#).is_err()
+        );
+    }
 
     #[test]
     fn quality_judge_prompt_supports_reference_defaults_and_legacy_rules() {

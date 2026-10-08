@@ -212,6 +212,7 @@ pub enum QualityVerdict {
     Incorrect,
     Unknown,
     RequestError,
+    Overloaded,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
