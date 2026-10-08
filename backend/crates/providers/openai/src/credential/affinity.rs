@@ -72,7 +72,7 @@ impl CodexSessionAffinity {
         &self,
         alias: &'a ProviderSessionAlias,
     ) -> &'a ProviderSessionAffinityKey {
-        if self.mode == AccountAffinity::Strict {
+        if self.mode != AccountAffinity::Relaxed {
             alias.root_session_key().unwrap_or(alias.session_key())
         } else {
             alias.session_key()
@@ -141,7 +141,7 @@ impl CodexSessionAffinity {
 
     pub(crate) fn follow_only(&self) -> bool {
         self.resolved_alias.as_ref().is_some_and(|alias| {
-            alias.follow_only()
+            (self.mode != AccountAffinity::Preferred && alias.follow_only())
                 || (self.mode == AccountAffinity::Strict && alias.root_session_key().is_some())
         }) || (self.mode == AccountAffinity::Strict && self.follow_only)
     }
@@ -149,7 +149,7 @@ impl CodexSessionAffinity {
     pub(crate) fn binding_key(&self) -> Option<&ProviderSessionAffinityKey> {
         if let Some(alias) = self.resolved_alias.as_ref() {
             Some(self.alias_binding_key(alias))
-        } else if self.mode == AccountAffinity::Strict {
+        } else if self.mode != AccountAffinity::Relaxed {
             self.root_key.as_ref().or(self.key.as_ref())
         } else {
             self.key.as_ref().or(self.root_key.as_ref())

@@ -47,6 +47,7 @@ impl RotationStrategy {
 #[serde(rename_all = "snake_case")]
 pub enum AccountAffinity {
     Relaxed,
+    Preferred,
     #[default]
     Strict,
 }
@@ -56,6 +57,7 @@ impl AccountAffinity {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Relaxed => "relaxed",
+            Self::Preferred => "preferred",
             Self::Strict => "strict",
         }
     }
@@ -64,6 +66,7 @@ impl AccountAffinity {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "relaxed" => Some(Self::Relaxed),
+            "preferred" => Some(Self::Preferred),
             "strict" => Some(Self::Strict),
             _ => None,
         }
@@ -493,19 +496,19 @@ pub struct AccountSelectionContext {
     pub round_robin_cursor: u64,
     pub eligibility: AccountEligibilityPolicy,
     pub account_scope: Option<std::sync::Arc<crate::account::scope::FrozenAccountScope>>,
-    /// 普通请求不可占用的 Guardian 预留名额；Guardian 请求由 Provider 传入 0。
+    /// 本请求独立审批池的上限；0 使用普通账号池，不扣减普通名额。
     pub reserved_concurrency: u32,
 }
 
 impl AccountSelectionContext {
     #[must_use]
     pub fn concurrency_limit(&self, account: &ProviderAccount) -> NonZeroU32 {
-        let limit = account
-            .effective_concurrency(self.policy.max_concurrent_per_account())
-            .get()
-            .saturating_sub(self.reserved_concurrency)
-            .max(1);
-        NonZeroU32::new(limit).expect("reserved concurrency keeps one normal slot")
+        self.limit_for_pool(account.effective_concurrency(self.policy.max_concurrent_per_account()))
+    }
+
+    #[must_use]
+    pub fn limit_for_pool(&self, ordinary_limit: NonZeroU32) -> NonZeroU32 {
+        NonZeroU32::new(self.reserved_concurrency).unwrap_or(ordinary_limit)
     }
 }
 
@@ -608,12 +611,7 @@ impl AccountSelector {
             self.non_capacity_blocker(candidate, context).is_none()
                 && !request_interval_blocked(candidate, context)
                 && candidate.signals.in_flight
-                    >= candidate
-                        .account
-                        .effective_concurrency(context.policy.max_concurrent_per_account())
-                        .get()
-                        .saturating_sub(context.reserved_concurrency)
-                        .max(1)
+                    >= context.concurrency_limit(&candidate.account).get()
         })
     }
 
@@ -637,8 +635,7 @@ impl AccountSelector {
                 AccountSchedulingBlocker::RequestInterval,
             );
         }
-        if candidate.signals.in_flight >= reserved_limit(limit, context.reserved_concurrency).get()
-        {
+        if candidate.signals.in_flight >= context.limit_for_pool(limit).get() {
             AccountSchedulingAvailability::Busy
         } else {
             AccountSchedulingAvailability::Ready
@@ -695,7 +692,7 @@ impl AccountSelector {
                 // Missing limits are rejected by the admission classifier above.
                 limits
                     .limit_for(candidate.account.id().as_str())
-                    .map(|limit| reserved_limit(limit, context.reserved_concurrency))
+                    .map(|limit| context.limit_for_pool(limit))
                     .unwrap_or(NonZeroU32::MIN)
             },
         )
@@ -717,7 +714,7 @@ impl AccountSelector {
                     .map(|limit| {
                         (
                             u64::from(candidate.signals.in_flight),
-                            u64::from(reserved_limit(limit, context.reserved_concurrency).get()),
+                            u64::from(context.limit_for_pool(limit).get()),
                         )
                     })
             })
@@ -773,16 +770,7 @@ impl AccountSelector {
             candidates,
             context,
             |candidate| self.scheduling_blocker(candidate, context),
-            |candidate| {
-                candidate
-                    .account
-                    .effective_concurrency(context.policy.max_concurrent_per_account())
-                    .get()
-                    .saturating_sub(context.reserved_concurrency)
-                    .max(1)
-                    .try_into()
-                    .expect("normal concurrency limit is non-zero")
-            },
+            |candidate| context.concurrency_limit(&candidate.account),
         )
     }
 
@@ -937,11 +925,6 @@ fn request_interval_blocked(
         })
 }
 
-fn reserved_limit(limit: NonZeroU32, reserved: u32) -> NonZeroU32 {
-    NonZeroU32::new(limit.get().saturating_sub(reserved).max(1))
-        .expect("reserved concurrency keeps one normal slot")
-}
-
 // 首输出 10 秒时延迟得分减半；固定尺度不随其他候选账号变化。
 const SMART_LATENCY_HALF_SCORE_MS: f64 = 10_000.0;
 
@@ -989,14 +972,7 @@ fn select_smart_candidate<'a>(
 pub(crate) fn smart_score(candidate: &AccountCandidate, context: &AccountSelectionContext) -> f64 {
     configured_smart_score(
         candidate,
-        candidate
-            .account
-            .effective_concurrency(context.policy.max_concurrent_per_account())
-            .get()
-            .saturating_sub(context.reserved_concurrency)
-            .max(1)
-            .try_into()
-            .expect("normal concurrency limit is non-zero"),
+        context.concurrency_limit(&candidate.account),
         context.now,
         context.policy.smart_scheduling(),
         context

@@ -8,7 +8,7 @@ pub(crate) async fn request_metrics(
     filter: &UsageRecordFilter,
 ) -> StoreResult<RequestMetrics> {
     filter.validate()?;
-    // 结果计数覆盖范围内全部请求（成功率/失败率的分母分子）；用量、缓存、
+    // 结果计数覆盖范围内业务请求（成功率/失败率的分母分子）；用量、缓存、
     // 延迟与成本聚合仅统计用量事实（已完整交付客户端的成功响应）。
     let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new(format!(
@@ -117,6 +117,7 @@ pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTota
            from model_requests mr
           where mr.recovered_at is null"
     ));
+    push_business_request_filter(&mut query, "mr");
     let row = query
         .build()
         .fetch_one(pool)
@@ -155,7 +156,7 @@ async fn request_metric_series_inner(
 ) -> StoreResult<Vec<RequestMetricPoint>> {
     filter.validate()?;
     let granularity = granularity_for(range);
-    // 与 request_metrics 同一契约：结果计数覆盖全部请求，用量/延迟/成本
+    // 与 request_metrics 同一契约：结果计数覆盖业务请求，用量/延迟/成本
     // 聚合仅统计用量事实。
     let fact = completed_usage_fact_predicate("mr");
     let mut query = QueryBuilder::<Postgres>::new("select date_bin(");

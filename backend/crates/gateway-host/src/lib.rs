@@ -35,6 +35,7 @@ pub struct HostBundle {
     config: HostConfig,
     log_guard: LogGuard,
     cancellation: CancellationToken,
+    egress_cancellation: CancellationToken,
     connections: Arc<ConnectionTracker>,
     workers: WorkerSupervisor,
     system: Arc<ProcessSystemOperations>,
@@ -55,7 +56,9 @@ pub async fn initialize_with_proxy_client_builder<E>(
     let log_guard = initialize_logging(&config.logging, config.timezone)?;
     let cancellation = CancellationToken::new();
     let connections = Arc::new(ConnectionTracker::new(cancellation.clone()));
-    let workers = WorkerSupervisor::new(cancellation.clone());
+    // Keep writers and account egress alive until all admitted requests drain.
+    let workers = WorkerSupervisor::new(CancellationToken::new());
+    let egress_cancellation = CancellationToken::new();
     let system = Arc::new(ProcessSystemOperations::new(
         cancellation.clone(),
         config.system_update.clone(),
@@ -64,7 +67,7 @@ pub async fn initialize_with_proxy_client_builder<E>(
     let mihomo = Arc::new(
         mihomo::ManagedMihomo::open(
             config.runtime_data_dir.join("mihomo"),
-            cancellation.clone(),
+            egress_cancellation.clone(),
             build,
         )
         .await
@@ -74,6 +77,7 @@ pub async fn initialize_with_proxy_client_builder<E>(
         config,
         log_guard,
         cancellation,
+        egress_cancellation,
         connections,
         workers,
         system,
@@ -197,12 +201,20 @@ impl HostBundle {
         )
         .await;
         self.cancellation.cancel();
-        self.mihomo.shutdown().await;
         self.workers
             .shutdown(self.config.worker_shutdown_timeout())
             .await;
+        self.egress_cancellation.cancel();
+        self.mihomo.shutdown().await;
         result?;
         Ok(())
+    }
+}
+
+impl Drop for HostBundle {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.egress_cancellation.cancel();
     }
 }
 

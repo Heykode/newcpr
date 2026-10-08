@@ -6,7 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use futures::future::BoxFuture;
 
-use super::{ProviderLeaseGuard, ProviderSchedulingLeaseRequest, ProviderStoreError};
+use super::{
+    ProviderConcurrencyPool, ProviderLeaseGuard, ProviderSchedulingLeaseRequest, ProviderStoreError,
+};
 use crate::account::ProviderAccountId;
 use crate::engine::{AccountWaitMode, ModelRequestId};
 use crate::identity::ProviderKind;
@@ -19,7 +21,7 @@ pub struct ProviderWaitLeaseRequest {
     mode: AccountWaitMode,
     max_waiting: NonZeroU32,
     deadline: SystemTime,
-    priority: bool,
+    concurrency_pool: ProviderConcurrencyPool,
 }
 
 impl ProviderWaitLeaseRequest {
@@ -39,7 +41,7 @@ impl ProviderWaitLeaseRequest {
             mode,
             max_waiting,
             deadline,
-            priority: false,
+            concurrency_pool: ProviderConcurrencyPool::Shared,
         }
     }
 
@@ -74,14 +76,14 @@ impl ProviderWaitLeaseRequest {
     }
 
     #[must_use]
-    pub const fn with_priority(mut self, priority: bool) -> Self {
-        self.priority = priority;
+    pub const fn with_concurrency_pool(mut self, pool: ProviderConcurrencyPool) -> Self {
+        self.concurrency_pool = pool;
         self
     }
 
     #[must_use]
-    pub const fn priority(&self) -> bool {
-        self.priority
+    pub const fn concurrency_pool(&self) -> ProviderConcurrencyPool {
+        self.concurrency_pool
     }
 }
 
@@ -120,7 +122,7 @@ impl fmt::Debug for ProviderWaitPromotion {
 
 /// Store owns atomic promotion, cancellation-safe handoff and expiring cleanup.
 ///
-/// Promotion must verify the same provider/account, a live wait token, execution
+/// Promotion must verify the same provider/account/pool, a live wait token, execution
 /// capacity and request interval. Success removes the wait registration and
 /// disarms its cleanup before handing off the execution guard. Dropping either
 /// an acquisition or promotion future must also clean up an uncertain grant.

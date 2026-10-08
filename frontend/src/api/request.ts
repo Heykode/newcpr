@@ -72,10 +72,14 @@ function handleUnauthorizedOnce() {
   })
 }
 
-http.interceptors.request.use((config) => {
+http.interceptors.request.use(async (config) => {
   const tracked = config as typeof config & RequestConfig
   tracked.sessionGeneration ??= generation
   tracked.recoveryCount ??= successfulRecoveries
+  if (recovery && !isAuthenticationRequest(config.url))
+    await recovery
+  if (tracked.sessionGeneration !== generation)
+    throw new axios.CanceledError('Session changed')
   return config
 })
 
@@ -114,7 +118,7 @@ async function rejectRequest(error: ApiError, config?: RequestConfig): Promise<n
         })
         recovery = pending
       }
-      const authenticated = config.recoveryCount !== successfulRecoveries || await recovery
+      const authenticated = await (recovery ?? (config.recoveryCount !== successfulRecoveries))
       if (authenticated && !config.signal?.aborted && config.sessionGeneration === generation)
         return http.request({ ...config, authRetried: true } as RequestConfig)
     }

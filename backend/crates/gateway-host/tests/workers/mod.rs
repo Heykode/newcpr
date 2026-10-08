@@ -649,6 +649,34 @@ async fn shutdown_timeout_aborts_uncooperative_task_and_drops_guard() {
     );
 }
 
+#[tokio::test]
+async fn dropping_shutdown_aborts_current_and_unjoined_workers() {
+    let task = HungTask {
+        entered: Arc::new(AtomicBool::new(false)),
+        notification: Arc::new(Notify::new()),
+    };
+    let leases = Arc::new(FakeLeasePort::default());
+    let supervisor = supervisor();
+    supervisor
+        .start(all_active_plan(task), leases.clone())
+        .expect("complete plan");
+    wait_until(|| lock_unpoisoned(&leases.active_guards).len() == ACTIVE_KINDS.len()).await;
+    let mut shutdown = Box::pin(supervisor.shutdown(Duration::from_secs(60)));
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    drop(shutdown);
+    wait_until(|| lock_unpoisoned(&leases.active_guards).is_empty()).await;
+    assert!(
+        supervisor
+            .health_source()
+            .snapshot()
+            .into_iter()
+            .all(|entry| matches!(
+                entry.state,
+                WorkerRuntimeState::Stopped | WorkerRuntimeState::Disabled
+            ))
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn shutdown_deadline_joins_cancelled_daemon_and_drops_held_guard() {
     let task = HungDaemon {

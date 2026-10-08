@@ -658,6 +658,21 @@ pub(crate) struct TestLeaseCoordinator {
     pub(crate) busy_accounts: Mutex<BTreeSet<ProviderAccountId>>,
     round_robin_cursor: Mutex<u64>,
     pub(crate) capacity: Arc<TestCapacityState>,
+    pub(crate) reserved_capacity: Arc<TestCapacityState>,
+}
+
+impl TestLeaseCoordinator {
+    fn capacity_for_pool(
+        &self,
+        pool: gateway_core::provider_ports::ProviderConcurrencyPool,
+    ) -> &Arc<TestCapacityState> {
+        match pool {
+            gateway_core::provider_ports::ProviderConcurrencyPool::Shared => &self.capacity,
+            gateway_core::provider_ports::ProviderConcurrencyPool::Reserved => {
+                &self.reserved_capacity
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -796,13 +811,14 @@ impl ProviderLeasePort for TestLeaseCoordinator {
         request: ProviderSchedulingLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async move {
-            self.capacity.safe_acquires.fetch_add(1, Ordering::SeqCst);
+            let capacity = self.capacity_for_pool(request.concurrency_pool());
+            capacity.safe_acquires.fetch_add(1, Ordering::SeqCst);
             self.requests.lock().unwrap().push(request.clone());
-            let acquired = match self.capacity.acquire(&request) {
+            let acquired = match capacity.acquire(&request) {
                 Some(guard) => ProviderLeaseAcquisition::Acquired(guard),
                 None => ProviderLeaseAcquisition::Busy { retry_after: None },
             };
-            if self.capacity.pause_acquire_reply.load(Ordering::SeqCst) {
+            if capacity.pause_acquire_reply.load(Ordering::SeqCst) {
                 futures::future::pending::<()>().await;
             }
             Ok(acquired)
@@ -811,18 +827,34 @@ impl ProviderLeasePort for TestLeaseCoordinator {
 
     fn load_state<'a>(
         &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+    ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+        self.load_state_for_pool(
+            client_api_key_id,
+            provider_kind,
+            accounts,
+            Default::default(),
+        )
+    }
+
+    fn load_state_for_pool<'a>(
+        &'a self,
         _client_api_key_id: &'a ClientApiKeyId,
         _provider_kind: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
+        pool: gateway_core::provider_ports::ProviderConcurrencyPool,
     ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
         Box::pin(async move {
-            self.capacity.state_reads.fetch_add(1, Ordering::SeqCst);
+            let capacity = self.capacity_for_pool(pool);
+            capacity.state_reads.fetch_add(1, Ordering::SeqCst);
             let signals = accounts
                 .iter()
                 .map(|account| {
                     (
                         account.clone(),
-                        self.capacity
+                        capacity
                             .signals
                             .lock()
                             .unwrap()
@@ -846,7 +878,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                 .expect("round robin cursor lock");
             let current = *cursor;
             *cursor = cursor.wrapping_add(1);
-            if let Some(hook) = self.capacity.after_state_load.lock().unwrap().take() {
+            if let Some(hook) = capacity.after_state_load.lock().unwrap().take() {
                 hook();
             }
             Ok(ProviderSchedulingState::new(signals, current))
@@ -855,22 +887,33 @@ impl ProviderLeasePort for TestLeaseCoordinator {
 
     fn load_signals<'a>(
         &'a self,
-        _provider: &'a ProviderKind,
+        provider: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, ProviderStoreError>>
     {
+        self.load_signals_for_pool(provider, accounts, Default::default())
+    }
+
+    fn load_signals_for_pool<'a>(
+        &'a self,
+        _provider: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: gateway_core::provider_ports::ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, ProviderStoreError>>
+    {
         Box::pin(async move {
-            self.capacity.signal_reads.fetch_add(1, Ordering::SeqCst);
-            if self.capacity.pause_signals.load(Ordering::SeqCst) {
+            let capacity = self.capacity_for_pool(pool);
+            capacity.signal_reads.fetch_add(1, Ordering::SeqCst);
+            if capacity.pause_signals.load(Ordering::SeqCst) {
                 futures::future::pending::<()>().await;
             }
-            if self.capacity.fail_signals.load(Ordering::SeqCst) {
+            if capacity.fail_signals.load(Ordering::SeqCst) {
                 return Err(ProviderStoreError::new(
                     gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
                     "test signals",
                 ));
             }
-            let signals = self.capacity.signals.lock().unwrap();
+            let signals = capacity.signals.lock().unwrap();
             Ok(accounts
                 .iter()
                 .map(|id| {
@@ -891,20 +934,21 @@ impl ProviderLeasePort for TestLeaseCoordinator {
         request: ProviderWaitLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderWaitLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async move {
-            self.capacity.waits.lock().unwrap().push(request);
-            if self.capacity.fail_wait.load(Ordering::SeqCst) {
+            let capacity = self.capacity_for_pool(request.concurrency_pool());
+            capacity.waits.lock().unwrap().push(request);
+            if capacity.fail_wait.load(Ordering::SeqCst) {
                 return Err(ProviderStoreError::new(
                     gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
                     "test wait",
                 ));
             }
-            if self.capacity.full.load(Ordering::SeqCst) {
+            if capacity.full.load(Ordering::SeqCst) {
                 return Ok(ProviderWaitLeaseAcquisition::Full);
             }
-            self.capacity.waiting.fetch_add(1, Ordering::SeqCst);
+            capacity.waiting.fetch_add(1, Ordering::SeqCst);
             Ok(ProviderWaitLeaseAcquisition::Acquired(Box::new(
                 TestCapacityWait {
-                    state: Arc::clone(&self.capacity),
+                    state: Arc::clone(capacity),
                     active: true,
                 },
             )))
@@ -919,9 +963,10 @@ impl ProviderLeasePort for TestLeaseCoordinator {
             let ProviderLeaseRequest::Scheduling(request) = request else {
                 panic!("expected scheduling lease request");
             };
-            if self.capacity.enabled.load(Ordering::SeqCst) {
+            let capacity = self.capacity_for_pool(request.concurrency_pool());
+            if capacity.enabled.load(Ordering::SeqCst) {
                 self.requests.lock().unwrap().push(request.clone());
-                return Ok(match self.capacity.acquire(&request) {
+                return Ok(match capacity.acquire(&request) {
                     Some(guard) => ProviderLeaseAcquisition::Acquired(guard),
                     None => ProviderLeaseAcquisition::Busy { retry_after: None },
                 });

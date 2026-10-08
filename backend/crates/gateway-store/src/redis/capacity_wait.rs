@@ -9,8 +9,8 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use gateway_core::account::ProviderAccountId;
 use gateway_core::lifecycle::{CancellationToken, Deadline};
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderSchedulingLeaseRequest, ProviderStoreError,
-    ProviderStoreErrorKind, ProviderWaitLease, ProviderWaitLeaseAcquisition,
+    ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderSchedulingLeaseRequest,
+    ProviderStoreError, ProviderStoreErrorKind, ProviderWaitLease, ProviderWaitLeaseAcquisition,
     ProviderWaitLeaseRequest, ProviderWaitPromotion,
 };
 use gateway_core::task::{DaemonTask, WorkerTaskError};
@@ -19,10 +19,7 @@ use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use super::{
-    CredentialLeaseRequest, CredentialLeaseScope, MAX_REDIS_EXACT_INTEGER,
-    RedisCredentialLeaseRepository, resource_fingerprint,
-};
+use super::{MAX_REDIS_EXACT_INTEGER, RedisCredentialLeaseRepository, resource_fingerprint};
 
 const QUEUE_CAPACITY: usize = 4_096;
 const CLEANUP_CONCURRENCY: usize = 32;
@@ -46,8 +43,9 @@ const ENQUEUE_SCRIPT: &str = r#"
 local clock = redis.call('TIME')
 local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
 local deadline = tonumber(ARGV[2])
+local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', now)
+for _, token in ipairs(expired) do redis.call('ZREM', KEYS[3], token) end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
-redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now)
 if deadline <= now or redis.call('EXISTS', KEYS[2]) == 1 then
   return -1
 end
@@ -58,13 +56,20 @@ end
 if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
   return 0
 end
-redis.call('ZADD', KEYS[1], deadline, ARGV[1])
 if ARGV[4] == '1' then
-  redis.call('ZADD', KEYS[3], deadline, ARGV[1])
+  local sequence = redis.call('INCR', KEYS[4])
+  if sequence > 9007199254740991 then
+    return redis.error_reply('capacity wait sequence exceeds exact Lua integer range')
+  end
+  redis.call('ZADD', KEYS[3], sequence, ARGV[1])
+  if redis.call('PTTL', KEYS[4]) < deadline - now then
+    redis.call('PEXPIREAT', KEYS[4], deadline)
+  end
   if redis.call('PTTL', KEYS[3]) < deadline - now then
     redis.call('PEXPIREAT', KEYS[3], deadline)
   end
 end
+redis.call('ZADD', KEYS[1], deadline, ARGV[1])
 if redis.call('PTTL', KEYS[1]) < deadline - now then
   redis.call('PEXPIREAT', KEYS[1], deadline)
 end
@@ -74,9 +79,10 @@ return 1
 const EXECUTION_SCRIPT: &str = r#"
 local clock = redis.call('TIME')
 local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', now)
+for _, token in ipairs(expired) do redis.call('ZREM', KEYS[6], token) end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
-redis.call('ZREMRANGEBYSCORE', KEYS[6], '-inf', now)
 local wait_deadline = tonumber(ARGV[2])
 local execution_deadline = tonumber(ARGV[3])
 if wait_deadline <= now or execution_deadline <= now
@@ -89,9 +95,10 @@ end
 if redis.call('ZSCORE', KEYS[2], ARGV[1]) then
   return {1, '0'}
 end
--- Recheck priority atomically with admission, including a displaced normal waiter.
-if ARGV[8] ~= '1' and redis.call('ZCARD', KEYS[6]) > 0 then
-  return {0, '100'}
+-- Reserved admissions cannot jump an older waiter, even without a wait token.
+if ARGV[8] == '1' then
+  local head = redis.call('ZRANGE', KEYS[6], 0, 0)
+  if #head > 0 and head[1] ~= ARGV[1] then return {0, '100'} end
 end
 local retry = 0
 if redis.call('ZCARD', KEYS[2]) >= tonumber(ARGV[4]) then
@@ -164,6 +171,7 @@ impl RedisCapacityWait {
     pub(super) async fn waiting_counts(
         &self,
         accounts: &[ProviderAccountId],
+        pool: ProviderConcurrencyPool,
     ) -> Result<std::collections::BTreeMap<ProviderAccountId, u32>, ProviderStoreError> {
         let mut counts = std::collections::BTreeMap::new();
         let mut connection = self.connection.clone();
@@ -173,12 +181,7 @@ impl RedisCapacityWait {
         for account in accounts {
             let keys = self
                 .repository
-                .keys(&CredentialLeaseRequest {
-                    scope: CredentialLeaseScope::ProviderAccount,
-                    resource_id: account.as_str().to_owned(),
-                    owner_id: "queue-pressure".to_owned(),
-                    ttl: Duration::from_secs(1),
-                })
+                .scheduling_keys(account.as_str(), pool)
                 .map_err(|_| invalid("queue pressure keys"))?;
             let count: u32 = script
                 .key(format!("{}:waiting", keys[0]))
@@ -218,18 +221,14 @@ impl RedisCapacityWait {
         identity: &str,
         deadline: SystemTime,
         quality: bool,
+        pool: ProviderConcurrencyPool,
     ) -> Result<(Ownership, [String; 3]), ProviderStoreError> {
         if self.sender.is_closed() || self.lifecycle.stopping.load(Ordering::SeqCst) {
             return Err(unavailable("capacity wait cleanup worker unavailable"));
         }
         let mut keys = self
             .repository
-            .keys(&CredentialLeaseRequest {
-                scope: CredentialLeaseScope::ProviderAccount,
-                resource_id: account.as_str().to_owned(),
-                owner_id: "capacity-wait".to_owned(),
-                ttl: Duration::from_secs(1),
-            })
+            .scheduling_keys(account.as_str(), pool)
             .map_err(|_| invalid("capacity wait account keys"))?;
         // Keep the account hash tag, interval and fence; isolate active/cleanup keys.
         if quality {
@@ -244,7 +243,7 @@ impl RedisCapacityWait {
         );
         let cleanup = Cleanup {
             waiting_key: format!("{}:waiting", keys[0]),
-            priority_key: format!("{}:waiting:priority", keys[0]),
+            order_key: format!("{}:waiting:order", keys[0]),
             active_key: keys[0].clone(),
             cancelled_key: format!("{}:cancelled:{token}", keys[0]),
             token,
@@ -273,12 +272,18 @@ impl RedisCapacityWait {
         request: ProviderSchedulingLeaseRequest,
     ) -> BoxFuture<'_, Result<ProviderLeaseAcquisition, ProviderStoreError>> {
         Box::pin(async move {
+            if request.is_quality_check()
+                && request.concurrency_pool() != ProviderConcurrencyPool::Shared
+            {
+                return Err(invalid("quality scheduling pool mismatch"));
+            }
             let deadline = request.deadline().lease_deadline();
             let (mut owner, keys) = self.ownership(
                 request.account_id(),
                 "scheduling",
                 deadline,
                 request.is_quality_check(),
+                request.concurrency_pool(),
             )?;
             let (outcome, value) = owner.acquire_execution(&keys, &request, false).await?;
             match outcome {
@@ -314,17 +319,21 @@ impl RedisCapacityWait {
                 request.request_id().as_str(),
                 request.deadline(),
                 false,
+                request.concurrency_pool(),
             )?;
             let cleanup = owner.cleanup.as_ref().expect("pending ownership");
             let mut connection = self.connection.clone();
             let outcome = Script::new(ENQUEUE_SCRIPT)
                 .key(&cleanup.waiting_key)
                 .key(&cleanup.cancelled_key)
-                .key(&cleanup.priority_key)
+                .key(&cleanup.order_key)
+                .key(&keys[1])
                 .arg(&cleanup.token)
                 .arg(deadline)
                 .arg(request.max_waiting().get())
-                .arg(u8::from(request.priority()))
+                .arg(u8::from(
+                    request.concurrency_pool() == ProviderConcurrencyPool::Reserved,
+                ))
                 .invoke_async::<i64>(&mut connection)
                 .await
                 .map_err(|_| unavailable("enqueue account capacity wait"))?;
@@ -371,7 +380,7 @@ impl ProviderWaitLease for RedisWaitLease {
             if request.provider_kind() != self.request.provider_kind()
                 || request.account_id() != self.request.account_id()
                 || request.is_quality_check()
-                || request.priority() != self.request.priority()
+                || request.concurrency_pool() != self.request.concurrency_pool()
             {
                 return Err(invalid("capacity promotion owner mismatch"));
             }
@@ -410,7 +419,7 @@ impl ProviderWaitLease for RedisWaitLease {
 
 struct Cleanup {
     waiting_key: String,
-    priority_key: String,
+    order_key: String,
     active_key: String,
     cancelled_key: String,
     token: String,
@@ -491,7 +500,7 @@ impl Ownership {
             .key(&keys[1])
             .key(&keys[2])
             .key(&cleanup.cancelled_key)
-            .key(&cleanup.priority_key)
+            .key(&cleanup.order_key)
             .arg(&cleanup.token)
             .arg(cleanup.wait_deadline)
             .arg(execution_millis)
@@ -503,7 +512,9 @@ impl Ownership {
             .arg(interval_millis)
             .arg(SIGNAL_TTL_MILLIS.max(interval_millis))
             .arg(u8::from(require_wait))
-            .arg(u8::from(request.priority()))
+            .arg(u8::from(
+                request.concurrency_pool() == ProviderConcurrencyPool::Reserved,
+            ))
             .invoke_async(&mut connection)
             .await
             .map_err(|_| unavailable("acquire account execution capacity"))
@@ -623,7 +634,7 @@ async fn cleanup_once(
             .key(&cleanup.waiting_key)
             .key(&cleanup.active_key)
             .key(&cleanup.cancelled_key)
-            .key(&cleanup.priority_key)
+            .key(&cleanup.order_key)
             .arg(&cleanup.token)
             .arg(cleanup.wait_deadline)
             .invoke_async::<i64>(&mut connection)

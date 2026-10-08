@@ -94,6 +94,25 @@ do not replace transport identity, account authorization or billing contracts.
 
 ## 7. Wrong vs Correct
 
+### Optional Preferred Mode
+
+- Migration 0068 only widens the existing check constraint. Strict remains the
+  default; upgrades do not rewrite existing settings or account identity.
+- Preferred uses the root binding for children and selects an eligible primary
+  before weight-based alternatives. Temporary spillover renews the observed
+  primary generation; streaming and compact success must not move that primary.
+- Guardian parent observation still records the account actually used. This is
+  not a second primary binding and cannot be dropped to simplify binding counts.
+- Prefer ready alternatives over the soft sticky queue in Preferred. Hard native
+  and required owners remain pinned; model authorization, exclusions, quotas,
+  credential validation and live capacity still gate every candidate.
+- A retained alias without a primary may use the existing atomic initial claim.
+  Unavailable storage is not a missing binding. Connection-local replay is
+  rejected before selection, leases, alias writes or primary renewal.
+- Preserve Relaxed child bindings across mode changes. Cover restoration,
+  native-owner conflicts, concurrent claims, successful spillover/return, compact
+  completion, model restrictions and capacity-wait selection.
+
 Wrong: clear local hints whenever `account_state_owner` is present.
 
 Correct: protect actual restored/native continuation; an ordinary retry carries

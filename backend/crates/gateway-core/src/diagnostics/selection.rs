@@ -44,8 +44,7 @@ impl TraceContext {
                     "blocker": AccountSelector.scheduling_blocker(candidate, context)
                         .map(|blocker| format!("{blocker:?}")),
                     "inFlight": signals.in_flight,
-                    "concurrencyLimit": candidate.account
-                        .effective_concurrency(context.policy.max_concurrent_per_account()).get(),
+                    "concurrencyLimit": context.concurrency_limit(&candidate.account).get(),
                     "quotaRemainingBasisPoints": signals.quota_remaining_rank,
                     "quotaResetAtUnixMs": signals.quota_reset_at.and_then(|reset|
                         reset.duration_since(std::time::UNIX_EPOCH).ok()

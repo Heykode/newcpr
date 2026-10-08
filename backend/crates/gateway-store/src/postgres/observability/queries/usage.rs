@@ -12,6 +12,7 @@ pub(crate) fn push_usage_filter(
     filter: &UsageRecordFilter,
     alias: &str,
 ) {
+    push_business_request_filter(query, alias);
     push_request_search(query, &filter.details, alias, None);
     if let Some(value) = &filter.client_api_key_ref {
         query.push(format!(" and {alias}.client_api_key_ref = "));

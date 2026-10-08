@@ -47,7 +47,7 @@ function authHarness() {
     pinia,
     vue,
     '@/api': {
-      refreshAuthSession: () => {
+      getAuthStatus: () => {
         requests += 1
         return getStatus()
       },

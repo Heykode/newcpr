@@ -24,6 +24,7 @@ use gateway_store::postgres::{
     ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
+mod quality_isolation;
 mod search;
 
 use super::{
@@ -1321,11 +1322,17 @@ async fn dashboard_account_metrics_with_cooldowns_should_only_reclassify_eligibl
 
 struct StaticCooldowns {
     cooldowns: BTreeMap<ProviderAccountId, ProviderCooldown>,
+    reads: std::sync::atomic::AtomicUsize,
+    active: std::sync::atomic::AtomicUsize,
+    peak: std::sync::atomic::AtomicUsize,
 }
 
 impl StaticCooldowns {
     fn new(cooldowns: impl IntoIterator<Item = ProviderCooldown>) -> Self {
         Self {
+            reads: Default::default(),
+            active: Default::default(),
+            peak: Default::default(),
             cooldowns: cooldowns
                 .into_iter()
                 .map(|cooldown| (cooldown.account_id().clone(), cooldown))
@@ -1346,7 +1353,15 @@ impl ProviderCooldownPort for StaticCooldowns {
         &'a self,
         account_id: &'a ProviderAccountId,
     ) -> BoxFuture<'a, Result<Option<ProviderCooldown>, ProviderStoreError>> {
-        Box::pin(async move { Ok(self.cooldowns.get(account_id).cloned()) })
+        Box::pin(async move {
+            use std::sync::atomic::Ordering::SeqCst;
+            self.reads.fetch_add(1, SeqCst);
+            let active = self.active.fetch_add(1, SeqCst) + 1;
+            self.peak.fetch_max(active, SeqCst);
+            tokio::task::yield_now().await;
+            self.active.fetch_sub(1, SeqCst);
+            Ok(self.cooldowns.get(account_id).cloned())
+        })
     }
 
     fn clear<'a>(
@@ -1387,6 +1402,41 @@ impl ProviderCooldownPort for StaticCooldowns {
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })
     }
+}
+
+#[tokio::test]
+async fn dashboard_reuses_one_bounded_account_snapshot_for_counts_and_slots() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let Some(database) = TestDatabase::create("dashboard_shared_state").await else {
+        return;
+    };
+    let now = Utc::now();
+    sqlx::query("insert into provider_accounts (id, provider_kind, name, upstream_user_id, authentication_kind, provider_credentials_json, credential_revision, has_refresh_token, access_token_expires_at, enabled, credential_state, quota_access_state, quota_access_observed_at, credential_observed_at, created_at, updated_at)
+        select 'acct_batch_' || n, 'openai', 'batch_' || n, 'user_' || n, 'oauth', '{}'::jsonb, 1, false, $1 + interval '1 day', true, 'ready', 'allowed', $1, $1, $1, $1 from generate_series(1, 257) n")
+        .bind(now).execute(&database.pool).await.unwrap();
+    let cooldowns = Arc::new(StaticCooldowns::new([]));
+    let store = PgAdminObservabilityStore::new(
+        database.pool.clone(),
+        None,
+        Some(cooldowns.clone()),
+        observability_query_budget(),
+    );
+    let range =
+        admin_observability::TimeRange::new(now - TimeDelta::hours(1), now + TimeDelta::hours(1))
+            .unwrap();
+    let (observation, slots) = store
+        .dashboard_with_runtime_slots(range, now)
+        .await
+        .unwrap();
+    assert_eq!(observation.provider_accounts.normal, 257);
+    assert_eq!(slots.unwrap().inherited_accounts, 257);
+    assert_eq!(
+        cooldowns.reads.load(SeqCst),
+        257,
+        "capacity must not read all accounts again"
+    );
+    assert!((2..=128).contains(&cooldowns.peak.load(SeqCst)));
+    database.close().await;
 }
 
 fn test_cooldown(account_id: &str, revision: u64) -> ProviderCooldown {

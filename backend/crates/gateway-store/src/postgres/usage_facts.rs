@@ -2,6 +2,22 @@
 
 use sqlx::{Postgres, QueryBuilder};
 
+/// Quality execution remains auditable but is not business request traffic.
+/// Protocol/transport are assigned by Core, unlike client request-kind metadata.
+/// NULL preserves legacy requests and system events without an associated request.
+pub(crate) fn business_request_predicate(alias: &str) -> String {
+    let internal = gateway_core::engine::execution::ClientTransport::InternalProbe.as_str();
+    format!(
+        "({alias}.request_kind is distinct from 'account_quality_check'
+          or {alias}.protocol is distinct from 'admin_quality_check'
+          or {alias}.client_transport is distinct from '{internal}')"
+    )
+}
+
+pub(crate) fn push_business_request_filter(query: &mut QueryBuilder<Postgres>, alias: &str) {
+    query.push(format!(" and {}", business_request_predicate(alias)));
+}
+
 /// 只把已完整交付给客户端、且存在用量证据的成功响应投影为用量事实。
 ///
 /// `model_requests` 同时承担执行审计：包括上游已发送、但尚未收到首个事件就断开的
@@ -15,10 +31,11 @@ use sqlx::{Postgres, QueryBuilder};
 /// 即使响应带有模型和输入 Token，也不是推理用量；原始审计和费用事实仍保留。
 pub(crate) fn completed_usage_fact_predicate(alias: &str) -> String {
     let evidence = usage_evidence_predicate(alias);
+    let business = business_request_predicate(alias);
     format!(
         "{alias}.outcome = 'succeeded'
          and {alias}.downstream_committed_at is not null
-         and {alias}.request_kind is distinct from 'account_quality_check'
+         and ({business})
          and ({alias}.provider_kind is distinct from 'openai'
               or {alias}.request_kind is distinct from 'prewarm')
          and (({alias}.client_transport = 'websocket' and {alias}.client_status_code is null)
@@ -61,5 +78,7 @@ mod tests {
     fn quality_checks_are_not_client_usage_facts() {
         let predicate = super::completed_usage_fact_predicate("mr");
         assert!(predicate.contains("mr.request_kind is distinct from 'account_quality_check'"));
+        assert!(predicate.contains("mr.protocol is distinct from 'admin_quality_check'"));
+        assert!(predicate.contains("mr.client_transport is distinct from 'internal'"));
     }
 }

@@ -118,8 +118,8 @@ fn current_search_policy_replaces_explicit_locations_and_fills_missing_ones() {
 }
 
 #[test]
-fn location_does_not_invent_search_tools_or_rewrite_unmarked_user_content() {
-    let text = "<environment_context><current_date>2000-01-01</current_date><timezone>UTC</timezone></environment_context>";
+fn location_does_not_invent_search_tools_or_rewrite_quoted_user_content() {
+    let text = "Explain this: <environment_context><current_date>2000-01-01</current_date><timezone>UTC</timezone></environment_context>";
     let bodies = [
         json!({"input": text}),
         json!({"input": [{"role": "user", "content": [{"type": "input_text", "text": text}]}]}),
@@ -137,6 +137,53 @@ fn location_does_not_invent_search_tools_or_rewrite_unmarked_user_content() {
         };
         assert_eq!(encoded.body()["input"], expected_input);
         assert_eq!(encoded.body().get("tools"), body.get("tools"));
+    }
+}
+
+#[test]
+fn unclassified_environment_is_aligned_but_explicit_kinds_remain_positional() {
+    let text = "<environment_context><timezone>UTC</timezone><nested><timezone>UTC</timezone></nested></environment_context>";
+    for metadata in [
+        None,
+        Some(json!({"create_time": 123})),
+        Some(json!({"content_item_kinds": null})),
+    ] {
+        let mut item = json!({"role": "user", "content": [{"type": "input_text", "text": text}]});
+        if let Some(metadata) = metadata {
+            item["internal_chat_message_metadata_passthrough"] = metadata;
+        }
+        let encoded = encode(json!({"input": [item]}), &west_coast());
+        assert_eq!(
+            encoded.body()["input"][0]["content"][0]["text"],
+            text.replacen(
+                "<timezone>UTC</timezone>",
+                "<timezone>America/Los_Angeles</timezone>",
+                1
+            )
+        );
+    }
+    for kinds in [
+        json!([]),
+        json!(["user.text"]),
+        json!([null, "environments.environment_context", "user.text"]),
+    ] {
+        let parts = vec![json!({"type": "input_text", "text": text}); 3];
+        let body = json!({"input": [{"role": "user", "content": parts,
+            "internal_chat_message_metadata_passthrough": {"content_item_kinds": kinds}}]});
+        let encoded = encode(body.clone(), &west_coast());
+        for index in 0..3 {
+            let actual = &encoded.body()["input"][0]["content"][index]["text"];
+            if kinds.get(index).and_then(Value::as_str) == Some("environments.environment_context")
+            {
+                assert_ne!(actual, text);
+            } else {
+                assert_eq!(actual, text);
+            }
+        }
+        assert_eq!(
+            encoded.body()["input"][0]["internal_chat_message_metadata_passthrough"],
+            body["input"][0]["internal_chat_message_metadata_passthrough"]
+        );
     }
 }
 

@@ -17,6 +17,12 @@
 - Keep location validation tests in `gateway-core/tests/account/location.rs`;
   production source files must not contain inline test modules.
 - No capacity freezing or adaptive concurrency belongs to this change.
+- A complete valid `environment_context` XML user input can be aligned when
+  classification is absent. If `content_item_kinds` is an array, each exact
+  content index is authoritative; null/unknown/missing slots stay unchanged.
+  Do not filter entries before indexing or rewrite all parts because one matches.
+  Keep quoted XML, malformed XML and non-user items unchanged. Only direct root
+  date/timezone fields are replaced; preserve nested fields and metadata.
 
 ## Opt-in Automatic Proxy Location
 

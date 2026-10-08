@@ -85,6 +85,7 @@ mod reasoning_replay;
 mod request_alignment;
 mod scheduling;
 mod streamed_errors;
+mod timing;
 mod turn_affinity;
 mod ws_message_compatibility;
 const CAPTURE_COMPLETED_SSE: &str = concat!(

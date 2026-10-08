@@ -7,10 +7,7 @@ use std::sync::Arc;
 
 use super::*;
 
-use crate::postgres::{
-    PgProviderAccountRepository, ProviderAccountRepository, ProviderAccountSummary,
-    account_status_projection, load_rate_limited_until,
-};
+use crate::postgres::{ProviderAccountStatus, load_account_statuses, load_rate_limited_until};
 
 use crate::redis::{CredentialLeaseRepository as _, RedisCredentialLeaseRepository};
 
@@ -39,13 +36,12 @@ impl PgObservabilityRepository {
     async fn account_status_snapshot(
         &self,
         observed_at: DateTime<Utc>,
-    ) -> StoreResult<(ProviderAccountMetrics, Vec<ProviderAccountSummary>)> {
-        let repository = PgProviderAccountRepository::new(self.pool.clone());
+    ) -> StoreResult<(ProviderAccountMetrics, Vec<ProviderAccountStatus>)> {
         let accounts = self
             .query_budget
             .run(
                 "load dashboard provider accounts",
-                repository.list_provider_accounts(None, true),
+                load_account_statuses(&self.pool),
             )
             .await?;
         let now = observed_at.into();
@@ -56,21 +52,18 @@ impl PgObservabilityRepository {
             ..ProviderAccountMetrics::default()
         };
         let mut normal_accounts = Vec::new();
-        for account in &accounts {
+        for mut account in accounts {
             // Dashboard capacity remains an enabled-account view, unlike directory status.
-            if !account.enabled {
+            if !account.facts.enabled {
                 metrics.disabled = metrics.disabled.saturating_add(1);
                 continue;
             }
-            let projection = account_status_projection(
-                account,
-                now,
-                rate_limited_until.get(&account.id).copied(),
-            );
+            account.facts.rate_limited_until = rate_limited_until.get(&account.id).copied();
+            let projection = gateway_core::account::resolve_account_status(&account.facts, now);
             match projection.status {
                 gateway_core::account::AccountStatus::Normal => {
                     metrics.normal = metrics.normal.saturating_add(1);
-                    normal_accounts.push(account.clone());
+                    normal_accounts.push(account);
                 }
                 gateway_core::account::AccountStatus::QuotaExhausted => {
                     metrics.quota_exhausted = metrics.quota_exhausted.saturating_add(1);
@@ -115,13 +108,12 @@ impl PgAdminObservabilityStore {
     }
 }
 
-#[async_trait]
-impl ObservabilityRepository for PgObservabilityRepository {
-    async fn dashboard_summary(
+impl PgObservabilityRepository {
+    async fn dashboard_summary_with_accounts(
         &self,
         range: ObservabilityRange,
         observed_at: DateTime<Utc>,
-    ) -> StoreResult<DashboardObservation> {
+    ) -> StoreResult<(DashboardObservation, Vec<ProviderAccountStatus>)> {
         let filter = UsageRecordFilter::default();
         let account_usage_query =
             ProviderAccountUsageQuery::recent(range, DASHBOARD_ACCOUNT_LIMIT)?
@@ -136,7 +128,7 @@ impl ObservabilityRepository for PgObservabilityRepository {
             page_size: ObservabilityPageSize::new(10)?,
         };
         // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞。
-        let (totals, (provider_accounts, _)) = futures::try_join!(
+        let (totals, (provider_accounts, normal_accounts)) = futures::try_join!(
             self.query_budget.run(
                 "load dashboard lifetime totals",
                 dashboard_totals(&self.pool)
@@ -157,14 +149,91 @@ impl ObservabilityRepository for PgObservabilityRepository {
                     list_usage_record_items(&self.pool, &recent_query).await
                 }),
         )?;
-        Ok(DashboardObservation {
-            range,
-            totals,
-            provider_accounts,
-            trend,
-            account_usage,
-            recent_requests,
-        })
+        Ok((
+            DashboardObservation {
+                range,
+                totals,
+                provider_accounts,
+                trend,
+                account_usage,
+                recent_requests,
+            },
+            normal_accounts,
+        ))
+    }
+}
+
+impl PgAdminObservabilityStore {
+    async fn runtime_slots_for_accounts(
+        &self,
+        normal_accounts: &[ProviderAccountStatus],
+    ) -> AdminStoreResult<Option<admin_observability::DashboardRuntimeSlots>> {
+        let inherited_accounts = u64::try_from(
+            normal_accounts
+                .iter()
+                .filter(|account| account.concurrency_limit.is_none())
+                .count(),
+        )
+        .map_err(|_| observability_error(invalid("inherited account count overflows u64")))?;
+        let overridden_slots = normal_accounts.iter().fold(0_u64, |total, account| {
+            total.saturating_add(
+                account
+                    .concurrency_limit
+                    .map_or(0, |limit| u64::from(limit.get())),
+            )
+        });
+        if normal_accounts.is_empty() {
+            return Ok(Some(admin_observability::DashboardRuntimeSlots {
+                inherited_accounts,
+                overridden_slots,
+                used_slots: Some(0),
+            }));
+        }
+        let normal_account_ids = normal_accounts
+            .iter()
+            .map(|account| account.id.clone())
+            .collect::<Vec<_>>();
+        let Some(runtime_signals) = &self.runtime_signals else {
+            return Ok(Some(admin_observability::DashboardRuntimeSlots {
+                inherited_accounts,
+                overridden_slots,
+                used_slots: None,
+            }));
+        };
+        let signals = match runtime_signals
+            .credential_runtime_signals(&normal_account_ids)
+            .await
+        {
+            Ok(signals) => signals,
+            Err(_) => {
+                return Ok(Some(admin_observability::DashboardRuntimeSlots {
+                    inherited_accounts,
+                    overridden_slots,
+                    used_slots: None,
+                }));
+            }
+        };
+        let used_slots = signals.into_iter().fold(0_u64, |total, signal| {
+            total.saturating_add(u64::from(signal.in_flight))
+        });
+        Ok(Some(admin_observability::DashboardRuntimeSlots {
+            inherited_accounts,
+            overridden_slots,
+            used_slots: Some(used_slots),
+        }))
+    }
+}
+
+#[async_trait]
+impl ObservabilityRepository for PgObservabilityRepository {
+    async fn dashboard_summary(
+        &self,
+        range: ObservabilityRange,
+        observed_at: DateTime<Utc>,
+    ) -> StoreResult<DashboardObservation> {
+        self.dashboard_summary_with_accounts(range, observed_at)
+            .await
+            .map(|(observation, _)| observation)
     }
 
     async fn dashboard_trend(
@@ -316,68 +385,33 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
         admin_dashboard_observation(observation)
     }
 
+    async fn dashboard_with_runtime_slots(
+        &self,
+        range: admin_observability::TimeRange,
+        observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<(
+        admin_observability::DashboardObservation,
+        Option<admin_observability::DashboardRuntimeSlots>,
+    )> {
+        let (observation, accounts) = self
+            .repository
+            .dashboard_summary_with_accounts(store_range(range)?, observed_at)
+            .await
+            .map_err(observability_error)?;
+        let slots = self.runtime_slots_for_accounts(&accounts).await?;
+        Ok((admin_dashboard_observation(observation)?, slots))
+    }
+
     async fn dashboard_runtime_slots(
         &self,
         observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<Option<admin_observability::DashboardRuntimeSlots>> {
-        let (_, normal_accounts) = self
+        let (_, accounts) = self
             .repository
             .account_status_snapshot(observed_at)
             .await
             .map_err(observability_error)?;
-        let inherited_accounts = u64::try_from(
-            normal_accounts
-                .iter()
-                .filter(|account| account.concurrency_limit.is_none())
-                .count(),
-        )
-        .map_err(|_| observability_error(invalid("inherited account count overflows u64")))?;
-        let overridden_slots = normal_accounts.iter().fold(0_u64, |total, account| {
-            total.saturating_add(
-                account
-                    .concurrency_limit
-                    .map_or(0, |limit| u64::from(limit.get())),
-            )
-        });
-        if normal_accounts.is_empty() {
-            return Ok(Some(admin_observability::DashboardRuntimeSlots {
-                inherited_accounts,
-                overridden_slots,
-                used_slots: Some(0),
-            }));
-        }
-        let normal_account_ids = normal_accounts
-            .iter()
-            .map(|account| account.id.clone())
-            .collect::<Vec<_>>();
-        let Some(runtime_signals) = &self.runtime_signals else {
-            return Ok(Some(admin_observability::DashboardRuntimeSlots {
-                inherited_accounts,
-                overridden_slots,
-                used_slots: None,
-            }));
-        };
-        let signals = match runtime_signals
-            .credential_runtime_signals(&normal_account_ids)
-            .await
-        {
-            Ok(signals) => signals,
-            Err(_) => {
-                return Ok(Some(admin_observability::DashboardRuntimeSlots {
-                    inherited_accounts,
-                    overridden_slots,
-                    used_slots: None,
-                }));
-            }
-        };
-        let used_slots = signals.into_iter().fold(0_u64, |total, signal| {
-            total.saturating_add(u64::from(signal.in_flight))
-        });
-        Ok(Some(admin_observability::DashboardRuntimeSlots {
-            inherited_accounts,
-            overridden_slots,
-            used_slots: Some(used_slots),
-        }))
+        self.runtime_slots_for_accounts(&accounts).await
     }
 
     async fn dashboard_trend(

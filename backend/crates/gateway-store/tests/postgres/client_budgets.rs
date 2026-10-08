@@ -112,6 +112,24 @@ async fn budgets_settle_exactly_once_and_enforce_each_threshold_across_store_ins
 }
 
 #[tokio::test]
+async fn empty_future_budget_windows_do_not_publish_usage_or_reset_time() {
+    let Some(database) = TestDatabase::create("empty_future_budget").await else {
+        return;
+    };
+    seed(&database, "key", "1", "5").await;
+    let store = PgClientBudgetStore::new(database.pool.clone());
+    store.settle(charge("key", "seed", "0.2")).await.unwrap();
+    sqlx::query("update client_key_budget_windows set daily_start = now() + interval '1 day', daily_end = now() + interval '1 day', weekly_start = now() + interval '7 days', weekly_end = now() + interval '7 days' where client_api_key_id = 'key'")
+        .execute(&database.pool).await.unwrap();
+    let value = status(&database, "key").await;
+    assert_eq!(value.daily_used_usd.canonical(), "0");
+    assert_eq!(value.weekly_used_usd.canonical(), "0");
+    assert!(value.daily_resets_at.is_none());
+    assert!(value.weekly_resets_at.is_none());
+    database.close().await;
+}
+
+#[tokio::test]
 async fn window_rollover_is_shanghai_midnight_and_seven_days_with_late_settlement() {
     let Some(database) = TestDatabase::create("budgets_windows").await else {
         return;

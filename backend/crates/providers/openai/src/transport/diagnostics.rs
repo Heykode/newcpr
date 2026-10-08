@@ -240,6 +240,26 @@ impl CodexUpstreamFailure {
         self.category
     }
 
+    /// Explicit account-limit evidence for quiet quality-probe logging only.
+    /// Bare HTTP 429 and transport/capacity failures must remain observable.
+    pub(crate) fn is_explicit_account_limit(&self) -> bool {
+        matches!(
+            self.category,
+            CodexFailureCategory::UsageLimitExhausted
+                | CodexFailureCategory::RateLimited
+                | CodexFailureCategory::QuotaExhausted
+        ) && self
+            .client_code
+            .iter()
+            .chain(self.client_error_type.iter())
+            .any(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                is_usage_limit_signal(&value)
+                    || is_rate_limit_signal(&value)
+                    || is_quota_signal(&value)
+            })
+    }
+
     /// 返回该拒绝是否允许换号重放。
     #[must_use]
     pub const fn replay_is_safe(&self) -> bool {

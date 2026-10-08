@@ -14,10 +14,11 @@ use gateway_core::account::{
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
-    BindingToken, ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort,
-    ProviderLeaseRequest, ProviderSchedulingLeaseRequest, ProviderSessionAffinityBinding,
-    ProviderSessionAffinityKey, ProviderSessionAffinityPort, ProviderSessionAlias,
-    ProviderSessionExclusionPort, ProviderSessionExclusions, ProviderStoreError,
+    BindingToken, ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseGuard,
+    ProviderLeasePort, ProviderLeaseRequest, ProviderSchedulingLeaseRequest,
+    ProviderSessionAffinityBinding, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
+    ProviderSessionAlias, ProviderSessionExclusionPort, ProviderSessionExclusions,
+    ProviderStoreError,
 };
 use gateway_core::routing::ProviderKind;
 use gateway_core::runtime::AccountConcurrencyHandle;
@@ -49,11 +50,6 @@ const CLOUDFLARE_CHALLENGE_BACKOFF: [Duration; 4] = [
 const CLOUDFLARE_PATH_BLOCK_THRESHOLD: u32 = 3;
 const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_millis(100);
 const CYBER_POLICY_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
-
-fn reserved_limit(limit: NonZeroU32, reserved: u32) -> NonZeroU32 {
-    NonZeroU32::new(limit.get().saturating_sub(reserved).max(1))
-        .expect("reserved concurrency keeps one normal slot")
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexAccountFailure {
@@ -104,8 +100,6 @@ pub struct SelectCodexCredential<'a> {
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
     pub session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
-    /// Guardian 使用完整账号并发；普通请求扣除策略预留槽位。
-    pub reserved_concurrency: u32,
     pub guardian: bool,
 }
 
@@ -126,20 +120,29 @@ struct CredentialSelectionInput<'a> {
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
     session_affinity_observation: Option<&'a CodexSessionAffinity>,
-    reserved_concurrency: u32,
     guardian: bool,
 }
 
 impl CredentialSelectionInput<'_> {
-    fn priority(&self) -> bool {
-        self.guardian
-            && self
-                .attempt
-                .account_selection_policy()
-                .openai_guardian_reserved_concurrency()
-                > 0
+    fn reserved_concurrency(&self) -> u32 {
+        if self.guardian
             && !self.attempt.is_quality_check()
             && !self.attempt.is_diagnostic_required_account()
+        {
+            self.attempt
+                .account_selection_policy()
+                .openai_guardian_reserved_concurrency()
+        } else {
+            0
+        }
+    }
+
+    fn concurrency_pool(&self) -> ProviderConcurrencyPool {
+        if self.reserved_concurrency() > 0 {
+            ProviderConcurrencyPool::Reserved
+        } else {
+            ProviderConcurrencyPool::Shared
+        }
     }
 }
 
@@ -408,7 +411,6 @@ impl CodexCredentialSelector {
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
             session_affinity_observation: None,
-            reserved_concurrency: request.reserved_concurrency,
             guardian: request.guardian,
         };
         self.select_inner(&input, None).await
@@ -427,7 +429,6 @@ impl CodexCredentialSelector {
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
             session_affinity_observation,
-            reserved_concurrency: request.reserved_concurrency,
             guardian: request.guardian,
         };
         self.select_inner(&input, cyber_policy_session_key).await
@@ -448,7 +449,6 @@ impl CodexCredentialSelector {
             attempt: request.attempt,
             session_affinity_key: request.session_affinity.and_then(CodexSessionAffinity::key),
             session_affinity_observation: request.session_affinity,
-            reserved_concurrency: 0,
             guardian: false,
         };
         self.select_inner(&input, None).await
@@ -577,10 +577,11 @@ impl CodexCredentialSelector {
             .collect::<Vec<_>>();
         let scheduling = self
             .leases
-            .load_state(
+            .load_state_for_pool(
                 request.attempt.client_api_key_ref(),
                 &self.provider_kind,
                 &account_ids,
+                request.concurrency_pool(),
             )
             .await?;
         let round_robin_cursor = scheduling.round_robin_cursor();
@@ -713,6 +714,8 @@ impl CodexCredentialSelector {
                 excluded_accounts: excluded.clone(),
                 preferred_account: preferred.clone(),
                 preferred_account_overrides_weight: pinned_account.is_some()
+                    || policy.openai_account_affinity()
+                        == gateway_core::account::AccountAffinity::Preferred
                     || policy.preferred_account_overrides_weight(),
                 round_robin_cursor,
                 eligibility: if diagnostic {
@@ -723,7 +726,7 @@ impl CodexCredentialSelector {
                     AccountEligibilityPolicy::Enforce
                 },
                 account_scope: request.attempt.account_scope().cloned(),
-                reserved_concurrency: request.reserved_concurrency,
+                reserved_concurrency: request.reserved_concurrency(),
             };
             let capacity = AccountSelector.capacity_snapshot(&candidates, &context);
             capacity_unavailable |= AccountSelector.has_busy_candidate(&candidates, &context);
@@ -809,17 +812,13 @@ impl CodexCredentialSelector {
                         self.provider_kind.clone(),
                         account.id().clone(),
                         account.revision(),
-                        quality_concurrency_limit(
-                            reserved_limit(
-                                account.effective_concurrency(policy.max_concurrent_per_account()),
-                                request.reserved_concurrency,
-                            ),
-                            quality,
-                        ),
+                        quality_concurrency_limit(context.concurrency_limit(&account), quality),
                         policy.request_interval(),
                         request.attempt.deadline(),
                     )
-                    .with_cancellation(request.attempt.cancellation().clone()),
+                    .with_cancellation(request.attempt.cancellation().clone())
+                    .with_quality_check(quality)
+                    .with_concurrency_pool(request.concurrency_pool()),
                 ))
                 .await?
             {
@@ -840,8 +839,10 @@ impl CodexCredentialSelector {
                         drop(guard);
                         return Err(CredentialSelectionError::AccountSnapshotChanged);
                     }
-                    let renew_existing_binding =
-                        observed_affinity_account.as_ref() == Some(account.id());
+                    let renew_existing_binding = observed_affinity_binding.is_some()
+                        && (observed_affinity_account.as_ref() == Some(account.id())
+                            || policy.openai_account_affinity()
+                                == gateway_core::account::AccountAffinity::Preferred);
                     let initial_affinity_claim = if !diagnostic
                         && observed_affinity_account.is_none()
                         && let Some(key) = request.session_affinity_key
@@ -1092,9 +1093,9 @@ impl CodexCredentialSelector {
         {
             match self.lookup_session_affinity(key).await {
                 SessionAffinityLookup::Bound(_) => {}
-                SessionAffinityLookup::Missing => {
-                    return Err(CredentialSelectionError::NoEligibleCredential);
-                }
+                // A retained alias names the session, not an account. Selection will
+                // atomically claim a missing binding while preserving any winning owner.
+                SessionAffinityLookup::Missing => {}
                 SessionAffinityLookup::Unavailable => {
                     return Err(CredentialSelectionError::Coordinator(None));
                 }

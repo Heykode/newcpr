@@ -9,7 +9,7 @@ use gateway_core::engine::{AccountWaitMode, ModelRequestId};
 use gateway_core::lifecycle::{CancellationToken, Deadline};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort,
+    ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort,
     ProviderSchedulingLeaseRequest, ProviderWaitLease, ProviderWaitLeaseAcquisition,
     ProviderWaitLeaseRequest, ProviderWaitPromotion,
 };
@@ -33,7 +33,12 @@ async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    for promote in [false, true] {
+    for (promote, pool) in [
+        (false, ProviderConcurrencyPool::Shared),
+        (true, ProviderConcurrencyPool::Shared),
+        (false, ProviderConcurrencyPool::Reserved),
+        (true, ProviderConcurrencyPool::Reserved),
+    ] {
         let id = if promote {
             "renew-promoted"
         } else {
@@ -48,15 +53,29 @@ async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after
             Duration::ZERO,
             Deadline::default(),
         )
-        .with_cancellation(cancellation.clone());
+        .with_cancellation(cancellation.clone())
+        .with_concurrency_pool(pool);
         let guard = if promote {
-            let mut waiter = fixture.wait(id, Duration::from_secs(30)).await;
+            let mut waiter = acquired(
+                fixture
+                    .port
+                    .try_acquire_wait(
+                        wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(30))
+                            .with_concurrency_pool(pool),
+                    )
+                    .await
+                    .unwrap(),
+            );
             promoted(waiter.try_promote(request).await.unwrap())
         } else {
             fast_acquired(fixture.port.try_acquire_scheduling(request).await.unwrap())
         };
         tokio::time::sleep(Duration::from_millis(20)).await;
-        let active = fixture.active_key(id);
+        let active = if pool == ProviderConcurrencyPool::Reserved {
+            format!("{}:reserved", fixture.active_key(id))
+        } else {
+            fixture.active_key(id)
+        };
         let members: Vec<String> = redis::cmd("ZRANGE")
             .arg(&active)
             .arg(0)
@@ -93,7 +112,7 @@ async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after
         })
         .await
         .expect("execution owner renews");
-        assert_eq!(fixture.in_flight(id).await, 1);
+        assert_eq!(fixture.pool_in_flight(id, pool).await, 1);
         assert!(!cancellation.is_cancelled());
         redis::cmd("ZREM")
             .arg(&active)
@@ -107,7 +126,7 @@ async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after
         tokio::time::timeout(Duration::from_secs(2), cancellation.cancelled())
             .await
             .expect("owner loss cancels execution");
-        assert_eq!(fixture.in_flight(id).await, 0);
+        assert_eq!(fixture.pool_in_flight(id, pool).await, 0);
         drop(guard);
     }
     fixture.finish().await;
@@ -118,7 +137,7 @@ fn timestamp_millis(time: SystemTime) -> i64 {
 }
 
 #[tokio::test]
-async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_cancel() {
+async fn guardian_waiters_are_fifo_without_blocking_normal_promotion() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
@@ -128,7 +147,7 @@ async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_canc
         .port
         .try_acquire_wait(
             wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(10))
-                .with_priority(true),
+                .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
         )
         .await
         .unwrap()
@@ -136,27 +155,39 @@ async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_canc
         panic!("guardian admitted");
     };
     let request = scheduling(id, 1, Duration::ZERO, Duration::from_secs(10));
+    let normal_active = promoted(normal.try_promote(request.clone()).await.unwrap());
+    let mut later = acquired(
+        fixture
+            .port
+            .try_acquire_wait(
+                wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(5))
+                    .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+            )
+            .await
+            .unwrap(),
+    );
+    let reserved = request
+        .clone()
+        .with_concurrency_pool(ProviderConcurrencyPool::Reserved);
     assert!(matches!(
-        normal.try_promote(request.clone()).await.unwrap(),
+        later.try_promote(reserved.clone()).await.unwrap(),
         ProviderWaitPromotion::Busy { .. }
     ));
     assert!(matches!(
         fixture
             .port
-            .try_acquire_scheduling(request.clone())
+            .try_acquire_scheduling(reserved.clone())
             .await
             .unwrap(),
         ProviderLeaseAcquisition::Busy { .. }
     ));
-    let ProviderWaitPromotion::Acquired(active) = guardian
-        .try_promote(request.clone().with_priority(true))
-        .await
-        .unwrap()
+    let ProviderWaitPromotion::Acquired(active) =
+        guardian.try_promote(reserved.clone()).await.unwrap()
     else {
         panic!("guardian promoted");
     };
     assert!(matches!(
-        normal.try_promote(request.clone()).await.unwrap(),
+        later.try_promote(reserved.clone()).await.unwrap(),
         ProviderWaitPromotion::Busy { .. }
     ));
     guardian.release().await.unwrap();
@@ -166,21 +197,32 @@ async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_canc
     let worker = tokio::spawn(async move { writer.run(worker_cancellation).await });
     drop(active);
     tokio::time::timeout(Duration::from_secs(2), async {
-        while fixture.in_flight(id).await != 0 {
+        while fixture
+            .pool_in_flight(id, ProviderConcurrencyPool::Reserved)
+            .await
+            != 0
+        {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
     .expect("guardian execution released");
     let ProviderWaitPromotion::Acquired(active) =
-        normal.try_promote(request.clone()).await.unwrap()
+        later.try_promote(reserved.clone()).await.unwrap()
     else {
-        panic!("normal promoted");
+        panic!("next guardian promoted");
     };
     normal.release().await.unwrap();
+    later.release().await.unwrap();
     drop(active);
+    drop(normal_active);
     tokio::time::timeout(Duration::from_secs(2), async {
-        while fixture.in_flight(id).await != 0 {
+        while fixture.in_flight(id).await != 0
+            || fixture
+                .pool_in_flight(id, ProviderConcurrencyPool::Reserved)
+                .await
+                != 0
+        {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -190,7 +232,7 @@ async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_canc
         .port
         .try_acquire_wait(
             wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(10))
-                .with_priority(true),
+                .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
         )
         .await
         .unwrap()
@@ -199,7 +241,7 @@ async fn guardian_waiter_precedes_normal_promotion_and_releases_priority_on_canc
     };
     guardian.release().await.unwrap();
     assert!(matches!(
-        fixture.port.try_acquire_scheduling(request).await.unwrap(),
+        fixture.port.try_acquire_scheduling(reserved).await.unwrap(),
         ProviderLeaseAcquisition::Acquired(_)
     ));
     cancellation.cancel();
@@ -710,7 +752,7 @@ async fn capacity_wait_cancelled_future_cleans_write_before_reply_delivery() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::HoldReply, 3).await;
+    let mut proxy = FaultProxy::start(Fault::HoldReply, ScriptTarget::Enqueue).await;
     let connection = proxy.connection().await;
     let repository = RedisCredentialLeaseRepository::new(connection, &fixture.namespace)
         .expect("proxy repository");
@@ -794,7 +836,7 @@ async fn capacity_wait_cancelled_promotion_cleans_committed_slot_and_cannot_retr
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::HoldReply, 6).await;
+    let mut proxy = FaultProxy::start(Fault::HoldReply, ScriptTarget::Execution).await;
     let repository =
         RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
             .expect("proxy repository");
@@ -847,7 +889,7 @@ async fn capacity_wait_failed_explicit_release_is_retried_by_tracked_writer() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::DelayCommand, 4).await;
+    let mut proxy = FaultProxy::start(Fault::DelayCommand, ScriptTarget::Cancel).await;
     let repository =
         RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
             .expect("proxy repository");
@@ -909,7 +951,7 @@ async fn capacity_wait_fast_lost_reply_is_owned_and_late_write_is_fenced() {
                 .expect("load real execution script"),
         );
         drop(warm);
-        let mut proxy = FaultProxy::start(fault, 6).await;
+        let mut proxy = FaultProxy::start(fault, ScriptTarget::Execution).await;
         let repository =
             RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
                 .expect("proxy repository");
@@ -954,7 +996,7 @@ async fn capacity_wait_running_writer_cleans_promptly_and_retries_redis_disconne
     let Some(mut fixture) = Fixture::new().await else {
         return;
     };
-    let mut proxy = FaultProxy::start(Fault::DelayCommand, 4).await;
+    let mut proxy = FaultProxy::start(Fault::DelayCommand, ScriptTarget::Cancel).await;
     let repository =
         RedisCredentialLeaseRepository::new(proxy.connection().await, &fixture.namespace)
             .expect("proxy repository");
@@ -1200,7 +1242,15 @@ async fn fault_scenario(fault: Fault, promotion: bool) {
         ));
     }
     warm.release().await.expect("warm script cleanup");
-    let mut proxy = FaultProxy::start(fault, if promotion { 6 } else { 3 }).await;
+    let mut proxy = FaultProxy::start(
+        fault,
+        if promotion {
+            ScriptTarget::Execution
+        } else {
+            ScriptTarget::Enqueue
+        },
+    )
+    .await;
     let connection = proxy.connection().await;
     let repository = RedisCredentialLeaseRepository::new(connection, &fixture.namespace)
         .expect("proxy repository");
@@ -1332,6 +1382,14 @@ impl Fixture {
             .in_flight
     }
 
+    async fn pool_in_flight(&self, id: &str, pool: ProviderConcurrencyPool) -> u32 {
+        self.port
+            .load_signals_for_pool(&provider(), &[account(id)], pool)
+            .await
+            .unwrap()[&account(id)]
+            .in_flight
+    }
+
     async fn drain(&mut self) {
         if let Some(writer) = self.writer.take() {
             drain(writer).await;
@@ -1431,6 +1489,26 @@ enum Fault {
     HoldReply,
 }
 
+#[derive(Clone, Copy)]
+enum ScriptTarget {
+    Enqueue,
+    Execution,
+    Cancel,
+}
+
+impl ScriptTarget {
+    fn matches(self, args: &[Vec<u8>]) -> bool {
+        let (keys, arguments) = match self {
+            Self::Enqueue => (4, 4),
+            Self::Execution => (6, 8),
+            Self::Cancel => (4, 2),
+        };
+        args.get(2)
+            .is_some_and(|count| *count == keys.to_string().as_bytes())
+            && args.len() == 3 + keys + arguments
+    }
+}
+
 struct FaultProxy {
     url: String,
     captured: mpsc::UnboundedReceiver<Vec<u8>>,
@@ -1440,7 +1518,7 @@ struct FaultProxy {
 }
 
 impl FaultProxy {
-    async fn start(fault: Fault, key_count: u8) -> Self {
+    async fn start(fault: Fault, script: ScriptTarget) -> Self {
         let mut url =
             url::Url::parse(&std::env::var("CPR_TEST_REDIS_URL").expect("real Redis required"))
                 .expect("test URL");
@@ -1478,7 +1556,7 @@ impl FaultProxy {
                         let sender = sender.clone();
                         let proceed = Arc::clone(&proceed);
                         sessions.spawn(async move {
-                            proxy_connection(client, &upstream, fault, key_count, fired, sender, proceed)
+                            proxy_connection(client, &upstream, fault, script, fired, sender, proceed)
                                 .await;
                         });
                     }
@@ -1518,7 +1596,7 @@ async fn proxy_connection(
     mut client: TcpStream,
     upstream: &str,
     fault: Fault,
-    key_count: u8,
+    script: ScriptTarget,
     fired: Arc<AtomicBool>,
     sender: mpsc::UnboundedSender<Vec<u8>>,
     resume: Arc<Notify>,
@@ -1531,9 +1609,7 @@ async fn proxy_connection(
         let target = args
             .first()
             .is_some_and(|value| value.eq_ignore_ascii_case(b"EVALSHA"))
-            && args
-                .get(2)
-                .is_some_and(|value| *value == key_count.to_string().as_bytes())
+            && script.matches(&args)
             && !fired.swap(true, Ordering::SeqCst);
         if target && matches!(fault, Fault::DelayCommand) {
             sender.send(command).expect("capture delayed command");
@@ -1589,4 +1665,244 @@ async fn replay(connection: &mut ConnectionManager, bytes: &[u8]) -> redis::Valu
         .query_async(connection)
         .await
         .expect("replay real delayed command")
+}
+
+mod guardian_pool {
+    use super::*;
+
+    #[tokio::test]
+    async fn pools_have_independent_execution_waiting_and_ordinary_observation() {
+        let Some(fixture) = Fixture::new().await else {
+            return;
+        };
+        let id = "independent";
+        let ordinary = scheduling(id, 2, Duration::ZERO, Duration::from_secs(30));
+        let reserved = scheduling(id, 1, Duration::ZERO, Duration::from_secs(30))
+            .with_concurrency_pool(ProviderConcurrencyPool::Reserved);
+        let mut guards = Vec::new();
+        for request in [
+            ordinary.clone(),
+            ordinary.clone(),
+            reserved.clone(),
+            ordinary.clone().with_quality_check(true),
+        ] {
+            guards.push(fast_acquired(
+                fixture.port.try_acquire_scheduling(request).await.unwrap(),
+            ));
+        }
+        for request in [ordinary, reserved] {
+            assert!(matches!(
+                fixture.port.try_acquire_scheduling(request).await.unwrap(),
+                ProviderLeaseAcquisition::Busy { .. }
+            ));
+        }
+        assert_eq!(fixture.in_flight(id).await, 2);
+        assert_eq!(
+            fixture
+                .pool_in_flight(id, ProviderConcurrencyPool::Reserved)
+                .await,
+            1
+        );
+        let ids = [account(id)];
+        let provider = provider();
+        let client = ClientApiKeyId::new("key_guardian_pool").unwrap();
+        let shared = fixture
+            .port
+            .load_state(&client, &provider, &ids)
+            .await
+            .unwrap();
+        let reserved = fixture
+            .port
+            .load_state_for_pool(&client, &provider, &ids, ProviderConcurrencyPool::Reserved)
+            .await
+            .unwrap();
+        assert_eq!(shared.signals()[&ids[0]].in_flight, 2);
+        assert_eq!(reserved.signals()[&ids[0]].in_flight, 1);
+        assert_eq!(
+            shared.signals()[&ids[0]].last_started_at,
+            reserved.signals()[&ids[0]].last_started_at
+        );
+        assert_eq!(
+            reserved.round_robin_cursor(),
+            shared.round_robin_cursor() + 1
+        );
+        let mut waiters = Vec::new();
+        for pool in [
+            ProviderConcurrencyPool::Shared,
+            ProviderConcurrencyPool::Reserved,
+        ] {
+            let request = wait_request(id, AccountWaitMode::Sticky, 1, Duration::from_secs(10))
+                .with_concurrency_pool(pool);
+            waiters.push(acquired(
+                fixture
+                    .port
+                    .try_acquire_wait(request.clone())
+                    .await
+                    .unwrap(),
+            ));
+            assert!(matches!(
+                fixture.port.try_acquire_wait(request).await.unwrap(),
+                ProviderWaitLeaseAcquisition::Full
+            ));
+            assert_eq!(
+                fixture
+                    .port
+                    .load_waiting_counts_for_pool(&provider, &ids, pool)
+                    .await
+                    .unwrap()[&ids[0]],
+                1
+            );
+        }
+        assert_eq!(
+            fixture
+                .port
+                .load_waiting_counts(&provider, &ids)
+                .await
+                .unwrap()[&ids[0]],
+            1
+        );
+        for waiter in waiters {
+            waiter.release().await.unwrap();
+        }
+        drop(guards);
+        fixture.finish().await;
+    }
+
+    #[tokio::test]
+    async fn account_interval_is_shared_in_both_directions_and_with_quality() {
+        let Some(fixture) = Fixture::new().await else {
+            return;
+        };
+        for (id, first, second) in [
+            (
+                "shared-first",
+                ProviderConcurrencyPool::Shared,
+                ProviderConcurrencyPool::Reserved,
+            ),
+            (
+                "reserved-first",
+                ProviderConcurrencyPool::Reserved,
+                ProviderConcurrencyPool::Shared,
+            ),
+        ] {
+            let request = scheduling(id, 3, Duration::from_secs(3600), Duration::from_secs(30));
+            let guard = fast_acquired(
+                fixture
+                    .port
+                    .try_acquire_scheduling(request.clone().with_concurrency_pool(first))
+                    .await
+                    .unwrap(),
+            );
+            for next in [
+                request.clone().with_concurrency_pool(second),
+                request.with_quality_check(true),
+            ] {
+                assert!(matches!(
+                    fixture.port.try_acquire_scheduling(next).await.unwrap(),
+                    ProviderLeaseAcquisition::Busy { .. }
+                ));
+            }
+            assert_eq!(fixture.pool_in_flight(id, first).await, 1);
+            assert_eq!(fixture.pool_in_flight(id, second).await, 0);
+            drop(guard);
+        }
+        fixture.finish().await;
+    }
+
+    #[tokio::test]
+    async fn reserved_fifo_releases_cancelled_and_expired_heads_and_rejects_cross_pool_promotion() {
+        let Some(mut fixture) = Fixture::new().await else {
+            return;
+        };
+        for expire in [false, true] {
+            let id = if expire {
+                "expired-head"
+            } else {
+                "cancelled-head"
+            };
+            let head = acquired(
+                fixture
+                    .port
+                    .try_acquire_wait(
+                        wait_request(id, AccountWaitMode::Sticky, 3, Duration::from_secs(10))
+                            .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            let mut next = acquired(
+                fixture
+                    .port
+                    .try_acquire_wait(
+                        wait_request(id, AccountWaitMode::Fallback, 3, Duration::from_secs(10))
+                            .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+                    )
+                    .await
+                    .unwrap(),
+            );
+            let request = scheduling(id, 1, Duration::ZERO, Duration::from_secs(10))
+                .with_concurrency_pool(ProviderConcurrencyPool::Reserved);
+            assert!(matches!(
+                next.try_promote(request.clone()).await.unwrap(),
+                ProviderWaitPromotion::Busy { .. }
+            ));
+            if expire {
+                let key = format!("{}:reserved:waiting", fixture.active_key(id));
+                let tokens: Vec<String> = redis::cmd("ZRANGE")
+                    .arg(format!("{key}:order"))
+                    .arg(0)
+                    .arg(0)
+                    .query_async(&mut fixture.connection)
+                    .await
+                    .unwrap();
+                redis::cmd("ZADD")
+                    .arg(key)
+                    .arg(0)
+                    .arg(&tokens[0])
+                    .query_async::<i64>(&mut fixture.connection)
+                    .await
+                    .unwrap();
+            } else {
+                head.release().await.unwrap();
+            }
+            let guard = promoted(next.try_promote(request).await.unwrap());
+            next.release().await.unwrap();
+            drop(guard);
+        }
+        let mut wrong = acquired(
+            fixture
+                .port
+                .try_acquire_wait(
+                    wait_request(
+                        "wrong-pool",
+                        AccountWaitMode::Sticky,
+                        1,
+                        Duration::from_secs(10),
+                    )
+                    .with_concurrency_pool(ProviderConcurrencyPool::Reserved),
+                )
+                .await
+                .unwrap(),
+        );
+        assert!(
+            wrong
+                .try_promote(scheduling(
+                    "wrong-pool",
+                    1,
+                    Duration::ZERO,
+                    Duration::from_secs(10)
+                ))
+                .await
+                .is_err()
+        );
+        assert_eq!(fixture.in_flight("wrong-pool").await, 0);
+        assert_eq!(
+            fixture
+                .pool_in_flight("wrong-pool", ProviderConcurrencyPool::Reserved)
+                .await,
+            0
+        );
+        drop(wrong);
+        fixture.finish().await;
+    }
 }

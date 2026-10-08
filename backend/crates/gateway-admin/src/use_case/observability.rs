@@ -164,10 +164,9 @@ impl DefaultObservabilityService {
         range: TimeRange,
     ) -> Result<DashboardResult, AdminError> {
         let observed_at = Utc::now();
-        let (mut observation, settings, runtime_slots) = futures::try_join!(
-            self.store.dashboard_summary(range, observed_at),
+        let ((mut observation, runtime_slots), settings) = futures::try_join!(
+            self.store.dashboard_with_runtime_slots(range, observed_at),
             self.settings.load_runtime_settings(),
-            self.store.dashboard_runtime_slots(observed_at),
         )
         .map_err(|error| map_store_error(error, "dashboard"))?;
         self.enrich_list_records(&mut observation.recent_requests);

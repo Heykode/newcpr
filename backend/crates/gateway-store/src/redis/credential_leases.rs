@@ -7,11 +7,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::future::join_all;
+use futures::future::{BoxFuture, join_all};
 use gateway_core::account::{AccountRuntimeSignals, ProviderAccountId};
 use gateway_core::policy::ClientApiKeyId;
 use gateway_core::provider_ports::{
-    ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
+    ProviderConcurrencyPool, ProviderLeaseAcquisition, ProviderLeasePort, ProviderLeaseRequest,
     ProviderRefreshCapacityRequest, ProviderSchedulingLeaseRequest, ProviderSchedulingState,
     ProviderStoreError, ProviderStoreErrorKind, ProviderWaitLeaseAcquisition,
     ProviderWaitLeaseRequest,
@@ -436,14 +436,45 @@ impl RedisCredentialLeaseRepository {
         })
     }
 
-    async fn load_signal(&self, resource_id: String) -> StoreResult<CredentialRuntimeSignal> {
-        let request = CredentialLeaseRequest {
+    async fn runtime_signals_for_pool(
+        &self,
+        resource_ids: &[String],
+        pool: ProviderConcurrencyPool,
+    ) -> StoreResult<Vec<CredentialRuntimeSignal>> {
+        for resource_id in resource_ids {
+            require_nonempty("credential runtime signal", "resource_id", resource_id)?;
+        }
+        let mut signals = Vec::with_capacity(resource_ids.len());
+        for ids in resource_ids.chunks(super::ACCOUNT_STATE_READ_CONCURRENCY) {
+            let batch = join_all(ids.iter().cloned().map(|id| self.load_signal(id, pool))).await;
+            signals.extend(batch.into_iter().collect::<StoreResult<Vec<_>>>()?);
+        }
+        Ok(signals)
+    }
+
+    pub(super) fn scheduling_keys(
+        &self,
+        resource_id: &str,
+        pool: ProviderConcurrencyPool,
+    ) -> StoreResult<[String; 3]> {
+        let mut keys = self.keys(&CredentialLeaseRequest {
             scope: CredentialLeaseScope::ProviderAccount,
-            resource_id: resource_id.clone(),
-            owner_id: "signal-reader".to_owned(),
+            resource_id: resource_id.to_owned(),
+            owner_id: "scheduling".to_owned(),
             ttl: Duration::from_secs(1),
-        };
-        let keys = self.keys(&request)?;
+        })?;
+        if pool == ProviderConcurrencyPool::Reserved {
+            keys[0].push_str(":reserved");
+        }
+        Ok(keys)
+    }
+
+    async fn load_signal(
+        &self,
+        resource_id: String,
+        pool: ProviderConcurrencyPool,
+    ) -> StoreResult<CredentialRuntimeSignal> {
+        let keys = self.scheduling_keys(&resource_id, pool)?;
         let mut connection = self.connection.clone();
         let (in_flight, last_started): (String, String) = Script::new(SIGNAL_SCRIPT)
             .key(&keys[0])
@@ -512,6 +543,7 @@ impl RedisProviderLeaseCoordinator {
     async fn load_signals(
         &self,
         accounts: &[ProviderAccountId],
+        pool: ProviderConcurrencyPool,
     ) -> Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, ProviderStoreError> {
         let ids = accounts
             .iter()
@@ -519,7 +551,7 @@ impl RedisProviderLeaseCoordinator {
             .collect::<Vec<_>>();
         let signals = self
             .repository
-            .credential_runtime_signals(&ids)
+            .runtime_signals_for_pool(&ids, pool)
             .await
             .map_err(|error| provider_unavailable("load scheduling signals").with_source(error))?;
         signals
@@ -575,13 +607,51 @@ impl RedisProviderLeaseCoordinator {
 }
 
 impl ProviderLeasePort for RedisProviderLeaseCoordinator {
+    fn load_waiting_counts_for_pool<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, u32>, ProviderStoreError>> {
+        Box::pin(self.capacity_wait.waiting_counts(accounts, pool))
+    }
+
+    fn load_signals_for_pool<'a>(
+        &'a self,
+        _provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, ProviderStoreError>>
+    {
+        Box::pin(self.load_signals(accounts, pool))
+    }
+
+    fn load_state_for_pool<'a>(
+        &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+        Box::pin(async move {
+            let signals = self.load_signals(accounts, pool).await?;
+            let cursor = self
+                .next_scheduling_cursor(client_api_key_id, provider_kind)
+                .await?;
+            Ok(ProviderSchedulingState::new(signals, cursor))
+        })
+    }
+
     fn load_waiting_counts<'a>(
         &'a self,
         _provider_kind: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> futures::future::BoxFuture<'a, Result<BTreeMap<ProviderAccountId, u32>, ProviderStoreError>>
     {
-        Box::pin(self.capacity_wait.waiting_counts(accounts))
+        Box::pin(
+            self.capacity_wait
+                .waiting_counts(accounts, ProviderConcurrencyPool::Shared),
+        )
     }
 
     fn try_acquire_scheduling(
@@ -599,7 +669,7 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
         'a,
         Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, ProviderStoreError>,
     > {
-        Box::pin(self.load_signals(accounts))
+        Box::pin(self.load_signals(accounts, ProviderConcurrencyPool::Shared))
     }
 
     fn try_acquire_wait(
@@ -616,13 +686,12 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
         provider_kind: &'a ProviderKind,
         accounts: &'a [ProviderAccountId],
     ) -> futures::future::BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
-        Box::pin(async move {
-            let signals = self.load_signals(accounts).await?;
-            let round_robin_cursor = self
-                .next_scheduling_cursor(client_api_key_id, provider_kind)
-                .await?;
-            Ok(ProviderSchedulingState::new(signals, round_robin_cursor))
-        })
+        self.load_state_for_pool(
+            client_api_key_id,
+            provider_kind,
+            accounts,
+            ProviderConcurrencyPool::Shared,
+        )
     }
 
     fn try_acquire(
@@ -632,8 +701,7 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
         Box::pin(async move {
             match request {
                 ProviderLeaseRequest::Scheduling(request) => {
-                    // All request leases share the capacity-wait admission script so a
-                    // normal request cannot bypass a queued Guardian waiter.
+                    // All request leases share cancellation-safe, pool-aware admission.
                     self.capacity_wait.acquire_scheduling(request).await
                 }
                 ProviderLeaseRequest::RefreshCapacity(request) => {
@@ -725,17 +793,8 @@ impl CredentialLeaseRepository for RedisCredentialLeaseRepository {
         &self,
         resource_ids: &[String],
     ) -> StoreResult<Vec<CredentialRuntimeSignal>> {
-        for resource_id in resource_ids {
-            require_nonempty("credential runtime signal", "resource_id", resource_id)?;
-        }
-        let signals = join_all(
-            resource_ids
-                .iter()
-                .cloned()
-                .map(|resource_id| self.load_signal(resource_id)),
-        )
-        .await;
-        signals.into_iter().collect()
+        self.runtime_signals_for_pool(resource_ids, ProviderConcurrencyPool::Shared)
+            .await
     }
 
     async fn try_acquire_bounded_lease(
