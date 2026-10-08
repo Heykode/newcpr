@@ -14,14 +14,23 @@ async function main() {
   await mkdir(output, { recursive: true })
   const server = spawn(process.execPath, ['tests/relogin-count-preview.mjs'], {
     env: { ...process.env, QA_PORT: port },
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let serverOutput = ''
+  let serverError = ''
+  server.stdout.on('data', (chunk) => {
+    serverOutput += chunk
+  })
+  server.stderr.on('data', (chunk) => {
+    serverError += chunk
   })
   let browser
   try {
     let ready = false
     for (let i = 0; i < 100; i++) {
+      assert.equal(server.exitCode, null, `fixture server exited: ${serverError}`)
       try {
-        if ((await fetch(`http://127.0.0.1:${port}/quality-ops`)).ok) {
+        if (serverOutput.includes('Local sample only:') && (await fetch(`http://127.0.0.1:${port}/quality-ops`)).ok) {
           ready = true
           break
         }
@@ -82,6 +91,7 @@ async function main() {
     let rules = [{ id: 'quality-rule', revision: 1, config, nextRunAt: now, running: false, pending: false, lastStatus: 'correct', lastRunAt: now }]
     const run = { id: 'quality-run', ruleId: 'quality-rule', accountId: config.accountId, model: config.model, status: 'correct', startedAt: now, finishedAt: now, correct: 2, incorrect: 0, unknown: 0, requestErrors: 0 }
     let historyRows = [run]
+    let overloadDetail = false
     let enqueues = 0
     let saves = 0
     let failHistory = false
@@ -157,6 +167,18 @@ async function main() {
       if (url.pathname.endsWith('/runs'))
         return fulfill(route, historyRows)
       if (url.pathname.endsWith('/detail')) {
+        if (overloadDetail) {
+          return fulfill(route, { ...run, answers: [{
+            index: 1,
+            answer: '',
+            verdict: 'overloaded',
+            reason: '上游服务器过载，纳入连续异常判定',
+            elapsedMs: 150,
+            returnedModel: null,
+            judgeAccountId: null,
+            probe: run.detectionMode === 'state_probe' ? { verdict: 'inconclusive', reason: 'upstream_overloaded', shots: [] } : null,
+          }] })
+        }
         return fulfill(route, { ...run, answers: [{
           ...(run.detectionMode === 'state_probe'
             ? { probe: {
@@ -246,6 +268,7 @@ async function main() {
     await page.getByRole('button', { name: '编辑规则', exact: true }).click()
     const editor = page.getByRole('dialog', { name: '编辑检测规则' })
     await editor.waitFor()
+    await editor.getByText(/探针和题目检测均适用：过载→过载/).waitFor()
     const models = editor.getByRole('combobox', { name: /^检测模型/ })
     modelMode = 'failed'
     await models.click()
@@ -450,6 +473,7 @@ async function main() {
     await creation.getByRole('textbox', { name: /^题目/ }).fill('Preserved question')
     await creation.getByRole('combobox', { name: /^检测模式/ }).click()
     await page.getByRole('option', { name: '状态探针', exact: true }).click()
+    await creation.getByText(/探针和题目检测均适用：过载→过载/).waitFor()
     assert.equal(await creation.getByRole('textbox', { name: /^题目/ }).count(), 0)
     assert.equal(await creation.getByRole('combobox', { name: /^判题模型/ }).count(), 0)
     assert.equal(await creation.getByRole('spinbutton', { name: '每轮并行答题次数' }).count(), 0)
@@ -508,6 +532,35 @@ async function main() {
       await page.screenshot({ path: `${output}/quality-probe-result-${width}.png`, fullPage: true, animations: 'disabled' })
       await drawer.getByRole('button', { name: '关闭', exact: true }).click()
     }
+    const originalRun = { ...run }
+    overloadDetail = true
+    for (const detectionMode of ['answer', 'state_probe']) {
+      for (const status of ['overloaded', 'incorrect']) {
+        Object.assign(run, {
+          detectionMode,
+          status,
+          correct: 0,
+          incorrect: 0,
+          requestErrors: 1,
+          action: status === 'incorrect' ? 'template_applied' : null,
+        })
+        await page.getByRole('button', { name: '刷新', exact: true }).click()
+        await page.getByRole('button', { name: '查看结果', exact: true }).click()
+        const drawer = page.getByRole('dialog', { name: '检测详情' })
+        const label = status === 'overloaded' ? '上游过载（待确认）' : detectionMode === 'state_probe' ? '智商异常' : '检测异常'
+        await drawer.getByText(label, { exact: true }).waitFor()
+        await drawer.getByText('上游服务器过载', { exact: true }).waitFor()
+        await drawer.getByText('上游服务器过载，纳入连续异常判定', { exact: true }).waitFor()
+        for (const width of [1440, 390, 320]) {
+          await page.setViewportSize({ width, height: 1000 })
+          assert.ok(await drawer.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+          await page.screenshot({ path: `${output}/quality-overload-${detectionMode}-${status}-${width}.png`, fullPage: true, animations: 'disabled' })
+        }
+        await drawer.getByRole('button', { name: '关闭', exact: true }).click()
+      }
+    }
+    Object.assign(run, originalRun)
+    overloadDetail = false
     await page.setViewportSize({ width: 1440, height: 1000 })
     await page.getByRole('button', { name: '切换浅色模式', exact: true }).click()
     await page.getByRole('checkbox', { name: '选择规则 fixture-quality-account@example.test', exact: true }).locator('..').click()

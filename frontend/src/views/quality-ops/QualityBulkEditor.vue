@@ -152,7 +152,7 @@ onBeforeUnmount(() => {
 <template>
   <QualityDrawer v-model="open" title="批量编辑检测规则" :busy="saving">
     <p class="mb-4 text-cp-sm text-cp-text-secondary">
-      仅修改勾选字段；其他配置保留各自的值。逐条保存，成功项不会重复提交。保存会清零所改规则的连续异常计数，不会立即检测。
+      仅修改勾选字段；其他配置保留各自的值。逐条保存，成功项不会重复提交。保存会清零所改规则的连续异常计数，不会立即检测。两种检测模式都将明确上游过载与异常累计 2 轮后执行处置；正常轮清零，此规则不受下方异常阈值影响。
     </p>
     <p v-if="error" role="alert" class="mb-4 text-cp-error">
       {{ error }}

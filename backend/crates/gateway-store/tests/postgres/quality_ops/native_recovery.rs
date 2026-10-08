@@ -35,6 +35,9 @@ async fn native_recovery_counts_two_healthy_rounds_holds_unknown_and_resets_on_d
     for (verdict, expected) in [
         (QualityVerdict::Unknown, 1),
         (QualityVerdict::RequestError, 1),
+        (QualityVerdict::Overloaded, 0),
+        (QualityVerdict::Unknown, 0),
+        (QualityVerdict::Correct, 1),
         (QualityVerdict::Incorrect, 0),
         (QualityVerdict::Correct, 1),
         (QualityVerdict::Unknown, 1),

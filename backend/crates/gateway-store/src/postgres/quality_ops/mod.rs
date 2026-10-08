@@ -13,6 +13,7 @@ use sqlx::{PgPool, Row as _};
 
 mod group_rules;
 mod native_recovery;
+mod overload_streak;
 mod policy;
 mod rule_templates;
 mod template_action;
@@ -283,7 +284,7 @@ impl PgQualityOpsStore {
                     or config->>'detectionMode' is distinct from $3->>'detectionMode'
                     or config->>'failureAction' is distinct from $3->>'failureAction'
                     or config->'failureTemplate' is distinct from $3->'failureTemplate'
-                    then recovery-'excel_streak'-'excel_owner'-'excel_pass_streak'-'template_owner' else recovery-'excel_streak'-'excel_pass_streak' end,
+                    then recovery-'excel_streak'-'excel_owner'-'excel_pass_streak'-'template_owner'-'overload_streak' else recovery-'excel_streak'-'excel_pass_streak'-'overload_streak' end,
                  last_action=case when last_action in ('excel_threshold_pending','excel_streak_reset','excel_recovery_counted')
                     then null else last_action end,
                  last_status=case when coalesce(config->>'detectionMode','answer')<>
@@ -625,16 +626,23 @@ impl QualityOpsStore for PgQualityOpsStore {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         lock_configuration(&mut tx).await?;
         let mut counts = [0_i32; 4];
+        let mut overloaded = false;
         for answer in &answers {
             counts[match answer.verdict {
                 QualityVerdict::Correct => 0,
                 QualityVerdict::Incorrect => 1,
                 QualityVerdict::Unknown => 2,
                 QualityVerdict::RequestError => 3,
+                QualityVerdict::Overloaded => {
+                    overloaded = true;
+                    3
+                }
             }] += 1;
         }
         let status = if counts[1] > 0 {
             "incorrect"
+        } else if overloaded {
+            "overloaded"
         } else if counts[3] > 0 {
             "request_error"
         } else if counts[2] > 0 || answers.len() != usize::from(claim.rule.config.repetitions) {
@@ -648,10 +656,18 @@ impl QualityOpsStore for PgQualityOpsStore {
             .bind(&claim.rule.id).bind(claim.rule.revision).bind(&claim.lease_token).bind(next).bind(status)
             .execute(&mut *tx).await.map_err(unavailable)?;
         if affected.rows_affected() == 1 {
-            let action = policy::apply(&mut tx, claim, status).await?;
-            sqlx::query("update quality_rules set last_action=$2 where id=$1")
+            let overload_trigger =
+                overload_streak::advance(&mut tx, claim, status, overloaded).await?;
+            let status = if overload_trigger {
+                "incorrect"
+            } else {
+                status
+            };
+            let action = policy::apply(&mut tx, claim, status, overload_trigger).await?;
+            sqlx::query("update quality_rules set last_action=$2,last_status=$3 where id=$1")
                 .bind(&claim.rule.id)
                 .bind(action)
+                .bind(status)
                 .execute(&mut *tx)
                 .await
                 .map_err(unavailable)?;

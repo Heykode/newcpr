@@ -1051,3 +1051,84 @@ async fn template_recovery_is_fenced_by_rule_changes_and_edits_during_a_probe() 
         db.close().await;
     }
 }
+
+#[tokio::test]
+async fn template_overload_triggers_after_two_rounds_in_both_modes_and_restores() {
+    use QualityVerdict::{Correct, Incorrect, Overloaded, RequestError, Unknown};
+    for mode in [
+        QualityDetectionMode::Answer,
+        QualityDetectionMode::StateProbe,
+    ] {
+        for second in [Overloaded, Incorrect] {
+            let Some(db) = TestDatabase::create("quality_overload_template").await else {
+                return;
+            };
+            let store = setup(&db).await;
+            let template = template(&db).await;
+            let mut cfg = config("acct_quality_a");
+            cfg.detection_mode = mode;
+            cfg.failure_action = QualityFailureAction::ApplyAccountTemplate;
+            cfg.failure_template = Some(template);
+            cfg.excel_failure_threshold = 5;
+            cfg.auto_restore = true;
+            let rule = store
+                .save(None, None, cfg, Utc::now(), &context())
+                .await
+                .unwrap();
+            // Unknown errors hold evidence; a healthy round starts a new sequence.
+            for verdict in [Overloaded, Unknown, RequestError, Correct, Overloaded] {
+                let run = scheduled_round(&store, &rule, &[verdict]).await;
+                assert!(run.action.is_none());
+                assert_eq!(snapshot(&db).await["account"]["weight"], 1);
+            }
+            let restarted = PgQualityOpsStore::new(db.pool.clone());
+            let run = scheduled_round(&restarted, &rule, &[second]).await;
+            assert_eq!(run.status, "incorrect");
+            assert_eq!(run.action.as_deref(), Some("template_applied"));
+            assert_eq!(snapshot(&db).await["account"]["weight"], 19);
+            // Overload does not restore settings; an entirely healthy round does.
+            scheduled_round(&restarted, &rule, &[Overloaded]).await;
+            assert_eq!(snapshot(&db).await["account"]["weight"], 19);
+            let restored = scheduled_round(&restarted, &rule, &[Correct]).await;
+            assert_eq!(restored.action.as_deref(), Some("template_restored"));
+            assert_eq!(snapshot(&db).await["account"]["weight"], 1);
+            db.close().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn template_overload_is_one_round_and_cannot_bypass_account_protection() {
+    use QualityVerdict::{Incorrect, Overloaded};
+    let Some(db) = TestDatabase::create("quality_overload_protection").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let template = template(&db).await;
+    let mut cfg = config("acct_quality_a");
+    cfg.repetitions = 3;
+    cfg.failure_action = QualityFailureAction::ApplyAccountTemplate;
+    cfg.failure_template = Some(template);
+    cfg.excel_failure_threshold = 1;
+    let rule = store
+        .save(None, None, cfg, Utc::now(), &context())
+        .await
+        .unwrap();
+    let first = scheduled_round(&store, &rule, &[Overloaded, Overloaded, Overloaded]).await;
+    assert_eq!(first.status, "overloaded");
+    assert_eq!(first.request_errors, 3);
+    assert!(first.action.is_none());
+    assert_eq!(snapshot(&db).await["account"]["weight"], 1);
+    sqlx::query(
+        "update provider_accounts set quota_access_state='exhausted',quota_evidence='usage_limit_reached',
+         quota_access_observed_at=now(),updated_at=now() where id='acct_quality_a'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let second = scheduled_round(&store, &rule, &[Overloaded, Overloaded, Incorrect]).await;
+    assert_eq!(second.status, "incorrect");
+    assert_eq!(second.action.as_deref(), Some("template_blocked_account"));
+    assert_eq!(snapshot(&db).await["account"]["weight"], 1);
+    db.close().await;
+}

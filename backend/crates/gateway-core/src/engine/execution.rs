@@ -1387,14 +1387,15 @@ impl AccountProbe for DefaultExecutionService {
                         .clone()
                         .with_quality_probe(exchange.step(continuation)),
                 );
-                if self
+                if let Err(error) = self
                     .quality_check_inner(shot, cancellation.clone(), true, None)
                     .await
-                    .is_err()
                 {
                     let mut report = exchange.report();
                     report.verdict = StateProbeVerdict::Inconclusive;
-                    if matches!(
+                    if error.is_upstream_overloaded() {
+                        report.reason = StateProbeReason::UpstreamOverloaded;
+                    } else if matches!(
                         report.reason,
                         StateProbeReason::MissingEvidence
                             | StateProbeReason::Unchanged
