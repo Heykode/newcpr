@@ -25,6 +25,35 @@ where
         .route("/api/admin/log-cleanup/preview", post(preview::<S>))
         .route("/api/admin/log-cleanup/start", post(start::<S>))
         .route("/api/admin/log-cleanup/cancel", post(cancel::<S>))
+        .route(
+            "/api/admin/log-cleanup/captures/start",
+            post(start_capture_clear::<S>),
+        )
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureClear {
+    confirmed: bool,
+}
+
+async fn start_capture_clear<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(command): AdminJson<CaptureClear>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let job = state
+        .admin_services()
+        .log_cleanup()
+        .start_capture_clear(command.confirmed, &auth.context().mutation_context())
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::ACCEPTED,
+        AdminEnvelope::ok(job),
+    ))
 }
 async fn state<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>
 where

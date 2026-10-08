@@ -1,5 +1,15 @@
 # Scheduled Quality Checks
 
+## Pause And Group-Removal Thresholds
+
+- Optional `failureThreshold` (1–100) controls disable_scheduling/remove_groups only.
+  Missing/null means one; do not reinterpret their previously ignored excelFailureThreshold.
+- Reuse persisted `excel_streak` and its round/identity/action-scope fences, not a parallel
+  counter. A correct round clears progress; unknown/request errors hold it. Repeated or stale
+  finish calls cannot increment it. Configuration/identity/egress changes invalidate evidence.
+- Existing pause/group ownership, manual override and auto-restore semantics remain intact.
+  Single/group/template editors share the threshold field; bulk changes require explicit opt-in.
+
 ## Read-Only Model Suggestions
 
 ### Scope / Trigger

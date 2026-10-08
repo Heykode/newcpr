@@ -33,6 +33,7 @@ pub trait ResetCreditsStore: Send + Sync {
     async fn save_inventory(&self, inventory: ResetInventory) -> AdminStoreResult<()>;
     async fn save_preview(&self, batch: ResetBatch) -> AdminStoreResult<ResetBatch>;
     async fn batches(&self) -> AdminStoreResult<Vec<ResetBatch>>;
+    async fn history(&self, query: ResetHistoryQuery) -> AdminStoreResult<ResetHistoryPage>;
     async fn confirm(&self, id: Uuid, context: &MutationContext) -> AdminStoreResult<ResetBatch>;
     async fn retry(
         &self,

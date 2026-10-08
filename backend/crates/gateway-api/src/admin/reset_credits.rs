@@ -35,6 +35,10 @@ where
             get(batches::<S>),
         )
         .route(
+            "/api/admin/accounts/reset-credits/history",
+            get(history::<S>),
+        )
+        .route(
             "/api/admin/accounts/reset-credits/confirm",
             post(confirm::<S>),
         )
@@ -159,6 +163,23 @@ where
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
 }
+async fn history<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<gateway_admin::model::reset_credits::ResetHistoryQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let data = state
+        .admin_services()
+        .reset_credits()
+        .history(query)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(data)))
+}
+
 async fn batches<S>(_: AdminAuth, State(state): State<S>) -> Result<impl IntoResponse, AdminError>
 where
     S: AdminSessionState + Send + Sync,

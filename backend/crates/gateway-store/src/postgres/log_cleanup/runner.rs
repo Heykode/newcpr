@@ -74,7 +74,26 @@ impl PgLogCleanupStore {
                         job.cutoff_at - Duration::days(i64::from(selection.retention_days));
                     // Failed SQL rolls back to this savepoint before recording the error.
                     let mut batch_tx = tx.begin().await.map_err(unavailable)?;
-                    let result = self.clean_batch(&mut batch_tx, category, cutoff).await;
+                    let result = if job.capture_only && category == CleanupCategory::Captures {
+                        match &self.captures {
+                            Some(captures) => captures
+                                .clear_stored(
+                                    gateway_admin::model::request_capture::ClearCaptures {
+                                        confirmed: true,
+                                        cutoff_at: Some(cutoff),
+                                    },
+                                    &system_context(),
+                                )
+                                .await
+                                .map(|result| CleanupBatch {
+                                    removed: result.removed_records,
+                                    complete: result.complete,
+                                }),
+                            None => Err(unavailable("captures")),
+                        }
+                    } else {
+                        self.clean_batch(&mut batch_tx, category, cutoff).await
+                    };
                     match result {
                         Ok(batch) => {
                             batch_tx.commit().await.map_err(unavailable)?;

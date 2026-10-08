@@ -18,6 +18,7 @@ pub trait LogCleanupStore: Send + Sync {
         context: &MutationContext,
     ) -> AdminStoreResult<CleanupJob>;
     async fn cancel(&self, id: &str, context: &MutationContext) -> AdminStoreResult<()>;
+    async fn start_capture_clear(&self, context: &MutationContext) -> AdminStoreResult<CleanupJob>;
 }
 /// Host-owned access to a fixed directory, never an administrator-supplied path.
 #[async_trait]

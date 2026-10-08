@@ -81,13 +81,17 @@ pub(super) async fn apply(
             .fetch_one(&mut **tx)
             .await
             .map_err(unavailable)?;
-    let mut recovery: Recovery = serde_json::from_value(value).map_err(unavailable)?;
+    let mut recovery: Recovery = serde_json::from_value(value.clone()).map_err(unavailable)?;
     let owned = recovery.paused || !recovery.groups.is_empty();
+    let cleared_streak = status == "correct" && value.get("excel_streak").is_some();
+    if cleared_streak {
+        update_failure_streak(tx, claim, status, &value).await?;
+    }
     if status == "incorrect" && !owned && config.failure_action == QualityFailureAction::None {
         return Ok(None);
     }
     if status == "correct" && (!owned || !config.auto_restore) {
-        return Ok(None);
+        return Ok(cleared_streak.then_some("excel_streak_reset"));
     }
     let account = &config.account_id;
     let row = sqlx::query(
@@ -126,6 +130,18 @@ pub(super) async fn apply(
     let mut changed = false;
     let action;
     if status == "incorrect" {
+        if matches!(
+            config.failure_action,
+            QualityFailureAction::DisableScheduling | QualityFailureAction::RemoveGroups
+        ) {
+            if action_scope(tx, account).await? != claim.action_scope {
+                return Ok(Some("failure_configuration_changed"));
+            }
+            let count = update_failure_streak(tx, claim, status, &value).await?;
+            if count < config.failure_threshold.unwrap_or(1) {
+                return Ok(Some("excel_threshold_pending"));
+            }
+        }
         recovery.user = user;
         recovery.workspace = workspace;
         match config.failure_action {
@@ -290,12 +306,33 @@ async fn apply_excel_threshold(
         if value.get("excel_streak").is_none() {
             return Ok(None);
         }
+        update_failure_streak(tx, claim, status, &value).await?;
+        return Ok(Some("excel_streak_reset"));
+    }
+    let count = update_failure_streak(tx, claim, status, &value).await?;
+    if count < claim.rule.config.excel_failure_threshold {
+        return Ok(Some("excel_threshold_pending"));
+    }
+    if claim.rule.config.failure_action == QualityFailureAction::ApplyAccountTemplate {
+        super::template_action::apply(tx, claim).await.map(Some)
+    } else {
+        enable_excel(tx, claim).await.map(Some)
+    }
+}
+
+async fn update_failure_streak(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    claim: &QualityClaim,
+    status: &str,
+    value: &serde_json::Value,
+) -> AdminStoreResult<u8> {
+    if status == "correct" {
         sqlx::query("update quality_rules set recovery=recovery-'excel_streak' where id=$1")
             .bind(&claim.rule.id)
             .execute(&mut **tx)
             .await
             .map_err(unavailable)?;
-        return Ok(Some("excel_streak_reset"));
+        return Ok(0);
     }
     let previous = value
         .get("excel_streak")
@@ -323,14 +360,7 @@ async fn apply_excel_threshold(
     .execute(&mut **tx)
     .await
     .map_err(unavailable)?;
-    if count < claim.rule.config.excel_failure_threshold {
-        return Ok(Some("excel_threshold_pending"));
-    }
-    if claim.rule.config.failure_action == QualityFailureAction::ApplyAccountTemplate {
-        super::template_action::apply(tx, claim).await.map(Some)
-    } else {
-        enable_excel(tx, claim).await.map(Some)
-    }
+    Ok(count)
 }
 
 async fn enable_excel(

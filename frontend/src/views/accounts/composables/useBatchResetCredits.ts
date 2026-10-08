@@ -156,13 +156,13 @@ export function useBatchResetCredits(options: {
     }
     finally { busy.value = false }
   }
-  async function retry(accountId: string) {
-    if (busy.value || !current.value)
+  async function retry(accountId: string, batchId = current.value?.id) {
+    if (busy.value || !batchId)
       return
     busy.value = true
     error.value = ''
     try {
-      await retryResetBatch(current.value.id, accountId)
+      await retryResetBatch(batchId, accountId)
       await poll()
     }
     catch (e) {
@@ -194,5 +194,5 @@ export function useBatchResetCredits(options: {
     clearInterval(timer)
     controller.abort()
   })
-  return { inventory, busy, open, error, preview, batches, current, activeCount, selectedBatchId, resetType, typeOptions, refreshSelected, prepare, confirm, retry, history }
+  return { inventory, busy, open, error, preview, viewingPreview, batches, current, activeCount, selectedBatchId, resetType, typeOptions, refreshSelected, prepare, confirm, retry, history }
 }

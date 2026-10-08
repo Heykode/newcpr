@@ -22,6 +22,7 @@ fn context() -> MutationContext {
 
 fn config(account: &str) -> QualityRuleConfig {
     QualityRuleConfig {
+        failure_threshold: None,
         failure_template: None,
         excel_failure_threshold: 1,
         excel_recovery_threshold: None,

@@ -18,6 +18,7 @@ export interface CleanupJob {
   id: string
   instanceId: string
   automatic: boolean
+  captureOnly?: boolean
   config: CleanupConfig
   cutoffAt: string
   status: 'running' | 'succeeded' | 'failed' | 'cancelled'
@@ -54,4 +55,7 @@ export function startCleanup(data: CleanupPreview) {
 }
 export function cancelCleanup(id: string) {
   return request<void>({ url: `${base}/cancel`, method: 'POST', data: { id } })
+}
+export function startCaptureCleanup() {
+  return request<CleanupJob>({ url: `${base}/captures/start`, method: 'POST', data: { confirmed: true }, silent: true })
 }

@@ -413,6 +413,8 @@ async function main() {
     await creation.getByRole('spinbutton', { name: '检测频率', exact: true }).fill('90')
     await creation.getByRole('combobox', { name: '处理方式', exact: true }).click()
     await page.getByRole('option', { name: '移出指定分组', exact: true }).click()
+    assert.equal(await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).inputValue(), '1')
+    await creation.getByRole('spinbutton', { name: '连续异常阈值', exact: true }).fill('4')
     await creation.getByRole('group', { name: /^处置分组/ }).getByRole('checkbox', { name: '独立判题分组', exact: true }).check()
     await creation.getByText('后续整轮通过后自动恢复', { exact: true }).click()
     assert.equal(await creation.getByRole('switch', { name: '后续整轮通过后自动恢复', exact: true }).isChecked(), true)
@@ -427,6 +429,7 @@ async function main() {
     assert.equal(rules.length, 2)
     assert.equal(rules[1].config.accountId, 'sample-60')
     assert.equal(rules[1].config.failureAction, 'remove_groups')
+    assert.equal(rules[1].config.failureThreshold, 4)
     assert.deepEqual(rules[1].config.failureGroupIds, ['quality-group'])
     assert.equal(rules[1].config.autoRestore, true)
     assert.equal(rules[0].config.accountId, config.accountId)
@@ -555,8 +558,8 @@ async function main() {
     await page.getByRole('checkbox', { name: '选择规则 sample-02@example.test', exact: true }).locator('..').click()
     await page.getByRole('button', { name: '批量编辑（1）', exact: true }).click()
     assert.equal(await bulk.locator('input[type=checkbox]:checked').count(), 0)
-    await bulk.getByRole('checkbox', { name: '修改连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).locator('..').click()
-    await bulk.getByRole('spinbutton', { name: '连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).fill('5')
+    await bulk.getByRole('checkbox', { name: '修改连续异常多少轮后执行处置', exact: true }).locator('..').click()
+    await bulk.getByRole('spinbutton', { name: '连续异常多少轮后执行处置', exact: true }).fill('5')
     await bulk.getByRole('checkbox', { name: '修改后续整轮通过后自动恢复（不适用于旧版开启 Excel）', exact: true }).locator('..').click()
     const bulkRestore = bulk.getByRole('switch', { name: '后续整轮通过后自动恢复（不适用于旧版开启 Excel）', exact: true })
     if (!await bulkRestore.isChecked())
@@ -567,7 +570,7 @@ async function main() {
     await page.getByRole('option', { name: template.config.name, exact: true }).click()
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 })
-      await bulk.getByRole('spinbutton', { name: '连续异常阈值（模板或旧版开启 Excel 规则）', exact: true }).scrollIntoViewIfNeeded()
+      await bulk.getByRole('spinbutton', { name: '连续异常多少轮后执行处置', exact: true }).scrollIntoViewIfNeeded()
       assert.ok(await bulk.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
       await page.screenshot({ path: `${output}/quality-bulk-threshold-${width}.png`, fullPage: true, animations: 'disabled' })
     }
@@ -621,6 +624,20 @@ async function main() {
     await page.mouse.wheel(0, 500)
     await page.waitForFunction(() => document.querySelector('.quality-rule-list').scrollTop > 0)
     assert.equal(await records.evaluate(element => element.scrollTop), 0)
+    // Native wheel animation may still be moving after the first scroll event.
+    await list.evaluate(element => new Promise((resolve) => {
+      let previous = element.scrollTop
+      let stable = 0
+      const frame = () => {
+        stable = element.scrollTop === previous ? stable + 1 : 0
+        previous = element.scrollTop
+        if (stable >= 6)
+          resolve()
+        else
+          requestAnimationFrame(frame)
+      }
+      requestAnimationFrame(frame)
+    }))
     const leftScroll = await list.evaluate(element => element.scrollTop)
     const recordBox = await records.boundingBox()
     assert.ok(recordBox)
