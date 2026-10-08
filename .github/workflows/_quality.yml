@@ -22,6 +22,16 @@ on:
         required: false
         default: true
         type: boolean
+      backend_packages:
+        description: JSON package list; empty means the complete workspace
+        required: false
+        default: '[]'
+        type: string
+      run_redis_acl:
+        description: Repeat Redis coverage with a named ACL user
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -115,8 +125,9 @@ jobs:
         run: cargo fmt --check
 
       - name: Rust clippy
-        working-directory: backend
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        env:
+          BACKEND_PACKAGES: ${{ inputs.backend_packages }}
+        run: python3 release/ci_plan.py cargo --packages "$BACKEND_PACKAGES" clippy -- --all-targets --all-features --locked -- -D warnings
 
       - name: Configure PostgreSQL and Redis test authentication
         shell: bash
@@ -141,10 +152,12 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Rust tests
-        working-directory: backend
-        run: cargo test --workspace --lib --test main --locked
+        env:
+          BACKEND_PACKAGES: ${{ inputs.backend_packages }}
+        run: python3 release/ci_plan.py cargo --packages "$BACKEND_PACKAGES" test -- --lib --test main --locked
 
       - name: Redis named-user ACL regression
+        if: inputs.run_redis_acl
         working-directory: backend
         shell: bash
         run: |
@@ -158,7 +171,7 @@ jobs:
           docker exec "${{ job.services.redis.id }}" redis-cli --no-auth-warning \
             -a "$redis_password" ACL SETUSER default off
           CPR_TEST_REDIS_URL="redis://cpr_acl:${acl_password}@127.0.0.1:6379" \
-            cargo test -p gateway-store --lib --test main --locked
+            cargo test -p gateway-store --lib --test main --locked redis::
 
   frontend:
     if: inputs.run_frontend
@@ -226,5 +239,8 @@ jobs:
       - name: Test release platform contracts
         run: |
           bash -n release/publish
+          bash -n release/build_ci_backend.sh
           ruby release/tests/platforms_test.rb
           ruby release/tests/publish_test.rb
+          python3 -m unittest discover -s release/tests -p 'test_ci_*.py' -v
+          ruby release/tests/ci_workflows_test.rb

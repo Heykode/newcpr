@@ -37,7 +37,6 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Setup Docker Buildx
-        id: buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Image identity
@@ -51,32 +50,34 @@ jobs:
           puts "build_time=#{Time.now.utc.iso8601}"
           RUBY
 
-      - name: Cache Cargo mounts
-        id: cargo-cache
+      # Preserve release compilation directly, without extracting a second copy
+      # of a large BuildKit target mount during the post-build cache hook.
+      - name: Cache backend compilation
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ${{ runner.temp }}/container-cargo/registry
-            ${{ runner.temp }}/container-cargo/git
-          key: container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile') }}-${{ inputs.ref }}
+          path: ${{ runner.temp }}/cpr-ci-cargo
+          key: ci-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile', 'release/build_ci_backend.sh') }}-${{ inputs.ref }}
           restore-keys: |
-            container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile') }}-
-            container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
+            ci-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile', 'release/build_ci_backend.sh') }}-
 
-      # The GHA layer exporter does not persist RUN --mount=type=cache contents.
-      # Keep only dependency source caches here; extracting the Rust target cache
-      # can exhaust the runner disk during the post-build hook.
-      - name: Restore Cargo mounts to BuildKit
-        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+      - name: Load pinned backend toolchain
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          builder: ${{ steps.buildx.outputs.name }}
-          scratch-dir: ${{ runner.temp }}/container-cache-dance
-          cache-map: |
-            {
-              "${{ runner.temp }}/container-cargo/registry": "/usr/local/cargo/registry",
-              "${{ runner.temp }}/container-cargo/git": "/usr/local/cargo/git"
-            }
-          skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
+          context: .
+          file: deploy/Dockerfile
+          target: backend-toolchain
+          platforms: linux/amd64
+          load: true
+          tags: cpr-ci-backend-toolchain:${{ inputs.ref }}
+
+      - name: Build current backend with cached compilation
+        env:
+          CPR_CARGO_CACHE: ${{ runner.temp }}/cpr-ci-cargo
+          CPR_BACKEND_IMAGE: cpr-ci-backend-toolchain:${{ inputs.ref }}
+          CPR_VERSION: ${{ steps.identity.outputs.version }}
+          CPR_GIT_SHA: ${{ inputs.ref }}
+          CPR_BUILD_TIME: ${{ steps.identity.outputs.build_time }}
+        run: bash release/build_ci_backend.sh
 
       - name: Select runtime cache policy
         id: cache-policy
@@ -89,7 +90,7 @@ jobs:
             {
               echo 'no_cache_filters<<EOF'
               echo 'runtime-base'
-              echo 'runtime'
+              echo 'runtime-ci'
               echo 'EOF'
             } >> "$GITHUB_OUTPUT"
           else
@@ -101,13 +102,12 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile
-          target: runtime
+          target: runtime-ci
+          platforms: linux/amd64
           load: true
           tags: ${{ env.CPR_IMAGE }}
           build-args: |
-            CPR_VERSION=${{ steps.identity.outputs.version }}
-            CPR_GIT_SHA=${{ inputs.ref }}
-            CPR_BUILD_TIME=${{ steps.identity.outputs.build_time }}
+            CPR_PREBUILT_DIR=dist/docker
           labels: |
             org.opencontainers.image.revision=${{ inputs.ref }}
             org.opencontainers.image.version=${{ steps.identity.outputs.version }}

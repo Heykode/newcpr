@@ -13,9 +13,11 @@ RUN npm install --global pnpm@11.7.0 \
 COPY frontend ./
 RUN pnpm build
 
-FROM rust:1.98-bookworm@sha256:9a73a5088750b4c95158ab26629c854c3d6fc4b173cb7bc8079ad252d8ed7bfa AS backend-builder
+FROM rust:1.98-bookworm@sha256:9a73a5088750b4c95158ab26629c854c3d6fc4b173cb7bc8079ad252d8ed7bfa AS backend-toolchain
 
 WORKDIR /app/backend
+
+FROM backend-toolchain AS backend-builder
 ARG TARGETARCH
 ARG CPR_VERSION=
 ARG CPR_GIT_SHA=unknown
@@ -91,6 +93,13 @@ CMD ["/app/bin/codex-proxy-rs"]
 FROM runtime-base AS runtime
 
 COPY --from=backend-builder --chown=cpr:cpr /tmp/codex-proxy-rs /app/bin/codex-proxy-rs
+COPY --from=frontend-builder --chown=cpr:cpr /app/frontend/dist ./web/dist
+USER cpr
+
+FROM runtime-base AS runtime-ci
+
+ARG CPR_PREBUILT_DIR=dist/docker
+COPY --chown=cpr:cpr ${CPR_PREBUILT_DIR}/linux-amd64/codex-proxy-rs /app/bin/codex-proxy-rs
 COPY --from=frontend-builder --chown=cpr:cpr /app/frontend/dist ./web/dist
 USER cpr
 

@@ -198,6 +198,29 @@ Prepared state is not a deployment result or a permanent recovery guarantee.
 
 ## Minimum Verification Checklist
 
+### Affected CI and Deployment Artifacts
+
+- Frontend-only application edits must have a current-tree verified CI image,
+  without requiring a separate full backend validation dispatch for deployment.
+- `release/ci_plan.py` allows only reviewed local backend surfaces to select
+  owning packages plus transitive reverse dependencies and App architecture tests.
+  Unknown/shared contracts, dependency or migration edits and missing comparison
+  evidence keep full validation. New production surfaces are not narrow by default.
+- Run focused development checks for localized changes; reuse successful CI only
+  under the existing exact-tree and freshness rules. Do not repeat workspace tests
+  on unchanged frontend-only work, or weaken full checks for core contract changes.
+- Container CI caches release compilation outside ephemeral BuildKit mounts but
+  still builds current source/version metadata with the pinned Docker toolchain.
+  Keep `build_ci_backend.sh` source staging aligned with `backend-builder` inputs;
+  do not silently switch to a host rustup override or reuse a stale binary.
+- Cache misses are normal builds. PR-scoped caches do not seed unrelated PRs;
+  current main CI and the existing scheduled security scan supply shared baselines.
+- Keep image scanning/startup/proof, security, privacy, migration and deployment
+  gates. Formal Release defaults to complete quality checks and keeps signing.
+- For CI-only edits, run planner/build-fixture tests, workflow contracts, actionlint
+  and the affected release/deployment tests. Record whether real Linux Docker and
+  GitHub execution happened; local mocked tests do not establish build latency.
+
 ### Container Egress
 
 - An unchanged/disabled application IPv6 policy means unbound automatic
