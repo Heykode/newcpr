@@ -31,6 +31,11 @@
   one-shot termination, cancellation/zero buffer/post-output behavior, cache
   isolation/expiry, original/effective effort reporting and Excel regressions.
   Direct test-host capability probes do not prove candidate production deployment.
+- Private recovery-clock and request-normalization unit modules must be registered
+  by exact owner/name in the App architecture audit. Preserve test-only/private
+  visibility and rejection of path/cfg_attr hooks. Run the App architecture suite
+  as well as provider tests before publication; provider tests alone cannot catch
+  a missing registration.
 
 ## Chat Reasoning Aliases
 
