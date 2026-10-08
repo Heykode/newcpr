@@ -502,6 +502,14 @@ pub(super) fn openai_response_request_summary(
     if trace.is_enabled() {
         summary["cacheFingerprints"] = super::cache_diagnostics::fingerprints(body);
     }
+    if let Some(requested) = &request.requested_reasoning_effort {
+        summary["requestedReasoningEffort"] = json!(requested);
+        summary["effectiveReasoningEffort"] = body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+            .cloned()
+            .unwrap_or(Value::Null);
+    }
     if let Some(prepared) = &request.excel {
         summary["requestedReasoningEffort"] = crate::transport::excel::reasoning_effort(body)
             .ok()

@@ -97,6 +97,7 @@ use crate::transport::{
 
 mod cache_diagnostics;
 mod compact;
+mod encrypted_history;
 mod excel;
 mod execution;
 mod failure;
@@ -151,6 +152,7 @@ pub struct CodexProvider {
     live_calls_url: Url,
     session_identity: Option<CodexSessionIdentity>,
     session_transport_recovery: CodexSessionTransportRecovery,
+    encrypted_history: encrypted_history::InvalidEncryptedHistory,
     stream_max_retries: u32,
     request_tuning: Option<gateway_core::runtime::RequestTuningHandle>,
     excel_replay: Arc<dyn gateway_core::provider_ports::ProviderReplayPort>,
@@ -265,6 +267,7 @@ impl CodexProvider {
             live_calls_url,
             session_identity: None,
             session_transport_recovery: CodexSessionTransportRecovery::default(),
+            encrypted_history: encrypted_history::InvalidEncryptedHistory::default(),
             stream_max_retries: _stream_max_retries,
             request_tuning: None,
             excel_replay: Arc::new(gateway_core::provider_ports::UnavailableProviderReplay),
@@ -760,6 +763,11 @@ impl Provider for CodexProvider {
                 upstream_request.body_mut(),
             );
             crate::transport::request::normalize_reasoning_replay(upstream_request.body_mut());
+            if !excel {
+                crate::transport::request::compatibility::normalize_minimal_effort(
+                    &mut upstream_request,
+                );
+            }
         }
         // Preserve the established identity/affinity inputs above. Only the
         // selected account's outbound copy receives the effective location.
@@ -865,6 +873,7 @@ impl Provider for CodexProvider {
             prepared.exit_lease = client.session_proxy_lease();
         }
         let events = cold_response_stream(ColdResponse {
+            encrypted_history: self.encrypted_history.clone(),
             client: client.with_response_control(context.response_control().cloned()),
             response_origin: if excel {
                 Url::parse(crate::transport::excel::RESPONSES_URL).map_err(|_| {
@@ -873,7 +882,7 @@ impl Provider for CodexProvider {
             } else {
                 self.responses_url.clone()
             },
-            request: upstream_request,
+            request: Arc::new(upstream_request),
             upstream_model: upstream_model.clone(),
             transport_policy: transport,
             context,

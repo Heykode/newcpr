@@ -299,10 +299,12 @@ pub(super) struct RawJsonEndpointRequest {
     pub(super) upstream_model: Option<UpstreamModelId>,
 }
 
+#[derive(Clone)]
 pub(super) struct ColdResponse {
+    pub(super) encrypted_history: super::encrypted_history::InvalidEncryptedHistory,
     pub(super) client: CodexBackendClient,
     pub(super) response_origin: Url,
-    pub(super) request: CodexResponsesRequest,
+    pub(super) request: Arc<CodexResponsesRequest>,
     pub(super) upstream_model: UpstreamModelId,
     pub(super) transport_policy: CodexProviderTransport,
     pub(super) context: AttemptContext,
@@ -361,6 +363,7 @@ pub(super) enum OpenAiContinuationScope {
     ReplayRequired,
 }
 
+#[derive(Clone)]
 pub(super) struct OpenAiSessionCapture {
     pub(super) responses_upstream: gateway_core::account::ResponsesUpstream,
     pub(super) account_id: String,
@@ -770,7 +773,12 @@ fn image_response_metering(
 }
 
 pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
+    super::encrypted_history::recovering_stream(response)
+}
+
+pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
     let ColdResponse {
+        encrypted_history: _,
         client,
         response_origin,
         request,

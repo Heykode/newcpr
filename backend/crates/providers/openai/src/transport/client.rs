@@ -721,6 +721,14 @@ pub struct CodexBackendJsonResponse {
 // CodexBackendClient
 // ---------------------------------------------------------------------------
 
+/// Frozen transport identity for a single native payload-repair attempt.
+#[derive(Clone)]
+pub(super) struct RecoveryAttemptRoute {
+    pub(super) profile: CodexWireProfileState,
+    pub(super) egress: Option<CodexEgressRoute>,
+    pub(super) pool_key: Option<CodexWebSocketPoolKey>,
+}
+
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
@@ -740,12 +748,19 @@ pub struct CodexBackendClient {
     pub(super) egress_route: Option<CodexEgressRoute>,
     pub(super) egress_account: Option<gateway_core::account::ProviderAccount>,
     pub(super) attempt_pinned: bool,
+    pub(super) recovery_route: Option<Arc<OnceLock<RecoveryAttemptRoute>>>,
     pub(super) forced_pool_key: Option<CodexWebSocketPoolKey>,
     pub(super) request_tuning: Option<RequestTuningHandle>,
     pub(super) timezone: DeploymentTimeZone,
 }
 
 impl CodexBackendClient {
+    // Shared only by a leased response and its sequential payload-repair retry.
+    pub(crate) fn with_same_attempt_recovery(mut self) -> Self {
+        self.recovery_route = Some(Arc::new(OnceLock::new()));
+        self
+    }
+
     pub(crate) fn quality_probe_scope(
         &self,
         account: &gateway_core::account::ProviderAccount,
@@ -814,6 +829,7 @@ impl CodexBackendClient {
         client.egress_account = Some(account.clone());
         client.egress_route = None;
         client.attempt_pinned = false;
+        client.recovery_route = None;
         client.forced_pool_key = None;
         client.websocket_origin_key = format!(
             "{}:{}",
@@ -852,6 +868,7 @@ impl CodexBackendClient {
         let mut client = self.clone();
         client.profile = self.profile.frozen();
         client.attempt_pinned = false;
+        client.recovery_route = None;
         client.forced_pool_key = None;
         client.client = build_account_http_client(
             account.id().as_str(),
