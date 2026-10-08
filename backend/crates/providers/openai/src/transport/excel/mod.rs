@@ -7,6 +7,7 @@ pub(crate) mod diagnostics;
 pub(super) mod encrypted;
 pub(crate) mod encrypted_content;
 mod envelope;
+mod events;
 mod failure;
 mod history_messages;
 #[cfg(test)]
@@ -19,6 +20,8 @@ pub(crate) mod image_relay;
 #[cfg(test)]
 mod image_tests;
 pub(crate) mod images;
+#[cfg(test)]
+mod protocol_compat_tests;
 pub(super) mod recovery;
 mod repair;
 pub(crate) mod replay;

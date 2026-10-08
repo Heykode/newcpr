@@ -114,7 +114,7 @@ fn native(name: &str, args: Value) -> Value {
         "name":"run_officejs","arguments":json!({"code":json!({"name":name,"arguments":args}).to_string()}).to_string()})
 }
 
-fn repair_call(id: &str, marker: &str, code: &str) -> Value {
+pub(super) fn repair_call(id: &str, marker: &str, code: &str) -> Value {
     json!({"type":"function_call","id":format!("fc_{id}"),"call_id":id,
         "name":"run_officejs","status":"completed","arguments":json!({
             "summary":marker,"code":code,"extended_summary":"{\"timeout\":123}",
@@ -122,7 +122,7 @@ fn repair_call(id: &str, marker: &str, code: &str) -> Value {
         }).to_string()})
 }
 
-fn repair_response(id: &str, calls: Vec<Value>) -> Value {
+pub(super) fn repair_response(id: &str, calls: Vec<Value>) -> Value {
     json!({"id":id,"status":"completed","model":super::tests::VERIFIED_MODEL,
         "output":calls,"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12,
             "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}})
@@ -155,7 +155,7 @@ async fn http_repair(
     http_repair_source(responses, source).await
 }
 
-async fn http_repair_source(
+pub(super) async fn http_repair_source(
     responses: Vec<wiremock::ResponseTemplate>,
     source: Value,
 ) -> (

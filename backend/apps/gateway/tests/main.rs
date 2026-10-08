@@ -234,6 +234,7 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
             Some(
                 "provider/excel.rs"
                 | "transport/excel/catalog.rs"
+                | "transport/excel/events.rs"
                 | "transport/excel/history_messages.rs"
                 | "transport/excel/repair.rs"
                 | "transport/excel/request.rs"
@@ -266,7 +267,11 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         ("crates/providers/openai", Some("transport/excel/mod.rs"), Item::Mod(module)) => {
             matches!(
                 module.ident.to_string().as_str(),
-                "tests" | "tool_compat_tests" | "image_tests" | "history_tests"
+                "tests"
+                    | "tool_compat_tests"
+                    | "image_tests"
+                    | "history_tests"
+                    | "protocol_compat_tests"
             ) && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }

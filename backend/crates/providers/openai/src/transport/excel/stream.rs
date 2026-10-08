@@ -5,7 +5,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::StreamExt;
-use gateway_protocol::openai::sse::{SseError, SseEvent, SseEventDecoder, encode_sse_event};
+use gateway_protocol::openai::sse::{SseError, SseEvent, encode_sse_event};
 use serde_json::{Value, json};
 
 use super::{ClientTools, ExcelPreparedRequest, StructuredOutput, structured};
@@ -47,7 +47,7 @@ pub(crate) fn transform_stream_with_repair(
     };
     Box::pin(async_stream::try_stream! {
         let mut source = Some(source);
-        let mut decoder = SseEventDecoder::default();
+        let mut decoder = super::events::ResponseDecoder::default();
         let mut recorded = false;
         loop {
             let chunk = match &mut source {
@@ -65,7 +65,8 @@ pub(crate) fn transform_stream_with_repair(
                 Some(chunk) => decoder.push(&chunk)?,
                 None => decoder.finish()?,
             };
-            for mut event in events {
+            for event in events {
+                let mut event = super::events::normalize(event)?;
                 if let Some(sender) = sender.as_mut()
                     && let Some((original, unknown)) = transform.repair_candidate(&event)
                 {
@@ -438,6 +439,7 @@ fn tool_events(item: &Value, index: usize) -> Vec<Value> {
 mod tests {
     use super::*;
     use futures::TryStreamExt;
+    use gateway_protocol::openai::sse::SseEventDecoder;
 
     #[tokio::test]
     async fn unknown_regeneration_respects_visible_delivery_not_empty_lifecycle_events() {
