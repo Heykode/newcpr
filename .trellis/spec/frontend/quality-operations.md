@@ -175,9 +175,28 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
 - New Excel failure/recovery threshold editors default to 2 and accept 1–100 rounds;
   legacy configs missing either field retain 1. Selective patches change only opted-in
   fields. Show reset-on-save semantics: abnormal rounds reset the healthy count,
-  normal rounds reset the abnormal count, unknown/errors hold both. Changing frequency
+  normal rounds reset the abnormal count, other unknown/errors hold both. Explicit
+  overload resets healthy progress and uses the fixed-two-round rule below. Changing frequency
   and native recovery are separately opted in. Do not add an account-edit shortcut;
   reuse quality operations and monitoring templates with existing bulk application.
 - Browser regressions cover partial success/retry, failed refresh, fresh unrelated
   values, empty field opt-ins on reopen and 1440/390/320px layouts. Interact with the
   visible labels of shared checkbox/switch controls and assert their checked state.
+
+
+## Explicit Overload Presentation
+
+- Shared account/template/group editors and the bulk editor explain the fixed-two-round
+  overload exception separately from the configurable pure-incorrect threshold.
+  Overload/overload and overload/incorrect (either order) trigger; a healthy round clears
+  progress; other unknown/request errors hold it. Quota, generic 503, authentication and
+  independent judge errors do not qualify.
+- Wire `QualityAnswer.verdict` includes `overloaded`. Aggregate `overloaded` displays
+  `上游过载（待确认）` in warning color; promoted aggregate `incorrect` displays the
+  mode's abnormal label. Raw sample overload displays `上游服务器过载`, preserving its
+  reason even when the aggregate is already abnormal. Do not mislabel it as a wrong answer.
+- The server owns counters and actions. No frontend counting, synthetic promotion or
+  automatic configuration changes. Read old runs with their original mode snapshots.
+- `browser/quality-ops.mjs` covers both modes and both pending/promoted states at
+  1440/390/320px. Require the child fixture's ready output so an occupied port cannot
+  accidentally test another checkout. Synthetic fixtures never contact upstream models.

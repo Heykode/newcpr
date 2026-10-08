@@ -9,6 +9,8 @@
   finish calls cannot increment it. Configuration/identity/egress changes invalidate evidence.
 - Existing pause/group ownership, manual override and auto-restore semantics remain intact.
   Single/group/template editors share the threshold field; bulk changes require explicit opt-in.
+- The explicit-overload sequence below satisfies the trigger after two abnormal rounds
+  independently of `failureThreshold`; pure incorrect rounds retain that setting.
 
 ## Read-Only Model Suggestions
 
@@ -235,7 +237,8 @@ scope, cached_account_models for aggregate scopes.
   Only explicitly configured
   quality failure actions may pause scheduling or remove selected group memberships.
   Legacy configs default to `none`; auto_restore defaults false. Explicit wrong answers
-  trigger actions even when another sample failed; errors alone are inconclusive.
+  trigger actions even when another sample failed; errors alone are inconclusive
+  except for the explicit overload sequence defined below.
 - Use isolated requests without user continuation or cache keys. The request kind
   is `account_quality_check`. Retain execution/cost audit but exclude it from
   ordinary client usage projections; account cumulative cost remains real.
@@ -272,7 +275,8 @@ scope, cached_account_models for aggregate scopes.
   timeout. Dropping a live probe future is not cleanup.
 - Judge only reference/actual answer data, not the original question; exclude the
   tested account and use an enabled configured group. Parse strict JSON with
-  duplicate/unknown/trailing fields rejected. Network errors are never incorrect.
+  duplicate/unknown/trailing fields rejected. Judge errors never count against the
+  target; only its explicit overload sequence can promote request failures.
 - Reference judge presets name `candidate_answer`; send that field when the saved
   instructions name it, otherwise preserve the legacy `actual_answer` field. Send
   exactly two escaped values with `reference_answer`, never duplicate the answer
@@ -388,9 +392,9 @@ scope, cached_account_models for aggregate scopes.
   Each shot independently follows random/round-robin egress; the probe never pins an IP.
   State probes force HTTP because WS opening metadata is not response-local evidence.
   A proxy URL cannot prove that its public IP remained stable.
-- Only definite incorrect/degraded results invoke `enable_excel`; inconclusive,
-  request errors and cancelled rounds never invoke quality policy. Existing auth
-  and quota feedback still applies through the normal request chain.
+- Definite incorrect/degraded results and a completed explicit overload sequence
+  invoke the configured policy. Other inconclusive, request errors and cancelled
+  rounds do not. Existing auth and quota feedback remains unchanged.
 - Enabling Excel validates current identity, OAuth type, model allowlist, credentials,
   quota and scheduling, and fences relevant account/proxy/UA/egress policy changes.
   Do not use the global config revision as a fence: independent concurrent account
@@ -430,6 +434,7 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
   New UI drafts explicitly set it to 2 without migrating saved rules/templates.
   Count definite incorrect rounds, never individual parallel samples. A correct
   round resets progress; unknown/request errors neither increment nor reset it.
+  Explicit overload uses the separate fixed-two-round rule below.
 - Persist progress in `quality_rules.recovery.excel_streak`, retaining unrelated
   recovery ownership. Count only after existing lease/revision fences within the
   finish transaction. Duplicate or stale completion cannot add evidence.
@@ -448,7 +453,8 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
   single-success behavior and is omitted on serialization. New UI drafts set 2.
 - Count correct native rounds in `quality_rules.recovery.excel_pass_streak` only
   after existing lease/revision/identity/model/Excel-owner guards. An incorrect
-  round resets the count; unknown/request errors neither increment nor reset it.
+  or explicit overloaded round resets the count; other unknown/request errors
+  neither increment nor reset it. Preserve an existing reset count as JSON zero.
 - Before the threshold, persist `excel_recovery_counted`; at the threshold, reuse
   existing fenced Excel close/audit logic. Never close a manually enabled route,
   clear an independent 403 pause or restore the rest of a remediation template.
@@ -463,7 +469,8 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 ### 1. Scope / Trigger
 - `apply_account_template` is a quality failure action, not a new scheduler or
   request path. It applies the existing full template only after the confirmed
-  incorrect-round threshold. Excel on/off is determined by that template.
+  incorrect-round threshold or the fixed-two-round explicit overload sequence.
+  Excel on/off is determined by that template.
 
 ### 2. Signatures
 - `QualityRuleConfig.failure_template: Option<ReloginTemplate>` serializes as
@@ -488,7 +495,8 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
   back every account/egress/group change while preserving the quality result.
   Storage-unavailable errors roll back the entire finish transaction. Successful
   mutation, config publication, audit and result share one transaction.
-- Reuse `excel_streak` and `excelFailureThreshold`; no second counter. Successful
+- Reuse `excel_streak` and `excelFailureThreshold` for pure incorrect rounds;
+  the shared overload sequence can satisfy the trigger independently. Successful
   template application clears old recovery and records route ownership if it newly
   enables Excel for a native probe. No whole-template restoration or auto-pause.
 - Historical `QualityRun.config` retains template name, version and settings.
@@ -522,3 +530,68 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
   in a second transaction, or trust the browser's template config.
 - Correct: resolve the versioned catalog template and reuse account mutation
   helpers in the caller's existing finish transaction.
+
+
+## Explicit Upstream Overload Sequence
+
+### 1. Scope / Trigger
+Both answer and state-probe modes treat explicit target upstream overload as abnormal
+evidence. This does not change background quota checks, retries or ordinary traffic.
+
+### 2. Signatures
+- `AccountProbeError::is_upstream_overloaded() -> bool` checks
+  `GatewayErrorKind::UpstreamUnavailable` and exact structured client code
+  `server_is_overloaded`, without matching messages or HTTP status alone.
+- `StateProbeReason::UpstreamOverloaded` serializes as `upstream_overloaded`;
+  Core keeps the raw probe verdict `inconclusive`.
+- `QualityVerdict::Overloaded` serializes as `overloaded`. Admin preserves this only
+  for tested-account failures; independent judge failures remain `unknown`.
+- `overload_streak::advance(tx, claim, status, overloaded) -> AdminStoreResult<bool>`
+  runs after the valid lease/revision update inside `finish`.
+
+### 3. Contracts
+Persist `recovery.overload_streak` with bounded `count` (1–2), `overloaded`, account
+identity, existing action scope, model and detection mode. Each completed round adds
+at most one; at least one of the two abnormal rounds must contain explicit overload.
+Correct rounds and rule saves clear it; other unknown/request errors hold it.
+Scope/identity changes start fresh. Duplicate, stale or cancelled completion cannot
+contribute. Existing healthy native-recovery progress resets on overload.
+
+Once reached, persist aggregate `status=incorrect` and call the original policy with
+`overload_trigger=true`, satisfying the template/Excel trigger without adding another
+`excelFailureThreshold` or pause/group `failureThreshold` wait. Pure incorrect rounds
+retain the configured threshold.
+Keep raw answers `overloaded` and count them in `requestErrors`, not incorrect answers.
+Reuse all account/template identity, quota, authentication, reference, ownership and
+auto-restore protections. `none` records the result without mutating the account.
+
+No SQL migration or new setting. Old strict binaries cannot decode the new answer or
+probe-reason enum: binary-only rollback requires compatibility handling of newly stored
+results first. Do not infer overload or backfill counters from old generic error text.
+
+### 4. Validation & Error Matrix
+| Sequence / condition | Result |
+| --- | --- |
+| Overload then overload | Second run is incorrect; apply configured action |
+| Overload then incorrect, or incorrect then overload | Second run satisfies overload trigger |
+| Overload then fully correct | Clear progress; next overload is first again |
+| Overload then unknown/request error | Hold progress, no action |
+| Multiple overloaded samples in one run | One abnormal round only |
+| Quota, authentication, generic 503, timeout or judge overload | No overload evidence |
+| Account changed during run | No overload promotion or stale action |
+
+### 5. Good / Base / Bad Cases
+Good: a threshold-five template still applies on the second overload round.
+Base: pure wrong answers keep their threshold; healthy results use existing recovery.
+Bad: two parallel samples or two completions of one lease trigger an action.
+
+### 6. Tests Required
+Core HTTP/stream errors through both modes; strict Admin classification and judge JSON
+rejection; real PostgreSQL two-round/mixed/normal/unknown sequences, store restart,
+lease/edit/identity/policy fencing, one-round parallel samples, account protection,
+record-only/pause/template actions and existing recovery. Test UI pending versus final
+aggregate states while preserving raw error reasons at desktop/mobile widths.
+
+### 7. Wrong vs Correct
+Wrong: classify all 503s or upstream messages as incorrect; reuse one sample as two rounds.
+Correct: retain exact structured evidence and promote only in the fenced finish transaction.

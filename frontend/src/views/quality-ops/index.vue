@@ -128,7 +128,8 @@ const names = ref<Record<string, string>>({})
 const testModels = ref<QualityModelChoice[]>([])
 const labels: Record<string, string> = {
   correct: '通过',
-  incorrect: '答案不符',
+  incorrect: '检测异常',
+  overloaded: '上游过载（待确认）',
   unknown: '不确定',
   request_error: '请求错误',
   running: '检测中',
@@ -153,7 +154,7 @@ const counts = computed(() => ({
   enabled: rules.value.filter(rule => rule.config.enabled).length,
   running: rules.value.filter(rule => rule.running).length,
   incorrect: rules.value.filter(rule => rule.lastStatus === 'incorrect').length,
-  errors: rules.value.filter(rule => rule.lastStatus === 'request_error').length,
+  errors: rules.value.filter(rule => rule.lastStatus === 'request_error' || rule.lastStatus === 'overloaded').length,
 }))
 function defaults(): QualityRuleConfig {
   return newQualityConfig(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
@@ -205,6 +206,8 @@ function message(cause: unknown) {
   return cause instanceof Error ? cause.message : '操作失败，请重试'
 }
 function statusColor(status: string | null) {
+  if (status === 'overloaded')
+    return 'text-cp-warning'
   return status === 'correct' ? 'text-cp-success' : status === 'incorrect' || status === 'request_error' ? 'text-cp-error' : 'text-cp-text-secondary'
 }
 function ruleStatusColor(rule: QualityRule) {
@@ -1086,18 +1089,21 @@ onBeforeUnmount(() => {
             <span>连续异常多少轮后执行处置</span>
             <BaseNumberInput :model-value="failureThreshold(draft)" label="连续异常阈值" :min="1" :max="100" @update:model-value="setFailureThreshold(draft, $event)" />
             <p class="text-xs text-cp-text-secondary">
-              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。
+              明确异常按此阈值计数。明确上游过载与异常累计 2 轮即触发处置，不受此阈值影响。正常轮清零；其他无法判断或请求失败不累计也不清零。保存规则会清零计数。
             </p>
           </div>
           <p v-if="draft.failureAction === 'apply_account_template'" class="text-xs text-cp-text-secondary">
             开启自动恢复后，后续整轮通过会恢复本规则应用前的账号配置；后续人工修改会终止本规则的恢复权限。旧处置未保存原配置时不会推测恢复。
           </p>
           <BaseSwitch v-if="draft.failureAction !== 'enable_excel'" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
+          <p class="text-xs text-cp-text-secondary">
+            探针和题目检测均适用：过载→过载、过载→异常或异常→过载，累计 2 轮归入异常并执行所选动作；过载→正常会清零。仅明确的上游服务器过载计入，额度耗尽、普通 503、认证或判题错误不计入。
+          </p>
           <p v-if="isProbe" class="text-xs text-cp-text-secondary">
             即使账号已开启 Excel，状态探针也继续检测原生 Codex 通道。
           </p>
           <p class="text-xs text-cp-text-secondary">
-            {{ isProbe ? '无法判断时不执行处置。换票结果仅表示探针观察，不等于模型能力的完整评估。' : '仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。' }}
+            {{ isProbe ? '其他无法判断结果不执行处置。换票和过载仅作为本规则的处置依据，不等于模型能力的完整评估。' : '明确答错或达到两轮的过载异常触发处置，其他网络或判题错误不计入。只撤销本规则的改动，不解除其他停用原因。' }}
           </p>
         </div>
       </form>
@@ -1146,7 +1152,7 @@ onBeforeUnmount(() => {
         </details>
         <section v-for="answer in detail.answers ?? []" :key="answer.index" class="min-w-0 border-b border-cp-border pb-4">
           <div class="mb-2 flex flex-wrap gap-3 text-cp-sm">
-            <strong>第 {{ answer.index }} 次</strong><span :class="statusColor(answer.verdict)">{{ verdictLabel(answer.verdict, detail.detectionMode) }}</span><span>{{ (answer.elapsedMs / 1000).toFixed(1) }} 秒</span>
+            <strong>第 {{ answer.index }} 次</strong><span :class="statusColor(answer.verdict)">{{ answer.verdict === 'overloaded' ? '上游服务器过载' : verdictLabel(answer.verdict, detail.detectionMode) }}</span><span>{{ (answer.elapsedMs / 1000).toFixed(1) }} 秒</span>
           </div>
           <p v-if="answer.returnedModel" class="mb-2 break-all text-xs text-cp-text-secondary">
             返回模型 {{ answer.returnedModel }}

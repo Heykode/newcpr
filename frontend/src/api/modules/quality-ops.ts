@@ -99,7 +99,7 @@ export interface QualityTemplateApplyResult {
 export interface QualityAnswer {
   index: number
   answer: string
-  verdict: 'correct' | 'incorrect' | 'unknown' | 'request_error'
+  verdict: 'correct' | 'incorrect' | 'unknown' | 'request_error' | 'overloaded'
   reason: string
   elapsedMs: number
   returnedModel: string | null
