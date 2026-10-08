@@ -12,7 +12,9 @@ const FAILURE_RATE_HALF_LIFE: Duration = Duration::from_secs(15 * 60);
 
 #[test]
 fn guardian_reservation_keeps_frozen_and_live_capacity_consistent() {
-    for (limit, reserved, normal_limit) in [(4, 0, 4), (4, 1, 3), (4, 4, 1), (1, u32::MAX, 1)] {
+    for (limit, reserved, normal_limit) in
+        [(4, 0, 4), (4, 1, 1), (4, 4, 4), (1, u32::MAX, u32::MAX)]
+    {
         for inflight in 0..=limit {
             let candidates = vec![candidate_with_concurrency("acct_reserved", inflight, limit)];
             let mut ctx = context(RotationStrategy::Smart);
@@ -21,6 +23,17 @@ fn guardian_reservation_keeps_frozen_and_live_capacity_consistent() {
             assert_eq!(
                 ctx.concurrency_limit(&candidates[0].account).get(),
                 normal_limit
+            );
+            let trace = gateway_core::diagnostics::TraceContext::new("req_pool_capacity");
+            trace.account_selection(&candidates, &ctx, None);
+            assert_eq!(
+                trace.snapshot().unwrap()["events"][0]["data"]["candidates"][0]["concurrencyLimit"],
+                normal_limit
+            );
+            assert!(
+                AccountSelector
+                    .select_with_live_capacity(&candidates, &ctx, &live_limits(&[]))
+                    .is_none()
             );
             assert_eq!(
                 AccountSelector.select(&candidates, &ctx).is_some(),

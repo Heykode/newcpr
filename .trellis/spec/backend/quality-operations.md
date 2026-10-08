@@ -301,6 +301,11 @@ scope, cached_account_models for aggregate scopes.
   by `cfg(test)`, and after implementation items. Do not expose test APIs or exempt
   entire directories. Validate the gateway architecture suite and Clippy with
   `--all-targets`, not only the modified libraries.
+- Core quality trace tests must use the public quality executor under
+  `tests/engine/execution.rs`, without exposing its private audit constructor.
+  OpenAI's trusted quality logging marker remains private: only the exact inline
+  `quality_logging_tests` module in `provider/failure.rs` has a test-only exception.
+  Reject other files, names, visibility, external paths or non-test gates.
 - New persisted tables must also be registered in the exact schema snapshot in
   `crates/gateway-store/tests/postgres/mod.rs`; a frozen migration checksum and
   feature-specific Store tests alone do not cover that integration contract.

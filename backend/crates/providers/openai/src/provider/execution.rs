@@ -147,7 +147,6 @@ impl CodexProvider {
                             session_affinity_key: session_affinity
                                 .as_ref()
                                 .and_then(CodexSessionAffinity::key),
-                            reserved_concurrency: 0,
                             guardian: false,
                         },
                         None,

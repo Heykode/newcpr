@@ -234,7 +234,7 @@ export function useSettingsForm() {
     if (openaiGuardianReservedConcurrencyValue === null
       || !Number.isSafeInteger(openaiGuardianReservedConcurrencyValue)
       || openaiGuardianReservedConcurrencyValue < 0) {
-      toast.warning('Guardian 预留并发须为非负整数')
+      toast.warning('Guardian 独立并发须为非负整数，0 表示共用普通并发')
       return
     }
     const openaiGuardianReservedConcurrency = openaiGuardianReservedConcurrencyValue

@@ -1,6 +1,8 @@
 //! Guardian is a checked, client-scoped preference, not a native continuation owner.
 
-use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
+use gateway_core::provider_ports::{
+    ProviderConcurrencyPool, ProviderSessionAffinityKey, ProviderSessionAffinityPort,
+};
 use gateway_core::routing::RequestTuning;
 
 use super::*;
@@ -448,8 +450,16 @@ async fn guardian_metadata_is_strict_and_reservation_reaches_the_actual_lease() 
         let requests = leases.requests.lock().unwrap();
         assert_eq!(
             requests.last().unwrap().max_concurrent().get(),
-            if guardian { 2 } else { 1 },
+            if guardian { 1 } else { 2 },
             "case {index}"
+        );
+        assert_eq!(
+            requests.last().unwrap().concurrency_pool(),
+            if guardian {
+                ProviderConcurrencyPool::Reserved
+            } else {
+                ProviderConcurrencyPool::Shared
+            }
         );
         drop(requests);
         assert_eq!(
@@ -487,7 +497,11 @@ async fn guardian_metadata_is_strict_and_reservation_reaches_the_actual_lease() 
                     .unwrap()
                     .max_concurrent()
                     .get(),
-                if guardian || reserved == 0 { 2 } else { 1 }
+                if guardian && reserved > 0 {
+                    reserved
+                } else {
+                    2
+                }
             );
         }
     }
@@ -552,14 +566,31 @@ async fn guardian_reservation_matches_live_capacity_wait_and_promotion_limits() 
 
     for (guardian, reserved, expected_limit, should_wait) in [
         (false, 0, 2, false),
-        (false, 1, 1, true),
-        (true, 1, 2, false),
+        (false, 1, 2, false),
+        (true, 0, 2, false),
+        (true, 1, 1, true),
+        (true, 3, 3, false),
     ] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_scope_old").await;
         let leases = Arc::new(TestLeaseCoordinator::default());
         leases.capacity.enabled.store(true, Ordering::SeqCst);
         leases.capacity.set_load("acct_scope_old", 1);
+        leases
+            .reserved_capacity
+            .enabled
+            .store(true, Ordering::SeqCst);
+        leases.reserved_capacity.set_load("acct_scope_old", 1);
+        let pool = if guardian && reserved > 0 {
+            ProviderConcurrencyPool::Reserved
+        } else {
+            ProviderConcurrencyPool::Shared
+        };
+        let capacity = if pool == ProviderConcurrencyPool::Reserved {
+            &leases.reserved_capacity
+        } else {
+            &leases.capacity
+        };
         let bindings = Arc::new(MemorySessionAffinity::default());
         let server = successful_server().await;
         let provider = super::scheduling::waiting_provider_with_affinity_and_limit(
@@ -590,16 +621,16 @@ async fn guardian_reservation_matches_live_capacity_wait_and_promotion_limits() 
         tokio::pin!(execution);
         if should_wait {
             tokio::select! {
-                result = &mut execution => panic!("ordinary request must wait, prepared={}", result.is_ok()),
+                result = &mut execution => panic!("saturated pool must wait, prepared={}", result.is_ok()),
                 _ = timeout(Duration::from_secs(2), async {
-                    while leases.capacity.waiting.load(Ordering::SeqCst) == 0 {
+                    while capacity.waiting.load(Ordering::SeqCst) == 0 {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 }) => {}
             }
-            assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 1);
+            assert_eq!(capacity.waiting.load(Ordering::SeqCst), 1);
             assert!(server.received_requests().await.unwrap().is_empty());
-            leases.capacity.set_load("acct_scope_old", 0);
+            capacity.set_load("acct_scope_old", 0);
         }
         let stream = timeout(Duration::from_secs(3), &mut execution)
             .await
@@ -610,7 +641,7 @@ async fn guardian_reservation_matches_live_capacity_wait_and_promotion_limits() 
             "acct_scope_old"
         );
         let lease_requests = if should_wait {
-            leases.capacity.promotion_requests.lock().unwrap()
+            capacity.promotion_requests.lock().unwrap()
         } else {
             leases.requests.lock().unwrap()
         };
@@ -621,14 +652,12 @@ async fn guardian_reservation_matches_live_capacity_wait_and_promotion_limits() 
         assert!(
             lease_requests
                 .iter()
-                .all(|request| request.max_concurrent().get() == expected_limit),
+                .all(|request| request.max_concurrent().get() == expected_limit
+                    && request.concurrency_pool() == pool),
             "every admission must use the effective limit"
         );
-        assert_eq!(
-            leases.capacity.promotions.load(Ordering::SeqCst) > 0,
-            should_wait
-        );
-        assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+        assert_eq!(capacity.promotions.load(Ordering::SeqCst) > 0, should_wait);
+        assert_eq!(capacity.waiting.load(Ordering::SeqCst), 0);
         drop(stream);
     }
 }

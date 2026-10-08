@@ -18,9 +18,6 @@ const HEAD_EVENTS: usize = 8;
 const MAX_DATA_BYTES: usize = 4096;
 const MAX_BUFFER_BYTES: usize = 64 * 1024;
 
-#[cfg(test)]
-mod tests;
-
 /// 显式传给异步任务的关联上下文；默认值禁用捕获，避免全局请求映射。
 #[derive(Clone, Default)]
 pub struct TraceContext {

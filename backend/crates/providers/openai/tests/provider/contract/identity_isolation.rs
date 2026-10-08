@@ -419,7 +419,12 @@ async fn location_switch_controls_actual_http_and_ws_payloads_without_changing_i
                 (http.uri(), None)
             };
             let body = json!({
-                "model":"gpt-5.4", "input":"same question",
+                "model":"gpt-5.4", "input":[
+                    {"role":"user", "content":[{"type":"input_text", "text":"<environment_context><timezone>UTC</timezone></environment_context>"}]},
+                    {"role":"user", "content":[{"type":"input_text", "text":"<environment_context><timezone>UTC</timezone></environment_context>"}],
+                        "internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}},
+                    {"role":"user", "content":"same question"}
+                ],
                 "thread_id":"location-thread", "session_id":"location-session",
                 "tools":[{"type":"web_search","user_location":{"city":"London","timezone":"Europe/London"}}]
             });
@@ -455,6 +460,15 @@ async fn location_switch_controls_actual_http_and_ws_payloads_without_changing_i
                 if enabled { "Auckland" } else { "London" }
             );
             assert_eq!(body["tools"][0]["user_location"]["city"], "London");
+            assert_eq!(
+                captured["input"][0]["content"][0]["text"],
+                if enabled {
+                    "<environment_context><timezone>Pacific/Auckland</timezone></environment_context>"
+                } else {
+                    "<environment_context><timezone>UTC</timezone></environment_context>"
+                }
+            );
+            assert_eq!(captured["input"][1], body["input"][1]);
             identities.push(captured["prompt_cache_key"].clone());
         }
         assert_eq!(identities[0], identities[1]);

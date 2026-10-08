@@ -657,13 +657,6 @@ impl Provider for CodexProvider {
                     session_affinity_key: session_affinity
                         .as_ref()
                         .and_then(CodexSessionAffinity::key),
-                    reserved_concurrency: if guardian {
-                        0
-                    } else {
-                        context
-                            .account_selection_policy()
-                            .openai_guardian_reserved_concurrency()
-                    },
                     guardian,
                 },
                 cyber_policy_session_key.as_ref(),

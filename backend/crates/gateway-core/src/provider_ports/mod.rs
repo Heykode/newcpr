@@ -127,6 +127,14 @@ impl ProviderSchedulingState {
     }
 }
 
+/// Independent execution and waiting ownership; account spacing remains shared.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProviderConcurrencyPool {
+    #[default]
+    Shared,
+    Reserved,
+}
+
 /// 请求级账号 lease 的全部中立事实。
 #[derive(Debug, Clone)]
 pub struct ProviderSchedulingLeaseRequest {
@@ -138,7 +146,7 @@ pub struct ProviderSchedulingLeaseRequest {
     deadline: crate::lifecycle::Deadline,
     cancellation: crate::lifecycle::CancellationToken,
     quality_check: bool,
-    priority: bool,
+    concurrency_pool: ProviderConcurrencyPool,
 }
 
 impl ProviderSchedulingLeaseRequest {
@@ -160,7 +168,7 @@ impl ProviderSchedulingLeaseRequest {
             deadline: deadline.into(),
             cancellation: crate::lifecycle::CancellationToken::new(),
             quality_check: false,
-            priority: false,
+            concurrency_pool: ProviderConcurrencyPool::Shared,
         }
     }
 
@@ -218,14 +226,14 @@ impl ProviderSchedulingLeaseRequest {
     }
 
     #[must_use]
-    pub const fn with_priority(mut self, priority: bool) -> Self {
-        self.priority = priority;
+    pub const fn with_concurrency_pool(mut self, pool: ProviderConcurrencyPool) -> Self {
+        self.concurrency_pool = pool;
         self
     }
 
     #[must_use]
-    pub const fn priority(&self) -> bool {
-        self.priority
+    pub const fn concurrency_pool(&self) -> ProviderConcurrencyPool {
+        self.concurrency_pool
     }
 }
 
@@ -260,6 +268,63 @@ pub enum ProviderLeaseRequest {
 }
 
 pub trait ProviderLeasePort: Send + Sync {
+    /// Pool-aware reads must never silently return another pool's capacity.
+    fn load_waiting_counts_for_pool<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, u32>, ProviderStoreError>> {
+        if pool == ProviderConcurrencyPool::Shared {
+            self.load_waiting_counts(provider_kind, accounts)
+        } else {
+            Box::pin(async {
+                Err(ProviderStoreError::new(
+                    ProviderStoreErrorKind::Unavailable,
+                    "load reserved queue pressure",
+                ))
+            })
+        }
+    }
+
+    fn load_signals_for_pool<'a>(
+        &'a self,
+        provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<BTreeMap<ProviderAccountId, AccountRuntimeSignals>, ProviderStoreError>>
+    {
+        if pool == ProviderConcurrencyPool::Shared {
+            self.load_signals(provider_kind, accounts)
+        } else {
+            Box::pin(async {
+                Err(ProviderStoreError::new(
+                    ProviderStoreErrorKind::Unavailable,
+                    "load reserved scheduling signals",
+                ))
+            })
+        }
+    }
+
+    fn load_state_for_pool<'a>(
+        &'a self,
+        client_api_key_id: &'a ClientApiKeyId,
+        provider_kind: &'a ProviderKind,
+        accounts: &'a [ProviderAccountId],
+        pool: ProviderConcurrencyPool,
+    ) -> BoxFuture<'a, Result<ProviderSchedulingState, ProviderStoreError>> {
+        if pool == ProviderConcurrencyPool::Shared {
+            self.load_state(client_api_key_id, provider_kind, accounts)
+        } else {
+            Box::pin(async {
+                Err(ProviderStoreError::new(
+                    ProviderStoreErrorKind::Unavailable,
+                    "load reserved scheduling state",
+                ))
+            })
+        }
+    }
+
     /// Active waiting ownership only; expired entries must not inflate pressure.
     fn load_waiting_counts<'a>(
         &'a self,
@@ -274,7 +339,8 @@ pub trait ProviderLeasePort: Send + Sync {
         })
     }
     /// Acquire execution capacity directly for opt-in scheduling, without joining
-    /// or checking the waiting queue. Unsupported stores must fail closed.
+    /// the ordinary waiting queue. Reserved admission must respect its FIFO.
+    /// Unsupported stores must fail closed.
     ///
     /// Before any remote write, the store must own a known token and arm cleanup.
     /// Dropping this future, losing a reply, or a late write must not orphan an

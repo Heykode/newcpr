@@ -2958,3 +2958,164 @@ mod failure_isolation {
         verify_isolation(false);
     }
 }
+
+mod quality_trace {
+    use super::*;
+    use gateway_core::diagnostics::TraceContext;
+    use tracing::{
+        Event, Metadata, Subscriber,
+        span::{Attributes, Id, Record},
+    };
+
+    struct LogCount(Arc<AtomicUsize>);
+
+    #[derive(Default)]
+    struct QualityTraceProvider(Mutex<Option<TraceContext>>);
+
+    #[async_trait]
+    impl Provider for QualityTraceProvider {
+        fn name(&self) -> &'static str {
+            "openai"
+        }
+
+        fn catalog_generation(&self) -> ProviderCatalogGeneration {
+            ProviderCatalogGeneration::default()
+        }
+
+        async fn query_model_capabilities(
+            &self,
+        ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn execute(
+            &self,
+            _: ProviderRequest,
+            context: AttemptContext,
+        ) -> Result<ProviderStream, ProviderError> {
+            assert!(context.is_quality_check());
+            *self.0.lock().unwrap() = Some(context.trace());
+            Err(ProviderError::new(
+                ProviderErrorKind::QuotaExhausted,
+                UpstreamSendState::Sent,
+            ))
+        }
+    }
+
+    fn quality_trace() -> TraceContext {
+        let provider = Arc::new(QualityTraceProvider::default());
+        let scope = account_scope(&ProviderKind::new("openai").unwrap(), "acct_start");
+        let service = DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(
+                start_snapshot().with_account_directory(Arc::clone(scope.directory())),
+            ),
+            Arc::new(TrackingExecutionStore::default()),
+            ProviderRegistry::new([provider.clone() as Arc<dyn Provider>]).unwrap(),
+            Arc::new(UnusedAdmissions),
+            Arc::new(UnusedCircuits),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        block_on(service.quality_check(
+            AccountProbeRequest {
+                account_id: ProviderAccountId::new("acct_start").unwrap(),
+                provider_kind: ProviderKind::new("openai").unwrap(),
+                upstream_model: UpstreamModelId::new("gpt-start").unwrap(),
+                operation: start_operation(),
+            },
+            gateway_core::lifecycle::CancellationToken::new(),
+        ))
+        .expect_err("synthetic quality quota failure");
+        provider.0.lock().unwrap().take().expect("quality trace")
+    }
+
+    impl Subscriber for LogCount {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+
+    #[test]
+    fn quality_audit_preserves_facts_without_trace_or_wire_logs() {
+        const CHILD: &str = "GATEWAY_CORE_QUALITY_TRACE_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let thread = std::thread::current();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", thread.name().unwrap()])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "isolated quality trace test failed: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let logs = Arc::new(AtomicUsize::new(0));
+        tracing::subscriber::with_default(LogCount(logs.clone()), || {
+            {
+                let ordinary = TraceContext::new("req_ordinary_trace");
+                ordinary.capture("client.request.body", b"{}");
+                assert_eq!(ordinary.snapshot().unwrap()["wireDumpEnabled"], true);
+            }
+            assert!(
+                logs.swap(0, Ordering::SeqCst) > 0,
+                "positive logging control"
+            );
+            {
+                let quality = quality_trace();
+                let exchange = quality.attempt(1).exchange("http_sse");
+                exchange.capture("client.request.body", br#"{"input":"synthetic prompt"}"#);
+                exchange.headers(
+                    "upstream.response.headers",
+                    json!({"status":429}),
+                    [("x-request-id", b"fixture-upstream-id".as_slice())],
+                );
+                exchange.record_provider_failure(&ProviderError::new(
+                    ProviderErrorKind::QuotaExhausted,
+                    UpstreamSendState::Sent,
+                ));
+                quality.record("request.finished", json!({"outcome":"Failed"}));
+                let snapshot = quality.snapshot().unwrap();
+                assert_eq!(snapshot["wireDumpEnabled"], false);
+                assert_eq!(snapshot["wireFrames"], 0);
+                assert!(
+                    snapshot["events"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|event| event["stage"] == "attempt.failed")
+                );
+                assert!(snapshot["totalEvents"].as_u64().unwrap() >= 4);
+            }
+            assert_eq!(logs.load(Ordering::SeqCst), 0, "including clone/drop logs");
+            {
+                let quality = quality_trace();
+                quality.record_provider_failure(&ProviderError::new(
+                    ProviderErrorKind::ProviderInfrastructureUnavailable,
+                    UpstreamSendState::NotSent,
+                ));
+            }
+            assert_eq!(
+                logs.load(Ordering::SeqCst),
+                1,
+                "real probe dependency failure"
+            );
+            tracing::warn!("fixture infrastructure failure remains visible");
+            assert_eq!(logs.load(Ordering::SeqCst), 2);
+        });
+    }
+}

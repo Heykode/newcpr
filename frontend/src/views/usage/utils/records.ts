@@ -251,7 +251,15 @@ export function usageModelDisplay(record: UsageCommonRecord) {
 }
 
 export function usageTokenDetails(record: UsageCommonRecord) {
-  return record.tokenDetails
+  const details = record.tokenDetails
+  if (details.inputTokens === null)
+    return details
+  const inputTokens = Math.max(0, details.inputTokens - (details.cachedTokens ?? 0) - (details.cacheWriteTokens ?? 0))
+  return {
+    ...details,
+    inputTokens,
+    inputTokensDisplay: new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(inputTokens),
+  }
 }
 
 export type UsagePerformanceRecord = Pick<UsageCommonRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'> & {

@@ -219,6 +219,21 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 
 ## 9. 必须保留的回归
 
+### Guardian 独立池
+
+- `ProviderConcurrencyPool::{Shared, Reserved}` 沿状态读取、原子执行准入、
+  等待压力、入队、晋升及终检一致传递；不再用普通上限减去预留数。
+  `R>0` 的 Guardian/review 用 R，普通请求用 L；R=0 回到 Shared。
+- Core `AccountSelectionContext::limit_for_pool` 统一冻结/live 容量与诊断上限；
+  即使 R 独立，live publication 缺失也不准入。普通容量观测端口只读 Shared。
+- Redis 只在原账号 active key 后追加 `:reserved`，独立 waiting/order/cancelled；
+  间隔和 fence 仍是账号级。Quality 继续独立 `:quality`，不进入审批池。
+- 审批排队用 fence 序列保留 FIFO，deadline ZSET 负责到期；不能按截止早晚排序。
+  直接执行也原子复核队首，取消/超时同时移除排序位置；不改变普通等待顺序。
+- 保留本项目 sticky/fallback 的有限人数及共享截止，不新增官方进程级总队列。
+  等待开关关闭不隐式排队。容量、续期和不确定结果清理仍复用既有所有权流程。
+- 未实现 Reserved 的端口失败关闭，不得回落读取普通池的计数。
+
 | 层 | 最低反例与断言 |
 | --- | --- |
 | 配置 | 旧 JSON/null/false、四数值默认及往返、关闭保值、非法值不提交；POST 到 PG/snapshot/新请求；旧请求仍冻结 |
