@@ -1,5 +1,5 @@
 use super::*;
-use gateway_core::account::AccountAffinity;
+use gateway_core::account::{AccountAffinity, AccountSelectionPolicy, RotationStrategy};
 use gateway_core::provider_ports::{ProviderSessionAffinityKey, ProviderSessionAffinityPort};
 
 fn mode_context(mode: AccountAffinity) -> AttemptContext {
@@ -698,4 +698,74 @@ async fn relaxed_compact_forwarding_preserves_business_body_and_rebuilds_account
         "input copy is not mutated"
     );
     upstream.verify().await;
+}
+
+#[tokio::test]
+async fn strict_child_waits_for_root_request_interval_without_switching_accounts() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_old").await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.enabled.store(true, Ordering::SeqCst);
+    let upstream = MockServer::start().await;
+    let provider = super::scheduling::waiting_provider_with_affinity_and_limit(
+        &store,
+        leases.clone(),
+        upstream.uri(),
+        Arc::new(MemorySessionExclusions::default()),
+        affinity.clone(),
+        NonZeroU32::MIN,
+    );
+    drop(
+        provider
+            .execute(
+                generate("root", None, None),
+                mode_context(AccountAffinity::Strict),
+            )
+            .await
+            .unwrap(),
+    );
+    create_account(&store, "acct_scope_new").await;
+    leases.capacity.set_load("acct_scope_old", 0);
+    leases.capacity.set_load("acct_scope_new", 0);
+    leases
+        .capacity
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&ProviderAccountId::new("acct_scope_old").unwrap())
+        .unwrap()
+        .last_started_at = Some(SystemTime::now());
+    let attempt = context_with_policy(
+        "req_strict_interval",
+        CancellationToken::new(),
+        contract_account_scope(),
+        AccountSelectionPolicy::new(
+            RotationStrategy::Sticky,
+            NonZeroU32::MIN,
+            Duration::from_millis(250),
+        )
+        .with_openai_account_affinity(AccountAffinity::Strict),
+    )
+    .with_request_tuning(gateway_core::routing::RequestTuning {
+        account_busy_wait_enabled: true,
+        ..Default::default()
+    });
+    let stream = timeout(
+        Duration::from_secs(3),
+        provider.execute(generate("root", Some("child"), None), attempt),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        stream.metadata().provider_account_id().as_str(),
+        "acct_scope_old"
+    );
+    drop(stream);
+    assert_eq!(leases.capacity.waits.lock().unwrap().len(), 1);
+    assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    assert_eq!(affinity.binding_count(), 1);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
 }

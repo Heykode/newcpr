@@ -373,6 +373,16 @@ scope, cached_account_models for aggregate scopes.
 - Changing detection mode clears the latest rule verdict but retains mode snapshots
   in historical runs. Keep existing owned scheduling/group recovery behavior intact.
 
+### Account changes during State comparison
+
+`quality_probe::rejected(AccountChanged)` keeps the existing Unsupported/NotSent
+control flow and inconclusive report, but attaches an existing ProviderDiagnostic
+with stage `quality_probe` and code `account_changed`, plus the concrete client
+message that account/egress state changed during the check. The provider does not
+retry or bypass the identity fence. Ordinary scheduled checks and quota recovery
+continue unchanged; no quota-exhaustion parking or additional scheduler is added.
+The regression asserts the reason, verdict, diagnostic and absence of retry intent.
+
 ## Excel Failure Threshold
 
 - `excelFailureThreshold` defaults to 1 for legacy configs and accepts 1–100.

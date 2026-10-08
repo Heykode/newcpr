@@ -99,7 +99,7 @@ async fn repeated_requests_preserve_item_ids_original_payload_and_nested_busines
 }
 
 #[tokio::test]
-async fn history_shapes_keep_ids_without_local_prefix_validation() {
+async fn history_repairs_only_complete_unreferenced_message_ids() {
     let message = json!({"type":"message","id":"item_local","role":"assistant","content":"hello"});
     let cases = [
         json!({"input":[
@@ -119,7 +119,7 @@ async fn history_shapes_keep_ids_without_local_prefix_validation() {
             {"type":"function_call_output","call_id":"call-original","output":"done"}
         ]}),
     ];
-    for mut body in cases {
+    for (index, mut body) in cases.into_iter().enumerate() {
         body["model"] = json!("gpt-5.4");
         let captured = capture_scoped_http_request(
             "req_conservative_ids",
@@ -129,7 +129,15 @@ async fn history_shapes_keep_ids_without_local_prefix_validation() {
             Map::new(),
         )
         .await;
-        assert_eq!(captured_request_body(&captured)["input"], body["input"]);
+        let mut expected = body["input"].clone();
+        if matches!(index, 0 | 2 | 6) {
+            expected[0]["id"] = json!("msg_local");
+        }
+        assert_eq!(captured_request_body(&captured)["input"], expected);
+        // The source history remains the client's original, including opaque references.
+        if matches!(index, 0 | 2 | 3 | 4 | 5 | 6) {
+            assert_eq!(body["input"][0]["id"], "item_local");
+        }
     }
 }
 

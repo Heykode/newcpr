@@ -111,3 +111,125 @@ pub(crate) fn normalize_custom_history_ids(body: &mut Map<String, Value>) {
         }
     }
 }
+
+/// Repair only complete, unreferenced stateless messages with the rejected item_ prefix.
+/// Reasoning IDs and tool call IDs may carry upstream identity and are never rewritten.
+pub(crate) fn normalize_message_history_ids(body: &mut Map<String, Value>) {
+    if body.get("store") == Some(&Value::Bool(true))
+        || ["previous_response_id", "conversation"]
+            .iter()
+            .any(|key| body.get(*key).is_some_and(|v| !v.is_null()))
+    {
+        return;
+    }
+    let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return;
+    };
+    // Unknown history may hold references whose schema we do not understand.
+    if input.iter().any(|item| {
+        !matches!(
+            item.get("type").and_then(Value::as_str),
+            Some(
+                "message"
+                    | "reasoning"
+                    | "compaction"
+                    | "function_call"
+                    | "function_call_output"
+                    | "custom_tool_call"
+                    | "custom_tool_call_output"
+                    | "item_reference"
+            )
+        ) && !(item.get("type").is_none()
+            && item.get("role").is_some_and(Value::is_string)
+            && item
+                .get("content")
+                .is_some_and(|v| v.is_string() || v.is_array()))
+    }) {
+        return;
+    }
+    let mut ids = BTreeMap::<String, usize>::new();
+    for item in input.iter() {
+        if let Some(id) = item.get("id").and_then(Value::as_str) {
+            *ids.entry(id.to_owned()).or_default() += 1;
+        }
+    }
+    for item in input {
+        if item.get("type").and_then(Value::as_str) != Some("message")
+            || !matches!(
+                item.get("role").and_then(Value::as_str),
+                Some("user" | "assistant" | "developer" | "system")
+            )
+            || !item
+                .get("content")
+                .is_some_and(|v| v.is_string() || v.is_array())
+            || opaque_or_referenced(item)
+        {
+            continue;
+        }
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(suffix) = id.strip_prefix("item_") else {
+            continue;
+        };
+        let normalized = format!("msg_{suffix}");
+        if suffix.is_empty()
+            || normalized.len() > 64
+            || !suffix
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            || ids.get(id) != Some(&1)
+            || ids.contains_key(&normalized)
+        {
+            continue;
+        }
+        item["id"] = Value::String(normalized);
+    }
+}
+
+/// Move only fully understood plaintext into an empty summary without dropping fields.
+pub(crate) fn normalize_plaintext_reasoning(item: &mut Map<String, Value>, stateless: bool) {
+    if item
+        .get("encrypted_content")
+        .is_some_and(|v| !v.is_null() && !v.as_str().is_some_and(|text| text.trim().is_empty()))
+        || item
+            .get("summary")
+            .is_some_and(|v| !v.is_null() && !v.as_array().is_some_and(Vec::is_empty))
+    {
+        return;
+    }
+    let Some(content) = item
+        .get("content")
+        .and_then(Value::as_array)
+        .filter(|v| !v.is_empty())
+    else {
+        return;
+    };
+    if !content.iter().all(|part| {
+        part.as_object().is_some_and(|part| {
+            part.len() == 2
+                && part.get("type").and_then(Value::as_str) == Some("reasoning_text")
+                && part.get("text").is_some_and(Value::is_string)
+        })
+    }) {
+        return;
+    }
+    let summary = content
+        .iter()
+        .map(|part| {
+            serde_json::json!({
+                "type":"summary_text", "text":part["text"]
+            })
+        })
+        .collect();
+    item.insert("summary".to_owned(), Value::Array(summary));
+    item.remove("content");
+    if stateless
+        && item
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.starts_with("rs_"))
+    {
+        item.remove("id");
+    }
+}

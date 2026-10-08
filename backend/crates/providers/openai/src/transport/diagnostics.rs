@@ -66,6 +66,8 @@ const PERSISTABLE_UPSTREAM_CODES: &[&str] = &[
     "unauthorized",
     "unsupported",
     "unsupported_feature",
+    "unsupported_parameter",
+    "unsupported_value",
     "usage_limit_reached",
     "verification_required",
     "websocket_connection_limit_reached",
@@ -189,12 +191,14 @@ impl CodexUpstreamFailure {
         set_cookie_headers: &[String],
         send_phase: CodexUpstreamSendPhase,
     ) -> Self {
+        let parsed = ParsedUpstreamError::from_http_response(failure.raw_body());
         let fields = ParsedUpstreamError {
             code: failure.upstream_code.clone(),
+            param: parsed.param,
             error_type: failure.upstream_type.clone(),
             message: failure.message.clone(),
             client_message: Some(failure.message.clone()),
-            resets_at: ParsedUpstreamError::from_http_response(failure.raw_body()).resets_at,
+            resets_at: parsed.resets_at,
         };
         let status = failure
             .explicit_status_code
@@ -280,6 +284,7 @@ impl CodexUpstreamFailure {
 
 struct ParsedUpstreamError {
     code: Option<String>,
+    param: Option<String>,
     error_type: Option<String>,
     message: String,
     client_message: Option<String>,
@@ -291,6 +296,7 @@ impl ParsedUpstreamError {
         let Ok(value) = serde_json::from_str::<Value>(body) else {
             return Self {
                 code: None,
+                param: None,
                 error_type: None,
                 message: body.to_owned(),
                 client_message: None,
@@ -331,6 +337,10 @@ impl ParsedUpstreamError {
             });
         Self {
             code,
+            param: error
+                .get("param")
+                .and_then(Value::as_str)
+                .and_then(non_empty_owned),
             error_type,
             message,
             client_message,
@@ -495,6 +505,26 @@ fn classify_upstream_failure(
         return CodexFailureCategory::InvalidRequest;
     }
 
+    // Parameter validation can mention a model without rejecting the model itself.
+    // Preserve the original payload for the client; do not cool down or rotate accounts.
+    let parameter_rejection = matches!(
+        code.as_str(),
+        "unsupported_value"
+            | "unsupported_parameter"
+            | "unknown_parameter"
+            | "invalid_value"
+            | "invalid_type"
+            | "invalid_parameter"
+            | "missing_required_parameter"
+    ) || (error_type == "invalid_request_error"
+        && fields
+            .param
+            .as_deref()
+            .is_some_and(|param| param != "model"));
+    if status.is_none_or(|status| matches!(status.as_u16(), 400 | 422)) && parameter_rejection {
+        return CodexFailureCategory::InvalidRequest;
+    }
+
     if [code.as_str(), message.as_str(), body.as_str()]
         .into_iter()
         .any(is_model_unsupported)
@@ -593,6 +623,9 @@ fn classify_upstream_failure(
     }
     if status == Some(StatusCode::TOO_MANY_REQUESTS) {
         return CodexFailureCategory::RateLimited;
+    }
+    if status.is_none() && error_type == "invalid_request_error" {
+        return CodexFailureCategory::InvalidRequest;
     }
     match status.map(|status| status.as_u16()) {
         Some(status) => match status {

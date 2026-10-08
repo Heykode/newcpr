@@ -12,7 +12,21 @@ fn rejected(step: &QualityProbeStep, reason: StateProbeReason) -> ProviderError 
         },
         None,
     );
-    provider_error(ProviderErrorKind::Unsupported, UpstreamSendState::NotSent)
+    let error = provider_error(ProviderErrorKind::Unsupported, UpstreamSendState::NotSent);
+    if reason == StateProbeReason::AccountChanged {
+        error
+            .with_diagnostic(
+                ProviderDiagnostic::new("检查期间账号或出口状态发生变化，本轮无结论")
+                    .with_classification("quality_probe", "account_changed"),
+            )
+            .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                "检查期间账号或出口状态发生变化，本轮无结论",
+                Some("account_changed".to_owned()),
+                None,
+            ))
+    } else {
+        error
+    }
 }
 
 pub(super) fn initialize(
@@ -225,6 +239,24 @@ fn route_cookies(headers: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_probe_explains_inconclusive_result_without_enabling_retries() {
+        use gateway_core::operation::quality_probe::{QualityProbeExchange, StateProbeVerdict};
+        let exchange = QualityProbeExchange::default();
+        let error = rejected(&exchange.step(true), StateProbeReason::AccountChanged);
+        assert_eq!(exchange.report().verdict, StateProbeVerdict::Inconclusive);
+        assert_eq!(exchange.report().reason, StateProbeReason::AccountChanged);
+        assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(!error.allows_pre_delivery_retry());
+        assert_eq!(error.diagnostic().unwrap().code(), Some("account_changed"));
+        assert!(error.diagnostic().unwrap().as_str().contains("本轮无结论"));
+        assert_eq!(
+            error.client_visible_upstream_error().unwrap().code(),
+            Some("account_changed")
+        );
+    }
 
     #[test]
     fn quality_probe_sessions_are_unique_with_normal_account_identity_projection() {

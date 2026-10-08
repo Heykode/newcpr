@@ -5797,3 +5797,112 @@ fn deadline_before_first_event_records_no_provider_circuit_failure() {
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
     assert!(!state.finalizations[0].committed);
 }
+
+#[test]
+fn account_switch_budget_preserves_last_upstream_response() {
+    let operation = generate_operation();
+    let route_plan = plan_with_tuning(
+        &operation,
+        AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN, Duration::ZERO),
+        gateway_core::routing::RequestTuning {
+            max_account_switches: 0,
+            ..Default::default()
+        },
+    );
+    let raw = Bytes::from_static(
+        br#"{"error":{"code":"model_not_supported","message":"model unavailable"}}"#,
+    );
+    let failure = ProviderError::new(ProviderErrorKind::Unsupported, UpstreamSendState::Sent)
+        .with_pre_delivery_retry()
+        .with_status(400)
+        .with_raw_upstream_error(RawUpstreamError::new("retained failure"))
+        .with_client_visible_upstream_response(ClientVisibleUpstreamResponse::new(
+            400,
+            Some(b"application/json".to_vec()),
+            raw.clone(),
+        ));
+    let (coordinator, store, provider) = coordinator(vec![Script::Stream {
+        account_id: "acct_first",
+        items: vec![Err(failure)],
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    let error = block_on(session.collect_uncommitted()).unwrap_err();
+    let EngineError::Provider(error) = error else {
+        panic!("expected retained provider error: {error:?}");
+    };
+    assert_eq!(
+        error.client_visible_upstream_response().unwrap().body(),
+        &raw
+    );
+    assert_eq!(error.upstream_status(), Some(400));
+    assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.finalizations[0].upstream_status_code, Some(400));
+    assert_eq!(state.finalizations[0].attempt_count, 1);
+    assert_eq!(
+        state.finalizations[0].raw_upstream_error.as_deref(),
+        Some("retained failure")
+    );
+}
+
+#[test]
+fn account_switch_budget_delivers_retained_atomic_failure_once() {
+    let operation = generate_operation();
+    let route_plan = plan_with_tuning(
+        &operation,
+        AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN, Duration::ZERO),
+        gateway_core::routing::RequestTuning {
+            max_account_switches: 0,
+            ..Default::default()
+        },
+    );
+    let (coordinator, store, provider) = coordinator(vec![Script::ObservedStream {
+        account_id: "acct_first",
+        items: vec![Err(atomic_response_failed(
+            "resp_retained",
+            "retained terminal error",
+        ))],
+    }]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    let delivery = block_on(session.next_event()).unwrap().unwrap();
+    assert_eq!(
+        delivery.commit_requirement(),
+        CommitRequirement::CommitBeforeDelivery
+    );
+    let events = delivery.into_provider_events();
+    let failures = events
+        .iter()
+        .filter_map(ProviderEvent::wire_event)
+        .filter(|wire| wire.event_type() == Some("response.failed"))
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].data()["response"]["id"], "resp_retained");
+    block_on(session.commit_downstream(Some(200))).unwrap();
+    assert!(matches!(
+        block_on(session.next_event()),
+        Err(EngineError::Provider(_))
+    ));
+    assert!(session.is_finalized());
+    assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.finalizations.len(), 1);
+    assert_eq!(state.finalizations[0].attempt_count, 1);
+    assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
+}

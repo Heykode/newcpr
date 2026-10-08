@@ -4009,3 +4009,103 @@ async fn model_access_queue_waits_for_allowed_account_without_using_free_forbidd
             .all(|lease| lease.account_id() == &allowed)
     );
 }
+
+#[tokio::test]
+async fn pinned_interval_wait_preserves_owner_and_releases_on_cancel_or_full() {
+    use std::sync::atomic::Ordering;
+    for scenario in [
+        "ready", "cancel", "full", "disabled", "moved", "busy", "timeout",
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "at-original");
+        create_account(&store, "acct_other", "at-other");
+        let original = ProviderAccountId::new("acct_original").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        leases
+            .capacity
+            .set_load("acct_original", u32::from(scenario == "busy"));
+        leases.capacity.set_load("acct_other", 0);
+        leases
+            .capacity
+            .full
+            .store(scenario == "full", Ordering::SeqCst);
+        leases
+            .capacity
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&original)
+            .unwrap()
+            .last_started_at = Some(SystemTime::now());
+        let selector = selector(&store, Arc::clone(&leases))
+            .with_account_concurrency(capacity_handle(&["acct_original", "acct_other"], 1));
+        let attempt = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new("req_pinned_interval").unwrap(),
+                ClientApiKeyId::new("key_codex_contract").unwrap(),
+            ),
+            NonZeroU32::MIN,
+            SystemTime::now() + Duration::from_secs(30),
+            gateway_core::account::AccountSelectionPolicy::new(
+                gateway_core::account::RotationStrategy::Sticky,
+                NonZeroU32::MIN,
+                Duration::from_millis(250),
+            ),
+            AccountAttemptContext::new(BTreeSet::new(), Some(original.clone()), None)
+                .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        )
+        .with_request_tuning(gateway_core::routing::RequestTuning {
+            account_busy_wait_sticky_timeout_seconds: 1,
+            account_busy_wait_fallback_timeout_seconds: 1,
+            ..capacity_tuning()
+        });
+        let selected = capacity_select(&selector, &attempt, None);
+        tokio::pin!(selected);
+        if scenario != "full" {
+            tokio::select! {
+                result = &mut selected => panic!("pinned interval must wait: {result:?}"),
+                () = wait_until_queued(&leases) => {}
+            }
+            assert!(leases.requests.lock().unwrap().is_empty());
+            if scenario == "busy" {
+                leases.capacity.set_load("acct_original", 0);
+            }
+            if matches!(scenario, "moved" | "timeout") {
+                leases
+                    .capacity
+                    .signals
+                    .lock()
+                    .unwrap()
+                    .get_mut(&original)
+                    .unwrap()
+                    .last_started_at = Some(
+                    SystemTime::now()
+                        + Duration::from_millis(if scenario == "timeout" { 2000 } else { 100 }),
+                );
+            }
+            if scenario == "cancel" {
+                attempt.cancellation().cancel();
+            }
+            if scenario == "disabled" {
+                store.set_enabled(&original, false).await.unwrap();
+            }
+        }
+        let result = tokio::time::timeout(Duration::from_secs(2), selected)
+            .await
+            .unwrap();
+        if matches!(scenario, "ready" | "moved" | "busy") {
+            assert_eq!(result.unwrap().account_id(), &original);
+        } else {
+            assert!(result.is_err(), "{scenario}");
+        }
+        assert_eq!(
+            leases.capacity.waiting.load(Ordering::SeqCst),
+            0,
+            "{scenario}"
+        );
+        assert_eq!(leases.capacity.waits.lock().unwrap().len(), 1, "{scenario}");
+    }
+}

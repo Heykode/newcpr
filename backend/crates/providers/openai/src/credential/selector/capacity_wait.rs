@@ -131,6 +131,16 @@ fn sole_interval_deadline(
     context: &AccountSelectionContext,
     limits: &AccountConcurrencySnapshot,
 ) -> Option<SystemTime> {
+    interval_wait_deadline(candidate, context, limits, false)
+}
+
+// Pinned owners cannot escape to another account when the interval and capacity overlap.
+fn interval_wait_deadline(
+    candidate: &AccountCandidate,
+    context: &AccountSelectionContext,
+    limits: &AccountConcurrencySnapshot,
+    pinned: bool,
+) -> Option<SystemTime> {
     if AccountSelector.availability(candidate, context, limits)
         != AccountSchedulingAvailability::Blocked(AccountSchedulingBlocker::RequestInterval)
     {
@@ -138,8 +148,9 @@ fn sole_interval_deadline(
     }
     let mut without_interval = candidate.clone();
     without_interval.signals.last_started_at = None;
-    if AccountSelector.availability(&without_interval, context, limits)
-        != AccountSchedulingAvailability::Ready
+    let available = AccountSelector.availability(&without_interval, context, limits);
+    if available != AccountSchedulingAvailability::Ready
+        && !(pinned && available == AccountSchedulingAvailability::Busy)
     {
         return None;
     }
@@ -384,9 +395,13 @@ impl CodexCredentialSelector {
                     candidate.account.id() == original
                         && (AccountSelector.availability(candidate, &state.context, &limits)
                             == AccountSchedulingAvailability::Busy
-                            || (state.pinned.is_none()
-                                && sole_interval_deadline(candidate, &state.context, &limits)
-                                    .is_some()))
+                            || interval_wait_deadline(
+                                candidate,
+                                &state.context,
+                                &limits,
+                                state.pinned.is_some(),
+                            )
+                            .is_some())
                 })
             {
                 sticky_tried.insert(original.clone());
@@ -853,8 +868,10 @@ impl CodexCredentialSelector {
             .run(self.reload_wait_exclusions(state, request))
             .await?;
         let limits = self.wait_limits()?;
-        let interval_end = (mode == AccountWaitMode::Sticky && state.pinned.is_none())
-            .then(|| sole_interval_deadline(&candidate, &state.context, &limits))
+        let interval_end = (mode == AccountWaitMode::Sticky)
+            .then(|| {
+                interval_wait_deadline(&candidate, &state.context, &limits, state.pinned.is_some())
+            })
             .flatten();
         match AccountSelector.availability(&candidate, &state.context, &limits) {
             AccountSchedulingAvailability::Blocked(AccountSchedulingBlocker::RequestInterval)
@@ -973,16 +990,23 @@ impl CodexCredentialSelector {
                     let limits = self.wait_limits()?;
                     state.context.now = SystemTime::now();
                     self.reload_wait_exclusions(state, request).await?;
+                    let pinned = state.pinned.is_some();
+                    let current_interval =
+                        interval_wait_deadline(&candidate, &state.context, &limits, pinned).filter(
+                            |current| {
+                                pinned
+                                    || interval_end.is_some_and(|end| {
+                                        *current <= end && state.context.now < end
+                                    })
+                            },
+                        );
                     match AccountSelector.availability(&candidate, &state.context, &limits) {
                         AccountSchedulingAvailability::Blocked(
                             AccountSchedulingBlocker::RequestInterval,
-                        ) if interval_end.is_some_and(|end| {
-                            sole_interval_deadline(&candidate, &state.context, &limits)
-                                .is_some_and(|current| current <= end && state.context.now < end)
-                        }) =>
-                        {
-                            // Do not promote before the interval ends or chase a later start.
-                            let remaining = interval_end
+                        ) if current_interval.is_some() => {
+                            // Fixed owners keep waiting through contention under the same deadline.
+                            // Soft affinity still stops when another request moves its original end.
+                            let remaining = current_interval
                                 .and_then(|end| end.duration_since(SystemTime::now()).ok())
                                 .unwrap_or_default();
                             tokio::time::sleep(poll.min(remaining)).await;
@@ -992,7 +1016,9 @@ impl CodexCredentialSelector {
                         AccountSchedulingAvailability::Blocked(_) => {
                             return Ok(WaitOutcome::Changed);
                         }
-                        AccountSchedulingAvailability::Busy if interval_end.is_some() => {
+                        AccountSchedulingAvailability::Busy
+                            if interval_end.is_some() && !pinned =>
+                        {
                             return Ok(WaitOutcome::Changed);
                         }
                         _ => {}
@@ -1033,7 +1059,7 @@ impl CodexCredentialSelector {
                                 AccountWaitFailure::TokenExpired,
                             ));
                         }
-                        ProviderWaitPromotion::Busy { .. } if interval_end.is_some() => {
+                        ProviderWaitPromotion::Busy { .. } if interval_end.is_some() && !pinned => {
                             return Ok(WaitOutcome::Changed);
                         }
                         ProviderWaitPromotion::Busy { .. } => {}
