@@ -247,7 +247,7 @@ fn translate_input(
             .and_then(Value::as_str)
             .unwrap_or("message")
         {
-            "additional_tools" => continue,
+            "additional_tools" | "tool_search_output" => continue,
             "configuration_update" => return Err(ExcelRequestError::Input),
             "compaction_trigger" => {
                 trigger = Some(item.into());

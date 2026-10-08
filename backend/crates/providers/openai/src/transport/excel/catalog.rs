@@ -29,7 +29,7 @@ pub(super) async fn resolve(
     let additional = source
         .get("input")
         .and_then(Value::as_array)
-        .is_some_and(|items| items.iter().any(|item| item["type"] == "additional_tools"));
+        .is_some_and(|items| items.iter().any(super::tools::is_catalog_delta));
     for _ in 0..8 {
         let previous = match key
             .as_ref()
@@ -98,13 +98,65 @@ mod tests {
     #[tokio::test]
     async fn duplicate_annotations_preserve_current_and_inherited_catalogs() {
         use super::super::tests::MemoryReplay;
-        for inherited in [false, true] {
+        for kind in ["additional_tools", "tool_search_output"] {
+            for inherited in [false, true] {
+                let store = MemoryReplay::default();
+                let current = json!({"type":"namespace","name":"workspace","tools":[{
+                    "type":"custom","name":"patch","description":"Current contract",
+                    "format":{"type":"text"},"encrypted":false,"strict":true
+                }]});
+                let initial = json!({"tools":[current.clone()],"input":"begin"});
+                let (_, expected) = resolve(
+                    &store,
+                    "owner",
+                    Some("session"),
+                    None,
+                    initial.as_object().unwrap(),
+                )
+                .await
+                .unwrap();
+                let mut historical = current.clone();
+                historical["tools"][0]["description"] = "Historical description".into();
+                historical["tools"][0]["defer_loading"] = true.into();
+                let mut source = json!({"input":[{"type":kind,"status":"completed","tools":[historical]},{"role":"user","content":"continue"}]});
+                if !inherited {
+                    source["tools"] = json!([current]);
+                }
+                let original = source.clone();
+                let (tools, catalog) = resolve(
+                    &store,
+                    "owner",
+                    Some("session"),
+                    None,
+                    source.as_object().unwrap(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(source, original);
+                assert_eq!(catalog, expected);
+                assert!(tools.instructions().contains("Current contract"));
+                assert!(!tools.instructions().contains("Historical description"));
+                let (_, stored) = resolve(
+                    &store,
+                    "owner",
+                    Some("session"),
+                    None,
+                    json!({"input":"next"}).as_object().unwrap(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(stored, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn conflicting_historical_contract_never_mutates_cached_catalog() {
+        use super::super::tests::MemoryReplay;
+        for kind in ["additional_tools", "tool_search_output"] {
             let store = MemoryReplay::default();
-            let current = json!({"type":"namespace","name":"workspace","tools":[{
-                "type":"custom","name":"patch","description":"Current contract",
-                "format":{"type":"text"},"encrypted":false,"strict":true
-            }]});
-            let initial = json!({"tools":[current.clone()],"input":"begin"});
+            let declaration = json!({"type":"custom","name":"patch","format":{"type":"text"},"strict":true,"encrypted":false});
+            let initial = json!({"tools":[declaration.clone()],"input":"begin"});
             let (_, expected) = resolve(
                 &store,
                 "owner",
@@ -114,90 +166,43 @@ mod tests {
             )
             .await
             .unwrap();
-            let mut historical = current.clone();
-            historical["tools"][0]["description"] = "Historical description".into();
-            historical["tools"][0]["defer_loading"] = true.into();
-            let mut source = json!({"input":[{"type":"additional_tools","tools":[historical]},{"role":"user","content":"continue"}]});
-            if !inherited {
-                source["tools"] = json!([current]);
+            for (field, changed) in [
+                ("type", json!("function")),
+                ("format", json!({"type":"grammar"})),
+                ("strict", json!(false)),
+                ("parameters", json!({"type":"object"})),
+                ("encrypted", json!(true)),
+                ("new_constraint", json!(true)),
+            ] {
+                let mut conflicting = declaration.clone();
+                conflicting[field] = changed;
+                let source =
+                    json!({"input":[{"type":kind,"status":"completed","tools":[conflicting]}]});
+                assert!(
+                    matches!(
+                        resolve(
+                            &store,
+                            "owner",
+                            Some("session"),
+                            None,
+                            source.as_object().unwrap()
+                        )
+                        .await,
+                        Err(ExcelRequestError::Tool)
+                    ),
+                    "{field}"
+                );
+                let (_, stored) = resolve(
+                    &store,
+                    "owner",
+                    Some("session"),
+                    None,
+                    json!({"input":"next"}).as_object().unwrap(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(stored, expected, "{field}");
             }
-            let original = source.clone();
-            let (tools, catalog) = resolve(
-                &store,
-                "owner",
-                Some("session"),
-                None,
-                source.as_object().unwrap(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(source, original);
-            assert_eq!(catalog, expected);
-            assert!(tools.instructions().contains("Current contract"));
-            assert!(!tools.instructions().contains("Historical description"));
-            let (_, stored) = resolve(
-                &store,
-                "owner",
-                Some("session"),
-                None,
-                json!({"input":"next"}).as_object().unwrap(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(stored, expected);
-        }
-    }
-
-    #[tokio::test]
-    async fn conflicting_historical_contract_never_mutates_cached_catalog() {
-        use super::super::tests::MemoryReplay;
-        let store = MemoryReplay::default();
-        let declaration = json!({"type":"custom","name":"patch","format":{"type":"text"},"strict":true,"encrypted":false});
-        let initial = json!({"tools":[declaration.clone()],"input":"begin"});
-        let (_, expected) = resolve(
-            &store,
-            "owner",
-            Some("session"),
-            None,
-            initial.as_object().unwrap(),
-        )
-        .await
-        .unwrap();
-        for (field, changed) in [
-            ("type", json!("function")),
-            ("format", json!({"type":"grammar"})),
-            ("strict", json!(false)),
-            ("parameters", json!({"type":"object"})),
-            ("encrypted", json!(true)),
-            ("new_constraint", json!(true)),
-        ] {
-            let mut conflicting = declaration.clone();
-            conflicting[field] = changed;
-            let source = json!({"input":[{"type":"additional_tools","tools":[conflicting]}]});
-            assert!(
-                matches!(
-                    resolve(
-                        &store,
-                        "owner",
-                        Some("session"),
-                        None,
-                        source.as_object().unwrap()
-                    )
-                    .await,
-                    Err(ExcelRequestError::Tool)
-                ),
-                "{field}"
-            );
-            let (_, stored) = resolve(
-                &store,
-                "owner",
-                Some("session"),
-                None,
-                json!({"input":"next"}).as_object().unwrap(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(stored, expected, "{field}");
         }
     }
 
@@ -228,40 +233,43 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_conflict_is_not_a_successful_delta_merge() {
-        let delta = json!({"input":[{"type":"additional_tools","tools":[{"type":"function","name":"read"}]}]});
-        assert!(matches!(
-            resolve(
-                &Contended,
-                "owner",
-                Some("thread"),
-                None,
-                delta.as_object().unwrap()
-            )
-            .await,
-            Err(ExcelRequestError::CatalogConflict)
-        ));
-        let explicit = json!({"tools":[{"type":"function","name":"read"}],"input":"hello"});
-        assert!(
-            resolve(
-                &Contended,
-                "owner",
-                Some("thread"),
-                None,
-                explicit.as_object().unwrap()
-            )
-            .await
-            .is_ok()
-        );
-        assert!(
-            resolve(
-                &gateway_core::provider_ports::UnavailableProviderReplay,
-                "owner",
-                Some("thread"),
-                None,
-                delta.as_object().unwrap()
-            )
-            .await
-            .is_ok()
-        );
+        for kind in ["additional_tools", "tool_search_output"] {
+            let delta =
+                json!({"input":[{"type":kind,"tools":[{"type":"function","name":"read"}]}]});
+            assert!(matches!(
+                resolve(
+                    &Contended,
+                    "owner",
+                    Some("thread"),
+                    None,
+                    delta.as_object().unwrap()
+                )
+                .await,
+                Err(ExcelRequestError::CatalogConflict)
+            ));
+            let explicit = json!({"tools":[{"type":"function","name":"read"}],"input":"hello"});
+            assert!(
+                resolve(
+                    &Contended,
+                    "owner",
+                    Some("thread"),
+                    None,
+                    explicit.as_object().unwrap()
+                )
+                .await
+                .is_ok()
+            );
+            assert!(
+                resolve(
+                    &gateway_core::provider_ports::UnavailableProviderReplay,
+                    "owner",
+                    Some("thread"),
+                    None,
+                    delta.as_object().unwrap()
+                )
+                .await
+                .is_ok()
+            );
+        }
     }
 }

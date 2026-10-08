@@ -13,6 +13,17 @@ use super::{
 
 const MAX_SCHEMA_BYTES: usize = 1024 * 1024;
 
+pub(super) fn is_catalog_delta(item: &Value) -> bool {
+    match item.get("type").and_then(Value::as_str) {
+        Some("additional_tools") => true,
+        Some("tool_search_output") => {
+            matches!(item.get("status"), None | Some(Value::Null))
+                || item.get("status").and_then(Value::as_str) == Some("completed")
+        }
+        _ => false,
+    }
+}
+
 // Match Sub2API #139: annotations can change, execution constraints cannot.
 // Keep the first (explicit/inherited) declaration ahead of historical additions.
 fn tool_definition(value: &Value) -> Value {
@@ -50,6 +61,11 @@ enum ToolChoice {
     Auto,
     Required,
     Named(String),
+    Allowed {
+        names: BTreeSet<String>,
+        required: bool,
+        wire: Value,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -116,7 +132,7 @@ impl ClientTools {
         }
         if let Some(input) = source.get("input").and_then(Value::as_array) {
             for item in input {
-                if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
+                if is_catalog_delta(item) {
                     tools.add(item.get("tools").ok_or(ExcelRequestError::Tool)?, None, 0)?;
                 }
             }
@@ -137,6 +153,40 @@ impl ClientTools {
             None => {}
         }
         let fields = choice.as_object().ok_or(invalid)?;
+        if fields.get("type").and_then(Value::as_str) == Some("allowed_tools") {
+            if fields
+                .keys()
+                .any(|key| !matches!(key.as_str(), "type" | "mode" | "tools"))
+            {
+                return Err(invalid);
+            }
+            let required = match fields.get("mode").and_then(Value::as_str) {
+                Some("auto") => false,
+                Some("required") => true,
+                _ => return Err(invalid),
+            };
+            let names = fields
+                .get("tools")
+                .and_then(Value::as_array)
+                .ok_or(invalid)?
+                .iter()
+                .map(|selector| self.selected_name(selector))
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            if required && names.is_empty() {
+                return Err(invalid);
+            }
+            return Ok(ToolChoice::Allowed {
+                names,
+                required,
+                wire: choice.clone(),
+            });
+        }
+        Ok(ToolChoice::Named(self.selected_name(choice)?))
+    }
+
+    fn selected_name(&self, selector: &Value) -> Result<String, ExcelRequestError> {
+        let invalid = ExcelRequestError::Tool;
+        let fields = selector.as_object().ok_or(invalid)?;
         if fields
             .keys()
             .any(|key| !matches!(key.as_str(), "type" | "name" | "namespace"))
@@ -156,7 +206,7 @@ impl ClientTools {
         if spec.kind != kind {
             return Err(invalid);
         }
-        Ok(ToolChoice::Named(name))
+        Ok(name)
     }
 
     fn add(
@@ -298,7 +348,10 @@ impl ClientTools {
             )
         };
         if self.specs.is_empty() {
-            return format!("{EXTERNAL_CLIENT_INSTRUCTIONS}{warning}");
+            return format!(
+                "{EXTERNAL_CLIENT_INSTRUCTIONS}{}{warning}",
+                self.choice_instructions()
+            );
         }
         let catalog = Value::Array(self.specs.values().map(|s| s.catalog.clone()).collect());
         format!(
@@ -320,6 +373,12 @@ impl ClientTools {
             ToolChoice::Auto => String::new(),
             ToolChoice::Required => "\nThe client requires at least one declared client tool call in this response, unless you explicitly refuse the request.".into(),
             ToolChoice::Named(name) => format!("\nThe client requires exactly one call to catalog tool {name}; do not substitute another tool. An explicit refusal is allowed."),
+            ToolChoice::Allowed { names, required, .. } => format!(
+                "\nOnly these exact catalog tools may be called in this response: {}. Other catalog entries are for history only. {}",
+                serde_json::to_string(names).expect("tool names serialize"),
+                if *required { "Call at least one allowed tool unless explicitly refusing the request." }
+                else { "Calling a tool is optional; an empty allowed list forbids all tool calls." }
+            ),
         }
     }
 
@@ -460,6 +519,7 @@ impl ClientTools {
     pub(crate) fn validate_call_count(&self, count: usize) -> Result<(), ExcelRequestError> {
         if (self.serial && count > 1)
             || matches!(self.choice, ToolChoice::Required) && count == 0
+            || matches!(self.choice, ToolChoice::Allowed { required: true, .. }) && count == 0
             || matches!(self.choice, ToolChoice::Named(_)) && count != 1
         {
             Err(ExcelRequestError::ToolCall)
@@ -507,6 +567,7 @@ impl ClientTools {
         match &self.choice {
             ToolChoice::Auto => {}
             ToolChoice::Required => response["tool_choice"] = "required".into(),
+            ToolChoice::Allowed { wire, .. } => response["tool_choice"] = wire.clone(),
             ToolChoice::Named(key) => {
                 if let Some(spec) = self.specs.get(key) {
                     let mut choice = json!({"type":spec.kind,"name":spec.name});
@@ -560,9 +621,11 @@ impl ClientTools {
                     .flatten()
             })
             .ok_or(ExcelRequestError::UnknownTool)?;
-        if let ToolChoice::Named(required) = &self.choice
-            && key != required
-        {
+        if match &self.choice {
+            ToolChoice::Named(required) => key != required,
+            ToolChoice::Allowed { names, .. } => !names.contains(key),
+            _ => false,
+        } {
             return Err(invalid);
         }
         if (marked && spec.kind != "custom")

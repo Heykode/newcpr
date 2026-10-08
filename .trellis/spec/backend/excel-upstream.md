@@ -757,3 +757,61 @@ genuine upstream rejections and any untested scenarios.
 - Wrong: teach the shared native decoder new Excel-specific semantics or reset account
   credentials from an error's embedded status. Correct: normalize at the Excel boundary
   and explicitly preserve HTTP-versus-semantic provenance.
+
+# Excel Compatibility: Discovered Tools And Response Framing
+
+## 1. Scope / Trigger
+- Adapt the locally audited CPA discovery, allowed-selection and completion behaviors
+  inside Excel only. No scheduling, account identity, egress, image, native Codex,
+  dependency or retry-budget changes. The reference snapshot is not proof of latest upstream.
+
+## 2. Signatures
+- `tools::is_catalog_delta(&Value) -> bool` is shared by `ClientTools::parse` and
+  `catalog::resolve`; catalog ownership and compare/exchange rules are unchanged.
+- `events::ResponseDecoder::{push, finish}` frames SSE or one JSON object;
+  `events::normalize(SseEvent)` runs per event before relay/correction processing.
+
+## 3. Contracts
+- `tool_search_output` accepts completed or unspecified/null status as discovery.
+  Other explicit statuses cannot register tools. Consume these metadata items in the
+  outgoing copy, without deleting source/replay history. Explicit/inherited declarations
+  still win over description changes; execution-constraint conflicts still fail.
+- `allowed_tools` requires auto/required mode and exact function/custom selectors.
+  Empty auto permits no calls; empty required is invalid. Keep the full catalog for
+  history and future turns. Apply the subset to direct/wrapped calls and correction,
+  retaining schema, serial-call, explicit-refusal and atomic batch validation.
+- Reuse the SSE parser and existing event buffer limit. JSON framing scans each byte
+  once; serde_json validates the complete value. A complete object need not wait for EOF.
+- Normalize response.done/done/completed and failure/cancellation aliases. Success
+  requires nonempty response ID and an output array. An explicit terminal alias may
+  supply absent status; a standalone body must report completed status. Never reconstruct
+  missing output. Explicit failures outrank success; cancellation provenance is retained.
+- Normalize events individually so junk after an accepted terminal cannot retroactively
+  reject it. Apply the same decoder to correction streams; preserve metering and replay
+  commit ordering. Strict raw-SSE recovery probes retain their separate EOF contract.
+
+## 4. Validation & Error Matrix
+- Unknown/wrong-type allowed selector or incompatible tool schema -> existing tool error.
+- Failed discovery -> no new declaration and no upstream discovery metadata.
+- Truncated/malformed/nonterminal JSON or incomplete response -> no successful completion.
+- Failed/cancelled correction -> sanitized semantic error, no tool batch or new parent.
+- Valid JSON compaction -> accepted, but encrypted compaction output validation remains.
+
+## 5. Good / Base / Bad Cases
+- Good: discovered files.patch is usable this turn and by the same owner/session later.
+- Base: canonical SSE and native HTTP/WS remain unchanged.
+- Bad: drop tools outside the current subset from reusable history, or infer success
+  from an arbitrary object containing only an ID.
+
+## 6. Tests Required
+- Discovery isolation, annotation priority, execution conflicts and catalog CAS conflicts.
+- Direct/wrapped custom/function subsets, schema, serial mode, refusal and history.
+- Byte-split JSON/BOM/Unicode/escapes, multiline SSE, EOF tails, failure precedence,
+  terminal-before-EOF, no partial calls, local HTTP correction and single cumulative usage.
+- Provider library/integration, API/protocol and exact private-test architecture checks.
+
+## 7. Wrong vs Correct
+- Wrong: map every failed response to generic failure and lose cancelled provenance.
+  Correct: normalize aliases while retaining the existing cancellation projection.
+- Wrong: validate every event in a chunk before processing its first terminal.
+  Correct: normalize per event, stop after genuine terminal validation succeeds.

@@ -1,0 +1,9 @@
+{
+  "from_version": "3.22.1",
+  "to_version": "3.23.0",
+  "from_migrations_tree": "9f2a609cc8ee00680e3eacddcc1af5d6b5dbe57f",
+  "to_migrations_tree": "a36f8520df448be5c84d0419ac37d1052661b5a2",
+  "added": ["0068_preferred_account_affinity.sql"],
+  "modified_documentation": ["README.md"],
+  "recovery": "manual"
+}

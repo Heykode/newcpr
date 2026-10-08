@@ -1074,13 +1074,32 @@ mod tests {
             "id":"resp_compact_fixture","status":"in_progress","output":[]
         }});
         let terminal = json!({"type":"response.completed","response":complete});
+        let mut incomplete = complete.clone();
+        incomplete["status"] = "incomplete".into();
+        let mut failed = complete.clone();
+        failed["error"] = json!({"code":"rate_limit_exceeded"});
         for (body, content_type, valid) in [
             (
                 format!("data: {created}\n\ndata: {terminal}\n\n"),
                 "text/event-stream",
                 true,
             ),
-            (complete.to_string(), "application/json", false),
+            (complete.to_string(), "application/json", true),
+            (
+                format!(
+                    "event: response.done\ndata: {}\n\n",
+                    json!({"response":complete})
+                ),
+                "text/event-stream",
+                true,
+            ),
+            (incomplete.to_string(), "application/json", false),
+            (failed.to_string(), "application/json", false),
+            (
+                "{\"id\":\"resp_compact_fixture\",\"output\":[".into(),
+                "application/json",
+                false,
+            ),
             (format!("data: {created}\n\n"), "text/event-stream", false),
         ] {
             let server = MockServer::start().await;

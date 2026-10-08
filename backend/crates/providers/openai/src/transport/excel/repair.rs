@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use futures::{StreamExt, future::BoxFuture, stream::BoxStream};
-use gateway_protocol::openai::sse::{SseError, SseEventDecoder};
+use gateway_protocol::openai::sse::SseError;
 use serde_json::{Map, Value, json};
 
 use super::{
@@ -522,7 +522,7 @@ fn read_response<'a>(
     usage_policy: &'a ExcelUsagePolicy,
 ) -> BoxStream<'a, Result<Option<Value>, CodexClientError>> {
     Box::pin(async_stream::try_stream! {
-    let mut decoder = SseEventDecoder::default();
+    let mut decoder = super::events::ResponseDecoder::default();
     let mut bytes = 0usize;
     let mut pending = BTreeSet::new();
     let mut observed_usage = json!({});
@@ -539,6 +539,7 @@ fn read_response<'a>(
             decoder.finish()?
         };
         for event in events {
+            let event = super::events::normalize(event)?;
             if event.data == "[DONE]" {
                 continue;
             }

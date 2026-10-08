@@ -112,6 +112,10 @@ def reviewed_upgrade(name, old_labels, proof, commit):
     changes = images.git("diff", "--name-status", source, commit, "--", "backend/migrations").splitlines()
     expected = {"A\tbackend/migrations/" + item for item in plan["added"]}
     expected.add("M\tbackend/migrations/.frozen-sha256")
+    documentation = plan.get("modified_documentation", [])
+    if documentation not in ([], ["README.md"]):
+        raise images.Unavailable("Only the migration README may be reviewed as documentation")
+    expected.update("M\tbackend/migrations/" + item for item in documentation)
     if set(changes) != expected:
         raise images.Unavailable("Migration changes differ from the reviewed additions")
     # Preserve exact bytes: git() strips trailing whitespace, SQLx checksums do not.
