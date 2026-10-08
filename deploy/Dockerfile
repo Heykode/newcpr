@@ -44,12 +44,14 @@ FROM ${POSTGRES_IMAGE} AS pg-client
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime-base
 
+ARG CPR_SECURITY_REFRESH=unknown
 ENV TZ=Asia/Shanghai
 
 # 运行时基础只从 Debian 官方源补 libpq（pg_dump 的动态依赖；ABI 兼容，无需引入第三方
 # APT 源）。pg_dump/pg_restore 二进制由 pg-client stage COPY，构建期不依赖运行时安装。
 # 更新基础镜像已有的系统包，使固定 digest 的镜像也能获取 Debian 安全更新。
-RUN apt-get update \
+RUN printf 'security refresh: %s\n' "${CPR_SECURITY_REFRESH}" >/dev/null \
+    && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl tzdata libpq5 python3 python3-venv \
     && install -d /usr/lib/postgresql/18/bin \

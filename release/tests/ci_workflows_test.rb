@@ -65,6 +65,7 @@ class CiWorkflowsTest < Minitest::Test
     image = step(CONTAINER, "container", "Build runtime image")["with"]
     assert_equal "runtime-ci", image["target"]
     assert_equal "linux/amd64", image["platforms"]
+    assert_includes image["build-args"], "CPR_SECURITY_REFRESH=${{ steps.identity.outputs.security_refresh }}"
     assert_includes image["labels"], "org.opencontainers.image.revision=${{ inputs.ref }}"
     dockerfile = File.read(File.join(ROOT, "deploy/Dockerfile"))
     assert_match(/FROM rust:[^\n]+@sha256:[a-f0-9]{64} AS backend-toolchain/, dockerfile)
@@ -72,6 +73,7 @@ class CiWorkflowsTest < Minitest::Test
     stage = dockerfile.split("FROM runtime-base AS runtime-ci", 2).last.split("FROM runtime-base AS runtime-prebuilt", 2).first
     assert_includes stage, "COPY --from=frontend-builder"
     assert_includes stage, "${CPR_PREBUILT_DIR}/linux-amd64/codex-proxy-rs"
+    assert_includes dockerfile, "ARG CPR_SECURITY_REFRESH=unknown"
     assert_equal "backend-toolchain", step(CONTAINER, "container", "Load pinned backend toolchain")["with"]["target"]
     backend = dockerfile.split("FROM backend-toolchain AS backend-builder", 2).last.split(/^FROM /, 2).first
     copied = backend.lines.grep(/^COPY /).flat_map { |line| line.split[1...-1] }
