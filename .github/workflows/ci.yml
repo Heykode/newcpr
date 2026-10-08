@@ -31,6 +31,8 @@ jobs:
       frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
       container: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.container == 'true' }}
       deployment: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.deployment == 'true' }}
+      backend_packages: ${{ steps.backend-plan.outputs.backend_packages || '[]' }}
+      redis_acl: ${{ steps.backend-plan.outputs.redis_acl != 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,23 +63,26 @@ jobs:
               - 'release/version.yaml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_quality.yml'
+              - '.github/workflows/_container.yml'
+              - 'release/ci_plan.py'
+              - 'release/build_ci_backend.sh'
+              - 'deploy/Dockerfile'
             frontend:
               - 'frontend/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_quality.yml'
             container:
               - 'backend/**'
+              - 'frontend/**'
               - 'deploy/**'
               - '.dockerignore'
               - 'release/version.yaml'
               - '.github/actions/**'
               - '.github/workflows/_container.yml'
               - '.github/workflows/ci.yml'
-              - 'frontend/package.json'
-              - 'frontend/pnpm-lock.yaml'
-              - 'frontend/pnpm-workspace.yaml'
-              - 'frontend/vite.config.*'
-              - 'frontend/tsconfig*.json'
+              - '.github/workflows/_quality.yml'
+              - 'release/ci_plan.py'
+              - 'release/build_ci_backend.sh'
               - 'release/verified_image.py'
               - 'release/deploy.py'
             deployment:
@@ -87,6 +92,15 @@ jobs:
               - '.github/workflows/ci.yml'
               - '.github/workflows/_container.yml'
 
+      - name: Plan affected backend packages
+        id: backend-plan
+        if: github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: python3 release/ci_plan.py plan --base "$BASE_SHA" --head "$HEAD_SHA" --event "$EVENT"
+
   quality:
     needs: changes
     if: needs.changes.outputs.reused != 'true'
@@ -95,6 +109,8 @@ jobs:
       ref: ${{ github.event.pull_request.head.sha || github.sha }}
       run_backend: ${{ needs.changes.outputs.backend == 'true' }}
       run_frontend: ${{ needs.changes.outputs.frontend == 'true' }}
+      backend_packages: ${{ needs.changes.outputs.backend_packages }}
+      run_redis_acl: ${{ needs.changes.outputs.redis_acl == 'true' }}
 
   container:
     needs: changes
