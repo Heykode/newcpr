@@ -100,13 +100,9 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
             "状态探针每轮固定一次，两次请求串行执行",
         ));
     }
-    if matches!(
-        config.failure_action,
-        QualityFailureAction::EnableExcel | QualityFailureAction::ApplyAccountTemplate
-    ) && config.auto_restore
-    {
+    if config.failure_action == QualityFailureAction::EnableExcel && config.auto_restore {
         return Err(AdminError::invalid(
-            "开启Excel或应用模板不支持自动恢复账号配置",
+            "旧版开启Excel规则不支持自动恢复账号配置",
         ));
     }
     if config.failure_action == QualityFailureAction::ApplyAccountTemplate {
@@ -120,6 +116,8 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
         }
         template.config.settings()?;
     }
+    // Retain the legacy field for stored template compatibility; template actions
+    // ignore it and use auto_restore exclusively.
     if config.disable_excel_on_native_recovery
         && (config.detection_mode != QualityDetectionMode::StateProbe
             || !matches!(
@@ -128,7 +126,7 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
             ))
     {
         return Err(AdminError::invalid(
-            "原生恢复后关闭Excel仅适用于状态探针的开启Excel或应用模板规则",
+            "原生恢复后关闭Excel仅适用于旧版状态探针开启Excel规则",
         ));
     }
     if !(1..=100).contains(&config.excel_failure_threshold) {
@@ -1017,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn quality_template_requires_versioned_valid_settings_and_never_auto_restores() {
+    fn quality_template_requires_versioned_valid_settings_and_supports_auto_restore() {
         let value = serde_json::json!({
             "detectionMode": "state_probe", "accountId": "account", "model": "model",
             "enabled": true, "cron": "0 */6 * * *", "timezone": "UTC", "repetitions": 1,
@@ -1038,7 +1036,13 @@ mod tests {
         );
         assert!(validate(&config).is_ok());
         config.auto_restore = true;
-        assert!(validate(&config).is_err());
+        assert!(validate(&config).is_ok());
+        config.disable_excel_on_native_recovery = true;
+        assert!(
+            validate(&config).is_ok(),
+            "legacy template field remains readable"
+        );
+        config.disable_excel_on_native_recovery = false;
         config.auto_restore = false;
         for revision in [0, 9_007_199_254_740_991, u64::MAX] {
             config.failure_template.as_mut().unwrap().revision = revision;

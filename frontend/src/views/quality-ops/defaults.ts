@@ -23,7 +23,7 @@ export function newQualityConfig(timezone: string): QualityRuleConfig {
     failureTemplate: null,
     failureGroupIds: [],
     autoRestore: false,
-    disableExcelOnNativeRecovery: true,
+    disableExcelOnNativeRecovery: false,
     excelFailureThreshold: 2,
     excelRecoveryThreshold: 2,
   }

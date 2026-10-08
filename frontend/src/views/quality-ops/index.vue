@@ -86,6 +86,9 @@ const batchDeleteError = ref('')
 const editing = ref<QualityRule | null>(null)
 const selectedAccounts = ref<string[]>([])
 const actions: Record<string, string> = {
+  template_restored: '已恢复应用模板前的账号配置',
+  template_restore_blocked: '原配置暂不可恢复，将在后续通过时重试',
+  template_recovery_released: '账号配置已变更，已放弃模板自动恢复',
   template_applied: '已应用账号模板',
   template_applied_probe_paused: '已应用账号模板并暂停状态探针',
   template_unavailable: '模板已删除或版本变化，请重新选择',
@@ -166,7 +169,7 @@ const selectedTemplate = computed({
 })
 const isProbe = computed(() => draft.value.detectionMode === 'state_probe')
 watch(() => draft.value.failureAction, (action) => {
-  if (usesFailureThreshold(action))
+  if (action === 'enable_excel')
     draft.value.autoRestore = false
 })
 function verdictLabel(status: string | null, mode?: QualityRuleConfig['detectionMode']) {
@@ -501,9 +504,9 @@ async function save() {
     config.repetitions = 1
     config.reasoningEffort = null
   }
-  if (usesFailureThreshold(config.failureAction))
+  if (config.failureAction === 'enable_excel')
     config.autoRestore = false
-  if (config.detectionMode !== 'state_probe' || !usesFailureThreshold(config.failureAction))
+  if (config.detectionMode !== 'state_probe' || config.failureAction !== 'enable_excel')
     config.disableExcelOnNativeRecovery = false
   if (config.failureAction !== 'apply_account_template')
     delete config.failureTemplate
@@ -788,8 +791,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-    <div v-if="activeTab === 'rules'" class="grid min-w-0 gap-5 xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
-      <section class="min-w-0">
+    <div v-if="activeTab === 'rules'" class="quality-monitor-panels grid min-w-0 gap-5 xl:h-[min(70dvh,900px)] xl:min-h-96 xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
+      <section class="flex min-h-0 min-w-0 flex-col">
         <div class="mb-3 flex items-center justify-between gap-3">
           <h2 class="text-base font-semibold">
             检测规则
@@ -809,7 +812,7 @@ onBeforeUnmount(() => {
         <p v-if="batchDeleteError" role="alert" class="mt-2 text-cp-sm break-words text-cp-error">
           {{ batchDeleteError }}
         </p>
-        <div class="mt-3 max-h-[65vh] space-y-1 overflow-y-auto pr-1">
+        <div class="quality-rule-list mt-3 min-h-0 max-h-[65vh] flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1 xl:max-h-none">
           <div v-for="rule in visibleRules" :key="rule.id" class="quality-rule rounded-lg border py-3 transition-colors" :class="selectedId === rule.id ? 'quality-rule-selected border-cp-border bg-cp-bg-container' : 'border-transparent hover:bg-cp-bg-container'">
             <button type="button" class="grid w-full min-w-0 gap-1 px-3 text-left text-cp-text outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline" :aria-pressed="selectedId === rule.id" @click="selectedId = rule.id">
               <span class="truncate font-semibold" :title="accountName(rule.config.accountId)">{{ accountName(rule.config.accountId) }}</span>
@@ -845,7 +848,7 @@ onBeforeUnmount(() => {
           </p>
         </div>
       </section>
-      <section class="min-w-0 xl:border-l xl:border-cp-border xl:pl-6">
+      <section class="quality-run-panel min-h-0 min-w-0 max-h-[70dvh] overflow-y-auto overscroll-contain xl:max-h-none xl:border-l xl:border-cp-border xl:pl-6">
         <div v-if="selected" class="mb-5 min-w-0 border-b border-cp-border pb-4">
           <div class="flex min-w-0 items-center justify-between gap-3">
             <p class="min-w-0 truncate text-base font-semibold" :title="accountName(selected.config.accountId)">
@@ -1082,20 +1085,15 @@ onBeforeUnmount(() => {
             <span>连续异常多少轮后执行处置</span>
             <BaseNumberInput v-model="draft.excelFailureThreshold" label="连续异常阈值" :min="1" :max="100" />
             <p class="text-xs text-cp-text-secondary">
-              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。除单独勾选的原生恢复关闭 Excel 外，不会撤销已应用的配置。
+              明确异常每轮计 1 次，正常轮清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。
             </p>
           </div>
-          <BaseSwitch v-if="!usesFailureThreshold(draft.failureAction)" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
-          <BaseCheckbox v-if="isProbe && usesFailureThreshold(draft.failureAction)" v-model="draft.disableExcelOnNativeRecovery" label="原生通道恢复正常后自动关闭 Excel" show-label />
-          <div v-if="isProbe && usesFailureThreshold(draft.failureAction) && draft.disableExcelOnNativeRecovery" class="grid gap-2 text-cp-sm">
-            <span>连续正常多少轮后关闭 Excel</span>
-            <BaseNumberInput :model-value="draft.excelRecoveryThreshold ?? 1" label="连续正常阈值" :min="1" :max="100" @update:model-value="draft.excelRecoveryThreshold = $event" />
-            <p class="text-xs text-cp-text-secondary">
-              正常轮累计，明确异常清零，无法判断或请求失败不累计也不清零。保存规则会清零计数。
-            </p>
-          </div>
+          <p v-if="draft.failureAction === 'apply_account_template'" class="text-xs text-cp-text-secondary">
+            开启自动恢复后，后续整轮通过会恢复本规则应用前的账号配置；后续人工修改会终止本规则的恢复权限。旧处置未保存原配置时不会推测恢复。
+          </p>
+          <BaseSwitch v-if="draft.failureAction !== 'enable_excel'" v-model="draft.autoRestore" label="后续整轮通过后自动恢复" show-label />
           <p v-if="isProbe" class="text-xs text-cp-text-secondary">
-            即使账号已开启 Excel，状态探针也继续检测原生 Codex 通道。勾选恢复选项只关闭本规则开启且未被后续人工设置覆盖的 Excel，不撤销模板其他配置。未勾选则只检测，不自动关闭。
+            即使账号已开启 Excel，状态探针也继续检测原生 Codex 通道。
           </p>
           <p class="text-xs text-cp-text-secondary">
             {{ isProbe ? '无法判断时不执行处置。换票结果仅表示探针观察，不等于模型能力的完整评估。' : '仅明确答错触发处置，网络或判题错误不算降质。只撤销本规则的改动，不解除其他停用原因。' }}

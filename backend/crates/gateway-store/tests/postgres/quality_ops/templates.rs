@@ -478,8 +478,107 @@ async fn template_controls_codex_and_scheduling_and_probe_lifecycle() {
 }
 
 #[tokio::test]
-async fn native_recovery_closes_template_owned_excel_without_reverting_other_settings() {
-    let Some(db) = TestDatabase::create("quality_template_native_recovery").await else {
+async fn template_recovery_restores_complete_configuration_and_preserves_credentials() {
+    for mode in [
+        QualityDetectionMode::Answer,
+        QualityDetectionMode::StateProbe,
+    ] {
+        let Some(db) = TestDatabase::create("quality_template_restore").await else {
+            return;
+        };
+        let store = setup(&db).await;
+        let mut template = template(&db).await;
+        template.config.enabled = false;
+        template.config.excel_recovery =
+            Some(gateway_admin::model::excel_recovery::ExcelRecoveryConfig {
+                enabled: true,
+                interval_minutes: 10,
+            });
+        sqlx::query("update account_relogin_templates set config=$1")
+            .bind(serde_json::to_value(&template.config).unwrap())
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let before = snapshot(&db).await;
+        let mut config = config("acct_quality_a");
+        config.detection_mode = mode;
+        config.failure_action = QualityFailureAction::ApplyAccountTemplate;
+        config.failure_template = Some(template);
+        config.auto_restore = true;
+        let rule = store
+            .save(None, None, config, Utc::now(), &context())
+            .await
+            .unwrap();
+        assert_eq!(
+            scheduled_round(&store, &rule, &[QualityVerdict::Incorrect])
+                .await
+                .action
+                .as_deref(),
+            Some("template_applied")
+        );
+        let recovery: (bool, i32) = sqlx::query_as("select enabled,interval_minutes from account_excel_recovery where account_id='acct_quality_a'").fetch_one(&db.pool).await.unwrap();
+        assert_eq!(recovery, (true, 10));
+        assert_eq!(snapshot(&db).await["account"]["enabled"], false);
+        assert!(
+            store.rules().await.unwrap()[0].config.enabled,
+            "keep probing paused account"
+        );
+        assert_eq!(
+            scheduled_round(&store, &rule, &[QualityVerdict::Incorrect])
+                .await
+                .action
+                .as_deref(),
+            Some("already_applied")
+        );
+        for verdict in [QualityVerdict::Unknown, QualityVerdict::RequestError] {
+            assert!(
+                scheduled_round(&store, &rule, &[verdict])
+                    .await
+                    .action
+                    .is_none()
+            );
+            assert_eq!(snapshot(&db).await["account"]["enabled"], false);
+        }
+        // A credential refresh after the template must survive configuration recovery.
+        sqlx::query("update provider_accounts set credential_revision=credential_revision+1 where id='acct_quality_a'").execute(&db.pool).await.unwrap();
+        assert_eq!(
+            scheduled_round(&store, &rule, &[QualityVerdict::Correct])
+                .await
+                .action
+                .as_deref(),
+            Some("template_restored")
+        );
+        let mut restored = snapshot(&db).await;
+        assert_eq!(
+            restored["account"]["credential_revision"].as_i64(),
+            before["account"]["credential_revision"]
+                .as_i64()
+                .map(|v| v + 1)
+        );
+        restored["account"]["credential_revision"] =
+            before["account"]["credential_revision"].clone();
+        restored["account"]["updated_at"] = before["account"]["updated_at"].clone();
+        assert_eq!(restored, before);
+        let count: i64 = sqlx::query_scalar(
+            "select count(*) from account_excel_recovery where account_id='acct_quality_a'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+        assert!(
+            scheduled_round(&store, &rule, &[QualityVerdict::Correct])
+                .await
+                .action
+                .is_none()
+        );
+        db.close().await;
+    }
+}
+
+#[tokio::test]
+async fn template_recovery_is_opt_in_and_ignores_legacy_excel_only_recovery() {
+    let Some(db) = TestDatabase::create("quality_template_no_restore").await else {
         return;
     };
     let store = setup(&db).await;
@@ -488,31 +587,92 @@ async fn native_recovery_closes_template_owned_excel_without_reverting_other_set
     config.detection_mode = QualityDetectionMode::StateProbe;
     config.failure_action = QualityFailureAction::ApplyAccountTemplate;
     config.failure_template = Some(template);
-    config.disable_excel_on_native_recovery = true;
+    config.disable_excel_on_native_recovery = true; // persisted legacy config
     let rule = store
-        .save(
-            None,
-            None,
-            config,
-            Utc::now() + Duration::hours(1),
-            &context(),
-        )
+        .save(None, None, config, Utc::now(), &context())
         .await
         .unwrap();
     scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
     let applied = snapshot(&db).await;
-    assert_eq!(applied["account"]["responses_upstream"], "excel");
-    let run = scheduled_round(&store, &rule, &[QualityVerdict::Correct]).await;
     assert_eq!(
-        run.action.as_deref(),
-        Some("excel_disabled_native_recovered")
+        scheduled_round(&store, &rule, &[QualityVerdict::Correct])
+            .await
+            .action
+            .as_deref(),
+        Some("already_applied")
     );
-    let mut restored = snapshot(&db).await;
-    assert_eq!(restored["account"]["responses_upstream"], "codex");
-    restored["account"]["responses_upstream"] = applied["account"]["responses_upstream"].clone();
-    restored["account"]["updated_at"] = applied["account"]["updated_at"].clone();
-    assert_eq!(restored, applied, "only route and timestamp may change");
+    assert_eq!(snapshot(&db).await, applied);
     db.close().await;
+}
+
+#[tokio::test]
+async fn template_recovery_does_not_override_manual_edits_or_independent_protection() {
+    for (label, change, expected) in [
+        (
+            "manual_same_value",
+            "insert into admin_audit_events(id,actor_kind,actor_ref,action,entity_kind,entity_ref,config_revision,changed_fields,created_at) values('manual-same-value','system','system','provider_account.update','provider_account','acct_quality_a',999,array['responses_upstream'],now())",
+            "template_recovery_released",
+        ),
+        (
+            "edit",
+            "update provider_accounts set weight=31 where id='acct_quality_a'",
+            "template_recovery_released",
+        ),
+        (
+            "quota",
+            "update provider_accounts set quota_access_state='exhausted',quota_evidence='usage_limit_reached',quota_access_observed_at=now(),updated_at=now() where id='acct_quality_a'",
+            "template_restore_blocked",
+        ),
+        (
+            "expired",
+            "update provider_accounts set credential_state='expired' where id='acct_quality_a'",
+            "template_restore_blocked",
+        ),
+        (
+            "protection",
+            "update provider_accounts set excel_auto_disabled_at=now() where id='acct_quality_a'",
+            "template_restore_blocked",
+        ),
+        (
+            "identity",
+            "update provider_accounts set upstream_user_id='changed-user' where id='acct_quality_a'",
+            "template_recovery_released",
+        ),
+    ] {
+        let Some(db) = TestDatabase::create(label).await else {
+            return;
+        };
+        let store = setup(&db).await;
+        let template = template(&db).await;
+        let mut rule = save(&store, &template, 1).await;
+        rule.config.auto_restore = true;
+        rule = store
+            .save(
+                Some(&rule.id),
+                Some(rule.revision),
+                rule.config.clone(),
+                Utc::now(),
+                &context(),
+            )
+            .await
+            .unwrap();
+        scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+        sqlx::query(sqlx::AssertSqlSafe(change))
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let before = snapshot(&db).await;
+        assert_eq!(
+            scheduled_round(&store, &rule, &[QualityVerdict::Correct])
+                .await
+                .action
+                .as_deref(),
+            Some(expected),
+            "{label}"
+        );
+        assert_eq!(snapshot(&db).await, before, "{label}");
+        db.close().await;
+    }
 }
 
 #[tokio::test]
@@ -755,4 +915,139 @@ async fn template_vetoes_preexisting_403_and_stale_claims_but_allows_independent
         );
     }
     db.close().await;
+}
+
+#[tokio::test]
+async fn template_recovery_waits_for_missing_references_and_retains_existing_recovery_settings() {
+    let Some(db) = TestDatabase::create("quality_restore_refs").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    sqlx::query("insert into account_groups(id,name,color,enabled,created_at,updated_at) values('grp_00000000000000000000000000000002','Original group','#FFFFFFFF',true,now(),now())")
+        .execute(&db.pool).await.unwrap();
+    sqlx::query("insert into account_group_accounts(provider_account_id,account_group_id,created_at) values('acct_quality_a','grp_00000000000000000000000000000002',now())")
+        .execute(&db.pool).await.unwrap();
+    sqlx::query("update provider_accounts set outbound_proxy_url='http://proxy.example:8080' where id='acct_quality_a'")
+        .execute(&db.pool).await.unwrap();
+    sqlx::query("insert into account_excel_recovery(account_id,enabled,interval_minutes,next_probe_at) values('acct_quality_a',false,17,now())")
+        .execute(&db.pool).await.unwrap();
+    let before = snapshot(&db).await;
+    let mut template = template(&db).await;
+    template.config.excel_recovery =
+        Some(gateway_admin::model::excel_recovery::ExcelRecoveryConfig {
+            enabled: true,
+            interval_minutes: 10,
+        });
+    sqlx::query("update account_relogin_templates set config=$1")
+        .bind(serde_json::to_value(&template.config).unwrap())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let mut rule = save(&store, &template, 1).await;
+    rule.config.auto_restore = true;
+    rule = store
+        .save(
+            Some(&rule.id),
+            Some(rule.revision),
+            rule.config.clone(),
+            Utc::now(),
+            &context(),
+        )
+        .await
+        .unwrap();
+    scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    let applied = snapshot(&db).await;
+    sqlx::query("delete from account_groups where id='grp_00000000000000000000000000000002'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        scheduled_round(&store, &rule, &[QualityVerdict::Correct])
+            .await
+            .action
+            .as_deref(),
+        Some("template_restore_blocked")
+    );
+    assert_eq!(snapshot(&db).await, applied);
+    sqlx::query("insert into account_groups(id,name,color,enabled,created_at,updated_at) values('grp_00000000000000000000000000000002','Original group','#FFFFFFFF',true,now(),now())")
+        .execute(&db.pool).await.unwrap();
+    assert_eq!(
+        scheduled_round(&store, &rule, &[QualityVerdict::Correct])
+            .await
+            .action
+            .as_deref(),
+        Some("template_restored")
+    );
+    let mut restored = snapshot(&db).await;
+    restored["account"]["updated_at"] = before["account"]["updated_at"].clone();
+    assert_eq!(restored, before);
+    let recovered: (bool, i32, i64) = sqlx::query_as("select enabled,interval_minutes,generation from account_excel_recovery where account_id='acct_quality_a'")
+        .fetch_one(&db.pool).await.unwrap();
+    assert_eq!((recovered.0, recovered.1), (false, 17));
+    assert!(
+        recovered.2 > 1,
+        "invalidate probes claimed before configuration restoration"
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn template_recovery_is_fenced_by_rule_changes_and_edits_during_a_probe() {
+    for during_probe in [false, true] {
+        let Some(db) = TestDatabase::create("quality_restore_fence").await else {
+            return;
+        };
+        let store = setup(&db).await;
+        let template = template(&db).await;
+        let mut rule = save(&store, &template, 1).await;
+        rule.config.auto_restore = true;
+        rule = store
+            .save(
+                Some(&rule.id),
+                Some(rule.revision),
+                rule.config.clone(),
+                Utc::now(),
+                &context(),
+            )
+            .await
+            .unwrap();
+        scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+        store
+            .enqueue(&rule.id, rule.revision, &context())
+            .await
+            .unwrap();
+        let claim = store.claim().await.unwrap().unwrap();
+        if during_probe {
+            sqlx::query("update provider_accounts set enabled=false where id='acct_quality_a'")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        } else {
+            rule.config.model = "changed-model".into();
+            // Drop the remediation action so the replacement model needs no Excel validation.
+            rule.config.failure_action = QualityFailureAction::None;
+            rule.config.failure_template = None;
+            store
+                .save(
+                    Some(&rule.id),
+                    Some(rule.revision),
+                    rule.config.clone(),
+                    Utc::now(),
+                    &context(),
+                )
+                .await
+                .unwrap();
+        }
+        let before = snapshot(&db).await;
+        store
+            .finish(&claim, Utc::now(), vec![answer(QualityVerdict::Correct)])
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot(&db).await,
+            before,
+            "stale probe cannot restore configuration"
+        );
+        db.close().await;
+    }
 }

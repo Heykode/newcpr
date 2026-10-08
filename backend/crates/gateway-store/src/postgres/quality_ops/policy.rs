@@ -279,7 +279,11 @@ async fn apply_excel_threshold(
             .fetch_one(&mut **tx)
             .await
             .map_err(unavailable)?;
-    if let Some(action) = native_recovery::apply(tx, claim, status, &value).await? {
+    if claim.rule.config.failure_action == QualityFailureAction::ApplyAccountTemplate {
+        if let Some(action) = super::template_recovery::apply(tx, claim, status, &value).await? {
+            return Ok(Some(action));
+        }
+    } else if let Some(action) = native_recovery::apply(tx, claim, status, &value).await? {
         return Ok(Some(action));
     }
     if status == "correct" {
