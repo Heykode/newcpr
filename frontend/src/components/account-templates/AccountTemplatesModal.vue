@@ -151,6 +151,7 @@ onScopeDispose(() => {
         v-model:egress-mode="form.egressMode"
         request-proxy-available
         model-access-available
+        known-model-catalog
         preserve-model-access
         :excel-available="form.applyExcel"
         encrypted-content-available

@@ -13,14 +13,23 @@ async function main() {
   await mkdir(output, { recursive: true })
   const server = spawn(process.execPath, ['tests/relogin-count-preview.mjs'], {
     env: { ...process.env, QA_PORT: port },
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let serverOutput = ''
+  let serverError = ''
+  server.stdout.on('data', (chunk) => {
+    serverOutput += chunk
+  })
+  server.stderr.on('data', (chunk) => {
+    serverError += chunk
   })
   let browser
   try {
     let ready = false
     for (let i = 0; i < 100; i++) {
+      assert.equal(server.exitCode, null, `fixture server exited: ${serverError}`)
       try {
-        if ((await fetch(`${base}/accounts`)).ok) {
+        if (serverOutput.includes('Local sample only:') && (await fetch(`${base}/accounts`)).ok) {
           ready = true
           break
         }
@@ -35,6 +44,8 @@ async function main() {
     const saves = []
     const applications = []
     let catalogRequests = 0
+    let failKnownCatalog = true
+    const knownCatalogPages = []
     const accounts = structuredClone(sampleAccounts)
     accounts[0].modelAccess = { mode: 'denylist', models: ['model-original'] }
     let template = {
@@ -46,7 +57,7 @@ async function main() {
     page.on('pageerror', error => errors.push(error.message))
     page.on('response', (response) => {
       const pathname = new URL(response.url()).pathname
-      if (pathname.startsWith('/dev/api/') && response.status() >= 400)
+      if (pathname.startsWith('/dev/api/') && response.status() >= 400 && pathname !== '/dev/api/admin/quality-ops/models' && !pathname.startsWith('/dev/api/admin/accounts/reset-credits/'))
         errors.push(`${response.status()} ${pathname}`)
     })
     await page.route('**/dev/api/**', async (route) => {
@@ -77,6 +88,20 @@ async function main() {
           items: accounts,
           page: { page: 1, pageSize: 20, total: accounts.length, totalPages: 1 },
           summary: { total: accounts.length, normal: accounts.length, error: 0, rateLimited: 0, disabled: 0, quotaExhausted: 0 },
+        })
+      }
+      if (pathname === '/api/admin/quality-ops/models') {
+        const body = request.postDataJSON()
+        assert.deepEqual(Object.keys(body), ['page'], 'template directory must not probe a specific account')
+        knownCatalogPages.push(body.page)
+        if (failKnownCatalog)
+          return route.fulfill({ status: 503, json: { code: 503, message: 'synthetic catalog unavailable', data: null } })
+        return respond(route, {
+          models: (body.page === 1 ? ['model-a', 'model-b'] : ['model-a', 'model-c']).map(id => ({ id, name: id, reasoningEfforts: null })),
+          nextPage: body.page === 1 ? 2 : null,
+          matchedAccounts: 100,
+          knownAccounts: 99,
+          failedAccounts: 1,
         })
       }
       if (pathname.startsWith('/api/admin/accounts/models')) {
@@ -125,19 +150,39 @@ async function main() {
     await input.fill('model-*')
     await input.press('Enter')
     await dialog.getByRole('alert').filter({ hasText: '请输入有效的精确模型 ID' }).waitFor()
-    await input.fill('model-a')
-    await input.press('Enter')
+    await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor()
+    failKnownCatalog = false
+    await input.fill('')
+    await dialog.getByRole('button', { name: '重试加载模型', exact: true }).click()
+    await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).locator('..').click()
+    await input.fill('model-b')
+    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).count(), 0)
+    assert.equal(await dialog.getByRole('checkbox', { name: 'model-b', exact: true }).count(), 1)
+    await input.fill('')
+    await dialog.getByRole('button', { name: '加载更多模型', exact: true }).click()
+    await dialog.getByRole('checkbox', { name: 'model-c', exact: true }).locator('..').click()
+    assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).count(), 1, 'deduplicate paged models')
+    assert.equal(await dialog.getByRole('button', { name: '加载更多模型', exact: true }).count(), 0)
+    await dialog.getByText('部分账号的模型目录暂不可用，已显示读取成功的模型，仍可手动添加。', { exact: true }).waitFor()
     const longModel = `model-${'x'.repeat(90)}`
     await input.fill(longModel)
     await input.press('Enter')
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
     await saveAndClose()
-    const policy = { mode: 'allowlist', models: ['model-a', longModel] }
+    const policy = { mode: 'allowlist', models: ['model-a', 'model-c', longModel] }
     assert.deepEqual(saves.at(-1).config.modelAccess, policy)
     await apply()
     assert.deepEqual(accounts[0].modelAccess, policy)
     await manage()
     assert.equal(await dialog.getByRole('checkbox', { name: 'model-a', exact: true }).isChecked(), true)
+    failKnownCatalog = true
+    await dialog.getByRole('button', { name: '刷新模型', exact: true }).click()
+    await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor()
+    assert.equal(await dialog.getByRole('checkbox', { name: longModel, exact: true }).isChecked(), true)
+    failKnownCatalog = false
+    await dialog.getByRole('button', { name: '重试加载模型', exact: true }).click()
+    await dialog.getByRole('alert').filter({ hasText: '模型列表加载失败' }).waitFor({ state: 'hidden' })
+    assert.equal(knownCatalogPages.at(-1), 1, 'retry the failed refresh page')
     await page.getByRole('button', { name: '关闭成功通知', exact: true }).first().waitFor({ state: 'hidden' })
     for (const theme of ['light', 'dark']) {
       await page.setViewportSize({ width: 1440, height: 1000 })
@@ -161,6 +206,10 @@ async function main() {
     for (const [label, mode] of [['黑名单', 'denylist'], ['不限制', 'all'], ['保留', undefined]]) {
       await manage()
       await dialog.getByRole('radio', { name: label, exact: true }).click()
+      if (mode === 'denylist') {
+        await dialog.getByRole('checkbox', { name: 'model-b', exact: true }).locator('..').click()
+        policy.models.push('model-b')
+      }
       await saveAndClose()
       if (mode)
         assert.deepEqual(saves.at(-1).config.modelAccess, { mode, models: mode === 'all' ? [] : policy.models })
@@ -185,8 +234,9 @@ async function main() {
     await dialog.getByRole('button', { name: '编辑模板', exact: true }).click()
     assert.equal(await dialog.getByRole('radio', { name: '保留', exact: true }).isChecked(), true)
     assert.equal(catalogRequests, 0, 'unbound templates must not probe account model catalogs')
+    assert.ok(knownCatalogPages.includes(1) && knownCatalogPages.includes(2), 'use known model directory pages')
     assert.deepEqual(errors, [])
-    process.stdout.write(`${JSON.stringify({ result: 'passed', saves: saves.length, applications: applications.length, layouts: 6, catalogRequests })}\n`)
+    process.stdout.write(`${JSON.stringify({ result: 'passed', saves: saves.length, applications: applications.length, layouts: 6, catalogRequests, knownCatalogPages })}\n`)
   }
   finally {
     await browser?.close()
