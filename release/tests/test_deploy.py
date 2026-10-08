@@ -185,6 +185,65 @@ class DeployTests(unittest.TestCase):
         ])
         self.assertEqual(plan["recovery"], "manual")
 
+    def test_reviewed_documentation_requires_exact_declaration_and_diff(self):
+        _, proof, _ = fixtures()
+        base = {
+            "from_version": "1.1.0", "to_version": proof["version"],
+            "from_migrations_tree": MIGRATIONS, "to_migrations_tree": MIGRATIONS,
+            "added": ["0028_example.sql"], "recovery": "manual",
+        }
+        labels = {"org.opencontainers.image.revision": SOURCE,
+                  "org.opencontainers.image.version": "1.1.0"}
+        additions = "A\tbackend/migrations/0028_example.sql\nM\tbackend/migrations/.frozen-sha256"
+        readme = "\nM\tbackend/migrations/README.md"
+        cases = [
+            ({}, additions, True),
+            ({}, additions + readme, False),
+            ({"modified_documentation": []}, additions, True),
+            ({"modified_documentation": ["README.md"]}, additions + readme, True),
+            ({"modified_documentation": ["README.md"]}, additions, False),
+            ({"modified_documentation": ["README.md"]}, additions + readme
+             + "\nM\tbackend/migrations/0001_example.sql", False),
+            ({"modified_documentation": ["README.md"]}, additions
+             + "\nA\tbackend/migrations/README.md", False),
+            ({"modified_documentation": ["0001_example.sql"]}, additions
+             + "\nM\tbackend/migrations/0001_example.sql", False),
+        ]
+        cases.extend(({"modified_documentation": value}, additions, False) for value in (
+            None, "README.md", {}, ["../README.md"], ["other.md"],
+            ["README.md", "README.md"], ["README.md", "0001_example.sql"],
+        ))
+        for fields, changes, accepted in cases:
+            with self.subTest(fields=fields, changes=changes):
+                def git(*args):
+                    if args[0] == "show":
+                        return json.dumps({**base, **fields})
+                    if args[0] == "rev-parse":
+                        return MIGRATIONS
+                    if args[0] == "diff":
+                        return changes
+                    return "backend/migrations/0001_example.sql\nbackend/migrations/README.md"
+
+                with patch.object(images, "git", side_effect=git), \
+                        patch.object(deploy.subprocess, "check_output", return_value=b"select 1;\n"):
+                    if accepted:
+                        result = deploy.reviewed_upgrade("v1.1.1", labels, proof, SOURCE)
+                        self.assertEqual(set(result["before"]), {"1"})
+                        self.assertEqual(result["before"], result["after"])
+                    else:
+                        with self.assertRaises(images.Unavailable):
+                            deploy.reviewed_upgrade("v1.1.1", labels, proof, SOURCE)
+
+    def test_v3230_upgrade_preserves_existing_affinity_and_requires_manual_recovery(self):
+        plan = json.loads((deploy.ROOT / "deploy/upgrades/v3.23.0.json").read_text())
+        self.assertEqual(plan["from_version"], "3.22.1")
+        self.assertEqual(plan["to_version"], "3.23.0")
+        self.assertEqual(plan["from_migrations_tree"], "9f2a609cc8ee00680e3eacddcc1af5d6b5dbe57f")
+        self.assertEqual(plan["to_migrations_tree"], "a36f8520df448be5c84d0419ac37d1052661b5a2")
+        self.assertEqual(plan["added"], ["0068_preferred_account_affinity.sql"])
+        self.assertEqual(plan["modified_documentation"], ["README.md"])
+        self.assertEqual(plan["recovery"], "manual")
+
     def test_latest_main_ci_required(self):
         run, _, _ = fixtures()
         run["event"] = "push"
