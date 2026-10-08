@@ -267,17 +267,22 @@ fn align_environment_context(item: &mut Value, current_date: &str, timezone: &st
         .and_then(Value::as_object)
         .and_then(|metadata| metadata.get("content_item_kinds"))
         .and_then(Value::as_array)
-        .map(|kinds| kinds.iter().filter_map(Value::as_str).collect::<Vec<_>>());
-    if !content_kinds
-        .as_deref()
-        .is_some_and(|kinds| kinds.contains(&ENVIRONMENT_CONTEXT_CONTENT_KIND))
-    {
-        return;
-    }
+        .map(|kinds| {
+            kinds
+                .iter()
+                .map(|kind| kind.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        });
     let Some(parts) = item.get_mut("content").and_then(Value::as_array_mut) else {
         return;
     };
-    for part in parts {
+    for (index, part) in parts.iter_mut().enumerate() {
+        // An explicit classification is authoritative for this exact content slot.
+        if let Some(kinds) = &content_kinds
+            && kinds.get(index).and_then(Option::as_deref) != Some(ENVIRONMENT_CONTEXT_CONTENT_KIND)
+        {
+            continue;
+        }
         let Some(part) = part.as_object_mut() else {
             continue;
         };

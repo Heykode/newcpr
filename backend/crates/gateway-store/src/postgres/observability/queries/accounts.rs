@@ -170,13 +170,14 @@ pub(crate) async fn provider_account_request_buckets(
     account_ids: &[String],
     bucket_duration: TimeDelta,
 ) -> StoreResult<HashMap<String, Vec<ProviderAccountRequestBucket>>> {
-    // Account health intentionally includes terminal failures, unlike billing usage.
+    // Business account health includes terminal failures, but not quality retests.
     // Five-minute buckets keep the account page responsive while preserving a short
     // recent-health projection for the UI.
     let bucket_seconds = bucket_duration.num_seconds();
     if bucket_seconds <= 0 {
         return Err(invalid("account request timeline bucket must be positive"));
     }
+    let business = business_request_predicate("mr");
     let statement = format!("select provider_account_ref,
                 floor(extract(epoch from (started_at - $1)) / {bucket_seconds})::bigint as bucket_index,
                 count(*)::bigint as request_count,
@@ -190,6 +191,7 @@ pub(crate) async fn provider_account_request_buckets(
            and mr.started_at >= $1 and mr.started_at < $3
            and mr.outcome <> 'running'
            and mr.recovered_at is null
+           and ({business})
          group by mr.provider_account_ref, bucket_index
          order by mr.provider_account_ref, bucket_index");
     let rows = sqlx::query(sqlx::AssertSqlSafe(statement))

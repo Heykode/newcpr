@@ -65,7 +65,7 @@ function fixtures() {
       inputTokens: 120,
       outputTokens: 40,
       cachedTokens: 20,
-      cacheWriteTokens: 0,
+      cacheWriteTokens: 10,
       reasoningTokens: 10,
       imageInputTokens: 0,
       imageOutputTokens: 0,
@@ -182,7 +182,9 @@ function fixtures() {
       storageFault: false,
       skipped: 0,
     }],
+    ['/api/admin/request-captures/by-request', []],
     ['/api/admin/auth/refresh', { authenticated: true }],
+    ['/api/admin/auth/status', { authenticated: true }],
     ['/api/admin/system/version', {
       version: 'synthetic',
       gitSha: 'synthetic',
@@ -196,6 +198,17 @@ function fixtures() {
       updateWarning: null,
     }],
     ['/api/admin/usage/records', { items: success, currentPage: 1, pageSize: 10, total: success.length }],
+    ['/api/admin/usage/records/detail', {
+      ...success[0],
+      requestId: 'req_usage_columns',
+      statusCode: 200,
+      logicalOutcome: 'succeeded',
+      metadata: {},
+      attempts: [],
+      attemptsComplete: true,
+      costs: [],
+      costCoverage: 'known',
+    }],
     ['/api/admin/operations/errors', { items: errors, currentPage: 1, pageSize: 10, total: errors.length }],
     ['/api/admin/usage/records/summary', {
       totalRequests: '2',
@@ -264,8 +277,10 @@ async function assertColumns(page, table, hidden = false) {
     assert.deepEqual(await row.locator('td[data-column-key]').evaluateAll(cells => cells.map(cell => cell.dataset.columnKey)), expected)
   const rows = activeTable(page).locator('tbody tr')
   if (table.id === 'success') {
-    assert.match(await rows.nth(0).locator('[data-column-key="performance"]').textContent() ?? '', /40 tok\/s\s*TTFT\s+234 ms/)
-    assert.match(await rows.nth(1).locator('[data-column-key="performance"]').textContent() ?? '', /\u2014\s*TTFT\s+\u2014/)
+    assert.match(await rows.nth(0).locator('[data-column-key="performance"]').textContent() ?? '', /32.4 tok\/s\s*TTFT\s+234 ms/)
+    assert.match(await rows.nth(1).locator('[data-column-key="performance"]').textContent() ?? '', /32.4 tok\/s\s*TTFT\s+\u2014/)
+    for (const row of await rows.all())
+      assert.match(await row.locator('[data-column-key="tokenDetails"]').textContent() ?? '', /90\s*40\s*20/)
   }
   else {
     assert.equal((await rows.nth(0).locator('[data-column-key="accountPlanType"]').textContent())?.trim(), 'Pro')
@@ -432,6 +447,22 @@ async function runScenario(browser, base, output, theme, width) {
     await ready()
     for (const table of tables) {
       await selectTable(page, table)
+      if (table.id === 'success') {
+        const cell = activeTable(page).locator('[data-column-key="tokenDetails"]').last()
+        await cell.scrollIntoViewIfNeeded()
+        await page.screenshot({ path: join(output, `${name}-tokens.png`), animations: 'disabled' })
+        await page.getByRole('button', { name: '查看使用记录详情', exact: true }).first().click()
+        const detail = page.getByRole('dialog', { name: '使用记录详情', exact: true })
+        await detail.waitFor()
+        for (const [label, value] of [['输入', '90'], ['输出', '40'], ['缓存读取', '20'], ['缓存写入', '10']]) {
+          const field = detail.locator('dl > div').filter({ has: page.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }) })
+          assert.equal((await field.locator('dd').textContent())?.trim(), value)
+        }
+        await detail.getByText('缓存写入', { exact: true }).scrollIntoViewIfNeeded()
+        await page.screenshot({ path: join(output, `${name}-token-detail.png`), animations: 'disabled' })
+        await page.keyboard.press('Escape')
+        await detail.waitFor({ state: 'hidden' })
+      }
       await checkKeyboard(page, table)
       const dialog = await openSettings(page, table)
       const checkbox = dialog.getByRole('checkbox', { name: table.hidden.label, exact: true })
@@ -472,8 +503,10 @@ async function runScenario(browser, base, output, theme, width) {
         await assertPreference(page, other, hidden)
       }
     }
-    for (const path of fixtures().keys())
-      assert.ok(report.api.includes(path), `Expected synthetic API was not exercised: ${path}`)
+    for (const path of fixtures().keys()) {
+      if (path !== '/api/admin/auth/refresh')
+        assert.ok(report.api.includes(path), `Expected synthetic API was not exercised: ${path}`)
+    }
     assert.deepEqual(report.blocked, [], 'Unexpected API, mutation, navigation or external network attempt')
     assert.deepEqual(report.pageErrors, [])
     assert.deepEqual(report.failedResources, [])

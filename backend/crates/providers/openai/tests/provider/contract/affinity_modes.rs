@@ -18,6 +18,255 @@ fn mode_context(mode: AccountAffinity) -> AttemptContext {
     )
 }
 
+#[tokio::test]
+async fn preferred_spillover_completion_preserves_primary_and_returns_to_it() {
+    let (provider, affinity, leases, upstream) = fixture().await;
+    let key = ProviderSessionAffinityKey::try_new(affinity.lookup_keys()[0].clone()).unwrap();
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("event: response.created\ndata: {}\n\n{CAPTURE_COMPLETED_SSE}", json!({"type":"response.created","response":{"id":"resp_scope_capture","model":"gpt-5.4","status":"in_progress"}})),
+            "text/event-stream",
+        ))
+        .expect(3)
+        .mount(&upstream).await;
+    for (busy, expected) in [
+        (false, "acct_subagent_a"),
+        (true, "acct_subagent_b"),
+        (false, "acct_subagent_a"),
+    ] {
+        leases.busy_accounts.lock().unwrap().clear();
+        if busy {
+            leases
+                .busy_accounts
+                .lock()
+                .unwrap()
+                .insert(ProviderAccountId::new("acct_subagent_a").unwrap());
+        }
+        let mut stream = provider
+            .execute(
+                generate("root", Some("child"), Some("preferred-turn")),
+                mode_context(AccountAffinity::Preferred),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stream.metadata().provider_account_id().as_str(), expected);
+        let mut completed = false;
+        while let Some(event) = stream.next().await {
+            let event = event.expect("successful response");
+            completed |= event
+                .wire_event()
+                .is_some_and(|wire| wire.event_type() == Some("response.completed"));
+        }
+        assert!(completed);
+        let bound = affinity
+            .load(&ProviderKind::new("openai").unwrap(), &key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            bound.as_str(),
+            "acct_subagent_a",
+            "successful spillover must not become the primary"
+        );
+        assert_eq!(
+            affinity.binding_count(),
+            2,
+            "one primary plus the existing Guardian parent observation"
+        );
+        assert_eq!(
+            affinity.claim_ttls().len(),
+            1,
+            "child never claims an independent primary"
+        );
+    }
+    assert!(
+        !affinity.renewal_ttls().is_empty(),
+        "spilling over still renews the primary lifetime"
+    );
+    upstream.verify().await;
+}
+
+#[tokio::test]
+async fn preferred_native_owner_does_not_spill_over_when_busy() {
+    let (provider, affinity, leases, upstream) = fixture().await;
+    leases
+        .busy_accounts
+        .lock()
+        .unwrap()
+        .insert(ProviderAccountId::new("acct_subagent_b").unwrap());
+    let error = provider
+        .execute(
+            generate("root", Some("child"), None),
+            native_context(AccountAffinity::Preferred),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ProviderErrorKind::AccountCapacityUnavailable);
+    assert_eq!(affinity.binding_count(), 1);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn preferred_busy_wait_path_uses_ready_alternative_without_sticky_queue() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_old").await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.enabled.store(true, Ordering::SeqCst);
+    let upstream = MockServer::start().await;
+    let provider = super::scheduling::waiting_provider_with_affinity_and_limit(
+        &store,
+        leases.clone(),
+        upstream.uri(),
+        Arc::new(MemorySessionExclusions::default()),
+        affinity.clone(),
+        NonZeroU32::MIN,
+    );
+    drop(
+        provider
+            .execute(
+                generate("root", None, None),
+                mode_context(AccountAffinity::Preferred),
+            )
+            .await
+            .unwrap(),
+    );
+    let key = ProviderSessionAffinityKey::try_new(affinity.lookup_keys()[0].clone()).unwrap();
+    create_account(&store, "acct_scope_new").await;
+    leases.capacity.set_load("acct_scope_old", 1);
+    leases.capacity.set_load("acct_scope_new", 0);
+    leases
+        .capacity
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&ProviderAccountId::new("acct_scope_old").unwrap())
+        .unwrap()
+        .last_started_at = None;
+    let attempt = mode_context(AccountAffinity::Preferred).with_request_tuning(
+        gateway_core::routing::RequestTuning {
+            account_busy_wait_enabled: true,
+            ..Default::default()
+        },
+    );
+    let stream = timeout(
+        Duration::from_secs(1),
+        provider.execute(generate("root", Some("child"), None), attempt),
+    )
+    .await
+    .expect("ready alternative is immediate")
+    .unwrap();
+    assert_eq!(
+        stream.metadata().provider_account_id().as_str(),
+        "acct_scope_new"
+    );
+    assert!(leases.capacity.waits.lock().unwrap().is_empty());
+    assert_eq!(
+        affinity
+            .load(&ProviderKind::new("openai").unwrap(), &key)
+            .await
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        "acct_scope_old"
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn preferred_concurrent_first_claims_share_one_primary() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_subagent_a").await;
+    create_account(&store, "acct_subagent_b").await;
+    let affinity = Arc::new(MemorySessionAffinity::with_claim_barrier(12));
+    let upstream = MockServer::start().await;
+    let provider = provider_with_affinity_and_base_url(&store, affinity.clone(), upstream.uri());
+    let results = timeout(
+        Duration::from_secs(5),
+        futures::future::join_all((0..12).map(|_| {
+            provider.execute(
+                generate("root", Some("child"), None),
+                mode_context(AccountAffinity::Preferred),
+            )
+        })),
+    )
+    .await
+    .unwrap();
+    let mut owners = BTreeSet::new();
+    for result in results {
+        owners.insert(result.unwrap().metadata().provider_account_id().clone());
+    }
+    assert_eq!(owners.len(), 1);
+    assert_eq!(affinity.binding_count(), 1);
+}
+
+#[tokio::test]
+async fn preferred_json_success_does_not_rebind_root_or_turn_alias() {
+    let (provider, affinity, leases, upstream) = fixture().await;
+    drop(
+        provider
+            .execute(
+                generate("root", Some("child"), Some("preferred-json")),
+                mode_context(AccountAffinity::Strict),
+            )
+            .await
+            .unwrap(),
+    );
+    leases
+        .busy_accounts
+        .lock()
+        .unwrap()
+        .insert(ProviderAccountId::new("acct_subagent_a").unwrap());
+    Mock::given(method("POST"))
+        .and(path("/codex/responses/compact"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"compact_preferred","object":"response.compaction","output":[{"type":"compaction","encrypted_content":"opaque-test-state"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}})))
+        .expect(1).mount(&upstream).await;
+    let compact = Operation::Compact(gateway_core::operation::CompactRequest::from_raw_json(
+        RawJsonPayload::new(
+            "openai",
+            Bytes::from_static(
+                br#"{"model":"gpt-5.4","session_id":"root","thread_id":"child","input":[]}"#,
+            ),
+        )
+        .unwrap(),
+    ));
+    let mut stream = provider
+        .execute(
+            planned_request("openai", compact),
+            mode_context(AccountAffinity::Preferred),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stream.metadata().provider_account_id().as_str(),
+        "acct_subagent_b"
+    );
+    let mut events = 0;
+    while let Some(event) = stream.next().await {
+        event.expect("compact success");
+        events += 1;
+    }
+    assert!(events > 0);
+    leases.busy_accounts.lock().unwrap().clear();
+    let root = provider
+        .execute(
+            generate("root", Some("child"), Some("preferred-json")),
+            mode_context(AccountAffinity::Strict),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        root.metadata().provider_account_id().as_str(),
+        "acct_subagent_a"
+    );
+    assert_eq!(affinity.binding_count(), 1);
+    assert_eq!(affinity.alias_count(), 1);
+    upstream.verify().await;
+}
+
 fn native_context(mode: AccountAffinity) -> AttemptContext {
     let account = ProviderAccountId::new("acct_subagent_b").unwrap();
     let provider_kind = ProviderKind::new("openai").unwrap();
@@ -142,7 +391,7 @@ async fn relaxed_child_prefers_root_but_can_escape_busy_root_without_migrating_i
 }
 
 #[tokio::test]
-async fn relaxed_child_can_use_an_eligible_model_account_without_moving_the_root() {
+async fn soft_affinity_can_use_an_eligible_model_account_without_moving_the_root() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -212,6 +461,18 @@ async fn relaxed_child_can_use_an_eligible_model_account_without_moving_the_root
         .err()
         .unwrap();
     assert_eq!(strict.kind(), ProviderErrorKind::NoEligibleAccount);
+    let preferred = provider
+        .execute(
+            generate("root", Some("preferred-child"), None),
+            scoped(AccountAffinity::Preferred),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        preferred.metadata().provider_account_id().as_str(),
+        "acct_subagent_b"
+    );
+    drop(preferred);
     let child = provider
         .execute(
             generate("root", Some("child"), None),
@@ -237,7 +498,7 @@ async fn relaxed_child_can_use_an_eligible_model_account_without_moving_the_root
 }
 
 #[tokio::test]
-async fn relaxed_child_turn_alias_survives_both_mode_changes_without_overwriting_its_target() {
+async fn relaxed_child_turn_alias_survives_mode_changes_without_overwriting_its_target() {
     let (provider, affinity, leases, _upstream) = fixture().await;
     leases
         .busy_accounts
@@ -259,6 +520,7 @@ async fn relaxed_child_turn_alias_survives_both_mode_changes_without_overwriting
     leases.busy_accounts.lock().unwrap().clear();
     for (mode, expected) in [
         (AccountAffinity::Strict, "acct_subagent_a"),
+        (AccountAffinity::Preferred, "acct_subagent_a"),
         (AccountAffinity::Relaxed, "acct_subagent_b"),
     ] {
         for body in [
@@ -351,7 +613,7 @@ async fn legacy_strict_child_turn_stays_on_root_in_relaxed_mode() {
 }
 
 #[tokio::test]
-async fn strict_mode_child_alias_cannot_recreate_a_lost_root() {
+async fn strict_mode_child_alias_reclaims_lost_root_without_rewriting_relaxed_child() {
     let (provider, affinity, _leases, upstream) = fixture().await;
     let root = ProviderSessionAffinityKey::try_new(affinity.lookup_keys()[0].clone()).unwrap();
     drop(
@@ -367,19 +629,33 @@ async fn strict_mode_child_alias_cannot_recreate_a_lost_root() {
         .clear(&ProviderKind::new("openai").unwrap(), &root)
         .await
         .unwrap();
-    let error = provider
+    let stream = provider
         .execute(
             generate("root", Some("child"), Some("turn-lost-root")),
             mode_context(AccountAffinity::Strict),
         )
         .await
-        .err()
         .unwrap();
-    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(
+        stream.metadata().provider_account_id().as_str(),
+        "acct_subagent_b"
+    );
+    drop(stream);
     assert_eq!(
         affinity.binding_count(),
-        1,
-        "child binding survives, root is not recreated"
+        2,
+        "child binding survives independently of the reclaimed root"
+    );
+    let child = provider
+        .execute(
+            generate("root", Some("child"), Some("turn-lost-root")),
+            mode_context(AccountAffinity::Relaxed),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        child.metadata().provider_account_id().as_str(),
+        "acct_subagent_a"
     );
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
@@ -446,7 +722,7 @@ async fn relaxed_search_and_compact_keep_the_independent_child_binding() {
 }
 
 #[tokio::test]
-async fn relaxed_restored_owner_still_overrides_root_and_turn_alias() {
+async fn soft_affinity_restored_owner_still_overrides_root_and_turn_alias() {
     let (provider, _affinity, _leases, _upstream) = fixture().await;
     drop(
         provider
@@ -468,17 +744,20 @@ async fn relaxed_restored_owner_still_overrides_root_and_turn_alias() {
         ]));
     let restored = GenerateRequest::from_protocol_payload(payload)
         .with_provider_session_state(generation.provider_session_state("openai").unwrap().clone());
-    let stream = provider
-        .execute(
-            planned_request("openai", Operation::Generate(restored)),
-            native_context(AccountAffinity::Relaxed),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        stream.metadata().provider_account_id().as_str(),
-        "acct_subagent_b"
-    );
+    for mode in [AccountAffinity::Relaxed, AccountAffinity::Preferred] {
+        let stream = provider
+            .execute(
+                planned_request("openai", Operation::Generate(restored.clone())),
+                native_context(mode),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.metadata().provider_account_id().as_str(),
+            "acct_subagent_b"
+        );
+        drop(stream);
+    }
 }
 
 #[tokio::test]
@@ -531,6 +810,7 @@ async fn live_turn_uses_relaxed_child_or_strict_root_without_rebinding() {
     for (mode, expected) in [
         (AccountAffinity::Relaxed, "acct_subagent_b"),
         (AccountAffinity::Strict, "acct_subagent_a"),
+        (AccountAffinity::Preferred, "acct_subagent_a"),
     ] {
         let operation = Operation::ProviderHttp(
             ProviderHttpRequest::new(

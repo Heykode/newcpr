@@ -199,10 +199,11 @@ impl CodexCredentialSelector {
         let scheduling = control
             .run(async {
                 self.leases
-                    .load_state(
+                    .load_state_for_pool(
                         request.attempt.client_api_key_ref(),
                         &self.provider_kind,
                         &ids,
+                        request.concurrency_pool(),
                     )
                     .await
                     .map_err(Into::into)
@@ -312,6 +313,11 @@ impl CodexCredentialSelector {
                     || request
                         .attempt
                         .account_selection_policy()
+                        .openai_account_affinity()
+                        == gateway_core::account::AccountAffinity::Preferred
+                    || request
+                        .attempt
+                        .account_selection_policy()
                         .preferred_account_overrides_weight(),
                 round_robin_cursor: scheduling.round_robin_cursor(),
                 eligibility: if request.attempt.is_quality_retest() {
@@ -320,7 +326,7 @@ impl CodexCredentialSelector {
                     AccountEligibilityPolicy::Enforce
                 },
                 account_scope: request.attempt.account_scope().cloned(),
-                reserved_concurrency: request.reserved_concurrency,
+                reserved_concurrency: request.reserved_concurrency(),
             },
             pinned,
             affinity,
@@ -390,6 +396,12 @@ impl CodexCredentialSelector {
                         })
                 });
             if let Some(original) = original.as_ref()
+                && (state.pinned.is_some()
+                    || request
+                        .attempt
+                        .account_selection_policy()
+                        .openai_account_affinity()
+                        != gateway_core::account::AccountAffinity::Preferred)
                 && !sticky_tried.contains(original)
                 && candidates.iter().any(|candidate| {
                     candidate.account.id() == original
@@ -642,7 +654,11 @@ impl CodexCredentialSelector {
                     context.waiting_counts = control
                         .run(async {
                             self.leases
-                                .load_waiting_counts(&self.provider_kind, &ids)
+                                .load_waiting_counts_for_pool(
+                                    &self.provider_kind,
+                                    &ids,
+                                    request.concurrency_pool(),
+                                )
                                 .await
                                 .map_err(Into::into)
                         })
@@ -794,7 +810,10 @@ impl CodexCredentialSelector {
             .iter()
             .map(|account| account.id().clone())
             .collect::<Vec<_>>();
-        let signals = self.leases.load_signals(&self.provider_kind, &ids).await?;
+        let signals = self
+            .leases
+            .load_signals_for_pool(&self.provider_kind, &ids, request.concurrency_pool())
+            .await?;
         self.wait_candidates(accounts, &signals, request).await
     }
 
@@ -814,7 +833,11 @@ impl CodexCredentialSelector {
         };
         let signals = self
             .leases
-            .load_signals(&self.provider_kind, std::slice::from_ref(id))
+            .load_signals_for_pool(
+                &self.provider_kind,
+                std::slice::from_ref(id),
+                request.concurrency_pool(),
+            )
             .await?;
         Ok(self
             .wait_candidates(vec![account], &signals, request)
@@ -833,12 +856,12 @@ impl CodexCredentialSelector {
             account.id().clone(),
             account.revision(),
             quality_concurrency_limit(
-                super::reserved_limit(
-                    limits
+                {
+                    let ordinary_limit = limits
                         .limit_for(account.id().as_str())
-                        .ok_or(CredentialSelectionError::NoEligibleCredential)?,
-                    request.reserved_concurrency,
-                ),
+                        .ok_or(CredentialSelectionError::NoEligibleCredential)?;
+                    NonZeroU32::new(request.reserved_concurrency()).unwrap_or(ordinary_limit)
+                },
                 request.attempt.is_quality_check(),
             ),
             request
@@ -849,7 +872,7 @@ impl CodexCredentialSelector {
         )
         .with_quality_check(request.attempt.is_quality_check())
         .with_cancellation(request.attempt.cancellation().clone())
-        .with_priority(request.priority()))
+        .with_concurrency_pool(request.concurrency_pool()))
     }
 
     async fn wait_for_account(
@@ -959,7 +982,7 @@ impl CodexCredentialSelector {
                             max_waiting,
                             deadline.deadline(),
                         )
-                        .with_priority(request.priority()),
+                        .with_concurrency_pool(request.concurrency_pool()),
                     )
                     .await
                     .map_err(Into::into)
@@ -1120,8 +1143,7 @@ impl CodexCredentialSelector {
                 AccountSchedulingAvailability::Blocked(_)
             )
             || limits.limit_for(id.as_str()).is_none_or(|limit| {
-                candidate.signals.in_flight
-                    > reserved_limit(limit, acquired_context.reserved_concurrency).get()
+                candidate.signals.in_flight > acquired_context.limit_for_pool(limit).get()
             })
         {
             drop(guard);
@@ -1210,8 +1232,7 @@ impl CodexCredentialSelector {
                         AccountSchedulingAvailability::Blocked(_)
                     )
                     && current_limits.limit_for(id.as_str()).is_some_and(|limit| {
-                        latest.signals.in_flight
-                            <= reserved_limit(limit, acquired_context.reserved_concurrency).get()
+                        latest.signals.in_flight <= acquired_context.limit_for_pool(limit).get()
                     })
             })
         {
@@ -1225,7 +1246,13 @@ impl CodexCredentialSelector {
         );
         // All fallible credential/capacity validation precedes affinity mutation.
         // A losing initial CAS only observes the existing winner; it cannot bind this account.
-        let renew_existing_binding = state.observed_affinity.as_ref() == Some(id);
+        let renew_existing_binding = state.observed_affinity_binding.is_some()
+            && (state.observed_affinity.as_ref() == Some(id)
+                || request
+                    .attempt
+                    .account_selection_policy()
+                    .openai_account_affinity()
+                    == gateway_core::account::AccountAffinity::Preferred);
         if state.observed_affinity.is_none()
             && let Some(key) = request.session_affinity_key
             && let Some(effective) = self

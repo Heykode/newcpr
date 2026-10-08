@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use chrono::Utc;
 use gateway_admin::model::backup::{BackupObjectMetadata, BackupStorageConfig};
@@ -60,6 +61,98 @@ async fn upload_file_sends_full_part_beyond_tokio_default_buffer_limit() {
         .expect("serve multipart probe");
 
     assert_eq!(uploaded_len, PART_SIZE_ABOVE_TOKIO_DEFAULT);
+}
+
+#[tokio::test]
+async fn cancelling_multipart_upload_drops_part_retries_before_remote_abort() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("archive.dump");
+    let size = 16 * 1024 * 1024 + 1;
+    tokio::fs::File::create(&source)
+        .await
+        .unwrap()
+        .set_len(size)
+        .await
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut create, _) = listener.accept().await.unwrap();
+        let (request, _) = read_http_request(&mut create).await.unwrap();
+        assert!(request.starts_with("POST ") && request.contains("uploads"));
+        create.write_all(xml_response("<InitiateMultipartUploadResult><UploadId>cancel-probe</UploadId></InitiateMultipartUploadResult>").as_bytes()).await.unwrap();
+        create.shutdown().await.unwrap();
+        let mut pending = Vec::new();
+        for _ in 0..2 {
+            let (mut part, _) = listener.accept().await.unwrap();
+            let (request, _) = read_http_request(&mut part).await.unwrap();
+            assert!(request.starts_with("PUT ") && request.contains("partNumber="));
+            pending.push(part);
+        }
+        started_tx.send(()).unwrap();
+        let (mut abort, _) = listener.accept().await.unwrap();
+        let (request, _) = read_http_request(&mut abort).await.unwrap();
+        assert!(request.starts_with("DELETE ") && request.contains("uploadId="));
+        abort
+            .write_all(b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        abort.shutdown().await.unwrap();
+        // A detached SDK request would retry these failures after remote cleanup.
+        for mut part in pending {
+            let _ = part.write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
+            let _ = part.shutdown().await;
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), listener.accept())
+                .await
+                .is_err(),
+            "part retries or completion must not outlive cancellation"
+        );
+    });
+    let cancellation = CancellationToken::new();
+    let request = UploadObjectRequest {
+        object_key: "backups/cancel.dump".to_owned(),
+        source,
+        metadata: BackupObjectMetadata::new(
+            "backup_cancel".to_owned(),
+            "b".repeat(64),
+            Utc::now(),
+            size,
+        ),
+        cancellation: cancellation.clone(),
+    };
+    let storage = BackupStorageConfig {
+        storage_revision: 1,
+        endpoint,
+        region: "auto".to_owned(),
+        bucket: "backup-bucket".to_owned(),
+        access_key_id: "test-access-key".to_owned(),
+        secret_access_key: SecretString::from("test-secret-key"),
+        prefix: "backups".to_owned(),
+        force_path_style: true,
+    };
+    let upload = tokio::spawn(async move {
+        S3ObjectStoreAdapter::new()
+            .upload_file(&storage, request)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), started_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    cancellation.cancel();
+    let error = tokio::time::timeout(Duration::from_secs(5), upload)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code(), gateway_admin::model::backup::code::CANCELLED);
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 async fn serve_multipart_probe(listener: TcpListener) -> io::Result<usize> {

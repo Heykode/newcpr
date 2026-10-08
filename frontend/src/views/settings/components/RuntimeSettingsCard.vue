@@ -77,7 +77,7 @@ const tuningValues = {
         <BaseSegmented
           v-model="openaiAccountAffinity"
           label="OpenAI 账号亲和模式"
-          :options="[{ label: '严格', value: 'strict' }, { label: '宽松', value: 'relaxed' }]"
+          :options="[{ label: '严格', value: 'strict' }, { label: '优先', value: 'preferred' }, { label: '宽松', value: 'relaxed' }]"
         />
       </BaseFormItem>
       <BaseFormItem label="OpenAI 会话账号绑定时长（小时）">
@@ -106,12 +106,12 @@ const tuningValues = {
       </BaseFormItem>
 
       <BaseFormItem
-        label="Guardian 预留并发"
-        description="普通请求为 Guardian 保留的并发槽位；0 为关闭"
+        label="Guardian 独立并发"
+        description="每个账号额外的审批名额，不占普通并发；0 为共用普通并发"
       >
         <BaseInput
           v-model="openaiGuardianReservedConcurrency"
-          aria-label="Guardian 预留并发"
+          aria-label="Guardian 独立并发"
           type="number"
           min="0"
           step="1"

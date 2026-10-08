@@ -58,20 +58,22 @@ impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
         &self,
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot> {
-        let reads = account_ids.iter().map(|account_id| async move {
-            self.cooldowns
-                .read_credential_cooldown(account_id)
-                .await
-                .map(|cooldown| {
-                    cooldown.map(|cooldown| (account_id.clone(), cooldown.cooldown_until))
-                })
-        });
         let mut rate_limited_until = BTreeMap::new();
-        for result in join_all(reads).await {
-            if let Some((account_id, until)) =
-                result.map_err(|error| crate::admin_store_error("account runtime", error))?
-            {
-                rate_limited_until.insert(account_id, until);
+        for ids in account_ids.chunks(super::ACCOUNT_STATE_READ_CONCURRENCY) {
+            let reads = ids.iter().map(|account_id| async move {
+                self.cooldowns
+                    .read_credential_cooldown(account_id)
+                    .await
+                    .map(|cooldown| {
+                        cooldown.map(|cooldown| (account_id.clone(), cooldown.cooldown_until))
+                    })
+            });
+            for result in join_all(reads).await {
+                if let Some((account_id, until)) =
+                    result.map_err(|error| crate::admin_store_error("account runtime", error))?
+                {
+                    rate_limited_until.insert(account_id, until);
+                }
             }
         }
         let in_flight = self

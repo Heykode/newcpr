@@ -588,6 +588,18 @@ pub trait ObservabilityStore: Send + Sync {
         observed_at: DateTime<Utc>,
     ) -> AdminStoreResult<DashboardObservation>;
 
+    /// Reuse one account snapshot for status counts and runtime capacity when supported.
+    async fn dashboard_with_runtime_slots(
+        &self,
+        range: TimeRange,
+        observed_at: DateTime<Utc>,
+    ) -> AdminStoreResult<(DashboardObservation, Option<DashboardRuntimeSlots>)> {
+        futures::try_join!(
+            self.dashboard_summary(range, observed_at),
+            self.dashboard_runtime_slots(observed_at),
+        )
+    }
+
     /// 返回 Dashboard 可选的实时槽位事实。
     ///
     /// 该状态来自可丢失的运行时存储；无实现或运行时存储不可用时返回 `None`，不影响

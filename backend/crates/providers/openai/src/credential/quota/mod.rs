@@ -8,13 +8,14 @@
 mod document;
 pub(crate) mod evidence;
 mod recovery;
+mod reset_locks;
 pub(crate) mod snapshot;
 
 pub use snapshot::{
     CodexAccountQuotaSnapshot, CodexQuotaFact, CodexQuotaWindow, CodexQuotaWindowKind,
     CodexQuotaWindowRole, parse_codex_quota_usage,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -315,7 +316,7 @@ pub struct CodexCredentialQuotaService {
     runtime_policy: Option<Arc<dyn ProviderRuntimePolicyPort>>,
     request_tuning: Option<RequestTuningHandle>,
     scheduling: CodexQuotaSchedulingProjection,
-    reset_consume_locks: Mutex<HashMap<ProviderAccountId, Arc<Mutex<()>>>>,
+    reset_consume_locks: reset_locks::ResetCreditLocks,
     initial_sync_delays: Arc<dyn Fn() -> Duration + Send + Sync>,
 }
 
@@ -650,7 +651,7 @@ impl CodexCredentialQuotaService {
             runtime_policy: None,
             request_tuning: None,
             scheduling: CodexQuotaSchedulingProjection::default(),
-            reset_consume_locks: Mutex::new(HashMap::new()),
+            reset_consume_locks: reset_locks::ResetCreditLocks::default(),
             initial_sync_delays: Arc::new(|| {
                 crate::jitter::uniform_delay(
                     crate::jitter::random_u64(),
@@ -949,15 +950,8 @@ impl CodexCredentialQuotaService {
         credit_id: Option<&str>,
         redeem_request_id: Uuid,
     ) -> Result<CodexRateLimitResetCreditsConsumeResult, CodexResetCreditsError> {
-        let lock = {
-            let mut locks = self.reset_consume_locks.lock().await;
-            Arc::clone(
-                locks
-                    .entry(account_id.clone())
-                    .or_insert_with(|| Arc::new(Mutex::new(()))),
-            )
-        };
-        let _guard = lock.lock().await;
+        let entry = self.reset_consume_locks.entry(account_id);
+        let _guard = entry.lock().await;
         let account = self.reset_credit_account(account_id).await?;
         let client = self.backend_client();
         let credential = self

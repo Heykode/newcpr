@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { login as apiLogin, logout as apiLogout, refreshAuthSession } from '@/api'
+import { login as apiLogin, logout as apiLogout, getAuthStatus, refreshAuthSession } from '@/api'
 import { ApiError, invalidatePendingRequests, resetUnauthorizedHandling } from '@/api/request'
 
 export type AuthCheckResult = 'authenticated' | 'unauthenticated' | 'unavailable'
@@ -13,6 +13,7 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
   let revision = 0
   let pendingCheck: Promise<AuthCheckResult> | undefined
+  let pendingRefresh: Promise<AuthCheckResult> | undefined
   let transition: Promise<void> = Promise.resolve()
   let refreshBarrier: Promise<void> = Promise.resolve()
 
@@ -23,18 +24,44 @@ export const useAuthStore = defineStore('auth', () => {
   function invalidatePendingCheck() {
     revision += 1
     pendingCheck = undefined
+    pendingRefresh = undefined
     sessionCheckError.value = ''
   }
 
   function checkAuth(): Promise<AuthCheckResult> {
     if (loading.value)
       return transition.then(currentResult)
+    if (pendingRefresh)
+      return pendingRefresh
     if (pendingCheck)
       return pendingCheck
-    const checkedRevision = revision
-    pendingCheck = (async (): Promise<AuthCheckResult> => {
+    const check = loadSession(getAuthStatus).finally(() => {
+      if (pendingCheck === check)
+        pendingCheck = undefined
+    })
+    pendingCheck = check
+    return check
+  }
+
+  function refreshSession(): Promise<AuthCheckResult> {
+    if (loading.value)
+      return transition.then(currentResult)
+    if (pendingRefresh)
+      return pendingRefresh
+    const refresh = loadSession(refreshAuthSession).finally(() => {
+      if (pendingRefresh === refresh)
+        pendingRefresh = undefined
+    })
+    pendingRefresh = refresh
+    refreshBarrier = Promise.allSettled([refreshBarrier, refresh]).then(() => {})
+    return refresh
+  }
+
+  function loadSession(load: typeof getAuthStatus): Promise<AuthCheckResult> {
+    const checkedRevision = ++revision
+    return (async (): Promise<AuthCheckResult> => {
       try {
-        const status = await refreshAuthSession({ silent: true })
+        const status = await load({ silent: true })
         if (checkedRevision !== revision)
           return currentResult()
         if (typeof status?.authenticated !== 'boolean')
@@ -60,13 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
         sessionCheckError.value = '暂时无法确认登录状态，请检查网络或稍后重试'
         return 'unavailable'
       }
-      finally {
-        if (checkedRevision === revision)
-          pendingCheck = undefined
-      }
     })()
-    refreshBarrier = Promise.allSettled([refreshBarrier, pendingCheck]).then(() => {})
-    return pendingCheck
   }
 
   function beginTransition<T>(action: (expectedRevision: number) => Promise<T>): Promise<T> {
@@ -134,6 +155,7 @@ export const useAuthStore = defineStore('auth', () => {
     sessionCheckError,
     loading,
     checkAuth,
+    refreshSession,
     login,
     logout,
     invalidateSession,

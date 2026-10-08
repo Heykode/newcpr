@@ -136,7 +136,7 @@ test('login waits for older refresh cookie and logout before setting the new coo
     '@/api/request': { ...load('../src/api/error.ts'), invalidatePendingRequests: () => {}, resetUnauthorizedHandling: () => {} },
   })
   const store = module.useAuthStore(pinia.createPinia())
-  const checking = store.checkAuth()
+  const checking = store.refreshSession()
   const leaving = store.logout()
   const entering = store.login({ password: 'test' })
   assert.deepEqual(calls, ['refresh'])
@@ -166,7 +166,7 @@ test('explicit invalidation cannot hide an older cookie refresh from a new login
     '@/api/request': { ...load('../src/api/error.ts'), invalidatePendingRequests: () => {}, resetUnauthorizedHandling: () => {} },
   })
   const store = module.useAuthStore(pinia.createPinia())
-  const checking = store.checkAuth()
+  const checking = store.refreshSession()
   store.invalidateSession()
   const entering = store.login({ password: 'synthetic-password' })
   await new Promise(resolve => setTimeout(resolve, 0))
@@ -181,4 +181,91 @@ test('password changes recover expired sessions without treating them as login r
   const app = requestHarness(async config => config.authRetried ? response(config, 200) : response(config, 401, 40101))
   assert.equal((await app.module.default({ url: '/api/admin/auth/password', method: 'POST' })).ok, true)
   assert.equal(app.renewals(), 1)
+})
+
+test('a late old 401 and new requests both wait for the active second renewal', async () => {
+  const oldResponse = deferred()
+  const secondRenewal = deferred()
+  const calls = []
+  const app = requestHarness(async (config) => {
+    calls.push([config.url, Boolean(config.authRetried)])
+    if (config.url === '/old' && !config.authRetried)
+      await oldResponse.promise
+    return config.authRetried || config.url === '/new' ? response(config, 200) : response(config, 401, 40101)
+  })
+  let renewals = 0
+  app.module.setSessionRecoveryHandler(async () => ++renewals === 1 ? true : secondRenewal.promise)
+  const old = app.module.default({ url: '/old' })
+  await app.module.default({ url: '/first' })
+  const second = app.module.default({ url: '/second' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(renewals, 2)
+  const next = app.module.default({ url: '/new' })
+  oldResponse.resolve()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.ok(!calls.some(([url, retried]) => url === '/new' || (url === '/old' && retried)))
+  secondRenewal.resolve(true)
+  assert.ok((await Promise.all([old, second, next])).every(result => result.ok))
+  assert.equal(renewals, 2)
+  assert.equal(app.logouts(), 0)
+})
+
+test('queued requests are never sent after abort or logout changes the generation', async () => {
+  for (const invalidate of [false, true]) {
+    const renewed = deferred()
+    const calls = []
+    const app = requestHarness(async (config) => {
+      calls.push(config.url)
+      return config.authRetried ? response(config, 200) : response(config, 401, 40101)
+    })
+    app.module.setSessionRecoveryHandler(() => renewed.promise)
+    const first = app.module.default({ url: '/first', silent: true }).catch(() => undefined)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const controller = new AbortController()
+    const queued = app.module.default({ url: '/queued', signal: controller.signal, silent: true })
+    const rejected = assert.rejects(queued)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    if (invalidate)
+      app.module.invalidatePendingRequests()
+    else
+      controller.abort()
+    renewed.resolve(true)
+    await Promise.all([first, rejected])
+    assert.ok(!calls.includes('/queued'))
+    assert.equal(app.logouts(), 0)
+  }
+})
+
+test('read-only status checks do not renew cookies or satisfy required renewal', async () => {
+  const status = deferred()
+  const refresh = deferred()
+  const calls = []
+  const module = load('../src/stores/modules/auth.ts', {
+    pinia,
+    vue,
+    '@/api': {
+      getAuthStatus: () => {
+        calls.push('status')
+        return status.promise
+      },
+      refreshAuthSession: () => {
+        calls.push('refresh')
+        return refresh.promise
+      },
+    },
+    '@/api/request': { ...load('../src/api/error.ts'), invalidatePendingRequests: () => {}, resetUnauthorizedHandling: () => {} },
+  })
+  const store = module.useAuthStore(pinia.createPinia())
+  const checking = store.checkAuth()
+  assert.deepEqual(calls, ['status'])
+  const renewing = store.refreshSession()
+  assert.deepEqual(calls, ['status', 'refresh'])
+  const anotherCheck = store.checkAuth()
+  refresh.resolve({ authenticated: true })
+  assert.equal(await renewing, 'authenticated')
+  assert.equal(await anotherCheck, 'authenticated')
+  status.resolve({ authenticated: false })
+  assert.equal(await checking, 'authenticated')
+  assert.equal(store.isAuthenticated, true)
+  assert.equal(store.sessionChecked, true)
 })

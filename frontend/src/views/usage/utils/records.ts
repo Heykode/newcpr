@@ -251,7 +251,15 @@ export function usageModelDisplay(record: UsageCommonRecord) {
 }
 
 export function usageTokenDetails(record: UsageCommonRecord) {
-  return record.tokenDetails
+  const details = record.tokenDetails
+  if (details.inputTokens === null)
+    return details
+  const inputTokens = Math.max(0, details.inputTokens - (details.cachedTokens ?? 0) - (details.cacheWriteTokens ?? 0))
+  return {
+    ...details,
+    inputTokens,
+    inputTokensDisplay: new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(inputTokens),
+  }
 }
 
 export type UsagePerformanceRecord = Pick<UsageCommonRecord, 'latencyDetails' | 'firstTokenLatencyMs' | 'latencyMs'> & {
@@ -265,10 +273,9 @@ export function usagePerformanceDetails(record: UsagePerformanceRecord) {
   const throughput = typeof outputTokens === 'number'
     && Number.isFinite(outputTokens)
     && outputTokens > 0
-    && firstTokenMs !== null
     && totalMs !== null
-    && totalMs > firstTokenMs
-    ? outputTokens * 1000 / (totalMs - firstTokenMs)
+    && totalMs > 0
+    ? outputTokens * 1000 / totalMs
     : null
 
   return {

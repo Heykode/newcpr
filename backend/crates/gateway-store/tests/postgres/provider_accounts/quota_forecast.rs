@@ -220,7 +220,8 @@ async fn quota_forecast_excludes_openai_prewarm_but_preserves_inference_and_audi
     assert_eq!(learning.usd, 2.0);
     // Quality probes, like prewarm traffic, must never inflate learned capacity.
     sqlx::query(
-        "update model_requests set request_kind = 'account_quality_check' where id = 'review'",
+        "update model_requests set request_kind = 'account_quality_check',
+         protocol = 'admin_quality_check', client_transport = 'internal' where id = 'review'",
     )
     .execute(&database.pool)
     .await

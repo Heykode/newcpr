@@ -11,6 +11,55 @@ use serde_json::{Value, json};
 use super::TestDatabase;
 
 #[tokio::test]
+async fn preferred_affinity_upgrade_preserves_existing_rows_and_defaults() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 68)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for mode in ["strict", "relaxed"] {
+        let Some(database) = TestDatabase::create_with_migrator("preferred_upgrade", &old).await
+        else {
+            return;
+        };
+        sqlx::query("update runtime_settings set openai_account_affinity = $1, rotation_strategy = 'sticky', openai_guardian_reserved_concurrency = 2 where id = 1").bind(mode).execute(&database.pool).await.unwrap();
+        let before: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        let after: Value =
+            sqlx::query_scalar("select to_jsonb(s) from runtime_settings s where id = 1")
+                .fetch_one(&database.pool)
+                .await
+                .unwrap();
+        assert_eq!(before, after);
+        sqlx::query(
+            "update runtime_settings set openai_account_affinity = 'preferred' where id = 1",
+        )
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+        assert_eq!(
+            repository
+                .load_runtime_settings()
+                .await
+                .unwrap()
+                .openai_account_affinity,
+            gateway_core::account::AccountAffinity::Preferred
+        );
+        database.close().await;
+    }
+}
+
+#[tokio::test]
 async fn refresh_margin_migration_updates_only_historical_default_and_preserves_settings() {
     let old = sqlx::migrate::Migrator {
         migrations: super::TEST_MIGRATOR
@@ -453,7 +502,11 @@ async fn account_affinity_defaults_strict_and_round_trips_through_settings_and_s
             .openai_account_affinity,
         AccountAffinity::Strict
     );
-    for mode in [AccountAffinity::Relaxed, AccountAffinity::Strict] {
+    for mode in [
+        AccountAffinity::Relaxed,
+        AccountAffinity::Strict,
+        AccountAffinity::Preferred,
+    ] {
         let before = settings.load_runtime_settings().await.unwrap();
         let mut update = settings_with_margin(300);
         update.openai_account_affinity = Some(mode);

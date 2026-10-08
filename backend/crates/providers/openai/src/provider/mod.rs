@@ -498,6 +498,48 @@ impl Provider for CodexProvider {
             ));
         };
         let previous_session = decode_openai_session_state(generate);
+        // Validate replay before account selection can mutate the shared binding.
+        let native_scope = if let Some(continuation) =
+            context.continuation().and_then(ContinuationBinding::pinned)
+        {
+            let native_scope = match previous_session
+                .as_ref()
+                .map(|state| state.continuation_scope)
+            {
+                Some(OpenAiContinuationScope::Persisted) => PreviousResponseScope::Persisted,
+                Some(OpenAiContinuationScope::ConnectionLocal) => {
+                    PreviousResponseScope::ConnectionLocal
+                }
+                Some(OpenAiContinuationScope::ReplayRequired) => {
+                    PreviousResponseScope::ExternalUnknown
+                }
+                None => match continuation.scope() {
+                    NativeContinuationScope::Persisted => PreviousResponseScope::Persisted,
+                    NativeContinuationScope::ConnectionLocal => {
+                        PreviousResponseScope::ConnectionLocal
+                    }
+                },
+            };
+            if matches!(
+                context.continuation_attempt(),
+                ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
+            ) && native_scope == PreviousResponseScope::ConnectionLocal
+            {
+                tracing::warn!(
+                    request_id = context.request_id().as_str(),
+                    attempt_index = context.attempt_index().get(),
+                    continuation_scope = "connection_local",
+                    continuation_attempt = context.continuation_attempt().as_str(),
+                    continuation_recovery_disposition = "client_replay_required",
+                    continuation_recovery_action = "stop_proxy_recovery",
+                    "OpenAI connection-local continuation replay was rejected before send"
+                );
+                return Err(continuation_replay_required_error("scope_unavailable"));
+            }
+            native_scope
+        } else {
+            PreviousResponseScope::ExternalUnknown
+        };
         let continuation_requested = generate.native_continuation_requested();
         let location = context
             .request_tuning()
@@ -615,13 +657,6 @@ impl Provider for CodexProvider {
                     session_affinity_key: session_affinity
                         .as_ref()
                         .and_then(CodexSessionAffinity::key),
-                    reserved_concurrency: if guardian {
-                        0
-                    } else {
-                        context
-                            .account_selection_policy()
-                            .openai_guardian_reserved_concurrency()
-                    },
                     guardian,
                 },
                 cyber_policy_session_key.as_ref(),
@@ -669,42 +704,6 @@ impl Provider for CodexProvider {
         {
             match continuation {
                 ContinuationBinding::Pinned(continuation) => {
-                    let native_scope = match previous_session
-                        .as_ref()
-                        .map(|state| state.continuation_scope)
-                    {
-                        Some(OpenAiContinuationScope::Persisted) => {
-                            PreviousResponseScope::Persisted
-                        }
-                        Some(OpenAiContinuationScope::ConnectionLocal) => {
-                            PreviousResponseScope::ConnectionLocal
-                        }
-                        Some(OpenAiContinuationScope::ReplayRequired) => {
-                            PreviousResponseScope::ExternalUnknown
-                        }
-                        None => match continuation.scope() {
-                            NativeContinuationScope::Persisted => PreviousResponseScope::Persisted,
-                            NativeContinuationScope::ConnectionLocal => {
-                                PreviousResponseScope::ConnectionLocal
-                            }
-                        },
-                    };
-                    if matches!(
-                        context.continuation_attempt(),
-                        ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny
-                    ) && native_scope == PreviousResponseScope::ConnectionLocal
-                    {
-                        tracing::warn!(
-                            request_id = context.request_id().as_str(),
-                            attempt_index = context.attempt_index().get(),
-                            continuation_scope = "connection_local",
-                            continuation_attempt = context.continuation_attempt().as_str(),
-                            continuation_recovery_disposition = "client_replay_required",
-                            continuation_recovery_action = "stop_proxy_recovery",
-                            "OpenAI connection-local continuation replay was rejected before send"
-                        );
-                        return Err(continuation_replay_required_error("scope_unavailable"));
-                    }
                     let previous_response_scope = match context.continuation_attempt() {
                         ContinuationAttempt::Native => native_scope,
                         ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny => {
