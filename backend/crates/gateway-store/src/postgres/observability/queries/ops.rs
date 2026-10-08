@@ -139,6 +139,7 @@ fn push_request_error_predicates(
     if filter.details.error_scope.as_deref() == Some("events") {
         statement.push(" and false");
     }
+    push_business_request_filter(statement, "mr");
     push_request_search(statement, &filter.details, "mr", None);
     // 错误事实独立于请求结束状态；主动取消不属于需要排查的错误。
     // 列表和总数共用此条件，避免流式响应中的错误因 outcome 被漏掉。
@@ -200,6 +201,7 @@ fn push_ops_event_predicates(
     if filter.details.error_scope.as_deref() == Some("requests") {
         statement.push(" and false");
     }
+    push_business_request_filter(statement, "mr");
     push_request_search(statement, &filter.details, "mr", Some("oe"));
     push_range(statement, "oe.created_at", range);
     for (column, value) in [

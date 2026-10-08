@@ -272,6 +272,7 @@ pub(super) struct UpstreamErrorLogContext<'a> {
     account_id: &'a str,
     attempt_index: u32,
     websocket_connection_id: Option<Uuid>,
+    quality_check: bool,
 }
 
 impl<'a> UpstreamErrorLogContext<'a> {
@@ -285,6 +286,7 @@ impl<'a> UpstreamErrorLogContext<'a> {
             account_id: account.id().as_str(),
             attempt_index: context.attempt_index().get(),
             websocket_connection_id,
+            quality_check: context.is_quality_check(),
         }
     }
 
@@ -298,6 +300,13 @@ pub(super) fn log_client_upstream_error(
     context: UpstreamErrorLogContext<'_>,
     error: &CodexClientError,
 ) {
+    if context.quality_check
+        && error
+            .upstream_failure()
+            .is_some_and(|failure| failure.is_explicit_account_limit())
+    {
+        return;
+    }
     match error {
         CodexClientError::Upstream {
             status,
@@ -364,6 +373,17 @@ pub(super) fn log_canonical_upstream_error(
     let CodexCanonicalError::Upstream(failure) = error else {
         return;
     };
+    if context.quality_check
+        && CodexUpstreamFailure::from_sse_failure(
+            failure,
+            &CodexUpstreamDiagnostics::default(),
+            &[],
+            CodexUpstreamSendPhase::AfterPayload,
+        )
+        .is_explicit_account_limit()
+    {
+        return;
+    }
     log_raw_upstream_body(
         context,
         transport,
@@ -403,6 +423,9 @@ pub(super) fn log_raw_upstream_body(
         "OpenAI upstream returned an error payload"
     );
 }
+
+#[cfg(test)]
+mod quality_logging_tests;
 
 pub(super) async fn apply_failure(
     context: &OpenAiFailureContext<'_>,

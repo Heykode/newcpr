@@ -18,6 +18,9 @@ const HEAD_EVENTS: usize = 8;
 const MAX_DATA_BYTES: usize = 4096;
 const MAX_BUFFER_BYTES: usize = 64 * 1024;
 
+#[cfg(test)]
+mod tests;
+
 /// 显式传给异步任务的关联上下文；默认值禁用捕获，避免全局请求映射。
 #[derive(Clone, Default)]
 pub struct TraceContext {
@@ -38,6 +41,7 @@ impl std::fmt::Debug for TraceContext {
 
 struct TraceState {
     request_id: String,
+    runtime_logging: bool,
     started_at_ms: u128,
     started: Instant,
     sequence: u64,
@@ -89,9 +93,19 @@ impl TraceContext {
     /// 一个模型请求只创建一次，所有 attempt 共享同一有界时间线。
     #[must_use]
     pub fn new(request_id: &str) -> Self {
+        Self::with_runtime_logging(request_id, true)
+    }
+
+    /// Internal probes retain their audit timeline without exporting runtime logs or wire dumps.
+    pub(crate) fn audit_only(request_id: &str) -> Self {
+        Self::with_runtime_logging(request_id, false)
+    }
+
+    fn with_runtime_logging(request_id: &str, runtime_logging: bool) -> Self {
         Self {
             state: Some(Arc::new(Mutex::new(TraceState {
                 request_id: bounded(request_id, 128),
+                runtime_logging,
                 started_at_ms: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -144,6 +158,27 @@ impl TraceContext {
 
     /// 这里只投影稳定诊断；来源链和上游正文保留给受控详情通道。
     pub fn record_provider_failure(&self, error: &crate::error::ProviderError) {
+        use crate::error::ProviderErrorKind;
+
+        if matches!(
+            error.kind(),
+            ProviderErrorKind::ProviderInfrastructureUnavailable
+                | ProviderErrorKind::Transport
+                | ProviderErrorKind::Protocol
+                | ProviderErrorKind::Unavailable
+                | ProviderErrorKind::Timeout
+        ) && let Some(state) = &self.state
+        {
+            let state = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !state.runtime_logging {
+                tracing::warn!(target: "quality_probe", request_id = %state.request_id,
+                    attempt_index = self.attempt_index, kind = error.kind().as_str(),
+                    upstream_status = error.upstream_status(),
+                    "Quality check dependency or transport failure");
+            }
+        }
         self.record("attempt.failed", json!({
             "kind": error.kind().as_str(), "sendState": format!("{:?}", error.send_state()),
             "diagnostic": error.diagnostic().map(|diagnostic| json!({
@@ -279,6 +314,9 @@ impl TraceContext {
             let mut state = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !state.runtime_logging {
+                return;
+            }
             state.wire_frames += 1;
             state.wire_bytes = state.wire_bytes.saturating_add(bytes.len() as u64);
             let wire_sequence = state.wire_frames;
@@ -309,7 +347,7 @@ impl TraceContext {
             "startedAtUnixMs": state.started_at_ms, "totalEvents": state.sequence,
             "droppedEvents": state.dropped_events, "maxEvents": MAX_EVENTS,
             "captureMode": "sanitized", "events": state.events,
-            "wireDumpEnabled": tracing::enabled!(target: "request_dump", tracing::Level::INFO),
+            "wireDumpEnabled": state.runtime_logging && tracing::enabled!(target: "request_dump", tracing::Level::INFO),
             "wireFrames": state.wire_frames, "wireBytes": state.wire_bytes,
             "maxBufferBytes": MAX_BUFFER_BYTES, "headEvents": HEAD_EVENTS,
             "snapshotBoundary": "execution_finalization",
@@ -370,9 +408,11 @@ impl TraceContext {
             return;
         }
         // 普通日志只输出有界安全事实；进程意外退出时仍可按 ID 检索已发生阶段。
-        tracing::info!(target: "request_trace", request_id = %state.request_id,
-            attempt_index = self.attempt_index, exchange_id = self.exchange_id,
-            sequence, elapsed_ms, stage, data = %data, "request trace");
+        if state.runtime_logging {
+            tracing::info!(target: "request_trace", request_id = %state.request_id,
+                attempt_index = self.attempt_index, exchange_id = self.exchange_id,
+                sequence, elapsed_ms, stage, data = %data, "request trace");
+        }
         let bytes = encoded.len() + 256;
         state.bytes += bytes;
         state.events.push_back(TraceEvent {
@@ -420,6 +460,9 @@ impl TraceContext {
 
 impl Drop for TraceState {
     fn drop(&mut self) {
+        if !self.runtime_logging {
+            return;
+        }
         tracing::info!(target: "request_trace", request_id = %self.request_id,
             stage = "request.trace.closed", total_events = self.sequence,
             dropped_events = self.dropped_events, wire_frames = self.wire_frames,

@@ -229,6 +229,32 @@ scope, cached_account_models for aggregate scopes.
 - Use isolated requests without user continuation or cache keys. The request kind
   is `account_quality_check`. Retain execution/cost audit but exclude it from
   ordinary client usage projections; account cumulative cost remains real.
+- Business request/error lists, counts, dashboard totals/trends, diagnostic dimensions
+  and account request-health timelines exclude quality successes and failures before
+  pagination/aggregation, including existing history. Share the NULL-safe predicate
+  in `usage_facts`; identify the trusted combination of request kind,
+  `protocol=admin_quality_check` and `client_transport=internal`. Client turn metadata
+  can forge request kind alone and must never hide a business request. Preserve NULL
+  legacy kinds, unknown kinds and independent ops events with no request row.
+- Quality results remain in quality operations. Direct administrator request-ID audit
+  lookup, finalization, real account cost and provider feedback remain intact. Do not
+  delete raw audit as a substitute for fixing projection scope.
+- Core's trusted quality selection skips `RequestCaptureFactory::start` entirely,
+  for both targets and judges; no new UI switch. Other requests cannot opt out via
+  client metadata. Existing capture files remain subject to normal retention.
+  Its audit-only `TraceContext` retains bounded sanitized finalization facts but
+  does not emit `request_trace` or `request_dump`, including attempt/exchange clones
+  and drop. Probe infrastructure, transport, protocol, timeout and availability
+  failures still emit a bounded `quality_probe` warning without raw error text.
+  Independent infrastructure warnings remain unchanged.
+- Quiet only explicit quality upstream quota/rate-limit payload warnings using the
+  existing classifier and structured code/type evidence. Bare/unknown 429, connection
+  capacity, authentication, transport, storage and internal failures remain logged;
+  ordinary traffic retains its warnings. Logging must not alter error classification,
+  cooldown/quota updates, retry decisions, credentials, identity or scheduling.
+- Test mixed historical facts against unchanged business projections (including all
+  diagnostic dimensions, pagination and independent system errors), forged metadata,
+  trusted target/judge capture bypass and HTTP/SSE/WS warning behavior.
 - Bound output to 64 KB and request duration to 120 seconds. Inspect completion
   reason; truncated, filtered, tool-only and missing terminal output are not a
   successful answer. Commit the streaming delivery boundary only once.

@@ -169,7 +169,11 @@ where
                     .position(|candidate| candidate.provider() == pin.provider())
                     .ok_or(EngineError::ContinuationPinMismatch)
             })?;
+        // Only trusted internal selection can opt out; client metadata cannot hide captures.
         let capture = self.engine.captures.as_ref().and_then(|factory| {
+            if matches!(account_selection, AccountSelection::Quality(..)) {
+                return None;
+            }
             factory.start(
                 request_id.as_str(),
                 client_api_key_ref.as_str(),
@@ -181,7 +185,12 @@ where
                     .collect::<Vec<_>>(),
             )
         });
-        let trace = TraceContext::new(request_id.as_str()).with_capture(capture);
+        let trace = if matches!(account_selection, AccountSelection::Quality(..)) {
+            TraceContext::audit_only(request_id.as_str())
+        } else {
+            TraceContext::new(request_id.as_str())
+        }
+        .with_capture(capture);
         trace.record(
             "request.routed",
             json!({

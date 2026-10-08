@@ -11,6 +11,48 @@ use gateway_core::engine::budget::{ClientBudgetCharge, ClientBudgetError, Client
 use gateway_core::error::GatewayError;
 
 #[derive(Default)]
+struct RecordingCaptures(AtomicUsize);
+
+impl gateway_core::diagnostics::request_capture::RequestCaptureFactory for RecordingCaptures {
+    fn start(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[&str],
+    ) -> Option<Arc<dyn gateway_core::diagnostics::request_capture::RequestCaptureObserver>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        None
+    }
+}
+
+#[test]
+fn ordinary_requests_cannot_opt_out_of_capture_using_quality_metadata() {
+    let captures = Arc::new(RecordingCaptures::default());
+    let service =
+        queue_service(Arc::new(QueueAdmissions::default()), 1).with_captures(captures.clone());
+    let mut request = request(&service, ClientTransport::HttpJson);
+    request.operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            serde_json::json!({
+                "model": "gpt-start", "input": "fixture",
+                "request_kind": "account_quality_check", "quality_check": true,
+                "client_metadata": {
+                    "x-codex-turn-metadata": "{\"request_kind\":\"account_quality_check\"}"
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+        .unwrap(),
+    ));
+    let started = block_on(service.start(request)).unwrap();
+    assert_eq!(captures.0.load(Ordering::SeqCst), 1);
+    drop(started);
+}
+
+#[derive(Default)]
 struct Admissions {
     active: Arc<AtomicBool>,
     limits: Mutex<Vec<RateLimits>>,
@@ -1379,6 +1421,7 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
     });
     for (complete, probe, retest, recovery, model_access) in cases {
         let store = Arc::new(TrackingExecutionStore::default());
+        let captures = Arc::new(RecordingCaptures::default());
         let providers = ProviderRegistry::new([Arc::new(QualityProvider {
             complete,
             probe,
@@ -1424,7 +1467,8 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             Arc::new(UnusedCircuits),
             Arc::new(UnusedContinuation),
             Arc::new(RecordingClientApiKeyUsage::default()),
-        );
+        )
+        .with_captures(captures.clone());
         let request = AccountProbeRequest {
             account_id: ProviderAccountId::new("acct_start").unwrap(),
             provider_kind: ProviderKind::new("openai").unwrap(),
@@ -1470,6 +1514,7 @@ fn quality_check_uses_normal_fixed_account_and_persists_without_client_charges()
             Some("account_quality_check")
         );
         assert_eq!(store.finalizations.lock().unwrap().len(), expected);
+        assert_eq!(captures.0.load(Ordering::SeqCst), 0);
         assert_eq!(
             ordinary_scope.allows_model(&target, "gpt-start"),
             ordinary_allowed

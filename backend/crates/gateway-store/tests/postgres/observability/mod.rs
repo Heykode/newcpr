@@ -24,6 +24,7 @@ use gateway_store::postgres::{
     ProviderAccountUsageQuery, UsageRecordFilter, UsageRecordQuery,
 };
 use sqlx::PgPool;
+mod quality_isolation;
 mod search;
 
 use super::{
