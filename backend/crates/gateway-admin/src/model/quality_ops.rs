@@ -129,6 +129,9 @@ pub struct QualityRuleConfig {
     pub disable_excel_on_native_recovery: bool,
     #[serde(default = "default_excel_failure_threshold")]
     pub excel_failure_threshold: u8,
+    /// Pause/remove-group rules previously ignored the Excel threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_threshold: Option<u8>,
     /// Omitted legacy configs retain single-success restoration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excel_recovery_threshold: Option<u8>,

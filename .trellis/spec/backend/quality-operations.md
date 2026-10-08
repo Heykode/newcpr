@@ -1,5 +1,17 @@
 # Scheduled Quality Checks
 
+## Pause And Group-Removal Thresholds
+
+- Optional `failureThreshold` (1–100) controls disable_scheduling/remove_groups only.
+  Missing/null means one; do not reinterpret their previously ignored excelFailureThreshold.
+- Reuse persisted `excel_streak` and its round/identity/action-scope fences, not a parallel
+  counter. A correct round clears progress; unknown/request errors hold it. Repeated or stale
+  finish calls cannot increment it. Configuration/identity/egress changes invalidate evidence.
+- Existing pause/group ownership, manual override and auto-restore semantics remain intact.
+  Single/group/template editors share the threshold field; bulk changes require explicit opt-in.
+- The explicit-overload sequence below satisfies the trigger after two abnormal rounds
+  independently of `failureThreshold`; pure incorrect rounds retain that setting.
+
 ## Read-Only Model Suggestions
 
 ### Scope / Trigger
@@ -547,7 +559,8 @@ contribute. Existing healthy native-recovery progress resets on overload.
 
 Once reached, persist aggregate `status=incorrect` and call the original policy with
 `overload_trigger=true`, satisfying the template/Excel trigger without adding another
-`excelFailureThreshold` wait. Pure incorrect rounds retain the configured threshold.
+`excelFailureThreshold` or pause/group `failureThreshold` wait. Pure incorrect rounds
+retain the configured threshold.
 Keep raw answers `overloaded` and count them in `requestErrors`, not incorrect answers.
 Reuse all account/template identity, quota, authentication, reference, ownership and
 auto-restore protections. `none` records the result without mutating the account.

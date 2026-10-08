@@ -15,6 +15,7 @@ async fn log_cleanup_requires_admin_auth_for_every_route() {
         ("POST", "/api/admin/log-cleanup"),
         ("POST", "/api/admin/log-cleanup/preview"),
         ("POST", "/api/admin/log-cleanup/start"),
+        ("POST", "/api/admin/log-cleanup/captures/start"),
         ("POST", "/api/admin/log-cleanup/cancel"),
     ] {
         let response = app

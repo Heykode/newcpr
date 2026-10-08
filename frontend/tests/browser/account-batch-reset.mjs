@@ -59,6 +59,12 @@ async function main() {
       case '/api/admin/accounts/import-tasks': return fulfill(route, { items: [] })
       case '/api/admin/accounts/reset-credits/cache': return fulfill(route, inventory)
       case '/api/admin/accounts/reset-credits/batches': return fulfill(route, batches)
+      case '/api/admin/accounts/reset-credits/history': {
+        const page = Number(url.searchParams.get('page'))
+        const search = url.searchParams.get('search')
+        const items = search === 'missing' ? [] : page === 1 ? batches : []
+        return fulfill(route, { items, accountNames: {}, before: '2026-10-01T01:00:00Z', hasMore: page === 1 && items.length > 0 })
+      }
       case '/api/admin/accounts/reset-credits/refresh':
         inventory = fixtureAccounts.map((a, index) => ({
           accountId: a.id,
@@ -101,9 +107,9 @@ async function main() {
     await server.listen()
     const address = server.httpServer.address()
     await page.goto(`http://127.0.0.1:${address.port}/accounts`)
-    await page.locator('tr[data-row-key]').first().waitFor()
+    await page.locator('tr[data-row-key]').first().waitFor({ timeout: 60000 })
     await page.getByRole('checkbox', { name: '选择当前页账号', exact: true }).locator('..').click()
-    await page.getByRole('button', { name: '刷新重置次数', exact: true }).click()
+    await page.getByRole('button', { name: '查询可用次数', exact: true }).click()
     await page.locator('td[data-column-key="resetCredits"]').filter({ hasText: '2 次' }).waitFor()
     assert.equal(consumes, 0)
     await page.getByRole('button', { name: '使用重置次数', exact: true }).click()
@@ -126,8 +132,22 @@ async function main() {
     assert.equal(consumes, 1)
     await dialog.getByRole('button', { name: '关闭', exact: true }).last().click()
     await page.reload()
+    batches.push({ ...batches[0], id: 'older-batch', items: [{ ...batches[0].items[0], message: '较早批次已完成' }] })
     await page.getByRole('button', { name: '重置记录', exact: true }).click()
     await dialog.getByText('额度已重置', { exact: true }).waitFor()
+    await dialog.getByText('较早批次已完成', { exact: true }).waitFor()
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 })
+      assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+      await page.screenshot({ path: `${output}/history-${width}.png`, fullPage: true })
+    }
+    await dialog.getByRole('button', { name: '下一页', exact: true }).click()
+    await dialog.getByText('第 2 页', { exact: true }).waitFor()
+    await dialog.getByRole('button', { name: '上一页', exact: true }).click()
+    await dialog.getByText('较早批次已完成', { exact: true }).waitFor()
+    await dialog.getByRole('textbox', { name: '搜索重置记录账号' }).fill('missing')
+    await dialog.getByRole('button', { name: '搜索账号', exact: true }).click()
+    await dialog.getByText('暂无匹配的重置记录', { exact: true }).waitFor()
     assert.equal(consumes, 1, 'reload/history must not submit another consumption')
     assert.deepEqual(errors, [])
     assert.deepEqual(unexpected, [])

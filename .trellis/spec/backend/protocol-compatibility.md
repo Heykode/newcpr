@@ -1,5 +1,42 @@
 # Protocol Compatibility Contracts
 
+## Native Effort Alias And Invalid Encrypted History
+
+- Native OAuth Generate maps trimmed `minimal` to `none` after selected-account
+  scoping, for HTTP and WS alike. This is an explicitly approved alias, not a
+  capability promise for all models. Preserve missing/other efforts, summaries,
+  immutable ingress, Excel's separate mapping and account selection inputs.
+  Persist requested/effective efforts through existing requestSummary fields.
+- Adapted from ranxi2001/sub2api production `17c88b0124d6703ef8ff3d229f461c35ff0a4e82`:
+  explicit invalid_encrypted_content can trigger one same-lease recovery before
+  any client event, under the original deadline/cancellation. Ordinary retry
+  settings do not repair a payload and are not modified by this repair.
+- Share a request-local transport pin between the initial send and this sequential
+  repair. Retain the selected IPv6 route, frozen profile and fresh-mode WS pool
+  identity; cloning an account client alone would select another IPv6 address.
+  Revalidate account/source availability without advancing the rotation cursor.
+  Account rebinding clears the pin; ordinary requests keep their existing policy.
+- Remove only rejected reasoning ciphertext, retain available plaintext summary,
+  and avoid dangling stateless IDs. Do not remove compaction ciphertext, encrypted
+  tool arguments, item references or exact/unknown continuation dependencies.
+  Keep persisted previous_response_id: absence of tool output does not prove that
+  input contains full history. No account rotation, proxy reselection, UA change,
+  TLS change, tool replay after delivery or image-search normalization is added.
+- After a completed recovery, retain only SHA-256 digests scoped to selected
+  account, downstream Key and local conversation. Bounded in-process retention
+  expires after one hour; eviction/restart merely loses the optimization, not
+  account eligibility or session ownership. Failed/incomplete/cancelled recovery
+  must not populate it. New ciphertext and other scopes remain untouched.
+- Test real loopback HTTP 400/SSE and WS, immutable input and wire identity,
+  one-shot termination, cancellation/zero buffer/post-output behavior, cache
+  isolation/expiry, original/effective effort reporting and Excel regressions.
+  Direct test-host capability probes do not prove candidate production deployment.
+- Private recovery-clock and request-normalization unit modules must be registered
+  by exact owner/name in the App architecture audit. Preserve test-only/private
+  visibility and rejection of path/cfg_attr hooks. Run the App architecture suite
+  as well as provider tests before publication; provider tests alone cannot catch
+  a missing registration.
+
 ## Chat Reasoning Aliases
 
 ### Scope / Trigger
@@ -489,8 +526,9 @@ events, then use the existing encoder and single execution finalization.
   Structured parameter rejection codes, or `invalid_request_error` with a non-model
   parameter, take precedence over broad model wording for 400/422 or statusless
   stream errors. Explicit authentication/429 handling remains intact.
-- No model-effort mapping or silent downgrade is introduced. The actual upstream
-  remains authoritative; supported efforts pass through unchanged. Invalid parameters
+- Apart from the explicitly approved native `minimal` alias above, no model-effort
+  mapping or silent downgrade is introduced. The actual upstream remains
+  authoritative; other efforts pass through unchanged. Invalid parameters
   must not update account/model health or supply account-rotation replay proof.
 - Statusless `invalid_request_error` retains request scope after specific auth,
   model, quota and capacity classification. Unknown tool/parameter capabilities are

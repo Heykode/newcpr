@@ -2,6 +2,7 @@
 
 mod capacity;
 mod control;
+mod evidence;
 mod filter;
 mod maintenance;
 mod session;
@@ -338,6 +339,10 @@ impl CaptureManager {
             }
             let mut incomplete =
                 bundle.incomplete || bundle.incomplete_tasks & (1 << task_index) != 0;
+            let mut omission_reasons = bundle.omission_reasons.clone();
+            if bundle.incomplete_tasks & (1 << task_index) != 0 {
+                omission_reasons.push("task_stopped_or_expired");
+            }
             let id = Uuid::new_v4().to_string();
             let file = self.file(&id)?;
             let config = self
@@ -365,6 +370,17 @@ impl CaptureManager {
                 write_line(&mut output, &json!({"schemaVersion":1,"requestId":bundle.request_id,
                     "accounts":bundle.accounts,"failedAccounts":bundle.failed_accounts,
                     "instanceId":self.instance_id,"error":true}), &mut bytes, used, quota).await?;
+                for evidence in &bundle.evidence {
+                    if evidence.task_mask & (1 << task_index) == 0 {
+                        continue;
+                    }
+                    if task.task.scope == CaptureScope::Account && evidence.attempt != 0
+                        && evidence.account.as_deref() != Some(task.task.target_id.as_str()) {
+                        continue;
+                    }
+                    write_line(&mut output, &json!({"stage":"diagnostic.evidence",
+                        "attempt":evidence.attempt,"body":evidence.body}), &mut bytes, used, quota).await?;
+                }
                 // Materialize one bounded stage at a time, not the entire record.
                 for ((stage, attempt, exchange, _), fragments) in bodies {
                     let mut body = filter::BodyFilter::new();
@@ -375,13 +391,16 @@ impl CaptureManager {
                     let (events, partial) = tokio::task::spawn_blocking(move || body.finish(media))
                         .await.map_err(unavailable)?;
                     incomplete |= partial;
+                    if partial && !omission_reasons.contains(&"body_filter_partial") {
+                        omission_reasons.push("body_filter_partial");
+                    }
                     for event in events {
                         write_line(&mut output,
                             &json!({"stage":stage,"attempt":attempt,"exchange":exchange,"body":event}),
                             &mut bytes, used, quota).await?;
                     }
                 }
-                write_line(&mut output, &json!({"captureEnd":{"incomplete":incomplete}}),
+                write_line(&mut output, &json!({"captureEnd":{"incomplete":incomplete,"omissionReasons":omission_reasons}}),
                     &mut bytes, used, quota).await?;
                 output.flush().await.map_err(unavailable)?;
                 output.sync_all().await.map_err(unavailable)?;

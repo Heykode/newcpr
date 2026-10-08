@@ -108,6 +108,8 @@ pub struct CleanupJob {
     pub id: String,
     pub instance_id: String,
     pub automatic: bool,
+    #[serde(default)]
+    pub capture_only: bool,
     pub config: CleanupConfig,
     pub cutoff_at: DateTime<Utc>,
     pub status: CleanupJobStatus,

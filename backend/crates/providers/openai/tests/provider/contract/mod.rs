@@ -77,6 +77,7 @@ mod fast_mode;
 mod generate_compat;
 mod guardian;
 mod identity_isolation;
+mod native_encrypted_history;
 mod precommit;
 mod quota_continuation;
 mod quota_observation;

@@ -57,7 +57,10 @@ export function applyQualityPatch(source: QualityRuleConfig, patch: QualityPatch
       continue
     if (field === 'failureTemplate' && action !== 'apply_account_template')
       continue
-    Object.assign(next, { [field]: Array.isArray(patch[field]) ? [...patch[field]] : patch[field] })
+    if (field === 'excelFailureThreshold' && (action === 'disable_scheduling' || action === 'remove_groups'))
+      next.failureThreshold = patch[field]
+    else
+      Object.assign(next, { [field]: Array.isArray(patch[field]) ? [...patch[field]] : patch[field] })
   }
   if (Object.hasOwn(patch, 'detectionMode') && mode === 'state_probe') {
     next.repetitions = 1

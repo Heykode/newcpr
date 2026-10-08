@@ -165,7 +165,11 @@ fn validate_config(config: &QualityRuleConfig, require_account: bool) -> Result<
             "原生恢复后关闭Excel仅适用于旧版状态探针开启Excel规则",
         ));
     }
-    if !(1..=100).contains(&config.excel_failure_threshold) {
+    if !(1..=100).contains(&config.excel_failure_threshold)
+        || config
+            .failure_threshold
+            .is_some_and(|value| !(1..=100).contains(&value))
+    {
         return Err(AdminError::invalid("连续异常阈值必须为 1–100 轮"));
     }
     if config
@@ -954,6 +958,7 @@ mod tests {
     #[test]
     fn quality_cron_is_five_fields_and_timezone_aware() {
         let mut config = QualityRuleConfig {
+            failure_threshold: None,
             failure_template: None,
             excel_failure_threshold: 1,
             excel_recovery_threshold: None,
@@ -1034,6 +1039,22 @@ mod tests {
         assert!(!config.auto_restore);
         assert!(!config.disable_excel_on_native_recovery);
         assert_eq!(config.excel_failure_threshold, 1);
+        assert_eq!(config.failure_threshold, None);
+        assert!(
+            serde_json::to_value(&config)
+                .unwrap()
+                .get("failureThreshold")
+                .is_none()
+        );
+        for invalid in [0, 101, 255] {
+            config.failure_threshold = Some(invalid);
+            assert!(validate(&config).is_err());
+        }
+        for valid in [1, 3, 100] {
+            config.failure_threshold = Some(valid);
+            assert!(validate(&config).is_ok());
+        }
+        config.failure_threshold = None;
         assert_eq!(config.excel_recovery_threshold, None);
         assert!(
             serde_json::to_value(&config)

@@ -14,6 +14,7 @@ async fn reset_credit_batch_routes_require_admin_authentication() {
         ("POST", "refresh"),
         ("POST", "preview"),
         ("GET", "batches"),
+        ("GET", "history?page=1"),
         ("POST", "confirm"),
         ("POST", "retry"),
         ("GET", "automatic"),

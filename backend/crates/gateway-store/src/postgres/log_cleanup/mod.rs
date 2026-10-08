@@ -156,6 +156,7 @@ impl PgLogCleanupStore {
             id: uuid::Uuid::new_v4().to_string(),
             instance_id: self.instance_id.clone(),
             automatic,
+            capture_only: false,
             config,
             cutoff_at,
             status: CleanupJobStatus::Running,
@@ -177,6 +178,40 @@ impl PgLogCleanupStore {
 
 #[async_trait]
 impl LogCleanupStore for PgLogCleanupStore {
+    async fn start_capture_clear(&self, context: &MutationContext) -> AdminStoreResult<CleanupJob> {
+        if self.captures.is_none() {
+            return Err(unavailable("captures"));
+        }
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let current = self.locked(&mut tx).await?;
+        if let Some(job) = current
+            .job
+            .filter(|job| job.status == CleanupJobStatus::Running)
+        {
+            return if job.capture_only && job.instance_id == self.instance_id {
+                Ok(job)
+            } else {
+                Err(conflict())
+            };
+        }
+        let mut config = current.config;
+        config.enabled = false;
+        config.requests.selected = false;
+        config.files.selected = false;
+        config.audit.selected = false;
+        config.captures = CleanupSelection {
+            selected: true,
+            retention_days: 0,
+        };
+        let mut job = self.new_job(config, Utc::now(), false);
+        job.capture_only = true;
+        Self::save_job(&mut tx, &job).await?;
+        Self::audit(&mut tx, context, "request_capture.clear_start", &job.id).await?;
+        tx.commit().await.map_err(unavailable)?;
+        self.wakeup.notify_one();
+        Ok(job)
+    }
+
     async fn state(&self) -> AdminStoreResult<CleanupState> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         let row = sqlx::query_as(

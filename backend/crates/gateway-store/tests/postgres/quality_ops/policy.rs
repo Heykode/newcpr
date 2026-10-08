@@ -1,5 +1,148 @@
 use super::*;
 
+#[tokio::test]
+async fn quality_pause_threshold_is_durable_and_legacy_excel_value_is_not_reinterpreted() {
+    use QualityVerdict::{Correct, Incorrect, RequestError, Unknown};
+    let Some(db) = TestDatabase::create("quality_pause_threshold").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let mut config = config("acct_quality_a");
+    config.failure_action = QualityFailureAction::DisableScheduling;
+    config.failure_threshold = Some(3);
+    config.auto_restore = true;
+    let rule = store
+        .save(None, None, config, Utc::now(), &context())
+        .await
+        .unwrap();
+    for (verdict, count) in [
+        (Incorrect, 1),
+        (Correct, 0),
+        (Incorrect, 1),
+        (Unknown, 1),
+        (RequestError, 1),
+        (Incorrect, 2),
+    ] {
+        let store = PgQualityOpsStore::new(db.pool.clone());
+        scheduled_round(&store, &rule, &[verdict]).await;
+        assert!(enabled(&db).await);
+        assert_eq!(store.rules().await.unwrap()[0].excel_failure_streak, count);
+    }
+    let run = scheduled_round(&store, &rule, &[Incorrect]).await;
+    assert_eq!(run.action.as_deref(), Some("scheduling_paused"));
+    assert!(!enabled(&db).await);
+    assert_eq!(
+        scheduled_round(&store, &rule, &[Correct])
+            .await
+            .action
+            .as_deref(),
+        Some("restored")
+    );
+    assert!(enabled(&db).await);
+    let mut config = rule.config.clone();
+    config.failure_threshold = None;
+    config.excel_failure_threshold = 9;
+    let rule = store
+        .save(
+            Some(&rule.id),
+            Some(rule.revision),
+            config,
+            Utc::now(),
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        scheduled_round(&store, &rule, &[Incorrect])
+            .await
+            .action
+            .as_deref(),
+        Some("scheduling_paused")
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn quality_remove_threshold_preserves_other_groups_and_fences_duplicate_or_stale_rounds() {
+    let Some(db) = TestDatabase::create("quality_remove_threshold").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let group = "grp_00000000000000000000000000000001";
+    sqlx::query("insert into account_groups(id,name,color,enabled,created_at,updated_at) values($1,$1,'#FFFFFFFF',true,now(),now())")
+        .bind(group).execute(&db.pool).await.unwrap();
+    sqlx::query("insert into account_group_accounts values($1,'acct_quality_a',now())")
+        .bind(group)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let mut config = config("acct_quality_a");
+    config.failure_action = QualityFailureAction::RemoveGroups;
+    config.failure_group_ids = vec![group.into()];
+    config.failure_threshold = Some(2);
+    config.auto_restore = true;
+    let mut rule = store
+        .save(None, None, config, Utc::now(), &context())
+        .await
+        .unwrap();
+    let claim = store.claim().await.unwrap().unwrap();
+    for _ in 0..2 {
+        store
+            .finish(&claim, Utc::now(), vec![answer(QualityVerdict::Incorrect)])
+            .await
+            .unwrap();
+        assert_eq!(store.rules().await.unwrap()[0].excel_failure_streak, 1);
+    }
+    let stale = store.claim().await.unwrap().unwrap();
+    rule = store
+        .save(
+            Some(&rule.id),
+            Some(rule.revision),
+            rule.config.clone(),
+            Utc::now(),
+            &context(),
+        )
+        .await
+        .unwrap();
+    store
+        .finish(&stale, Utc::now(), vec![answer(QualityVerdict::Incorrect)])
+        .await
+        .unwrap();
+    assert_eq!(store.rules().await.unwrap()[0].excel_failure_streak, 0);
+    for expected in ["excel_threshold_pending", "groups_removed"] {
+        assert_eq!(
+            scheduled_round(&store, &rule, &[QualityVerdict::Incorrect])
+                .await
+                .action
+                .as_deref(),
+            Some(expected)
+        );
+    }
+    assert!(enabled(&db).await);
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from account_group_accounts where provider_account_id='acct_quality_a'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        scheduled_round(&store, &rule, &[QualityVerdict::Correct])
+            .await
+            .action
+            .as_deref(),
+        Some("restored")
+    );
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from account_group_accounts where provider_account_id='acct_quality_a'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    db.close().await;
+}
+
 pub(super) async fn probe_setup(db: &TestDatabase) -> PgQualityOpsStore {
     let store = setup(db).await;
     sqlx::query("update provider_accounts set excel_models_follow_global=false,excel_models=array['fixture-model']")

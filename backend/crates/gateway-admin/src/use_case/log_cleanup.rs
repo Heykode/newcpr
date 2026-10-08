@@ -63,4 +63,17 @@ impl LogCleanupService {
             .await
             .map_err(|e| map_store_error(e, "log cleanup"))
     }
+    pub async fn start_capture_clear(
+        &self,
+        confirmed: bool,
+        context: &MutationContext,
+    ) -> Result<CleanupJob, AdminError> {
+        if !confirmed {
+            return Err(AdminError::invalid("请确认清理采集材料"));
+        }
+        self.store()?
+            .start_capture_clear(context)
+            .await
+            .map_err(|e| map_store_error(e, "log cleanup"))
+    }
 }

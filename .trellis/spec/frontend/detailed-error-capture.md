@@ -9,10 +9,16 @@
   selected cutoff; running capture tasks and their active material remain protected.
 - A capture-only clear command requires explicit second confirmation. Explain permanent
   material deletion, preserved usage/errors/accounts, and a fixed cutoff excluding new records.
-- Reuse one server-selected cutoff through bounded clear batches. Prevent duplicate mutation
-  while saving/clearing, allow stopping after the current batch, and stop on unmount. Never
-  replay ambiguous failed deletes automatically or claim complete success after a partial error.
+- Start a durable capture-only job through `/log-cleanup/captures/start`. Reuse the existing
+  worker, shared job exclusion and server-selected cutoff. Closing the modal or leaving the
+  page only stops status reads, never the job. Remount reloads authoritative progress.
+- Prevent duplicate mutations while accepting/cancelling; allow modal closure during a running
+  job. Cancellation uses its persisted job ID. Never retry an ambiguous POST automatically or
+  claim complete success after a partial error. This command never saves draft cleanup settings.
 - Clearing neither saves draft configuration nor toggles capture. Refresh authoritative
   counts/status afterward; retain an explicit read/cleanup error and preserve ordinary logs.
 - API has no path/table/instance selector. Browser fixtures must check confirmation cancel,
   rejected writes, no automatic retries, stable cutoff, unchanged switch and 1440/390/320px.
+
+- Capture JSONL adds bounded `diagnostic.evidence` rows and `captureEnd.omissionReasons`.
+  Display/export these through the existing lazy text reader; no automatic body fetch on lists.

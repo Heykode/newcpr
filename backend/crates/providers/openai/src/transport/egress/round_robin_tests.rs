@@ -397,6 +397,200 @@ async fn excel_ipv6_http_sse_reuses_connections_but_isolates_accounts() {
     }
 }
 
+#[tokio::test]
+async fn payload_recovery_pins_source_and_profile_without_advancing_rotation() {
+    for mode in [EgressMode::RandomIpv6Reuse, EgressMode::RandomIpv6Fresh] {
+        let sources = addresses();
+        let (_, runtime, accounts) = fixture(&sources, mode).await;
+        let ordinary = managed_proxy_client()
+            .with_egress_runtime(runtime.clone())
+            .for_account(&accounts[0])
+            .unwrap();
+        let client = ordinary.clone().with_same_attempt_recovery();
+        let request = managed_proxy_request(true);
+        let context =
+            CodexRequestContext::auxiliary("Bearer synthetic", Some("workspace"), "repair", None);
+        let first = client
+            .prepare_response_transport_with_pool_account(
+                &request,
+                context,
+                Some(accounts[0].id().as_str()),
+            )
+            .await
+            .unwrap();
+        let first = first.attempt_client.unwrap();
+        assert_eq!(first.egress_route.as_ref().unwrap().source, sources[0]);
+        let profile = first.profile.snapshot().user_agent();
+        client
+            .profile
+            .apply_user_agent_override(
+                &gateway_core::provider_ports::ProviderUserAgentOverride::Custom {
+                    user_agent: "codex-tui/0.140.0 (Ubuntu 24.04; x86_64) xterm-256color".into(),
+                },
+            )
+            .unwrap();
+        assert_ne!(client.profile.snapshot().user_agent(), profile);
+        let retry = client
+            .clone()
+            .prepare_response_transport_with_pool_account(
+                &request,
+                context,
+                Some(accounts[0].id().as_str()),
+            )
+            .await
+            .unwrap();
+        let retry = retry.attempt_client.unwrap();
+        assert_eq!(retry.egress_route.as_ref().unwrap().source, sources[0]);
+        assert_eq!(retry.profile.snapshot().user_agent(), profile);
+        let next = ordinary
+            .prepare_response_transport_with_pool_account(
+                &request,
+                context,
+                Some(accounts[0].id().as_str()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            next.attempt_client.unwrap().egress_route.unwrap().source,
+            sources[1]
+        );
+        assert!(
+            client
+                .for_account(&accounts[1])
+                .unwrap()
+                .recovery_route
+                .is_none()
+        );
+        assert_eq!(selected(&runtime, &accounts[1]), sources[2]);
+    }
+}
+
+#[tokio::test]
+async fn payload_recovery_refuses_invalidated_route_without_selecting_another() {
+    for remove_account in [false, true] {
+        let sources = addresses();
+        let (store, runtime, accounts) = fixture(&sources, EgressMode::RandomIpv6Fresh).await;
+        let client = managed_proxy_client()
+            .with_egress_runtime(runtime.clone())
+            .for_account(&accounts[0])
+            .unwrap()
+            .with_same_attempt_recovery();
+        let request = managed_proxy_request(true);
+        let context =
+            CodexRequestContext::auxiliary("Bearer synthetic", Some("workspace"), "repair", None);
+        let first = client
+            .prepare_response_transport_with_pool_account(
+                &request,
+                context,
+                Some(accounts[0].id().as_str()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first.attempt_client.unwrap().egress_route.unwrap().source,
+            sources[0]
+        );
+        {
+            let mut state = store.0.lock().unwrap();
+            if remove_account {
+                state.account_overrides.remove(accounts[0].id());
+            } else {
+                state.addresses[0].enabled = false;
+            }
+        }
+        runtime.reload().await.unwrap();
+        let error = client
+            .prepare_response_transport_with_pool_account(
+                &request,
+                context,
+                Some(accounts[0].id().as_str()),
+            )
+            .await
+            .err()
+            .expect("invalidated recovery must fail closed");
+        assert!(matches!(
+            error,
+            crate::transport::CodexClientError::Egress(
+                CodexEgressError::SourceDisabled | CodexEgressError::ConfigurationChanged
+            )
+        ));
+        assert_eq!(selected(&runtime, &accounts[1]), sources[1]);
+    }
+}
+
+#[tokio::test]
+async fn payload_recovery_preserves_fresh_websocket_pool_identity() {
+    let listener = TcpListener::bind("[::1]:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (_, runtime, accounts) = fixture(&[Ipv6Addr::LOCALHOST], EgressMode::RandomIpv6Fresh).await;
+    let server = tokio::spawn(async move {
+        // Prepared sockets are dropped without sending a payload in this test.
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().await.unwrap();
+            use tokio_tungstenite::tungstenite::{
+                extensions::{ExtensionsConfig, compression::deflate::DeflateConfig},
+                protocol::WebSocketConfig,
+            };
+            let mut extensions = ExtensionsConfig::default();
+            extensions.permessage_deflate = Some(DeflateConfig::default());
+            let mut config = WebSocketConfig::default();
+            config.extensions = extensions;
+            let mut socket = tokio_tungstenite::accept_async_with_config(stream, Some(config))
+                .await
+                .unwrap();
+            while let Some(message) = socket.next().await {
+                if message.is_err() || message.unwrap().is_close() {
+                    break;
+                }
+            }
+        }
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_secs(60)));
+    let client = CodexBackendClient::new(
+        Client::builder().no_proxy().build().unwrap(),
+        base,
+        OpenAiConfig::default().wire_profile_state(),
+    )
+    .with_egress_runtime(runtime)
+    .with_websocket_pool(pool.clone())
+    .for_account(&accounts[0])
+    .unwrap()
+    .with_same_attempt_recovery();
+    let request = managed_proxy_request(false);
+    let context =
+        CodexRequestContext::auxiliary("Bearer synthetic", Some("workspace"), "repair", None);
+    let mut keys = Vec::new();
+    for _ in 0..2 {
+        let prepared = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.prepare_response_transport_with_pool_account(
+                &request,
+                context,
+                Some(accounts[0].id().as_str()),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_or_else(|error| panic!("synthetic websocket preparation failed: {error}"));
+        keys.push(
+            prepared
+                .attempt_client
+                .as_ref()
+                .unwrap()
+                .forced_pool_key
+                .clone()
+                .unwrap(),
+        );
+        drop(prepared);
+    }
+    assert_eq!(keys[0], keys[1]);
+    pool.shutdown().await;
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 struct Exit {
     proxy: OutboundProxy,
     reports: Mutex<Vec<SessionProxyOutcome>>,

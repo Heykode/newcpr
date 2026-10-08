@@ -150,6 +150,14 @@ impl ResetCreditsService {
             .map_err(|e| map_store_error(e, "reset credits"))
     }
 
+    pub async fn history(&self, query: ResetHistoryQuery) -> Result<ResetHistoryPage, AdminError> {
+        query.validate()?;
+        self.store()?
+            .history(query)
+            .await
+            .map_err(|e| map_store_error(e, "reset credits"))
+    }
+
     pub async fn batches(&self) -> Result<Vec<ResetBatch>, AdminError> {
         self.store()?
             .batches()

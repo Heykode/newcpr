@@ -1,7 +1,20 @@
 import type { QualityRuleConfig } from '@/api/modules/quality-ops'
 
 export function usesFailureThreshold(action: QualityRuleConfig['failureAction']): boolean {
-  return action === 'enable_excel' || action === 'apply_account_template'
+  return action !== 'none'
+}
+
+export function failureThreshold(config: Partial<QualityRuleConfig>): number {
+  return config.failureAction === 'disable_scheduling' || config.failureAction === 'remove_groups'
+    ? config.failureThreshold ?? 1
+    : config.excelFailureThreshold ?? 1
+}
+
+export function setFailureThreshold(config: QualityRuleConfig, value: number) {
+  if (config.failureAction === 'disable_scheduling' || config.failureAction === 'remove_groups')
+    config.failureThreshold = value
+  else
+    config.excelFailureThreshold = value
 }
 
 export function failureActionOptions(current: QualityRuleConfig['failureAction']) {

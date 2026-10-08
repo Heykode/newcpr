@@ -14,6 +14,84 @@ use gateway_core::account::ProviderAccountId;
 use gateway_store::postgres::PgResetCreditsStore;
 use uuid::Uuid;
 
+#[tokio::test]
+async fn reset_history_pages_all_confirmed_batches_and_searches_literal_account_fields() {
+    let Some(db) = TestDatabase::create("reset_history").await else {
+        return;
+    };
+    seed(&db).await;
+    let store = PgResetCreditsStore(db.pool.clone());
+    sqlx::query("update provider_accounts set custom_name='100%_fixture' where id='acct_reset_1'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    for n in 0..35 {
+        let mut value = batch(1);
+        value.confirmed = true;
+        value.created_at = Utc::now() - Duration::seconds(40 - n);
+        value.items[0].status = ResetItemStatus::Succeeded;
+        store.save_preview(value).await.unwrap();
+    }
+    store.save_preview(batch(1)).await.unwrap();
+    let first = store
+        .history(ResetHistoryQuery {
+            page: 1,
+            search: "%_".into(),
+            before: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(first.items.len(), 10);
+    assert!(first.has_more);
+    assert_eq!(first.account_names["acct_reset_1"], "100%_fixture");
+    let mut added = batch(1);
+    added.confirmed = true;
+    store.save_preview(added).await.unwrap();
+    let mut ids: std::collections::BTreeSet<_> = first.items.iter().map(|batch| batch.id).collect();
+    for page in 2..=4 {
+        let next = store
+            .history(ResetHistoryQuery {
+                page,
+                search: "".into(),
+                before: Some(first.before),
+            })
+            .await
+            .unwrap();
+        assert_eq!(next.has_more, page < 4);
+        for batch in next.items {
+            assert!(ids.insert(batch.id));
+        }
+    }
+    assert_eq!(ids.len(), 35);
+    assert!(
+        store
+            .history(ResetHistoryQuery {
+                page: 1,
+                search: "missing".into(),
+                before: None
+            })
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    sqlx::query("delete from provider_accounts where id='acct_reset_1'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let deleted = store
+        .history(ResetHistoryQuery {
+            page: 1,
+            search: "acct_reset_1".into(),
+            before: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(deleted.items.len(), 10);
+    assert!(deleted.account_names.is_empty());
+    db.close().await;
+}
+
 fn context() -> MutationContext {
     MutationContext {
         actor: MutationActor::System,

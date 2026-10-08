@@ -65,6 +65,37 @@ pub struct ResetBatch {
     pub context: Option<MutationContext>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResetHistoryQuery {
+    pub page: u32,
+    #[serde(default)]
+    pub search: String,
+    pub before: Option<DateTime<Utc>>,
+}
+
+impl ResetHistoryQuery {
+    pub fn validate(&self) -> Result<(), AdminError> {
+        if self.page == 0
+            || self.search.len() > 200
+            || self.search.chars().any(char::is_control)
+            || self.before.is_some_and(|before| before > Utc::now())
+        {
+            return Err(AdminError::invalid("重置记录查询参数不合法"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetHistoryPage {
+    pub items: Vec<ResetBatch>,
+    pub account_names: std::collections::BTreeMap<String, String>,
+    pub before: DateTime<Utc>,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum ResetConsumePermit {
     Execute(Uuid),

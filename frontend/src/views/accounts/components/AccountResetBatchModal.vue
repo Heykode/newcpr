@@ -5,9 +5,11 @@ import { computed } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import AccountResetHistory from './AccountResetHistory.vue'
 
 const props = defineProps<{
   batch: ResetBatch | null
+  previewing: boolean
   batches: ResetBatch[]
   accounts: Account[]
   busy: boolean
@@ -17,9 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{ confirm: [], prepare: [], retry: [accountId: string] }>()
 const open = defineModel<boolean>({ required: true })
 const resetType = defineModel<string>('resetType', { required: true })
-const selectedBatchId = defineModel<string>('selectedBatchId', { required: true })
 const readyCount = computed(() => props.batch?.items.filter(i => i.status === 'ready').length ?? 0)
-const doneCount = computed(() => props.batch?.items.filter(i => !['ready', 'queued', 'running'].includes(i.status)).length ?? 0)
 const labels: Record<ResetItemStatus, string> = {
   ready: '待确认',
   queued: '排队中',
@@ -29,10 +29,6 @@ const labels: Record<ResetItemStatus, string> = {
   failed: '失败',
   unknown: '待确认结果',
 }
-const batchOptions = computed(() => props.batches.map(batch => ({
-  value: batch.id,
-  label: `${date(batch.createdAt)} · ${batch.items.length} 个账号`,
-})))
 function accountLabel(id: string) {
   const account = props.accounts.find(a => a.id === id)
   return account?.customName || account?.email || id
@@ -64,14 +60,11 @@ function date(value: string | null) {
           已选 {{ batch.items.length }} 个 · 可用 {{ readyCount }} 个 · 跳过 {{ batch.items.length - readyCount }} 个
         </p>
       </div>
-      <BaseSelect v-else-if="batches.length" v-model="selectedBatchId" :options="batchOptions" aria-label="重置任务" :disabled="busy" />
       <p v-if="batch && !batch.confirmed" class="m-0 text-cp-warning-text">
         本次最多消耗 {{ readyCount }} 次，每个账号一张，优先最早到期。重置后不能撤销。
       </p>
-      <p v-else-if="batch" class="m-0 text-cp-text-secondary">
-        已处理 {{ doneCount }} / {{ batch.items.length }}
-      </p>
-      <div v-if="batch" class="divide-y divide-cp-border border-y border-cp-border">
+      <AccountResetHistory v-if="open && !previewing" />
+      <div v-if="batch && previewing" class="divide-y divide-cp-border border-y border-cp-border">
         <article v-for="item in batch.items" :key="item.accountId" class="grid min-w-0 gap-2 py-3 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:gap-4">
           <div class="min-w-0">
             <div class="break-all font-medium">
@@ -100,7 +93,7 @@ function date(value: string | null) {
           </div>
         </article>
       </div>
-      <p v-else class="m-0 py-6 text-center text-cp-text-secondary">
+      <p v-else-if="previewing" class="m-0 py-6 text-center text-cp-text-secondary">
         {{ busy ? '正在查询所选账号的重置次数…' : '暂无批量重置记录' }}
       </p>
     </div>

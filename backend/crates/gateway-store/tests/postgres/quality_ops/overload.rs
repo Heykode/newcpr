@@ -119,6 +119,7 @@ async fn quality_overload_reuses_scheduling_action_and_keeps_explicit_error_beha
     let store = setup(&db).await;
     let mut cfg = config("acct_quality_a");
     cfg.failure_action = QualityFailureAction::DisableScheduling;
+    cfg.failure_threshold = Some(5);
     cfg.auto_restore = true;
     let rule = store
         .save(None, None, cfg, Utc::now(), &context())
@@ -147,7 +148,28 @@ async fn quality_overload_reuses_scheduling_action_and_keeps_explicit_error_beha
         Some("restored")
     );
     assert!(enabled(&db).await);
-    // Pure explicit failures keep the legacy action timing.
+    // Pure explicit failures retain the configured threshold after restoration.
+    assert_eq!(
+        scheduled_round(&store, &rule, &[Incorrect])
+            .await
+            .action
+            .as_deref(),
+        Some("excel_threshold_pending")
+    );
+    assert!(enabled(&db).await);
+    // Omitted thresholds still preserve the legacy single-failure timing.
+    let mut cfg = rule.config.clone();
+    cfg.failure_threshold = None;
+    let rule = store
+        .save(
+            Some(&rule.id),
+            Some(rule.revision),
+            cfg,
+            Utc::now(),
+            &context(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         scheduled_round(&store, &rule, &[Incorrect])
             .await
