@@ -45,8 +45,8 @@ function bucket(index, counts = {}) {
   }
 }
 
-function renderBuckets(buckets) {
-  return renderToString(createSSRApp(exports.default, { buckets }))
+function renderBuckets(buckets, props = {}) {
+  return renderToString(createSSRApp(exports.default, { buckets, ...props }))
 }
 
 function buttonsFromHtml(html) {
@@ -186,4 +186,30 @@ test('only non-completions is zero percent, not empty or successful', async () =
     进行中: '0',
   })
   assert.doesNotMatch(html, />\s*样本数\s*</)
+})
+
+test('compact health retains the same buckets, details and accessible labels without the desktop caption', async () => {
+  const samples = [
+    bucket(0),
+    bucket(1, { requestCount: 10, successCount: 10 }),
+    bucket(2, { requestCount: 10, successCount: 9, errorCount: 1 }),
+    bucket(3, { requestCount: 10, successCount: 6, errorCount: 3, nonCompletionCount: 1 }),
+    bucket(4, { inFlightCount: 2 }),
+    bucket(5, { requestCount: 1 }),
+  ]
+  const desktop = await renderBuckets(samples)
+  const compact = await renderBuckets(samples, { compact: true })
+  assert.deepEqual(buttonsFromHtml(compact), buttonsFromHtml(desktop))
+  assert.deepEqual(popoverDetails(compact), popoverDetails(desktop))
+  assert.match(compact, />健康<\/span>/)
+  assert.match(compact, /h-3\.5/)
+  assert.doesNotMatch(compact, />较早<|>现在</)
+  assert.match(desktop, /h-8/)
+  assert.match(desktop, />较早<\/span>/)
+})
+
+test('compact health explicitly labels missing history without inventing healthy buckets', async () => {
+  const html = await renderBuckets([], { compact: true })
+  assert.match(html, />暂无样本<\/span>/)
+  assert.equal(buttonsFromHtml(html).length, 0)
 })

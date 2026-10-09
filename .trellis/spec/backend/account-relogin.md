@@ -15,6 +15,16 @@
   Paused queues reject new enrollment. Active/uncertain rows cannot be replaced by it.
   Workspace selection preserves intent; Ready enrollment resumes push after pause
   without logging in again. Cancel, manual queue/push and successful settlement clear it.
+- Enrollment owns optional `purchase_cost` separately from reusable template config.
+  Carry the existing `AccountPurchaseUpdate` through construction, persisted JSONB
+  and `settings()` replay without changing decimal strings or the optional cycle date.
+  Reuse `AccountPurchaseUpdate::validate` before queuing and on replay; the enrollment
+  API does not run the ordinary credential-import request's `validate()` method.
+  Missing fields in old tasks deserialize as no cost update; explicit zero is retained.
+  No schema migration or normal account-template cost setting is introduced. Existing
+  account enrollment stays credential-only. Costs already omitted by an older writer
+  cannot be recovered or guessed. Verify against the original submitted cost, not
+  another call to the same potentially lossy settings converter.
 - Relogin export requires explicit selected IDs (at most 200), administrator auth,
   confirmation and no-store. Export one CPR JSON bundle or one three-field text file.
   Resolve actual pooled identity/workspace before reading credentials; reject deleted,

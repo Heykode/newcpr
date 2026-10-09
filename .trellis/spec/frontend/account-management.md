@@ -1,5 +1,41 @@
 # Account Management Contracts
 
+## Mobile Account Cards
+
+- Below 768px, render `AccountMobileList` instead of `BaseTable`, never both hidden
+  trees. The page still owns querying, refresh, selection, expansion and mutations.
+  Resizing must not issue list requests or clear selected/expanded account IDs.
+- Mobile core fields are independent of desktop column preferences. Preserve filters,
+  pagination and the existing sortable keys, with page selection and cross-page counts.
+  Disable table mouse-drag selection on mobile; card clicks never toggle scheduling
+  or selection implicitly. Editing, deleting and menus reuse the existing handlers.
+- Reuse `AccountIdentityCell.mobile`, quota summary `comfortable`, action sizes and
+  `AccountGroupMarks.layout = 'wrap'`. Their defaults preserve desktop appearance.
+  Keep full email wrapping, monitoring, Excel and 2FA indicators. Extra columns,
+  including purchase cost and relogin count, remain in each card's expanded details.
+- Keep mobile metadata compact: provider avatar, plan, status and monitoring share
+  one strip below the ordinary-weight email, with a reserved scheduling-switch column.
+  Capacity and groups share the bottom row. Wrapping group roots and their popovers
+  use the full available column width so badges do not wrap prematurely.
+- Mobile credits, observed cost and forecast share a wrapping billing row; the
+  desktop wrapper uses `display: contents` to retain separate table-cell rows.
+  Preserve credit precision, unknown values and the explicit forecast action.
+- Keep the mobile health timeline in the existing usage-header row between token
+  usage and authentication type, not in a new row or duplicated in expanded details.
+  Compact mode reuses the same six buckets, thresholds and popover details; absent
+  history stays explicitly unknown. Do not add health requests or change polling.
+- `AccountPurchaseCell.align` defaults to centered desktop text. Mobile details
+  explicitly opt into right alignment; a parent's `text-right` cannot override a
+  child's `text-center`. Test actual text bounds for numbers and unknown markers,
+  not merely cell bounds or inherited classes.
+- `AccountQuotaPanel.mobile` owns its frame and width. It has a fragment root, so
+  passing a class from the caller cannot remove its desktop padding. Mobile metadata
+  must wrap, and balances/Excel details use container width, not old table offsets.
+- Browser tests must select `[data-account-card]` on mobile, and still assert actual
+  table headers/cells on desktop. Check 320/390/430/767px, both themes, expanded bounds,
+  cancel paths, batch editing, unknown quota/capacity, and quota refresh without a GET.
+  Use synthetic APIs in the isolated test server; no production credentials or traffic.
+
 ## First-Step Import Templates
 
 - The template picker belongs to `AccountSetupFields`, before editable settings,

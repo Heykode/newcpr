@@ -8,6 +8,7 @@ import { quotaWindowCode, quotaWindowPresentation, quotaWindowResetPresentation 
 const props = defineProps<{
   label: string
   windows: AccountQuotaWindow[]
+  comfortable?: boolean
 }>()
 
 const now = useUiClock()
@@ -25,7 +26,7 @@ const windowItems = computed(() => props.windows.map(window => ({
 
 <template>
   <div class="grid min-w-0 gap-1.5">
-    <span class="min-w-0 truncate text-[10px] leading-3 font-bold text-cp-text-quaternary" :title="label">
+    <span class="min-w-0 truncate leading-3 font-bold text-cp-text-quaternary" :class="comfortable ? 'text-xs' : 'text-[10px]'" :title="label">
       {{ label }}
     </span>
 
@@ -33,7 +34,8 @@ const windowItems = computed(() => props.windows.map(window => ({
       <div
         v-for="item in windowItems"
         :key="item.key"
-        class="grid min-h-4 min-w-0 grid-cols-[24px_minmax(0,1fr)_40px_64px] items-center gap-x-1.5 text-[10px] leading-4"
+        class="grid min-w-0 items-center gap-x-1.5 leading-4"
+        :class="comfortable ? 'min-h-5 grid-cols-[28px_minmax(0,1fr)_44px_64px] text-xs' : 'min-h-4 grid-cols-[24px_minmax(0,1fr)_40px_64px] text-[10px]'"
         role="group"
         :aria-label="`${item.labelTooltip}额度周期`"
       >

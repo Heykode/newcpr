@@ -9,7 +9,7 @@ import { accountGroupLayout } from './account-group-layout'
 
 const props = withDefaults(defineProps<{
   groups: AccountGroupRef[]
-  layout?: 'inline' | 'stacked'
+  layout?: 'inline' | 'stacked' | 'wrap'
 }>(), { layout: 'inline' })
 
 const fullNames = computed(() =>
@@ -49,7 +49,7 @@ function measureGroups() {
 useResizeObserver([root, measurements], measureGroups)
 watch(() => [props.layout, props.groups], measureGroups, { deep: true, flush: 'post' })
 
-const visibleGroups = computed(() => styledGroups.value.slice(0, props.layout === 'stacked' ? layoutSize.value.count : 2))
+const visibleGroups = computed(() => props.layout === 'wrap' ? styledGroups.value : styledGroups.value.slice(0, props.layout === 'stacked' ? layoutSize.value.count : 2))
 const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.value.length, 0))
 </script>
 
@@ -58,12 +58,12 @@ const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.
     v-if="groups.length > 0"
     ref="root"
     class="relative min-w-0 max-w-full"
-    :class="layout === 'stacked' ? 'w-full' : undefined"
+    :class="layout !== 'inline' ? 'w-full' : undefined"
     :aria-label="fullNames"
   >
     <BasePopover
       class="min-w-0 max-w-full"
-      :class="layout === 'stacked' ? 'w-full' : undefined"
+      :class="layout !== 'inline' ? 'w-full' : undefined"
       placement="top"
       trigger="hover-click"
       :hover-delay="100"
@@ -73,7 +73,7 @@ const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.
         <button
           type="button"
           class="min-w-0 max-w-full cursor-help items-center overflow-hidden border-0 bg-transparent p-0 text-left"
-          :class="layout === 'stacked' ? 'flex w-full flex-wrap justify-center gap-x-1.5 gap-y-1' : 'flex flex-nowrap gap-1.5'"
+          :class="layout === 'wrap' ? 'flex w-full flex-wrap gap-1.5' : layout === 'stacked' ? 'flex w-full flex-wrap justify-center gap-x-1.5 gap-y-1' : 'flex flex-nowrap gap-1.5'"
           :aria-label="`查看账号分组：${fullNames}`"
           :aria-expanded="open"
         >
@@ -81,10 +81,10 @@ const hiddenCount = computed(() => Math.max(props.groups.length - visibleGroups.
             v-for="group in visibleGroups"
             :key="group.id"
             class="inline-flex min-w-0 items-center overflow-hidden px-2 py-1 leading-none font-heavy"
-            :class="layout === 'stacked' ? 'max-w-full shrink-0 rounded-cp-sm text-[13px]' : 'max-w-28 shrink rounded-full text-[10px]'"
+            :class="layout === 'wrap' ? 'max-w-full rounded-cp-sm px-1.5! py-0.5! text-xs leading-4' : layout === 'stacked' ? 'max-w-full shrink-0 rounded-cp-sm text-[13px]' : 'max-w-28 shrink rounded-full text-[10px]'"
             :style="[group.style, layout === 'stacked' && layoutSize.maxWidth !== undefined ? { maxWidth: `${layoutSize.maxWidth}px` } : undefined]"
           >
-            <span class="truncate">{{ group.name }}</span>
+            <span :class="layout === 'wrap' ? 'break-all whitespace-normal' : 'truncate'">{{ group.name }}</span>
           </span>
           <span
             v-if="hiddenCount > 0"

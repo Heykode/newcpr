@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AccountRow } from './constants'
 import { ChevronDown, History, ListTodo, RefreshCw, RotateCcw } from '@lucide/vue'
-import { useLocalStorage } from '@vueuse/core'
+import { useLocalStorage, useMediaQuery } from '@vueuse/core'
 
 import { computed, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { getRelogin } from '@/api/modules/relogin'
@@ -17,6 +17,7 @@ import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination
 import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
+import AccountQualityMonitorBadge from '@/components/quality-ops/AccountQualityMonitorBadge.vue'
 import QualityTemplateApplyMenu from '@/components/quality-ops/QualityTemplateApplyMenu.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
@@ -30,6 +31,7 @@ import AccountFilters from './components/AccountFilters.vue'
 import AccountHealthTimeline from './components/AccountHealthTimeline.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountImportTasks from './components/AccountImportTasks/index.vue'
+import AccountMobileList from './components/AccountMobileList.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountPurchaseCell from './components/AccountPurchaseCell.vue'
@@ -57,6 +59,7 @@ import { accountColumnOptions, accountColumns, derivedAccountStatus, readAccount
 import { accountHasReloginTotp, reloginTotpEmailSet } from './relogin-availability'
 
 const selectedIds = ref<Set<string>>(new Set())
+const isMobile = useMediaQuery('(max-width: 767px)')
 const applyingTemplate = shallowRef(false)
 const applyingQualityTemplate = shallowRef(false)
 const forecastAccount = ref<AccountRow | null>(null)
@@ -377,15 +380,15 @@ function toggleColumn(key: string) {
 }
 
 const accountTableRef = useTemplateRef<{
-  getScrollElement: () => HTMLElement | undefined
-  getTableElement: () => HTMLTableElement | undefined
+  getScrollElement?: () => HTMLElement | undefined
+  getTableElement?: () => HTMLTableElement | undefined
 }>('accountTable')
 const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
-  getScrollElement: () => accountTableRef.value?.getScrollElement(),
-  getTableElement: () => accountTableRef.value?.getTableElement(),
+  getScrollElement: () => accountTableRef.value?.getScrollElement?.(),
+  getTableElement: () => accountTableRef.value?.getTableElement?.(),
   rowIds: computed(() => accounts.value.map(row => row.id)),
   selectedIds,
-  disabled: loading,
+  disabled: computed(() => loading.value || isMobile.value),
   invalidationKey: computed(() => JSON.stringify([
     accountPagination.value.currentPage,
     accountPagination.value.pageSize,
@@ -434,6 +437,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
     <BaseCard
       class="mt-4 flex flex-col xl:h-[calc(100dvh-250px)] xl:min-h-125"
+      :class="isMobile ? 'overflow-visible! rounded-none! bg-transparent! p-0! shadow-none!' : undefined"
     >
       <template #header>
         <AccountFilters
@@ -456,6 +460,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           :groups="groups"
           :groups-loading="groupsLoading"
           :selected-count="selectedIds.size"
+          :hide-columns="isMobile"
           :batch-deleting="batchDeleting"
           :exporting-accounts="exportingAccounts"
           :template-applying="applyingTemplate || applyingQualityTemplate"
@@ -486,12 +491,13 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
       <template #body>
         <div class="flex min-h-0 flex-col xl:h-full">
-          <BaseTable
+          <component
+            :is="isMobile ? AccountMobileList : BaseTable"
             ref="accountTable"
-            class="account-table h-100! min-h-100 flex-none [--cp-table-row-height:72px] xl:h-auto! xl:min-h-0 xl:flex-1"
-            :class="{ 'select-none': isDragging }"
+            :class="[isMobile ? undefined : 'account-table h-100! min-h-100 flex-none [--cp-table-row-height:72px] xl:h-auto! xl:min-h-0 xl:flex-1', { 'select-none': isDragging }]"
+            v-bind="isMobile ? { hasTotp: hasReloginTotp } : {}"
             column-layout="content"
-            :columns="visibleAccountColumns"
+            :columns="isMobile ? accountColumns : visibleAccountColumns"
             :rows="accounts"
             :loading="loading"
             :selected-row-keys="selectedRowKeys"
@@ -505,7 +511,11 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
               <button
                 type="button"
                 class="inline-flex size-6 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-cp-text-secondary transition hover:bg-cp-bg-text-hover hover:text-cp-text"
+                :class="isMobile ? 'size-8!' : undefined"
                 :title="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
+                :aria-label="expandedAccountIds.has(row.id) ? '收起统计' : '展开统计'"
+                :aria-expanded="expandedAccountIds.has(row.id)"
+                :aria-controls="isMobile && expandedAccountIds.has(row.id) ? `account-details-${row.id}` : undefined"
                 @click.stop="toggleExpanded(row.id)"
               >
                 <ChevronDown
@@ -537,16 +547,21 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             </template>
 
             <template #status="{ row }">
-              <div class="grid w-full min-w-0 justify-items-center gap-1.5">
-                <AccountStatusBadge
-                  align="center"
-                  :status="derivedAccountStatus(row)"
-                  :error-reason="row.errorReason"
-                  :error-message="row.errorMessage"
-                  :rate-limited-until="row.quota.rateLimitedUntil"
-                  :next-refresh-at="row.nextRefreshAt"
-                />
+              <div :class="isMobile ? 'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5' : 'grid w-full min-w-0 justify-items-center gap-1.5'">
+                <div :class="isMobile ? 'flex min-w-0 flex-wrap items-center gap-1.5' : 'contents'">
+                  <AccountPlanBadge v-if="isMobile" data-account-plan-mark :plan-type="row.planType" :plan-type-display="row.planTypeDisplay" size="sm" />
+                  <AccountStatusBadge
+                    align="center"
+                    :status="derivedAccountStatus(row)"
+                    :error-reason="row.errorReason"
+                    :error-message="row.errorMessage"
+                    :rate-limited-until="row.quota.rateLimitedUntil"
+                    :next-refresh-at="row.nextRefreshAt"
+                  />
+                  <AccountQualityMonitorBadge v-if="isMobile && row.qualityMonitoring" :account-id="row.id" :monitor="row.qualityMonitoring" class="mt-0! shrink-0" />
+                </div>
                 <AccountSchedulingSwitch
+                  :class="isMobile ? 'ml-auto shrink-0' : undefined"
                   :enabled="row.enabled"
                   :status="derivedAccountStatus(row)"
                   :loading="togglingAccountIds.has(row.id)"
@@ -576,13 +591,18 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             <template #usage="{ row }">
               <AccountQuotaSummaryCell
                 :account="row"
+                :comfortable="isMobile"
                 @forecast-requested="openQuotaForecast"
-              />
+              >
+                <template v-if="isMobile" #health>
+                  <AccountHealthTimeline :buckets="row.healthTimeline" compact />
+                </template>
+              </AccountQuotaSummaryCell>
             </template>
 
             <template #groups="{ row }">
-              <div class="flex w-full min-w-0 justify-center">
-                <AccountGroupMarks :groups="row.groups" layout="stacked" />
+              <div class="flex w-full min-w-0" :class="isMobile ? 'justify-start' : 'justify-center'">
+                <AccountGroupMarks :groups="row.groups" :layout="isMobile ? 'wrap' : 'stacked'" />
               </div>
             </template>
 
@@ -595,7 +615,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             </template>
 
             <template #purchaseCost="{ row }">
-              <AccountPurchaseCell :cost="row.purchaseCost" />
+              <AccountPurchaseCell :cost="row.purchaseCost" :align="isMobile ? 'right' : 'center'" />
             </template>
             <template #resetCredits="{ row }">
               <AccountResetCreditCell :inventory="resetInventory[row.id]" :supported="row.provider === 'openai'" />
@@ -604,6 +624,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             <template #actions="{ row }">
               <AccountTableActions
                 :account="row"
+                :comfortable="isMobile"
                 :deleting="deletingAccount"
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
@@ -625,20 +646,22 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
             </template>
 
             <template #expanded="{ row }">
-              <div class="grid items-stretch gap-3 p-4 lg:grid-cols-[1.05fr_2.45fr] xl:min-h-77">
+              <div class="grid min-w-0 items-stretch gap-3 p-4 lg:grid-cols-[1.05fr_2.45fr] xl:min-h-77" :class="isMobile ? 'px-0!' : undefined">
                 <AccountQuotaPanel
+                  :mobile="isMobile"
                   :account="row"
                   :refreshing="refreshingQuotaAccountIds.has(row.id)"
                   @account-updated="void replaceAccount($event)"
                   @refresh-quota="handleRefreshQuota"
                 />
                 <AccountUsagePanel
+                  :class="isMobile ? 'min-w-0 rounded-none! bg-transparent! p-0! shadow-none!' : undefined"
                   :account="row"
                   @forecast-requested="openQuotaForecast"
                 />
               </div>
             </template>
-          </BaseTable>
+          </component>
           <BaseTablePagination
             :pagination="accountPagination"
             :loading="loading"

@@ -1,7 +1,15 @@
 use super::*;
 
+fn purchase_cost(amount: &str) -> gateway_admin::model::account_purchase::AccountPurchaseUpdate {
+    gateway_admin::model::account_purchase::AccountPurchaseUpdate {
+        amount_cny: Some(amount.into()),
+        cycle_start: chrono::NaiveDate::from_ymd_opt(2026, 1, 31),
+    }
+}
+
 fn intent() -> ReloginEnrollment {
     let mut settings = template_config().settings().unwrap();
+    settings.purchase_cost = Some(purchase_cost("50.125"));
     settings.custom_name = Some("Imported via 2FA".into());
     settings.responses_upstream = Some(gateway_core::account::ResponsesUpstream::Excel);
     settings.excel_403_action = Some(gateway_core::account::Excel403Action::DisableExcel);
@@ -10,6 +18,65 @@ fn intent() -> ReloginEnrollment {
 }
 
 const MATERIAL: &str = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
+
+#[test]
+fn enrollment_serializes_and_replays_purchase_cost_without_changing_other_settings() {
+    for cost in [
+        None,
+        Some(purchase_cost("0")),
+        Some(purchase_cost("50.1234567890")),
+        Some(
+            gateway_admin::model::account_purchase::AccountPurchaseUpdate {
+                amount_cny: Some("25".into()),
+                cycle_start: None,
+            },
+        ),
+    ] {
+        let mut settings = template_config().settings().unwrap();
+        settings.purchase_cost = cost;
+        let enrollment =
+            ReloginEnrollment::new(settings.clone(), None, context("cost-enroll")).unwrap();
+        assert_eq!(enrollment.settings().unwrap(), settings);
+        let replay: ReloginEnrollment =
+            serde_json::from_value(serde_json::to_value(enrollment).unwrap()).unwrap();
+        assert_eq!(replay.settings().unwrap(), settings);
+    }
+}
+
+#[test]
+fn enrollment_rejects_invalid_purchase_cost_on_creation_and_replay() {
+    let mut future_cost = purchase_cost("25");
+    future_cost.cycle_start = Some((Utc::now() + chrono::Duration::days(2)).date_naive());
+    for cost in [
+        purchase_cost("-1"),
+        purchase_cost("NaN"),
+        purchase_cost("10000000000"),
+        purchase_cost("0.00000000001"),
+        future_cost,
+    ] {
+        let mut settings = template_config().settings().unwrap();
+        settings.purchase_cost = Some(cost.clone());
+        assert!(ReloginEnrollment::new(settings, None, context("cost-enroll")).is_err());
+        let mut serialized = serde_json::to_value(intent()).unwrap();
+        serialized["purchase_cost"] = serde_json::to_value(cost).unwrap();
+        let replay: ReloginEnrollment = serde_json::from_value(serialized).unwrap();
+        assert!(replay.settings().is_err());
+    }
+}
+
+#[test]
+fn legacy_enrollment_without_purchase_cost_still_restores_other_settings() {
+    let mut serialized = serde_json::to_value(intent()).unwrap();
+    serialized.as_object_mut().unwrap().remove("purchase_cost");
+    let replay: ReloginEnrollment = serde_json::from_value(serialized).unwrap();
+    let restored = replay.settings().unwrap();
+    assert!(restored.purchase_cost.is_none());
+    assert_eq!(restored.custom_name.as_deref(), Some("Imported via 2FA"));
+    assert_eq!(
+        restored.responses_upstream,
+        Some(gateway_core::account::ResponsesUpstream::Excel)
+    );
+}
 
 #[test]
 fn enrollment_serializes_and_replays_all_egress_intents() {
@@ -84,6 +151,13 @@ async fn enrollment_resumes_selected_workspace_and_keeps_the_import_intent() {
     h.cycle().await;
     assert!(h.row(&ids[0]).await.synced_at.is_some());
     assert_eq!(h.accounts.import_settings().len(), 1);
+    assert_eq!(
+        h.accounts.import_settings()[0]
+            .as_ref()
+            .unwrap()
+            .purchase_cost,
+        Some(purchase_cost("50.125"))
+    );
 }
 
 #[tokio::test]
@@ -108,6 +182,13 @@ async fn verified_enrollment_waits_for_pause_to_end_without_logging_in_again() {
     h.cycle().await;
     assert!(h.row(&ids[0]).await.synced_at.is_some());
     assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+    assert_eq!(
+        h.accounts.import_settings()[0]
+            .as_ref()
+            .unwrap()
+            .purchase_cost,
+        Some(purchase_cost("50.125"))
+    );
 }
 
 #[tokio::test]
@@ -122,6 +203,19 @@ async fn enrollment_queues_then_imports_with_confirmed_settings_and_retains_2fa(
     let entry = h.row(&ids[0]).await;
     assert_eq!(entry.status, ReloginStatus::Queued);
     assert!(entry.enrollment.is_some());
+    let restored: ReloginEntry =
+        serde_json::from_value(serde_json::to_value(&entry).unwrap()).unwrap();
+    assert_eq!(
+        restored
+            .enrollment
+            .as_ref()
+            .unwrap()
+            .settings()
+            .unwrap()
+            .purchase_cost,
+        Some(purchase_cost("50.125"))
+    );
+    h.store.save(&restored, Some(entry.revision)).await.unwrap();
     assert!(h.accounts.import_settings().is_empty());
     assert!(
         h.services
@@ -144,6 +238,13 @@ async fn enrollment_queues_then_imports_with_confirmed_settings_and_retains_2fa(
         vec![Some(intent().settings().unwrap())]
     );
     assert_eq!(h.accounts.audit_requests(), vec!["enroll-account"]);
+    assert_eq!(
+        h.accounts.import_settings()[0]
+            .as_ref()
+            .unwrap()
+            .purchase_cost,
+        Some(purchase_cost("50.125"))
+    );
     h.cycle().await;
     assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 1);
 }

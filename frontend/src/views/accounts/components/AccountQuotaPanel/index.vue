@@ -16,6 +16,7 @@ import AccountResetCredits from './ResetCredits.vue'
 const props = defineProps<{
   account: AccountRow
   refreshing: boolean
+  mobile?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -30,7 +31,7 @@ const profileOpen = shallowRef(false)
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-col rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary">
+  <section class="flex min-h-0 flex-col" :class="mobile ? 'min-w-0' : 'rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary'">
     <div class="mb-3 flex shrink-0 items-start justify-between gap-3">
       <div class="min-w-0">
         <h3 class="m-0 text-cp-lg font-heavy text-cp-text">
@@ -38,6 +39,7 @@ const profileOpen = shallowRef(false)
         </h3>
         <p
           class="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-cp-xs font-emphasis text-cp-text-secondary"
+          :class="mobile ? 'flex-wrap break-all' : undefined"
         >
           <span>{{ account.provider === 'xai' ? 'xAI 用量窗口' : 'Codex 额度' }}</span>
           <template v-if="account.provider === 'openai'">
@@ -83,7 +85,7 @@ const profileOpen = shallowRef(false)
     <div class="grid min-h-0 gap-3">
       <AccountQuotaCredits
         v-if="account.provider === 'openai'"
-        class="max-sm:w-[calc(100vw-5.5rem)]"
+        :class="mobile ? 'w-full min-w-0' : 'max-sm:w-[calc(100vw-5.5rem)]'"
         :credits="account.quota.credits"
       />
       <AccountQuotaPanelEntry
@@ -103,7 +105,7 @@ const profileOpen = shallowRef(false)
     <p v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt" class="m-0 break-words border-t border-cp-border-secondary pt-3 text-cp-sm text-cp-text-secondary">
       Excel 因上游 HTTP 403 自动关闭：{{ formatDateTime(account.excelModeDisabledAt) }}
     </p>
-    <dl v-if="account.responsesUpstream === 'excel'" class="m-0 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-cp-border-secondary pt-3 text-cp-sm max-sm:w-[calc(100vw-5.5rem)]">
+    <dl v-if="account.responsesUpstream === 'excel'" class="m-0 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-cp-border-secondary pt-3 text-cp-sm" :class="mobile ? undefined : 'max-sm:w-[calc(100vw-5.5rem)]'">
       <dt class="text-cp-text-tertiary">
         生成入口
       </dt>

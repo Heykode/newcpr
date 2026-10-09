@@ -30,7 +30,7 @@ async function main() {
   }
   async function selectAccounts() {
     for (const id of ['acct_sample_0', 'acct_sample_1'])
-      await page.locator(`tr[data-row-key="${id}"]`).getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
+      await page.locator(`tr[data-row-key="${id}"], [data-account-card="${id}"]`).getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
   }
   async function layouts(name, control) {
     for (const width of [1440, 390, 320]) {

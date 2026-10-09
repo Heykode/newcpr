@@ -165,6 +165,21 @@ async function main() {
     const alignment = []
     for (const width of [1440, 2560, 390]) {
       await page.setViewportSize({ width, height: 1000 })
+      if (width < 768) {
+        for (const index of [0, 1, 2]) {
+          const card = page.locator(`[data-account-card="${accounts[index].id}"]`)
+          await card.getByRole('button', { name: '展开统计', exact: true }).click()
+          await card.getByText('保本价', { exact: true }).waitFor()
+          const value = card.locator('dd[data-column-key="purchaseCost"]')
+          assert.equal((await value.textContent()).trim(), index === 0 ? '0.5' : '—')
+          const valueText = await textBounds(value, index === 0 ? '0.5' : '—')
+          const cellBox = await value.boundingBox()
+          assert.ok(Math.abs(valueText.x + valueText.width - cellBox.x - cellBox.width) <= 1, 'mobile breakeven numbers and unknown markers align with the right edge')
+          assert.ok(await card.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+        }
+        await page.screenshot({ path: `${output}/mobile-details.png`, fullPage: true })
+        continue
+      }
       await cell(0).scrollIntoViewIfNeeded()
       const headerText = await textBounds(costHeader, '保本价')
       for (const index of [0, 1, 2]) {

@@ -177,6 +177,8 @@ impl ReloginTarget {
 pub struct ReloginEnrollment {
     pub config: super::relogin_templates::ReloginTemplateConfig,
     pub custom_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purchase_cost: Option<super::account_purchase::AccountPurchaseUpdate>,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub context: super::MutationContext,
 }
@@ -218,6 +220,7 @@ impl ReloginEnrollment {
                 outbound_proxy_id,
             },
             custom_name: super::accounts::normalize_custom_name(settings.custom_name.as_deref())?,
+            purchase_cost: settings.purchase_cost,
             model_access: settings.model_access,
             context,
         };
@@ -226,6 +229,9 @@ impl ReloginEnrollment {
     }
 
     pub fn settings(&self) -> Result<super::accounts::AccountImportSettings, AdminError> {
+        if let Some(cost) = &self.purchase_cost {
+            cost.validate()?;
+        }
         let mut settings = self.config.settings()?;
         gateway_core::account::Excel403Action::resolve(
             settings.excel_403_action,
@@ -233,6 +239,7 @@ impl ReloginEnrollment {
         )
         .map_err(AdminError::invalid)?;
         settings.custom_name = self.custom_name.clone();
+        settings.purchase_cost = self.purchase_cost.clone();
         settings.model_access = self.model_access.clone();
         Ok(settings)
     }

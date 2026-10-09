@@ -136,9 +136,9 @@ async function main() {
       return fulfill(route, null)
     })
     await page.goto(`http://127.0.0.1:${port}/accounts`)
-    const warningRow = page.locator(`tr[data-row-key="${accounts[1].id}"]`)
+    const warningRow = page.locator(`tr[data-row-key="${accounts[1].id}"], [data-account-card="${accounts[1].id}"]`)
     const warningAvatar = warningRow.locator('[data-account-avatar][data-account-excel-status="warning"]')
-    const firstRow = page.locator(`tr[data-row-key="${accounts[0].id}"]`)
+    const firstRow = page.locator(`tr[data-row-key="${accounts[0].id}"], [data-account-card="${accounts[0].id}"]`)
     const firstAvatar = firstRow.locator('[data-account-avatar]')
     const firstExcelMark = firstRow.locator('[data-account-excel-mark]')
     const warningExcelMark = warningRow.locator('[data-account-excel-mark]')
@@ -230,8 +230,8 @@ async function main() {
         assert.notEqual(avatarStyle.borderColor, 'rgba(0, 0, 0, 0)')
         assert.equal(avatarStyle.border, 'solid')
         assert.equal(avatarStyle.borderWidth, 2)
-        assert.equal(avatarStyle.width, originalAvatarSize.width)
-        assert.equal(avatarStyle.height, originalAvatarSize.height)
+        assert.equal(avatarStyle.width, width < 768 ? 24 : originalAvatarSize.width)
+        assert.equal(avatarStyle.height, width < 768 ? 24 : originalAvatarSize.height)
         assert.ok(avatarStyle.fits)
         const greenStyle = await firstAvatar.evaluate((element) => {
           const style = getComputedStyle(element)
@@ -272,8 +272,11 @@ async function main() {
         await firstAvatar.locator('..').locator('..').screenshot({ path: `${output}/excel-enabled-avatar-${theme}-${width}.png` })
         await panel.scrollIntoViewIfNeeded()
         assert.ok(await panel.evaluate(element => element.scrollWidth <= element.clientWidth))
-        if (width < 640)
-          assert.ok(await panel.evaluate(element => element.getBoundingClientRect().width <= window.innerWidth - 88))
+        if (width < 768) {
+          const bounds = await panel.boundingBox()
+          const card = await firstRow.boundingBox()
+          assert.ok(bounds.x >= card.x && bounds.x + bounds.width <= card.x + card.width)
+        }
         await page.screenshot({ path: `${output}/excel-${theme}-${width}.png` })
       }
     }
