@@ -5,8 +5,10 @@ import BasePopover from '@/components/base/BasePopover.vue'
 
 const props = withDefaults(defineProps<{
   buckets?: AccountHealthBucket[]
+  compact?: boolean
 }>(), {
   buckets: () => [],
+  compact: false,
 })
 
 const activeBucketKey = shallowRef<string | null>(null)
@@ -65,11 +67,18 @@ function formatTime(value: Date) {
 
 <template>
   <div
-    class="account-health-timeline w-[74px] max-w-full space-y-1"
+    class="account-health-timeline max-w-full"
+    :class="compact ? 'flex w-[102px] shrink-0 items-center gap-1' : 'w-[74px] space-y-1'"
     role="group"
     aria-label="最近 30 分钟账号健康状态"
   >
-    <div class="health-track relative h-8 w-full overflow-hidden rounded-[6px]">
+    <span v-if="compact" class="shrink-0 text-[10px] leading-none text-cp-text-tertiary">健康</span>
+    <span v-if="compact && !visibleBuckets.length" class="text-[10px] leading-none text-cp-text-quaternary">暂无样本</span>
+    <div
+      v-if="!compact || visibleBuckets.length"
+      class="health-track relative overflow-hidden"
+      :class="compact ? 'h-3.5 min-w-0 flex-1 rounded-sm' : 'h-8 w-full rounded-[6px]'"
+    >
       <div class="flex h-full w-full gap-[2px] p-[2px]">
         <BasePopover
           v-for="bucket in visibleBuckets"
@@ -140,7 +149,7 @@ function formatTime(value: Date) {
         </BasePopover>
       </div>
     </div>
-    <div class="flex justify-between text-[9px] leading-3 text-cp-text-tertiary" aria-hidden="true">
+    <div v-if="!compact" class="flex justify-between text-[9px] leading-3 text-cp-text-tertiary" aria-hidden="true">
       <span>较早</span>
       <span>现在</span>
     </div>

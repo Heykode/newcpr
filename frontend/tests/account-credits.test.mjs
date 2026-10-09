@@ -68,3 +68,15 @@ test('other providers do not display a Codex credit balance', async () => {
     assert.ok(!html.includes('123.45'))
   }
 })
+
+test('embedded mobile quota panel removes only the desktop frame and uses the available width', async () => {
+  const account = structuredClone(accounts[0])
+  account.quota.credits = { hasCredits: true, unlimited: false, balance: '123.45' }
+  for (const mobile of [false, true]) {
+    const html = await renderToString(vue.createSSRApp(panel.default, { account, refreshing: false, mobile }))
+    assert.equal(html.includes('rounded-lg bg-cp-bg-container p-4 shadow-cp-tertiary'), !mobile)
+    assert.equal(html.includes('flex-wrap break-all'), mobile)
+    assert.equal(html.includes('max-sm:w-[calc(100vw-5.5rem)]'), !mobile)
+    assert.ok(html.includes('123.45'))
+  }
+})

@@ -12,6 +12,7 @@ import { recentlyUsedQuotaEntry } from './presenter'
 
 const props = defineProps<{
   account: AccountRow
+  comfortable?: boolean
 }>()
 const emit = defineEmits<{
   forecastRequested: [account: AccountRow]
@@ -42,7 +43,7 @@ const accountTypeLabel = computed(() => {
 
 <template>
   <div class="box-border grid min-h-16.5 w-full min-w-0 content-center gap-1.5 py-1.5">
-    <div class="flex min-h-3.5 min-w-0 items-baseline justify-between gap-2 leading-none">
+    <div data-account-usage-header class="flex min-h-3.5 min-w-0 items-baseline justify-between gap-2 leading-none">
       <span
         v-if="hasUsage && summaryEntries.length > 0"
         class="flex min-w-0 items-baseline gap-1 font-mono tabular-nums"
@@ -55,6 +56,9 @@ const accountTypeLabel = computed(() => {
           Tokens
         </span>
       </span>
+      <div v-if="$slots.health" data-account-mobile-health class="ml-auto shrink-0 self-center">
+        <slot name="health" />
+      </div>
       <span class="ml-auto min-w-0 truncate text-[10px] font-emphasis text-cp-text-tertiary" :title="accountTypeLabel">
         {{ accountTypeLabel }}
       </span>
@@ -63,6 +67,7 @@ const accountTypeLabel = computed(() => {
       <div v-if="recentUsageEntry" class="flex min-w-0 items-end gap-2">
         <div class="flex min-w-0 flex-1">
           <AccountQuotaSummaryEntry
+            :comfortable="comfortable"
             :label="recentUsageEntry.label"
             :windows="recentUsageEntry.windows"
           />
@@ -77,28 +82,31 @@ const accountTypeLabel = computed(() => {
       </div>
     </template>
     <AccountUsageWindow v-else variant="compact" />
-    <AccountQuotaCredits
-      v-if="account.provider === 'openai'"
-      :credits="account.quota.credits"
-      compact
-    />
-    <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[10px] font-emphasis text-cp-text-tertiary">
-      <span
-        v-if="summaryEntries.length > 0"
-        class="min-w-0 break-all text-cp-text-quaternary"
-        :title="usdCost ? undefined : '暂无统计数据，不代表账号不可用'"
-      >
-        消费：{{ usdCost?.estimatedAmountDisplay ?? '—' }}
-      </span>
-      <button
-        type="button"
-        class="min-w-0 cursor-pointer text-left wrap-anywhere text-cp-primary-text underline decoration-dotted underline-offset-2"
-        aria-haspopup="dialog"
-        :title="weeklyForecast.title"
-        @click.stop="emit('forecastRequested', account)"
-      >
-        预计周额度：{{ weeklyForecast.amount }}
-      </button>
+    <div :class="comfortable ? 'flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1' : 'contents'" :data-account-inline-billing="comfortable || undefined">
+      <AccountQuotaCredits
+        v-if="account.provider === 'openai'"
+        :credits="account.quota.credits"
+        :class="comfortable ? 'max-w-full' : undefined"
+        compact
+      />
+      <div :class="comfortable ? 'contents' : 'flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1'" class="text-[10px] font-emphasis text-cp-text-tertiary">
+        <span
+          v-if="summaryEntries.length > 0"
+          class="min-w-0 break-all text-cp-text-quaternary"
+          :title="usdCost ? undefined : '暂无统计数据，不代表账号不可用'"
+        >
+          消费：{{ usdCost?.estimatedAmountDisplay ?? '—' }}
+        </span>
+        <button
+          type="button"
+          class="min-w-0 cursor-pointer text-left wrap-anywhere text-cp-primary-text underline decoration-dotted underline-offset-2"
+          aria-haspopup="dialog"
+          :title="weeklyForecast.title"
+          @click.stop="emit('forecastRequested', account)"
+        >
+          预计周额度：{{ weeklyForecast.amount }}
+        </button>
+      </div>
     </div>
   </div>
 </template>

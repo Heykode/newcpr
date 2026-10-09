@@ -50,7 +50,7 @@ async function main() {
         return fulfill(route, { account: rows[0] })
       })
       await page.goto(`http://127.0.0.1:${port}/accounts`)
-      const row = page.locator(`tr[data-row-key="${rows[0].id}"]`)
+      const row = page.locator(width < 768 ? `[data-account-card="${rows[0].id}"]` : `tr[data-row-key="${rows[0].id}"]`)
       await row.waitFor()
       await row.locator('button[title="展开统计"]').click()
       const refresh = page.getByRole('button', { name: '刷新额度', exact: true })

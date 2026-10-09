@@ -1,6 +1,7 @@
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
+import { mobileAccounts } from './fixtures/mobile-account-data.mjs'
 import { accounts, reloginEntries } from './fixtures/relogin-count-data.mjs'
 import { layoutEntries } from './fixtures/relogin-layout-data.mjs'
 
@@ -8,7 +9,7 @@ import { layoutEntries } from './fixtures/relogin-layout-data.mjs'
 async function main() {
   const server = await createServer({
     root: fileURLToPath(new URL('..', import.meta.url)),
-    server: { host: '127.0.0.1', port: Number(process.env.QA_PORT || 5198), strictPort: true },
+    server: { host: process.env.QA_HOST || '127.0.0.1', port: Number(process.env.QA_PORT || 5198), strictPort: true },
     plugins: [{
       name: 'local-relogin-count-fixture',
       configResolved(config) {
@@ -31,7 +32,7 @@ async function main() {
                 data = { version: 'local-sample', buildType: 'test' }
                 break
               case '/api/admin/accounts': {
-                const items = accounts.map(account => ({ ...account }))
+                const items = (process.env.QA_MOBILE_ACCOUNTS ? mobileAccounts : accounts).map(account => ({ ...account }))
                 const stateModelCount = Number(process.env.QA_STATE_MODEL_COUNT || 0)
                 if (Number.isInteger(stateModelCount) && stateModelCount > 0 && stateModelCount <= 10) {
                   const models = Array.from({ length: stateModelCount }, (_, index) => ({
@@ -53,20 +54,34 @@ async function main() {
                 }
                 data = {
                   items,
-                  page: { page: 1, pageSize: 20, total: 3, totalPages: 1 },
-                  summary: { total: 3, normal: 3, error: 0, rateLimited: 0, disabled: 0, quotaExhausted: 0 },
+                  page: { page: 1, pageSize: 20, total: items.length, totalPages: 1 },
+                  summary: { total: items.length, normal: items.filter(row => row.enabled && row.status === 'normal').length, error: 0, rateLimited: 0, disabled: 0, quotaExhausted: 0 },
                 }
                 break
               }
               case '/api/admin/account-groups':
+              case '/api/admin/proxies':
                 data = { items: [], page: { page: 1, pageSize: 200, total: 0, totalPages: 0 } }
                 break
+              case '/api/admin/account-templates':
+              case '/api/admin/accounts/import-tasks':
+                data = { items: [] }
+                break
+              case '/api/admin/accounts/reset-credits/batches':
+                data = []
+                break
               case '/api/admin/relogin':
-                data = { items: process.env.QA_RELOGIN_LAYOUT ? layoutEntries : reloginEntries, settings: { concurrency: 1, paused: false } }
+                data = {
+                  items: process.env.QA_MOBILE_ACCOUNTS ? [{ email: mobileAccounts[0].email, hasTotp: true }] : process.env.QA_RELOGIN_LAYOUT ? layoutEntries : reloginEntries,
+                  settings: { concurrency: 1, paused: false },
+                }
+                break
+              case '/api/admin/ipv6-egress':
+                data = { revision: 1, defaultMode: 'unchanged', addresses: [], accountOverrides: {}, fixedBindings: {} }
                 break
             }
           }
-          else if (request.method === 'POST' && url.pathname === '/dev/api/admin/relogin/accounts/query') {
+          else if (request.method === 'POST' && ['/dev/api/admin/relogin/accounts/query', '/dev/api/admin/accounts/reset-credits/cache'].includes(url.pathname)) {
             data = []
           }
           else if (request.method === 'POST' && url.pathname === '/dev/api/admin/auth/refresh') {

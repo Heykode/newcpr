@@ -18,7 +18,10 @@ async function main() {
   const mutations = []
   page.on('pageerror', error => errors.push(error.message))
   page.on('request', (request) => {
-    const actionQuery = request.method() === 'POST' && new URL(request.url()).pathname === '/dev/api/admin/relogin/accounts/query'
+    const actionQuery = request.method() === 'POST' && [
+      '/dev/api/admin/relogin/accounts/query',
+      '/dev/api/admin/accounts/reset-credits/cache',
+    ].includes(new URL(request.url()).pathname)
     if (request.url().includes('/dev/api/') && request.method() !== 'GET' && !actionQuery)
       mutations.push(request.url())
   })
@@ -30,7 +33,8 @@ async function main() {
     assert.deepEqual(await page.locator('td[data-column-key="weight"]').allTextContents().then(values => values.map(value => value.trim())), ['1', '50', '100'])
     const keys = await page.locator('thead th[data-column-key]').evaluateAll(elements => elements.map(element => element.dataset.columnKey))
     assert.equal(keys[keys.indexOf('lastUsedAt') + 1], 'weight')
-    assert.equal(keys[keys.indexOf('lastUsedAt') + 2], 'reloginCount')
+    assert.equal(keys[keys.indexOf('lastUsedAt') + 2], 'purchaseCost')
+    assert.equal(keys[keys.indexOf('lastUsedAt') + 3], 'reloginCount')
     assert.match(await page.locator('td[data-column-key="reloginCount"] span').nth(1).getAttribute('title'), /最近成功重登/)
     for (const direction of ['asc', 'desc']) {
       await Promise.all([
@@ -75,6 +79,21 @@ async function main() {
         await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme)
         for (const width of [1920, 1440, 390, 320]) {
           await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
+          if (route === 'accounts' && width < 768) {
+            for (const card of await page.locator('[data-account-card]').all()) {
+              const expand = card.getByRole('button', { name: '展开统计', exact: true })
+              if (await expand.count())
+                await expand.click()
+            }
+            const counts = page.locator('[data-account-card] dd[data-column-key="reloginCount"]')
+            const priorities = page.locator('[data-account-card] dd[data-column-key="weight"]')
+            assert.deepEqual(await counts.allTextContents().then(values => values.map(value => value.trim())), ['0', '1', '2'])
+            assert.deepEqual(await priorities.allTextContents().then(values => values.map(value => value.trim())), ['1', '50', '100'])
+            for (const card of await page.locator('[data-account-card]').all())
+              assert.ok(await card.evaluate(element => element.scrollWidth <= element.clientWidth + 1))
+            await page.screenshot({ path: `${output}/${route}-${theme}-${width}.png`, fullPage: true })
+            continue
+          }
           await page.locator('td[data-column-key="reloginCount"]').first().evaluate(element => element.scrollIntoView({ block: 'nearest', inline: 'center' }))
           const headerFits = await page.locator('th[data-column-key="reloginCount"]').evaluate(element =>
             [...element.querySelectorAll('.truncate')].every(label => label.scrollWidth <= label.clientWidth + 1))

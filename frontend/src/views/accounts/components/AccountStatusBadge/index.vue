@@ -70,7 +70,7 @@ const presentation = computed(() =>
       </component>
     </template>
 
-    <section class="w-88 overflow-hidden rounded-cp-lg">
+    <section class="w-88 max-w-[calc(100vw-2rem)] overflow-hidden rounded-cp-lg">
       <header class="flex items-start gap-3 bg-cp-popover-header-bg px-4 py-3">
         <span
           class="inline-flex size-9 shrink-0 items-center justify-center rounded-cp"

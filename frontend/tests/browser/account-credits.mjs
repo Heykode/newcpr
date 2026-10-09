@@ -87,7 +87,7 @@ async function main() {
       })
       try {
         await page.goto(`${base}/accounts`)
-        const tableRow = page.locator(`tr[data-row-key="${row.id}"]`)
+        const tableRow = page.locator(width < 768 ? `[data-account-card="${row.id}"]` : `tr[data-row-key="${row.id}"]`)
         const listBalance = tableRow.getByLabel('Codex 点数', { exact: true }).getByText('123.45', { exact: true })
         await listBalance.waitFor()
         if (width >= 1000) {

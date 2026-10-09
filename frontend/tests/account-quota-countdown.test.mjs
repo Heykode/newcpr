@@ -244,7 +244,9 @@ test('real summary recalculates current weekly costs immediately and expires the
 function assertSummaryFooter(root, expectedCost) {
   const button = forecastButton(root)
   const footer = button.parent
-  assert.equal(footer, root.children[0].children.at(-1), 'the forecast footer remains outside conditional quota content')
+  const billing = root.children[0].children.at(-1)
+  assert.equal(footer, billing.children.at(-1), 'the forecast footer remains outside conditional quota content')
+  assert.equal(billing.props.class, 'contents', 'the desktop billing wrapper does not add a layout box')
   const classes = footer.props.class.split(/\s+/)
   for (const name of ['flex', 'min-w-0', 'flex-wrap', 'items-baseline', 'gap-x-2', 'gap-y-1'])
     assert.ok(classes.includes(name), `footer retains ${name}`)
@@ -265,6 +267,20 @@ function assertSummaryFooter(root, expectedCost) {
   assert.equal(footer.props.title, undefined, 'missing cost statistics must not label the forecast button')
   return button
 }
+
+test('mobile summary shares a billing row while preserving cost and forecast content', (context) => {
+  const { root } = mountComponent(context, 'AccountQuotaSummaryCell/index.vue', {
+    account: quotaAccount([quotaWindow()]),
+    comfortable: true,
+  })
+  const billing = root.children[0].children.at(-1)
+  assert.equal(billing.props['data-account-inline-billing'], true)
+  assert.match(billing.props.class, /flex-wrap/)
+  const footer = forecastButton(root).parent
+  assert.match(footer.props.class, /(?:^|\s)contents(?:\s|$)/)
+  assert.ok(textContent(billing).includes('消费：$12.50'))
+  assert.ok(textContent(billing).includes('预计周额度：'))
+})
 
 test('quota countdown formats days, hours, minutes and the last partial minute without early expiry', () => {
   for (const [minutes, display] of [

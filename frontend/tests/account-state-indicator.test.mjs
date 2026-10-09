@@ -73,6 +73,28 @@ function mark(html, name) {
   return element
 }
 
+test('mobile identity keeps the full email, name, Excel and 2FA marks with separate controls', async () => {
+  for (const mobile of [false, true]) {
+    const html = await renderToString(createSSRApp({
+      render: () => h(component, {
+        account: { ...account, customName: 'Mobile account', responsesUpstream: 'excel' },
+        hasTotp: true,
+        mobile,
+      }, {
+        selection: () => h('input', { 'type': 'checkbox', 'aria-label': 'Select fixture' }),
+        actions: () => h('button', { type: 'button' }, 'Edit fixture'),
+      }),
+    }))
+    assert.match(html, /Mobile account/)
+    assert.match(html, /state-sample@example\.invalid/)
+    mark(html, 'excel-mark')
+    mark(html, 'totp-mark')
+    assert.equal(html.includes('Select fixture'), mobile)
+    assert.equal(html.includes('Edit fixture'), mobile)
+    assert.equal(html.includes('break-all text-xs leading-4'), mobile)
+  }
+})
+
 test('Excel selection renders an accessible name marker and retains the green avatar frame', async () => {
   const html = await render({ responsesUpstream: 'excel' })
   const avatar = mark(html, 'avatar')

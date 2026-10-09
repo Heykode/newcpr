@@ -13,6 +13,7 @@ import AccountQuotaWindowGroup from './WindowGroup.vue'
 const props = defineProps<{
   label: string | null
   windows: AccountQuotaWindow[]
+  comfortable?: boolean
 }>()
 
 const now = useUiClock()
@@ -64,6 +65,7 @@ const hasQuotaWindow = computed(() => detailItems.value.some(item => !item.local
       >
         <AccountQuotaWindowGroup
           v-if="hasQuotaWindow"
+          :comfortable="comfortable"
           :label="summaryLabel"
           :windows="windows"
         />

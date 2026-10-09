@@ -87,6 +87,19 @@ test('empty account groups do not create a popover or an empty button', async ()
   assert.ok(!html.includes('role="list"'))
 })
 
+test('mobile wrapping shows every group without changing the default two-group summary', async () => {
+  const groups = Array.from({ length: 5 }, (_, index) => group(index))
+  const html = await renderToString(createSSRApp(exports.default, { groups, layout: 'wrap' }))
+  const trigger = html.match(/<button\b[^>]*>(.*?)<\/button>/s)?.[1]
+  assert.ok(trigger)
+  for (const item of groups)
+    assert.ok(trigger.includes(item.name))
+  assert.ok(trigger.includes('break-all whitespace-normal'))
+  assert.ok(!trigger.includes('truncate'))
+  assert.ok(!trigger.includes('+3'))
+  assert.equal([...html.matchAll(/role="listitem"/g)].length, 5)
+})
+
 test('account table centers wrapping summaries and measures labels without changing inline callers', async () => {
   const groups = Array.from({ length: 5 }, (_, index) => group(index))
   const stacked = await renderToString(createSSRApp(exports.default, { groups, layout: 'stacked' }))

@@ -22,6 +22,7 @@ const props = withDefaults(
   defineProps<{
     account: AccountIdentity
     hasTotp?: boolean
+    mobile?: boolean
     size?: 'md' | 'lg'
     showPlan?: boolean
     titleMode?: 'local-part' | 'email'
@@ -57,7 +58,7 @@ const secondaryText = computed(() =>
 )
 
 const avatarSizeClass = computed(() =>
-  props.size === 'lg' ? 'size-10 text-cp-xl' : 'size-9 text-cp',
+  props.mobile ? 'size-6 text-cp-sm' : props.size === 'lg' ? 'size-10 text-cp-xl' : 'size-9 text-cp',
 )
 
 const secondaryClass = computed(() =>
@@ -101,8 +102,11 @@ const avatarDescription = computed(() => {
 </script>
 
 <template>
-  <div class="flex min-w-0 items-center gap-3">
-    <span class="relative inline-flex shrink-0">
+  <div :class="mobile ? 'grid min-w-0 grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-1' : 'flex min-w-0 items-center gap-3'">
+    <div v-if="mobile" class="col-start-1 row-start-1 flex min-h-8 items-center [&>label]:min-h-8 [&>label]:min-w-6">
+      <slot name="selection" />
+    </div>
+    <span class="relative inline-flex shrink-0" :class="mobile ? 'col-start-1 row-start-3' : undefined">
       <span
         data-account-avatar
         :data-account-excel-status="avatarExcelStatus"
@@ -132,8 +136,8 @@ const avatarDescription = computed(() => {
         <KeyRound class="size-2.5" :stroke-width="2.5" />
       </span>
     </span>
-    <div class="min-w-0 flex-1" data-swipe-select-ignore>
-      <div class="flex min-w-0 items-center gap-2">
+    <div class="min-w-0 flex-1" :class="{ contents: mobile }" data-swipe-select-ignore>
+      <div class="flex min-w-0 items-center gap-2" :class="mobile ? 'col-start-2 row-start-1 min-h-8' : undefined">
         <span
           v-if="account.responsesUpstream === 'excel'"
           data-account-excel-mark
@@ -156,6 +160,9 @@ const avatarDescription = computed(() => {
           <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
         </span>
       </div>
+      <div v-if="mobile" class="col-start-3 row-start-1">
+        <slot name="actions" />
+      </div>
       <div
         v-if="metaPosition === 'secondary' && (showPlan || $slots.meta)"
         class="mt-0.5 inline-flex min-w-0 items-center"
@@ -164,17 +171,23 @@ const avatarDescription = computed(() => {
         <slot name="meta" />
         <AccountPlanBadge v-if="showPlan" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
-      <div v-if="secondaryText && (customName || metaPosition !== 'secondary' || (!showPlan && !$slots.meta))" class="truncate font-emphasis" :class="secondaryClass" :title="secondaryText">
+      <div v-if="secondaryText && (customName || metaPosition !== 'secondary' || (!showPlan && !$slots.meta))" :class="mobile ? 'col-span-3 col-start-1 row-start-2 min-w-0 break-all text-xs leading-4 text-cp-text-secondary' : ['truncate font-emphasis', secondaryClass]" :title="secondaryText">
         {{ secondaryText }}
+      </div>
+      <div v-if="mobile" data-account-mobile-meta class="col-span-2 col-start-2 row-start-3 flex min-h-7 min-w-0 items-center gap-1.5">
+        <slot name="status">
+          <AccountQualityMonitorBadge v-if="account.qualityMonitoring" :account-id="account.id" :monitor="account.qualityMonitoring" class="mt-0!" />
+        </slot>
       </div>
       <div
         v-if="account.responsesUpstream !== 'excel' && account.excelModeDisabledAt"
         class="mt-0.5 text-cp-xs text-cp-text-secondary"
+        :class="mobile ? 'col-span-2 col-start-2' : undefined"
         :title="`Excel 上游返回 HTTP 403，自动关闭于 ${formatDateTime(account.excelModeDisabledAt)}`"
       >
         Excel 403 自动关闭
       </div>
-      <div v-if="account.qualityMonitoring">
+      <div v-if="account.qualityMonitoring && !mobile">
         <AccountQualityMonitorBadge :account-id="account.id" :monitor="account.qualityMonitoring" />
       </div>
     </div>

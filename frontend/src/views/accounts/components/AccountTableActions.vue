@@ -10,6 +10,7 @@ import BasePopover from '@/components/base/BasePopover.vue'
 
 defineProps<{
   account: AccountRow
+  comfortable?: boolean
   deleting: boolean
   recovering: boolean
   refreshing: boolean
@@ -37,7 +38,8 @@ const router = useRouter()
   <div class="relative flex items-center justify-start gap-1">
     <BaseIconButton
       variant="ghost"
-      size="sm"
+      :size="comfortable ? 'md' : 'sm'"
+      :class="comfortable ? 'size-8!' : undefined"
       label="编辑账号"
       @click.stop="emit('edit', account)"
     >
@@ -46,7 +48,8 @@ const router = useRouter()
 
     <BaseIconButton
       variant="ghost"
-      size="sm"
+      :size="comfortable ? 'md' : 'sm'"
+      :class="comfortable ? 'size-8!' : undefined"
       label="删除账号"
       :disabled="deleting"
       @click.stop="emit('delete', account)"
@@ -56,7 +59,7 @@ const router = useRouter()
 
     <BasePopover placement="bottom-end">
       <template #trigger="{ open }">
-        <BaseIconButton variant="ghost" size="sm" label="更多操作" :pressed="open">
+        <BaseIconButton variant="ghost" :size="comfortable ? 'md' : 'sm'" :class="comfortable ? 'size-8!' : undefined" label="更多操作" :pressed="open">
           <MoreHorizontal class="size-4" />
         </BaseIconButton>
       </template>

@@ -13,6 +13,7 @@ import { accountStatusFilterOptions } from '../constants'
 
 const props = defineProps<{
   selectedCount: number
+  hideColumns?: boolean
   batchDeleting: boolean
   exportingAccounts: boolean
   templateApplying?: boolean
@@ -87,7 +88,7 @@ const groupOptions = computed(() => [
         class="w-full min-w-0 xl:w-40 xl:shrink-0"
       />
 
-      <BasePopover placement="bottom-start">
+      <BasePopover v-if="!hideColumns" placement="bottom-start">
         <template #trigger>
           <BaseButton variant="secondary" class="w-full min-w-0 xl:w-auto" title="列显示设置">
             <Settings2 class="size-4" />
