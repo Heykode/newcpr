@@ -174,6 +174,34 @@ test('2FA enrollment submits one durable intent and clears secrets after accepta
   assert.equal(h.state.createForm.value.importTexts.two_fa, '')
 })
 
+test('2FA import keeps cost entered before template and provider selection', async (t) => {
+  const { prefillAccountTemplate } = loader()('views/accounts/components/AccountCreateModal/template.ts')
+  for (const amount of ['50.125', '0', '']) {
+    const h = mountOnboarding(t)
+    h.state.openCreateAccount()
+    Object.assign(h.state.createForm.value, { purchaseAmount: amount, purchaseCycleStart: '2026-01-31' })
+    h.state.createForm.value = prefillAccountTemplate(h.state.createForm.value, {
+      id: 'template-cost',
+      revision: 1,
+      config: { name: 'Cost import', enabled: false, concurrencyLimit: 3, weight: 7, groupIds: [], preserveOutboundProxy: true, outboundProxyId: null },
+    })
+    h.state.createForm.value.provider = 'openai'
+    h.state.createForm.value.step = 'import'
+    h.state.createForm.value.mode = 'two_fa'
+    h.state.createForm.value.importTexts.two_fa = 'test@example.invalid----test-password----JBSWY3DPEHPK3PXP'
+    await h.state.handleCreate()
+    assert.equal(h.enrollments.length, 1)
+    const settings = h.enrollments[0].settings
+    if (amount)
+      assert.deepEqual(settings.purchaseCost, { amountCny: amount, cycleStart: '2026-01-31' })
+    else
+      assert.equal('purchaseCost' in settings, false)
+    assert.equal(settings.enabled, false)
+    assert.equal(settings.concurrencyLimit, 3)
+    assert.equal(settings.weight, 7)
+  }
+})
+
 test('failed enrollment preserves the form without assuming the account was created', async (t) => {
   const h = mountOnboarding(t, {
     enroll: async () => {
