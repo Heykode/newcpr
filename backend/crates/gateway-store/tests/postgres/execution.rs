@@ -457,6 +457,7 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
     let after: Value = sqlx::query_scalar(
         "select to_jsonb(mr) - 'billing_snapshot_json' - 'purchase_identity_id'
+                               - 'client_api_key_name_snapshot'
          from model_requests mr",
     )
     .fetch_one(&database.pool)
@@ -469,6 +470,11 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
             .unwrap();
     let snapshot: Option<Value> =
         sqlx::query_scalar("select billing_snapshot_json from model_requests")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let key_name_snapshot: Option<String> =
+        sqlx::query_scalar("select client_api_key_name_snapshot from model_requests")
             .fetch_one(&database.pool)
             .await
             .unwrap();
@@ -486,6 +492,10 @@ async fn billing_snapshot_upgrade_preserves_legacy_request_and_cumulative_totals
     assert!(
         snapshot.is_none(),
         "legacy records must not fabricate a pricing flag"
+    );
+    assert!(
+        key_name_snapshot.is_none(),
+        "legacy records without a surviving key must not fabricate a key name"
     );
     assert!(
         old.run(&database.pool).await.is_err(),

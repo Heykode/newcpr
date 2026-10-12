@@ -399,7 +399,29 @@ async fn scheduling_hint_reaches_standalone_context_without_changing_raw_bodies(
                     .map(OpenAiSchedulingSessionHint::id),
                 transport_hint.then_some("transport-hint")
             );
-            assert!(!captured.context.contains_key("opaque_request_headers"));
+            assert_no_forwarded_hint_headers(&captured.context);
+            let mut expected = json!({
+                "session_id": "standard-session",
+                "thread_id": "child-thread",
+                "turn_metadata": r#"{"session_id":"metadata-session"}"#,
+            });
+            if transport_hint {
+                expected[OPENAI_SCHEDULING_SESSION_HINT_CONTEXT_KEY] =
+                    json!({"source":"x-session-id","id":"transport-hint"});
+            }
+            crate::openai::assert_standalone_context(
+                &Value::Object(captured.context.clone()),
+                expected,
+                &[
+                    ("content-type", "application/json"),
+                    ("session-id", "standard-session"),
+                    ("thread-id", "child-thread"),
+                    (
+                        "x-codex-turn-metadata",
+                        r#"{"session_id":"metadata-session"}"#,
+                    ),
+                ],
+            );
         }
     }
     assert_eq!(execution.captured.lock().expect("capture lock").len(), 8);

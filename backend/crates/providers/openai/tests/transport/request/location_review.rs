@@ -54,6 +54,33 @@ fn environment(text: &str) -> Value {
 }
 
 #[test]
+fn desktop_time_context_respects_role_and_content_kind() {
+    let time = "<codex_apps_client_time_context><current_date>2000-01-01</current_date><timezone>UTC</timezone><epoch>946684800</epoch></codex_apps_client_time_context>";
+    let desktop = json!({
+        "role": "developer",
+        "content": [{"type": "input_text", "text": time}],
+        "internal_chat_message_metadata_passthrough": {
+            "content_item_kinds": ["additional_content.codex_apps_client_time_context"]
+        }
+    });
+    let mut wrong_kind = desktop.clone();
+    wrong_kind["internal_chat_message_metadata_passthrough"]["content_item_kinds"] =
+        json!(["user.text"]);
+    let mut wrong_role = desktop.clone();
+    wrong_role["role"] = json!("user");
+    let body = json!({"input": [desktop, wrong_kind, wrong_role]});
+    let encoded = encode(body.clone(), &west_coast());
+    let rewritten = encoded.body()["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(rewritten.contains("<timezone>America/Los_Angeles</timezone>"));
+    assert!(rewritten.contains("<epoch>946684800</epoch>"));
+    assert!(!rewritten.contains("<current_date>2000-01-01</current_date>"));
+    assert_eq!(encoded.body()["input"][1], body["input"][1]);
+    assert_eq!(encoded.body()["input"][2], body["input"][2]);
+}
+
+#[test]
 fn disabled_location_preserves_environment_and_explicit_search_location() {
     use provider_openai::transport::request::encode_generate_request_with_location;
     let body = json!({

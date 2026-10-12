@@ -8,9 +8,9 @@ use std::time::{Duration, SystemTime};
 
 use gateway_core::account::{
     AccountCandidate, AccountCapacitySnapshot, AccountEligibilityPolicy, AccountErrorReason,
-    AccountFeedbackStats, AccountRuntimeSignals, AccountSchedulingBlocker, AccountSelectionContext,
-    AccountSelector, AccountStatus, CredentialState, PreferredAccountSelection, ProviderAccount,
-    ProviderAccountId, QuotaEvidence,
+    AccountFeedbackStats, AccountModelAccessMode, AccountRuntimeSignals, AccountSchedulingBlocker,
+    AccountSelectionContext, AccountSelector, AccountStatus, CredentialState,
+    PreferredAccountSelection, ProviderAccount, ProviderAccountId, QuotaEvidence,
 };
 use gateway_core::engine::{AttemptContext, ContinuationAttempt};
 use gateway_core::provider_ports::{
@@ -109,12 +109,14 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
     pub session_affinity: Option<&'a CodexSessionAffinity>,
     /// 本端点的上游模型；提供后按账号模型权限过滤候选（如 live 语音）。
     pub upstream_model: Option<&'a str>,
+    pub image_request: bool,
     /// 本端点只接受 OAuth 凭据时排除 API Key 账号，避免混合池选中后必然失败。
     pub requires_oauth: bool,
 }
 
 struct CredentialSelectionInput<'a> {
     upstream_model: Option<&'a str>,
+    image_request: bool,
     requires_oauth: bool,
     request_url: &'a Url,
     attempt: &'a AttemptContext,
@@ -347,6 +349,12 @@ impl CodexCredentialSelector {
     ) -> bool {
         let upstream = Self::request_upstream(account, request);
         account.provider() == &self.provider_kind
+            && (!request.image_request
+                || upstream == gateway_core::account::ResponsesUpstream::Excel
+                || account.authentication_kind() != CODEX_AUTHENTICATION_KIND_OAUTH
+                || !account
+                    .plan_type()
+                    .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free")))
             && (!request.requires_oauth
                 || account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH)
             && request
@@ -376,10 +384,19 @@ impl CodexCredentialSelector {
                     )))
             && (request.attempt.is_diagnostic_required_account()
                 || request.attempt.account_scope().is_some_and(|scope| {
-                    request.upstream_model.map_or_else(
-                        || scope.allows(account.id()),
-                        |model| scope.allows_model(account.id(), model),
-                    )
+                    match (request.image_request, request.upstream_model) {
+                        (_, Some(model)) => scope.allows_model(account.id(), model),
+                        (true, None) => {
+                            scope.allows(account.id())
+                                && scope
+                                    .directory()
+                                    .account(account.id())
+                                    .is_some_and(|entry| {
+                                        entry.model_access().mode() == AccountModelAccessMode::All
+                                    })
+                        }
+                        (false, None) => scope.allows(account.id()),
+                    }
                 }))
     }
 
@@ -389,12 +406,10 @@ impl CodexCredentialSelector {
     ) -> gateway_core::account::ResponsesUpstream {
         if request.attempt.is_native_quality_probe() {
             gateway_core::account::ResponsesUpstream::Codex
+        } else if request.image_request {
+            account.responses_upstream()
         } else if let Some(model) = request.upstream_model {
             account.responses_upstream_for_model(model)
-        } else if crate::transport::excel::image_generation::is_image_path(
-            request.request_url.path(),
-        ) {
-            account.responses_upstream()
         } else {
             gateway_core::account::ResponsesUpstream::Codex
         }
@@ -406,6 +421,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             upstream_model: Some(request.upstream_model),
+            image_request: false,
             requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
@@ -424,6 +440,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             upstream_model: Some(request.upstream_model),
+            image_request: false,
             requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
@@ -444,6 +461,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             upstream_model: request.upstream_model,
+            image_request: request.image_request,
             requires_oauth: request.requires_oauth,
             request_url: request.request_url,
             attempt: request.attempt,

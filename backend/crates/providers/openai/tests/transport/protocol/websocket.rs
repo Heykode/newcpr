@@ -154,7 +154,10 @@ fn websocket_event_to_sse_should_forward_public_events_and_strip_internal_events
         format!("event: response.completed\ndata: {event}\n\n")
     );
     assert!(websocket_event_to_sse_frame(r#"{"type":"codex.rate_limits"}"#).is_none());
-    assert!(websocket_event_to_sse_frame(r#"{"type":"response.metadata"}"#).is_none());
+    assert_eq!(
+        websocket_event_to_sse_frame(r#"{"type":"response.metadata"}"#).unwrap(),
+        "event: response.metadata\ndata: {\"type\":\"response.metadata\"}\n\n"
+    );
     assert!(websocket_event_to_sse_frame(r#"{"type":"codex.response.metadata"}"#).is_some());
     assert!(websocket_event_to_sse_frame(r#"{"response":{}}"#).is_none());
     assert!(websocket_event_to_sse_frame("not-json").is_none());

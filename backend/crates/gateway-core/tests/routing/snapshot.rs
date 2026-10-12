@@ -58,6 +58,76 @@ enum TestCatalog {
     Discovery,
 }
 
+struct MixedCatalog;
+
+impl ProviderCatalogPort for MixedCatalog {
+    fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
+        ["openai", "xai"]
+            .into_iter()
+            .map(|provider| {
+                (
+                    ProviderKind::new(provider).unwrap(),
+                    ProviderCatalogGeneration::new(1),
+                )
+            })
+            .collect()
+    }
+
+    fn model_catalog_is_exhaustive(&self, provider: &ProviderKind) -> bool {
+        provider.as_str() != "openai"
+    }
+
+    fn query_model_capabilities(
+        &self,
+        provider: &ProviderKind,
+    ) -> BoxFuture<'_, Result<Vec<ProviderModelCapabilities>, ProviderCatalogUnavailable>> {
+        let model = match provider.as_str() {
+            "openai" => "gpt-5.5",
+            "xai" => "grok-4.7",
+            _ => return Box::pin(async { Err(ProviderCatalogUnavailable) }),
+        };
+        Box::pin(async move {
+            Ok([model, "shared-model"]
+                .into_iter()
+                .map(|model| {
+                    ProviderModelCapabilities::new(
+                        UpstreamModelId::new(model).unwrap(),
+                        ModelCapabilities::new([OperationKind::Generate].into(), None),
+                    )
+                })
+                .collect())
+        })
+    }
+}
+
+fn mixed_catalog_snapshot() -> gateway_core::routing::RuntimeSnapshot {
+    let facts = SnapshotFacts::new(
+        revision(1),
+        revision(1),
+        SnapshotSettingsFacts::new(3, 0, "smart", BTreeMap::new(), None, None),
+        vec![],
+        vec![],
+        ["openai", "xai"]
+            .into_iter()
+            .map(|provider| {
+                SnapshotProviderAccountFacts::new(
+                    ProviderAccountId::new(format!("acct_{provider}")).unwrap(),
+                    provider,
+                )
+            })
+            .collect(),
+        vec![],
+    );
+    block_on(
+        RuntimeSnapshotCompiler::new(
+            Arc::new(TestSnapshotStore::new(Ok(facts))),
+            Arc::new(MixedCatalog),
+        )
+        .compile(),
+    )
+    .unwrap()
+}
+
 impl ProviderCatalogPort for TestCatalog {
     fn model_catalog_is_exhaustive(&self, _: &ProviderKind) -> bool {
         !matches!(self, Self::Discovery)
@@ -432,6 +502,46 @@ fn discovery_catalog_does_not_reject_an_unlisted_or_mapped_model() {
             "discovery does not bypass blocked providers"
         );
     }
+}
+
+#[test]
+fn known_model_precedes_discovery_fallback_without_losing_passthrough() {
+    let snapshot = mixed_catalog_snapshot();
+    for (model, expected) in [
+        ("grok-4.7", vec!["xai", "openai"]),
+        ("shared-model", vec!["openai", "xai"]),
+        ("unlisted-model", vec!["openai"]),
+    ] {
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new(model).unwrap(),
+                &super::operation(),
+                snapshot.all_account_scope(),
+                &Default::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            plan.candidates()
+                .iter()
+                .map(|candidate| candidate.provider().as_str())
+                .collect::<Vec<_>>(),
+            expected,
+        );
+    }
+
+    let plan = snapshot
+        .plan(
+            &PublicModelId::new("grok-4.7").unwrap(),
+            &super::operation(),
+            snapshot.all_account_scope(),
+            &gateway_core::routing::RoutingContext {
+                required_provider: Some(ProviderKind::new("openai").unwrap()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(plan.candidates().len(), 1);
+    assert_eq!(plan.candidates()[0].provider().as_str(), "openai");
 }
 
 #[test]

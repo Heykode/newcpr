@@ -63,8 +63,8 @@ pub(crate) struct ProviderAccountStatus {
     pub facts: AccountStatusFacts,
 }
 
-pub(crate) async fn load_account_statuses(
-    pool: &sqlx::PgPool,
+pub(crate) async fn load_account_statuses<'e>(
+    pool: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
 ) -> crate::StoreResult<Vec<ProviderAccountStatus>> {
     use super::rows::{account_status_facts_from_row, get};
     let rows = sqlx::query(

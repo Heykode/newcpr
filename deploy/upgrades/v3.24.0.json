@@ -1,0 +1,8 @@
+{
+  "from_version": "3.23.1",
+  "to_version": "3.24.0",
+  "from_migrations_tree": "a36f8520df448be5c84d0419ac37d1052661b5a2",
+  "to_migrations_tree": "113e46d3e329312ff8502f088bb0e414f1858476",
+  "added": ["0069_usage_history_and_indexes.sql"],
+  "recovery": "manual"
+}

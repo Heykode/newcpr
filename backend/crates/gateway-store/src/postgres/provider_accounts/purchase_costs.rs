@@ -40,8 +40,8 @@ pub(super) async fn update(
     Ok(())
 }
 
-pub(super) async fn load(
-    pool: &PgPool,
+pub(super) async fn load<'e>(
+    pool: impl sqlx::Executor<'e, Database = Postgres>,
     account_ids: &[String],
 ) -> StoreResult<BTreeMap<String, AccountPurchaseView>> {
     if account_ids.is_empty() {

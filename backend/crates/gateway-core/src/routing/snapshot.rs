@@ -1149,6 +1149,7 @@ impl RuntimeSnapshot {
     ) -> Result<RoutingPlan, RoutingError> {
         let requirements = operation.capability_requirements();
         let mut candidates = Vec::new();
+        let mut unlisted_candidates = Vec::new();
 
         if context.required_provider.is_none() && account_scope.provider_kinds().is_empty() {
             return Err(RoutingError::EmptyAccountScope);
@@ -1178,11 +1179,11 @@ impl RuntimeSnapshot {
                 UpstreamModelId::from_client_wire(mapped_model)
             }
             .map_err(|_| RoutingError::InvalidIdentifier)?;
-            let emulated_features = match self
+            let capabilities = self
                 .provider_models
                 .get(provider)
-                .and_then(|models| models.get(&upstream_model))
-            {
+                .and_then(|models| models.get(&upstream_model));
+            let emulated_features = match capabilities {
                 Some(capabilities) => {
                     let Some(emulated) = capabilities.match_requirements(&requirements) else {
                         continue;
@@ -1192,7 +1193,7 @@ impl RuntimeSnapshot {
                 None if self.exhaustive_provider_catalogs.contains(provider) => continue,
                 None => BTreeSet::new(),
             };
-            candidates.push(ProviderCandidate {
+            let candidate = ProviderCandidate {
                 provider: provider.clone(),
                 model_presentation: self
                     .provider_model_presentations
@@ -1202,8 +1203,14 @@ impl RuntimeSnapshot {
                 upstream_model: Some(upstream_model),
                 emulated_features,
                 account_scope: Arc::clone(&account_scope),
-            });
+            };
+            if capabilities.is_some() {
+                candidates.push(candidate);
+            } else {
+                unlisted_candidates.push(candidate);
+            }
         }
+        candidates.extend(unlisted_candidates);
 
         if candidates.is_empty() {
             // 模型存在性必须包含被熔断的 Provider；目录未知时不能断言模型不存在。

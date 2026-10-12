@@ -38,17 +38,21 @@ pub(super) async fn load_learning_usage(
         completed_usage_fact_predicate("mr"),
     );
     let row = budget
-        .run("load monitor learning usage", async {
-            sqlx::query(sqlx::AssertSqlSafe(query))
-                .bind(&window.account_id)
-                .bind(range.start)
-                .bind(range.end)
-                .fetch_one(pool)
-                .await
-                .map_err(|error| {
-                    postgres_unavailable("load monitor learning usage").with_source(error)
-                })
-        })
+        .run(
+            pool,
+            "load monitor learning usage",
+            |mut connection| async move {
+                sqlx::query(sqlx::AssertSqlSafe(query))
+                    .bind(&window.account_id)
+                    .bind(range.start)
+                    .bind(range.end)
+                    .fetch_one(&mut *connection)
+                    .await
+                    .map_err(|error| {
+                        postgres_unavailable("load monitor learning usage").with_source(error)
+                    })
+            },
+        )
         .await
         .map_err(|error| admin_store_error(ENTITY, error))?;
     Ok(QuotaForecastUsage {
@@ -77,18 +81,22 @@ pub(super) async fn load_history(
         ));
     }
     let rows = budget
-        .run("load quota forecast history", async {
-            sqlx::query(sqlx::AssertSqlSafe(history_sql()))
-                .bind(&window.account_id)
-                .bind(range.start)
-                .bind(range.end)
-                .bind(MAX_FORECAST_HISTORY_POINTS as i32)
-                .fetch_all(pool)
-                .await
-                .map_err(|error| {
-                    postgres_unavailable("load quota forecast history").with_source(error)
-                })
-        })
+        .run(
+            pool,
+            "load quota forecast history",
+            |mut connection| async move {
+                sqlx::query(sqlx::AssertSqlSafe(history_sql()))
+                    .bind(&window.account_id)
+                    .bind(range.start)
+                    .bind(range.end)
+                    .bind(MAX_FORECAST_HISTORY_POINTS as i32)
+                    .fetch_all(&mut *connection)
+                    .await
+                    .map_err(|error| {
+                        postgres_unavailable("load quota forecast history").with_source(error)
+                    })
+            },
+        )
         .await
         .map_err(|error| admin_store_error(ENTITY, error))?;
     let mut history = QuotaForecastHistory::default();

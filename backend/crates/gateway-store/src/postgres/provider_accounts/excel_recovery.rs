@@ -24,8 +24,8 @@ pub(super) async fn update(
     Ok(())
 }
 
-pub(super) async fn load(
-    pool: &PgPool,
+pub(super) async fn load<'e>(
+    pool: impl sqlx::Executor<'e, Database = Postgres>,
     ids: &[String],
 ) -> StoreResult<BTreeMap<String, ExcelRecoveryView>> {
     let rows = sqlx::query("select r.*,case when last_result='probing' and (lease_until is null or lease_until<=now()) then 'interrupted' else last_result end as display_last_result from account_excel_recovery r where account_id=any($1::text[])")

@@ -3,7 +3,7 @@
 use super::super::*;
 
 pub(crate) async fn request_metrics(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<RequestMetrics> {
@@ -97,13 +97,15 @@ pub(crate) async fn request_metrics(
     push_usage_filter(&mut query, filter, "mr");
     let row = query
         .build()
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("load request metrics").with_source(error))?;
     request_metrics_from_row(&row)
 }
 
-pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTotals> {
+pub(crate) async fn dashboard_totals(
+    connection: &mut PgConnection,
+) -> StoreResult<DashboardTotals> {
     // 卡片脚注的“总计”覆盖全部历史；只聚合页面实际展示的字段，避免重复计算
     // 当前区间指标所需的延迟分位数。
     let fact = completed_usage_fact_predicate("mr");
@@ -120,7 +122,7 @@ pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTota
     push_business_request_filter(&mut query, "mr");
     let row = query
         .build()
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("load dashboard totals").with_source(error))?;
     Ok(DashboardTotals {
@@ -133,23 +135,23 @@ pub(crate) async fn dashboard_totals(pool: &PgPool) -> StoreResult<DashboardTota
 }
 
 pub(crate) async fn request_metric_series(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<RequestMetricPoint>> {
-    request_metric_series_inner(pool, range, filter, true).await
+    request_metric_series_inner(connection, range, filter, true).await
 }
 
 pub(crate) async fn dashboard_request_metric_series(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<RequestMetricPoint>> {
-    request_metric_series_inner(pool, range, filter, false).await
+    request_metric_series_inner(connection, range, filter, false).await
 }
 
 async fn request_metric_series_inner(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     load_costs: bool,
@@ -253,10 +255,11 @@ async fn request_metric_series_inner(
     push_unrecovered_request_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by bucket_start order by bucket_start");
-    let rows =
-        query.build().fetch_all(pool).await.map_err(|error| {
-            postgres_unavailable("load request metric series").with_source(error)
-        })?;
+    let rows = query
+        .build()
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| postgres_unavailable("load request metric series").with_source(error))?;
 
     let mut points = BTreeMap::new();
     for row in rows {
@@ -273,7 +276,7 @@ async fn request_metric_series_inner(
         );
     }
     if load_costs {
-        let bucket_costs = request_costs_by_bucket(pool, range, filter, granularity).await?;
+        let bucket_costs = request_costs_by_bucket(connection, range, filter, granularity).await?;
         for (bucket, costs) in bucket_costs {
             if let Some(point) = points.get_mut(&bucket) {
                 point.costs = costs;
@@ -284,10 +287,10 @@ async fn request_metric_series_inner(
 }
 
 pub(crate) fn calculated_usage_billing_facts(
-    pool: &PgPool,
+    mut connection: ObservabilityConnection,
     range: ObservabilityRange,
     filter: UsageRecordFilter,
-) -> futures::stream::BoxStream<'_, StoreResult<CalculatedUsageBillingFact>> {
+) -> futures::stream::BoxStream<'static, StoreResult<CalculatedUsageBillingFact>> {
     use futures::TryStreamExt;
 
     Box::pin(async_stream::try_stream! {
@@ -314,7 +317,7 @@ pub(crate) fn calculated_usage_billing_facts(
         push_completed_usage_fact_filter(&mut query, "mr");
         push_usage_filter(&mut query, &filter, "mr");
         // 费用逐条累加与行顺序无关，避免全量物化和不必要的数据库排序。
-        let mut rows = query.build().fetch(pool);
+        let mut rows = query.build().fetch(&mut *connection);
         while let Some(row) = rows.try_next().await
             .map_err(|error| postgres_unavailable("load calculated usage billing facts").with_source(error))?
         {
@@ -324,7 +327,7 @@ pub(crate) fn calculated_usage_billing_facts(
 }
 
 pub(crate) async fn request_costs_by_bucket(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     granularity: ObservationGranularity,
@@ -344,10 +347,11 @@ pub(crate) async fn request_costs_by_bucket(
     push_completed_usage_fact_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by bucket_start, mr.cost_currency order by bucket_start, mr.cost_currency");
-    let rows =
-        query.build().fetch_all(pool).await.map_err(|error| {
-            postgres_unavailable("load request costs by bucket").with_source(error)
-        })?;
+    let rows = query
+        .build()
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| postgres_unavailable("load request costs by bucket").with_source(error))?;
     let mut result = BTreeMap::<DateTime<Utc>, Vec<CurrencyCostTotal>>::new();
     for row in rows {
         result
@@ -359,7 +363,7 @@ pub(crate) async fn request_costs_by_bucket(
 }
 
 pub(crate) async fn attempt_metrics(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<AttemptMetrics> {
@@ -460,7 +464,7 @@ pub(crate) async fn attempt_metrics(
     );
     let row = query
         .build()
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("load attempt metrics").with_source(error))?;
     Ok(AttemptMetrics {
@@ -473,12 +477,12 @@ pub(crate) async fn attempt_metrics(
         auth_failure_count: unsigned(&row, "auth_failure_count")?,
         provider_5xx_count: unsigned(&row, "provider_5xx_count")?,
         cost_coverage: coverage_from_row(&row)?,
-        costs: request_costs(pool, range, filter).await?,
+        costs: request_costs(connection, range, filter).await?,
     })
 }
 
 pub(crate) async fn request_costs(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<CurrencyCostTotal>> {
@@ -495,7 +499,7 @@ pub(crate) async fn request_costs(
     query.push(" group by mr.cost_currency order by mr.cost_currency");
     query
         .build()
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("load request costs").with_source(error))?
         .iter()
@@ -504,7 +508,7 @@ pub(crate) async fn request_costs(
 }
 
 pub(crate) async fn provider_observations(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<Vec<ProviderObservation>> {
@@ -525,10 +529,11 @@ pub(crate) async fn provider_observations(
     push_unrecovered_request_filter(&mut query, "mr");
     push_usage_filter(&mut query, filter, "mr");
     query.push(" group by coalesce(mr.provider_kind, 'unrouted') order by request_count desc");
-    let rows =
-        query.build().fetch_all(pool).await.map_err(|error| {
-            postgres_unavailable("load provider observations").with_source(error)
-        })?;
+    let rows = query
+        .build()
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| postgres_unavailable("load provider observations").with_source(error))?;
     rows.iter()
         .map(|row| {
             Ok(ProviderObservation {

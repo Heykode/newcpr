@@ -294,9 +294,15 @@ async fn image_routes_should_not_decode_bodies_and_should_preserve_both_directio
         assert_eq!(captured.transport, ClientTransport::HttpJson);
         assert_eq!(captured.kind, *kind);
         assert_eq!(captured.body.as_ref(), *body);
-        assert_eq!(
-            captured.context,
-            json!({"image_turn_id": "turn_image_route", "session_id": "root-image-session", "thread_id": "child-image-thread"})
+        super::assert_standalone_context(
+            &captured.context,
+            json!({"image_turn_id": "turn_image_route", "session_id": "root-image-session", "thread_id": "child-image-thread"}),
+            &[
+                ("content-type", "application/json"),
+                ("session-id", "root-image-session"),
+                ("thread-id", "child-image-thread"),
+                ("x-codex-image-turn-id", "turn_image_route"),
+            ],
         );
     }
     assert_eq!(

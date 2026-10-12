@@ -26,6 +26,7 @@ use gateway_store::postgres::{
 use sqlx::PgPool;
 mod quality_isolation;
 mod search;
+mod usage_history;
 
 use super::{
     TestDatabase, admin_account_store, admin_observability_store, observability_query_budget,

@@ -77,6 +77,7 @@ mod fast_mode;
 mod generate_compat;
 mod guardian;
 mod identity_isolation;
+mod image_account_eligibility;
 mod native_encrypted_history;
 mod precommit;
 mod quota_continuation;
@@ -8258,16 +8259,20 @@ async fn assert_websocket_failure_headers(headers: Value, request_id: Option<&st
             .iter()
             .filter_map(|event| event.wire_event()?.event_type())
             .collect::<Vec<_>>(),
-        vec![event_type],
-        "original failure stays atomically deliverable",
+        vec!["response.metadata", event_type],
+        "metadata and original failure stay atomically deliverable",
     );
     let wire = events
         .iter()
-        .find_map(|event| event.wire_event()?.raw_sse_frame())
+        .filter_map(|event| event.wire_event())
+        .find(|wire| wire.event_type() == Some(event_type))
         .expect("raw frame");
+    assert!(wire.raw_sse_frame().is_none());
+    assert_eq!(wire.raw_websocket_message(), Some(raw.as_str()));
+    let metadata = events[0].wire_event().expect("metadata frame");
     assert_eq!(
-        wire.as_ref(),
-        format!("event: {event_type}\ndata: {raw}\n\n").as_bytes()
+        metadata.raw_websocket_message(),
+        Some(r#"{"type":"response.metadata","headers":{"x-request-id":"req-metadata"}}"#)
     );
 }
 

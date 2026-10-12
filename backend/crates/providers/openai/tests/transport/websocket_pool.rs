@@ -2208,7 +2208,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_error_termin
         .expect("second pooled websocket response should use a fresh connection");
     server.await.unwrap();
 
-    assert!(first.body.contains("event: error"));
+    assert!(first.body.contains("\"type\":\"error\""));
     assert!(first.body.contains("\"code\":\"rate_limit_exceeded\""));
     assert!(second.body.contains("resp_pool_after_error"));
     assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
@@ -2282,7 +2282,7 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_unknown_resp
         .expect("failed websocket should be replaced");
     server.await.unwrap();
 
-    assert!(first.body.contains("event: response.failed"));
+    assert!(first.body.contains("\"type\":\"response.failed\""));
     assert!(first.body.contains("resp_pool_model_refusal"));
     assert!(second.body.contains("resp_pool_after_unknown_failed"));
     assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");

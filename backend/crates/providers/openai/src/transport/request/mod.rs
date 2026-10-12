@@ -30,6 +30,7 @@ const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
 const ENVIRONMENT_CONTEXT_CONTENT_KIND: &str = "environments.environment_context";
+const DESKTOP_TIME_CONTEXT_CONTENT_KIND: &str = "additional_content.codex_apps_client_time_context";
 const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] =
     &["max_output_tokens", "temperature", "prompt_cache_retention"];
 
@@ -245,7 +246,7 @@ pub(crate) fn align_structured_location_fields(
         .to_string();
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
-            align_environment_context(item, &current_date, location.timezone.name());
+            align_time_context(item, &current_date, location.timezone.name());
         }
     }
     if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
@@ -255,13 +256,18 @@ pub(crate) fn align_structured_location_fields(
     }
 }
 
-fn align_environment_context(item: &mut Value, current_date: &str, timezone: &str) {
+fn align_time_context(item: &mut Value, current_date: &str, timezone: &str) {
     let Some(item) = item.as_object_mut() else {
         return;
     };
-    if item.get("role").and_then(Value::as_str) != Some("user") {
-        return;
-    }
+    let (context_tag, content_kind) = match item.get("role").and_then(Value::as_str) {
+        Some("user") => ("environment_context", ENVIRONMENT_CONTEXT_CONTENT_KIND),
+        Some("developer") => (
+            "codex_apps_client_time_context",
+            DESKTOP_TIME_CONTEXT_CONTENT_KIND,
+        ),
+        _ => return,
+    };
     let content_kinds = item
         .get("internal_chat_message_metadata_passthrough")
         .and_then(Value::as_object)
@@ -279,7 +285,7 @@ fn align_environment_context(item: &mut Value, current_date: &str, timezone: &st
     for (index, part) in parts.iter_mut().enumerate() {
         // An explicit classification is authoritative for this exact content slot.
         if let Some(kinds) = &content_kinds
-            && kinds.get(index).and_then(Option::as_deref) != Some(ENVIRONMENT_CONTEXT_CONTENT_KIND)
+            && kinds.get(index).and_then(Option::as_deref) != Some(content_kind)
         {
             continue;
         }
@@ -292,21 +298,27 @@ fn align_environment_context(item: &mut Value, current_date: &str, timezone: &st
         let Some(Value::String(text)) = part.get_mut("text") else {
             continue;
         };
-        if let Some(aligned) = aligned_environment_context(text, current_date, timezone) {
+        if let Some(aligned) = aligned_time_context(text, context_tag, current_date, timezone) {
             *text = aligned;
         }
     }
 }
 
-fn aligned_environment_context(text: &str, current_date: &str, timezone: &str) -> Option<String> {
+fn aligned_time_context(
+    text: &str,
+    context_tag: &str,
+    current_date: &str,
+    timezone: &str,
+) -> Option<String> {
     let trimmed = text.trim();
-    if !trimmed.starts_with("<environment_context>") || !trimmed.ends_with("</environment_context>")
+    if !trimmed.starts_with(&format!("<{context_tag}>"))
+        || !trimmed.ends_with(&format!("</{context_tag}>"))
     {
         return None;
     }
     let document = Document::parse(text).ok()?;
     let root = document.root_element();
-    if !root.has_tag_name("environment_context") {
+    if !root.has_tag_name(context_tag) {
         return None;
     }
     let mut replacements = root
@@ -990,7 +1002,7 @@ fn apply_protocol_context(request: &mut CodexResponsesRequest, context: &Map<Str
     }
 }
 
-fn decode_passthrough_headers(context: &Map<String, Value>) -> HeaderMap {
+pub(crate) fn decode_passthrough_headers(context: &Map<String, Value>) -> HeaderMap {
     let mut headers = HeaderMap::new();
     let Some(entries) = context
         .get(PASSTHROUGH_HEADERS_CONTEXT_KEY)

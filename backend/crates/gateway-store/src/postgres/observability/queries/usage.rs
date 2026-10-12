@@ -2,6 +2,7 @@
 
 use super::super::*;
 use serde_json::Value;
+use sqlx::Connection as _;
 
 const MODEL_DIAGNOSTIC_DIMENSION_SQL: &str =
     "coalesce(mr.upstream_model_id, mr.requested_model_id)";
@@ -92,6 +93,7 @@ pub(crate) fn push_usage_filter(
         query.push_bind(pattern.clone());
         for column in [
             "client_api_key_ref",
+            "client_api_key_name_snapshot",
             "provider_account_ref",
             "provider_account_email_snapshot",
             "provider_account_name_snapshot",
@@ -135,7 +137,7 @@ pub(crate) fn literal_prefix_pattern(value: &str) -> String {
 }
 
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
-    "select mr.id, ck.name as client_api_key_name, mr.billing_snapshot_json,
+    "select mr.id, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
             mr.provider_account_name_snapshot as provider_account_name,
@@ -162,7 +164,7 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
      left join client_api_keys ck on ck.id = mr.client_api_key_ref";
 
 pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
-    "select mr.id, mr.client_api_key_ref, ck.name as client_api_key_name,
+    "select mr.id, mr.client_api_key_ref, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name,
             mr.billing_snapshot_json, mr.config_revision,
             mr.routing_scope, mr.routing_group_refs, mr.routing_group_names_snapshot,
             mr.protocol, mr.operation,
@@ -194,12 +196,38 @@ pub(crate) const USAGE_RECORD_DETAIL_SELECT: &str =
      left join client_api_keys ck on ck.id = mr.client_api_key_ref";
 
 pub(crate) async fn list_usage_records(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     query: UsageRecordQuery,
 ) -> StoreResult<UsageRecordPage> {
     query.filter.validate()?;
-    let total = count_usage_records(pool, query.range, &query.filter).await?;
-    let items = list_usage_record_items(pool, &query).await?;
+    observability_page_offset(query.current_page, query.page_size)?;
+    let mut transaction = connection
+        .begin()
+        .await
+        .map_err(|error| postgres_unavailable("begin usage page snapshot").with_source(error))?;
+    sqlx::query("set transaction isolation level repeatable read read only")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| {
+            postgres_unavailable("configure usage page snapshot").with_source(error)
+        })?;
+    let (total, items) = if query.current_page == 1 {
+        let items = list_usage_record_items(&mut transaction, &query, None).await?;
+        let total = if items.len() < usize::from(query.page_size.get()) {
+            items.len() as u64
+        } else {
+            count_usage_records(&mut transaction, query.range, &query.filter).await?
+        };
+        (total, items)
+    } else {
+        let total = count_usage_records(&mut transaction, query.range, &query.filter).await?;
+        let items = list_usage_record_items(&mut transaction, &query, Some(total)).await?;
+        (total, items)
+    };
+    transaction
+        .commit()
+        .await
+        .map_err(|error| postgres_unavailable("complete usage page snapshot").with_source(error))?;
     Ok(UsageRecordPage {
         items,
         current_page: query.current_page,
@@ -209,25 +237,51 @@ pub(crate) async fn list_usage_records(
 }
 
 pub(crate) async fn list_usage_record_items(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     query: &UsageRecordQuery,
+    total: Option<u64>,
 ) -> StoreResult<Vec<UsageListRecord>> {
     query.filter.validate()?;
-    let offset = observability_page_offset(query.current_page, query.page_size)?;
-    let mut statement = QueryBuilder::<Postgres>::new(USAGE_LIST_RECORD_SELECT);
+    let mut offset = observability_page_offset(query.current_page, query.page_size)?;
+    let mut limit = i64::from(query.page_size.get());
+    let mut ascending = false;
+    if let Some(total) = total {
+        let total = i64::try_from(total).map_err(|_| invalid("usage count overflows i64"))?;
+        if offset >= total {
+            return Ok(Vec::new());
+        }
+        limit = limit.min(total - offset);
+        let reverse_offset = total - offset - limit;
+        if reverse_offset < offset {
+            offset = reverse_offset;
+            ascending = true;
+        }
+    }
+    let mut statement = QueryBuilder::<Postgres>::new(
+        "with candidate_page as materialized (select mr.id, mr.started_at from model_requests mr",
+    );
     statement.push(" where mr.started_at >= ");
     statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(query.range.end);
     push_completed_usage_fact_filter(&mut statement, "mr");
     push_usage_filter(&mut statement, &query.filter, "mr");
-    statement.push(" order by mr.started_at desc, mr.id desc limit ");
-    statement.push_bind(i64::from(query.page_size.get()));
+    statement.push(if ascending {
+        " order by mr.started_at, mr.id limit "
+    } else {
+        " order by mr.started_at desc, mr.id desc limit "
+    });
+    statement.push_bind(limit);
     statement.push(" offset ");
     statement.push_bind(offset);
+    statement.push(") ");
+    statement.push(USAGE_LIST_RECORD_SELECT);
+    statement.push(
+        " join candidate_page page on page.id = mr.id order by page.started_at desc, page.id desc",
+    );
     let rows = statement
         .build()
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("list usage records").with_source(error))?;
     let items = rows
@@ -238,7 +292,7 @@ pub(crate) async fn list_usage_record_items(
 }
 
 pub(crate) async fn count_usage_records(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
 ) -> StoreResult<u64> {
@@ -252,14 +306,14 @@ pub(crate) async fn count_usage_records(
     push_usage_filter(&mut statement, filter, "mr");
     let total = statement
         .build_query_scalar::<i64>()
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("count usage records").with_source(error))?;
     to_u64(total)
 }
 
 pub(crate) async fn usage_record_detail(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     request_id: &str,
 ) -> StoreResult<UsageRecordDetail> {
     require_nonempty("model request", "id", request_id)?;
@@ -269,7 +323,7 @@ pub(crate) async fn usage_record_detail(
     statement.push_bind(request_id.to_owned());
     let row = statement
         .build()
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("load usage record detail").with_source(error))?
         .ok_or_else(|| StoreError::NotFound {
@@ -291,7 +345,7 @@ pub(crate) async fn usage_record_detail(
          order by attempt_index, created_at, id",
     )
     .bind(request_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|error| postgres_unavailable("load usage attempt observations").with_source(error))?;
     let mut attempts = rows
@@ -311,7 +365,7 @@ pub(crate) async fn usage_record_detail(
          from model_requests current join model_requests related
            on related.id = current.recovery_request_id or related.recovery_request_id = current.id
          where current.id = $1 order by related.started_at limit 20"
-    ).bind(request_id).fetch_all(pool).await
+    ).bind(request_id).fetch_all(&mut *connection).await
         .map_err(|error| postgres_unavailable("load related recovery requests").with_source(error))?;
     Ok(UsageRecordDetail {
         request,
@@ -398,7 +452,7 @@ pub(crate) fn final_attempt_from_request(request: &UsageRecord) -> UsageAttemptO
 }
 
 pub(crate) async fn usage_diagnostics(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &UsageRecordFilter,
     dimension: DiagnosticDimension,
@@ -506,7 +560,7 @@ pub(crate) async fn usage_diagnostics(
         .push(" order by selected.sort_position, currency_grouping desc, cost_currency nulls last");
     let rows = statement
         .build()
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("load usage diagnostics").with_source(error))?;
     let total_request_count = rows
@@ -554,7 +608,7 @@ pub(crate) async fn usage_diagnostics(
     let mut display_names = match dimension {
         DiagnosticDimension::Account => {
             diagnostic_account_display_names(
-                pool,
+                connection,
                 &observations
                     .iter()
                     .map(|item| item.key.clone())
@@ -564,7 +618,7 @@ pub(crate) async fn usage_diagnostics(
         }
         DiagnosticDimension::ApiKey => {
             diagnostic_api_key_display_names(
-                pool,
+                connection,
                 &observations
                     .iter()
                     .map(|item| item.key.clone())
@@ -581,7 +635,7 @@ pub(crate) async fn usage_diagnostics(
                 })
                 .collect::<StoreResult<Vec<_>>>()?;
             let names = diagnostic_api_key_display_names(
-                pool,
+                connection,
                 &pairs.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>(),
             )
             .await?;
@@ -612,7 +666,7 @@ pub(crate) async fn usage_diagnostics(
 }
 
 pub(crate) async fn diagnostic_account_display_names(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     account_ids: &[String],
 ) -> StoreResult<HashMap<String, String>> {
     if account_ids.is_empty() {
@@ -642,7 +696,7 @@ pub(crate) async fn diagnostic_account_display_names(
          from unnest($1::text[]) as requested(account_id)",
     )
     .bind(account_ids)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|error| {
         postgres_unavailable("load diagnostic account display names").with_source(error)
@@ -658,19 +712,30 @@ pub(crate) async fn diagnostic_account_display_names(
 }
 
 pub(crate) async fn diagnostic_api_key_display_names(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     key_ids: &[String],
 ) -> StoreResult<HashMap<String, String>> {
     if key_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows = sqlx::query("select id, name from client_api_keys where id = any($1::text[])")
-        .bind(key_ids)
-        .fetch_all(pool)
-        .await
-        .map_err(|error| {
-            postgres_unavailable("load diagnostic api key display names").with_source(error)
-        })?;
+    let rows = sqlx::query(
+        "select requested.key_id as id,
+                coalesce(current_key.name,
+                  (select request.client_api_key_name_snapshot
+                   from model_requests request
+                   where request.client_api_key_ref = requested.key_id
+                     and request.client_api_key_name_snapshot is not null
+                   order by request.started_at desc, request.id desc limit 1),
+                  requested.key_id) as name
+         from unnest($1::text[]) as requested(key_id)
+         left join client_api_keys current_key on current_key.id = requested.key_id",
+    )
+    .bind(key_ids)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|error| {
+        postgres_unavailable("load diagnostic api key display names").with_source(error)
+    })?;
     let mut display_names = HashMap::with_capacity(rows.len());
     for row in rows {
         display_names.insert(get(&row, "id")?, get(&row, "name")?);

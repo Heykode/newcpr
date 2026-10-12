@@ -10,14 +10,18 @@ pub(super) fn endpoint_requested_model(
     if payload.protocol() != PROVIDER_NAME {
         return None;
     }
+    endpoint_requested_model_body(payload.body())
+}
+
+pub(super) fn endpoint_requested_model_body(
+    body: &[u8],
+) -> Option<gateway_core::routing::PublicModelId> {
     // 只读取 model，避免把编辑请求中的整张图片复制到观测数据。
     #[derive(Deserialize)]
     struct RequestModel {
         model: Option<Value>,
     }
-    let model = serde_json::from_slice::<RequestModel>(payload.body())
-        .ok()?
-        .model?;
+    let model = serde_json::from_slice::<RequestModel>(body).ok()?.model?;
     gateway_core::routing::PublicModelId::new(model.as_str()?.to_owned()).ok()
 }
 
@@ -41,6 +45,7 @@ pub(super) struct OpenAiResponseObservationState {
     upstream_response_model: Option<String>,
     rate_limit_headers: Vec<(String, String)>,
     timings: ProviderResponseTimings,
+    upstream_timing_metrics: crate::transport::protocol::responses::ResponseTimingMetrics,
     terminal: Option<OpenAiResponseTerminal>,
 }
 
@@ -111,6 +116,7 @@ impl OpenAiResponseObservationState {
                 &response.response_metadata,
             ),
             terminal: None,
+            upstream_timing_metrics: Default::default(),
         }
     }
 
@@ -191,6 +197,15 @@ impl OpenAiResponseObservationState {
         changed
     }
 
+    pub(super) fn observe_upstream_timing_metrics(
+        &mut self,
+        metrics: crate::transport::protocol::responses::ResponseTimingMetrics,
+    ) -> bool {
+        let previous = self.upstream_timing_metrics;
+        self.upstream_timing_metrics.merge(metrics);
+        previous != self.upstream_timing_metrics
+    }
+
     pub(super) fn observe_upstream_service_tier(&mut self, service_tier: Option<&str>) -> bool {
         let Some(service_tier) = normalize_service_tier(service_tier) else {
             return false;
@@ -261,6 +276,12 @@ impl OpenAiResponseObservationState {
     pub(super) fn provider_metadata(&self) -> Option<ProviderResponseMetadata> {
         let mut metadata = Map::new();
         metadata.insert("schemaVersion".to_owned(), json!(2));
+        if self.upstream_timing_metrics != Default::default() {
+            metadata.insert(
+                "upstreamTimingMetrics".to_owned(),
+                json!(self.upstream_timing_metrics),
+            );
+        }
         if self.transport == CodexBackendTransport::WebSocket
             && let Some(request_id) = &self.diagnostics.request_id
         {

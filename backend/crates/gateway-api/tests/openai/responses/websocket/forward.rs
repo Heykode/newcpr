@@ -167,8 +167,33 @@ async fn initial_content_error_param_reaches_websocket_without_changing_status()
 
 #[tokio::test]
 async fn active_interrupt_preserves_queued_frames_and_the_pending_execution_future() {
-    use gateway_core::engine::response_control::ResponseControl;
+    use gateway_core::engine::response_control::{
+        ResponseControl, ResponseControlTransport, ResponseControlUnavailable,
+    };
+    struct SyntheticControl(ResponseControl);
+    #[async_trait::async_trait]
+    impl ResponseControlTransport for SyntheticControl {
+        async fn send(&self, payload: &str) -> Result<(), ResponseControlUnavailable> {
+            let value: Value =
+                serde_json::from_str(payload).map_err(|_| ResponseControlUnavailable)?;
+            if value["mode"] != "discard_partial_items" {
+                return Err(ResponseControlUnavailable);
+            }
+            self.0
+                .interrupt(
+                    value["response_id"]
+                        .as_str()
+                        .ok_or(ResponseControlUnavailable)?,
+                )
+                .map_err(|_| ResponseControlUnavailable)
+        }
+        async fn receive(&self) -> Result<String, ResponseControlUnavailable> {
+            std::future::pending().await
+        }
+    }
     let control = ResponseControl::default();
+    let transport: Arc<dyn ResponseControlTransport> = Arc::new(SyntheticControl(control.clone()));
+    control.bind(&transport);
     let active = control.activate("resp_active_interrupt".into()).unwrap();
     let trace = Arc::new(AtomicFailureTrace {
         control: Some(control.clone()),

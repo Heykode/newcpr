@@ -14,8 +14,9 @@ use crate::openai::error::{gateway_error_contract, gateway_error_from_engine};
 use super::{
     super::{DecodedResponsesRequest, OpenAiResponsesEncoder, PendingExecution, ProtocolErrorBody},
     connection::{ConnectionEvent, FramePhase, ResponsesWebSocketConnection, WriteContext},
+    interrupt::ResponseInterrupt,
     protocol::{
-        decode_response_interrupt, error_event, initial_engine_error_event, response_metadata_event,
+        error_event, initial_engine_error_event, is_response_create, response_metadata_event,
     },
 };
 
@@ -95,6 +96,8 @@ async fn forward_execution_inner(
 ) -> ForwardOutcome {
     let request_id = Arc::<str>::from(started.request_id.to_string());
     let streaming = started.stream;
+    let control = started.session.response_control().unwrap_or_default();
+    let mut interrupt = ResponseInterrupt::default();
     let mut execution = PendingExecution::new(started.session);
     if !streaming {
         let error = GatewayError::new(
@@ -103,7 +106,15 @@ async fn forward_execution_inner(
         );
         return send_gateway_error(connection, &error, &request_id).await;
     }
-    let first = match next_active_input(connection, &mut execution, &request_id).await {
+    let first = match next_active_input(
+        connection,
+        &mut execution,
+        &mut interrupt,
+        &request_id,
+        false,
+    )
+    .await
+    {
         ActiveInput::Event(Ok(Some(event))) => event,
         ActiveInput::Event(Ok(None)) => {
             let error = GatewayError::new(
@@ -154,7 +165,8 @@ async fn forward_execution_inner(
     let mut first_frame_written = false;
     if encoder.is_completed() {
         if let Err(outcome) =
-            confirm_completed_execution(connection, &mut execution, &request_id).await
+            confirm_completed_execution(connection, &mut execution, &mut interrupt, &request_id)
+                .await
         {
             return outcome;
         }
@@ -168,6 +180,8 @@ async fn forward_execution_inner(
         .await
             && send_messages(
                 connection,
+                &control,
+                &mut interrupt,
                 first_messages,
                 &request_id,
                 &mut first_frame_written,
@@ -190,6 +204,8 @@ async fn forward_execution_inner(
     .await
         || !send_messages(
             connection,
+            &control,
+            &mut interrupt,
             first_messages,
             &request_id,
             &mut first_frame_written,
@@ -201,7 +217,15 @@ async fn forward_execution_inner(
     }
 
     loop {
-        match next_active_input(connection, &mut execution, &request_id).await {
+        match next_active_input(
+            connection,
+            &mut execution,
+            &mut interrupt,
+            &request_id,
+            false,
+        )
+        .await
+        {
             ActiveInput::Event(Ok(Some(delivery))) => {
                 let requirement = delivery.commit_requirement();
                 let mut events = delivery.into_provider_events();
@@ -220,8 +244,13 @@ async fn forward_execution_inner(
                     messages.extend(encoder.push_websocket(event));
                 }
                 if encoder.is_completed() {
-                    if let Err(outcome) =
-                        confirm_completed_execution(connection, &mut execution, &request_id).await
+                    if let Err(outcome) = confirm_completed_execution(
+                        connection,
+                        &mut execution,
+                        &mut interrupt,
+                        &request_id,
+                    )
+                    .await
                     {
                         return outcome;
                     }
@@ -229,6 +258,8 @@ async fn forward_execution_inner(
                     commit_connection_replay(replay, &encoder, provider_state.take());
                     if !send_messages(
                         connection,
+                        &control,
+                        &mut interrupt,
                         messages,
                         &request_id,
                         &mut first_frame_written,
@@ -254,6 +285,8 @@ async fn forward_execution_inner(
                 let terminal_batch = encoder.has_wire_failure();
                 if !send_messages(
                     connection,
+                    &control,
+                    &mut interrupt,
                     messages,
                     &request_id,
                     &mut first_frame_written,
@@ -333,9 +366,10 @@ fn commit_connection_replay(
 async fn confirm_completed_execution(
     connection: &mut ResponsesWebSocketConnection,
     execution: &mut PendingExecution,
+    interrupt: &mut ResponseInterrupt,
     request_id: &Arc<str>,
 ) -> Result<(), ForwardOutcome> {
-    match next_active_input(connection, execution, request_id).await {
+    match next_active_input(connection, execution, interrupt, request_id, true).await {
         ActiveInput::Event(Ok(None))
             if execution
                 .session_mut()
@@ -373,7 +407,9 @@ enum ActiveInput {
 async fn next_active_input(
     connection: &mut ResponsesWebSocketConnection,
     execution: &mut PendingExecution,
+    interrupt: &mut ResponseInterrupt,
     request_id: &Arc<str>,
+    terminal_seen: bool,
 ) -> ActiveInput {
     let Some(session) = execution.session_mut() else {
         return ActiveInput::Disconnect;
@@ -388,23 +424,36 @@ async fn next_active_input(
                 let Some(incoming) = incoming else { return ActiveInput::Disconnect; };
                 match &incoming.event {
                     ConnectionEvent::Text(payload) => {
-                        let error = match decode_response_interrupt(payload) {
-                            Ok(Some(id)) => {
-                                let accepted = control.as_ref().is_some_and(|control| control.interrupt(&id).is_ok());
-                                (!accepted).then(|| super::super::RequestDecodeError::InvalidValue { field: "response_id".to_owned() }.protocol_body())
+                        if is_response_create(payload) {
+                            connection.defer(incoming);
+                            continue;
+                        }
+                        let Some(control) = control.as_ref() else {
+                            if send_gateway_error(connection, &GatewayError::new(
+                                GatewayErrorKind::InvalidRequest,
+                                "No upstream WebSocket connection is available for control messages",
+                            ), request_id).await == ForwardOutcome::Disconnect {
+                                return ActiveInput::Disconnect;
                             }
-                            Ok(None) => { connection.defer(incoming); continue; }
-                            Err(error) => Some(error.protocol_body()),
+                            continue;
                         };
-                        if let Some(error) = error
-                            && send_protocol_error(connection, StatusCode::BAD_REQUEST, error, request_id).await == ForwardOutcome::Disconnect
-                        {
+                        if !terminal_seen && interrupt.retain(payload) {
+                            tokio::select! {
+                                _ = connection.wait_for_exit() => return ActiveInput::Disconnect,
+                                () = interrupt.forward_pending(control) => {}
+                            }
+                        } else if send_control(connection, control, payload, request_id).await == ForwardOutcome::Disconnect {
                             return ActiveInput::Disconnect;
                         }
                     }
                     ConnectionEvent::Binary => connection.defer(incoming),
                     ConnectionEvent::Expired => {}
                     ConnectionEvent::Exited(_) => return ActiveInput::Disconnect,
+                }
+            }
+            reply = async { control.as_ref().expect("guarded control").receive().await }, if terminal_seen && control.is_some() => {
+                if forward_control_event(connection, control.as_ref().expect("guarded control"), reply).await == ForwardOutcome::Disconnect {
+                    return ActiveInput::Disconnect;
                 }
             }
             event = &mut event => return ActiveInput::Event(event),
@@ -509,6 +558,8 @@ async fn send_metadata(
 
 async fn send_messages(
     connection: &mut ResponsesWebSocketConnection,
+    control: &gateway_core::engine::response_control::ResponseControl,
+    interrupt: &mut ResponseInterrupt,
     messages: Vec<String>,
     request_id: &Arc<str>,
     first_frame_written: &mut bool,
@@ -523,6 +574,7 @@ async fn send_messages(
             (true, true) => FramePhase::Terminal,
             (true, false) => FramePhase::Data,
         };
+        let created_id = ResponseInterrupt::created_id(&message);
         if connection
             .send_text(message, WriteContext::request(request_id, phase))
             .await
@@ -531,6 +583,13 @@ async fn send_messages(
             return false;
         }
         *first_frame_written = true;
+        if let Some(id) = created_id {
+            interrupt.observe_created(id, control);
+            tokio::select! {
+                _ = connection.wait_for_exit() => return false,
+                () = interrupt.forward_pending(control) => {}
+            }
+        }
     }
     true
 }
@@ -563,4 +622,55 @@ fn log_terminal_write_failure(
         provider_succeeded_but_terminal_write_failed = true,
         "Provider execution succeeded before the terminal WebSocket frame write failed"
     );
+}
+
+pub(super) async fn send_control(
+    connection: &mut ResponsesWebSocketConnection,
+    control: &gateway_core::engine::response_control::ResponseControl,
+    payload: &str,
+    request_id: &Arc<str>,
+) -> ForwardOutcome {
+    let result = tokio::select! {
+        _ = connection.wait_for_exit() => return ForwardOutcome::Disconnect,
+        result = control.send(payload) => result,
+    };
+    if result.is_err() {
+        if serde_json::from_str::<serde_json::Value>(payload).is_err() {
+            let error = super::protocol::ResponseCreateFrameError::InvalidJson.protocol_body();
+            return send_protocol_error(connection, StatusCode::BAD_REQUEST, error, request_id)
+                .await;
+        }
+        return send_gateway_error(
+            connection,
+            &GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "No upstream WebSocket connection is available for control messages",
+            ),
+            request_id,
+        )
+        .await;
+    }
+    ForwardOutcome::Continue
+}
+
+pub(super) async fn forward_control_event(
+    connection: &mut ResponsesWebSocketConnection,
+    control: &gateway_core::engine::response_control::ResponseControl,
+    event: Result<String, gateway_core::engine::response_control::ResponseControlUnavailable>,
+) -> ForwardOutcome {
+    let Ok(payload) = event else {
+        control.clear();
+        return ForwardOutcome::Continue;
+    };
+    let Some(payload) = super::super::response::control_payload_for_client(payload) else {
+        return ForwardOutcome::Continue;
+    };
+    if connection
+        .send_text(payload, WriteContext::connection(FramePhase::Data))
+        .await
+        .is_err()
+    {
+        return ForwardOutcome::Disconnect;
+    }
+    ForwardOutcome::Continue
 }

@@ -851,7 +851,7 @@ async fn tokenless_provider_endpoints_should_remain_in_health_but_not_usage_reco
 }
 
 #[tokio::test]
-async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
+async fn api_key_diagnostics_keeps_snapshot_after_delete_and_falls_back_for_legacy_rows() {
     let Some(database) = TestDatabase::create("snapshot_api_key_dimension").await else {
         return;
     };
@@ -920,6 +920,27 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         )
         .await
         .expect("api key diagnostics after deletion")
+        .items;
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].key, "key_diag");
+    assert_eq!(diagnostics[0].name, "My Key");
+
+    sqlx::query(
+        "update model_requests set client_api_key_name_snapshot = null
+         where client_api_key_ref = 'key_diag'",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("simulate legacy rows without a key name snapshot");
+    let diagnostics = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::ApiKey,
+            None,
+        )
+        .await
+        .expect("legacy api key diagnostics after deletion")
         .items;
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].key, "key_diag");
