@@ -1,6 +1,7 @@
 mod capture;
 mod connection;
 mod forward;
+mod interrupt;
 mod protocol;
 
 use std::sync::{

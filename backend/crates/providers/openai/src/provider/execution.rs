@@ -80,6 +80,9 @@ impl CodexProvider {
                 response_origin,
                 endpoint_path,
                 body: image.payload().body().clone(),
+                passthrough_headers: crate::transport::request::decode_passthrough_headers(
+                    image.payload().context(),
+                ),
                 image_turn_id,
                 turn_metadata: None,
                 session_affinity,
@@ -118,6 +121,9 @@ impl CodexProvider {
                 response_origin: self.search_url.clone(),
                 endpoint_path: CODEX_ALPHA_SEARCH_PATH,
                 body: search.payload().body().clone(),
+                passthrough_headers: crate::transport::request::decode_passthrough_headers(
+                    search.payload().context(),
+                ),
                 image_turn_id: None,
                 turn_metadata,
                 session_affinity,
@@ -132,6 +138,11 @@ impl CodexProvider {
         context: AttemptContext,
         mut request: RawJsonEndpointRequest,
     ) -> Result<ProviderStream, ProviderError> {
+        let image_request =
+            crate::transport::excel::image_generation::is_image_path(request.endpoint_path);
+        let image_model = image_request
+            .then(|| observation::endpoint_requested_model_body(&request.body))
+            .flatten();
         let selection_started_at = Instant::now();
         let session_affinity = self
             .resolve_turn_affinity(request.session_affinity, &context)
@@ -160,7 +171,8 @@ impl CodexProvider {
                         request_url: &request.response_origin,
                         attempt: &context,
                         session_affinity: session_affinity.as_ref(),
-                        upstream_model: None,
+                        upstream_model: image_model.as_ref().map(|model| model.as_str()),
+                        image_request,
                         requires_oauth: false,
                     })
                     .await
@@ -267,6 +279,7 @@ impl CodexProvider {
             endpoint_path: request.endpoint_path,
             body,
             image_turn_id: request.image_turn_id,
+            passthrough_headers: request.passthrough_headers,
             turn_metadata,
             context,
             selector: Arc::clone(&self.selector),
@@ -293,6 +306,7 @@ pub(super) struct RawJsonEndpointRequest {
     pub(super) response_origin: Url,
     pub(super) endpoint_path: &'static str,
     pub(super) body: Bytes,
+    pub(super) passthrough_headers: reqwest::header::HeaderMap,
     pub(super) image_turn_id: Option<String>,
     pub(super) turn_metadata: Option<String>,
     pub(super) session_affinity: Option<CodexSessionAffinity>,
@@ -326,6 +340,7 @@ pub(super) struct ColdJsonResponse {
     pub(super) response_origin: Url,
     pub(super) endpoint_path: &'static str,
     pub(super) body: Bytes,
+    pub(super) passthrough_headers: reqwest::header::HeaderMap,
     pub(super) image_turn_id: Option<String>,
     pub(super) turn_metadata: Option<String>,
     pub(super) context: AttemptContext,
@@ -564,6 +579,7 @@ pub(super) async fn create_json_attempt(
             request.endpoint_path,
             request.body.clone(),
             request.image_turn_id.as_deref(),
+            &request.passthrough_headers,
             request_context,
         ) => response.map_err(CodexHandshakeAttemptError::Client),
     }
@@ -888,6 +904,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         &mut failure,
                         WebSocketRecoveryContext {
                             policy,
+                            replay_boundary: ReplayBoundary::BeforeSemanticOutput,
                             requirement: request_transport_requirement,
                             allow_http_fallback: context
                                 .request_tuning()
@@ -1013,7 +1030,13 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         let mut pre_commit_events = PreCommitClientEvents::new(
             trace,
             context.request_tuning().stream_prefetch_bytes,
-        ).with_upstream_grace_started_at(response.precommit_started_at);
+        ).with_upstream_grace_started_at(response.precommit_started_at)
+        .with_replayable_prelude(
+            response_transport == CodexBackendTransport::WebSocket
+                && request.responses_lite.as_deref() == Some("true")
+                && request.downstream_websocket_connection_id.is_some()
+                && context.response_control().is_some(),
+        );
         let mut quota_success = false;
         loop {
             if context.deadline().is_elapsed() {
@@ -1116,6 +1139,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                             &mut failure,
                             WebSocketRecoveryContext {
                                 policy: WebSocketFailurePolicy::Budgeted,
+                                replay_boundary: ReplayBoundary::from_semantic_output(pre_commit_events.is_committed()),
                                 requirement: request_transport_requirement,
                                 allow_http_fallback: context
                                     .request_tuning()
@@ -1169,8 +1193,20 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             };
             let first_event_changed =
                 observation_state.observe_stream_chunk(&chunk, context.timing_started_at());
-            let chunk_len = chunk.len();
-            let (mut events, canonical_failure) = match decoder.push(&chunk) {
+            let websocket = response_transport == CodexBackendTransport::WebSocket;
+            let chunk_len = if websocket {
+                crate::transport::protocol::websocket::websocket_prefetch_len(&chunk)
+            } else {
+                chunk.len()
+            };
+            let decoded = if websocket {
+                decoder.push_websocket(std::str::from_utf8(&chunk).map_err(|_| {
+                    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
+                })?)
+            } else {
+                decoder.push(&chunk)
+            };
+            let (mut events, canonical_failure) = match decoded {
                 CodexCanonicalOutcome::Events(events) => (events, None),
                 CodexCanonicalOutcome::Failed(failure) => {
                     let (events, error, semantic_output_seen) = failure.into_parts();
@@ -1217,7 +1253,9 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             let timing_signals = decoder.take_timing_signals();
             let output_timing_changed = observation_state
                 .observe_timing_signals(timing_signals, context.timing_started_at());
-            let timing_changed = first_event_changed || output_timing_changed;
+            let upstream_timing_changed = observation_state
+                .observe_upstream_timing_metrics(decoder.upstream_timing_metrics());
+            let timing_changed = first_event_changed || output_timing_changed || upstream_timing_changed;
             let completed = events
                 .iter()
                 .flat_map(ProviderEvent::canonical_facts)
@@ -1357,7 +1395,8 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         let service_tier_changed = observation_state
             .observe_upstream_service_tier(decoder.response_service_tier());
         let timing_changed = observation_state
-            .observe_timing_signals(timing_signals, context.timing_started_at());
+            .observe_timing_signals(timing_signals, context.timing_started_at())
+            | observation_state.observe_upstream_timing_metrics(decoder.upstream_timing_metrics());
         let updates = take_rate_limit_updates(rate_limit_updates.as_ref()).await;
         let rate_limits_changed = if updates.is_empty() {
             false

@@ -341,7 +341,7 @@ fn websocket_connection_should_prepare_capture_payload_with_canonical_field_orde
 }
 
 #[tokio::test]
-async fn websocket_execute_response_create_request_should_collect_completed_sse() {
+async fn websocket_execute_response_create_request_should_collect_completed_message() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -391,7 +391,7 @@ async fn websocket_execute_response_create_request_should_collect_completed_sse(
     let payload = server.await.unwrap();
 
     assert_eq!(payload["type"], "response.create");
-    assert!(response.body.contains("event: response.completed"));
+    assert!(response.body.contains("\"type\":\"response.completed\""));
     assert!(response.body.contains("\"id\":\"resp_ws_live\""));
     assert_eq!(response.usage.expect("usage").input_tokens, 5);
 }
@@ -504,7 +504,7 @@ async fn websocket_execute_response_create_request_should_return_business_coded_
         .expect("response.failed should remain a terminal SSE fact");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: response.failed"));
+    assert!(response.body.contains("\"type\":\"response.failed\""));
     assert!(response.body.contains("\"code\":\"rate_limit_exceeded\""));
     assert!(
         response
@@ -549,7 +549,7 @@ async fn websocket_execute_response_create_request_should_return_unknown_respons
         .expect("unknown response.failed should remain a terminal SSE fact");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: response.failed"));
+    assert!(response.body.contains("\"type\":\"response.failed\""));
     assert!(response.body.contains("\"id\":\"resp_model_refusal\""));
     assert!(response.body.contains("\"code\":\"model_refusal\""));
 }
@@ -694,8 +694,16 @@ async fn websocket_business_events_should_not_be_consumed_by_internal_observers(
         .expect("business events should remain on the wire");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: future.business.rate_limits"));
-    assert!(response.body.contains("event: future.business.metadata"));
+    assert!(
+        response
+            .body
+            .contains("\"type\":\"future.business.rate_limits\"")
+    );
+    assert!(
+        response
+            .body
+            .contains("\"type\":\"future.business.metadata\"")
+    );
     assert_eq!(response.turn_state, None);
     assert!(response.rate_limit_headers.is_empty());
 }
@@ -836,7 +844,7 @@ async fn websocket_execute_response_create_request_should_return_wrapped_error_a
         .expect("wrapped error should remain a terminal SSE fact");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: error"));
+    assert!(response.body.contains("\"type\":\"error\""));
     assert!(response.body.contains("\"status\":409"));
     assert!(response.body.contains("\"retry-after\":[\"17\"]"));
     assert!(response.body.contains("wrapped conflict"));
@@ -877,7 +885,7 @@ async fn websocket_execute_response_create_request_should_return_connection_limi
         .expect("connection limit should remain a terminal SSE fact");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: response.failed"));
+    assert!(response.body.contains("\"type\":\"response.failed\""));
     assert!(response.body.contains("websocket_connection_limit_reached"));
 }
 
@@ -933,8 +941,12 @@ async fn websocket_execute_response_create_request_should_forward_typed_events_w
         .expect("websocket exchange should succeed");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: response.output_text.delta"));
-    assert!(response.body.contains("event: response.completed"));
+    assert!(
+        response
+            .body
+            .contains("\"type\":\"response.output_text.delta\"")
+    );
+    assert!(response.body.contains("\"type\":\"response.completed\""));
     assert!(response.body.contains("\"id\":\"resp_after_invalid\""));
 }
 
@@ -1003,13 +1015,13 @@ async fn websocket_execute_response_create_request_should_capture_internal_metad
 
     let response = execute_response_create_request(&prepared)
         .await
-        .expect("internal events should update metadata without forwarding");
+        .expect("metadata is forwarded while internal rate limits update observation");
     server.await.unwrap();
 
     assert_eq!(response.turn_state.as_deref(), Some("turn-from-metadata"));
     assert!(!response.body.contains("codex.rate_limits"));
-    assert!(!response.body.contains("response.metadata"));
-    assert!(response.body.contains("event: response.completed"));
+    assert!(response.body.contains("\"type\":\"response.metadata\""));
+    assert!(response.body.contains("\"type\":\"response.completed\""));
     assert!(
         response
             .rate_limit_headers
@@ -1069,9 +1081,13 @@ async fn websocket_codex_metadata_should_capture_first_turn_state_without_changi
     server.await.unwrap();
 
     assert_eq!(response.turn_state.as_deref(), Some("turn-first"));
-    assert!(response.body.contains("event: codex.response.metadata"));
-    assert!(!response.body.contains("event: response.metadata\n"));
-    assert!(response.body.contains("event: response.completed"));
+    assert!(
+        response
+            .body
+            .contains("\"type\":\"codex.response.metadata\"")
+    );
+    assert!(response.body.contains("\"type\":\"response.metadata\""));
+    assert!(response.body.contains("\"type\":\"response.completed\""));
 }
 
 #[tokio::test]
@@ -1328,7 +1344,7 @@ async fn websocket_execute_response_create_request_should_forward_incomplete_res
         .expect("response.incomplete should remain a terminal Responses event");
     server.await.unwrap();
 
-    assert!(exchange.body.contains("event: response.incomplete"));
+    assert!(exchange.body.contains("\"type\":\"response.incomplete\""));
     assert!(exchange.body.contains("max_output_tokens"));
 }
 
@@ -1378,7 +1394,7 @@ async fn websocket_execute_response_create_request_should_forward_invalid_comple
         .expect("invalid response.completed must remain forwardable");
     server.await.unwrap();
 
-    assert!(exchange.body.contains("event: response.completed"));
+    assert!(exchange.body.contains("\"type\":\"response.completed\""));
     assert!(exchange.body.contains("\"input_tokens\":\"bad\""));
     assert!(!exchange.body.contains("response.failed"));
 }
@@ -1420,7 +1436,7 @@ async fn websocket_execute_response_create_request_should_forward_completed_with
         .expect("completion without response must remain forwardable");
     server.await.unwrap();
 
-    assert!(exchange.body.contains("event: response.completed"));
+    assert!(exchange.body.contains("\"type\":\"response.completed\""));
     assert!(exchange.usage.is_none());
     assert!(!exchange.body.contains("response.failed"));
 }
@@ -1467,7 +1483,7 @@ async fn websocket_execute_response_create_request_should_return_error_terminal_
         .expect("error frame should remain a terminal SSE fact");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: error"));
+    assert!(response.body.contains("\"type\":\"error\""));
     assert!(response.body.contains("invalid_request"));
     assert!(response.body.contains("No tool output found"));
 }
@@ -1591,7 +1607,7 @@ async fn websocket_stream_should_allow_silence_below_idle_timeout() {
         .expect("structural events and model output share the same idle timeout");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: response.created"));
+    assert!(response.body.contains("\"type\":\"response.created\""));
     assert!(response.body.contains("resp_structural"));
 }
 
@@ -1681,7 +1697,7 @@ async fn websocket_execute_response_create_request_should_reply_to_server_ping_b
         .expect("websocket exchange should succeed after ping/pong");
     server.await.unwrap();
 
-    assert!(response.body.contains("event: response.completed"));
+    assert!(response.body.contains("\"type\":\"response.completed\""));
     assert!(response.body.contains("\"id\":\"resp_after_ping\""));
     assert_eq!(response.usage.expect("usage").input_tokens, 2);
 }
@@ -1994,7 +2010,8 @@ async fn codex_backend_client_stream_should_preserve_burst_during_downstream_bac
     server.await.unwrap();
 
     assert_eq!(
-        body.matches("event: response.output_text.delta").count(),
+        body.matches("\"type\":\"response.output_text.delta\"")
+            .count(),
         BURST_FRAMES + 1
     );
     assert!(body.contains("initial;"));
@@ -2322,7 +2339,7 @@ async fn codex_backend_client_should_use_websocket_when_previous_response_id_is_
 
     assert_eq!(payload["type"], "response.create");
     assert_eq!(payload["previous_response_id"], "resp_previous");
-    assert!(response.body.contains("event: response.completed"));
+    assert!(response.body.contains("\"type\":\"response.completed\""));
     assert!(response.body.contains("\"id\":\"resp_ws_client\""));
     assert_eq!(response.usage.expect("usage").input_tokens, 3);
     assert_eq!(response.turn_state.as_deref(), Some("turn-ws-client"));

@@ -191,9 +191,15 @@ async fn search_route_should_preserve_request_and_success_response_bytes() {
     assert_eq!(captured[0].endpoint, "/v1/alpha/search");
     assert_eq!(captured[0].transport, ClientTransport::HttpJson);
     assert_eq!(captured[0].body.as_ref(), request_body);
-    assert_eq!(
-        captured[0].context,
-        json!({"turn_metadata": turn_metadata, "session_id": "root-session", "thread_id": "child-thread"})
+    super::assert_standalone_context(
+        &captured[0].context,
+        json!({"turn_metadata": turn_metadata, "session_id": "root-session", "thread_id": "child-thread"}),
+        &[
+            ("content-type", "application/json"),
+            ("session-id", "root-session"),
+            ("thread-id", "child-thread"),
+            ("x-codex-turn-metadata", turn_metadata),
+        ],
     );
     assert_eq!(
         *execution

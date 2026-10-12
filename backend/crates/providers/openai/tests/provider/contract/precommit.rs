@@ -160,6 +160,7 @@ async fn custom_thresholds_release_wire_once_without_changing_body_or_retrying_a
             create_account(&store, "acct_provider_contract").await;
             let created = structural("response.created", padding);
             let body = sse(&created);
+            let websocket_body = created.to_string();
             let (base_url, release, server) = if websocket {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -200,10 +201,14 @@ async fn custom_thresholds_release_wire_once_without_changing_body_or_retrying_a
             let event = timeout(Duration::from_secs(1), next_client_event(&mut stream))
                 .await
                 .unwrap();
-            assert_eq!(
-                event.wire_event().unwrap().raw_sse_frame().unwrap(),
-                body.as_bytes()
-            );
+            let wire = event.wire_event().unwrap();
+            if websocket {
+                assert!(wire.raw_sse_frame().is_none());
+                assert_eq!(wire.raw_websocket_message().unwrap(), websocket_body);
+            } else {
+                assert_eq!(wire.raw_sse_frame().unwrap(), body.as_bytes());
+                assert!(wire.raw_websocket_message().is_none());
+            }
             release.send(()).unwrap();
             let (_, error) = timeout(Duration::from_secs(2), stream_failure(&mut stream))
                 .await
@@ -233,8 +238,8 @@ async fn zero_prefetch_ws_releases_lifecycle_before_terminal_and_never_replays_l
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let created = structural("response.created", 512);
         let progress = structural("response.in_progress", 512);
-        let expected = [sse(&created), sse(&progress)];
-        let expected_tail = sse(&tail);
+        let expected = [created.to_string(), progress.to_string()];
+        let expected_tail = tail.to_string();
         let failed = tail["type"] == "error";
         let (release, released) = oneshot::channel();
         let server = tokio::spawn(async move {
@@ -270,8 +275,8 @@ async fn zero_prefetch_ws_releases_lifecycle_before_terminal_and_never_replays_l
                 .await
                 .unwrap();
             assert_eq!(
-                event.wire_event().unwrap().raw_sse_frame().unwrap(),
-                frame.as_bytes()
+                event.wire_event().unwrap().raw_websocket_message().unwrap(),
+                frame
             );
         }
         release.send(()).unwrap();
@@ -295,9 +300,13 @@ async fn zero_prefetch_ws_releases_lifecycle_before_terminal_and_never_replays_l
         };
         let wire: Vec<_> = events
             .iter()
-            .filter_map(|event| event.wire_event().and_then(|wire| wire.raw_sse_frame()))
+            .filter_map(|event| {
+                event
+                    .wire_event()
+                    .and_then(|wire| wire.raw_websocket_message())
+            })
             .collect();
-        assert_eq!(wire, vec![expected_tail.as_bytes()]);
+        assert_eq!(wire, vec![expected_tail.as_str()]);
         let events = releases(&trace);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["data"]["reason"], "disabled");

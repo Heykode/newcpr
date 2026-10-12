@@ -40,8 +40,9 @@ impl PgObservabilityRepository {
         let accounts = self
             .query_budget
             .run(
+                &self.pool,
                 "load dashboard provider accounts",
-                load_account_statuses(&self.pool),
+                |mut connection| async move { load_account_statuses(&mut *connection).await },
             )
             .await?;
         let now = observed_at.into();
@@ -130,24 +131,34 @@ impl PgObservabilityRepository {
         // 每条 SQL 独立取一个全局观测槽位，避免整包预留造成队头阻塞。
         let (totals, (provider_accounts, normal_accounts)) = futures::try_join!(
             self.query_budget.run(
+                &self.pool,
                 "load dashboard lifetime totals",
-                dashboard_totals(&self.pool)
+                |mut connection| async move { dashboard_totals(&mut connection).await }
             ),
             self.account_status_snapshot(observed_at),
         )?;
         let (trend, account_usage, recent_requests) = futures::try_join!(
             self.query_budget.run(
+                &self.pool,
                 "load dashboard request trend",
-                dashboard_request_metric_series(&self.pool, range, &filter),
+                |mut connection| async move {
+                    dashboard_request_metric_series(&mut connection, range, &filter).await
+                },
             ),
             self.query_budget.run(
+                &self.pool,
                 "load dashboard account usage",
-                provider_account_usage(&self.pool, account_usage_query),
+                |mut connection| async move {
+                    provider_account_usage(&mut connection, account_usage_query).await
+                },
             ),
-            self.query_budget
-                .run("load dashboard recent requests", async {
-                    list_usage_record_items(&self.pool, &recent_query).await
-                }),
+            self.query_budget.run(
+                &self.pool,
+                "load dashboard recent requests",
+                |mut connection| async move {
+                    list_usage_record_items(&mut connection, &recent_query, None).await
+                }
+            ),
         )?;
         Ok((
             DashboardObservation {
@@ -242,8 +253,16 @@ impl ObservabilityRepository for PgObservabilityRepository {
     ) -> StoreResult<Vec<RequestMetricPoint>> {
         self.query_budget
             .run(
+                &self.pool,
                 "load dashboard request trend",
-                dashboard_request_metric_series(&self.pool, range, &UsageRecordFilter::default()),
+                |mut connection| async move {
+                    dashboard_request_metric_series(
+                        &mut connection,
+                        range,
+                        &UsageRecordFilter::default(),
+                    )
+                    .await
+                },
             )
             .await
     }
@@ -255,8 +274,11 @@ impl ObservabilityRepository for PgObservabilityRepository {
     ) -> StoreResult<Vec<RequestMetricPoint>> {
         self.query_budget
             .run(
+                &self.pool,
                 "load usage request trend",
-                request_metric_series(&self.pool, range, &filter),
+                |mut connection| async move {
+                    request_metric_series(&mut connection, range, &filter).await
+                },
             )
             .await
     }
@@ -267,8 +289,9 @@ impl ObservabilityRepository for PgObservabilityRepository {
         filter: UsageRecordFilter,
     ) -> BoxStream<'_, StoreResult<CalculatedUsageBillingFact>> {
         self.query_budget.run_stream(
+            &self.pool,
             "load calculated usage billing facts",
-            calculated_usage_billing_facts(&self.pool, range, filter),
+            move |connection| calculated_usage_billing_facts(connection, range, filter),
         )
     }
 
@@ -278,23 +301,29 @@ impl ObservabilityRepository for PgObservabilityRepository {
     ) -> StoreResult<Vec<ProviderAccountUsageObservation>> {
         self.query_budget
             .run(
+                &self.pool,
                 "load provider account usage",
-                provider_account_usage(&self.pool, query),
+                |mut connection| async move { provider_account_usage(&mut connection, query).await },
             )
             .await
     }
 
     async fn list_usage_records(&self, query: UsageRecordQuery) -> StoreResult<UsageRecordPage> {
         self.query_budget
-            .run("list usage records", list_usage_records(&self.pool, query))
+            .run(
+                &self.pool,
+                "list usage records",
+                |mut connection| async move { list_usage_records(&mut connection, query).await },
+            )
             .await
     }
 
     async fn usage_record_detail(&self, request_id: &str) -> StoreResult<UsageRecordDetail> {
         self.query_budget
             .run(
+                &self.pool,
                 "load usage record detail",
-                usage_record_detail(&self.pool, request_id),
+                |mut connection| async move { usage_record_detail(&mut connection, request_id).await },
             )
             .await
     }
@@ -305,25 +334,35 @@ impl ObservabilityRepository for PgObservabilityRepository {
         filter: UsageRecordFilter,
     ) -> StoreResult<UsageOverview> {
         filter.validate()?;
-        let requests = self
-            .query_budget
-            .run(
-                "load usage request metrics",
-                request_metrics(&self.pool, range, &filter),
-            )
-            .await?;
-        let attempts = self
-            .query_budget
-            .run(
-                "load usage attempt metrics",
-                attempt_metrics(&self.pool, range, &filter),
-            )
-            .await?;
+        let filter = &filter;
+        let requests =
+            self.query_budget
+                .run(
+                    &self.pool,
+                    "load usage request metrics",
+                    |mut connection| async move {
+                        request_metrics(&mut connection, range, filter).await
+                    },
+                )
+                .await?;
+        let attempts =
+            self.query_budget
+                .run(
+                    &self.pool,
+                    "load usage attempt metrics",
+                    |mut connection| async move {
+                        attempt_metrics(&mut connection, range, filter).await
+                    },
+                )
+                .await?;
         let providers = self
             .query_budget
             .run(
+                &self.pool,
                 "load usage provider observations",
-                provider_observations(&self.pool, range, &filter),
+                |mut connection| async move {
+                    provider_observations(&mut connection, range, filter).await
+                },
             )
             .await?;
         Ok(UsageOverview {
@@ -343,15 +382,20 @@ impl ObservabilityRepository for PgObservabilityRepository {
     ) -> StoreResult<DiagnosticObservationPage> {
         self.query_budget
             .run(
+                &self.pool,
                 "load usage diagnostics",
-                usage_diagnostics(&self.pool, range, &filter, dimension, page),
+                |mut connection| async move {
+                    usage_diagnostics(&mut connection, range, &filter, dimension, page).await
+                },
             )
             .await
     }
 
     async fn list_ops_errors(&self, query: OpsErrorQuery) -> StoreResult<OpsErrorPage> {
         self.query_budget
-            .run("list ops errors", list_ops_errors(&self.pool, query))
+            .run(&self.pool, "list ops errors", |mut connection| async move {
+                list_ops_errors(&mut connection, query).await
+            })
             .await
     }
 }
@@ -363,11 +407,15 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
         range: admin_observability::TimeRange,
         search: &str,
     ) -> AdminStoreResult<Vec<admin_observability::AccountFilterOption>> {
+        let range = store_range(range)?;
         self.repository
             .query_budget
             .run(
+                &self.repository.pool,
                 "account filter options",
-                account_filter_options(&self.repository.pool, store_range(range)?, search),
+                |mut connection| async move {
+                    account_filter_options(&mut connection, range, search).await
+                },
             )
             .await
             .map_err(observability_error)

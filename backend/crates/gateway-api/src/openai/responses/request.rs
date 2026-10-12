@@ -108,6 +108,12 @@ impl OpenAiRequestHeaders {
         insert_protocol_context(&mut context, "thread_id", self.thread_id.as_ref());
         insert_protocol_context(&mut context, "turn_metadata", self.turn_metadata.as_ref());
         self.insert_scheduling_session_hint(&mut context);
+        if !self.passthrough_headers.is_empty() {
+            context.insert(
+                PASSTHROUGH_HEADERS_CONTEXT_KEY.to_owned(),
+                Value::Array(self.passthrough_headers.clone()),
+            );
+        }
         context
     }
 

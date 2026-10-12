@@ -9,7 +9,7 @@ mod responses;
 mod router;
 mod search;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -167,11 +167,66 @@ impl ClientApiKeyUsageSink for IgnoredClientApiKeyUsage {
 }
 
 fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
+    snapshot_with_accounts(plaintext, provider_name, "key_api_test", &["acct_api_test"])
+}
+
+fn assert_standalone_context(
+    context: &serde_json::Value,
+    expected: serde_json::Value,
+    expected_headers: &[(&str, &str)],
+) {
+    use base64::Engine;
+
+    let mut context = context.clone();
+    let encoded = context
+        .as_object_mut()
+        .unwrap()
+        .remove("opaque_request_headers")
+        .expect("standalone business headers");
+    let mut actual_headers = encoded
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry[0].as_str().unwrap().to_owned(),
+                String::from_utf8(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(entry[1].as_str().unwrap())
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    actual_headers.sort();
+    let mut expected_headers = expected_headers
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect::<Vec<_>>();
+    expected_headers.sort();
+    assert_eq!(actual_headers, expected_headers);
+    assert_eq!(context, expected);
+}
+
+fn snapshot_with_accounts(
+    plaintext: &str,
+    provider_name: &str,
+    key_id: &str,
+    accounts: &[&str],
+) -> RuntimeSnapshot {
     let provider = ProviderKind::new(provider_name).expect("provider");
-    let account_directory = Arc::new(RuntimeAccountDirectory::new(BTreeMap::from([(
-        ProviderAccountId::new("acct_api_test").expect("account ID"),
-        RuntimeAccount::new(provider.clone(), BTreeSet::new()),
-    )])));
+    let account_directory = Arc::new(RuntimeAccountDirectory::new(
+        accounts
+            .iter()
+            .map(|id| {
+                (
+                    ProviderAccountId::new(*id).expect("account ID"),
+                    RuntimeAccount::new(provider.clone(), BTreeSet::new()),
+                )
+            })
+            .collect(),
+    ));
     let capabilities = ModelCapabilities::new(
         BTreeSet::from([gateway_core::operation::OperationKind::Generate]),
         Some(16_000),
@@ -195,7 +250,7 @@ fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
             })
             .collect(),
         vec![ClientPolicy::new(
-            ClientApiKeyId::new("key_api_test").expect("key ID"),
+            ClientApiKeyId::new(key_id).expect("key ID"),
             PlaintextClientApiKey::new(plaintext).expect("plaintext key"),
             Arc::new(FrozenAccountScope::new(
                 Arc::clone(&account_directory),
@@ -210,7 +265,7 @@ fn snapshot(plaintext: &str, provider_name: &str) -> RuntimeSnapshot {
 }
 
 #[derive(Default)]
-struct TestLifecycle {
+pub(crate) struct TestLifecycle {
     cancellation: gateway_core::lifecycle::CancellationToken,
 }
 

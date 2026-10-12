@@ -11,7 +11,7 @@ use gateway_admin::{
     model::observability as admin_observability,
     ports::store::{AdminStoreResult, ObservabilityStore as AdminObservabilityStore},
 };
-use sqlx::{PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
 
 use crate::{
     DecimalAmount, StoreError, StoreResult, admin_store_error, postgres_unavailable,

@@ -19,23 +19,19 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use super::control::{PumpCommand, PumpControl, SharedMessages, send_message};
 use futures::{Sink, SinkExt, Stream, StreamExt};
+use gateway_core::engine::response_control::{ResponseControl, ResponseControlTransport};
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::mpsc,
     task::JoinHandle,
     time::{Instant, MissedTickBehavior},
 };
-use tokio_tungstenite::tungstenite::{
-    Message,
-    protocol::frame::{
-        Frame,
-        coding::{Data, OpCode},
-    },
-};
+use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use uuid::Uuid;
 
-use super::CodexWebSocketCloseError;
+use super::{CodexWebSocketCloseError, CodexWebSocketExchangeError};
 
 /// 底层 tungstenite WebSocket 流。
 pub(crate) trait WebSocketIo:
@@ -140,13 +136,6 @@ impl PumpKeepalive {
             liveness_timeout: None,
         }
     }
-}
-
-enum PumpCommand {
-    Send {
-        message: Message,
-        ack: oneshot::Sender<Result<(), tungstenite::Error>>,
-    },
 }
 
 const PUMP_MESSAGE_BUFFER: usize = 64;
@@ -338,7 +327,8 @@ pub(crate) struct PumpedWebSocket {
     connection_id: Uuid,
     compression_threshold: Option<usize>,
     tx_command: mpsc::Sender<PumpCommand>,
-    rx_message: mpsc::Receiver<Result<Message, tungstenite::Error>>,
+    rx_message: SharedMessages,
+    control: Option<Arc<dyn ResponseControlTransport>>,
     closed: Arc<AtomicBool>,
     lifecycle: Arc<Mutex<PumpLifecycleState>>,
     pump: Option<JoinHandle<()>>,
@@ -397,7 +387,8 @@ impl PumpedWebSocket {
             connection_id,
             compression_threshold,
             tx_command,
-            rx_message,
+            rx_message: Arc::new(tokio::sync::Mutex::new(rx_message)),
+            control: None,
             closed,
             lifecycle,
             pump: Some(pump),
@@ -406,45 +397,35 @@ impl PumpedWebSocket {
     }
 
     /// 通过 pump 发送一帧，返回底层 `send` 的结果。
-    pub(crate) async fn send(&self, message: Message) -> Result<(), tungstenite::Error> {
-        // Bypass compression before it touches the connection's dictionary.
-        // Tungstenite still owns framing, random client masking and buffering.
-        let message = match message {
-            Message::Text(text)
-                if self
-                    .compression_threshold
-                    .is_some_and(|threshold| text.len() < threshold) =>
-            {
-                Message::Frame(Frame::message(text, OpCode::Data(Data::Text), true))
-            }
-            Message::Binary(bytes)
-                if self
-                    .compression_threshold
-                    .is_some_and(|threshold| bytes.len() < threshold) =>
-            {
-                Message::Frame(Frame::message(bytes, OpCode::Data(Data::Binary), true))
-            }
-            other => other,
-        };
-        let (ack, rx_ack) = oneshot::channel();
-        if self
-            .tx_command
-            .send(PumpCommand::Send { message, ack })
-            .await
-            .is_err()
-        {
-            return Err(tungstenite::Error::ConnectionClosed);
-        }
-        rx_ack
-            .await
-            .unwrap_or(Err(tungstenite::Error::ConnectionClosed))
+    pub(crate) async fn send(&self, message: Message) -> Result<(), CodexWebSocketExchangeError> {
+        send_message(
+            &self.tx_command,
+            &self.closed,
+            self.compression_threshold,
+            message,
+        )
+        .await
+    }
+
+    /// A new exchange revokes the prior owner's weak control binding.
+    pub(crate) fn bind_control(&mut self, control: Option<&ResponseControl>) {
+        self.control = control.map(|control| {
+            let transport: Arc<dyn ResponseControlTransport> = Arc::new(PumpControl {
+                tx_command: self.tx_command.clone(),
+                rx_message: Arc::clone(&self.rx_message),
+                closed: Arc::clone(&self.closed),
+                compression_threshold: self.compression_threshold,
+            });
+            control.bind(&transport);
+            transport
+        });
     }
 
     /// 取出下一帧入站消息（`Ping`/`Pong` 已被 pump 处理，不会到达这里）。
     ///
     /// 返回 `None` 表示连接已结束（pump 已退出且缓冲已排空）。
     pub(crate) async fn next(&mut self) -> Option<Result<Message, tungstenite::Error>> {
-        self.rx_message.recv().await
+        self.rx_message.lock().await.recv().await
     }
 
     /// 连接是否已被后台 pump 判定关闭/失活。零成本，用于复用前探活。
@@ -551,13 +532,12 @@ async fn pump_loop(
                     }
                     // 背压期间无法读取 socket，不能把这段本地下游阻塞误算成上游静默。
                     last_activity = Instant::now();
-                    record_activity(&lifecycle, last_activity);
                 }
                 command = rx_command.recv() => {
                     let Some(command) = command else {
                         break 'pump PumpExitReason::CommandChannelClosed;
                     };
-                    if let Some(reason) = handle_command(&mut inner, command).await {
+                    if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
                         break 'pump reason;
                     }
                 }
@@ -572,7 +552,7 @@ async fn pump_loop(
                 let Some(command) = command else {
                     break 'pump PumpExitReason::CommandChannelClosed;
                 };
-                if let Some(reason) = handle_command(&mut inner, command).await {
+                if let Some(reason) = handle_command(&mut inner, command, closed.load(Ordering::Acquire)).await {
                     break 'pump reason;
                 }
             }
@@ -580,9 +560,11 @@ async fn pump_loop(
                 match message {
                     None => break 'pump PumpExitReason::UpstreamEof,
                     Some(Ok(message)) => {
-                        last_activity = Instant::now();
-                        record_activity(&lifecycle, last_activity);
-                        observe_inbound(connection_id, &mut pending_ping, &message);
+                        if !matches!(message, Message::Close(_)) {
+                            last_activity = Instant::now();
+                            record_activity(&lifecycle, last_activity);
+                            observe_inbound(connection_id, &mut pending_ping, &message);
+                        }
                         match message {
                             Message::Ping(payload) => {
                                 if let Err(error) = inner.send(Message::Pong(payload)).await {
@@ -605,6 +587,9 @@ async fn pump_loop(
                                     }),
                                     _ => None,
                                 };
+                                if let Some(reason) = &terminal_reason {
+                                    record_closed(&closed, &lifecycle, reason);
+                                }
                                 if let Some(reason) = enqueue_inbound(
                                     &tx_message,
                                     &mut pending_inbound,
@@ -625,6 +610,7 @@ async fn pump_loop(
                             message: err.to_string(),
                             metric_reason: transport_metric_reason(&err),
                         };
+                        record_closed(&closed, &lifecycle, &terminal_reason);
                         if let Some(reason) = enqueue_inbound(
                             &tx_message,
                             &mut pending_inbound,
@@ -665,15 +651,16 @@ async fn pump_loop(
         }
     };
 
-    closed.store(true, Ordering::Release);
+    record_closed(&closed, &lifecycle, &reason);
+    rx_command.close();
+    while let Ok(PumpCommand::Send { ack, .. }) = rx_command.try_recv() {
+        let _ = ack.send(Err(CodexWebSocketExchangeError::SendNotStarted));
+    }
     let observation = {
-        let closed_at = Instant::now();
-        let mut lifecycle = lifecycle
+        let lifecycle = lifecycle
             .lock()
             .expect("WebSocket pump lifecycle lock poisoned");
-        lifecycle.closed_at = Some(closed_at);
-        lifecycle.exit_reason = Some(reason.clone());
-        lifecycle.observation(connection_id, closed_at)
+        lifecycle.observation(connection_id, Instant::now())
     };
     log_pump_exit(
         connection_id,
@@ -714,15 +701,26 @@ fn enqueue_inbound(
     }
 }
 
-async fn handle_command(inner: &mut RawWsStream, command: PumpCommand) -> Option<PumpExitReason> {
+async fn handle_command(
+    inner: &mut RawWsStream,
+    command: PumpCommand,
+    closed: bool,
+) -> Option<PumpExitReason> {
     let PumpCommand::Send { message, ack } = command;
+    if ack.is_closed() {
+        return None;
+    }
+    if closed {
+        let _ = ack.send(Err(CodexWebSocketExchangeError::SendNotStarted));
+        return None;
+    }
     let is_close = matches!(message, Message::Close(_));
     let result = inner.send(message).await;
     let transport_error = result
         .as_ref()
         .err()
         .map(|error| (error.to_string(), transport_metric_reason(error)));
-    let _ = ack.send(result);
+    let _ = ack.send(result.map_err(CodexWebSocketExchangeError::Transport));
     match transport_error {
         Some((message, metric_reason)) => Some(PumpExitReason::OutboundTransportError {
             message,
@@ -754,6 +752,21 @@ fn record_activity(lifecycle: &Mutex<PumpLifecycleState>, observed_at: Instant) 
         .lock()
         .expect("WebSocket pump lifecycle lock poisoned")
         .last_activity = observed_at;
+}
+
+fn record_closed(
+    closed: &AtomicBool,
+    lifecycle: &Mutex<PumpLifecycleState>,
+    reason: &PumpExitReason,
+) {
+    let mut lifecycle = lifecycle
+        .lock()
+        .expect("WebSocket pump lifecycle lock poisoned");
+    if lifecycle.closed_at.is_none() {
+        lifecycle.closed_at = Some(Instant::now());
+        lifecycle.exit_reason = Some(reason.clone());
+    }
+    closed.store(true, Ordering::Release);
 }
 
 pub(crate) fn transport_metric_reason(error: &tungstenite::Error) -> &'static str {

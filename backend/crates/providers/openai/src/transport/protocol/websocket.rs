@@ -59,10 +59,18 @@ pub fn websocket_event_to_sse_frame(raw: &str) -> Option<String> {
 /// 复用已解析的 JSON，剥离内部帧并原样转发公开事件。
 pub(crate) fn websocket_event_frame(value: &Value, raw: &str) -> Option<String> {
     let event = websocket_event_type(value)?;
-    if is_internal_websocket_event(event) || event == "response.metadata" {
+    if is_internal_websocket_event(event) {
         return None;
     }
     Some(encode_sse_event(event, raw))
+}
+
+/// Keep configured prefetch thresholds in the original SSE byte units.
+pub(crate) fn websocket_prefetch_len(raw: &[u8]) -> usize {
+    std::str::from_utf8(raw)
+        .ok()
+        .and_then(websocket_event_to_sse_frame)
+        .map_or(raw.len(), |frame| frame.len())
 }
 
 pub(crate) fn websocket_event_type(value: &Value) -> Option<&str> {
@@ -105,20 +113,16 @@ fn is_websocket_metadata_event(event: Option<&str>) -> bool {
 pub(crate) const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str =
     "websocket_connection_limit_reached";
 
-/// 若首个可投递 SSE 帧是连接寿命限制错误，保留原始失败事实而不改变恢复分类。
+/// 若首个可投递 WS 消息是连接寿命限制错误，保留原始失败事实而不改变恢复分类。
 pub(crate) fn websocket_connection_limit_failure(frame: &[u8]) -> Option<ResponsesSseFailure> {
     let text = std::str::from_utf8(frame).ok()?;
-    let event = gateway_protocol::openai::sse::parse_sse_events(text)
-        .ok()?
-        .into_iter()
-        .next()?;
-    if event.event.as_deref() != Some("error") {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    if websocket_event_type(&value) != Some("error") {
         return None;
     }
-    let value = serde_json::from_str::<Value>(&event.data).ok()?;
     let code = value.pointer("/error/code").and_then(Value::as_str)?;
     (code == WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE).then(|| {
-        let mut failure = ResponsesSseFailure::from_raw_event("error", &event.data, &value);
+        let mut failure = ResponsesSseFailure::from_raw_event("error", text, &value);
         if value
             .pointer("/error/message")
             .and_then(Value::as_str)

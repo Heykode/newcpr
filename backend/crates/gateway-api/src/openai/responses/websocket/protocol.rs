@@ -29,40 +29,11 @@ pub fn decode_response_create_with_context(
         .map(|(request, _, _)| request)
 }
 
-pub(super) fn decode_response_interrupt(
-    payload: &str,
-) -> Result<Option<String>, ResponseCreateFrameError> {
-    #[derive(serde::Deserialize)]
-    struct FrameType {
-        #[serde(rename = "type")]
-        message_type: Option<String>,
-    }
-    // Leave queued create frames to their normal serial validation boundary.
-    let Ok(frame) = serde_json::from_str::<FrameType>(payload) else {
-        return Ok(None);
-    };
-    if frame.message_type.as_deref() != Some("response.interrupt") {
-        return Ok(None);
-    }
-    let value: Value =
-        serde_json::from_str(payload).map_err(|_| ResponseCreateFrameError::InvalidJson)?;
-    if value.get("mode").and_then(Value::as_str) != Some("discard_partial_items") {
-        return Err(ResponseCreateFrameError::Request(
-            RequestDecodeError::InvalidValue {
-                field: "mode".to_owned(),
-            },
-        ));
-    }
-    let id = value
-        .get("response_id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| {
-            ResponseCreateFrameError::Request(RequestDecodeError::InvalidValue {
-                field: "response_id".to_owned(),
-            })
-        })?;
-    Ok(Some(id.to_owned()))
+pub(super) fn is_response_create(payload: &str) -> bool {
+    serde_json::from_str::<Value>(payload)
+        .ok()
+        .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned))
+        .is_some_and(|kind| kind == "response.create")
 }
 
 pub(super) fn decode_response_create_for_window(

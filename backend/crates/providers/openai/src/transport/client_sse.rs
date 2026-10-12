@@ -991,7 +991,24 @@ impl CodexBackendClient {
                 .await
                 .map_err(websocket_exchange_error_to_client_error)?;
                 let mut precommit_started_at = None;
-                if requirement.allows_connection_restart() {
+                if requirement.allows_connection_restart()
+                    && request.responses_lite.as_deref() == Some("true")
+                    && request.downstream_websocket_connection_id.is_some()
+                {
+                    let mut boundary_reached = false;
+                    exchange.body = Box::pin(exchange.body.map(move |frame| {
+                        let frame = frame?;
+                        if !boundary_reached && !is_websocket_lifecycle_prelude(&frame) {
+                            boundary_reached = true;
+                            if let Some(failure) = websocket_connection_limit_failure(&frame) {
+                                return Err(CodexWebSocketExchangeError::ConnectionLimitReached(
+                                    Box::new(failure),
+                                ));
+                            }
+                        }
+                        Ok(frame)
+                    }));
+                } else if requirement.allows_connection_restart() {
                     // Zero releases the first complete event, but an immediate
                     // connection-limit rejection still precedes delivery.
                     match await_websocket_delivery_boundary(&mut exchange, stream_prefetch_bytes)
@@ -1016,7 +1033,12 @@ impl CodexBackendClient {
                     body: Box::pin(
                         exchange
                             .body
-                            .map_err(post_send_ambiguous)
+                            .map_err(|error| match error {
+                                error @ CodexWebSocketExchangeError::ConnectionLimitReached(_) => {
+                                    error
+                                }
+                                error => post_send_ambiguous(error),
+                            })
                             .map_err(websocket_exchange_error_to_client_error),
                     ),
                     precommit_started_at,
@@ -1149,7 +1171,9 @@ async fn await_websocket_delivery_boundary(
                 } else {
                     websocket_connection_limit_failure(&frame)
                 };
-                prefetched_bytes = prefetched_bytes.saturating_add(frame.len() as u64);
+                prefetched_bytes = prefetched_bytes.saturating_add(
+                    super::protocol::websocket::websocket_prefetch_len(&frame) as u64,
+                );
                 prelude.push(frame);
                 if let Some(failure) = connection_limit_failure {
                     break DeliveryBoundary::ConnectionLimitReached(Box::new(failure));
@@ -1177,8 +1201,14 @@ async fn await_websocket_delivery_boundary(
 }
 
 fn is_websocket_lifecycle_prelude(frame: &[u8]) -> bool {
-    frame.starts_with(b"event: response.created\n")
-        || frame.starts_with(b"event: response.in_progress\n")
+    serde_json::from_slice::<serde_json::Value>(frame)
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.get("type").and_then(serde_json::Value::as_str),
+                Some("response.created" | "response.in_progress")
+            )
+        })
 }
 
 async fn read_model_catalog_body(response: ReqwestResponse) -> CodexClientResult<Vec<u8>> {

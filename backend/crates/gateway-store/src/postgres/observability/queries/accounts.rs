@@ -3,7 +3,7 @@
 use super::super::*;
 
 pub(crate) async fn provider_account_usage(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     query: ProviderAccountUsageQuery,
 ) -> StoreResult<Vec<ProviderAccountUsageObservation>> {
     if let Some(account_ids) = &query.account_ids {
@@ -88,10 +88,11 @@ pub(crate) async fn provider_account_usage(
           order by selected.sort_position, model_grouping desc, currency_grouping desc,
                    model nulls last, cost_currency nulls last",
     );
-    let rows =
-        statement.build().fetch_all(pool).await.map_err(|error| {
-            postgres_unavailable("load provider account usage").with_source(error)
-        })?;
+    let rows = statement
+        .build()
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(|error| postgres_unavailable("load provider account usage").with_source(error))?;
 
     let mut observations = Vec::with_capacity(usize::from(query.limit));
     let mut costs = HashMap::<String, Vec<CurrencyCostTotal>>::new();
@@ -139,7 +140,8 @@ pub(crate) async fn provider_account_usage(
         .map(|item| item.account_id.clone())
         .collect::<Vec<_>>();
     let mut request_buckets = if let Some(bucket_duration) = query.request_bucket_duration {
-        provider_account_request_buckets(pool, query.range, &account_ids, bucket_duration).await?
+        provider_account_request_buckets(connection, query.range, &account_ids, bucket_duration)
+            .await?
     } else {
         HashMap::new()
     };
@@ -165,7 +167,7 @@ pub(crate) async fn provider_account_usage(
 }
 
 pub(crate) async fn provider_account_request_buckets(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     account_ids: &[String],
     bucket_duration: TimeDelta,
@@ -198,7 +200,7 @@ pub(crate) async fn provider_account_request_buckets(
         .bind(range.start)
         .bind(account_ids)
         .bind(range.end)
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|error| {
             postgres_unavailable("load provider account request timeline").with_source(error)

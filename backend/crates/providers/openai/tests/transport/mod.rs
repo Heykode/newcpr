@@ -10,7 +10,7 @@ use std::{
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use gateway_protocol::openai::events::{
-    TokenUsage, extract_sse_usage, rate_limits_to_header_pairs,
+    TokenUsage, extract_sse_usage, extract_usage, rate_limits_to_header_pairs,
 };
 use provider_openai::transport::profile::{
     CodexBundledReleaseProfile, CodexWireProfile, CodexWireProfileState,
@@ -271,6 +271,8 @@ async fn collect_backend_response(
         connection_local_continuation,
     } = response;
     let mut body_bytes = Vec::new();
+    let mut websocket_usage = None;
+    let mut websocket_completed_usage = None;
     while let Some(chunk) = body.next().await {
         let chunk = chunk?;
         transport_metrics.first_event_ms.get_or_insert_with(|| {
@@ -278,6 +280,19 @@ async fn collect_backend_response(
                 .unwrap_or(i64::MAX)
                 .max(1)
         });
+        // WS chunks are complete messages; HTTP chunks can split SSE frames.
+        if transport == CodexBackendTransport::WebSocket
+            && let Ok(value) = serde_json::from_slice::<Value>(&chunk)
+            && let Some(usage) = value
+                .get("response")
+                .and_then(extract_usage)
+                .or_else(|| extract_usage(&value))
+        {
+            websocket_usage = Some(usage);
+            if value["type"] == "response.completed" {
+                websocket_completed_usage = Some(usage);
+            }
+        }
         body_bytes.extend_from_slice(&chunk);
     }
     if let Some(updates) = rate_limit_updates {
@@ -292,7 +307,11 @@ async fn collect_backend_response(
         reported_model = updates.reported_model.clone().or(reported_model);
     }
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
-    let usage = extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?;
+    let usage = if transport == CodexBackendTransport::WebSocket {
+        websocket_completed_usage.or(websocket_usage)
+    } else {
+        extract_sse_usage(&body).map_err(CodexClientError::InvalidSse)?
+    };
     Ok(CollectedBackendResponse {
         body,
         transport,

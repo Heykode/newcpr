@@ -36,6 +36,9 @@ impl CodexProvider {
                 response_origin: self.compact_url.clone(),
                 endpoint_path: CODEX_RESPONSES_COMPACT_PATH,
                 body,
+                passthrough_headers: crate::transport::request::decode_passthrough_headers(
+                    compact.payload().context(),
+                ),
                 image_turn_id: None,
                 turn_metadata: None,
                 session_affinity,

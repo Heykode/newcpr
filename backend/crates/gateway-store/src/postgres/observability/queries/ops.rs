@@ -5,7 +5,7 @@ use super::super::*;
 const REQUEST_ERROR_SELECT: &str = "select 'model_request'::text as source,
        mr.id as event_id, mr.id as request_id,
        nullif(mr.attempt_count, 0) as attempt_index,
-       mr.client_api_key_ref, ck.name as client_api_key_name,
+       mr.client_api_key_ref, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name,
        'model_request'::text as component, mr.operation,
        mr.protocol, mr.client_transport, mr.requested_model_id, mr.service_tier,
        mr.endpoint, mr.provider_kind, mr.provider_account_ref,
@@ -41,7 +41,7 @@ where true";
 
 const OPS_EVENT_SELECT: &str = "select 'ops_event'::text as source,
        oe.id as event_id, oe.model_request_id as request_id, oe.attempt_index,
-       mr.client_api_key_ref, ck.name as client_api_key_name, oe.component, oe.operation,
+       mr.client_api_key_ref, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, oe.component, oe.operation,
        mr.protocol, mr.client_transport, mr.requested_model_id, mr.service_tier,
        mr.endpoint, oe.provider_kind, oe.provider_account_ref,
        oe.provider_account_name_snapshot as provider_account_name,
@@ -76,11 +76,11 @@ left join client_api_keys ck on ck.id = mr.client_api_key_ref
 where true";
 
 pub(crate) async fn list_ops_errors(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     query: OpsErrorQuery,
 ) -> StoreResult<OpsErrorPage> {
     query.filter.validate()?;
-    let total = count_ops_errors(pool, query.range, &query.filter).await?;
+    let total = count_ops_errors(connection, query.range, &query.filter).await?;
     let offset = observability_page_offset(query.current_page, query.page_size)?;
     let mut statement = QueryBuilder::<Postgres>::new("select * from (");
     statement.push(REQUEST_ERROR_SELECT);
@@ -94,7 +94,7 @@ pub(crate) async fn list_ops_errors(
     statement.push_bind(offset);
     let rows = statement
         .build()
-        .fetch_all(pool)
+        .fetch_all(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("list ops errors").with_source(error))?;
     let items = rows
@@ -110,7 +110,7 @@ pub(crate) async fn list_ops_errors(
 }
 
 pub(crate) async fn count_ops_errors(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     filter: &OpsErrorFilter,
 ) -> StoreResult<u64> {
@@ -125,7 +125,7 @@ pub(crate) async fn count_ops_errors(
     statement.push(") counts");
     let total = statement
         .build_query_scalar::<i64>()
-        .fetch_one(pool)
+        .fetch_one(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("count ops errors").with_source(error))?;
     to_u64(total)
@@ -312,6 +312,8 @@ fn push_error_search(
     }
     statement.push(format!(" or exists (select 1 from provider_accounts pa where pa.id = {owner}.provider_account_ref and concat_ws(' ', pa.name, pa.email, pa.custom_name) ilike "));
     statement.push_bind(pattern.clone()).push(" escape '\\')");
+    statement.push(" or mr.client_api_key_name_snapshot ilike ");
+    statement.push_bind(pattern.clone()).push(" escape '\\'");
     statement.push(" or exists (select 1 from client_api_keys ck where ck.id = mr.client_api_key_ref and (ck.name ilike ");
     statement
         .push_bind(pattern.clone())

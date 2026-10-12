@@ -2,8 +2,10 @@
 
 ## 1. Scope
 
-Applies to the local adaptation of upstream #298, #291, #286, #287, #295
-and the verified gaps in #297, #225 and #224. Preserve the local Excel,
+Applies to the local adaptation of upstream #298, #291, #286, #287, #295,
+the verified gaps in #297, #225 and #224, and the approved non-plugin
+v3.24.1 changes pinned at `eea16f5275cc20c8893ee9b568301152f329089d`.
+Preserve the local Excel,
 QX identity, finite concurrency, Redis wait ownership and transport policies.
 This contract does not authorize production changes or wholesale upstream merges.
 
@@ -15,6 +17,9 @@ This contract does not authorize production changes or wholesale upstream merges
   JSONB object; no schema migration is needed.
 - `ResponseControl::activate` returns an `ActiveResponseInterrupt` owner.
   `interrupt(response_id)` targets only that live owner.
+- `ResponseControl::bind` stores a weak reference to the existing upstream WS
+  pump. `ResponseControlBinding::send` uses the captured connection; controls
+  never select an account or start another execution.
 - `ProviderModelCapabilities::with_catalog_accounts` restricts discovery
   visibility; the runtime snapshot carries the source map across cached
   catalog publication.
@@ -52,13 +57,29 @@ Account switching strips top-level `client_metadata.parent_response_id`;
 nested opaque metadata stays intact. Ingress and Provider both reject
 `x-openai-account-routing-override` and `x-openai-fedramp`.
 
-WS interruption accepts only `mode: discard_partial_items` and the exact
-active response ID. It uses the current execution's original socket, coalesces
-duplicates, retires on terminal/cancellation, and allows a continuation after
-`response.incomplete` with reason `interrupted`. While processing controls,
+WS control messages retain their raw text. Unknown modes, unknown/retired IDs
+and non-JSON controls go transparently to the existing socket, where upstream
+owns validation. They must not start inference or bypass queued-create admission.
+For `mode: discard_partial_items`, retain interruption intent only for IDs from
+`response.created` actually delivered during the current logical execution.
+Coalesce duplicates until the response ID or socket binding changes; a replay-safe
+pre-output retry retargets retained intent to the newly delivered ID. Clear the
+logical execution's intent on terminal/cancellation. Controls after terminal may
+still reach the original socket without recreating a request. A continuation after
+`response.incomplete` with reason `interrupted` remains valid. While processing controls,
 pin the same `ExecutionSession::next_event` future: settlement is not
 cancel-safe. Deferred create frames and incoming frames share one bounded
 32-slot budget.
+
+Only explicitly marked replaceable WS preludes (`response.created`, empty
+`response.in_progress` and protocol metadata) may precede recovery. Unknown
+events, semantic output and terminal failures reach the replay barrier. A prelude
+marker is not replay authorization: preserve provider replay proof, attempt limits,
+hard continuation owners and the prohibition on `UpstreamSendState::Ambiguous`.
+HTTP delivery keeps its original commit boundary and configured prefetch bytes.
+Keep raw WS text separate from raw SSE; never infer success from opaque frames.
+Filter protocol metadata headers in active, settlement and idle phases, retaining
+business fields. Do not expose `codex.rate_limits` to downstream clients.
 
 Oversized new chains may use HTTP under the existing fallback settings.
 Oversized exact continuations fail before sending. A downstream WS delta
@@ -69,8 +90,10 @@ new chain. Keep the separate Excel replay contract.
 
 | Condition | Required result |
 | --- | --- |
-| Wrong/retired response ID or invalid interrupt mode | 400; do not abort the active response |
-| Duplicate valid interrupt | At most one upstream control frame |
+| Wrong/retired response ID, unknown mode or opaque control | Forward unchanged on the existing socket; upstream validation; no extra admission |
+| Duplicate valid active interrupt | At most one control per response ID/socket binding |
+| Replay-safe pre-output retry changes response ID/socket | Retained interrupt follows the newly delivered ID once |
+| Semantic/unknown output, terminal failure or ambiguous send | No recovery justified by a replaceable prelude |
 | Smart weights invalid/all zero | Reject save; preserve old settings |
 | Switchback off | Original preferred account remains preferred |
 | Switchback on with hard owner | Original owner remains mandatory |
@@ -98,7 +121,11 @@ new chain. Keep the separate Excel replay contract.
   seed followed by rejected delta, disabled refresh, bounded snapshot races,
   finite capacity and both Smart selection paths.
 - API: control frames must not recreate the pending execution future;
-  queued creates, overload, disconnect and settlement still work.
+  queued creates, overload, disconnect and settlement still work. Cover duplicate
+  active interrupts, retired IDs, transparent unknown/non-JSON controls, retry
+  retargeting, raw business messages and all metadata-delivery phases over real WS.
+- Core/Provider: retain the existing ambiguous-send regression without weakening
+  it; prove semantic and unknown output block recovery after a replaceable prelude.
 - Store: real isolated PostgreSQL credential CAS/clocks and finalization;
   real Redis password authentication and a named ACL user with default disabled.
 - UI: save/reload/reset and responsive controls with all API/upstream traffic
@@ -113,6 +140,12 @@ Wrong: recreate `next_event()` for each interrupt/control frame.
 
 Correct: pin it once and process controls alongside that future until it
 resolves, preserving exactly-once settlement and response ownership.
+
+Wrong: reset the interrupt's sent flag on every duplicate, or let a prelude
+marker authorize retry of an ambiguous send.
+
+Correct: reset only when the delivered response ID/socket binding changes;
+check send certainty and explicit replay proof independently of the prelude.
 
 Wrong: acquire capacity before verifying a stale account snapshot.
 

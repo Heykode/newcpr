@@ -203,11 +203,17 @@ async fn compact_route_captures_model_context_metadata_and_commits_raw_response_
     assert_eq!(captured[0].public_model, "model-a");
     assert_eq!(captured[0].client_key, "key_api_test");
     assert_eq!(captured[0].body.as_ref(), raw);
-    assert_eq!(
-        captured[0].context,
+    super::assert_standalone_context(
+        &captured[0].context,
         json!({
             "session_id":"root","thread_id":"child","turn_metadata":turn_metadata,
-        })
+        }),
+        &[
+            ("content-type", "application/json"),
+            ("session-id", "root"),
+            ("thread-id", "child"),
+            ("x-codex-turn-metadata", turn_metadata),
+        ],
     );
     assert_eq!(captured[0].metadata.protocol, "openai");
     assert_eq!(captured[0].metadata.endpoint, "/v1/responses/compact");

@@ -104,6 +104,7 @@ pub(super) struct PreCommitClientEvents {
     replay_grace_started_at: Option<Instant>,
     upstream_grace_started_at: Option<Instant>,
     committed: bool,
+    replayable_prelude: bool,
     max_prefetch_bytes: u64,
     trace: TraceContext,
 }
@@ -113,6 +114,7 @@ pub(super) struct PreCommitClientEvents {
 pub(super) enum PreCommitReleaseReason {
     Disabled,
     SemanticOutput,
+    NonReplayableEvent,
     Terminal,
     ByteLimit,
     GraceTimeout,
@@ -127,6 +129,7 @@ impl PreCommitClientEvents {
             replay_grace_started_at: None,
             upstream_grace_started_at: None,
             committed: false,
+            replayable_prelude: false,
             max_prefetch_bytes,
             trace,
         }
@@ -134,6 +137,11 @@ impl PreCommitClientEvents {
 
     pub(super) fn with_upstream_grace_started_at(mut self, started_at: Option<Instant>) -> Self {
         self.upstream_grace_started_at = started_at;
+        self
+    }
+
+    pub(super) fn with_replayable_prelude(mut self, enabled: bool) -> Self {
+        self.replayable_prelude = enabled;
         self
     }
 
@@ -159,6 +167,16 @@ impl PreCommitClientEvents {
         }
         if completed {
             return self.commit_pending(PreCommitReleaseReason::Terminal);
+        }
+        if self.replayable_prelude {
+            if !self.pending.iter().all(is_replaceable_prelude) {
+                return self.commit_pending(PreCommitReleaseReason::NonReplayableEvent);
+            }
+            self.prefetched_bytes = 0;
+            return std::mem::take(&mut self.pending)
+                .into_iter()
+                .map(ProviderEvent::with_replayable_prelude)
+                .collect();
         }
         if self.max_prefetch_bytes == 0 {
             // 分片尚未解析出客户端事件时不伪造提交；完整事件不再额外等待。
@@ -187,12 +205,11 @@ impl PreCommitClientEvents {
         timing_signals: ResponseEventSignals,
         completed: bool,
     ) -> Vec<ProviderEvent> {
-        let events = self.stage(incoming, timing_signals, completed);
-        if self.committed {
-            events
-        } else {
-            self.commit_pending(PreCommitReleaseReason::Eof)
+        let mut events = self.stage(incoming, timing_signals, completed);
+        if !self.committed {
+            events.extend(self.commit_pending(PreCommitReleaseReason::Eof));
         }
+        events
     }
 
     pub(super) fn commit(&mut self, incoming: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
@@ -234,6 +251,19 @@ impl PreCommitClientEvents {
         self.replay_grace_started_at = None;
         std::mem::take(&mut self.pending)
     }
+}
+
+fn is_replaceable_prelude(event: &ProviderEvent) -> bool {
+    event
+        .wire_event()
+        .is_some_and(|wire| match wire.event_type() {
+            Some("codex.response.metadata" | "codex.rate_limits") => true,
+            Some("response.created" | "response.in_progress") => wire
+                .data()
+                .pointer("/response/output")
+                .is_none_or(|output| output.as_array().is_some_and(Vec::is_empty)),
+            _ => false,
+        })
 }
 
 #[derive(Clone, Copy)]
@@ -569,6 +599,7 @@ pub(super) enum WebSocketFailurePolicy {
 
 pub(super) struct WebSocketRecoveryContext<'a> {
     pub(super) policy: WebSocketFailurePolicy,
+    pub(super) replay_boundary: ReplayBoundary,
     pub(super) requirement: TransportRequirement,
     pub(super) allow_http_fallback: bool,
     pub(super) retry_count: u32,
@@ -660,30 +691,11 @@ pub(super) fn apply_websocket_recovery_policy(
             .session_transport_recovery
             .record_websocket_failure(key, context.max_retries)
     });
-    let send_state = failure.error.send_state();
-    let post_send = matches!(
-        send_state,
-        UpstreamSendState::Sent | UpstreamSendState::Ambiguous
-    );
-    if send_state == UpstreamSendState::Ambiguous || (post_send && !failure.error.replay_is_safe())
+    if matches!(context.replay_boundary, ReplayBoundary::AfterSemanticOutput)
+        || failure.error.send_state() == UpstreamSendState::Ambiguous
+        || (failure.error.send_state() == UpstreamSendState::Sent
+            && !failure.error.replay_is_safe())
     {
-        tracing::warn!(
-            request_id = context.request_id,
-            attempt_index = context.attempt_index,
-            account_id = context.account_id,
-            websocket_failure_kind = failure.error.kind().as_str(),
-            websocket_failure_code = failure
-                .error
-                .upstream_code()
-                .map_or("", OpaqueUpstreamValue::as_str),
-            upstream_send_state = ?send_state,
-            transport_requirement = context.requirement.as_str(),
-            continuation_recovery_action = "client_replay_required",
-            session_http_fallback = session_budget_exhausted,
-            session_affinity_present = context.session_affinity_key.is_some(),
-            session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
-            "OpenAI upstream WebSocket failed after payload send; proxy replay was suppressed"
-        );
         return;
     }
 
@@ -1238,6 +1250,7 @@ fn websocket_diagnostic(error: &CodexWebSocketExchangeError) -> ProviderDiagnost
         CodexWebSocketExchangeError::OriginHalfOpenBusy => ("connect", "origin_half_open_busy"),
         CodexWebSocketExchangeError::InvalidRequest(_) => ("prepare", "invalid_request"),
         CodexWebSocketExchangeError::SendTimeout { .. } => ("send", "send_timeout"),
+        CodexWebSocketExchangeError::SendNotStarted => ("send", "send_not_started"),
         CodexWebSocketExchangeError::ReceiveIdleTimeout { .. } => {
             ("receive", "receive_idle_timeout")
         }
@@ -1326,6 +1339,9 @@ fn websocket_diagnostic_message(error: &CodexWebSocketExchangeError) -> Provider
         }
         CodexWebSocketExchangeError::SharedConnectFailed => {
             "OpenAI shared WebSocket connection failed before payload send".to_owned()
+        }
+        CodexWebSocketExchangeError::SendNotStarted => {
+            "OpenAI WebSocket connection closed before payload send started".to_owned()
         }
         CodexWebSocketExchangeError::SendTimeout { timeout } => {
             format!("OpenAI WebSocket payload send timed out after {timeout:?}")
@@ -1643,6 +1659,7 @@ pub(super) fn websocket_send_state(error: &CodexWebSocketExchangeError) -> Upstr
         | CodexWebSocketExchangeError::OriginCircuitOpen
         | CodexWebSocketExchangeError::OriginHalfOpenBusy
         | CodexWebSocketExchangeError::SharedConnectFailed
+        | CodexWebSocketExchangeError::SendNotStarted
         | CodexWebSocketExchangeError::ContinuationUnavailable { .. } => UpstreamSendState::NotSent,
         CodexWebSocketExchangeError::Upstream(_)
         | CodexWebSocketExchangeError::ConnectionLimitReached(_)
@@ -1686,6 +1703,7 @@ pub(super) fn websocket_error_kind(error: &CodexWebSocketExchangeError) -> Provi
         CodexWebSocketExchangeError::Upstream(_) => ProviderErrorKind::Unavailable,
         CodexWebSocketExchangeError::ConnectionLimitReached(_) => ProviderErrorKind::RateLimited,
         CodexWebSocketExchangeError::Transport(_)
+        | CodexWebSocketExchangeError::SendNotStarted
         | CodexWebSocketExchangeError::Connect(_)
         | CodexWebSocketExchangeError::PostSendAmbiguous { .. }
         | CodexWebSocketExchangeError::ClosedBeforeTerminal(_)

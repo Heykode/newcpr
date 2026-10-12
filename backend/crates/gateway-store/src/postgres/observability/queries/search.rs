@@ -4,7 +4,7 @@ use super::super::*;
 use admin_observability::RequestSearchFilter;
 
 pub(crate) async fn account_filter_options(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     range: ObservabilityRange,
     search: &str,
 ) -> StoreResult<Vec<admin_observability::AccountFilterOption>> {
@@ -47,7 +47,7 @@ pub(crate) async fn account_filter_options(
     .bind(range.end)
     .bind(format!("%{}", literal_prefix_pattern(search)))
     .bind(search)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(|_| postgres_unavailable("account filter options"))?;
     rows.iter()

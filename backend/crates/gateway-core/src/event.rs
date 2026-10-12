@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use serde_json::Value;
@@ -201,6 +202,7 @@ pub struct ProtocolWireEvent {
     data: Value,
     has_json_data: bool,
     raw_sse_frame: Option<Bytes>,
+    raw_websocket_message: Option<Arc<str>>,
     raw_json_body: Option<Bytes>,
     raw_http_body: Option<Bytes>,
     sse_id: Option<String>,
@@ -241,6 +243,7 @@ impl ProtocolWireEvent {
             data,
             has_json_data: true,
             raw_sse_frame: None,
+            raw_websocket_message: None,
             raw_json_body: None,
             raw_http_body: None,
             sse_id,
@@ -289,6 +292,7 @@ impl ProtocolWireEvent {
             data: Value::Null,
             has_json_data: false,
             raw_sse_frame: Some(raw_sse_frame),
+            raw_websocket_message: None,
             raw_json_body: None,
             raw_http_body: None,
             sse_id: None,
@@ -316,6 +320,7 @@ impl ProtocolWireEvent {
             has_json_data: false,
             raw_sse_frame: None,
             raw_json_body: Some(raw_json_body),
+            raw_websocket_message: None,
             raw_http_body: None,
             sse_id: None,
             sse_retry: None,
@@ -337,9 +342,31 @@ impl ProtocolWireEvent {
             raw_sse_frame: None,
             raw_json_body: None,
             raw_http_body: Some(raw_http_body),
+            raw_websocket_message: None,
             sse_id: None,
             sse_retry: None,
         })
+    }
+
+    /// Preserve an opaque WebSocket message without inferring canonical facts.
+    pub fn raw_websocket(
+        protocol: impl Into<String>,
+        message: impl Into<Arc<str>>,
+    ) -> Result<Self, IdentifierError> {
+        let mut wire = Self::json(protocol, None, Value::Null)?;
+        wire.has_json_data = false;
+        Ok(wire.with_raw_websocket_message(message))
+    }
+
+    #[must_use]
+    pub fn with_raw_websocket_message(mut self, message: impl Into<Arc<str>>) -> Self {
+        self.raw_websocket_message = Some(message.into());
+        self
+    }
+
+    #[must_use]
+    pub fn raw_websocket_message(&self) -> Option<&str> {
+        self.raw_websocket_message.as_deref()
     }
 
     /// 返回客户端协议名称。
@@ -421,6 +448,10 @@ impl fmt::Debug for ProtocolWireEvent {
             .field("event_type", &self.event_type)
             .field("has_json_data", &self.has_json_data)
             .field("has_raw_sse_frame", &self.raw_sse_frame.is_some())
+            .field(
+                "has_raw_websocket_message",
+                &self.raw_websocket_message.is_some(),
+            )
             .field("has_raw_json_body", &self.raw_json_body.is_some())
             .field("has_raw_http_body", &self.raw_http_body.is_some())
             .field("has_sse_id", &self.sse_id.is_some())
@@ -803,6 +834,7 @@ pub struct ProviderEvent {
     observation: Option<Box<ProviderResponseObservation>>,
     session_update: Option<Box<ProviderSessionState>>,
     metering: Option<Box<ProviderMeteringCheckpoint>>,
+    replayable_prelude: bool,
 }
 
 impl ProviderEvent {
@@ -815,6 +847,7 @@ impl ProviderEvent {
             observation: None,
             session_update: None,
             metering: None,
+            replayable_prelude: false,
         }
     }
 
@@ -827,6 +860,7 @@ impl ProviderEvent {
             observation: None,
             session_update: None,
             metering: None,
+            replayable_prelude: false,
         }
     }
 
@@ -839,6 +873,7 @@ impl ProviderEvent {
             observation: None,
             session_update: None,
             metering: None,
+            replayable_prelude: false,
         }
     }
 
@@ -851,6 +886,7 @@ impl ProviderEvent {
             observation: Some(Box::new(observation)),
             session_update: None,
             metering: None,
+            replayable_prelude: false,
         }
     }
 
@@ -863,7 +899,20 @@ impl ProviderEvent {
             observation: None,
             session_update: None,
             metering: Some(Box::new(checkpoint)),
+            replayable_prelude: false,
         }
+    }
+
+    /// Provider proof of a replaceable prelude; does not grant retry permission.
+    #[must_use]
+    pub fn with_replayable_prelude(mut self) -> Self {
+        self.replayable_prelude = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn is_replayable_prelude(&self) -> bool {
+        self.replayable_prelude
     }
 
     #[must_use]

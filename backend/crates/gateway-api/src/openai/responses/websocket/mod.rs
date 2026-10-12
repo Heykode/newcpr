@@ -2,6 +2,7 @@
 
 pub mod connection;
 mod forward;
+mod interrupt;
 mod protocol;
 
 use std::{
@@ -36,8 +37,8 @@ use crate::{
 use super::{http::request_client_context, request::OpenAiRequestHeaders};
 use connection::{ConnectionEvent, FramePhase, ResponsesWebSocketConnection, WriteContext};
 use forward::{
-    ConnectionReplaySnapshot, ForwardOutcome, forward_execution, send_gateway_error,
-    send_protocol_error,
+    ConnectionReplaySnapshot, ForwardOutcome, forward_control_event, forward_execution,
+    send_control, send_gateway_error, send_protocol_error,
 };
 use protocol::connection_limit_event;
 pub use protocol::{ResponseCreateFrameError, decode_response_create_with_context};
@@ -160,9 +161,19 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
     let mut connection = ResponsesWebSocketConnection::new(socket, connection_id, cancellation);
     let mut request_count = 0_u64;
     let mut replay = ConnectionReplaySnapshot::default();
+    let mut control = gateway_core::engine::response_control::ResponseControl::default();
 
     loop {
-        let Some(event) = connection.next_event().await else {
+        let event = tokio::select! {
+            event = connection.next_event() => event,
+            event = control.receive() => {
+                if forward_control_event(&mut connection, &control, event).await == ForwardOutcome::Disconnect {
+                    break;
+                }
+                continue;
+            }
+        };
+        let Some(event) = event else {
             break;
         };
         let payload = match event {
@@ -180,6 +191,15 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
         if connection.is_expired() {
             expire_connection(&mut connection).await;
             break;
+        }
+        if !protocol::is_response_create(&payload) {
+            let request_id = Arc::<str>::from(service.next_request_id());
+            if send_control(&mut connection, &control, &payload, &request_id).await
+                == ForwardOutcome::Disconnect
+            {
+                break;
+            }
+            continue;
         }
         request_count = request_count.saturating_add(1);
         let correlation_id = Arc::<str>::from(service.next_request_id());
@@ -255,6 +275,7 @@ async fn serve_responses_websocket(socket: WebSocket, session: ResponsesWebSocke
             .capture("client.request.body", payload.as_bytes());
         drop(payload);
 
+        control = started.session.response_control().unwrap_or_default();
         if forward_execution(&mut connection, started, &mut replay).await
             == ForwardOutcome::Disconnect
         {

@@ -405,7 +405,7 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
             if let Some(model) = metadata.response_metadata.effective_model.as_deref() {
                 response_metadata_updates.lock().await.reported_model = Some(model.to_owned());
             }
-            let (frame, terminal) = match reduced.action {
+            let terminal = match reduced.action {
                 ExchangeAction::RateLimits(rate_limits) => {
                     rate_limit_updates.lock().await.push(
                         crate::transport::CodexRateLimitObservation {
@@ -415,13 +415,17 @@ async fn forward_websocket_response_stream(state: WebSocketStreamForwardState) {
                     );
                     continue;
                 }
-                ExchangeAction::Forward { frame, terminal } => (frame, terminal),
+                ExchangeAction::Forward { terminal } => terminal,
                 ExchangeAction::Ignore => continue,
             };
             if terminal.is_some() {
                 drop(active_interrupt.take());
             }
-            if tx.send(Ok(Bytes::from(frame))).await.is_err() {
+            if tx
+                .send(Ok(Bytes::copy_from_slice(raw.as_bytes())))
+                .await
+                .is_err()
+            {
                 drop(active_interrupt.take());
                 trace.record(
                     "upstream.forward.failed",

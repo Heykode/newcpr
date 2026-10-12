@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use bytes::Bytes;
-use reqwest::header::{CONTENT_TYPE, HeaderValue};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
 use super::{
     client::{
@@ -14,7 +14,7 @@ use super::{
     },
     diagnostics::CodexUpstreamSendPhase,
     endpoints::endpoint_url,
-    headers::insert_optional_protocol_header,
+    headers::{append_passthrough_headers, insert_optional_protocol_header},
     response_meta,
 };
 
@@ -25,10 +25,15 @@ impl CodexBackendClient {
         endpoint_path: &'static str,
         body: Bytes,
         image_turn_id: Option<&str>,
+        passthrough_headers: &HeaderMap,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexBackendJsonResponse> {
         let profile = self.profile.snapshot();
         let mut headers = self.model_request_headers(&profile, context)?;
+        append_passthrough_headers(&mut headers, passthrough_headers);
+        // Standalone endpoints have no proven owner for client continuation identity.
+        headers.remove("x-codex-turn-state");
+        headers.remove("x-codex-turn-metadata");
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         insert_optional_protocol_header(&mut headers, "x-codex-image-turn-id", image_turn_id);
         insert_optional_protocol_header(

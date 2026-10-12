@@ -259,6 +259,8 @@ function popoverArrowPosition(options: {
 
 const updatePopoverPositionThrottled = useThrottleFn(updatePopoverPosition, 32, true)
 
+defineExpose({ updatePosition: updatePopoverPosition })
+
 async function openPopover() {
   if (props.disabled || open.value)
     return

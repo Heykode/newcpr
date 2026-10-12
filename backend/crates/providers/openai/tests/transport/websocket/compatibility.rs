@@ -299,7 +299,7 @@ async fn recovery_size_budget_accepts_the_boundary_and_rejects_larger_messages()
 }
 
 #[tokio::test]
-async fn ordinary_unknown_json_keeps_existing_reducer_compatibility() {
+async fn ordinary_unknown_json_is_preserved_with_terminal_in_order() {
     let terminal = completed_websocket_response("resp_unknown_compat", 2, 1);
     for streaming in [false, true] {
         for raw in [
@@ -310,17 +310,7 @@ async fn ordinary_unknown_json_keeps_existing_reducer_compatibility() {
             let body = receive_messages(vec![raw.to_owned(), terminal.clone()], streaming)
                 .await
                 .unwrap();
-            assert!(body.contains(&terminal));
-            let forwarded = raw.contains("future.event");
-            if forwarded {
-                assert_eq!(body.matches(raw).count(), 1);
-            }
-            assert_eq!(
-                body.lines()
-                    .filter(|line| line.starts_with("event:"))
-                    .count(),
-                if forwarded { 2 } else { 1 }
-            );
+            assert_eq!(body, format!("{raw}{terminal}"));
         }
     }
 }

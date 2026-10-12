@@ -160,19 +160,23 @@ impl PgAdminAccountStore {
             .collect::<Vec<_>>();
         let rows = self
             .query_budget
-            .run("load account usage windows", async {
-                sqlx::query(sqlx::AssertSqlSafe(account_usage_by_windows_sql()))
-                    .bind(account_ids)
-                    .bind(keys)
-                    .bind(starts)
-                    .bind(ends)
-                    .fetch_all(&self.pool)
-                    .await
-                    .map_err(|error| {
-                        postgres_unavailable("load provider account quota window usage")
-                            .with_source(error)
-                    })
-            })
+            .run(
+                &self.pool,
+                "load account usage windows",
+                |mut connection| async move {
+                    sqlx::query(sqlx::AssertSqlSafe(account_usage_by_windows_sql()))
+                        .bind(account_ids)
+                        .bind(keys)
+                        .bind(starts)
+                        .bind(ends)
+                        .fetch_all(&mut *connection)
+                        .await
+                        .map_err(|error| {
+                            postgres_unavailable("load provider account quota window usage")
+                                .with_source(error)
+                        })
+                },
+            )
             .await
             .map_err(|error| admin_store_error(ENTITY, error))?;
         let mut usage_rows = Vec::with_capacity(windows.len());
@@ -752,8 +756,11 @@ impl AccountStore for PgAdminAccountStore {
             validate_admin_account_ids(ids).map_err(|error| admin_store_error(ENTITY, error))?;
             let rows = self
                 .query_budget
-                .run("load account cumulative costs", async {
-                    sqlx::query_as::<_, (String, String, String)>(
+                .run(
+                    &self.pool,
+                    "load account cumulative costs",
+                    |mut connection| async move {
+                        sqlx::query_as::<_, (String, String, String)>(
                         "select totals.provider_account_ref, totals.currency, totals.amount::text
                          from account_cumulative_costs totals
                          join provider_accounts account on account.id = totals.provider_account_ref
@@ -762,12 +769,13 @@ impl AccountStore for PgAdminAccountStore {
                          order by totals.provider_account_ref, totals.currency",
                     )
                     .bind(ids)
-                    .fetch_all(&self.pool)
+                    .fetch_all(&mut *connection)
                     .await
                     .map_err(|error| {
                         postgres_unavailable("load account cumulative costs").with_source(error)
                     })
-                })
+                    },
+                )
                 .await
                 .map_err(|error| admin_store_error(ENTITY, error))?;
             for (account_id, currency, amount) in rows {
@@ -794,8 +802,11 @@ impl AccountStore for PgAdminAccountStore {
             values.extend(
                 self.query_budget
                     .run(
+                        &self.pool,
                         "load Excel recovery",
-                        super::excel_recovery::load(&self.pool, ids),
+                        |mut connection| async move {
+                            super::excel_recovery::load(&mut *connection, ids).await
+                        },
                     )
                     .await
                     .map_err(|error| admin_store_error(ENTITY, error))?,
@@ -846,8 +857,11 @@ impl AccountStore for PgAdminAccountStore {
             costs.extend(
                 self.query_budget
                     .run(
+                        &self.pool,
                         "load account purchase costs",
-                        super::purchase_costs::load(&self.pool, ids),
+                        |mut connection| async move {
+                            super::purchase_costs::load(&mut *connection, ids).await
+                        },
                     )
                     .await
                     .map_err(|error| admin_store_error(ENTITY, error))?,

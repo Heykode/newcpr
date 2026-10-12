@@ -672,7 +672,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     } = prepared;
     let (lease, reused, pool_decision) = binding.into_parts();
     let PooledWebSocketConnection {
-        websocket,
+        mut websocket,
         mut metadata,
         continuation,
         created_at,
@@ -688,16 +688,20 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     }));
     trace.capture("upstream.request.body", request.payload_text().as_bytes());
     if let Err(error) = send_websocket_request(&websocket, request.payload_text()).await {
+        let not_started = matches!(error, CodexWebSocketExchangeError::SendNotStarted);
         if let Some(lease) = &metadata.session_proxy {
             lease.report_websocket_error(&error);
         }
-        let observation = websocket
-            .observation()
-            .with_exit_reason("outbound_transport_error");
+        let observation = websocket.observation();
+        let observation = if observation.exit_reason() == "running" {
+            observation.with_exit_reason("outbound_transport_error")
+        } else {
+            observation
+        };
         trace.record(
             "upstream.send.failed",
             serde_json::json!({
-                "phase": "websocket_payload", "sendState": "ambiguous",
+                "phase": "websocket_payload", "sendState": if not_started { "not_sent" } else { "ambiguous" },
                 "failureReason": error.transport_failure_reason().unwrap_or(observation.exit_reason()),
                 "connectionId": observation.connection_id().to_string(),
                 "connectionAgeMs": observation.age_ms(),
@@ -706,11 +710,19 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
             }),
         );
         discard_after_send(websocket, lease, observation.clone()).await;
-        return Err(post_send_ambiguous(
-            error.with_connection_observation(observation),
-        ));
+        let error = if not_started {
+            if request.continuation().permits_fresh_connection() {
+                error
+            } else {
+                continuation_unavailable(PreviousResponseUnavailableReason::ReusedConnectionLost)
+            }
+        } else {
+            post_send_ambiguous(error)
+        };
+        return Err(error.with_connection_observation(observation));
     }
     trace.record("upstream.payload.sent", serde_json::json!({}));
+    websocket.bind_control(response_control.as_ref());
     let connection_local_available = lease.is_some();
     let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
         lease,

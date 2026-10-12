@@ -4,9 +4,8 @@ use gateway_protocol::openai::events;
 use serde_json::Value;
 
 use crate::transport::protocol::websocket::{
-    websocket_event_frame, websocket_event_type, websocket_metadata_headers,
-    websocket_metadata_turn_state, websocket_response_completed_id,
-    websocket_response_is_interrupted,
+    websocket_event_type, websocket_metadata_headers, websocket_metadata_turn_state,
+    websocket_response_completed_id, websocket_response_is_interrupted,
 };
 use crate::transport::response_meta;
 
@@ -23,6 +22,9 @@ pub(super) fn parse_websocket_event_documents(
     let (single, recovered) = if let Ok(value) = serde_json::from_str::<Value>(raw) {
         (Some((raw, value)), Vec::new())
     } else {
+        if !raw.trim_start().starts_with(['{', '[']) {
+            return Ok(Some((raw, Value::Null)).into_iter().chain(Vec::new()));
+        }
         if raw.len() > MAX_CONCATENATED_EVENT_BYTES {
             return Err(CodexWebSocketExchangeError::InvalidEventJson);
         }
@@ -59,7 +61,6 @@ pub(in crate::transport::websocket) enum WebSocketTerminalKind {
 pub(super) enum ExchangeAction {
     RateLimits(events::ParsedRateLimits),
     Forward {
-        frame: String,
         terminal: Option<WebSocketTerminalKind>,
     },
     Ignore,
@@ -74,7 +75,7 @@ pub(super) struct ReducedWebSocketEvent {
 }
 
 pub(super) fn reduce_websocket_event(
-    raw: &str,
+    _raw: &str,
     value: &Value,
     metadata: &mut CodexWebSocketConnectionMetadata,
     continuation: &mut WebSocketContinuationState,
@@ -121,9 +122,10 @@ pub(super) fn reduce_websocket_event(
         Some("response.failed" | "error") => Some(WebSocketTerminalKind::Failed),
         _ => None,
     };
-    let action = match websocket_event_frame(value, raw) {
-        Some(frame) => ExchangeAction::Forward { frame, terminal },
-        None => ExchangeAction::Ignore,
+    let action = if event == Some("codex.rate_limits") {
+        ExchangeAction::Ignore
+    } else {
+        ExchangeAction::Forward { terminal }
     };
     Ok(ReducedWebSocketEvent {
         created_response_id: (event == Some("response.created"))

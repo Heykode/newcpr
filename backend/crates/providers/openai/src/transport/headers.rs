@@ -206,29 +206,33 @@ impl CodexBackendClient {
             None => format!("model={}", request.model()),
         };
         insert_optional_protocol_header(&mut headers, "x-codex-routing-hint", Some(&routing_hint));
-        for name in request.passthrough_headers.keys() {
-            // 身份与传输字段只由画像/正文生成；其余协议头保留原始多值字节。
-            if is_managed_identity_header(name.as_str())
-                || matches!(
-                    name.as_str(),
-                    "openai-beta"
-                        | "accept"
-                        | "content-type"
-                        | "content-encoding"
-                        | "x-codex-routing-hint"
-                        | "x-codex-turn-id"
-                        | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
-                )
-            {
-                continue;
-            }
-            headers.remove(name);
-            for value in request.passthrough_headers.get_all(name) {
-                headers.append(name.clone(), value.clone());
-            }
-        }
+        append_passthrough_headers(&mut headers, &request.passthrough_headers);
         super::qx_application::apply_response_headers(&mut headers, request, context)?;
         Ok(headers)
+    }
+}
+
+pub(super) fn append_passthrough_headers(headers: &mut HeaderMap, passthrough: &HeaderMap) {
+    for name in passthrough.keys() {
+        // 身份与传输字段只由画像/正文生成；其余协议头保留原始多值字节。
+        if is_managed_identity_header(name.as_str())
+            || matches!(
+                name.as_str(),
+                "openai-beta"
+                    | "accept"
+                    | "content-type"
+                    | "content-encoding"
+                    | "x-codex-routing-hint"
+                    | "x-codex-turn-id"
+                    | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
+            )
+        {
+            continue;
+        }
+        headers.remove(name);
+        for value in passthrough.get_all(name) {
+            headers.append(name.clone(), value.clone());
+        }
     }
 }
 

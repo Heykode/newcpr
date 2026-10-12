@@ -45,7 +45,7 @@ impl OpenAiResponsesEncoder {
         };
         // 当前 Codex 不消费 Responses `error` event，会在 EOF 时丢失失败原因。
         // 在客户端 SSE 边界统一投影成它能识别的 `response.failed`。
-        let projected = projected_capacity_error(wire);
+        let projected = client_payload(wire);
         let data = projected.as_ref().unwrap_or(wire.data());
         if effective_event_type(wire) == Some("error")
             && let Some(data) = response_failed_sse_data_from_error_event(
@@ -66,9 +66,16 @@ impl OpenAiResponsesEncoder {
         {
             return vec![raw_sse_frame.clone()];
         }
+        let data = if projected.is_none() {
+            wire.raw_websocket_message()
+                .map(str::to_owned)
+                .unwrap_or_else(|| data.to_string())
+        } else {
+            data.to_string()
+        };
         vec![Bytes::from(encode_sse_event_with_metadata(
             effective_event_type(wire).unwrap_or_default(),
-            &data.to_string(),
+            &data,
             wire.sse_id(),
             wire.sse_retry(),
         ))]
@@ -77,10 +84,10 @@ impl OpenAiResponsesEncoder {
     /// 消费一个 Provider event，并返回 WebSocket JSON messages。
     pub fn push_websocket(&mut self, event: &ProviderEvent) -> Vec<String> {
         self.observe_event(event);
-        let Some(wire) = openai_wire(event).filter(|wire| wire.has_json_data()) else {
+        let Some(wire) = openai_wire(event) else {
             return Vec::new();
         };
-        let projected = projected_capacity_error(wire);
+        let projected = client_payload(wire);
         let data = projected.as_ref().unwrap_or(wire.data());
         // Keep consumable wrappers and continuation-control codes; only final
         // capacity failures receive the client-retryable code/status.
@@ -93,6 +100,14 @@ impl OpenAiResponsesEncoder {
             )
         {
             return vec![data.to_string()];
+        }
+        if projected.is_none()
+            && let Some(raw) = wire.raw_websocket_message()
+        {
+            return vec![raw.to_owned()];
+        }
+        if !wire.has_json_data() {
+            return Vec::new();
         }
         vec![data.to_string()]
     }
@@ -186,13 +201,60 @@ fn effective_event_type(wire: &ProtocolWireEvent) -> Option<&str> {
         .or_else(|| wire.data().get("type").and_then(Value::as_str))
 }
 
-fn projected_capacity_error(wire: &ProtocolWireEvent) -> Option<Value> {
-    matches!(
+fn client_payload(wire: &ProtocolWireEvent) -> Option<Value> {
+    if matches!(
         effective_event_type(wire),
         Some("error" | "response.failed")
+    ) {
+        return capacity_error_for_client(wire.data());
+    }
+    response_metadata_for_client(wire.data(), effective_event_type(wire))
+}
+
+pub(super) fn control_payload_for_client(payload: String) -> Option<String> {
+    let Ok(data) = serde_json::from_str::<Value>(&payload) else {
+        return Some(payload);
+    };
+    let event_type = data.get("type").and_then(Value::as_str);
+    if event_type == Some("codex.rate_limits") {
+        return None;
+    }
+    Some(
+        response_metadata_for_client(&data, event_type)
+            .map_or(payload, |projected| projected.to_string()),
     )
-    .then(|| capacity_error_for_client(wire.data()))
-    .flatten()
+}
+
+fn response_metadata_for_client(data: &Value, event_type: Option<&str>) -> Option<Value> {
+    if !matches!(
+        event_type,
+        Some("response.metadata" | "codex.response.metadata")
+    ) {
+        return None;
+    }
+    let headers = data.get("headers")?.as_object()?;
+    let connection_options: Vec<String> = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("connection"))
+        .flat_map(|(_, value)| match value {
+            Value::Array(values) => values.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
+            _ => value.as_str().into_iter().collect(),
+        })
+        .flat_map(|value| value.split(','))
+        .map(|name| name.trim().to_ascii_lowercase())
+        .collect();
+    if headers
+        .keys()
+        .all(|name| super::response_header_is_forwardable(name, &connection_options))
+    {
+        return None;
+    }
+    let mut projected = data.clone();
+    projected
+        .get_mut("headers")?
+        .as_object_mut()?
+        .retain(|name, _| super::response_header_is_forwardable(name, &connection_options));
+    Some(projected)
 }
 
 fn ws_client_consumable_error(data: &Value) -> bool {

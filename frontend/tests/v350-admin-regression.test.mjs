@@ -573,7 +573,11 @@ test('diagnostic exports allow only safe fields and never borrow correlation fro
   const safe = requestDiagnosticsBundle('request-b', matchingDetail, matchingError)
   assert.equal(safe.error.summary, 'upstream_unavailable')
   assert.equal(safe.error.summarySource, 'failure_class')
-  assert.doesNotMatch(JSON.stringify(safe), /sensitive|providerErrorCode/)
+  assert.equal(safe.schemaVersion, 4)
+  assert.equal(Object.hasOwn(safe.error, 'providerErrorCode'), false)
+  assert.equal(Object.hasOwn(safe.attempts[0], 'providerErrorCode'), false)
+  assert.ok(safe.omitted.includes('error.providerErrorCode'))
+  assert.doesNotMatch(JSON.stringify(safe), /sensitive/)
 })
 
 test('usage searches preserve email and request IDs but never send full CPR API keys', () => {

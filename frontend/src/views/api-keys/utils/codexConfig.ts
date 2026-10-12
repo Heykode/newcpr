@@ -27,6 +27,9 @@ requires_openai_auth = false
 # 代理密钥仅用于网关鉴权，真实账号登录状态由服务端管理。
 experimental_bearer_token = ${JSON.stringify(input.apiKey)}
 
+[model_providers.OpenAI.capabilities]
+remote_compaction = "v2"
+
 [model_providers.OpenAI.http_headers]
 # 声明服务端托管认证，让官方客户端启用原生生图；该标记不是密钥。
 X-OpenAI-Actor-Authorization = "proxy-managed"
