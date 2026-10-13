@@ -14,6 +14,10 @@ let version = 0
 let controller: AbortController | undefined
 const completed = new Set<string>()
 
+function waitingForRetry(row: ReloginEntry) {
+  return row.enrollmentPending && ['waiting', 'cooldown'].includes(row.recovery?.state ?? '')
+}
+
 function stop() {
   version++
   clearTimeout(timer)
@@ -37,7 +41,7 @@ async function refresh(run: number) {
     }
     if (changed)
       emit('completed')
-    if (rows.value.some(row => ['pending', 'queued', 'running', 'pushing'].includes(row.status) || (row.status === 'ready' && row.enrollmentPending)))
+    if (rows.value.some(row => ['pending', 'queued', 'running', 'pushing'].includes(row.status) || waitingForRetry(row) || (row.status === 'ready' && row.enrollmentPending)))
       timer = setTimeout(() => void refresh(run), 2000)
   }
   catch (error) {
@@ -75,7 +79,7 @@ onScopeDispose(stop)
     <div class="mt-2 max-h-36 overflow-y-auto">
       <div v-for="row in rows" :key="row.id" class="flex flex-wrap justify-between gap-x-4 gap-y-1 py-1 text-cp-sm">
         <span class="break-all">{{ row.email }}</span>
-        <span :class="row.status === 'failed' || row.status === 'uncertain' ? 'text-cp-error' : 'text-cp-text-secondary'">{{ row.message || row.status }}</span>
+        <span :class="waitingForRetry(row) ? 'text-cp-warning' : row.status === 'failed' || row.status === 'uncertain' ? 'text-cp-error' : 'text-cp-text-secondary'">{{ waitingForRetry(row) ? row.recovery?.message : row.message || row.status }}</span>
       </div>
     </div>
   </section>

@@ -243,9 +243,9 @@ async fn relogin_retry_settings_reject_wrong_types_before_accessing_storage() {
         json!({"maxRetries": -1}),
         json!({"maxRetries": 1.5}),
         json!({"maxRetries": "2"}),
-        json!({"retryIntervalMinutes": -1}),
-        json!({"retryIntervalMinutes": 0.5}),
-        json!({"retryIntervalMinutes": true}),
+        json!({"retryIntervalSeconds": -1}),
+        json!({"retryIntervalSeconds": 0.5}),
+        json!({"retryIntervalSeconds": true}),
     ] {
         let mut body = json!({"concurrency": 1, "paused": false});
         body.as_object_mut()

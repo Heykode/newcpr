@@ -19,6 +19,260 @@ fn intent() -> ReloginEnrollment {
 
 const MATERIAL: &str = "test@example.invalid----test-only-password----JBSWY3DPEHPK3PXP";
 
+async fn expire_wait(h: &Harness, id: &str) {
+    let mut row = h.row(id).await;
+    let revision = row.revision;
+    row.revision += 1;
+    row.next_attempt_at = Some(Utc::now() - Duration::seconds(1));
+    h.store.save(&row, Some(revision)).await.unwrap();
+}
+
+#[tokio::test]
+async fn enrollment_retry_keeps_the_selected_proxy_on_every_login() {
+    let proxies = Arc::new(super::super::proxies::TestProxies {
+        events: Some(events()),
+        ..Default::default()
+    });
+    let h = Harness::with_proxies(vec![], Some(proxies)).await;
+    let mut enrollment = intent();
+    enrollment.config.outbound_proxy_id = Some("proxy-fixture".into());
+    let ids = h
+        .services
+        .relogin()
+        .enroll(MATERIAL, false, enrollment.clone())
+        .await
+        .unwrap();
+    *h.provider.relogin_result.lock().unwrap() = None;
+    h.cycle().await;
+    expire_wait(&h, &ids[0]).await;
+    *h.provider.relogin_result.lock().unwrap() = Some(credential());
+    h.cycle().await;
+    {
+        let proxies = h.provider.relogin_proxies.lock().unwrap();
+        assert_eq!(proxies.len(), 2);
+        assert!(proxies[0].is_some());
+        assert_eq!(proxies[0], proxies[1]);
+    }
+    assert!(h.row(&ids[0]).await.synced_at.is_some());
+    assert_eq!(
+        h.accounts.import_settings(),
+        vec![Some(enrollment.settings().unwrap())]
+    );
+}
+
+#[tokio::test]
+async fn unavailable_enrollment_proxy_uses_retry_budget_without_direct_fallback() {
+    let h = Harness::new(vec![]).await;
+    let ids = h
+        .services
+        .relogin()
+        .enroll(MATERIAL, false, intent())
+        .await
+        .unwrap();
+    let mut row = h.row(&ids[0]).await;
+    row.enrollment.as_mut().unwrap().config.outbound_proxy_id = Some("missing-proxy".into());
+    h.store.save(&row, Some(row.revision)).await.unwrap();
+    for attempt in 1..=3 {
+        let before = Utc::now();
+        h.cycle().await;
+        let row = h.row(&ids[0]).await;
+        assert_eq!(row.automatic_attempts, attempt);
+        assert!(row.next_attempt_at.unwrap() >= before + Duration::seconds(30));
+        h.cycle().await;
+        assert_eq!(h.row(&ids[0]).await.automatic_attempts, attempt);
+        expire_wait(&h, &ids[0]).await;
+    }
+    h.cycle().await;
+    assert_eq!(h.row(&ids[0]).await.automatic_attempts, 3);
+    assert!(h.provider.relogin_requests.lock().unwrap().is_empty());
+    assert!(h.accounts.import_settings().is_empty());
+}
+
+#[tokio::test]
+async fn enrollment_uses_shared_retry_count_and_seconds_without_resetting_the_budget() {
+    for retries in [0, 2, 10] {
+        let h = Harness::new(vec![]).await;
+        h.services
+            .relogin()
+            .configure(ReloginSettings {
+                max_retries: retries,
+                retry_interval_seconds: 30,
+                ..ReloginSettings::default()
+            })
+            .await
+            .unwrap();
+        let ids = h
+            .services
+            .relogin()
+            .enroll(MATERIAL, false, intent())
+            .await
+            .unwrap();
+        *h.provider.relogin_result.lock().unwrap() = None;
+        for attempt in 1..=retries + 1 {
+            let before = Utc::now();
+            h.cycle().await;
+            let after = Utc::now();
+            let row = h.row(&ids[0]).await;
+            assert_eq!(row.automatic_attempts, attempt);
+            assert!(!row.automatic_job);
+            assert!(row.enrollment.is_some());
+            assert!(row.next_attempt_at.unwrap() >= before + Duration::seconds(30));
+            assert!(row.next_attempt_at.unwrap() <= after + Duration::seconds(30));
+            let list = h.services.relogin().list().await.unwrap();
+            assert_eq!(list.items[0].recovery.retries_used, attempt - 1);
+            assert_eq!(
+                list.items[0].recovery.state,
+                if attempt > retries {
+                    "retry_limit"
+                } else {
+                    "cooldown"
+                }
+            );
+            h.cycle().await;
+            assert_eq!(
+                h.provider.relogin_requests.lock().unwrap().len(),
+                attempt as usize
+            );
+            expire_wait(&h, &ids[0]).await;
+        }
+        h.cycle().await;
+        assert_eq!(
+            h.provider.relogin_requests.lock().unwrap().len(),
+            (retries + 1) as usize
+        );
+        assert!(h.accounts.import_settings().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn enrollment_retry_survives_restart_and_preserves_workspace_and_import_settings() {
+    let h = Harness::new(vec![]).await;
+    let ids = h
+        .services
+        .relogin()
+        .enroll(MATERIAL, false, intent())
+        .await
+        .unwrap();
+    let mut row = h.row(&ids[0]).await;
+    row.selected_workspace_id = Some("workspace-team".into());
+    h.store.save(&row, Some(row.revision)).await.unwrap();
+    *h.provider.relogin_result.lock().unwrap() = None;
+    h.cycle().await;
+    let failed = h.row(&ids[0]).await;
+    let restored: ReloginEntry =
+        serde_json::from_value(serde_json::to_value(&failed).unwrap()).unwrap();
+    let restarted = Harness::new(vec![]).await;
+    restarted.store.save(&restored, None).await.unwrap();
+    restarted.cycle().await;
+    assert!(
+        restarted
+            .provider
+            .relogin_requests
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    expire_wait(&restarted, &ids[0]).await;
+    restarted.cycle().await;
+    let ready = restarted.row(&ids[0]).await;
+    assert!(ready.synced_at.is_some(), "{}", ready.message);
+    assert_eq!(ready.automatic_attempts, 0);
+    assert!(ready.next_attempt_at.is_none());
+    assert!(ready.enrollment.is_none());
+    assert_eq!(
+        *restarted.provider.relogin_requests.lock().unwrap(),
+        vec![Some("workspace-team".into())]
+    );
+    assert_eq!(
+        restarted.accounts.import_settings(),
+        vec![Some(intent().settings().unwrap())]
+    );
+    restarted.cycle().await;
+    assert_eq!(restarted.accounts.import_settings().len(), 1);
+}
+
+#[tokio::test]
+async fn enrollment_retry_keeps_pause_terminal_and_ambiguous_push_fences() {
+    for state in [
+        "paused",
+        "terminal",
+        "uncertain",
+        "verified",
+        "workspace",
+        "pool_changed",
+        "disabled",
+    ] {
+        let h = Harness::new(vec![]).await;
+        let ids = h
+            .services
+            .relogin()
+            .enroll(MATERIAL, false, intent())
+            .await
+            .unwrap();
+        *h.provider.relogin_result.lock().unwrap() = None;
+        h.cycle().await;
+        expire_wait(&h, &ids[0]).await;
+        let mut row = h.row(&ids[0]).await;
+        match state {
+            "paused" => h.store.settings.lock().unwrap().paused = true,
+            "terminal" => row.stop_reason = Some(ReloginStopReason::AccountBanned),
+            "uncertain" => row.status = ReloginStatus::Uncertain,
+            "verified" => row.credential = Some(credential()),
+            "workspace" => row.status = ReloginStatus::AwaitingWorkspace,
+            "pool_changed" => h.accounts.set_accounts(vec![account(false)]),
+            "disabled" => row.automatic = false,
+            _ => unreachable!(),
+        }
+        h.store.save(&row, Some(row.revision)).await.unwrap();
+        h.cycle().await;
+        assert_eq!(
+            h.provider.relogin_requests.lock().unwrap().len(),
+            1,
+            "{state}"
+        );
+        assert!(h.accounts.import_settings().is_empty(), "{state}");
+        if state == "paused" {
+            h.store.settings.lock().unwrap().paused = false;
+            h.cycle().await;
+            assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn legacy_failed_enrollment_counts_its_initial_attempt_and_obeys_zero_retries() {
+    for retries in [0, 1] {
+        let h = Harness::new(vec![]).await;
+        let ids = h
+            .services
+            .relogin()
+            .enroll(MATERIAL, false, intent())
+            .await
+            .unwrap();
+        let mut row = h.row(&ids[0]).await;
+        row.status = ReloginStatus::Failed;
+        row.automatic_attempts = 0;
+        h.store.save(&row, Some(row.revision)).await.unwrap();
+        h.store.settings.lock().unwrap().max_retries = retries;
+        *h.provider.relogin_result.lock().unwrap() = None;
+        h.cycle().await;
+        h.cycle().await;
+        assert_eq!(
+            h.provider.relogin_requests.lock().unwrap().len(),
+            retries as usize
+        );
+        if retries > 0 {
+            assert_eq!(h.row(&ids[0]).await.automatic_attempts, 2);
+        }
+        assert_eq!(
+            h.services.relogin().list().await.unwrap().items[0]
+                .recovery
+                .state,
+            "retry_limit"
+        );
+    }
+}
+
 #[test]
 fn enrollment_serializes_and_replays_purchase_cost_without_changing_other_settings() {
     for cost in [
@@ -148,6 +402,15 @@ async fn enrollment_resumes_selected_workspace_and_keeps_the_import_intent() {
         .resume_workspace(&ids[0], waiting.revision, "workspace-team")
         .await
         .unwrap();
+    *h.provider.relogin_result.lock().unwrap() = None;
+    h.cycle().await;
+    assert_eq!(h.row(&ids[0]).await.automatic_attempts, 1);
+    assert_eq!(
+        h.row(&ids[0]).await.selected_workspace_id.as_deref(),
+        Some("workspace-team")
+    );
+    expire_wait(&h, &ids[0]).await;
+    *h.provider.relogin_result.lock().unwrap() = Some(credential());
     h.cycle().await;
     assert!(h.row(&ids[0]).await.synced_at.is_some());
     assert_eq!(h.accounts.import_settings().len(), 1);

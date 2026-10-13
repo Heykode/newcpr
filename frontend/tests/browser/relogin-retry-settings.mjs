@@ -17,7 +17,7 @@ async function main() {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
   const errors = []
   const mutations = []
-  let settings = { concurrency: 1, paused: false, maxRetries: 2, retryIntervalMinutes: 5 }
+  let settings = { concurrency: 1, paused: false, maxRetries: 2, retryIntervalSeconds: 30 }
   let failSave = false
   let reads = 0
   const now = new Date().toISOString()
@@ -85,7 +85,7 @@ async function main() {
   const open = () => page.getByRole('button', { name: '自动重登设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '自动重登设置', exact: true })
   const retries = dialog.getByRole('spinbutton', { name: '失败重试次数', exact: true })
-  const interval = dialog.getByRole('spinbutton', { name: '重试间隔（分钟）', exact: true })
+  const interval = dialog.getByRole('spinbutton', { name: '重试间隔（秒）', exact: true })
   const save = () => dialog.getByRole('button', { name: '保存', exact: true }).click()
   const cancel = () => dialog.getByRole('button', { name: '取消', exact: true }).click()
   try {
@@ -109,7 +109,7 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 1000 })
     await open()
     assert.equal(await retries.inputValue(), '2')
-    assert.equal(await interval.inputValue(), '5')
+    assert.equal(await interval.inputValue(), '30')
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 })
       const box = await dialog.boundingBox()
@@ -122,7 +122,7 @@ async function main() {
     await interval.fill('23')
     await save()
     await dialog.waitFor({ state: 'hidden' })
-    assert.deepEqual(mutations.at(-1), { concurrency: 1, paused: false, maxRetries: 0, retryIntervalMinutes: 23 })
+    assert.deepEqual(mutations.at(-1), { concurrency: 1, paused: false, maxRetries: 0, retryIntervalSeconds: 23 })
     await open()
     assert.equal(await retries.inputValue(), '0')
     assert.equal(await interval.inputValue(), '23')
@@ -134,10 +134,10 @@ async function main() {
       assert.equal(mutations.length, count)
     }
     await retries.fill('0')
-    for (const value of ['', '0', '1441', '1.5']) {
+    for (const value of ['', '0', '86401', '1.5']) {
       await interval.fill(value)
       await save()
-      await dialog.getByRole('alert').filter({ hasText: '重试间隔必须为 1 至 1440 分钟' }).waitFor()
+      await dialog.getByRole('alert').filter({ hasText: '重试间隔必须为 1 至 86400 秒' }).waitFor()
       assert.equal(mutations.length, count)
     }
     await retries.fill('7')
@@ -168,7 +168,7 @@ async function main() {
     assert.deepEqual(mutations.at(-2), { concurrency: 2, paused: false })
     assert.deepEqual(mutations.at(-1), { concurrency: 2, paused: true })
     assert.equal(settings.maxRetries, 3)
-    assert.equal(settings.retryIntervalMinutes, 23)
+    assert.equal(settings.retryIntervalSeconds, 23)
     await page.getByRole('button', { name: '切换暗黑模式', exact: true }).click()
     await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark')
     await open()

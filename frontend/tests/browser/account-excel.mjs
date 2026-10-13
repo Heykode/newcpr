@@ -115,7 +115,7 @@ async function main() {
       return fulfill(route, row)
     })
     await page.route('**/dev/api/admin/relogin', route => fulfill(route, {
-      settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalMinutes: 5 },
+      settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalSeconds: 30 },
       items: [{ ...reloginEntries[0], poolAccountIds: [], poolStatus: 'not_in_pool', message: '待推送', syncedAt: null }],
     }))
     await page.route('**/dev/api/admin/relogin/push', (route) => {

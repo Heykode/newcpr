@@ -145,7 +145,7 @@ impl DefaultReloginService {
                     entry.message = "上次重登已中断，未确认推送结果".to_owned();
                     entry.next_attempt_at = Some(
                         Utc::now()
-                            + chrono::Duration::minutes(i64::from(settings.retry_interval_minutes)),
+                            + chrono::Duration::seconds(i64::from(settings.retry_interval_seconds)),
                     );
                     self.save(entry).await?;
                 }
@@ -186,28 +186,32 @@ impl DefaultReloginService {
                     if !recovery::view(&entry, &pool, &settings, Utc::now()).waiting() {
                         continue;
                     }
-                    let target = match select_target(&entry, &pool) {
-                        Ok(Some(target)) => target,
-                        Ok(None) | Err(_) => continue,
-                    };
-                    let Some(account) = pool
-                        .iter()
-                        .find(|account| account.id == target.account_id && needs_relogin(account))
-                    else {
-                        continue;
-                    };
-                    if entry.synced_at.is_some() || !recovery::same_attempt(&entry, account) {
-                        entry.automatic_attempts = 0;
-                        entry.next_attempt_at = None;
+                    if entry.enrollment.is_some() && entry.target.is_none() {
+                        // Older failed enrollments did not count their first login.
+                        entry.automatic_attempts = entry.automatic_attempts.max(1);
+                    } else {
+                        let target = match select_target(&entry, &pool) {
+                            Ok(Some(target)) => target,
+                            Ok(None) | Err(_) => continue,
+                        };
+                        let Some(account) = pool.iter().find(|account| {
+                            account.id == target.account_id && needs_relogin(account)
+                        }) else {
+                            continue;
+                        };
+                        if entry.synced_at.is_some() || !recovery::same_attempt(&entry, account) {
+                            entry.automatic_attempts = 0;
+                            entry.next_attempt_at = None;
+                        }
+                        entry.target = Some(ReloginTarget::from_account(account)?);
+                        entry.automatic_job = true;
+                        entry.workspace_mode = ReloginWorkspaceMode::Original;
+                        entry.workspace_targets.clear();
+                        entry.workspace_choices.clear();
+                        entry.selected_workspace_id = None;
+                        entry.manual_push_context = None;
+                        entry.enrollment = None;
                     }
-                    entry.target = Some(ReloginTarget::from_account(account)?);
-                    entry.automatic_job = true;
-                    entry.workspace_mode = ReloginWorkspaceMode::Original;
-                    entry.workspace_targets.clear();
-                    entry.workspace_choices.clear();
-                    entry.selected_workspace_id = None;
-                    entry.manual_push_context = None;
-                    entry.enrollment = None;
                 }
                 let target_account = entry
                     .target
@@ -262,6 +266,9 @@ impl DefaultReloginService {
                         continue;
                     }
                 }
+                if entry.automatic_job || (entry.enrollment.is_some() && entry.target.is_none()) {
+                    entry.automatic_attempts += 1;
+                }
                 let enrollment_proxy = if entry.target.is_none() {
                     if let Some(enrollment) = &entry.enrollment {
                         match super::super::import_proxy_binding(
@@ -276,6 +283,12 @@ impl DefaultReloginService {
                             Err(error) => {
                                 entry.status = ReloginStatus::Failed;
                                 entry.message = error.message().to_owned();
+                                entry.next_attempt_at = Some(
+                                    Utc::now()
+                                        + chrono::Duration::seconds(i64::from(
+                                            settings.retry_interval_seconds,
+                                        )),
+                                );
                                 self.save(&mut entry).await?;
                                 continue;
                             }
@@ -310,7 +323,6 @@ impl DefaultReloginService {
                         .or(enrollment_proxy),
                 };
                 if entry.automatic_job {
-                    entry.automatic_attempts += 1;
                     let now = Utc::now();
                     entry.automatic_started_at = recovery::recent_starts(&entry, now);
                     entry.automatic_started_at.push(now);
@@ -376,12 +388,12 @@ impl DefaultReloginService {
         if current.revision != entry.revision || cancellation.is_cancelled() {
             return Ok(());
         }
-        let retry_interval = chrono::Duration::minutes(i64::from(
+        let retry_interval = chrono::Duration::seconds(i64::from(
             self.store()?
                 .settings()
                 .await
                 .map_err(store_error)?
-                .retry_interval_minutes,
+                .retry_interval_seconds,
         ));
         current.workspace_choices.clear();
         match outcome {

@@ -46,7 +46,7 @@ async function main() {
       return route.continue()
     })
     await page.route('**/dev/api/admin/relogin', route => fulfill(route, {
-      settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalMinutes: 5 },
+      settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalSeconds: 30 },
       items: reloginPage
         ? reloginEntries
         : [{
@@ -57,6 +57,7 @@ async function main() {
             enrollmentPending: stage !== 'synced',
             poolStatus: stage === 'synced' ? 'synced' : 'not_in_pool',
             message: stage === 'synced' ? '凭据已同步到号池' : '等待登录验证并入池',
+            recovery: { state: stage === 'failed' ? 'cooldown' : stage, message: '上次登录失败，等待重试', retryAt: null },
           }],
     }))
     await page.route('**/dev/api/admin/relogin/enroll', (route) => {
@@ -120,6 +121,8 @@ async function main() {
     const progress = page.getByRole('region', { name: '2FA导入进度' })
     await progress.getByText('等待登录验证并入池', { exact: true }).waitFor()
     const beforeCompletion = accountReads
+    stage = 'failed'
+    await progress.getByText('上次登录失败，等待重试', { exact: true }).waitFor({ timeout: 10000 })
     stage = 'synced'
     await progress.getByText(/1\/1 已入池/).waitFor({ timeout: 10000 })
     await page.waitForTimeout(500)

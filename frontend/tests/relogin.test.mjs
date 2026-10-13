@@ -74,16 +74,16 @@ test('relogin settings preserve explicit zero and omit retry fields on legacy co
   const { configureRelogin } = load('../src/api/modules/relogin.ts', {
     '../request': async config => calls.push(config),
   })
-  await configureRelogin({ concurrency: 1, paused: false, maxRetries: 0, retryIntervalMinutes: 17 })
+  await configureRelogin({ concurrency: 1, paused: false, maxRetries: 0, retryIntervalSeconds: 17 })
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0].data)), {
     concurrency: 1,
     paused: false,
     maxRetries: 0,
-    retryIntervalMinutes: 17,
+    retryIntervalSeconds: 17,
   })
   await configureRelogin({ concurrency: 2, paused: true })
   assert.equal(Object.hasOwn(calls[1].data, 'maxRetries'), false)
-  assert.equal(Object.hasOwn(calls[1].data, 'retryIntervalMinutes'), false)
+  assert.equal(Object.hasOwn(calls[1].data, 'retryIntervalSeconds'), false)
 })
 
 test('recovery diagnostics supersede old sync messages but never an active or uncertain push', () => {

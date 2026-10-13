@@ -38,6 +38,12 @@
 
 ## First-Step Import Templates
 
+- The existing relogin retry dialog edits `retryIntervalSeconds` (default 30,
+  range 1..86400) for both expired-account recovery and new 2FA enrollment.
+  Enrollment progress continues polling during `waiting`/`cooldown`, displays the
+  retry state, and refreshes accounts on confirmed settlement. Terminal/uncertain
+  states stop polling. Disposing the view aborts reads only, never accepted jobs.
+
 - The template picker belongs to `AccountSetupFields`, before editable settings,
   not the credential-entry step. Selection copies scheduling/groups and present
   optional model/Excel fields; it never replaces account name or purchase metadata.
