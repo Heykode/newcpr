@@ -92,6 +92,7 @@ pub(super) struct FakeProviderAdmin {
     pub(super) relogin_error: Mutex<Option<ProviderAdminError>>,
     pub(super) relogin_delay: Mutex<std::time::Duration>,
     pub(super) relogin_requests: Mutex<Vec<Option<String>>>,
+    pub(super) relogin_proxies: Mutex<Vec<Option<gateway_core::account::OutboundProxy>>>,
     pub(super) relogin_active: std::sync::atomic::AtomicUsize,
     pub(super) relogin_peak: std::sync::atomic::AtomicUsize,
 }
@@ -122,6 +123,7 @@ impl FakeProviderAdmin {
             relogin_error: Mutex::new(None),
             relogin_delay: Mutex::new(std::time::Duration::ZERO),
             relogin_requests: Mutex::new(Vec::new()),
+            relogin_proxies: Mutex::new(Vec::new()),
             relogin_active: std::sync::atomic::AtomicUsize::new(0),
             relogin_peak: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -264,6 +266,10 @@ impl ProviderAdmin for FakeProviderAdmin {
             .lock()
             .unwrap()
             .push(request.workspace_id);
+        self.relogin_proxies
+            .lock()
+            .unwrap()
+            .push(request.outbound_proxy);
         let active = self.relogin_active.fetch_add(1, Ordering::SeqCst) + 1;
         self.relogin_peak.fetch_max(active, Ordering::SeqCst);
         struct Active<'a>(&'a std::sync::atomic::AtomicUsize);

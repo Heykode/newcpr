@@ -95,6 +95,16 @@ fn eligibility(
     if let Some(reason) = entry.automatic_stop_reason() {
         return RecoveryView::new("manual_required", reason.label());
     }
+    if entry.enrollment.is_some() && entry.target.is_none() {
+        if entry.credential.is_some() || entry.status != ReloginStatus::Failed {
+            return RecoveryView::new("awaiting_push", "登录结果待处理，不重复获取凭据");
+        }
+        if !matching_accounts(entry, pool).is_empty() {
+            return RecoveryView::new("manual_required", "号池已出现同邮箱账号，请确认后重新处理");
+        }
+        return retry_wait(entry, settings, now)
+            .unwrap_or_else(|| RecoveryView::new("waiting", "登录入池失败，等待重试"));
+    }
     let target = match select_target(entry, pool) {
         Ok(Some(target)) => target,
         Ok(None) if !matching_accounts(entry, pool).is_empty() => {
@@ -134,28 +144,11 @@ fn eligibility(
     }
     // A successful delivery, or a genuinely new auth binding, ends the old retry budget.
     // Routine Cookie revisions still match the captured authentication generation.
-    if entry.synced_at.is_none() && same_attempt(entry, account) {
-        if entry.automatic_attempts > settings.max_retries {
-            return RecoveryView::new(
-                "retry_limit",
-                if settings.max_retries == 0 {
-                    "首次自动重登失败，已设置不重试，请人工处理".to_owned()
-                } else {
-                    format!(
-                        "已用完 {} 次自动重试，请检查失败原因后手动重登",
-                        settings.max_retries
-                    )
-                },
-            );
-        }
-        if let Some(at) = entry.next_attempt_at.filter(|at| *at > now) {
-            return RecoveryView {
-                state: "cooldown",
-                message: "上次恢复未完成，等待重试".to_owned(),
-                retry_at: Some(at),
-                ..RecoveryView::new("cooldown", "")
-            };
-        }
+    if entry.synced_at.is_none()
+        && same_attempt(entry, account)
+        && let Some(wait) = retry_wait(entry, settings, now)
+    {
+        return wait;
     }
     let mut starts = recent_starts(entry, now);
     if starts.len() >= MAX_AUTOMATIC_STARTS {
@@ -171,4 +164,36 @@ fn eligibility(
         };
     }
     RecoveryView::new("waiting", "账号凭据已失效，等待可用并发")
+}
+
+fn retry_wait(
+    entry: &ReloginEntry,
+    settings: &ReloginSettings,
+    now: DateTime<Utc>,
+) -> Option<RecoveryView> {
+    let attempts = if entry.enrollment.is_some() && entry.status == ReloginStatus::Failed {
+        entry.automatic_attempts.max(1)
+    } else {
+        entry.automatic_attempts
+    };
+    if attempts > settings.max_retries {
+        return Some(RecoveryView::new(
+            "retry_limit",
+            if settings.max_retries == 0 {
+                "首次登录失败，已设置不重试，请人工处理".to_owned()
+            } else {
+                format!(
+                    "已用完 {} 次自动重试，请检查失败原因后手动重登",
+                    settings.max_retries
+                )
+            },
+        ));
+    }
+    entry
+        .next_attempt_at
+        .filter(|at| *at > now)
+        .map(|at| RecoveryView {
+            retry_at: Some(at),
+            ..RecoveryView::new("cooldown", "上次登录失败，等待重试")
+        })
 }

@@ -92,8 +92,8 @@ const savedConcurrency = shallowRef(1)
 const paused = shallowRef(false)
 const retrySettingsOpen = shallowRef(false)
 const maxRetries = shallowRef('2')
-const retryIntervalMinutes = shallowRef('5')
-const savedRetrySettings = shallowRef({ maxRetries: 2, retryIntervalMinutes: 5 })
+const retryIntervalSeconds = shallowRef('30')
+const savedRetrySettings = shallowRef({ maxRetries: 2, retryIntervalSeconds: 30 })
 const retrySettingsError = shallowRef('')
 const now = useNow({ interval: 1000 })
 const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries({ ...statusLabels, ...recoveryLabels }).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
@@ -161,7 +161,7 @@ async function reload(silent = false) {
     savedConcurrency.value = result.settings.concurrency
     savedRetrySettings.value = {
       maxRetries: result.settings.maxRetries ?? 2,
-      retryIntervalMinutes: result.settings.retryIntervalMinutes ?? 5,
+      retryIntervalSeconds: result.settings.retryIntervalSeconds ?? 30,
     }
     const ids = new Set(result.items.map(row => row.id))
     const retainedSelection = new Set([...selected.value].filter(id => ids.has(id)))
@@ -265,19 +265,19 @@ function configure(nextPaused = paused.value) {
 }
 function openRetrySettings() {
   maxRetries.value = String(savedRetrySettings.value.maxRetries)
-  retryIntervalMinutes.value = String(savedRetrySettings.value.retryIntervalMinutes)
+  retryIntervalSeconds.value = String(savedRetrySettings.value.retryIntervalSeconds)
   retrySettingsError.value = ''
   retrySettingsOpen.value = true
 }
 function saveRetrySettings() {
   const retries = Number(maxRetries.value)
-  const interval = Number(retryIntervalMinutes.value)
+  const interval = Number(retryIntervalSeconds.value)
   if (!maxRetries.value.trim() || !Number.isInteger(retries) || retries < 0 || retries > 10) {
     retrySettingsError.value = '失败重试次数必须为 0 至 10'
     return
   }
-  if (!retryIntervalMinutes.value.trim() || !Number.isInteger(interval) || interval < 1 || interval > 1440) {
-    retrySettingsError.value = '重试间隔必须为 1 至 1440 分钟'
+  if (!retryIntervalSeconds.value.trim() || !Number.isInteger(interval) || interval < 1 || interval > 86400) {
+    retrySettingsError.value = '重试间隔必须为 1 至 86400 秒'
     return
   }
   retrySettingsError.value = ''
@@ -287,9 +287,9 @@ function saveRetrySettings() {
         concurrency: savedConcurrency.value,
         paused: paused.value,
         maxRetries: retries,
-        retryIntervalMinutes: interval,
+        retryIntervalSeconds: interval,
       })
-      savedRetrySettings.value = { maxRetries: retries, retryIntervalMinutes: interval }
+      savedRetrySettings.value = { maxRetries: retries, retryIntervalSeconds: interval }
       retrySettingsOpen.value = false
       toast.success('自动重登设置已保存')
     }
@@ -656,8 +656,8 @@ onBeforeUnmount(() => {
         <BaseFormItem label="失败重试次数（不含首次，0 为不重试）">
           <BaseInput v-model="maxRetries" type="number" min="0" max="10" step="1" aria-label="失败重试次数" :disabled="busy" />
         </BaseFormItem>
-        <BaseFormItem label="重试间隔（分钟）">
-          <BaseInput v-model="retryIntervalMinutes" type="number" min="1" max="1440" step="1" aria-label="重试间隔（分钟）" :disabled="busy" />
+        <BaseFormItem label="重试间隔（秒）">
+          <BaseInput v-model="retryIntervalSeconds" type="number" min="1" max="86400" step="1" aria-label="重试间隔（秒）" :disabled="busy" />
         </BaseFormItem>
         <div v-if="retrySettingsError" class="break-words text-cp-sm text-cp-error" role="alert">
           {{ retrySettingsError }}

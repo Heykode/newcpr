@@ -79,7 +79,7 @@ async function main() {
       data = { authenticated: true }
     }
     else if (path === '/api/admin/relogin') {
-      data = { items: rows, settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalMinutes: 5 } }
+      data = { items: rows, settings: { concurrency: 1, paused: false, maxRetries: 2, retryIntervalSeconds: 30 } }
     }
     else if (path.endsWith('/system/version')) {
       data = { version: 'test', buildType: 'test' }

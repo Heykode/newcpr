@@ -1209,8 +1209,8 @@ impl ReloginService for DefaultReloginService {
         if let Some(value) = update.max_retries {
             settings.max_retries = value;
         }
-        if let Some(value) = update.retry_interval_minutes {
-            settings.retry_interval_minutes = value;
+        if let Some(value) = update.retry_interval_seconds {
+            settings.retry_interval_seconds = value;
         }
         settings.validate()?;
         self.store()?

@@ -15,6 +15,16 @@
   Paused queues reject new enrollment. Active/uncertain rows cannot be replaced by it.
   Workspace selection preserves intent; Ready enrollment resumes push after pause
   without logging in again. Cancel, manual queue/push and successful settlement clear it.
+- Failed new-account enrollment reuses `maxRetries` and `retryIntervalSeconds`.
+  Count the initial attempt (including proxy-resolution failure) in persisted
+  `automatic_attempts`, without marking the job as existing-account automatic
+  recovery. Retain enrollment settings, proxy and selected workspace across retries.
+  Only failed rows without cached credentials/targets may enter this path; pool
+  identity appearing meanwhile, terminal errors, workspace choice, cancellation and
+  uncertain pushes remain fenced. Old failed enrollment rows with zero attempts
+  count as one prior attempt. Explicit workspace selection starts a fresh budget.
+  This finite import budget does not use the existing post-success expiry loop guard.
+  It does not make ordinary library imports automatically enroll.
 - Enrollment owns optional `purchase_cost` separately from reusable template config.
   Carry the existing `AccountPurchaseUpdate` through construction, persisted JSONB
   and `settings()` replay without changing decimal strings or the optional cycle date.
@@ -104,7 +114,10 @@
   Preserve a JSONB-defaulted rolling history of automatic starts across success and
   reimport: at most three starts in fifteen minutes, including across new bindings.
 - `account_relogin_settings` owns `maxRetries` (default 2, range 0..10) and
-  `retryIntervalMinutes` (default 5, range 1..1440), added by migration 0034.
+  `retryIntervalSeconds` (default 30, range 1..86400). Migration 0070 renames
+  the column from migration 0034, changes the former five-minute default to thirty
+  seconds and converts other saved minute values without changing their duration.
+  Do not reinterpret the old minute API field as seconds; stale writes are rejected.
   Old settings requests that only send concurrency/paused preserve these values.
   Apply optional updates while holding the service gate. Retry-setting changes do
   not cancel active jobs, clear counts, or rewrite existing cooldown deadlines.

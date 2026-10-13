@@ -25,7 +25,7 @@ async fn relogin_configurable_retry_budget_excludes_the_first_attempt() {
             .relogin()
             .configure(ReloginSettings {
                 max_retries,
-                retry_interval_minutes: 17,
+                retry_interval_seconds: 17,
                 ..ReloginSettings::default()
             })
             .await
@@ -43,8 +43,8 @@ async fn relogin_configurable_retry_budget_excludes_the_first_attempt() {
             let row = h.row(&id).await;
             assert_eq!(row.automatic_attempts, attempt);
             let deadline = row.next_attempt_at.unwrap();
-            assert!(deadline >= before + Duration::minutes(17));
-            assert!(deadline <= after + Duration::minutes(17));
+            assert!(deadline >= before + Duration::seconds(17));
+            assert!(deadline <= after + Duration::seconds(17));
             assert_eq!(
                 state(&h, &id).await,
                 if attempt > max_retries {
@@ -77,7 +77,7 @@ async fn relogin_retry_edits_preserve_counts_deadlines_and_legacy_settings_clien
         .relogin()
         .configure(ReloginSettings {
             max_retries: 0,
-            retry_interval_minutes: 60,
+            retry_interval_seconds: 60,
             ..ReloginSettings::default()
         })
         .await
@@ -96,12 +96,12 @@ async fn relogin_retry_edits_preserve_counts_deadlines_and_legacy_settings_clien
     let settings = h.services.relogin().list().await.unwrap().settings;
     assert_eq!(settings.concurrency, 2);
     assert_eq!(settings.max_retries, 0);
-    assert_eq!(settings.retry_interval_minutes, 60);
+    assert_eq!(settings.retry_interval_seconds, 60);
     h.services
         .relogin()
         .configure(ReloginSettings {
             max_retries: 4,
-            retry_interval_minutes: 60,
+            retry_interval_seconds: 60,
             ..ReloginSettings::default()
         })
         .await
@@ -116,11 +116,11 @@ async fn relogin_retry_edits_preserve_counts_deadlines_and_legacy_settings_clien
             ..ReloginSettings::default()
         },
         ReloginSettings {
-            retry_interval_minutes: 0,
+            retry_interval_seconds: 0,
             ..ReloginSettings::default()
         },
         ReloginSettings {
-            retry_interval_minutes: 1441,
+            retry_interval_seconds: 86401,
             ..ReloginSettings::default()
         },
     ] {
@@ -209,7 +209,7 @@ async fn relogin_terminal_failures_stop_immediately_and_manual_success_clears_th
             .relogin()
             .configure(ReloginSettings {
                 max_retries: 10,
-                retry_interval_minutes: 1,
+                retry_interval_seconds: 1,
                 ..ReloginSettings::default()
             })
             .await
@@ -278,7 +278,7 @@ async fn relogin_uncertain_push_precedes_terminal_reason_and_setting_changes() {
         .relogin()
         .configure(ReloginSettings {
             max_retries: 10,
-            retry_interval_minutes: 1,
+            retry_interval_seconds: 1,
             ..ReloginSettings::default()
         })
         .await
@@ -485,7 +485,7 @@ async fn relogin_retry_settings_do_not_cancel_running_login_and_apply_at_failure
         .relogin()
         .configure(ReloginSettings {
             max_retries: 0,
-            retry_interval_minutes: 17,
+            retry_interval_seconds: 17,
             ..ReloginSettings::default()
         })
         .await
@@ -500,8 +500,8 @@ async fn relogin_retry_settings_do_not_cancel_running_login_and_apply_at_failure
     running.await.unwrap().unwrap();
     let failed = h.row(&id).await;
     assert_eq!(failed.status, ReloginStatus::Failed);
-    assert!(failed.next_attempt_at.unwrap() >= failure_started + Duration::minutes(17));
-    assert!(failed.next_attempt_at.unwrap() <= Utc::now() + Duration::minutes(17));
+    assert!(failed.next_attempt_at.unwrap() >= failure_started + Duration::seconds(17));
+    assert!(failed.next_attempt_at.unwrap() <= Utc::now() + Duration::seconds(17));
     assert_eq!(state(&h, &id).await, "retry_limit");
     h.cycle().await;
     assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 1);

@@ -327,7 +327,7 @@ pub struct ReloginSettings {
     pub concurrency: usize,
     pub paused: bool,
     pub max_retries: u32,
-    pub retry_interval_minutes: u32,
+    pub retry_interval_seconds: u32,
 }
 
 impl Default for ReloginSettings {
@@ -336,7 +336,7 @@ impl Default for ReloginSettings {
             concurrency: 1,
             paused: false,
             max_retries: 2,
-            retry_interval_minutes: 5,
+            retry_interval_seconds: 30,
         }
     }
 }
@@ -349,8 +349,8 @@ impl ReloginSettings {
         if self.max_retries > 10 {
             return Err(AdminError::invalid("失败重试次数必须为 0 至 10"));
         }
-        if !(1..=1440).contains(&self.retry_interval_minutes) {
-            return Err(AdminError::invalid("重试间隔必须为 1 至 1440 分钟"));
+        if !(1..=86400).contains(&self.retry_interval_seconds) {
+            return Err(AdminError::invalid("重试间隔必须为 1 至 86400 秒"));
         }
         Ok(())
     }
@@ -362,7 +362,7 @@ pub struct ReloginSettingsUpdate {
     pub concurrency: usize,
     pub paused: bool,
     pub max_retries: Option<u32>,
-    pub retry_interval_minutes: Option<u32>,
+    pub retry_interval_seconds: Option<u32>,
 }
 
 impl From<ReloginSettings> for ReloginSettingsUpdate {
@@ -371,7 +371,7 @@ impl From<ReloginSettings> for ReloginSettingsUpdate {
             concurrency: settings.concurrency,
             paused: settings.paused,
             max_retries: Some(settings.max_retries),
-            retry_interval_minutes: Some(settings.retry_interval_minutes),
+            retry_interval_seconds: Some(settings.retry_interval_seconds),
         }
     }
 }

@@ -39,7 +39,7 @@ async function main() {
     workspaceId: accounts[0].accountId,
   })
   const templates = []
-  const reloginSettings = { concurrency: 1, paused: false, maxRetries: 2, retryIntervalMinutes: 5 }
+  const reloginSettings = { concurrency: 1, paused: false, maxRetries: 2, retryIntervalSeconds: 30 }
   const groups = [{
     id: 'grp_00000000000000000000000000000091',
     name: '测试分组',

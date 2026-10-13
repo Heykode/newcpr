@@ -162,6 +162,13 @@ pub(super) struct Harness {
 }
 impl Harness {
     pub(super) async fn new(pool: Vec<AccountRecord>) -> Self {
+        Self::with_proxies(pool, None).await
+    }
+
+    async fn with_proxies(
+        pool: Vec<AccountRecord>,
+        proxies: Option<Arc<dyn gateway_admin::ports::proxy::ProxyStore>>,
+    ) -> Self {
         let log = events();
         let accounts = FakeAccountStore::new("openai", log.clone());
         accounts.set_accounts(pool);
@@ -169,12 +176,14 @@ impl Harness {
         *provider.rotation_store.lock().unwrap() = Some(accounts.clone());
         *provider.relogin_result.lock().unwrap() = Some(credential());
         let store = Arc::new(MemoryStore::default());
-        let mut bundle = AdminHarness::new()
+        let mut builder = AdminHarness::new()
             .accounts(accounts.clone())
             .provider(provider.clone())
-            .relogin(store.clone())
-            .build_bundle()
-            .await;
+            .relogin(store.clone());
+        if let Some(proxies) = proxies {
+            builder = builder.proxies(proxies);
+        }
+        let mut bundle = builder.build_bundle().await;
         let id = WorkerId::try_new(WorkerKind::OAuthRefresh, "admin_relogin").unwrap();
         let task = bundle
             .take_worker_contributions()

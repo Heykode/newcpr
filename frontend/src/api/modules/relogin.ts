@@ -48,8 +48,8 @@ export interface ReloginEntry {
   importedAt?: string | null
   updatedAt: string
 }
-export interface ReloginSettings { concurrency: number, paused: boolean, maxRetries: number, retryIntervalMinutes: number }
-export type ReloginSettingsUpdate = Pick<ReloginSettings, 'concurrency' | 'paused'> & Partial<Pick<ReloginSettings, 'maxRetries' | 'retryIntervalMinutes'>>
+export interface ReloginSettings { concurrency: number, paused: boolean, maxRetries: number, retryIntervalSeconds: number }
+export type ReloginSettingsUpdate = Pick<ReloginSettings, 'concurrency' | 'paused'> & Partial<Pick<ReloginSettings, 'maxRetries' | 'retryIntervalSeconds'>>
 export interface ReloginList { settings: ReloginSettings, items: ReloginEntry[] }
 export interface ReloginBatchResult { id: string, success: boolean, message: string }
 

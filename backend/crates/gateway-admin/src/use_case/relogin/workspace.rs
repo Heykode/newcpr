@@ -175,6 +175,9 @@ impl DefaultReloginService {
         entry.synced_at = None;
         entry.next_attempt_at = None;
         entry.stop_reason = None;
+        if entry.enrollment.is_some() && entry.target.is_none() {
+            entry.automatic_attempts = 0;
+        }
         entry.status = ReloginStatus::Queued;
         entry.message = "已选择工作区，等待继续获取凭据".to_owned();
         self.save(&mut entry).await

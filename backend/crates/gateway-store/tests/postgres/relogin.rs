@@ -16,6 +16,39 @@ use gateway_store::postgres::{
     RotateProviderAccount,
 };
 
+#[tokio::test]
+async fn relogin_seconds_upgrade_converts_defaults_and_preserves_custom_durations() {
+    let old = sqlx::migrate::Migrator {
+        migrations: super::TEST_MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 70)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into(),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for (minutes, seconds) in [(5, 30), (1, 60), (37, 2220), (1440, 86400)] {
+        let Some(database) = TestDatabase::create_with_migrator("relogin_seconds", &old).await
+        else {
+            return;
+        };
+        sqlx::query("update account_relogin_settings set retry_interval_minutes=$1, max_retries=7, concurrency=3, paused=true where singleton")
+            .bind(minutes).execute(&database.pool).await.unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
+        let store = PgReloginStore::new(database.pool.clone());
+        let settings = store.settings().await.unwrap();
+        assert_eq!(settings.retry_interval_seconds, seconds);
+        assert_eq!(settings.max_retries, 7);
+        assert_eq!(settings.concurrency, 3);
+        assert!(settings.paused);
+        let fresh: i32 = sqlx::query_scalar("select column_default::text::integer from information_schema.columns where table_schema=current_schema() and table_name='account_relogin_settings' and column_name='retry_interval_seconds'")
+            .fetch_one(&database.pool).await.unwrap();
+        assert_eq!(fresh, 30);
+        database.close().await;
+    }
+}
+
 fn entry(id: &str, email: &str) -> ReloginEntry {
     ReloginEntry {
         imported_at: Some(chrono::Utc::now()),
@@ -618,13 +651,13 @@ async fn relogin_storage_fences_rows_and_rolls_back_entire_import() {
     assert!(!rows[0].automatic);
     assert_eq!(store.settings().await.unwrap().concurrency, 1);
     assert_eq!(store.settings().await.unwrap().max_retries, 2);
-    assert_eq!(store.settings().await.unwrap().retry_interval_minutes, 5);
+    assert_eq!(store.settings().await.unwrap().retry_interval_seconds, 30);
     store
         .save_settings(&ReloginSettings {
             concurrency: 3,
             paused: true,
             max_retries: 0,
-            retry_interval_minutes: 37,
+            retry_interval_seconds: 37,
         })
         .await
         .unwrap();
@@ -636,15 +669,15 @@ async fn relogin_storage_fences_rows_and_rolls_back_entire_import() {
     );
     assert_eq!(restarted.settings().await.unwrap().max_retries, 0);
     assert_eq!(
-        restarted.settings().await.unwrap().retry_interval_minutes,
+        restarted.settings().await.unwrap().retry_interval_seconds,
         37
     );
-    for (retries, interval) in [(11, 5), (2, 0), (2, 1441)] {
+    for (retries, interval) in [(11, 5), (2, 0), (2, 86401)] {
         assert!(
             restarted
                 .save_settings(&ReloginSettings {
                     max_retries: retries,
-                    retry_interval_minutes: interval,
+                    retry_interval_seconds: interval,
                     ..ReloginSettings::default()
                 })
                 .await
@@ -653,7 +686,7 @@ async fn relogin_storage_fences_rows_and_rolls_back_entire_import() {
     }
     assert_eq!(restarted.settings().await.unwrap().max_retries, 0);
     assert_eq!(
-        restarted.settings().await.unwrap().retry_interval_minutes,
+        restarted.settings().await.unwrap().retry_interval_seconds,
         37
     );
     assert!(
