@@ -657,7 +657,7 @@ impl AccountSelector {
         )
     }
 
-    /// Selecting a busy candidate does not prove all ready candidates were tried.
+    /// Wait for capacity or request spacing; Ready candidates must be tried first.
     #[must_use]
     pub fn select_for_capacity_wait<'a>(
         &self,
@@ -685,6 +685,9 @@ impl AccountSelector {
             context,
             |candidate| match self.availability(candidate, context, limits) {
                 available if available == expected => None,
+                AccountSchedulingAvailability::Blocked(
+                    AccountSchedulingBlocker::RequestInterval,
+                ) if expected == AccountSchedulingAvailability::Busy => None,
                 AccountSchedulingAvailability::Blocked(blocker) => Some(blocker),
                 _ => Some(AccountSchedulingBlocker::ConcurrencyLimit),
             },

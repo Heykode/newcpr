@@ -183,7 +183,7 @@ fn account_wait_classification_distinguishes_busy_unhealthy_and_live_capacity() 
 }
 
 #[test]
-fn account_wait_never_masks_non_capacity_blockers() {
+fn account_wait_admits_spacing_without_masking_other_blockers() {
     use gateway_core::account::{
         AccountSchedulingAvailability as Availability, AccountSchedulingBlocker,
         AccountSelectionPolicy, CredentialState, QuotaEvidence, QuotaState,
@@ -235,7 +235,12 @@ fn account_wait_never_masks_non_capacity_blockers() {
     );
     assert!(
         AccountSelector
-            .select_for_capacity_wait(&[interval_busy], &ctx, &limits)
+            .select_for_capacity_wait(std::slice::from_ref(&interval_busy), &ctx, &limits)
+            .is_some()
+    );
+    assert!(
+        AccountSelector
+            .select_with_live_capacity(&[interval_busy], &ctx, &limits)
             .is_none()
     );
     let mut cooled = busy;
@@ -243,6 +248,11 @@ fn account_wait_never_masks_non_capacity_blockers() {
     assert_eq!(
         AccountSelector.availability(&cooled, &ctx, &limits),
         Availability::Blocked(AccountSchedulingBlocker::LocalAvailability)
+    );
+    assert!(
+        AccountSelector
+            .select_for_capacity_wait(&[cooled], &ctx, &limits)
+            .is_none()
     );
 }
 
