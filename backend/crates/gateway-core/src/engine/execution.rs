@@ -25,6 +25,7 @@ use crate::engine::probe::{
     AccountProbeResult, AccountProbeUpstreamResponse,
 };
 use crate::engine::provider::ProviderRegistry;
+pub use crate::engine::response_commit::ResponseCommit;
 use crate::engine::{
     AttemptCoordinator, AttemptRecord, CoordinatedEvent, EngineError, ExecutionStore,
     GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
@@ -161,6 +162,9 @@ pub struct StartedExecution {
 }
 
 pub trait ExecutionSession: Send {
+    fn response_commit(&self) -> ResponseCommit {
+        ResponseCommit::default()
+    }
     fn response_control(&self) -> Option<super::response_control::ResponseControl> {
         None
     }
@@ -1594,6 +1598,9 @@ impl Drop for DefaultExecutionSession {
 }
 
 impl ExecutionSession for DefaultExecutionSession {
+    fn response_commit(&self) -> ResponseCommit {
+        self.core.response_commit()
+    }
     fn response_control(&self) -> Option<super::response_control::ResponseControl> {
         Some(self.core.response_control())
     }

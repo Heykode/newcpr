@@ -130,9 +130,11 @@ struct ModelPricing {
     standard: TokenRates,
     flex: TokenRates,
     fast: TokenRates,
+    ultrafast: TokenRates,
     long_standard: TokenRates,
     long_flex: TokenRates,
     long_fast: TokenRates,
+    long_ultrafast: TokenRates,
     cache_write_percent: u32,
     unpriced_long_context: bool,
 }
@@ -143,9 +145,11 @@ impl ModelPricing {
             standard: TokenRates::new(input, output, cache_read),
             flex: TokenRates::ZERO,
             fast: TokenRates::ZERO,
+            ultrafast: TokenRates::ZERO,
             long_standard: TokenRates::ZERO,
             long_flex: TokenRates::ZERO,
             long_fast: TokenRates::ZERO,
+            long_ultrafast: TokenRates::ZERO,
             cache_write_percent: 0,
             unpriced_long_context: false,
         }
@@ -163,6 +167,16 @@ impl ModelPricing {
 
     const fn with_long(mut self, input: u128, output: u128, cache_read: u128) -> Self {
         self.long_standard = TokenRates::new(input, output, cache_read);
+        self
+    }
+
+    const fn with_ultrafast(mut self, input: u128, output: u128, cache_read: u128) -> Self {
+        self.ultrafast = TokenRates::new(input, output, cache_read);
+        self
+    }
+
+    const fn with_long_ultrafast(mut self, input: u128, output: u128, cache_read: u128) -> Self {
+        self.long_ultrafast = TokenRates::new(input, output, cache_read);
         self
     }
 
@@ -198,9 +212,11 @@ impl ModelPricing {
             (PricingTier::Standard, false) => self.standard,
             (PricingTier::Flex, false) => self.flex,
             (PricingTier::Fast, false) => self.fast,
+            (PricingTier::Ultrafast, false) => self.ultrafast,
             (PricingTier::Standard, true) => self.long_standard,
             (PricingTier::Flex, true) => self.long_flex,
             (PricingTier::Fast, true) => self.long_fast,
+            (PricingTier::Ultrafast, true) => self.long_ultrafast,
         };
         rates.is_configured().then_some(rates)
     }
@@ -211,6 +227,7 @@ enum PricingTier {
     Standard,
     Flex,
     Fast,
+    Ultrafast,
 }
 
 #[derive(Clone, Copy)]
@@ -232,9 +249,11 @@ const PRICING_RULES: &[PricingRule] = &[
             .with_cache_write(125)
             .with_flex(10_000, 50_000, 500)
             .with_fast(40_000, 200_000, 2_000)
+            .with_ultrafast(120_000, 600_000, 6_000)
             .with_long(40_000, 150_000, 2_000)
             .with_long_flex(20_000, 75_000, 1_000)
-            .with_long_fast(80_000, 300_000, 4_000),
+            .with_long_fast(80_000, 300_000, 4_000)
+            .with_long_ultrafast(240_000, 900_000, 12_000),
     },
     // Astra：https://developers.openai.com/api/docs/models/gpt-6-astra
     // 已于 2026-09-09 对照官方价目表核验。
@@ -244,9 +263,11 @@ const PRICING_RULES: &[PricingRule] = &[
             .with_cache_write(125)
             .with_flex(50_000, 250_000, 5_000)
             .with_fast(200_000, 1_000_000, 20_000)
+            .with_ultrafast(600_000, 3_000_000, 60_000)
             .with_long(200_000, 750_000, 20_000)
             .with_long_flex(100_000, 375_000, 10_000)
-            .with_long_fast(400_000, 1_500_000, 40_000),
+            .with_long_fast(400_000, 1_500_000, 40_000)
+            .with_long_ultrafast(1_200_000, 4_500_000, 120_000),
     },
     // Sol/Luna 对照官方模型页和价目表核验于 2026-09-23：
     // https://developers.openai.com/api/docs/models/gpt-6-sol
@@ -704,6 +725,7 @@ fn pricing_tier(service_tier: Option<&str>) -> Option<PricingTier> {
         None | Some("default" | "standard") => Some(PricingTier::Standard),
         Some("flex") => Some(PricingTier::Flex),
         Some("fast" | "priority") => Some(PricingTier::Fast),
+        Some("ultrafast") => Some(PricingTier::Ultrafast),
         Some(_) => None,
     }
 }

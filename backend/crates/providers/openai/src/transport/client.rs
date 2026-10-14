@@ -1,5 +1,9 @@
 //! Codex HTTP/SSE 上游客户端、请求头构造、TLS 与自定义 CA。
 
+#[cfg(test)]
+#[path = "client_connection_tests.rs"]
+mod connection_tests;
+
 use std::{
     collections::VecDeque,
     fmt,
@@ -50,7 +54,7 @@ pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 const MAX_CACHED_REQWEST_CLIENTS: usize = 256;
-type ReqwestClientCacheKey = (Option<String>, String, String);
+type ReqwestClientCacheKey = (Option<String>, String, String, Duration);
 
 struct ReqwestClientCacheEntry {
     account_id: String,
@@ -109,10 +113,25 @@ pub fn build_account_http_client(
     proxy: Option<&gateway_core::account::OutboundProxy>,
     profile_identity: &str,
 ) -> Result<Client, CustomCaError> {
+    build_account_http_client_with_timeout(
+        account_id,
+        proxy,
+        profile_identity,
+        UPSTREAM_CONNECT_TIMEOUT,
+    )
+}
+
+fn build_account_http_client_with_timeout(
+    account_id: &str,
+    proxy: Option<&gateway_core::account::OutboundProxy>,
+    profile_identity: &str,
+    timeout: Duration,
+) -> Result<Client, CustomCaError> {
     let cache_key = (
         custom_ca_env_cache_key(),
         egress_key(account_id, proxy),
         profile_identity.to_owned(),
+        timeout,
     );
     if let Some(client) = reqwest_clients()
         .lock()
@@ -127,7 +146,7 @@ pub fn build_account_http_client(
     let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(UPSTREAM_CONNECT_TIMEOUT);
+        .connect_timeout(timeout);
     if let Some(proxy) = proxy {
         builder = builder.proxy(
             reqwest::Proxy::all(proxy.expose_url())
@@ -254,6 +273,8 @@ impl fmt::Debug for CodexClientVisibleUpstreamResponse {
 /// Codex 上游 HTTP 客户端错误。
 #[derive(Error)]
 pub enum CodexClientError {
+    #[error("connection recovery budget exhausted")]
+    ConnectionBudgetExhausted,
     /// Reqwest 传输失败。
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
@@ -335,6 +356,9 @@ pub enum CodexClientError {
 impl fmt::Debug for CodexClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConnectionBudgetExhausted => {
+                formatter.write_str("CodexClientError::ConnectionBudgetExhausted")
+            }
             Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
             Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
             Self::ErrorBodyRead {
@@ -402,7 +426,8 @@ impl CodexClientError {
             Self::Upstream { transport, .. } | Self::ErrorBodyRead { transport, .. } => {
                 Some(*transport)
             }
-            Self::CustomCa(_)
+            Self::ConnectionBudgetExhausted
+            | Self::CustomCa(_)
             | Self::Egress(_)
             | Self::InvalidHeaderName(_)
             | Self::InvalidHeaderValue(_)
@@ -732,11 +757,13 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
     pub(super) response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     pub(super) client: Client,
     pub(super) direct_client: Client,
+    pub(super) default_direct_client: bool,
     pub(super) base_url: String,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
@@ -755,6 +782,22 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_default_http_client(mut self) -> Self {
+        self.default_direct_client = true;
+        self
+    }
+
+    pub(crate) fn has_connection_budget(&self) -> bool {
+        self.connection_budget.is_some()
+    }
+
+    pub(crate) fn with_connection_budget(
+        mut self,
+        budget: gateway_core::engine::connection::ConnectionBudget,
+    ) -> Self {
+        self.connection_budget = Some(budget);
+        self
+    }
     // Shared only by a leased response and its sequential payload-repair retry.
     pub(crate) fn with_same_attempt_recovery(mut self) -> Self {
         self.recovery_route = Some(Arc::new(OnceLock::new()));
@@ -915,6 +958,7 @@ impl CodexBackendClient {
     fn request_client(
         &self,
         profile: &super::profile::CodexWireProfile,
+        timeout: Duration,
     ) -> CodexClientResult<Client> {
         if let Some(runtime) = &self.egress_runtime {
             if let Some(account) = &self.egress_account {
@@ -926,8 +970,22 @@ impl CodexBackendClient {
                 _ => None,
             };
             if let Some(route) = selected {
-                return Ok(runtime.http_client(&route, profile)?);
+                return Ok(runtime.http_client_with_timeout(&route, profile, timeout)?);
             }
+        }
+        // Caller-injected clients may carry trust, DNS or other configuration
+        // that reqwest cannot clone into a new builder. Only rebuild our own clients.
+        if timeout < UPSTREAM_CONNECT_TIMEOUT
+            && (self.default_direct_client || self.outbound_proxy.is_some())
+        {
+            return Ok(build_account_http_client_with_timeout(
+                self.egress_account
+                    .as_ref()
+                    .map_or("", |account| account.id().as_str()),
+                self.outbound_proxy.as_ref(),
+                &profile.user_agent(),
+                timeout,
+            )?);
         }
         Ok(self.client.clone())
     }
@@ -941,7 +999,28 @@ impl CodexBackendClient {
     where
         F: FnOnce(Client) -> reqwest::RequestBuilder + Send,
     {
-        let response = build(self.request_client(profile)?).send().await;
+        let remaining = self
+            .connection_budget
+            .as_ref()
+            .map(|budget| budget.begin())
+            .transpose()
+            .map_err(|_| CodexClientError::ConnectionBudgetExhausted)?
+            .flatten();
+        // Only shorten connect timeout. A response may legitimately take much longer.
+        let connect_timeout = remaining.map_or(UPSTREAM_CONNECT_TIMEOUT, |remaining| {
+            remaining.min(UPSTREAM_CONNECT_TIMEOUT)
+        });
+        if connect_timeout.is_zero() {
+            return Err(CodexClientError::ConnectionBudgetExhausted);
+        }
+        let response = build(self.request_client(profile, connect_timeout)?)
+            .send()
+            .await;
+        if (response.is_ok() || response.as_ref().is_err_and(|error| !error.is_connect()))
+            && let Some(budget) = &self.connection_budget
+        {
+            budget.complete();
+        }
         if let Some(lease) = &self.session_proxy {
             use gateway_core::provider_ports::session_proxy::SessionProxyOutcome;
             match &response {
@@ -1177,6 +1256,9 @@ pub(super) fn openai_subagent_from_metadata(client_metadata: Option<&Value>) -> 
 pub(super) fn websocket_exchange_error_to_client_error(
     error: CodexWebSocketExchangeError,
 ) -> CodexClientError {
+    if error.connection_budget_exhausted() {
+        return CodexClientError::ConnectionBudgetExhausted;
+    }
     match error {
         CodexWebSocketExchangeError::Egress(error) => CodexClientError::Egress(error),
         CodexWebSocketExchangeError::Upstream(upstream) => {

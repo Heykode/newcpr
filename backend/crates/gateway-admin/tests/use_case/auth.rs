@@ -22,21 +22,26 @@ struct MemoryAuthStore {
 
 #[async_trait]
 impl AuthStore for MemoryAuthStore {
-    async fn renew_session(
+    async fn compare_exchange_session(
         &self,
         id: &str,
         expected: &AdminSession,
-        expires_at: chrono::DateTime<Utc>,
+        replacement: Option<&AdminSession>,
     ) -> AdminStoreResult<Option<AdminSession>> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let Some(current) = sessions
             .get_mut(id)
-            .filter(|session| session.expires_at > Utc::now())
+            .filter(|session| session.retained_until() > Utc::now())
         else {
             return Ok(None);
         };
         if current == expected {
-            current.expires_at = expires_at;
+            if let Some(replacement) = replacement {
+                *current = replacement.clone();
+            } else {
+                sessions.remove(id);
+                return Ok(None);
+            }
         }
         Ok(Some(current.clone()))
     }
@@ -186,40 +191,72 @@ async fn renewal_preserves_fingerprint_obeys_absolute_expiry_and_never_revives_l
         .await
         .unwrap();
     let original = store
-        .load_session(&login.session_id)
+        .load_session(login.session_id.split('.').nth(1).unwrap())
         .await
         .unwrap()
         .unwrap();
     let unchanged = services
         .auth()
-        .renew_session(Some(&login.session_id))
+        .renew_session(login.refresh_token.as_deref())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(unchanged, original, "throttle early renewal writes");
+    assert_eq!(unchanged, login, "reuse active generation");
     let absolute = Utc::now() + TimeDelta::minutes(10);
     let session = AdminSession {
-        expires_at: Utc::now() + TimeDelta::seconds(30),
+        expires_at: Utc::now() - TimeDelta::seconds(1),
         absolute_expires_at: Some(absolute),
         ..original
     };
     store
-        .store_session(&login.session_id, &session)
+        .store_session(login.session_id.split('.').nth(1).unwrap(), &session)
         .await
         .unwrap();
     let renewed = services
         .auth()
-        .renew_session(Some(&login.session_id))
+        .renew_session(login.refresh_token.as_deref())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(renewed.expires_at, absolute);
-    assert_eq!(renewed.absolute_expires_at, Some(absolute));
+    assert_eq!(renewed.refresh_expires_at, Some(absolute));
+    let stored = store
+        .load_session(login.session_id.split('.').nth(1).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.absolute_expires_at, Some(absolute));
     assert_eq!(
-        renewed.credential_fingerprint,
+        stored.credential_fingerprint,
         session.credential_fingerprint
     );
-    services.auth().logout(&login.session_id).await.unwrap();
+    assert_eq!(
+        services
+            .auth()
+            .renew_session(login.refresh_token.as_deref())
+            .await
+            .unwrap(),
+        Some(renewed.clone())
+    );
+    assert!(
+        !services
+            .auth()
+            .validate_session(Some(&login.session_id))
+            .await
+            .unwrap()
+    );
+    assert!(
+        services
+            .auth()
+            .validate_session(Some(&renewed.session_id))
+            .await
+            .unwrap()
+    );
+    services
+        .auth()
+        .logout(renewed.refresh_token.as_deref().unwrap())
+        .await
+        .unwrap();
     assert!(
         services
             .auth()
@@ -230,7 +267,11 @@ async fn renewal_preserves_fingerprint_obeys_absolute_expiry_and_never_revives_l
     );
     assert!(
         store
-            .renew_session(&login.session_id, &session, absolute)
+            .compare_exchange_session(
+                login.session_id.split('.').nth(1).unwrap(),
+                &session,
+                Some(&stored)
+            )
             .await
             .unwrap()
             .is_none()
@@ -250,19 +291,26 @@ async fn renewal_keeps_legacy_expiry_and_rejects_missing_fingerprint_or_expired_
         .await
         .unwrap();
     let original = store
-        .load_session(&login.session_id)
+        .load_session(login.session_id.split('.').nth(1).unwrap())
         .await
         .unwrap()
         .unwrap();
     let legacy = AdminSession {
         expires_at: Utc::now() + TimeDelta::seconds(30),
         absolute_expires_at: None,
+        renewal: None,
         ..original.clone()
     };
     store.store_session("legacy", &legacy).await.unwrap();
     assert_eq!(
-        services.auth().renew_session(Some("legacy")).await.unwrap(),
-        Some(legacy)
+        services
+            .auth()
+            .renew_session(Some("legacy"))
+            .await
+            .unwrap()
+            .unwrap()
+            .expires_at,
+        legacy.expires_at
     );
     for (id, expires_at, absolute_expires_at, fingerprint) in [
         (
@@ -291,6 +339,7 @@ async fn renewal_keeps_legacy_expiry_and_rejects_missing_fingerprint_or_expired_
                     expires_at,
                     absolute_expires_at,
                     credential_fingerprint: fingerprint,
+                    renewal: None,
                     ..original.clone()
                 },
             )
@@ -348,6 +397,95 @@ async fn login_with_huge_session_ttl_should_clamp_expiry_instead_of_panicking() 
             .validate_session(Some(&result.session_id))
             .await
             .expect("validate")
+    );
+}
+
+#[tokio::test]
+async fn refresh_credentials_are_separated_and_replay_outside_grace_revokes_session() {
+    let store = std::sync::Arc::new(MemoryAuthStore::default());
+    let services = super::AdminHarness::new().auth(store.clone()).build().await;
+    let login = services
+        .auth()
+        .login(LoginCommand {
+            username: None,
+            password: "strong-test-password".to_owned(),
+        })
+        .await
+        .unwrap();
+    let id = login.session_id.split('.').nth(1).unwrap();
+    assert!(
+        !services
+            .auth()
+            .validate_session(login.refresh_token.as_deref())
+            .await
+            .unwrap()
+    );
+    assert!(!services.auth().validate_session(Some(id)).await.unwrap());
+    assert!(
+        services
+            .auth()
+            .renew_session(Some(&login.session_id))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    services.auth().logout(id).await.unwrap();
+    assert!(
+        services
+            .auth()
+            .validate_session(Some(&login.session_id))
+            .await
+            .unwrap()
+    );
+    {
+        let mut sessions = store.sessions.lock().unwrap();
+        sessions.get_mut(id).unwrap().expires_at = Utc::now() - TimeDelta::seconds(1);
+    }
+    let (first, second) = tokio::join!(
+        services
+            .auth()
+            .renew_session(login.refresh_token.as_deref()),
+        services
+            .auth()
+            .renew_session(login.refresh_token.as_deref())
+    );
+    let renewed = first.unwrap().unwrap();
+    assert_eq!(second.unwrap(), Some(renewed.clone()));
+    {
+        let mut sessions = store.sessions.lock().unwrap();
+        sessions
+            .get_mut(id)
+            .unwrap()
+            .renewal
+            .as_mut()
+            .unwrap()
+            .previous
+            .as_mut()
+            .unwrap()
+            .expires_at = Utc::now() - TimeDelta::seconds(1);
+    }
+    assert!(
+        services
+            .auth()
+            .renew_session(login.refresh_token.as_deref())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !services
+            .auth()
+            .validate_session(Some(&renewed.session_id))
+            .await
+            .unwrap()
+    );
+    assert!(
+        services
+            .auth()
+            .renew_session(renewed.refresh_token.as_deref())
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -524,7 +662,7 @@ async fn password_change_attempt_limit_is_shared_across_sessions_and_legacy_sess
         .sessions
         .lock()
         .expect("sessions")
-        .get_mut(&first.session_id)
+        .get_mut(first.session_id.split('.').nth(1).unwrap())
         .expect("first")
         .credential_fingerprint
         .clear();

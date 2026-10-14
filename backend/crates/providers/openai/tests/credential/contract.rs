@@ -2613,6 +2613,48 @@ async fn immediate_snapshot_conflict_reloads_facts_before_reserving_capacity() {
 }
 
 #[tokio::test]
+async fn quota_observation_only_update_does_not_restart_selection() {
+    use std::sync::atomic::Ordering;
+    for during_acquire in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "fixture");
+        let account = store.account("acct_original").unwrap();
+        let observed = SystemTime::now();
+        store
+            .apply_quota_access(QuotaAccessChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                state: QuotaState::allowed(observed),
+            })
+            .await
+            .unwrap();
+        let changed = Arc::clone(&store);
+        let advance: Box<dyn FnOnce() + Send + Sync> = Box::new(move || {
+            block_on(changed.apply_quota_access(QuotaAccessChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                state: QuotaState::allowed(observed + Duration::from_secs(1)),
+            }))
+            .unwrap();
+        });
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        if during_acquire {
+            *leases.capacity.after_acquire.lock().unwrap() = Some(advance);
+        } else {
+            *store.before_credential_load.lock().unwrap() = Some(advance);
+        }
+        let selector = selector(&store, Arc::clone(&leases));
+        let lease = capacity_select(&selector, &attempt(BTreeSet::new()), None)
+            .await
+            .unwrap();
+        assert_eq!(lease.account_id().as_str(), "acct_original");
+        assert_eq!(leases.requests.lock().unwrap().len(), 1);
+        assert_eq!(store.credential_loads.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
 async fn immediate_snapshot_conflict_is_bounded_without_consuming_a_lease() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());

@@ -99,15 +99,16 @@ pub fn responses_websocket_endpoint(base_url: &str) -> String {
 pub(super) async fn connect_sideband_websocket(
     connection: &CodexWebSocketConnection,
 ) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
-    connect_websocket(connection).await
+    connect_websocket(connection, None).await
 }
 
 pub(super) async fn connect_pumped_websocket(
     connection: &CodexWebSocketConnection,
     keepalive: PumpKeepalive,
     context: PumpLogContext,
+    connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<(PumpedWebSocket, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
-    let (raw, response) = connect_websocket(connection).await?;
+    let (raw, response) = connect_websocket(connection, connection_budget).await?;
     let compression_threshold = negotiated_compression_threshold(&response);
     Ok((
         PumpedWebSocket::new(raw, keepalive, context, compression_threshold),
@@ -173,6 +174,7 @@ pub(super) fn websocket_connection_metadata(
 
 async fn connect_websocket(
     connection: &CodexWebSocketConnection,
+    connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<(RawWsStream, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let request = websocket_handshake_request(connection)?;
     let connector = tls::maybe_build_rustls_client_config_with_custom_ca()
@@ -182,7 +184,19 @@ async fn connect_websocket(
             )))
         })?
         .map(Connector::Rustls);
-    let result = timeout(WEBSOCKET_CONNECT_TIMEOUT, async {
+    let remaining = connection_budget
+        .map(|budget| budget.begin())
+        .transpose()
+        .map_err(|error| {
+            CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
+                error,
+            )))
+        })?
+        .flatten();
+    let connect_timeout = remaining.map_or(WEBSOCKET_CONNECT_TIMEOUT, |remaining| {
+        remaining.min(WEBSOCKET_CONNECT_TIMEOUT)
+    });
+    let result = timeout(connect_timeout, async {
         // All paths retain the same TLS/WS handshake; only direct TCP is IPv4-only.
         let stream = dial_account(connection).await?;
         match stream {
@@ -205,8 +219,16 @@ async fn connect_websocket(
         }
     })
     .await
-    .map_err(|_| CodexWebSocketExchangeError::ConnectTimeout {
-        timeout: WEBSOCKET_CONNECT_TIMEOUT,
+    .map_err(|_| {
+        if connect_timeout < WEBSOCKET_CONNECT_TIMEOUT {
+            CodexWebSocketExchangeError::Connect(tungstenite::Error::Io(std::io::Error::other(
+                gateway_core::engine::connection::ConnectionBudgetExhausted,
+            )))
+        } else {
+            CodexWebSocketExchangeError::ConnectTimeout {
+                timeout: connect_timeout,
+            }
+        }
     })?;
     match result {
         Ok((websocket, response)) => Ok((websocket, response)),

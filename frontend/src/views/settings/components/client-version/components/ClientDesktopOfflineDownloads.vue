@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ClientDownloadPackage, CodexDesktopWindowsDownloads } from '@/api'
 import { ArrowDownToLine, PackageOpen, RefreshCw } from '@lucide/vue'
+import { computed } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseEmpty from '@/components/base/BaseEmpty.vue'
@@ -12,7 +13,7 @@ import ClientInstallCommandList from './ClientInstallCommandList.vue'
 
 defineOptions({ name: 'ClientDesktopOfflineDownloads' })
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     downloads?: CodexDesktopWindowsDownloads | null
     loading?: boolean
@@ -29,6 +30,13 @@ const emit = defineEmits<{
   refresh: []
   retry: []
 }>()
+
+const downloadDescription = computed(() => {
+  const packages = props.downloads?.packages
+  if (packages?.length && packages.every(packageItem => packageItem.source === 'official_openai'))
+    return 'OpenAI 官方安装包，请选择与设备一致的架构'
+  return 'Microsoft Store 离线安装包，请选择与设备一致的架构'
+})
 
 const localInstallCommand = [
   {
@@ -75,7 +83,7 @@ function formatFileSize(value: number | null): string {
             </span>
           </div>
           <p class="mt-1.5 mb-0 text-cp-sm leading-[1.45] font-semibold text-cp-text-secondary">
-            后端实时校验 Microsoft CDN 直链；请选择与设备一致的架构。
+            {{ downloadDescription }}
           </p>
         </div>
       </div>

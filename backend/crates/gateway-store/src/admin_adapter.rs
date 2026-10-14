@@ -379,6 +379,7 @@ impl AuthStore for AdminAuthStoreAdapter {
                     credential_fingerprint: record.credential_fingerprint,
                     expires_at: record.expires_at,
                     absolute_expires_at: record.absolute_expires_at,
+                    renewal: record.renewal,
                 })
             })
             .map_err(|error| admin_store_error("admin session", error))
@@ -397,6 +398,7 @@ impl AuthStore for AdminAuthStoreAdapter {
                 credential_fingerprint: session.credential_fingerprint.clone(),
                 expires_at: session.expires_at,
                 absolute_expires_at: session.absolute_expires_at,
+                renewal: session.renewal.clone(),
             },
         )
         .await
@@ -412,18 +414,26 @@ impl AuthStore for AdminAuthStoreAdapter {
                     credential_fingerprint: record.credential_fingerprint,
                     expires_at: record.expires_at,
                     absolute_expires_at: record.absolute_expires_at,
+                    renewal: record.renewal,
                 })
             })
             .map_err(|error| admin_store_error("admin session", error))
     }
 
-    async fn renew_session(
+    async fn compare_exchange_session(
         &self,
         session_id: &str,
         expected: &AdminSession,
-        expires_at: chrono::DateTime<chrono::Utc>,
+        replacement: Option<&AdminSession>,
     ) -> AdminStoreResult<Option<AdminSession>> {
-        redis::AdminAuthStateRepository::renew_admin_session(
+        let replacement = replacement.map(|session| redis::AdminSessionRecord {
+            admin_user_id: session.admin_user_id.clone(),
+            credential_fingerprint: session.credential_fingerprint.clone(),
+            expires_at: session.expires_at,
+            absolute_expires_at: session.absolute_expires_at,
+            renewal: session.renewal.clone(),
+        });
+        redis::AdminAuthStateRepository::compare_exchange_admin_session(
             &self.state,
             session_id,
             &redis::AdminSessionRecord {
@@ -431,8 +441,9 @@ impl AuthStore for AdminAuthStoreAdapter {
                 credential_fingerprint: expected.credential_fingerprint.clone(),
                 expires_at: expected.expires_at,
                 absolute_expires_at: expected.absolute_expires_at,
+                renewal: expected.renewal.clone(),
             },
-            expires_at,
+            replacement.as_ref(),
         )
         .await
         .map(|session| {
@@ -441,6 +452,7 @@ impl AuthStore for AdminAuthStoreAdapter {
                 credential_fingerprint: record.credential_fingerprint,
                 expires_at: record.expires_at,
                 absolute_expires_at: record.absolute_expires_at,
+                renewal: record.renewal,
             })
         })
         .map_err(|error| admin_store_error("admin session renewal", error))

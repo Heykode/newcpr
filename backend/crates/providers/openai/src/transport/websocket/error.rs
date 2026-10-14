@@ -240,6 +240,11 @@ impl fmt::Display for CodexWebSocketUpstreamError {
 }
 
 impl CodexWebSocketExchangeError {
+    pub(crate) fn connection_budget_exhausted(&self) -> bool {
+        matches!(self.classified(), Self::Connect(tungstenite::Error::Io(error))
+            if error.get_ref().is_some_and(|source| source.is::<gateway_core::engine::connection::ConnectionBudgetExhausted>()))
+    }
+
     /// 仅供诊断展示穿透发送状态与连接快照包装；重试分类仍使用 classified。
     pub(crate) fn diagnostic_cause(&self) -> &Self {
         match self {

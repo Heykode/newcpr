@@ -279,6 +279,11 @@ impl CodexProvider {
         })
     }
 
+    pub(crate) fn with_default_http_client(mut self) -> Self {
+        self.client = self.client.with_default_http_client();
+        self
+    }
+
     pub(crate) fn with_session_identity(mut self, identity: CodexSessionIdentity) -> Self {
         self.session_identity = Some(identity);
         self
@@ -869,6 +874,11 @@ impl Provider for CodexProvider {
                     .and_then(Value::as_str)
             });
         let client = self.account_exit_client(&context, lease.account(), excel, session)?;
+        let client = if !excel && context.continuation_attempt() == ContinuationAttempt::None {
+            client.with_connection_budget(context.connection_budget().clone())
+        } else {
+            client
+        };
         if let Some(prepared) = upstream_request.excel.as_mut() {
             prepared.exit_lease = client.session_proxy_lease();
         }

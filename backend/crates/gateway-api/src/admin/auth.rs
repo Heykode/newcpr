@@ -26,6 +26,7 @@ use super::{AdminEnvelope, AdminError, AdminJson, AdminResponse};
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const ADMIN_SESSION_COOKIE: &str = "cpr_admin_session";
+const ADMIN_REFRESH_COOKIE: &str = "cpr_admin_refresh";
 
 /// 所有管理 HTTP 模块从 state 消费同一个认证用例端口。
 pub trait AdminSessionState {
@@ -263,14 +264,7 @@ where
         AdminEnvelope::ok(serde_json::json!({ "message": "Password changed" })),
     )
     .into_response();
-    response.headers_mut().insert(
-        SET_COOKIE,
-        HeaderValue::from_str(&format!(
-            "{ADMIN_SESSION_COOKIE}=; {}; Max-Age=0",
-            admin_session_cookie_attrs(&headers),
-        ))
-        .map_err(|_| AdminError::internal())?,
-    );
+    clear_session_cookies(&mut response, &headers)?;
     Ok(response)
 }
 
@@ -300,6 +294,7 @@ where
         &session.session_id,
         session.expires_at,
     )?;
+    set_refresh_cookie(&mut response, &headers, &session)?;
     Ok(response)
 }
 
@@ -330,7 +325,8 @@ async fn refresh_session<S>(
 where
     S: AdminSessionState + Send + Sync,
 {
-    let id = admin_session_cookie(&headers);
+    let id =
+        named_cookie(&headers, ADMIN_REFRESH_COOKIE).or_else(|| admin_session_cookie(&headers));
     let session = state
         .admin_services()
         .auth()
@@ -342,8 +338,14 @@ where
         AdminEnvelope::ok(AdminSessionStatusData::new(session.is_some())),
     )
     .into_response();
-    if let (Some(id), Some(session)) = (id, session) {
-        set_session_cookie(&mut response, &headers, &id, session.expires_at)?;
+    if let Some(session) = session {
+        set_session_cookie(
+            &mut response,
+            &headers,
+            &session.session_id,
+            session.expires_at,
+        )?;
+        set_refresh_cookie(&mut response, &headers, &session)?;
     }
     Ok(response)
 }
@@ -371,29 +373,78 @@ async fn logout<S>(State(state): State<S>, headers: HeaderMap) -> Result<Respons
 where
     S: AdminSessionState + Send + Sync,
 {
-    if let Some(session_id) = admin_session_cookie(&headers) {
-        let _ = state.admin_services().auth().logout(&session_id).await;
-    }
-    let mut response =
-        AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(AdminLogoutData::new()))
-            .into_response();
-    let cookie = format!(
-        "{ADMIN_SESSION_COOKIE}=; {}; Max-Age=0",
-        admin_session_cookie_attrs(&headers)
-    );
-    response.headers_mut().insert(
-        SET_COOKIE,
-        HeaderValue::from_str(&cookie).map_err(|_| AdminError::internal())?,
-    );
+    let result = if let Some(session_id) =
+        named_cookie(&headers, ADMIN_REFRESH_COOKIE).or_else(|| admin_session_cookie(&headers))
+    {
+        state
+            .admin_services()
+            .auth()
+            .logout(&session_id)
+            .await
+            .map_err(super::wire::map_admin_service_error)
+    } else {
+        Ok(())
+    };
+    let mut response = match result {
+        Ok(()) => AdminResponse::new(StatusCode::OK, AdminEnvelope::ok(AdminLogoutData::new()))
+            .into_response(),
+        Err(error) => error.into_response(),
+    };
+    clear_session_cookies(&mut response, &headers)?;
     Ok(response)
 }
 
 fn admin_session_cookie(headers: &HeaderMap) -> Option<String> {
+    named_cookie(headers, ADMIN_SESSION_COOKIE)
+}
+
+fn named_cookie(headers: &HeaderMap, expected: &str) -> Option<String> {
     let cookie = headers.get("cookie")?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
-        (name == ADMIN_SESSION_COOKIE).then(|| value.to_owned())
+        (name == expected && !value.is_empty()).then(|| value.to_owned())
     })
+}
+
+fn set_refresh_cookie(
+    response: &mut Response,
+    headers: &HeaderMap,
+    session: &gateway_admin::model::auth::LoginResult,
+) -> Result<(), AdminError> {
+    let (Some(token), Some(expiry)) = (&session.refresh_token, session.refresh_expires_at) else {
+        return Ok(());
+    };
+    let attrs = admin_session_cookie_attrs(headers).replacen("Path=/;", "Path=/api/admin/auth;", 1);
+    let max_age = (expiry - chrono::Utc::now()).num_seconds().max(0);
+    response.headers_mut().append(
+        SET_COOKIE,
+        HeaderValue::from_str(&format!(
+            "{ADMIN_REFRESH_COOKIE}={token}; {attrs}; Max-Age={max_age}; Expires={}",
+            expiry.format("%a, %d %b %Y %H:%M:%S GMT")
+        ))
+        .map_err(|_| AdminError::internal())?,
+    );
+    Ok(())
+}
+
+fn clear_session_cookies(response: &mut Response, headers: &HeaderMap) -> Result<(), AdminError> {
+    for (name, attrs) in [
+        (
+            ADMIN_SESSION_COOKIE,
+            admin_session_cookie_attrs(headers).to_owned(),
+        ),
+        (
+            ADMIN_REFRESH_COOKIE,
+            admin_session_cookie_attrs(headers).replacen("Path=/;", "Path=/api/admin/auth;", 1),
+        ),
+    ] {
+        response.headers_mut().append(
+            SET_COOKIE,
+            HeaderValue::from_str(&format!("{name}=; {attrs}; Max-Age=0"))
+                .map_err(|_| AdminError::internal())?,
+        );
+    }
+    Ok(())
 }
 
 fn map_login_error(error: LoginError) -> AdminError {

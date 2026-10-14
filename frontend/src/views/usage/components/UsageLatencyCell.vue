@@ -10,6 +10,12 @@ const props = defineProps<{
 }>()
 
 const latencyDetails = computed(() => usageLatencyDetails(props.record))
+const latencyTones = {
+  good: 'text-cp-success-text',
+  warn: 'text-cp-warning-text',
+  slow: 'latency-slow',
+  critical: 'text-cp-error-text',
+}
 </script>
 
 <template>
@@ -18,9 +24,9 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
       class="grid grid-cols-[auto_auto] items-center justify-end gap-x-2 gap-y-1.5 whitespace-nowrap font-mono text-cp-sm leading-none font-heavy tabular-nums"
     >
       <span class="text-cp-xs text-cp-text-quaternary">{{ latencyDetails.firstOutputLabel }}</span>
-      <span class="text-cp-text-secondary">{{ latencyDetails.firstOutputDisplay }}</span>
+      <span :class="latencyDetails.firstOutputSeverity === null ? 'text-cp-text-quaternary' : latencyTones[latencyDetails.firstOutputSeverity]">{{ latencyDetails.firstOutputDisplay }}</span>
       <span class="text-cp-xs text-cp-text-quaternary">总耗时</span>
-      <span class="text-cp-text">{{ latencyDetails.totalDisplay }}</span>
+      <span :class="latencyDetails.totalSeverity === null ? 'text-cp-text-quaternary' : latencyTones[latencyDetails.totalSeverity]">{{ latencyDetails.totalDisplay }}</span>
     </div>
 
     <UsageDetailPopover title="延迟明细" trigger-label="查看延迟明细">
@@ -74,3 +80,9 @@ const latencyDetails = computed(() => usageLatencyDetails(props.record))
     </UsageDetailPopover>
   </div>
 </template>
+
+<style scoped>
+.latency-slow {
+  color: color-mix(in oklab, var(--cp-color-warning-text) 65%, var(--cp-color-error-text));
+}
+</style>

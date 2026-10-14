@@ -2,14 +2,14 @@
 import type { HealthTimelinePoint } from '../constants'
 
 import { computed } from 'vue'
-import { formatHealthCount, healthReliabilityValueClass, healthStatusMeta } from '../constants'
+import { formatHealthCount, healthReliabilityValueClass, healthServiceFailureCount, healthStatusMeta } from '../constants'
 
 const props = defineProps<{
   point: HealthTimelinePoint
 }>()
 
 const status = computed(() => healthStatusMeta[props.point.status])
-const eligibleRequests = computed(() => props.point.successRequests + props.point.failedRequests)
+const eligibleRequests = computed(() => props.point.successRequests + healthServiceFailureCount(props.point))
 const observedRequests = computed(
   () => eligibleRequests.value + props.point.cancelledRequests + props.point.callerErrorRequests,
 )
@@ -23,7 +23,7 @@ const outcomeMeta = computed(() => [
   },
   {
     label: '服务失败',
-    value: props.point.failedRequests,
+    value: healthServiceFailureCount(props.point),
     dotClass: 'bg-cp-error',
     valueClass: 'text-cp-error-text',
   },
@@ -86,7 +86,7 @@ const metricItems = outcomeMeta
           </p>
           <strong
             class="mt-2 block font-mono text-[25px] leading-none font-heavy tabular-nums"
-            :class="healthReliabilityValueClass(point.successRequests, point.failedRequests)"
+            :class="healthReliabilityValueClass(point.successRequests, healthServiceFailureCount(point))"
           >
             {{ point.reliabilityDisplay }}
           </strong>

@@ -100,6 +100,8 @@ pub enum CodexFailureCategory {
     /// 当前用量窗口已经耗尽，但存在自动恢复的重置时间。
     UsageLimitExhausted,
     RateLimited,
+    /// Request-scoped turn limit; never infer an account cooldown.
+    TurnRateLimited,
     QuotaExhausted,
     CloudflareChallenge,
     CloudflarePathBlocked,
@@ -264,30 +266,34 @@ impl CodexUpstreamFailure {
             })
     }
 
-    /// 返回该拒绝是否允许换号重放。
+    pub(crate) fn is_retryable_server_error(&self) -> bool {
+        self.category == CodexFailureCategory::Unavailable
+            && self.status == Some(StatusCode::SERVICE_UNAVAILABLE)
+            && self
+                .code
+                .as_deref()
+                .is_some_and(|code| code.trim().eq_ignore_ascii_case("server_error"))
+    }
+
+    /// Only explicit recoverable rejections grant replay proof.
     #[must_use]
-    pub const fn replay_is_safe(&self) -> bool {
-        if matches!(self.category, CodexFailureCategory::FlexUnavailable) {
-            return false;
-        }
-        match self.send_phase {
-            CodexUpstreamSendPhase::BeforePayload => true,
-            CodexUpstreamSendPhase::Ambiguous => false,
-            CodexUpstreamSendPhase::AfterPayload => matches!(
-                self.category,
-                CodexFailureCategory::ModelUnsupported
-                    | CodexFailureCategory::CredentialExpired
-                    | CodexFailureCategory::CredentialRevoked
-                    | CodexFailureCategory::IdentityVerificationRequired
-                    | CodexFailureCategory::Banned
-                    | CodexFailureCategory::UsageLimitExhausted
-                    | CodexFailureCategory::RateLimited
-                    | CodexFailureCategory::QuotaExhausted
-                    | CodexFailureCategory::CloudflareChallenge
-                    | CodexFailureCategory::CloudflarePathBlocked
-                    | CodexFailureCategory::CapacityUnavailable
-            ),
-        }
+    pub fn replay_is_safe(&self) -> bool {
+        !matches!(self.send_phase, CodexUpstreamSendPhase::Ambiguous)
+            && (self.is_retryable_server_error()
+                || matches!(
+                    self.category,
+                    CodexFailureCategory::ModelUnsupported
+                        | CodexFailureCategory::CredentialExpired
+                        | CodexFailureCategory::CredentialRevoked
+                        | CodexFailureCategory::IdentityVerificationRequired
+                        | CodexFailureCategory::Banned
+                        | CodexFailureCategory::UsageLimitExhausted
+                        | CodexFailureCategory::RateLimited
+                        | CodexFailureCategory::QuotaExhausted
+                        | CodexFailureCategory::CloudflareChallenge
+                        | CodexFailureCategory::CloudflarePathBlocked
+                        | CodexFailureCategory::CapacityUnavailable
+                ))
     }
 
     pub(crate) fn persistable_code(&self) -> Option<&'static str> {
@@ -496,6 +502,9 @@ fn classify_upstream_failure(
 
     if code == "flex_unavailable" {
         return CodexFailureCategory::FlexUnavailable;
+    }
+    if code == "turn_rate_limit_exceeded" {
+        return CodexFailureCategory::TurnRateLimited;
     }
 
     // 容量拒绝可能带 400/429/503；仅用结构化错误字段识别，不能扫描任意正文。

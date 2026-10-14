@@ -41,6 +41,8 @@ fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() 
         (Some("fast"), 272_000, ["20", "2", "25", "100"], 200),
         (Some("fast"), 272_001, ["40", "4", "50", "150"], 200),
         (Some("priority"), 272_001, ["40", "4", "50", "150"], 200),
+        (Some("ultrafast"), 272_000, ["60", "6", "75", "300"], 600),
+        (Some("ultrafast"), 272_001, ["120", "12", "150", "450"], 600),
     ] {
         let breakdown =
             openai_billing_breakdown("gpt-6-astra", billing_usage(input, 5, 20, 10), tier)
@@ -441,7 +443,7 @@ fn billing_should_not_inherit_prices_for_unknown_models_or_tiers() {
         ("gpt-5.6-cyber", 1, Some("fast")),
         ("gpt-5.3-codex", 1, Some("flex")),
         ("gpt-6-astra", 1, Some("auto")),
-        ("gpt-6-astra", 1, Some("ultrafast")),
+        ("gpt-6-astra", 1, Some("unknown-tier")),
         ("gpt-6-sol", 1, Some("auto")),
         ("gpt-6-luna", 1, Some("ultrafast")),
     ] {

@@ -11,6 +11,35 @@ import * as vue from 'vue'
 
 const require = createRequire(import.meta.url)
 
+test('initial expired access recovers through refresh and login waits for its cookie', async () => {
+  const refresh = deferred()
+  const calls = []
+  const module = load('../src/stores/modules/auth.ts', {
+    pinia,
+    vue,
+    '@/api': {
+      getAuthStatus: async () => ({ authenticated: false }),
+      refreshAuthSession: () => {
+        calls.push('refresh')
+        return refresh.promise
+      },
+      login: async () => { calls.push('login') },
+    },
+    '@/api/request': { ...load('../src/api/error.ts'), invalidatePendingRequests: () => {}, resetUnauthorizedHandling: () => {} },
+  })
+  const store = module.useAuthStore(pinia.createPinia())
+  const checking = store.checkAuth()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.deepEqual(calls, ['refresh'])
+  const entering = store.login({ password: 'synthetic-password' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.deepEqual(calls, ['refresh'])
+  refresh.resolve({ authenticated: true })
+  await checking
+  assert.equal(await entering, true)
+  assert.deepEqual(calls, ['refresh', 'login'])
+})
+
 function load(path, dependencies = {}) {
   const source = readFileSync(new URL(path, import.meta.url), 'utf8')
   const { outputText } = ts.transpileModule(source, {

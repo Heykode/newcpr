@@ -1128,7 +1128,7 @@ impl CodexCredentialSelector {
         state: &mut WaitingSelection,
     ) -> Result<Option<CodexCredentialLease>, CredentialSelectionError> {
         let id = acquired_account.id();
-        let Some(candidate) = self.reload_wait_target(id, request).await? else {
+        let Some(mut candidate) = self.reload_wait_target(id, request).await? else {
             return Ok(None);
         };
         let limits = self.wait_limits()?;
@@ -1143,7 +1143,7 @@ impl CodexCredentialSelector {
             Duration::ZERO,
         )
         .with_smart_scheduling(state.context.policy.smart_scheduling());
-        if candidate.account != *acquired_account
+        if !only_quota_observation_advanced(acquired_account, &candidate.account)
             || limits.revision() != revision
             || matches!(
                 AccountSelector.availability(&candidate, &acquired_context, &limits),
@@ -1158,10 +1158,13 @@ impl CodexCredentialSelector {
         }
         let runtime = match self
             .repository
-            .load_runtime_credential(&candidate.account)
+            .reload_selected_credential(&candidate.account)
             .await
         {
-            Ok(runtime) => runtime,
+            Ok((account, runtime)) => {
+                candidate.account = account;
+                runtime
+            }
             Err(CredentialRepositoryError::RevisionConflict(_)) => {
                 drop(guard);
                 return Ok(None);
@@ -1186,7 +1189,7 @@ impl CodexCredentialSelector {
                 .await
                 .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?
                 .as_ref()
-                != Some(&candidate.account)
+                .is_none_or(|current| !only_quota_observation_advanced(&candidate.account, current))
         {
             drop(guard);
             return Ok(None);
@@ -1233,7 +1236,7 @@ impl CodexCredentialSelector {
         acquired_context.excluded_accounts = state.context.excluded_accounts.clone();
         if current_limits.revision() != revision
             || !current.iter().any(|latest| {
-                latest.account == candidate.account
+                only_quota_observation_advanced(&candidate.account, &latest.account)
                     && !matches!(
                         AccountSelector.availability(latest, &acquired_context, &current_limits),
                         AccountSchedulingAvailability::Blocked(_)

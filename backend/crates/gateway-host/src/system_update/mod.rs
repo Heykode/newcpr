@@ -6,6 +6,7 @@ mod process;
 mod release;
 mod state;
 mod swap;
+mod swap_paths;
 
 use std::env;
 use std::fs;

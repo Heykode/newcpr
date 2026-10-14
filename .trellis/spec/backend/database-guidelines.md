@@ -92,8 +92,11 @@ rate. The database implementation remains SQLx/PostgreSQL.
 ### 3. Contracts
 
 - The existing configured slot count and wait timeout remain authoritative.
-  Connection acquisition and query consumption share a 10-second execution
-  deadline. This applies only to admin observability, not inference.
+  Queueing, connection acquisition and query consumption share the configured
+  observability deadline (120 seconds by default). This applies only to admin
+  observability, not inference. The owned connection captures and restores its
+  original statement timeout after draining SQL and rollback. Failed restoration
+  closes the connection instead of returning altered state to the pool.
 - On cancellation, error or completion, the connection's SQLx return/rollback
   future keeps the semaphore permit until protocol cleanup finishes. Releasing
   the permit immediately on cancellation would oversubscribe PostgreSQL.
@@ -103,6 +106,9 @@ rate. The database implementation remains SQLx/PostgreSQL.
   Order is always `(started_at desc, id desc)`. The first short page supplies its
   own count; later pages may scan the nearer end and restore descending order.
   Materialize only candidate IDs/timestamps before joining wide projections.
+  Later usage/error pages use exact minute-bucket counts from that same snapshot
+  to narrow the detail range. Preserve all NewCPR predicates, substring search,
+  historical labels, quality isolation and stable cross-source ordering.
 - Snapshot downstream Key names in both request-admission insert paths. Row
   details/list/search use the snapshot before the current Key name. Grouped
   diagnostics prefer a current name, then the latest snapshot, then the Key ID.

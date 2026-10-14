@@ -502,23 +502,24 @@ for (const mode of ['access_token', 'refresh_token']) {
   })
 }
 
-test('JSON documents retain metadata, multi-account boundaries and provider filtering', async (t) => {
+test('JSON documents retain metadata and provider filtering while splitting OpenAI accounts', async (t) => {
   const openai = { version: 1, metadata: { keep: true }, accounts: [{ accessToken: 'synthetic-a' }, { refreshToken: 'synthetic-b' }] }
   const xai = { provider: 'xai', accounts: [{ refreshToken: 'synthetic-c' }] }
   const mixed = { documents: [{ provider: 'openai', document: openai }, { provider: 'xai', document: xai }] }
+  const split = openai.accounts.map(account => ({ ...openai, accounts: [account] }))
   for (const [provider, input, documents] of [
-    ['openai', openai, [openai]],
+    ['openai', openai, split],
     ['xai', xai, [xai]],
-    ['openai', mixed, [openai]],
+    ['openai', mixed, split],
     ['xai', mixed, [xai]],
-    ['batch', mixed, [openai, xai]],
+    ['batch', mixed, [...split, xai]],
   ]) {
     const h = mountOnboarding(t)
     h.input(provider, 'json', JSON.stringify(input))
     await h.state.handleCreate()
     assert.equal(h.submissions.length, 1)
     assert.deepEqual(h.submissions[0].items.map(entry => entry.data), documents)
-    assert.deepEqual(h.submissions[0].items.map(entry => entry.provider), provider === 'batch' ? ['openai', 'xai'] : [provider])
+    assert.deepEqual(h.submissions[0].items.map(entry => entry.provider), provider === 'batch' ? ['openai', 'openai', 'xai'] : documents.map(() => provider))
     assert.ok(h.submissions[0].items.every(entry => entry.outboundProxyId === undefined))
   }
 })
@@ -732,7 +733,7 @@ test('every effective payload change renews the submission ID while proxy trimmi
   assert.deepEqual(h.submissions.at(-1), proxy)
 })
 
-test('invalid input never submits and the 200-item boundary counts documents, not JSON accounts', async (t) => {
+test('invalid input never submits and JSON accounts are submitted in bounded batches', async (t) => {
   const invalid = [
     ['openai', 'access_token', ' \n '],
     ['openai', 'refresh_token', Array.from({ length: 201 }).fill('synthetic-a').join('\n')],
@@ -744,7 +745,6 @@ test('invalid input never submits and the 200-item boundary counts documents, no
     ['batch', 'json', '{"documents":[{"provider":"other","document":{}}]}'],
     ['batch', 'json', '{"documents":[{"provider":"xai","document":null}]}'],
     ['openai', 'json', '{"documents":[{"provider":"xai","document":{}}]}'],
-    ['batch', 'json', JSON.stringify({ documents: Array.from({ length: 201 }, () => ({ provider: 'xai', document: {} })) })],
   ]
   for (const [provider, mode, input] of invalid) {
     const h = mountOnboarding(t)
@@ -760,13 +760,36 @@ test('invalid input never submits and the 200-item boundary counts documents, no
   assert.equal(h.submissions[0].items.length, 200)
   h.input('openai', 'json', JSON.stringify({ accounts: Array.from({ length: 201 }, () => ({ accessToken: 'synthetic-a' })) }))
   await h.state.handleCreate()
-  assert.equal(h.submissions[1].items.length, 1, 'legacy JSON validation remains server-owned')
+  assert.equal(h.submissions[1].items.length, 200)
+  assert.equal(h.submissions[2].items.length, 1)
   for (const values of [{ proxyMode: 'proxy', proxyId: '' }, { weight: 'invalid' }]) {
     h.input('openai', 'access_token', 'synthetic-a')
     Object.assign(h.state.createForm.value, values)
     await h.state.handleCreate()
-    assert.equal(h.submissions.length, 2)
+    assert.equal(h.submissions.length, 3)
   }
+})
+
+test('partial batch submission keeps the retry form and opens progress only after all batches are confirmed', async (t) => {
+  let calls = 0
+  const h = mountOnboarding(t, { create: async (input) => {
+    if (++calls === 2)
+      throw new Error('second batch response lost')
+    return task(input.submissionId)
+  } })
+  h.input('openai', 'json', JSON.stringify({
+    accounts: Array.from({ length: 201 }, (_, index) => ({ refreshToken: `synthetic-${index}` })),
+  }))
+  await h.state.handleCreate()
+  assert.deepEqual(h.submissions.map(body => body.items.length), [200, 1])
+  assert.equal(h.state.showCreateModal.value, true)
+  assert.equal(h.created.length, 0, 'do not stack progress over the retry form')
+  await h.state.handleCreate()
+  assert.equal(h.submissions.length, 3, 'confirmed first batch must not be resubmitted')
+  assert.deepEqual(h.submissions[2], h.submissions[1])
+  assert.equal(h.state.showCreateModal.value, false)
+  assert.equal(h.created.length, 1)
+  assert.equal(h.created[0].taskId, h.submissions[1].submissionId)
 })
 
 test('OAuth creation and existing-account relogin keep their original APIs and settings semantics', async (t) => {

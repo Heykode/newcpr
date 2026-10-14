@@ -20,7 +20,7 @@ use futures::StreamExt;
 use futures::future::{BoxFuture, pending};
 use gateway_core::engine::execution::{
     AuthenticatedClient, ClientAuthenticationError, ExecutionService, ExecutionSession,
-    StartExecution, StartProviderExecution, StartedExecution,
+    ResponseCommit, StartExecution, StartProviderExecution, StartedExecution,
 };
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError, ModelRequestId};
 use gateway_core::error::{
@@ -44,6 +44,7 @@ use crate::openai::{api_router, authenticated_client_for_provider};
 
 #[derive(Default)]
 pub(super) struct Trace {
+    response_commit: ResponseCommit,
     events: Mutex<Vec<&'static str>>,
     client_statuses: Mutex<Vec<u16>>,
     delivery_errors: Mutex<Vec<GatewayError>>,
@@ -63,7 +64,7 @@ impl Trace {
         self.client_statuses
             .lock()
             .expect("client status lock")
-            .push(status);
+            .push(self.response_commit.status_code().unwrap_or(status));
     }
 
     pub(super) fn client_statuses(&self) -> Vec<u16> {
@@ -290,6 +291,10 @@ impl FakeSession {
 }
 
 impl ExecutionSession for FakeSession {
+    fn response_commit(&self) -> ResponseCommit {
+        self.trace.response_commit.clone()
+    }
+
     fn next_event(&mut self) -> BoxFuture<'_, Result<Option<CoordinatedEvent>, EngineError>> {
         Box::pin(async move {
             match self.next.pop_front().unwrap_or(NextStep::End) {
@@ -712,7 +717,7 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
     headers.insert("x-real-ip", "198.51.100.2".parse().expect("real IP"));
     headers.insert(
         "x-forwarded-for",
-        "10.0.0.2, 203.0.113.3".parse().expect("forwarded IPs"),
+        "127.0.0.2, 203.0.113.3".parse().expect("forwarded IPs"),
     );
     headers.insert("user-agent", " Codex-CLI/1.0 ".parse().expect("user agent"));
     assert_eq!(
@@ -736,7 +741,7 @@ async fn request_context_should_resolve_forwarded_precedence_and_peer_fallback()
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-forwarded-for",
-        "10.0.0.2, 203.0.113.3".parse().expect("forwarded IPs"),
+        "127.0.0.2, 203.0.113.3".parse().expect("forwarded IPs"),
     );
     assert_eq!(
         captured_client_context(headers, peer).await.client_ip,
@@ -979,27 +984,117 @@ async fn dropping_stream_during_keepalive_should_cancel_and_finalize_execution()
 }
 
 #[tokio::test(start_paused = true)]
-async fn streaming_keepalive_should_wait_for_first_event_before_committing_http_status() {
+async fn streaming_keepalive_should_cover_four_minutes_before_first_event() {
     let trace = Arc::new(Trace::default());
     let session = FakeSession::streaming(
         Arc::clone(&trace),
         vec![
             NextStep::DelayedEvent(
-                Duration::from_secs(45),
-                delivery(started(), CommitRequirement::CommitBeforeDelivery),
+                Duration::from_secs(240),
+                delivery(completed(), CommitRequirement::CommitBeforeDelivery),
             ),
-            NextStep::FinalizeCancelled,
+            NextStep::FinalizeSuccess,
         ],
     );
-    let response = tokio::spawn(stream_execution_response(Box::new(session), None));
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(30)).await;
-
-    assert!(!response.is_finished());
-    assert!(trace.client_statuses().is_empty());
-    let response = response.await.expect("response task");
+    let start = tokio::time::Instant::now();
+    let response = tokio::time::timeout(
+        Duration::from_secs(20),
+        stream_execution_response(Box::new(session), None),
+    )
+    .await
+    .expect("headers and heartbeat must precede the first upstream event");
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(trace.snapshot(), vec!["wait_event", "next_event", "commit"]);
+    assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
+    assert_eq!(trace.response_commit.status_code(), Some(200));
+    let mut body = response.into_body().into_data_stream();
+    for heartbeat in 1..16 {
+        let chunk = tokio::time::timeout(Duration::from_secs(20), body.next())
+            .await
+            .expect("first-event wait must stay alive")
+            .expect("heartbeat")
+            .expect("bytes");
+        assert_eq!(chunk, Bytes::from_static(b": keep-alive\n\n"));
+        assert_eq!(start.elapsed(), Duration::from_secs(15 * heartbeat));
+        assert_eq!(trace.snapshot(), vec!["wait_event"]);
+    }
+    let terminal = body.next().await.expect("terminal").expect("bytes");
+    assert!(String::from_utf8_lossy(&terminal).contains("response.completed"));
+    assert_eq!(start.elapsed(), Duration::from_secs(240));
+    assert_eq!(
+        body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"data: [DONE]\n\n")
+    );
+    assert!(body.next().await.is_none());
+    assert_eq!(
+        trace.snapshot(),
+        vec!["wait_event", "next_event", "commit", "next_end"]
+    );
+    assert!(!trace.is_cancelled());
+}
+
+#[tokio::test(start_paused = true)]
+async fn streaming_error_after_initial_keepalive_should_be_a_terminal_sse_failure() {
+    let trace = Arc::new(Trace::default());
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![NextStep::DelayedError(
+            Duration::from_secs(45),
+            EngineError::Deadline,
+        )],
+    )
+    .with_response_headers(headers(&[("x-codex-turn-state", "private-attempt-state")]));
+    let response = stream_execution_response(Box::new(session), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!response.headers().contains_key("x-codex-turn-state"));
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let events = parse_sse_events(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).starts_with(": keep-alive\n\n"));
+    let failed = events
+        .iter()
+        .find(|event| event.event.as_deref() == Some("response.failed"))
+        .expect("failure event");
+    let payload: Value = serde_json::from_str(&failed.data).unwrap();
+    assert_eq!(payload["response"]["error"]["code"], "request_timeout");
+    assert!(bytes.ends_with(b"data: [DONE]\n\n"));
+    assert_eq!(trace.client_statuses(), vec![200]);
+    assert_eq!(trace.snapshot(), vec!["wait_error", "next_error"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn streaming_late_upstream_error_should_preserve_extended_error_fields() {
+    let mut error = json!({
+        "type": "invalid_request_error", "code": "misalignment_policy_violation",
+        "message": "synthetic policy error", "misalignment": {"category": "synthetic"},
+        "extension": {"opaque": true}
+    });
+    let failure = ProviderError::new(ProviderErrorKind::InvalidRequest, UpstreamSendState::Sent)
+        .with_client_visible_upstream_response(
+            ClientVisibleUpstreamResponse::new(
+                400,
+                Some(b"application/json".to_vec()),
+                Bytes::from(json!({"error": error}).to_string()),
+            )
+            .with_headers(headers(&[("retry-after", "7")])),
+        );
+    error["headers"] = json!({"retry-after": "7"});
+    let session = FakeSession::streaming(
+        Arc::new(Trace::default()),
+        vec![NextStep::DelayedError(
+            Duration::from_secs(30),
+            EngineError::Provider(failure),
+        )],
+    );
+    let response = stream_execution_response(Box::new(session), None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let events = parse_sse_events(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    let failed = events
+        .iter()
+        .find(|event| event.event.as_deref() == Some("response.failed"))
+        .unwrap();
+    let payload: Value = serde_json::from_str(&failed.data).unwrap();
+    assert_eq!(payload["response"]["error"], error);
+    assert!(bytes.ends_with(b"data: [DONE]\n\n"));
 }
 
 #[tokio::test]

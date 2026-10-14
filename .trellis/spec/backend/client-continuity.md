@@ -222,6 +222,34 @@ editing prior entries.
 
 ## 4. Validation & Error Matrix
 
+### Request-Local Connection Recovery
+
+- Native Generate shares a maximum of four opening reservations and a 30-second
+  startup window across HTTP and fresh WS handshakes. HTTP reserves before send
+  because reqwest hides cold connection versus pool reuse; WS reserves only at
+  actual handshake. Reused WS sockets and waiters on another opening do not
+  consume another reservation. Live sideband and Excel retain their own paths.
+- Recover only proven unsent failures, at most three retries with bounded
+  backoff, on the selected account. Request-wide Sent/Ambiguous state, native
+  continuations, retry prohibition and the business replay barrier remain binding.
+  Retain the previous connection error when a typed local exhaustion marker
+  interrupts the scheduled connection retry; never infer this from upstream text.
+- Shorten only connect_timeout, preserving subsecond time. Never apply this
+  window as a whole-response timeout. Production default, account proxy and
+  explicit source clients retain their existing TLS, CA and egress builders.
+  Arbitrary injected HTTP clients keep their original configuration and connect
+  timeout because reqwest cannot reconstruct their settings. They still share
+  the opening count and recovery eligibility window.
+- A pooled background handshake owns its captured opening timeout and pool lease.
+  Foreground HTTP completion does not cancel it or transfer its ownership.
+  Successful WS payload send closes the recovery window immediately. Typed local
+  budget exhaustion cancels the breaker permit rather than marking the origin bad.
+- Do not copy fixed process-wide opening semaphores over the existing account
+  concurrency policy. Preserve pool keys, exact owners, identity and exit selection.
+- Verify real HTTP delayed headers/body, exhausted no-send, proxy/header retention,
+  injected-client configuration, refused connection classification, WS fresh/reuse
+  accounting, local breaker exclusion and background preconnect completion.
+
 | State | Required result |
 | --- | --- |
 | No IPv6 pool, unchanged mode | Original direct/proxy path |

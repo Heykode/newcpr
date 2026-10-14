@@ -506,6 +506,7 @@ impl DatabaseDumpPort for FakeDumpPort {
 pub(crate) struct FakeObjectStore {
     pub(crate) objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     upload_error: Option<BackupError>,
+    delete_error: Option<BackupError>,
 }
 
 impl FakeObjectStore {
@@ -513,6 +514,7 @@ impl FakeObjectStore {
         Self {
             objects: Mutex::new(std::collections::HashMap::new()),
             upload_error: None,
+            delete_error: None,
         }
     }
 
@@ -524,6 +526,14 @@ impl FakeObjectStore {
 
     pub(crate) fn object(&self, key: &str) -> Option<Vec<u8>> {
         self.objects.lock().expect("objects").get(key).cloned()
+    }
+
+    pub(crate) fn fail_delete(mut self) -> Self {
+        self.delete_error = Some(BackupError::new(
+            code::UPSTREAM_FAILURE,
+            "sensitive cleanup detail".to_owned(),
+        ));
+        self
     }
 }
 
@@ -583,6 +593,9 @@ impl BackupObjectStorePort for FakeObjectStore {
         _config: &BackupStorageConfig,
         object_key: &str,
     ) -> Result<(), gateway_admin::model::backup::BackupError> {
+        if let Some(error) = &self.delete_error {
+            return Err(error.clone());
+        }
         self.objects.lock().expect("objects").remove(object_key);
         Ok(())
     }
@@ -622,11 +635,11 @@ impl FakeAuthStore {
 
 #[async_trait]
 impl AuthStore for FakeAuthStore {
-    async fn renew_session(
+    async fn compare_exchange_session(
         &self,
         _: &str,
         _: &gateway_admin::model::auth::AdminSession,
-        _: chrono::DateTime<chrono::Utc>,
+        _: Option<&gateway_admin::model::auth::AdminSession>,
     ) -> AdminStoreResult<Option<gateway_admin::model::auth::AdminSession>> {
         Ok(None)
     }

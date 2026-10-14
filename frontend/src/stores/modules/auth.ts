@@ -35,7 +35,13 @@ export const useAuthStore = defineStore('auth', () => {
       return pendingRefresh
     if (pendingCheck)
       return pendingCheck
-    const check = loadSession(getAuthStatus).finally(() => {
+    const status = loadSession(getAuthStatus)
+    const checkedRevision = revision
+    const check = status.then((result) => {
+      if (result === 'unauthenticated' && checkedRevision === revision && !loading.value)
+        return refreshSession()
+      return result
+    }).finally(() => {
       if (pendingCheck === check)
         pendingCheck = undefined
     })

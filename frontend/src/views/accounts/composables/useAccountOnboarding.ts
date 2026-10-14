@@ -12,6 +12,7 @@ import { useAsyncAction } from '@/composables/useAsyncAction'
 import { isRecord } from '@/utils/object'
 import { formatProviderLabel, isSupportedProvider } from '@/utils/providers'
 import { accountCreateEgress, accountImportSettings, accountImportTemplate, accountProxyError, emptyAccountCreateForm } from '../components/AccountCreateModal/model'
+import { accountImportBatches, splitAccountDocuments } from './account-import-batches'
 
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>['items'][number]
 type ImportProvider = 'openai' | 'xai'
@@ -37,12 +38,14 @@ export function useAccountOnboarding(options: {
   const creatingAccount = creatingAccountAction.loading
   const authorizingOAuth = authorizingOAuthAction.loading
   const createForm = ref(emptyAccountCreateForm())
-  let submissionId: string | undefined
+  let submissionIds: string[] = []
+  let submittedBatches = 0
   // Modal-local credential material; never persist or log this comparison key.
   let submissionKey: string | undefined
 
   function clearSubmission() {
-    submissionId = undefined
+    submissionIds = []
+    submittedBatches = 0
     submissionKey = undefined
   }
 
@@ -98,9 +101,7 @@ export function useAccountOnboarding(options: {
         const documents = createForm.value.provider === 'batch'
           ? parseMixedImportDocuments(parseImportJson(createForm.value.importTexts.json))
           : accountImportDocuments(requireImportProvider(createForm.value.provider), mode, createForm.value.importTexts[mode])
-        if (documents.length > MAX_TOKEN_IMPORT_COUNT)
-          throw new Error(`单次最多导入 ${MAX_TOKEN_IMPORT_COUNT} 个条目`)
-        const items = documents.map(entry => ({
+        const items = documents.flatMap(splitAccountDocuments).map(entry => ({
           provider: entry.provider,
           data: entry.document,
           ...(createForm.value.importTemplate ? { template: accountImportTemplate(createForm.value, entry.provider), templateSettingsOverride: true } : {}),
@@ -110,17 +111,24 @@ export function useAccountOnboarding(options: {
         const encoded = JSON.stringify(items, (_key, value: unknown) => isRecord(value)
           ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
           : value)
-        if (!submissionId || submissionKey !== encoded) {
-          submissionId = generateSubmissionId()
+        const batches = accountImportBatches<typeof items[number]>(JSON.parse(encoded))
+        if (submissionKey !== encoded) {
+          submissionIds = batches.map(() => generateSubmissionId())
+          submittedBatches = 0
           submissionKey = encoded
         }
-        const task = await createAccountImportTask({
-          submissionId,
-          // Canonical key order also keeps the server fingerprint stable.
-          items: JSON.parse(encoded),
-        })
+        // Preserve IDs and successful progress if a later submission needs retrying.
+        const batchIds = submissionIds
+        let lastTask: AccountImportTask | undefined
+        for (let index = submittedBatches; index < batches.length; index++) {
+          const task = await createAccountImportTask({ submissionId: batchIds[index]!, items: batches[index]! })
+          if (submissionKey === encoded)
+            submittedBatches = index + 1
+          lastTask = task
+        }
         showCreateModal.value = false
-        options.onImportTaskCreated(task)
+        if (lastTask)
+          options.onImportTaskCreated(lastTask)
         toast.success('导入任务已创建')
       },
     )

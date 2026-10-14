@@ -284,12 +284,22 @@ impl CodexEgressRuntime {
         route: &CodexEgressRoute,
         profile: &CodexWireProfile,
     ) -> Result<Client, CodexEgressError> {
+        self.http_client_with_timeout(route, profile, Duration::from_secs(15))
+    }
+
+    pub(crate) fn http_client_with_timeout(
+        &self,
+        route: &CodexEgressRoute,
+        profile: &CodexWireProfile,
+        connect_timeout: Duration,
+    ) -> Result<Client, CodexEgressError> {
         self.check(route)?;
         let key = format!(
-            "{}:{}:{:?}",
+            "{}:{}:{:?}:{:?}",
             route.key(),
             profile.user_agent(),
-            custom_ca_env_cache_key()
+            custom_ca_env_cache_key(),
+            connect_timeout
         );
         if !route.mode.is_fresh() {
             let mut cache = self
@@ -313,7 +323,7 @@ impl CodexEgressRuntime {
                 .no_proxy()
                 .local_address(IpAddr::V6(route.source))
                 .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_secs(15))
+                .connect_timeout(connect_timeout)
                 .tcp_keepalive(Duration::from_secs(30))
                 .http2_keep_alive_interval(Duration::from_secs(30))
                 .http2_keep_alive_timeout(Duration::from_secs(5))

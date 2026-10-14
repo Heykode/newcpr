@@ -225,6 +225,7 @@ async fn initialize_with_request_tuning_mode(
         config.timezone,
     )
     .map_err(OpenAiInitializeError::Provider)?
+    .with_default_http_client()
     .with_request_tuning(request_tuning.clone())
     .with_excel_replay(ports.replay())
     .with_session_proxy_pool(ports.session_proxy_pool())

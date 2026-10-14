@@ -345,6 +345,23 @@ pub(in crate::openai) async fn stream_execution_response_as(
     connection_guard: Option<Box<dyn ConnectionGuard>>,
     format: HttpResponseFormat,
 ) -> Response {
+    if matches!(format, HttpResponseFormat::Responses) {
+        let commit = session.response_commit();
+        super::keepalive::response(
+            stream_execution_response_inner(session, connection_guard, format),
+            commit,
+        )
+        .await
+    } else {
+        stream_execution_response_inner(session, connection_guard, format).await
+    }
+}
+
+async fn stream_execution_response_inner(
+    session: Box<dyn ExecutionSession>,
+    connection_guard: Option<Box<dyn ConnectionGuard>>,
+    format: HttpResponseFormat,
+) -> Response {
     let mut execution = PendingExecution::new(session);
     let mut encoder = HttpResponseEncoder::new(format);
     let (frames, terminal_frames) = loop {

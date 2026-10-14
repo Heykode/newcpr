@@ -7,6 +7,106 @@ use gateway_protocol::openai::sse::encode_sse_event;
 
 use super::*;
 
+#[tokio::test]
+async fn sse_comments_are_forwarded_without_closing_the_retry_window() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let heartbeat = ": keep-alive\r\n\r\n";
+    let (base_url, release, _, server) =
+        paused_chunked_sse_server(heartbeat.to_owned(), sse(&overload())).await;
+    let mut stream = provider_with_base_url(&store, base_url)
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            traced_context(&TraceContext::new("req_heartbeat_retry"), 0),
+        )
+        .await
+        .unwrap();
+    let event = timeout(Duration::from_secs(1), next_client_event(&mut stream))
+        .await
+        .expect("heartbeat cannot wait for a later event");
+    assert_eq!(
+        event.wire_event().unwrap().raw_sse_frame().unwrap(),
+        heartbeat.as_bytes()
+    );
+    assert!(event.is_replayable_prelude());
+    release.send(()).unwrap();
+    let (_, error) = stream_failure(&mut stream).await;
+    assert!(error.replay_is_safe());
+    assert!(matches!(
+        error.pre_delivery_retry(),
+        Some(PreDeliveryRetry::SameAccountTransientRetry { .. })
+    ));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn ordinary_streams_forward_compaction_output_and_unknown_events_without_reopening_retry() {
+    for websocket in [false, true] {
+        for first in [
+            json!({"type":"response.compaction.compacting","item_id":"compact_test","output_index":0}),
+            json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}),
+            json!({"type":"response.future","value":"opaque"}),
+        ] {
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_provider_contract").await;
+            let prelude = structural("response.created", 1024);
+            let (base_url, release, server) = if websocket {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let base_url = format!("http://{}", listener.local_addr().unwrap());
+                let (release, released) = oneshot::channel();
+                let first = first.clone();
+                let server = tokio::spawn(async move {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut socket = accept_codex_test_websocket(socket).await;
+                    socket.next().await.unwrap().unwrap();
+                    for event in [first, prelude] {
+                        socket
+                            .send(Message::Text(event.to_string().into()))
+                            .await
+                            .unwrap();
+                    }
+                    released.await.unwrap();
+                    socket
+                        .send(Message::Text(overload().to_string().into()))
+                        .await
+                        .unwrap();
+                });
+                (base_url, release, server)
+            } else {
+                let (base_url, release, _, server) =
+                    paused_chunked_sse_server(sse(&first) + &sse(&prelude), sse(&overload())).await;
+                (base_url, release, server)
+            };
+            let operation = if websocket {
+                generate_operation()
+            } else {
+                http_generate_operation()
+            };
+            let mut stream = provider_with_base_url(&store, base_url)
+                .execute(
+                    planned_request("openai", operation),
+                    traced_context(&TraceContext::new("req_closed_retry"), 0),
+                )
+                .await
+                .unwrap();
+            let delivered = timeout(Duration::from_secs(1), next_client_event(&mut stream))
+                .await
+                .unwrap();
+            assert_eq!(delivered.wire_event().unwrap().data(), &first);
+            assert!(!delivered.is_replayable_prelude());
+            let created = timeout(Duration::from_secs(1), next_client_event(&mut stream))
+                .await
+                .unwrap();
+            assert!(!created.is_replayable_prelude());
+            release.send(()).unwrap();
+            let (_, error) = stream_failure(&mut stream).await;
+            assert!(!error.replay_is_safe());
+            assert!(error.pre_delivery_retry().is_none());
+            server.await.unwrap();
+        }
+    }
+}
+
 fn traced_context(trace: &TraceContext, bytes: u64) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
@@ -63,7 +163,9 @@ async fn next_client_event(stream: &mut ProviderStream) -> ProviderEvent {
     }
 }
 
-async fn stream_failure(stream: &mut ProviderStream) -> (Vec<ProviderEvent>, ProviderError) {
+pub(super) async fn stream_failure(
+    stream: &mut ProviderStream,
+) -> (Vec<ProviderEvent>, ProviderError) {
     let mut events = Vec::new();
     loop {
         match stream.next().await.expect("upstream failure") {
@@ -146,7 +248,7 @@ async fn large_structural_events_keep_http_and_websocket_overload_replay_safe() 
 }
 
 #[tokio::test]
-async fn custom_thresholds_release_wire_once_without_changing_body_or_retrying_after_commit() {
+async fn custom_thresholds_preserve_wire_and_only_zero_keeps_preludes_replayable() {
     for websocket in [false, true] {
         for (limit, padding, expected_reason) in [
             (0, 512, "disabled"),
@@ -202,6 +304,7 @@ async fn custom_thresholds_release_wire_once_without_changing_body_or_retrying_a
                 .await
                 .unwrap();
             let wire = event.wire_event().unwrap();
+            assert_eq!(event.is_replayable_prelude(), limit == 0);
             if websocket {
                 assert!(wire.raw_sse_frame().is_none());
                 assert_eq!(wire.raw_websocket_message().unwrap(), websocket_body);
@@ -213,7 +316,16 @@ async fn custom_thresholds_release_wire_once_without_changing_body_or_retrying_a
             let (_, error) = timeout(Duration::from_secs(2), stream_failure(&mut stream))
                 .await
                 .unwrap();
-            assert!(!error.replay_is_safe());
+            assert_eq!(error.replay_is_safe(), limit == 0);
+            if limit == 0 {
+                assert!(matches!(
+                    error.pre_delivery_retry(),
+                    Some(PreDeliveryRetry::SameAccountTransientRetry { .. })
+                ));
+                assert!(releases(&trace).is_empty());
+                server.await.unwrap();
+                continue;
+            }
             assert!(error.pre_delivery_retry().is_none());
             let events = releases(&trace);
             assert_eq!(events.len(), 1);
@@ -226,7 +338,7 @@ async fn custom_thresholds_release_wire_once_without_changing_body_or_retrying_a
 }
 
 #[tokio::test]
-async fn zero_prefetch_ws_releases_lifecycle_before_terminal_and_never_replays_late_errors() {
+async fn zero_prefetch_ws_releases_preludes_and_preserves_only_safe_late_recovery() {
     for tail in [
         json!({"type":"response.completed","response":{"id":"resp_precommit","model":"gpt-5.4","status":"completed","output":[]}}),
         overload(),
@@ -241,6 +353,7 @@ async fn zero_prefetch_ws_releases_lifecycle_before_terminal_and_never_replays_l
         let expected = [created.to_string(), progress.to_string()];
         let expected_tail = tail.to_string();
         let failed = tail["type"] == "error";
+        let overloaded = tail == overload();
         let (release, released) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
@@ -284,8 +397,16 @@ async fn zero_prefetch_ws_releases_lifecycle_before_terminal_and_never_replays_l
             let (events, error) = timeout(Duration::from_secs(2), stream_failure(&mut stream))
                 .await
                 .unwrap();
-            assert!(!error.replay_is_safe());
-            assert_eq!(error.pre_delivery_retry(), None);
+            assert_eq!(error.replay_is_safe(), overloaded);
+            if overloaded {
+                assert!(matches!(
+                    error.pre_delivery_retry(),
+                    Some(PreDeliveryRetry::SameAccountTransientRetry { .. })
+                ));
+            }
+            let mut error = error;
+            let mut events = events;
+            events.extend(error.take_atomic_client_events());
             events
         } else {
             timeout(Duration::from_secs(2), async {
@@ -308,9 +429,13 @@ async fn zero_prefetch_ws_releases_lifecycle_before_terminal_and_never_replays_l
             .collect();
         assert_eq!(wire, vec![expected_tail.as_str()]);
         let events = releases(&trace);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["data"]["reason"], "disabled");
-        assert_eq!(events[0]["data"]["limitBytes"], 0);
+        if failed {
+            assert!(events.is_empty());
+        } else {
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["data"]["reason"], "terminal");
+            assert_eq!(events[0]["data"]["limitBytes"], 0);
+        }
         server.await.unwrap();
     }
 }

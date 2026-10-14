@@ -59,9 +59,10 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
 
     config.validate_resolved()?;
     let pool = postgres::connect_and_migrate(&config.database_url()?, config.pool).await?;
-    let observability_query_budget = postgres::ObservabilityQueryBudget::try_new(
+    let observability_query_budget = postgres::ObservabilityQueryBudget::try_new_with_timeout(
         config.pool.observability_max_connections(),
         config.pool.acquire_timeout(),
+        std::time::Duration::from_secs(config.pool.observability_query_timeout_seconds),
     )?;
     let redis_client = ::redis::Client::open(config.redis_url()?)
         .map_err(|error| redis_unavailable("create Redis client").with_source(error))?;

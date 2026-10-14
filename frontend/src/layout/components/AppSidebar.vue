@@ -379,7 +379,7 @@ onBeforeUnmount(() => {
             v-for="item in navItems"
             :key="item.label"
             type="button"
-            class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-offset-2 focus-visible:ring-offset-cp-bg-container"
+            class="relative z-10 inline-flex h-11.5 cursor-pointer items-center rounded-cp border-0 text-sm leading-[1.15] outline-none focus-visible:ring-2 focus-visible:ring-cp-control-outline focus-visible:ring-inset"
             :class="[
               isCollapsed ? 'w-11.5 justify-center' : 'w-full gap-3 px-4',
               isActive(item.path)

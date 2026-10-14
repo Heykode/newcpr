@@ -287,11 +287,11 @@ struct BootstrapAuthStore {
 
 #[async_trait]
 impl AuthStore for BootstrapAuthStore {
-    async fn renew_session(
+    async fn compare_exchange_session(
         &self,
         _: &str,
         _: &AdminSession,
-        _: chrono::DateTime<Utc>,
+        _: Option<&AdminSession>,
     ) -> AdminStoreResult<Option<AdminSession>> {
         Err(unavailable("admin session"))
     }

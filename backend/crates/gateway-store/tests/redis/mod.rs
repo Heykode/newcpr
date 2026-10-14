@@ -27,6 +27,7 @@ fn admin_auth_state_rejects_invalid_ttl_boundaries() {
         expires_at: Utc::now() - chrono::Duration::seconds(1),
         credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
         absolute_expires_at: None,
+        renewal: None,
     };
     let runtime = tokio::runtime::Runtime::new().expect("test runtime");
     let Some((repository, _connection, _namespace)) = runtime.block_on(admin_auth_repository())
@@ -53,6 +54,7 @@ async fn admin_auth_state_keeps_fixed_ttl_and_opaque_keys() {
         expires_at: Utc::now() + chrono::Duration::seconds(60),
         credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
         absolute_expires_at: None,
+        renewal: None,
     };
 
     repository
@@ -131,6 +133,7 @@ async fn admin_renewal_cas_preserves_newer_expiry_and_cannot_revive_deleted_sess
         credential_fingerprint: "synthetic-password-fingerprint".to_owned(),
         expires_at: Utc::now() + chrono::Duration::seconds(30),
         absolute_expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+        renewal: None,
     };
     repository
         .store_admin_session("renew", &original)
@@ -138,16 +141,26 @@ async fn admin_renewal_cas_preserves_newer_expiry_and_cannot_revive_deleted_sess
         .unwrap();
     let longer = original.expires_at + chrono::Duration::minutes(10);
     let renewed = repository
-        .renew_admin_session("renew", &original, longer)
+        .compare_exchange_admin_session(
+            "renew",
+            &original,
+            Some(&AdminSessionRecord {
+                expires_at: longer,
+                ..original.clone()
+            }),
+        )
         .await
         .unwrap()
         .unwrap();
     assert_eq!(renewed.expires_at, longer);
     let stale = repository
-        .renew_admin_session(
+        .compare_exchange_admin_session(
             "renew",
             &original,
-            original.expires_at + chrono::Duration::minutes(1),
+            Some(&AdminSessionRecord {
+                expires_at: original.expires_at + chrono::Duration::minutes(1),
+                ..original.clone()
+            }),
         )
         .await
         .unwrap()
@@ -155,10 +168,14 @@ async fn admin_renewal_cas_preserves_newer_expiry_and_cannot_revive_deleted_sess
     assert_eq!(stale, renewed);
     assert!(
         repository
-            .renew_admin_session(
+            .compare_exchange_admin_session(
                 "renew",
                 &renewed,
-                original.absolute_expires_at.unwrap() + chrono::Duration::seconds(1)
+                Some(&AdminSessionRecord {
+                    expires_at: original.absolute_expires_at.unwrap()
+                        + chrono::Duration::seconds(1),
+                    ..original.clone()
+                })
             )
             .await
             .is_err()
@@ -166,7 +183,7 @@ async fn admin_renewal_cas_preserves_newer_expiry_and_cannot_revive_deleted_sess
     repository.delete_admin_session("renew").await.unwrap();
     assert!(
         repository
-            .renew_admin_session("renew", &original, longer)
+            .compare_exchange_admin_session("renew", &original, Some(&renewed))
             .await
             .unwrap()
             .is_none()
@@ -214,5 +231,84 @@ async fn password_change_limit_is_atomic_and_expires() {
             .consume_password_change_attempt("admin-test", 10, 1)
             .await
             .expect("new window")
+    );
+}
+
+#[tokio::test]
+async fn refresh_retention_survives_access_expiry_and_cas_revokes_without_recreation() {
+    let Some((repository, mut connection, namespace)) = admin_auth_repository().await else {
+        return;
+    };
+    let expiry = Utc::now() + chrono::Duration::seconds(60);
+    let original = AdminSessionRecord {
+        admin_user_id: "synthetic-admin".to_owned(),
+        expires_at: Utc::now() - chrono::Duration::seconds(1),
+        credential_fingerprint: "synthetic-fingerprint".to_owned(),
+        absolute_expires_at: Some(expiry),
+        renewal: Some(gateway_admin::model::auth::SessionRenewal {
+            expires_at: expiry,
+            access_digest: [1; 32],
+            refresh_digest: [2; 32],
+            previous: None,
+        }),
+    };
+    repository
+        .store_admin_session("retained", &original)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.load_admin_session("retained").await.unwrap(),
+        Some(original.clone())
+    );
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{namespace}:*"))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(keys.len(), 1);
+    let ttl: i64 = redis::cmd("PTTL")
+        .arg(&keys[0])
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert!((1..=60_000).contains(&ttl));
+    let replacement = AdminSessionRecord {
+        expires_at: Utc::now() + chrono::Duration::seconds(30),
+        ..original.clone()
+    };
+    assert_eq!(
+        repository
+            .compare_exchange_admin_session("retained", &original, Some(&replacement))
+            .await
+            .unwrap(),
+        Some(replacement.clone())
+    );
+    assert_eq!(
+        repository
+            .compare_exchange_admin_session("retained", &original, None)
+            .await
+            .unwrap(),
+        Some(replacement.clone())
+    );
+    assert!(
+        repository
+            .compare_exchange_admin_session("retained", &replacement, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        repository
+            .compare_exchange_admin_session("retained", &replacement, Some(&replacement))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        repository
+            .load_admin_session("retained")
+            .await
+            .unwrap()
+            .is_none()
     );
 }

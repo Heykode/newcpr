@@ -58,10 +58,21 @@ impl std::fmt::Debug for LoginCommand {
 }
 
 /// 登录成功后返回的会话事实。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LoginResult {
     pub session_id: String,
     pub expires_at: DateTime<Utc>,
+    pub refresh_token: Option<String>,
+    pub refresh_expires_at: Option<DateTime<Utc>>,
+}
+
+impl std::fmt::Debug for LoginResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LoginResult")
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
 }
 
 /// 登录状态机可被 API 精确映射的失败类型。
@@ -80,6 +91,33 @@ pub struct AdminSession {
     pub expires_at: DateTime<Utc>,
     pub credential_fingerprint: String,
     pub absolute_expires_at: Option<DateTime<Utc>>,
+    pub renewal: Option<SessionRenewal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRenewal {
+    pub expires_at: DateTime<Utc>,
+    pub access_digest: [u8; 32],
+    pub refresh_digest: [u8; 32],
+    pub previous: Option<SessionRefreshReplay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRefreshReplay {
+    pub digest: [u8; 32],
+    pub salt: [u8; 32],
+    pub expires_at: DateTime<Utc>,
+}
+
+impl AdminSession {
+    #[must_use]
+    pub fn retained_until(&self) -> DateTime<Utc> {
+        self.renewal
+            .as_ref()
+            .map_or(self.expires_at, |renewal| renewal.expires_at)
+    }
 }
 
 /// 修改后台管理员密码；不得记录明文密码。

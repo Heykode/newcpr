@@ -3,6 +3,7 @@
 pub mod admission;
 pub mod budget;
 mod capacity_wait;
+pub mod connection;
 pub mod continuation;
 pub mod coordinator;
 pub mod execution;
@@ -10,6 +11,7 @@ mod key_wait;
 mod observation;
 pub mod probe;
 pub mod provider;
+mod response_commit;
 pub mod response_control;
 
 pub use capacity_wait::{
@@ -352,6 +354,7 @@ impl ContinuationAttempt {
 /// Provider 每次执行可见的 request-local context。
 #[derive(Debug, Clone)]
 pub struct RequestAttemptContext {
+    connection_budget: connection::ConnectionBudget,
     response_control: Option<response_control::ResponseControl>,
     provider_route: Arc<std::sync::OnceLock<String>>,
     request_profile: Option<Arc<crate::account::OpaqueProviderData>>,
@@ -364,6 +367,12 @@ pub struct RequestAttemptContext {
 }
 
 impl RequestAttemptContext {
+    #[must_use]
+    pub fn with_connection_budget(mut self, budget: connection::ConnectionBudget) -> Self {
+        self.connection_budget = budget;
+        self
+    }
+
     #[must_use]
     pub fn with_response_control(
         mut self,
@@ -406,6 +415,7 @@ impl RequestAttemptContext {
     pub fn new(request_id: ModelRequestId, client_api_key_ref: ClientApiKeyId) -> Self {
         Self {
             provider_route: Arc::new(std::sync::OnceLock::new()),
+            connection_budget: connection::ConnectionBudget::default(),
             response_control: None,
             request_id,
             client_api_key_ref,
@@ -464,6 +474,11 @@ pub struct AttemptContext {
 }
 
 impl AttemptContext {
+    #[must_use]
+    pub fn connection_budget(&self) -> &connection::ConnectionBudget {
+        &self.request.connection_budget
+    }
+
     #[must_use]
     pub fn response_control(&self) -> Option<&response_control::ResponseControl> {
         self.request.response_control.as_ref()

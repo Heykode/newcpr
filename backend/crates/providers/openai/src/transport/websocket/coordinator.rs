@@ -1,5 +1,9 @@
 //! Responses WebSocket pre-send/post-send 与 pool/breaker 编排。
 
+#[cfg(test)]
+#[path = "connection_budget_tests.rs"]
+mod connection_budget_tests;
+
 use std::{
     future::Future,
     time::{Duration, Instant},
@@ -109,6 +113,7 @@ impl PreparedWebSocket {
 }
 
 /// 只建立或租用 WebSocket，不发送 payload。
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn prepare_response_create_request_with_pool(
     request: &CodexWebSocketRequest,
     pool: Option<(&CodexWebSocketPool, CodexWebSocketPoolKey)>,
@@ -117,6 +122,7 @@ pub(crate) async fn prepare_response_create_request_with_pool(
     fast_path_budget: Option<Duration>,
     require_pool: bool,
     fallback_stream_idle_timeout: Option<Duration>,
+    connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<WebSocketFastPath<PreparedWebSocket>, CodexWebSocketExchangeError> {
     let decision_started_at = Instant::now();
     let Some((pool, key)) = pool else {
@@ -132,6 +138,7 @@ pub(crate) async fn prepare_response_create_request_with_pool(
             fast_path_budget,
             fallback_stream_idle_timeout,
             decision_started_at,
+            connection_budget,
         )
         .await;
     };
@@ -194,6 +201,7 @@ pub(crate) async fn prepare_response_create_request_with_pool(
                 origin_key,
                 decision_deadline,
                 decision_started_at,
+                connection_budget,
             )
             .await
         }
@@ -266,6 +274,7 @@ async fn prepare_unpooled_websocket(
     fast_path_budget: Option<Duration>,
     stream_idle_timeout: Option<Duration>,
     decision_started_at: Instant,
+    connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<WebSocketFastPath<PreparedWebSocket>, CodexWebSocketExchangeError> {
     let permit = acquire_breaker_permit(breaker, origin_key, fast_path_budget.is_some())?;
     let context = pump_log_context_from_connection(request.connection());
@@ -274,6 +283,7 @@ async fn prepare_unpooled_websocket(
         PumpKeepalive::disabled(),
         fast_path_budget,
         context,
+        connection_budget.as_ref(),
     )
     .await;
     let connected = match connected {
@@ -296,6 +306,7 @@ async fn prepare_unpooled_websocket(
     }))
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn prepare_pooled_websocket(
     request: &CodexWebSocketRequest,
     pool: &CodexWebSocketPool,
@@ -304,6 +315,7 @@ async fn prepare_pooled_websocket(
     origin_key: &str,
     decision_deadline: Option<TokioInstant>,
     decision_started_at: Instant,
+    connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<WebSocketFastPath<PreparedWebSocket>, CodexWebSocketExchangeError> {
     let permit = match acquire_breaker_permit(breaker, origin_key, decision_deadline.is_some()) {
         Ok(permit) => permit,
@@ -319,6 +331,7 @@ async fn prepare_pooled_websocket(
         pool.clone(),
         connect_lease,
         permit,
+        connection_budget,
     );
     match waiter.wait(fast_path_budget).await? {
         WebSocketFastPath::Ready(handoff) => Ok(WebSocketFastPath::Ready(PreparedWebSocket {
@@ -370,6 +383,7 @@ fn start_pooled_websocket_connect(
     pool: CodexWebSocketPool,
     connect_lease: WebSocketPoolConnectLease,
     permit: Option<WebSocketOriginBreakerPermit>,
+    connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
 ) -> PooledWebSocketConnectWaiter {
     let task_key = connect_lease.key().clone();
     let started_at = connect_lease.started_at();
@@ -404,7 +418,7 @@ fn start_pooled_websocket_connect(
                 return;
             }
             result = async {
-                let connecting = connect_websocket_connection(&connection, keepalive, context);
+                let connecting = connect_websocket_connection(&connection, keepalive, context, connection_budget.as_ref());
                 tokio::pin!(connecting);
                 // Capacity waiting shortens only the foreground deadline. The opening
                 // owns its full slow-connect budget, even after that caller leaves.
@@ -539,11 +553,12 @@ async fn connect_with_budget(
     keepalive: PumpKeepalive,
     fast_path_budget: Option<Duration>,
     context: PumpLogContext,
+    connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<WebSocketFastPath<(PooledWebSocketConnection, Duration)>, CodexWebSocketExchangeError> {
     match wait_for_fast_path(
         TokioInstant::now(),
         fast_path_budget,
-        connect_websocket_connection(connection, keepalive, context),
+        connect_websocket_connection(connection, keepalive, context, connection_budget),
     )
     .await
     {
@@ -556,9 +571,11 @@ async fn connect_websocket_connection(
     connection: &CodexWebSocketConnection,
     keepalive: PumpKeepalive,
     context: PumpLogContext,
+    connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError> {
     let started_at = Instant::now();
-    let (websocket, response) = connect_pumped_websocket(connection, keepalive, context).await?;
+    let (websocket, response) =
+        connect_pumped_websocket(connection, keepalive, context, connection_budget).await?;
     Ok((
         PooledWebSocketConnection {
             websocket,
@@ -595,6 +612,10 @@ fn finish_breaker_attempt(
         return connected;
     };
     match connected {
+        Err(error) if error.connection_budget_exhausted() => {
+            permit.cancel();
+            Err(error)
+        }
         Ok(connection) => {
             permit.succeed();
             Ok(connection)

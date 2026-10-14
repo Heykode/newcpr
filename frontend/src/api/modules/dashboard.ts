@@ -2,6 +2,7 @@ import type { RequestOptions } from '../request'
 import type { AccountQuotaWindow } from './accounts'
 import type { UsageListRecord } from './usage'
 import request from '../request'
+import { OBSERVABILITY_TIMEOUT_MS } from '../constants'
 
 export type DashboardTrendKind = 'usage' | 'latency' | 'errors'
 
@@ -189,6 +190,7 @@ interface DashboardQuery {
 export function getDashboardSummary(data: DashboardQuery, options: RequestOptions = {}) {
   return request<DashboardSummaryResponse>({
     url: '/api/admin/dashboard/summary',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,
@@ -198,6 +200,7 @@ export function getDashboardSummary(data: DashboardQuery, options: RequestOption
 export function getDashboardTrend(data: DashboardQuery, options: RequestOptions = {}) {
   return request<DashboardTrendResponse>({
     url: '/api/admin/dashboard/trend',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,

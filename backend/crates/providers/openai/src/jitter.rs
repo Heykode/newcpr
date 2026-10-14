@@ -22,6 +22,14 @@ pub fn uniform_delay(sample: Option<u64>, max: Duration) -> Duration {
 }
 
 const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
+pub(crate) fn server_error_retry_jitter(sample: Option<u64>) -> Duration {
+    match sample {
+        Some(sample) => {
+            Duration::from_millis(50) + uniform_delay(Some(sample), Duration::from_millis(200))
+        }
+        None => Duration::from_millis(150),
+    }
+}
 const QUOTA_FAILURE_REFRESH_MIN_DELAY: Duration = Duration::from_secs(1);
 const QUOTA_FAILURE_REFRESH_MAX_DELAY: Duration = Duration::from_secs(3);
 

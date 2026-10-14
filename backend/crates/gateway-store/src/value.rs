@@ -14,7 +14,6 @@ pub enum StoreBackend {
 pub enum ConflictKind {
     StaleRevision,
     AlreadyFinalized,
-    DownstreamAlreadyCommitted,
     RequestNotRunning,
     InvalidTransition,
     LeaseLost,
