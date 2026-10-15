@@ -82,6 +82,7 @@ mod account_groups;
 mod accounts;
 mod auth;
 mod client_keys;
+mod compression;
 mod egress;
 mod errors;
 mod log_cleanup;
@@ -276,6 +277,7 @@ impl MemoryAuthStore {
             AdminSession {
                 admin_user_id: "admin_1".to_owned(),
                 absolute_expires_at: None,
+                renewal: None,
                 expires_at: Utc::now() + Duration::hours(1),
                 credential_fingerprint: {
                     use base64::Engine as _;
@@ -308,21 +310,26 @@ impl MemoryAuthStore {
 
 #[async_trait]
 impl AuthStore for MemoryAuthStore {
-    async fn renew_session(
+    async fn compare_exchange_session(
         &self,
         id: &str,
         expected: &AdminSession,
-        expires_at: chrono::DateTime<Utc>,
+        replacement: Option<&AdminSession>,
     ) -> AdminStoreResult<Option<AdminSession>> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let Some(current) = sessions
             .get_mut(id)
-            .filter(|session| session.expires_at > Utc::now())
+            .filter(|session| session.retained_until() > Utc::now())
         else {
             return Ok(None);
         };
         if current == expected {
-            current.expires_at = expires_at;
+            if let Some(replacement) = replacement {
+                *current = replacement.clone();
+            } else {
+                sessions.remove(id);
+                return Ok(None);
+            }
         }
         Ok(Some(current.clone()))
     }

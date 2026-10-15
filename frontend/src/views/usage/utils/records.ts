@@ -343,10 +343,24 @@ export function usageLatencyDetails(record: UsageCommonRecord) {
     // SSE 可能先收到生命周期事件而没有文本或推理增量；这不是首字，须保留原始语义。
     firstOutputLabel: firstTokenMs === null && firstEventMs !== null ? '首事件' : '首字',
     firstOutputDisplay: formatDuration(firstTokenMs ?? firstEventMs),
+    firstOutputSeverity: latencySeverity(firstTokenMs ?? firstEventMs, [10_000, 30_000, 60_000]),
     totalDisplay: formatDuration(totalMs),
+    totalSeverity: latencySeverity(totalMs, [60_000, 180_000, 300_000]),
     breakdownItems,
     transportItems,
   }
+}
+
+function latencySeverity(ms: number | null, thresholds: readonly [number, number, number]): 'good' | 'warn' | 'slow' | 'critical' | null {
+  if (ms === null)
+    return null
+  if (ms >= thresholds[2])
+    return 'critical'
+  if (ms >= thresholds[1])
+    return 'slow'
+  if (ms >= thresholds[0])
+    return 'warn'
+  return 'good'
 }
 
 export function usageBilling(record: UsageCommonRecord) {

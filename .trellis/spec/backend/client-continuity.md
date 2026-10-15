@@ -96,6 +96,19 @@ editing prior entries.
 - Default and custom UA are explicit independent modes. A custom string equal to
   the current default is still custom. Verified release updates change only the
   default profile. Parsing custom text is not artifact or TLS verification.
+- `custom-auto-version` is an explicit opt-in, preserving the original custom
+  environment and persisted UA. Existing custom selections stay pinned. CLI/Exec
+  resolves stable `rust-v` releases every six hours, with bounded fetch, list
+  fallback, no prereleases or version regression and a separate cached version.
+  A failed lookup retains the current profile. Update both CLI version positions;
+  Desktop uses the verified bundled Core/Desktop tuple instead. Never substitute
+  CLI release numbers into the Desktop application version. Freeze the resolved
+  version with the existing request snapshot, including HTTP/WS fallback.
+  Each process reconciles the shared CLI cache without a leader lease, so a
+  local profile cannot remain stale behind another instance. Network checks
+  remain six-hourly; Redis CAS keeps the cached version monotonic.
+  Migration 0071 only expands the allowed mode; it does not rewrite existing
+  selections. Old binaries cannot interpret the new mode once opted in.
 - Desktop artifact scanning follows official CPR `d83d3eb8`: only the nested
   `/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` binary is Core.
   The legacy `/Contents/Resources/codex` path and `codex-cli/bin/codex` launcher
@@ -221,6 +234,38 @@ editing prior entries.
   persist them again. Other unknown fields remain invalid.
 
 ## 4. Validation & Error Matrix
+
+### Request-Local Connection Recovery
+
+- Native Generate shares a maximum of four opening reservations and a 30-second
+  startup window across HTTP and fresh WS handshakes. HTTP reserves before send
+  because reqwest hides cold connection versus pool reuse; WS reserves only at
+  actual handshake. Reused WS sockets and waiters on another opening do not
+  consume another reservation. Live sideband and Excel retain their own paths.
+- Recover only proven unsent failures, at most three retries with bounded
+  backoff, on the selected account. Request-wide Sent/Ambiguous state, native
+  continuations, retry prohibition and the business replay barrier remain binding.
+  Retain the previous connection error when a typed local exhaustion marker
+  interrupts the scheduled connection retry; never infer this from upstream text.
+- Converting a transient retry to connection recovery requires a Transport or
+  Timeout error in addition to the unsent/replay-safe checks. A WS opening may
+  return an explicit capacity or server rejection before payload; preserve its
+  business retry policy instead of overwriting it with a connection retry.
+- Shorten only connect_timeout, preserving subsecond time. Never apply this
+  window as a whole-response timeout. Production default, account proxy and
+  explicit source clients retain their existing TLS, CA and egress builders.
+  Arbitrary injected HTTP clients keep their original configuration and connect
+  timeout because reqwest cannot reconstruct their settings. They still share
+  the opening count and recovery eligibility window.
+- A pooled background handshake owns its captured opening timeout and pool lease.
+  Foreground HTTP completion does not cancel it or transfer its ownership.
+  Successful WS payload send closes the recovery window immediately. Typed local
+  budget exhaustion cancels the breaker permit rather than marking the origin bad.
+- Do not copy fixed process-wide opening semaphores over the existing account
+  concurrency policy. Preserve pool keys, exact owners, identity and exit selection.
+- Verify real HTTP delayed headers/body, exhausted no-send, proxy/header retention,
+  injected-client configuration, refused connection classification, WS fresh/reuse
+  accounting, local breaker exclusion and background preconnect completion.
 
 | State | Required result |
 | --- | --- |
@@ -551,6 +596,10 @@ time. Observe actual opening duration and its outcome independently.
   Synthetic compression timing is not end-to-end latency or upstream acceptance.
 
 ## 13. 固定 Rustls 画像与安全依赖
+
+- Rustls 安全基线升级至 0.23.46（上游 7c38aabf）；保留原 features 和 provider。
+  本地 macOS 升级前后各 40 次采样，四条路径的算法、扩展集合、key share、ALPN
+  和稳定扩展内容一致。该记录不代表 Linux 或生产上游验证；发布仍需对应平台验收。
 
 - `ensure_rustls_provider` 是现有进程默认 Rustls provider 的初始化 owner。
   CPR WS、显式 Rustls HTTP helper、共享该 provider 的代理、XAI/Host 等消费者

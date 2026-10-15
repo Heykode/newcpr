@@ -232,6 +232,21 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
+        // Opening budgets and injected clients require private transport state;
+        // the version observer also owns its private release endpoint and clock.
+        ("crates/providers/openai", Some(relative), Item::Mod(module))
+            if matches!(
+                (relative, module.ident.to_string().as_str()),
+                ("transport/client.rs", "connection_tests")
+                    | (
+                        "transport/websocket/coordinator.rs",
+                        "connection_budget_tests"
+                    )
+                    | ("transport/profile/cli_version.rs", "tests")
+            ) =>
+        {
+            module.content.is_some() && matches!(module.vis, syn::Visibility::Inherited)
+        }
         // Round-robin regressions need the private cursor and source-health clock.
         ("crates/providers/openai", Some("transport/egress/mod.rs"), Item::Mod(module)) => {
             module.ident == "round_robin_tests"
@@ -860,6 +875,41 @@ fn mihomo_private_tests_require_exact_owner_and_private_external_module() {
     ] {
         let item: Item = syn::parse_str(source).unwrap();
         assert!(!is_audited_private_test("crates/gateway-host", path, &item));
+    }
+}
+
+#[test]
+fn transport_recovery_tests_require_exact_owner_and_private_inline_module() {
+    let owner = "crates/providers/openai";
+    for (relative, name) in [
+        ("transport/client.rs", "connection_tests"),
+        (
+            "transport/websocket/coordinator.rs",
+            "connection_budget_tests",
+        ),
+        ("transport/profile/cli_version.rs", "tests"),
+    ] {
+        let path = Path::new(relative);
+        let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name} {{}}")).unwrap();
+        assert!(is_audited_private_test(owner, path, &item));
+        assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+        assert!(!is_audited_private_test(
+            owner,
+            Path::new("transport/mod.rs"),
+            &item
+        ));
+        for source in [
+            format!("mod {name} {{}}"),
+            format!("#[cfg(test)] pub mod {name} {{}}"),
+            format!("#[cfg(test)] pub(crate) mod {name} {{}}"),
+            format!("#[cfg(test)] mod {name};"),
+            "#[cfg(test)] mod other {}".to_owned(),
+            format!("#[cfg(test)] #[path = \"other.rs\"] mod {name} {{}}"),
+            format!("#[cfg_attr(test, path = \"other.rs\")] mod {name} {{}}"),
+        ] {
+            let item: Item = syn::parse_str(&source).unwrap();
+            assert!(!is_audited_private_test(owner, path, &item), "{source}");
+        }
     }
 }
 

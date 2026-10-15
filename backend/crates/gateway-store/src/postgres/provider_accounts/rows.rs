@@ -120,6 +120,7 @@ pub(crate) fn parse_error_reason(value: Option<String>) -> StoreResult<Option<Ac
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountSummary {
+    pub outbound_proxy_enabled: bool,
     pub custom_name: Option<String>,
     pub request_location: Option<gateway_core::account::RequestLocation>,
     pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
@@ -463,7 +464,8 @@ impl ProviderAccountStateUpdate {
 }
 
 pub(crate) const ACCOUNT_SELECT: &str = "select
-            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+            coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
@@ -474,7 +476,8 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
      from provider_accounts where id = $1";
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
-            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+            coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
@@ -487,7 +490,8 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
      order by id";
 
 pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
-            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+            coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
             has_refresh_token, access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,
@@ -583,7 +587,11 @@ pub(crate) fn core_account_from_summary(
     .with_turn_state_binding_revision(binding_revision)
     .with_scheduling(summary.concurrency_limit, summary.weight)
     .with_model_access(summary.model_access)
-    .with_outbound_proxy(summary.outbound_proxy)
+    .with_outbound_proxy(
+        summary
+            .outbound_proxy
+            .filter(|_| summary.outbound_proxy_enabled),
+    )
     .with_request_location(summary.request_location)
     .with_refresh_schedule(
         summary.has_refresh_token,
@@ -630,6 +638,7 @@ pub(crate) fn account_summary_from_row(
         .and_then(AccountWeight::new)
         .ok_or_else(|| invalid("invalid weight"))?;
     Ok(ProviderAccountSummary {
+        outbound_proxy_enabled: get(&row, "outbound_proxy_enabled")?,
         custom_name: get(&row, "custom_name")?,
         request_location: get::<Option<sqlx::types::Json<gateway_core::account::RequestLocation>>>(
             &row,

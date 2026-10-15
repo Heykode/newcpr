@@ -259,6 +259,150 @@ async fn usage_pagination_keeps_tie_order_filters_and_totals_from_both_ends() {
 }
 
 #[tokio::test]
+async fn usage_time_pages_match_exact_order_across_buckets_and_partial_ranges() {
+    let Some(database) = TestDatabase::create("usage_time_pages").await else {
+        return;
+    };
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-14T10:00:15Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    sqlx::query(
+        "insert into model_requests (id, client_api_key_ref, config_revision, protocol,
+           operation, endpoint, client_transport, requested_model_id, started_at,
+           deadline_at, completed_at, downstream_committed_at, outcome, client_status_code, routing_scope)
+         select 'req_bucket_' || lpad(n::text, 3, '0'), 'key_buckets', 1, 'openai',
+           'responses', '/v1/responses', 'http_sse',
+           case when n % 5 = 0 then 'excluded-model' else 'bucket-model' end,
+           $1 + (n / 3) * interval '25 seconds',
+           $1 + interval '1 hour', $1 + interval '1 hour', $1, 'succeeded', 200, 'all'
+         from generate_series(1, 83) n",
+    )
+    .bind(now)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let repository = observability_repository(&database.pool);
+    let range =
+        ObservabilityRange::new(now + TimeDelta::seconds(37), now + TimeDelta::seconds(619))
+            .unwrap();
+    let expected: Vec<String> = sqlx::query_scalar(
+        "select id from model_requests where started_at >= $1 and started_at < $2
+           and requested_model_id = 'bucket-model' order by started_at desc, id desc",
+    )
+    .bind(range.start)
+    .bind(range.end)
+    .fetch_all(&database.pool)
+    .await
+    .unwrap();
+    for page_size in [1_u16, 7, 19] {
+        for page_number in 1..=(expected.len() / usize::from(page_size) + 3) {
+            let page = repository
+                .list_usage_records(UsageRecordQuery {
+                    range,
+                    filter: UsageRecordFilter {
+                        model: Some("bucket-model".to_owned()),
+                        search: Some("bucket_".to_owned()),
+                        ..Default::default()
+                    },
+                    current_page: page_number as u32,
+                    page_size: ObservabilityPageSize::new(page_size).unwrap(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(page.total, expected.len() as u64);
+            let offset = (page_number - 1) * usize::from(page_size);
+            let expected_page: Vec<_> = expected
+                .iter()
+                .skip(offset)
+                .take(usize::from(page_size))
+                .cloned()
+                .collect();
+            assert_eq!(
+                page.items
+                    .into_iter()
+                    .map(|item| item.id)
+                    .collect::<Vec<_>>(),
+                expected_page,
+                "page {page_number}, size {page_size}"
+            );
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
+async fn ops_time_pages_preserve_cross_source_ties_and_filters() {
+    let Some(database) = TestDatabase::create("ops_time_pages").await else {
+        return;
+    };
+    let now = Utc::now();
+    seed_observability_facts(&database.pool, now).await.unwrap();
+    sqlx::query(
+        "insert into ops_events (id, model_request_id, attempt_index, level, component,
+           operation, failure_kind, status_code, message, created_at)
+         select 'ops_page_' || lpad(n::text, 3, '0'), 'req_observe_failed', 1,
+           'warning', 'routing', 'responses', 'rate_limited', 429, 'page failure',
+           $1 - interval '10 minutes' + (n / 3) * interval '30 seconds'
+         from generate_series(1, 45) n",
+    )
+    .bind(now)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let range = ObservabilityRange::new(now - TimeDelta::minutes(10) + TimeDelta::seconds(17), now)
+        .unwrap();
+    let expected: Vec<String> = sqlx::query_scalar(
+        "select stable_id from (
+           select 'model_request:' || id as stable_id, completed_at as occurred_at
+           from model_requests where id = 'req_observe_failed'
+           union all select 'ops_event:' || id, created_at from ops_events
+           where model_request_id = 'req_observe_failed'
+         ) events where occurred_at >= $1 and occurred_at < $2
+         order by occurred_at desc, stable_id desc",
+    )
+    .bind(range.start)
+    .bind(range.end)
+    .fetch_all(&database.pool)
+    .await
+    .unwrap();
+    let repository = observability_repository(&database.pool);
+    for page_size in [1_u16, 7, 19] {
+        for page_number in 1..=(expected.len() / usize::from(page_size) + 3) {
+            let page = repository
+                .list_ops_errors(OpsErrorQuery {
+                    range,
+                    filter: OpsErrorFilter {
+                        request_id: Some("req_observe_failed".to_owned()),
+                        status_code: Some(429),
+                        ..Default::default()
+                    },
+                    current_page: page_number as u32,
+                    page_size: ObservabilityPageSize::new(page_size).unwrap(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(page.total, expected.len() as u64);
+            let actual = page
+                .items
+                .iter()
+                .map(|item| format!("{}:{}", item.source, item.event_id))
+                .collect::<Vec<_>>();
+            let expected_page = expected
+                .iter()
+                .skip((page_number - 1) * usize::from(page_size))
+                .take(usize::from(page_size))
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual, expected_page,
+                "page {page_number}, size {page_size}"
+            );
+        }
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn history_upgrade_backfills_available_names_without_rewriting_billing_or_accounts() {
     let migrator = sqlx::migrate::Migrator {
         migrations: crate::postgres::TEST_MIGRATOR

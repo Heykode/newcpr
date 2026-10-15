@@ -57,6 +57,7 @@ struct CreateRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateRequest {
+    enabled: Option<bool>,
     auto_location: Option<bool>,
     #[serde(default, deserialize_with = "optional_location")]
     request_location: Option<Option<gateway_core::account::RequestLocation>>,
@@ -124,6 +125,7 @@ struct ProxyAccountView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyView {
+    enabled: bool,
     auto_location: bool,
     detected_location: Option<DetectedProxyLocation>,
     effective_location: Option<gateway_core::account::RequestLocation>,
@@ -148,6 +150,7 @@ impl From<ProxyRecord> for ProxyView {
             auto_location: record.auto_location,
             detected_location: record.detected_location,
             effective_location,
+            enabled: record.enabled,
             id: record.id,
             request_location: record.request_location,
             name: record.name,
@@ -399,6 +402,7 @@ where
         .proxies()
         .update(
             UpdateProxy {
+                enabled: request.enabled,
                 auto_location: request.auto_location,
                 test: None,
                 request_location: request.request_location,

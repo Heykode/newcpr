@@ -20,6 +20,7 @@ use url::Url;
 
 use self::desktop_artifact::{CodexDesktopArtifactError, fetch_codex_core_version};
 
+pub mod cli_version;
 pub mod desktop_artifact;
 pub mod qx;
 
@@ -76,6 +77,22 @@ pub struct CodexWireProfile {
 }
 
 impl CodexWireProfile {
+    fn set_cli_version(&mut self, version: &str) {
+        let Some(raw) = &self.raw_user_agent else {
+            return;
+        };
+        let Some((_, tail)) = raw.split_once(" (") else {
+            return;
+        };
+        let old_suffix = format!(" ({}; {})", self.originator, self.codex_version);
+        let suffix = format!(" ({}; {version})", self.originator);
+        let tail = tail
+            .strip_suffix(&old_suffix)
+            .map_or_else(|| tail.to_owned(), |target| format!("{target}{suffix}"));
+        self.raw_user_agent = Some(format!("{}/{version} ({tail}", self.originator));
+        self.codex_version = version.to_owned();
+    }
+
     /// 自动识别受支持的完整 UA；识别本身不选择 TLS 或应用层策略。
     pub fn parse_custom_user_agent(
         value: &str,
@@ -239,6 +256,7 @@ fn valid_architecture(os_type: &str, arch: &str) -> bool {
 pub enum CodexWireProfileOverride {
     Default,
     Custom(Box<CodexWireProfile>),
+    CustomAutoVersion(Box<CodexWireProfile>),
 }
 
 /// Settings and previews needed by the admin UI.
@@ -263,22 +281,49 @@ pub struct CodexWireProfileState {
 struct CodexWireProfileSelection {
     default_profile: CodexWireProfile,
     mode: CodexWireProfileOverride,
+    #[serde(default)]
+    cli_version: Option<String>,
 }
 
 impl CodexWireProfileSelection {
-    fn effective(&self) -> &CodexWireProfile {
+    fn effective(&self) -> CodexWireProfile {
         match &self.mode {
-            CodexWireProfileOverride::Default => &self.default_profile,
-            CodexWireProfileOverride::Custom(profile) => profile,
+            CodexWireProfileOverride::Default => self.default_profile.clone(),
+            CodexWireProfileOverride::Custom(profile) => *profile.clone(),
+            CodexWireProfileOverride::CustomAutoVersion(profile) => {
+                let mut effective = *profile.clone();
+                if effective.originator == "Codex Desktop" {
+                    effective
+                        .codex_version
+                        .clone_from(&self.default_profile.codex_version);
+                    effective
+                        .desktop_version
+                        .clone_from(&self.default_profile.desktop_version);
+                    effective
+                        .desktop_build
+                        .clone_from(&self.default_profile.desktop_build);
+                } else if let Some(version) = &self.cli_version
+                    && semver::Version::parse(&effective.codex_version)
+                        .ok()
+                        .zip(cli_version::stable_version(version))
+                        .is_none_or(|(current, candidate)| candidate >= current)
+                {
+                    effective.set_cli_version(version);
+                }
+                effective
+            }
         }
     }
 
-    fn desktop(&self) -> &CodexWireProfile {
+    fn desktop(&self) -> CodexWireProfile {
         match &self.mode {
-            CodexWireProfileOverride::Custom(profile) if profile.originator == "Codex Desktop" => {
-                profile
+            CodexWireProfileOverride::Custom(profile)
+            | CodexWireProfileOverride::CustomAutoVersion(profile)
+                if profile.originator == "Codex Desktop" =>
+            {
+                self.effective()
             }
-            _ => &self.default_profile,
+            _ => self.default_profile.clone(),
         }
     }
 }
@@ -316,6 +361,7 @@ impl CodexWireProfileState {
             selection: Arc::new(RwLock::new(CodexWireProfileSelection {
                 default_profile: profile,
                 mode: CodexWireProfileOverride::Default,
+                cli_version: None,
             })),
         }
     }
@@ -326,7 +372,7 @@ impl CodexWireProfileState {
             .selection
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        selection.effective().clone()
+        selection.effective()
     }
 
     /// 一次读锁冻结有效选择和独立 Desktop 默认，后续发布不会改变这份状态。
@@ -347,7 +393,6 @@ impl CodexWireProfileState {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .desktop()
-            .clone()
     }
 
     /// 返回当前已核验的默认画像，不受自定义覆盖影响。
@@ -372,9 +417,9 @@ impl CodexWireProfileState {
             default_user_agent: default_profile.user_agent(),
             effective_user_agent: effective.user_agent(),
             effective_desktop_user_agent: selection.desktop().desktop_user_agent(),
-            effective_desktop_version: selection.desktop().desktop_version.clone(),
+            effective_desktop_version: selection.desktop().desktop_version,
             default_verified_at: default_profile.verified_at,
-            effective_profile: effective.clone(),
+            effective_profile: effective,
         }
     }
 
@@ -389,12 +434,20 @@ impl CodexWireProfileState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mode = match selection {
             ProviderUserAgentOverride::Default => CodexWireProfileOverride::Default,
-            ProviderUserAgentOverride::Custom { user_agent } => {
+            ProviderUserAgentOverride::Custom { user_agent }
+            | ProviderUserAgentOverride::CustomAutoVersion { user_agent } => {
                 let profile = CodexWireProfile::parse_custom_user_agent(
                     user_agent,
                     &current.default_profile,
                 )?;
-                CodexWireProfileOverride::Custom(Box::new(profile))
+                if matches!(
+                    selection,
+                    ProviderUserAgentOverride::CustomAutoVersion { .. }
+                ) {
+                    CodexWireProfileOverride::CustomAutoVersion(Box::new(profile))
+                } else {
+                    CodexWireProfileOverride::Custom(Box::new(profile))
+                }
             }
         };
         current.mode = mode;
@@ -411,8 +464,39 @@ impl CodexWireProfileState {
             CodexWireProfileOverride::Custom(profile) => ProviderUserAgentOverride::Custom {
                 user_agent: profile.user_agent(),
             },
+            CodexWireProfileOverride::CustomAutoVersion(profile) => {
+                ProviderUserAgentOverride::CustomAutoVersion {
+                    user_agent: profile.user_agent(),
+                }
+            }
         };
         self.apply_user_agent_override(&selection)
+    }
+
+    pub fn cli_sync_enabled(&self) -> bool {
+        let selection = self
+            .selection
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        matches!(&selection.mode, CodexWireProfileOverride::CustomAutoVersion(profile) if profile.originator != "Codex Desktop")
+    }
+
+    pub fn update_cli_version(&self, version: &str) {
+        let Some(candidate) = cli_version::stable_version(version) else {
+            return;
+        };
+        let mut selection = self
+            .selection
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if selection
+            .cli_version
+            .as_deref()
+            .and_then(cli_version::stable_version)
+            .is_none_or(|current| candidate > current)
+        {
+            selection.cli_version = Some(candidate.to_string());
+        }
     }
 
     /// 原子发布同一 Desktop ZIP 中核验出的完整版本元组。

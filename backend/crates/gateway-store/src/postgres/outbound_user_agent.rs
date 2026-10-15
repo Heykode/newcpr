@@ -29,6 +29,10 @@ pub(crate) async fn load_user_agent_override(
             validate_custom(Some(&user_agent))?;
             Ok(ProviderUserAgentOverride::Custom { user_agent })
         }
+        Some((mode, Some(user_agent))) if mode == "custom-auto-version" => {
+            validate_custom(Some(&user_agent))?;
+            Ok(ProviderUserAgentOverride::CustomAutoVersion { user_agent })
+        }
         Some(_) => Err(invalid_selection()),
     }
 }
@@ -51,6 +55,9 @@ impl PgControlPlaneRepository {
             ProviderUserAgentOverride::Default => ("default", None),
             ProviderUserAgentOverride::Custom { user_agent } => {
                 ("custom", Some(user_agent.as_str()))
+            }
+            ProviderUserAgentOverride::CustomAutoVersion { user_agent } => {
+                ("custom-auto-version", Some(user_agent.as_str()))
             }
         };
         validate_custom(custom)?;

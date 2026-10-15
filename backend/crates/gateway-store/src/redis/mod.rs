@@ -51,20 +51,30 @@ pub struct AdminSessionRecord {
     pub expires_at: DateTime<Utc>,
     pub credential_fingerprint: String,
     pub absolute_expires_at: Option<DateTime<Utc>>,
+    pub renewal: Option<gateway_admin::model::auth::SessionRenewal>,
 }
 
 impl AdminSessionRecord {
+    fn retained_until(&self) -> DateTime<Utc> {
+        self.renewal
+            .as_ref()
+            .map_or(self.expires_at, |renewal| renewal.expires_at)
+    }
+
     fn validate(&self) -> StoreResult<u64> {
         require_nonempty("admin session", "admin_user_id", &self.admin_user_id)?;
         if self
             .absolute_expires_at
-            .is_some_and(|limit| self.expires_at > limit)
+            .is_some_and(|limit| self.retained_until() > limit)
+            || self.renewal.as_ref().is_some_and(|renewal| {
+                self.absolute_expires_at.is_none() || self.expires_at > renewal.expires_at
+            })
         {
             return Err(admin_auth_invalid(
                 "session expiry exceeds its absolute lifetime",
             ));
         }
-        let expires_at_millis = u64::try_from(self.expires_at.timestamp_millis())
+        let expires_at_millis = u64::try_from(self.retained_until().timestamp_millis())
             .map_err(|_| admin_auth_invalid("session expiry must be after the Unix epoch"))?;
         if expires_at_millis > MAX_REDIS_EXACT_INTEGER {
             return Err(admin_auth_invalid(
@@ -83,11 +93,11 @@ impl AdminSessionRecord {
 /// 管理员会话的 Redis 基础设施端口。
 #[async_trait]
 pub trait AdminAuthStateRepository: Send + Sync {
-    async fn renew_admin_session(
+    async fn compare_exchange_admin_session(
         &self,
         session_id: &str,
         expected: &AdminSessionRecord,
-        expires_at: DateTime<Utc>,
+        replacement: Option<&AdminSessionRecord>,
     ) -> StoreResult<Option<AdminSessionRecord>>;
 
     async fn consume_password_change_attempt(
@@ -133,32 +143,28 @@ impl RedisAdminAuthStateRepository {
 
 #[async_trait]
 impl AdminAuthStateRepository for RedisAdminAuthStateRepository {
-    async fn renew_admin_session(
+    async fn compare_exchange_admin_session(
         &self,
         session_id: &str,
         expected: &AdminSessionRecord,
-        expires_at: DateTime<Utc>,
+        replacement: Option<&AdminSessionRecord>,
     ) -> StoreResult<Option<AdminSessionRecord>> {
-        if expected.expires_at <= Utc::now()
-            || expected.credential_fingerprint.is_empty()
-            || expires_at < expected.expires_at
-            || expected
-                .absolute_expires_at
-                .is_none_or(|limit| expires_at > limit)
-        {
-            return Err(admin_auth_invalid(
-                "session renewal is outside its lifetime",
-            ));
-        }
-        let renewed = AdminSessionRecord {
-            expires_at,
-            ..expected.clone()
-        };
-        let expiry = renewed.validate()?;
+        let expiry = replacement
+            .map(AdminSessionRecord::validate)
+            .transpose()?
+            .unwrap_or(0);
+        let replacement_payload = replacement
+            .map(encode_admin_session)
+            .transpose()?
+            .unwrap_or_default();
         let payload: Option<String> = redis::Script::new(
             r#"
 local current = redis.call('GET', KEYS[1])
 if current == ARGV[1] then
+    if ARGV[2] == '' then
+        redis.call('DEL', KEYS[1])
+        return nil
+    end
     redis.call('SET', KEYS[1], ARGV[2], 'PXAT', ARGV[3], 'XX')
     return ARGV[2]
 end
@@ -167,7 +173,7 @@ return current
         )
         .key(self.session_key(session_id)?)
         .arg(encode_admin_session(expected)?)
-        .arg(encode_admin_session(&renewed)?)
+        .arg(replacement_payload)
         .arg(expiry)
         .invoke_async(&mut self.connection.clone())
         .await
@@ -267,10 +273,13 @@ struct AdminSessionWire {
     credential_fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     absolute_expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    renewal: Option<gateway_admin::model::auth::SessionRenewal>,
 }
 
 fn encode_admin_session(session: &AdminSessionRecord) -> StoreResult<String> {
     serde_json::to_string(&AdminSessionWire {
+        renewal: session.renewal.clone(),
         admin_user_id: session.admin_user_id.clone(),
         credential_fingerprint: session.credential_fingerprint.clone(),
         absolute_expires_at: session
@@ -291,6 +300,7 @@ fn decode_admin_session(value: &str) -> StoreResult<AdminSessionRecord> {
         .map_err(|_| admin_auth_invalid("Redis returned an invalid session expiry"))?
         .with_timezone(&Utc);
     Ok(AdminSessionRecord {
+        renewal: wire.renewal,
         admin_user_id: wire.admin_user_id,
         expires_at,
         credential_fingerprint: wire.credential_fingerprint,

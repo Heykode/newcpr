@@ -119,7 +119,8 @@ pub(crate) async fn load_admin_account_page(
              from runtime_settings
             where id = 1
          )
-         select (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id) as request_location_json,
+         select coalesce((select enabled from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id), true) as outbound_proxy_enabled,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = a.outbound_proxy_id and enabled) as request_location_json,
                 a.outbound_proxy_url, a.id, a.provider_kind, a.name, a.custom_name, a.email, a.upstream_user_id,
                 a.upstream_account_id, a.plan_type, a.authentication_kind,
                 a.credential_revision, a.turn_state_binding_revision, a.relogin_count, a.last_relogin_at,

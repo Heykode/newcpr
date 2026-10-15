@@ -6,6 +6,24 @@ use gateway_core::lifecycle::{Deadline, REQUEST_LEASE_TTL};
 use std::time::{Duration, SystemTime};
 
 #[test]
+fn first_cancellation_reason_survives_cleanup() {
+    use gateway_core::lifecycle::{CancellationReason, LeaseFailure, RequestLeaseKind};
+    let token = CancellationToken::new();
+    let reason = CancellationReason::Lease {
+        kind: RequestLeaseKind::Credential,
+        failure: LeaseFailure::Lost,
+    };
+    token.cancel_with_reason(reason);
+    token.cancel();
+    assert_eq!(token.reason(), Some(reason));
+    assert!(token.is_cancelled());
+    let requested = CancellationToken::new();
+    requested.cancel();
+    requested.cancel_with_reason(reason);
+    assert_eq!(requested.reason(), Some(CancellationReason::Requested));
+}
+
+#[test]
 fn abandoned_cancellation_futures_release_their_waiters() {
     use futures::FutureExt;
 

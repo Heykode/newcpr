@@ -446,7 +446,10 @@ impl Ownership {
         self.execution_deadline = Some(request.deadline());
         self.renewal = Some(crate::lease_renewal::LeaseRenewal::spawn(
             request.deadline(),
-            Some(request.cancellation()),
+            Some((
+                request.cancellation(),
+                gateway_core::lifecycle::RequestLeaseKind::Credential,
+            )),
             move |ttl| {
                 let mut connection = connection.clone();
                 let active_key = active_key.clone();
@@ -460,7 +463,9 @@ impl Ownership {
                         .arg(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX))
                         .invoke_async::<i64>(&mut connection)
                         .await
-                        .map_err(|_| crate::redis_unavailable("renew account execution"))?;
+                        .map_err(|error| {
+                            crate::redis_unavailable("renew account execution").with_source(error)
+                        })?;
                     Ok(renewed == 1)
                 })
             },

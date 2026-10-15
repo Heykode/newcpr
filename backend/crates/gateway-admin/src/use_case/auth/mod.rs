@@ -6,7 +6,6 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
-use rand_core::{OsRng, RngCore as _};
 use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
@@ -23,6 +22,7 @@ use crate::{
 };
 
 use super::map_store_error;
+mod session;
 
 /// API 鉴权与管理员登录消费的统一服务。
 #[async_trait]
@@ -30,7 +30,7 @@ pub trait AuthService: Send + Sync {
     async fn renew_session(
         &self,
         session_id: Option<&str>,
-    ) -> Result<Option<AdminSession>, AdminError>;
+    ) -> Result<Option<LoginResult>, AdminError>;
     async fn change_password(
         &self,
         session_id: Option<&str>,
@@ -61,12 +61,40 @@ pub(crate) struct DefaultAuthService {
 
 impl DefaultAuthService {
     async fn current_session(&self, session_id: &str) -> Result<Option<AdminSession>, AdminError> {
+        let credential = session::Credential::parse(session_id);
+        let Some(session) = self
+            .load_live_session(session::storage_id(session_id))
+            .await?
+        else {
+            return Ok(None);
+        };
+        let valid = match (&session.renewal, credential) {
+            (Some(renewal), Some(credential)) => !credential.refresh && credential.owns(renewal),
+            (None, None) => true,
+            _ => false,
+        };
+        Ok((valid && session_valid(&session)).then_some(session))
+    }
+
+    fn access_ttl(&self) -> Duration {
+        (self.session_ttl / 4).min(Duration::hours(24))
+    }
+
+    async fn load_live_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<AdminSession>, AdminError> {
         let Some(session) = self
             .store
             .load_session(session_id)
             .await
             .map_err(|error| map_store_error(error, "administrator session"))?
-            .filter(session_valid)
+            .filter(|session| {
+                session.retained_until() > Utc::now()
+                    && session
+                        .absolute_expires_at
+                        .is_none_or(|limit| limit > Utc::now())
+            })
         else {
             return Ok(None);
         };
@@ -125,27 +153,22 @@ impl AuthService for DefaultAuthService {
     async fn renew_session(
         &self,
         session_id: Option<&str>,
-    ) -> Result<Option<AdminSession>, AdminError> {
+    ) -> Result<Option<LoginResult>, AdminError> {
         let Some(session_id) = session_id else {
             return Ok(None);
         };
-        let Some(session) = self.current_session(session_id).await? else {
-            return Ok(None);
-        };
-        let Some(absolute) = session.absolute_expires_at else {
-            return Ok(Some(session));
-        };
-        let now = Utc::now();
-        let expiry = (now + self.session_ttl).min(absolute);
-        let interval = (self.session_ttl / 4).min(Duration::minutes(1));
-        if expiry <= session.expires_at || session.expires_at - now > self.session_ttl - interval {
-            return Ok(Some(session));
+        if session::Credential::parse(session_id).is_some() {
+            return self.refresh(session_id).await;
         }
-        self.store
-            .renew_session(session_id, &session, expiry)
-            .await
-            .map(|session| session.filter(session_valid))
-            .map_err(|error| map_store_error(error, "administrator session renewal"))
+        Ok(self
+            .current_session(session_id)
+            .await?
+            .map(|session| LoginResult {
+                session_id: session_id.to_owned(),
+                expires_at: session.expires_at,
+                refresh_token: None,
+                refresh_expires_at: None,
+            }))
     }
 
     async fn change_password(
@@ -154,11 +177,7 @@ impl AuthService for DefaultAuthService {
         command: ChangePassword,
     ) -> Result<(), AdminError> {
         let session = match session_id {
-            Some(id) => self
-                .store
-                .load_session(id)
-                .await
-                .map_err(|error| map_store_error(error, "administrator session"))?,
+            Some(id) => self.current_session(id).await?,
             None => None,
         }
         .filter(session_valid)
@@ -268,20 +287,23 @@ impl AuthService for DefaultAuthService {
             return Err(LoginError::InvalidCredentials);
         }
 
-        let session_id = random_session_token();
         let now = Utc::now();
         let absolute_expires_at = now + self.session_absolute_ttl;
-        let expires_at = (now + self.session_ttl).min(absolute_expires_at);
+        let refresh_expiry = (now + self.session_ttl).min(absolute_expires_at);
+        let expires_at = (now + self.access_ttl()).min(refresh_expiry);
+        let (session_id, session, result) = session::issue(
+            AdminSession {
+                admin_user_id: self.default_admin_user_id.clone(),
+                expires_at,
+                credential_fingerprint: password_fingerprint(&hash),
+                absolute_expires_at: Some(absolute_expires_at),
+                renewal: None,
+            },
+            refresh_expiry,
+        )
+        .map_err(|error| LoginError::Unavailable(Some(error.into())))?;
         self.store
-            .store_session(
-                &session_id,
-                &AdminSession {
-                    admin_user_id: self.default_admin_user_id.clone(),
-                    expires_at,
-                    credential_fingerprint: password_fingerprint(&hash),
-                    absolute_expires_at: Some(absolute_expires_at),
-                },
-            )
+            .store_session(&session_id, &session)
             .await
             .map_err(|error| LoginError::Unavailable(Some(error.into())))?;
         if let Err(error) = self
@@ -296,10 +318,7 @@ impl AuthService for DefaultAuthService {
             };
             return Err(LoginError::Unavailable(Some(source)));
         }
-        Ok(LoginResult {
-            session_id,
-            expires_at,
-        })
+        Ok(result)
     }
 
     async fn validate_session(&self, session_id: Option<&str>) -> Result<bool, AdminError> {
@@ -307,9 +326,18 @@ impl AuthService for DefaultAuthService {
     }
 
     async fn logout(&self, session_id: &str) -> Result<(), AdminError> {
+        let id = session::storage_id(session_id);
+        let Some(session) = self.load_live_session(id).await? else {
+            return Ok(());
+        };
+        match (&session.renewal, session::Credential::parse(session_id)) {
+            (Some(renewal), Some(credential)) if credential.owns(renewal) => {}
+            (None, None) => {}
+            _ => return Ok(()),
+        }
         let session = self
             .store
-            .delete_session(session_id)
+            .delete_session(id)
             .await
             .map_err(|error| map_store_error(error, "administrator session"))?;
         if let Some(session) = session {
@@ -369,12 +397,6 @@ fn verify_admin_password(password: &str, encoded: &str) -> Result<bool, AdminErr
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &hash)
         .is_ok())
-}
-
-fn random_session_token() -> String {
-    let mut bytes = [0_u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    format!("session_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn valid_admin_api_key_shape(value: &str) -> bool {

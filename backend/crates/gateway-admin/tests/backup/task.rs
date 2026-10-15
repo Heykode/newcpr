@@ -185,6 +185,47 @@ async fn backup_task_marks_failed_with_the_upload_error() {
 }
 
 #[tokio::test]
+async fn upload_failure_keeps_cleanup_failure_without_leaking_details() {
+    for expires in [false, true] {
+        let repository = Arc::new(FakeBackupRepository::new(configured_settings()));
+        let dump = Arc::new(FakeDumpPort::new());
+        let object_store = Arc::new(
+            FakeObjectStore::new()
+                .fail_upload(code::S3_UPLOAD_FAILED, "original upload failure")
+                .fail_delete(),
+        );
+        repository
+            .insert_backup_record(BackupRecordSeed {
+                id: backup_id("cleanup-failure"),
+                trigger_kind: BackupTriggerKind::Manual,
+                scheduled_at: None,
+                object_key: "synthetic/cleanup.dump".to_owned(),
+                expires_at: expires.then(|| Utc::now() + chrono::TimeDelta::days(1)),
+            })
+            .await
+            .unwrap();
+        BackupTask::new(repository.clone(), dump, object_store)
+            .run_cycle(&CancellationToken::new())
+            .await
+            .unwrap();
+        let records = repository.all_records();
+        assert_eq!(
+            records[0].error_code.as_deref(),
+            Some(code::S3_UPLOAD_FAILED)
+        );
+        let message = records[0].error_message.as_deref().unwrap();
+        assert!(message.contains("original upload failure"));
+        assert!(message.contains("DeleteObject"));
+        assert!(!message.contains("sensitive cleanup detail"));
+        assert!(message.contains(if expires {
+            "等待备份到期清理"
+        } else {
+            "未安排自动重试"
+        }));
+    }
+}
+
+#[tokio::test]
 async fn backup_task_recovery_marks_failed_with_the_upload_error() {
     let repository = Arc::new(FakeBackupRepository::new(configured_settings()));
     let dump = Arc::new(FakeDumpPort::new());

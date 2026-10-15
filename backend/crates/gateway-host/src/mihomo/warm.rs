@@ -336,6 +336,9 @@ impl ManagedMihomo {
                                     .await
                                     .map_err(|_| ())?;
                                 for item in result.items {
+                                    if !item.enabled {
+                                        continue;
+                                    }
                                     let id = digest(item.proxy.expose_url().as_bytes());
                                     exits.push((id, item.proxy, false, false));
                                 }

@@ -1,5 +1,6 @@
 mod admission;
 mod capacity_wait;
+mod connection;
 mod continuation;
 mod coordinator;
 mod execution;

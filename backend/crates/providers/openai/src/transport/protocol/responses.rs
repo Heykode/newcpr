@@ -324,6 +324,16 @@ pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequir
     }
 }
 
+pub(crate) fn is_replaceable_response_prelude(value: &serde_json::Value) -> bool {
+    match value.get("type").and_then(serde_json::Value::as_str) {
+        Some("codex.response.metadata" | "codex.rate_limits") => true,
+        Some("response.created" | "response.in_progress") => value
+            .pointer("/response/output")
+            .is_none_or(|output| output.as_array().is_some_and(Vec::is_empty)),
+        _ => false,
+    }
+}
+
 /// 单个 Responses 事件对计时系统提供的稳定语义信号。
 ///
 /// `output_start` observes the first non-preamble event. Semantic output still

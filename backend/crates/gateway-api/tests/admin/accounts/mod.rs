@@ -1750,6 +1750,7 @@ mod response {
             turn_state: None,
             effective_concurrency_limit: std::num::NonZeroU32::new(3).expect("concurrency limit"),
             account: AccountRecord {
+                outbound_proxy_enabled: true,
                 effective_excel_models: Default::default(),
                 model_access: Default::default(),
                 custom_name: None,

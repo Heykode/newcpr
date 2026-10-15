@@ -27,6 +27,7 @@ export interface HealthTimelinePoint {
   reliabilityDisplay: string
   successRequests: number
   failedRequests: number
+  incompleteRequests?: number
   cancelledRequests: number
   callerErrorRequests: number
 }
@@ -38,6 +39,7 @@ export interface HealthTimeline {
   status: HealthStatus
   successRequests: number
   failedRequests: number
+  incompleteRequests?: number
   cancelledRequests: number
   callerErrorRequests: number
   points: HealthTimelinePoint[]
@@ -96,13 +98,15 @@ export function healthReliabilityValueClass(successRequests: number, failedReque
     return 'text-cp-text-quaternary'
 
   const reliability = (Math.max(0, successRequests) / eligibleRequests) * 100
-  if (reliability >= 99.5)
-    return 'text-cp-success-text'
-  if (reliability >= 98)
-    return 'text-cp-cyan-text'
   if (reliability >= 95)
+    return 'text-cp-success-text'
+  if (successRequests > 0)
     return 'text-cp-warning-text'
   return 'text-cp-error-text'
+}
+
+export function healthServiceFailureCount(point: Pick<HealthTimelinePoint, 'failedRequests' | 'incompleteRequests'>) {
+  return point.failedRequests + (point.incompleteRequests ?? 0)
 }
 
 export function formatHealthCount(value: number) {

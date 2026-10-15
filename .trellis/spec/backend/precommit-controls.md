@@ -17,8 +17,11 @@ authority, finite scheduling, Excel repair, or continuation ownership contracts.
   wait: the first complete parsed client event, including created/in_progress,
   can be released without waiting for later output or a grace timer. Inspect an
   immediate first-event connection-limit rejection before delivery so its existing
-  recovery remains available. A rejection after a released lifecycle event cannot
-  transparently replay. Pass the frozen AttemptContext threshold to transport;
+  recovery remains available. Native zero-buffer created/empty in_progress and
+  comment-only frames are explicitly replaceable preludes; they do not alone
+  prohibit recovery. Semantic, tool, compaction, unknown and terminal output
+  close the replay barrier. Excel keeps its independent contract.
+  Pass the frozen AttemptContext threshold to transport;
   standalone client calls snapshot the threshold before opening, not while streaming.
   A positive value bounds lower WS lifecycle buffering with the same original
   SSE-frame byte count used by Provider. Replaying that buffered prefix into the
@@ -34,13 +37,14 @@ authority, finite scheduling, Excel repair, or continuation ownership contracts.
   when the count exceeds the configured threshold, at the fixed 2500 ms grace,
   or immediately on semantic output, terminal or EOF. A last chunk may cross the
   threshold: this is not a hard memory ceiling or a request rejection limit.
-- Zero must not mark an incomplete, non-client-visible chunk committed. Once
-  events are released, later failures must not become transparent replay.
+- Zero must not mark an incomplete, non-client-visible chunk committed. Released
+  business output or a positive-buffer release prohibits transparent replay.
+  Transport heartbeat commitment is recorded separately from this business barrier.
 - Buffering does not create retry attempts. Existing same-account transport
   budgets, account-switch budgets and the independent HTTP fallback setting
   remain authoritative. A zero/exhausted transport retry budget with fallback
   disabled produces no transport retry/fallback intent. Core still requires
-  replay proof and an uncommitted downstream before any configured retry.
+  replay proof and an open business replay barrier before any configured retry.
 - Trace `provider.precommit.released` with reason, prefetchedBytes, limitBytes,
   and waitMs. No request bodies, credentials, or device identifiers are added.
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord } from '@/api'
-import { LockKeyhole, Pencil, Plus, RefreshCw, Search, Trash2, Users, Wifi } from '@lucide/vue'
+import { LockKeyhole, MoreHorizontal, Pencil, Plus, Power, RefreshCw, Search, Trash2, Users, Wifi } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
 import { createProxy, deleteProxy, getProxies, probeProxy, testProxy, updateProxy } from '@/api'
@@ -10,7 +10,9 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
+import BasePopover from '@/components/base/BasePopover.vue'
 import BaseTablePagination from '@/components/base/BaseTable/BaseTablePagination.vue'
 import { defineTableColumns } from '@/components/base/BaseTable/columns'
 import BaseTable from '@/components/base/BaseTable/index.vue'
@@ -34,6 +36,7 @@ const { items: proxies, loading } = query
 const pagination = computed(() => ({ currentPage: query.page.value, pageSize: query.pageSize.value, total: query.total.value }))
 const columns = defineTableColumns<OutboundProxyRecord>([
   { key: 'identity', label: '代理', kind: 'identity' },
+  { key: 'status', label: '状态', kind: 'status' },
   { key: 'exitIp', label: '出口 IP', kind: 'custom', size: 'xl' },
   { key: 'location', label: '地区 / 时区', kind: 'custom' },
   { key: 'latency', label: '耗时', kind: 'custom', size: 'sm' },
@@ -51,6 +54,10 @@ const { loading: deleting } = deleteAction
 const showDelete = shallowRef(false)
 const pendingDelete = shallowRef<OutboundProxyRecord | null>(null)
 const testingIds = ref(new Set<string>())
+const updatingIds = ref(new Set<string>())
+const showDisable = shallowRef(false)
+const pendingDisable = shallowRef<OutboundProxyRecord | null>(null)
+const disabling = computed(() => pendingDisable.value !== null && updatingIds.value.has(pendingDisable.value.id))
 const formTestAction = useAsyncAction()
 const testingForm = computed(() => formTestAction.loading.value || (editing.value !== null && testingIds.value.has(editing.value.id)))
 const showAccounts = shallowRef(false)
@@ -67,7 +74,7 @@ function openForm(proxy: OutboundProxyRecord | null = null) {
 }
 
 async function checkProxy(proxy: OutboundProxyRecord) {
-  if (testingIds.value.has(proxy.id))
+  if (testingIds.value.has(proxy.id) || updatingIds.value.has(proxy.id))
     return
   testingIds.value.add(proxy.id)
   try {
@@ -143,6 +150,37 @@ async function save() {
 function requestDelete(proxy: OutboundProxyRecord) {
   pendingDelete.value = proxy
   showDelete.value = true
+}
+
+async function setEnabled(proxy: OutboundProxyRecord, enabled: boolean) {
+  if (updatingIds.value.has(proxy.id) || testingIds.value.has(proxy.id))
+    return
+  updatingIds.value.add(proxy.id)
+  try {
+    await updateProxy({ id: proxy.id, revision: proxy.revision, name: proxy.name, enabled })
+    showDisable.value = false
+    toast.success(enabled ? '代理已启用' : '代理已禁用')
+  }
+  catch {}
+  finally {
+    updatingIds.value.delete(proxy.id)
+    await query.execute({ silent: true })
+  }
+}
+
+function toggleEnabled(proxy: OutboundProxyRecord) {
+  if (proxy.enabled) {
+    pendingDisable.value = proxy
+    showDisable.value = true
+  }
+  else {
+    void setEnabled(proxy, true)
+  }
+}
+
+async function confirmDisable() {
+  if (pendingDisable.value)
+    await setEnabled(pendingDisable.value, false)
 }
 
 async function confirmDelete() {
@@ -259,17 +297,40 @@ onMounted(() => void query.execute())
             <template #testedAt="{ row }">
               {{ row.lastTestAt ? formatDateTime(row.lastTestAt) : '-' }}
             </template>
+            <template #status="{ row }">
+              <span :class="row.enabled ? 'text-cp-success' : 'text-cp-text-quaternary'">{{ row.enabled ? '已启用' : '已禁用' }}</span>
+            </template>
             <template #actions="{ row }">
-              <div class="flex items-center gap-1">
-                <BaseIconButton size="sm" label="测试代理" :loading="testingIds.has(row.id)" :disabled="testingIds.has(row.id)" @click="checkProxy(row)">
+              <div class="flex items-center gap-0.5">
+                <BaseIconButton size="sm" label="测试代理" :loading="testingIds.has(row.id)" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="checkProxy(row)">
                   <Wifi class="size-3.5 text-cp-link" />
                 </BaseIconButton>
-                <BaseIconButton size="sm" label="编辑代理" :disabled="testingIds.has(row.id)" @click="openForm(row)">
+                <BaseIconButton size="sm" label="编辑代理" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="openForm(row)">
                   <Pencil class="size-3.5 text-cp-link" />
                 </BaseIconButton>
-                <BaseIconButton size="sm" :label="row.accountCount ? '代理正在被账号使用' : '删除代理'" :disabled="row.accountCount > 0 || testingIds.has(row.id)" @click="requestDelete(row)">
-                  <Trash2 class="size-3.5 text-cp-error" />
-                </BaseIconButton>
+                <BasePopover placement="bottom-end">
+                  <template #trigger="{ open }">
+                    <BaseIconButton size="sm" label="更多代理操作" :aria-expanded="open" :loading="updatingIds.has(row.id)" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)">
+                      <MoreHorizontal class="size-3.5" />
+                    </BaseIconButton>
+                  </template>
+                  <template #default="{ close }">
+                    <div class="w-44 p-1">
+                      <BaseMenuItem :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), toggleEnabled(row))">
+                        <template #icon>
+                          <Power class="size-3.5" :class="row.enabled ? 'text-cp-warning' : 'text-cp-success'" />
+                        </template>
+                        {{ row.enabled ? '禁用代理' : '启用代理' }}
+                      </BaseMenuItem>
+                      <BaseMenuItem tone="destructive" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), requestDelete(row))">
+                        <template #icon>
+                          <Trash2 class="size-3.5" />
+                        </template>
+                        删除代理
+                      </BaseMenuItem>
+                    </div>
+                  </template>
+                </BasePopover>
               </div>
             </template>
           </BaseTable>
@@ -295,6 +356,12 @@ onMounted(() => void query.execute())
     <BaseConfirmModal v-model="showDelete" title="删除代理" destructive :loading="deleting" @confirm="confirmDelete">
       <p class="m-0">
         确定删除“{{ pendingDelete?.name }}”吗？
+        将自动解除 {{ pendingDelete?.accountCount ?? 0 }} 个账号的代理绑定，原来使用此代理的请求将改为直连。
+      </p>
+    </BaseConfirmModal>
+    <BaseConfirmModal v-model="showDisable" title="禁用代理" :loading="disabling" @confirm="confirmDisable">
+      <p class="m-0">
+        禁用“{{ pendingDisable?.name }}”后保留配置和 {{ pendingDisable?.accountCount ?? 0 }} 个账号的绑定，原来使用此代理的后续请求将改为直连。重新启用后恢复使用。
       </p>
     </BaseConfirmModal>
     <ProxyAccountsModal v-model="showAccounts" :proxy="inspected" @removed="query.execute({ silent: true })" />

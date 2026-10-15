@@ -108,6 +108,13 @@ pub enum ContinuationRecoveryDisposition {
     ProviderReplayAllowed,
 }
 
+/// Action after bounded same-account transient recovery is exhausted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TransientRetryPolicy {
+    RetryThenRotateAccount,
+    RetryThenReturnError,
+}
+
 /// Provider 在下游尚未提交事件时请求的隐藏恢复方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PreDeliveryRetry {
@@ -121,6 +128,8 @@ pub enum PreDeliveryRetry {
         initial_delay: Duration,
         /// 本地退避上限；上游 Retry-After 不受此上限截断。
         max_delay: Duration,
+        jitter: Duration,
+        policy: TransientRetryPolicy,
     },
     /// 固定本次账号，并按 Provider 给出的序号重试当前传输。
     SameAccountTransportRetry {
@@ -131,6 +140,10 @@ pub enum PreDeliveryRetry {
     },
     /// 固定本次账号，并要求 Provider 使用备用传输。
     SameAccountTransportFallback,
+    /// Explicitly unsent opening recovery, separate from business retries.
+    SameAccountConnectionRetry {
+        transport: crate::engine::AttemptTransport,
+    },
 }
 
 /// 已由 Provider 从结构化上游错误中提取、仅供原客户端协议展示的错误详情。
@@ -668,18 +681,46 @@ impl ProviderError {
         self
     }
 
+    #[must_use]
+    pub fn with_connection_retry(mut self, transport: crate::engine::AttemptTransport) -> Self {
+        self.pre_delivery_retry = Some(Box::new(PreDeliveryRetry::SameAccountConnectionRetry {
+            transport,
+        }));
+        self
+    }
+
     /// 请求有界同账号退避；该意图本身不提供安全重放证据。
     #[must_use]
     pub fn with_transient_retry(
+        self,
+        max_retries: NonZeroU32,
+        initial_delay: Duration,
+        max_delay: Duration,
+    ) -> Self {
+        self.with_transient_retry_policy(
+            max_retries,
+            initial_delay,
+            max_delay,
+            Duration::ZERO,
+            TransientRetryPolicy::RetryThenRotateAccount,
+        )
+    }
+
+    #[must_use]
+    pub fn with_transient_retry_policy(
         mut self,
         max_retries: NonZeroU32,
         initial_delay: Duration,
         max_delay: Duration,
+        jitter: Duration,
+        policy: TransientRetryPolicy,
     ) -> Self {
         self.pre_delivery_retry = Some(Box::new(PreDeliveryRetry::SameAccountTransientRetry {
             max_retries,
             initial_delay,
             max_delay,
+            jitter,
+            policy,
         }));
         self
     }

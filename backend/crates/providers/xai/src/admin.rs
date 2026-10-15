@@ -1045,7 +1045,7 @@ fn account_from_record(account: &AccountRecord) -> Result<ProviderAccount, Provi
         revision,
         account.access_token_expires_at.map(SystemTime::from),
     )
-    .with_outbound_proxy(account.outbound_proxy.clone())
+    .with_outbound_proxy(account.effective_outbound_proxy().cloned())
     .with_profile(
         account.email.clone(),
         account.upstream_account_id.clone(),

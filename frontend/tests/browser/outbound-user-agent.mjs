@@ -8,7 +8,13 @@ const defaultUa = 'Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex D
 const endpoint = '/api/admin/settings/openai-user-agent'
 
 function view(selection, defaultUserAgent = defaultUa) {
-  const userAgent = selection.userAgent ?? defaultUserAgent
+  let userAgent = selection.userAgent ?? defaultUserAgent
+  if (selection.mode === 'custom-auto-version') {
+    const version = userAgent.split('/')[1].split(' ')[0]
+    userAgent = userAgent.startsWith('Codex Desktop/')
+      ? userAgent.replace(`/${version} `, '/0.170.0 ')
+      : userAgent.replaceAll(version, '0.170.0')
+  }
   const [, product, coreVersion, osType, osVersion, arch, terminal, , clientVersion] = userAgent.match(/^(Codex Desktop|codex-tui|codex_exec)\/([^ ]+) \((Mac OS|Ubuntu|Windows) ([^; ]+); ([^ )]+)\) ([^ ]+) \((Codex Desktop|codex-tui|codex_exec); ([^ )]+)\)$/)
   const desktop = product === 'Codex Desktop'
   return {
@@ -199,6 +205,26 @@ async function main() {
           assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width, 'controls fit in viewport')
         }
         await page.screenshot({ path: `${output}/samples-${theme}-${width}.png`, fullPage: true })
+        const versionInput = page.getByRole('textbox', { name: 'Codex 客户端版本号', exact: true })
+        const syncVersion = page.getByRole('checkbox', { name: '自动同步客户端版本', exact: true })
+        const oldOs = await page.getByRole('textbox', { name: 'OpenAI 出站系统版本' }).inputValue()
+        await versionInput.fill('')
+        await versionInput.pressSequentially('0.169.0')
+        assert((await input.inputValue()).includes('/0.169.0 '))
+        await syncVersion.setChecked(true, { force: true })
+        assert(await versionInput.isDisabled())
+        await save.click()
+        await page.waitForFunction(() => [...document.querySelectorAll('dd')].some(element => element.textContent.includes('/0.170.0 ')))
+        assert.equal(saved.mode, 'custom-auto-version')
+        assert.equal(await versionInput.inputValue(), '0.170.0')
+        assert.equal(await page.getByRole('textbox', { name: 'OpenAI 出站系统版本' }).inputValue(), oldOs)
+        await page.screenshot({ path: `${output}/version-sync-${theme}-${width}.png`, fullPage: true })
+        await syncVersion.setChecked(false, { force: true })
+        assert.equal(await versionInput.inputValue(), '0.170.0')
+        assert((await input.inputValue()).includes('/0.170.0 '))
+        await save.click()
+        await page.waitForFunction(() => !document.querySelector('input[aria-label="Codex 客户端版本号"]')?.disabled)
+        assert.equal(saved.mode, 'custom')
         await automatic.setChecked(true, { force: true })
         latestDefault = defaultUa.replace('0.153.4', '0.154.0')
         await Promise.all([

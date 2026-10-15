@@ -1,4 +1,5 @@
 import type { RequestOptions } from '../request'
+import { OBSERVABILITY_TIMEOUT_MS } from '../constants'
 import request from '../request'
 
 export interface UsageTokenDetails {
@@ -532,6 +533,7 @@ export interface UsageAccountOption {
 export function getUsageAccountOptions(data: { startTime: string, endTime: string, search?: string }, options: RequestOptions = {}) {
   return request<UsageAccountOption[]>({
     url: '/api/admin/usage/account-options',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,
@@ -560,6 +562,7 @@ type UsageDiagnosticsQuery = UsageRangeQuery & {
 export function getUsageRecords(data: UsagePageQuery, options: RequestOptions = {}) {
   return request<UsageRecordsResponse>({
     url: '/api/admin/usage/records',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,
@@ -569,6 +572,7 @@ export function getUsageRecords(data: UsagePageQuery, options: RequestOptions = 
 export function getOpsErrors(data: OpsErrorPageQuery, options: RequestOptions = {}) {
   return request<OpsErrorsResponse>({
     url: '/api/admin/operations/errors',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,
@@ -578,6 +582,7 @@ export function getOpsErrors(data: OpsErrorPageQuery, options: RequestOptions = 
 export function getUsageRecordDetail(data: UsageDetailQuery, options: RequestOptions = {}) {
   return request<UsageRecordDetail>({
     url: '/api/admin/usage/records/detail',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,
@@ -587,6 +592,7 @@ export function getUsageRecordDetail(data: UsageDetailQuery, options: RequestOpt
 export function getUsageRecordSummary(data: UsageRangeQuery, options: RequestOptions = {}) {
   return request<UsageSummaryResponse>({
     url: '/api/admin/usage/records/summary',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,
@@ -596,6 +602,7 @@ export function getUsageRecordSummary(data: UsageRangeQuery, options: RequestOpt
 export function getUsageRecordInsightsOverview(data: UsageRangeQuery, options: RequestOptions = {}) {
   return request<UsageInsightsOverviewResponse>({
     url: '/api/admin/usage/insights/overview',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,
@@ -605,6 +612,7 @@ export function getUsageRecordInsightsOverview(data: UsageRangeQuery, options: R
 export function getUsageRecordInsightsDiagnostics(data: UsageDiagnosticsQuery, options: RequestOptions = {}) {
   return request<UsageDiagnosticsResponse>({
     url: '/api/admin/usage/insights/diagnostics',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,
     ...options,

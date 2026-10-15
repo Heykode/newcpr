@@ -154,7 +154,8 @@ async fn pending_authorization(
             proxy = required_credential(accounts, provider_kind, account_id, resource)
                 .await?
                 .credential
-                .outbound_proxy;
+                .effective_outbound_proxy()
+                .cloned();
             AuthorizationMutationTarget::Reauthorize {
                 account_id: account_id.clone(),
             }
@@ -168,6 +169,9 @@ async fn pending_authorization(
                         .get(id)
                         .await
                         .map_err(|error| map_store_error(error, "proxy"))?;
+                    if !record.enabled {
+                        return Err(AdminError::invalid("代理已禁用，请启用后再选择"));
+                    }
                     if !record.last_test.is_some_and(|test| test.success) {
                         return Err(AdminError::conflict("请先测试代理连接"));
                     }

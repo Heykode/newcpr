@@ -40,7 +40,7 @@ const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
 const HEALTH_TIMELINE_MIN_SAMPLE_SIZE: u64 = 10;
 const HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD: u64 = 3;
-const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 99.0;
+const HEALTH_TIMELINE_STABLE_RELIABILITY: f64 = 95.0;
 const DASHBOARD_QUERY_BUCKET_SECONDS: i64 = 2;
 const DASHBOARD_QUERY_CACHE_RETENTION: StdDuration = StdDuration::from_secs(2);
 
@@ -457,8 +457,9 @@ fn build_usage_insights(
     }
 
     let requests = &overview.requests;
-    let failed_requests = service_failure_count(requests);
-    let health_requests = requests.success_count.saturating_add(failed_requests);
+    let health_window = HealthWindow::from_metrics(requests);
+    let failed_requests = health_window.failed_requests;
+    let health_requests = health_window.eligible_requests();
     let health = UsageInsightsHealth {
         total_requests: requests.request_count,
         success_requests: requests.success_count,
@@ -476,17 +477,19 @@ fn build_usage_insights(
         points: trend
             .iter()
             .map(|point| {
-                let failed_requests = service_failure_count(&point.metrics);
-                let health_requests = point.metrics.success_count.saturating_add(failed_requests);
+                let health_window = HealthWindow::from_metrics(&point.metrics);
                 UsageInsightsHealthPoint {
                     total_requests: point.metrics.request_count,
                     bucket_start: point.bucket_start,
                     success_requests: point.metrics.success_count,
-                    failed_requests,
+                    failed_requests: health_window.failed_requests,
                     cancelled_requests: point.metrics.cancelled_count,
                     incomplete_requests: point.metrics.incomplete_count,
                     caller_error_requests: point.metrics.caller_error_count,
-                    error_rate: rate_or_zero(failed_requests, health_requests),
+                    error_rate: rate_or_zero(
+                        health_window.non_success_requests(),
+                        health_window.eligible_requests(),
+                    ),
                 }
             })
             .collect(),
@@ -998,7 +1001,7 @@ fn trend(kind: TrendKind, points: Vec<RequestMetricPoint>) -> Result<Trend, Admi
     let service_failure_count = service_failure_count(&metrics);
     let success_rate = ratio(
         metrics.success_count,
-        metrics.success_count.saturating_add(service_failure_count),
+        HealthWindow::from_metrics(&metrics).eligible_requests(),
     );
     let cache_hit_request_rate = ratio(
         metrics.cache_hit_request_count,
@@ -1061,7 +1064,10 @@ fn trend_point(point: RequestMetricPoint) -> TrendPoint {
             point.metrics.cache_hit_request_count,
             point.metrics.cache_eligible_request_count,
         ),
-        success_rate: ratio(point.metrics.success_count, point.metrics.request_count),
+        success_rate: ratio(
+            point.metrics.success_count,
+            HealthWindow::from_metrics(&point.metrics).eligible_requests(),
+        ),
         metrics: point.metrics,
         cost_coverage: point.cost_coverage,
         costs: point.costs,
@@ -1157,20 +1163,28 @@ struct HealthWindow {
 }
 
 impl HealthWindow {
+    fn from_metrics(metrics: &RequestMetrics) -> Self {
+        Self {
+            success_requests: metrics.success_count,
+            failed_requests: service_failure_count(metrics),
+            cancelled_requests: metrics.cancelled_count,
+            incomplete_requests: metrics.incomplete_count,
+            caller_error_requests: metrics.caller_error_count,
+        }
+    }
+
+    fn non_success_requests(self) -> u64 {
+        self.failed_requests
+            .saturating_add(self.incomplete_requests)
+    }
+
+    fn eligible_requests(self) -> u64 {
+        self.success_requests
+            .saturating_add(self.non_success_requests())
+    }
+
     fn add_metrics(&mut self, metrics: &RequestMetrics) {
-        self.success_requests = self.success_requests.saturating_add(metrics.success_count);
-        self.failed_requests = self
-            .failed_requests
-            .saturating_add(service_failure_count(metrics));
-        self.cancelled_requests = self
-            .cancelled_requests
-            .saturating_add(metrics.cancelled_count);
-        self.incomplete_requests = self
-            .incomplete_requests
-            .saturating_add(metrics.incomplete_count);
-        self.caller_error_requests = self
-            .caller_error_requests
-            .saturating_add(metrics.caller_error_count);
+        self.add_window(Self::from_metrics(metrics));
     }
 
     fn add_window(&mut self, other: Self) {
@@ -1189,15 +1203,13 @@ impl HealthWindow {
 }
 
 fn health_status(bucket: HealthWindow, is_future: bool) -> HealthStatus {
-    let eligible_requests = bucket
-        .success_requests
-        .saturating_add(bucket.failed_requests);
+    let eligible_requests = bucket.eligible_requests();
     if is_future {
         HealthStatus::Future
     } else if eligible_requests == 0 {
         HealthStatus::NoData
     } else if bucket.success_requests == 0
-        && bucket.failed_requests >= HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD
+        && bucket.non_success_requests() >= HEALTH_TIMELINE_UNAVAILABLE_FAILURE_THRESHOLD
     {
         HealthStatus::Unavailable
     } else if eligible_requests < HEALTH_TIMELINE_MIN_SAMPLE_SIZE {
@@ -1212,9 +1224,7 @@ fn health_status(bucket: HealthWindow, is_future: bool) -> HealthStatus {
 }
 
 fn health_reliability(bucket: HealthWindow) -> Option<f64> {
-    let eligible_requests = bucket
-        .success_requests
-        .saturating_add(bucket.failed_requests);
+    let eligible_requests = bucket.eligible_requests();
     (eligible_requests > 0)
         .then(|| bucket.success_requests as f64 / eligible_requests as f64 * 100.0)
 }

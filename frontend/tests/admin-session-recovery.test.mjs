@@ -51,6 +51,7 @@ function authHarness() {
         requests += 1
         return getStatus()
       },
+      refreshAuthSession: async () => ({ authenticated: false }),
       login: async () => ({}),
       logout: async () => ({}),
     },

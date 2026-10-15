@@ -116,7 +116,7 @@ function requestCount(point: HealthPoint) {
 }
 
 function serviceSuccessRate(point: HealthPoint) {
-  const total = Math.max(0, point.successRequests) + Math.max(0, point.failedRequests)
+  const total = Math.max(0, point.successRequests) + Math.max(0, point.failedRequests) + Math.max(0, point.incompleteRequests ?? 0)
   if (total > 0)
     return Math.max(0, point.successRequests ?? 0) / total
   return requestCount(point) === 0 ? 0 : null

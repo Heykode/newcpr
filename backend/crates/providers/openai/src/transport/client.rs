@@ -1,5 +1,211 @@
 //! Codex HTTP/SSE 上游客户端、请求头构造、TLS 与自定义 CA。
 
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    use gateway_core::engine::connection::ConnectionBudget;
+    use std::{cell::Cell, time::Instant};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    thread_local! { static NOW: Cell<Instant> = Cell::new(Instant::now()); }
+    fn now() -> Instant {
+        NOW.with(Cell::get)
+    }
+
+    fn test_client(base: String, budget: ConnectionBudget) -> CodexBackendClient {
+        let profile = super::super::profile::CodexWireProfile::parse_user_agent(
+            "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)",
+        )
+        .unwrap();
+        CodexBackendClient::new(
+            build_reqwest_client().unwrap(),
+            base,
+            CodexWireProfileState::new(profile),
+        )
+        .with_default_http_client()
+        .with_connection_budget(budget)
+    }
+
+    #[tokio::test]
+    async fn shortened_connection_budget_preserves_injected_client_configuration() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let budget = ConnectionBudget::with_clock(now);
+        budget.begin().unwrap();
+        NOW.with(|clock| clock.set(clock.get() + Duration::from_secs(29)));
+        let profile = test_client(base.clone(), budget.clone()).profile;
+        let client = CodexBackendClient::new(
+            Client::builder()
+                .no_proxy()
+                .user_agent("synthetic-injected-client")
+                .build()
+                .unwrap(),
+            base.clone(),
+            profile,
+        )
+        .with_connection_budget(budget);
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                request.push(socket.read_u8().await.unwrap());
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            client.send_profiled(&client.profile.snapshot(), false, |http| http.get(base)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            server
+                .await
+                .unwrap()
+                .contains("user-agent: synthetic-injected-client\r\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn subsecond_connection_budget_does_not_limit_response_duration() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let budget = ConnectionBudget::with_clock(now);
+        budget.begin().unwrap();
+        NOW.with(|clock| clock.set(clock.get() + Duration::from_millis(29_500)));
+        let client = test_client(base.clone(), budget.clone());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                let byte = socket.read_u8().await.unwrap();
+                request.push(byte);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            // Both response headers and body may arrive after the opening deadline.
+            tokio::time::sleep(Duration::from_millis(650)).await;
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(650)).await;
+            socket.write_all(b"ok").await.unwrap();
+        });
+        let response = tokio::time::timeout(Duration::from_secs(5), async {
+            client
+                .send_profiled(&client.profile.snapshot(), false, |http| http.get(base))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(response, "ok");
+        assert!(budget.retry_delay(0, "req_connection").is_none());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn exhausted_connection_budget_never_opens_http_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let budget = ConnectionBudget::default();
+        for _ in 0..4 {
+            budget.begin().unwrap();
+        }
+        let client = test_client(base, budget);
+        let result = client
+            .send_profiled(&client.profile.snapshot(), false, |_| {
+                panic!("exhausted budget must not build or send a request")
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(CodexClientError::ConnectionBudgetExhausted)
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn shortened_connection_budget_preserves_account_proxy_and_headers() {
+        use gateway_core::{
+            account::{CredentialRevision, OutboundProxy, ProviderAccount, ProviderAccountId},
+            routing::ProviderKind,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy = format!("http://{}", listener.local_addr().unwrap());
+        let account = ProviderAccount::new(
+            ProviderAccountId::new("acct_connection_proxy").unwrap(),
+            ProviderKind::new("openai").unwrap(),
+            "synthetic".to_owned(),
+            None,
+            "oauth".to_owned(),
+            CredentialRevision::new(1).unwrap(),
+            None,
+        )
+        .with_outbound_proxy(Some(OutboundProxy::parse(&proxy).unwrap()));
+        let budget = ConnectionBudget::with_clock(now);
+        budget.begin().unwrap();
+        NOW.with(|clock| clock.set(clock.get() + Duration::from_secs(29)));
+        let client = test_client("http://upstream.invalid".to_owned(), budget)
+            .for_account(&account)
+            .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            loop {
+                request.push(socket.read_u8().await.unwrap());
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.send_profiled(&client.profile.snapshot(), false, |http| {
+                http.get("http://upstream.invalid/responses")
+                    .header("chatgpt-account-id", "synthetic-account")
+                    .header("user-agent", client.profile.snapshot().user_agent())
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let request = server.await.unwrap();
+        assert!(request.starts_with("GET http://upstream.invalid/responses HTTP/1.1\r\n"));
+        assert!(request.contains("chatgpt-account-id: synthetic-account\r\n"));
+        assert!(request.contains(&format!(
+            "user-agent: {}\r\n",
+            client.profile.snapshot().user_agent()
+        )));
+    }
+}
+
 use std::{
     collections::VecDeque,
     fmt,
@@ -50,7 +256,7 @@ pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
 const MAX_CACHED_REQWEST_CLIENTS: usize = 256;
-type ReqwestClientCacheKey = (Option<String>, String, String);
+type ReqwestClientCacheKey = (Option<String>, String, String, Duration);
 
 struct ReqwestClientCacheEntry {
     account_id: String,
@@ -109,10 +315,25 @@ pub fn build_account_http_client(
     proxy: Option<&gateway_core::account::OutboundProxy>,
     profile_identity: &str,
 ) -> Result<Client, CustomCaError> {
+    build_account_http_client_with_timeout(
+        account_id,
+        proxy,
+        profile_identity,
+        UPSTREAM_CONNECT_TIMEOUT,
+    )
+}
+
+fn build_account_http_client_with_timeout(
+    account_id: &str,
+    proxy: Option<&gateway_core::account::OutboundProxy>,
+    profile_identity: &str,
+    timeout: Duration,
+) -> Result<Client, CustomCaError> {
     let cache_key = (
         custom_ca_env_cache_key(),
         egress_key(account_id, proxy),
         profile_identity.to_owned(),
+        timeout,
     );
     if let Some(client) = reqwest_clients()
         .lock()
@@ -127,7 +348,7 @@ pub fn build_account_http_client(
     let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(UPSTREAM_CONNECT_TIMEOUT);
+        .connect_timeout(timeout);
     if let Some(proxy) = proxy {
         builder = builder.proxy(
             reqwest::Proxy::all(proxy.expose_url())
@@ -254,6 +475,8 @@ impl fmt::Debug for CodexClientVisibleUpstreamResponse {
 /// Codex 上游 HTTP 客户端错误。
 #[derive(Error)]
 pub enum CodexClientError {
+    #[error("connection recovery budget exhausted")]
+    ConnectionBudgetExhausted,
     /// Reqwest 传输失败。
     #[error("http transport error: {0}")]
     Http(#[from] reqwest::Error),
@@ -335,6 +558,9 @@ pub enum CodexClientError {
 impl fmt::Debug for CodexClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ConnectionBudgetExhausted => {
+                formatter.write_str("CodexClientError::ConnectionBudgetExhausted")
+            }
             Self::Http(_) => formatter.write_str("CodexClientError::Http([REDACTED])"),
             Self::HttpJson(_) => formatter.write_str("CodexClientError::HttpJson([REDACTED])"),
             Self::ErrorBodyRead {
@@ -402,7 +628,8 @@ impl CodexClientError {
             Self::Upstream { transport, .. } | Self::ErrorBodyRead { transport, .. } => {
                 Some(*transport)
             }
-            Self::CustomCa(_)
+            Self::ConnectionBudgetExhausted
+            | Self::CustomCa(_)
             | Self::Egress(_)
             | Self::InvalidHeaderName(_)
             | Self::InvalidHeaderValue(_)
@@ -732,11 +959,13 @@ pub(super) struct RecoveryAttemptRoute {
 /// Codex HTTP/SSE 上游客户端。
 #[derive(Clone)]
 pub struct CodexBackendClient {
+    pub(super) connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
     pub(super) session_proxy:
         Option<Arc<dyn gateway_core::provider_ports::session_proxy::SessionProxyLease>>,
     pub(super) response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     pub(super) client: Client,
     pub(super) direct_client: Client,
+    pub(super) default_direct_client: bool,
     pub(super) base_url: String,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
@@ -755,6 +984,22 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    pub(crate) fn with_default_http_client(mut self) -> Self {
+        self.default_direct_client = true;
+        self
+    }
+
+    pub(crate) fn has_connection_budget(&self) -> bool {
+        self.connection_budget.is_some()
+    }
+
+    pub(crate) fn with_connection_budget(
+        mut self,
+        budget: gateway_core::engine::connection::ConnectionBudget,
+    ) -> Self {
+        self.connection_budget = Some(budget);
+        self
+    }
     // Shared only by a leased response and its sequential payload-repair retry.
     pub(crate) fn with_same_attempt_recovery(mut self) -> Self {
         self.recovery_route = Some(Arc::new(OnceLock::new()));
@@ -915,6 +1160,7 @@ impl CodexBackendClient {
     fn request_client(
         &self,
         profile: &super::profile::CodexWireProfile,
+        timeout: Duration,
     ) -> CodexClientResult<Client> {
         if let Some(runtime) = &self.egress_runtime {
             if let Some(account) = &self.egress_account {
@@ -926,8 +1172,22 @@ impl CodexBackendClient {
                 _ => None,
             };
             if let Some(route) = selected {
-                return Ok(runtime.http_client(&route, profile)?);
+                return Ok(runtime.http_client_with_timeout(&route, profile, timeout)?);
             }
+        }
+        // Caller-injected clients may carry trust, DNS or other configuration
+        // that reqwest cannot clone into a new builder. Only rebuild our own clients.
+        if timeout < UPSTREAM_CONNECT_TIMEOUT
+            && (self.default_direct_client || self.outbound_proxy.is_some())
+        {
+            return Ok(build_account_http_client_with_timeout(
+                self.egress_account
+                    .as_ref()
+                    .map_or("", |account| account.id().as_str()),
+                self.outbound_proxy.as_ref(),
+                &profile.user_agent(),
+                timeout,
+            )?);
         }
         Ok(self.client.clone())
     }
@@ -941,7 +1201,28 @@ impl CodexBackendClient {
     where
         F: FnOnce(Client) -> reqwest::RequestBuilder + Send,
     {
-        let response = build(self.request_client(profile)?).send().await;
+        let remaining = self
+            .connection_budget
+            .as_ref()
+            .map(|budget| budget.begin())
+            .transpose()
+            .map_err(|_| CodexClientError::ConnectionBudgetExhausted)?
+            .flatten();
+        // Only shorten connect timeout. A response may legitimately take much longer.
+        let connect_timeout = remaining.map_or(UPSTREAM_CONNECT_TIMEOUT, |remaining| {
+            remaining.min(UPSTREAM_CONNECT_TIMEOUT)
+        });
+        if connect_timeout.is_zero() {
+            return Err(CodexClientError::ConnectionBudgetExhausted);
+        }
+        let response = build(self.request_client(profile, connect_timeout)?)
+            .send()
+            .await;
+        if (response.is_ok() || response.as_ref().is_err_and(|error| !error.is_connect()))
+            && let Some(budget) = &self.connection_budget
+        {
+            budget.complete();
+        }
         if let Some(lease) = &self.session_proxy {
             use gateway_core::provider_ports::session_proxy::SessionProxyOutcome;
             match &response {
@@ -1177,6 +1458,9 @@ pub(super) fn openai_subagent_from_metadata(client_metadata: Option<&Value>) -> 
 pub(super) fn websocket_exchange_error_to_client_error(
     error: CodexWebSocketExchangeError,
 ) -> CodexClientError {
+    if error.connection_budget_exhausted() {
+        return CodexClientError::ConnectionBudgetExhausted;
+    }
     match error {
         CodexWebSocketExchangeError::Egress(error) => CodexClientError::Egress(error),
         CodexWebSocketExchangeError::Upstream(upstream) => {

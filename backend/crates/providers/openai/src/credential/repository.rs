@@ -176,6 +176,24 @@ impl CodexCredentialRepository {
         CodexCredentialCodec::decode_complete(&loaded.credential).map_err(Into::into)
     }
 
+    pub async fn reload_selected_credential(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<(ProviderAccount, CodexRuntimeCredential), CredentialRepositoryError> {
+        if account.provider().as_str() != PROVIDER_NAME {
+            return Err(CredentialRepositoryError::InvalidCredentialData(None));
+        }
+        let loaded = self
+            .store
+            .load_credential(account.id(), account.revision())
+            .await?;
+        if !only_quota_observation_advanced(account, &loaded.account) {
+            return Err(CredentialRepositoryError::RevisionConflict(None));
+        }
+        let runtime = self.decode_runtime_credential(&loaded)?;
+        Ok((loaded.account, runtime))
+    }
+
     pub async fn compare_and_swap_data(
         &self,
         account: &ProviderAccount,
@@ -291,6 +309,31 @@ fn unchanged_profile(account: &ProviderAccount) -> ProviderAccountUpdate {
         email: account.email().map(str::to_owned),
         plan_type: account.plan_type().map(str::to_owned),
     }
+}
+
+pub(super) fn only_quota_observation_advanced(
+    selected: &ProviderAccount,
+    current: &ProviderAccount,
+) -> bool {
+    if selected == current {
+        return true;
+    }
+    let (before, after) = (selected.quota(), current.quota());
+    if before.is_exhausted()
+        || before.access() != after.access()
+        || before.evidence() != after.evidence()
+        || before.reset_at() != after.reset_at()
+        || after.observed_at() < before.observed_at()
+    {
+        return false;
+    }
+    current.clone().with_account_facts(
+        current.enabled(),
+        current.credential_state(),
+        before,
+        current.last_error_reason(),
+        current.last_error_message().map(str::to_owned),
+    ) == *selected
 }
 
 fn cas_revision(

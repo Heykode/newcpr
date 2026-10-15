@@ -29,7 +29,9 @@ use url::Url;
 use super::affinity::{CODEX_ROOT_SESSION_TTL, CodexSessionAffinity};
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
-use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
+use super::repository::{
+    CodexCredentialRepository, CredentialRepositoryError, only_quota_observation_advanced,
+};
 use super::security::CodexRuntimeAuthentication;
 use super::types::{
     CODEX_AUTHENTICATION_KIND_OAUTH, CodexCookie, CodexCookieCaptureOutcome, RuntimeCodexCookie,
@@ -810,19 +812,20 @@ impl CodexCredentialSelector {
                 continue;
             }
             // Snapshot conflicts must not consume capacity or the request interval.
-            let runtime = match self.repository.load_runtime_credential(&account).await {
-                Ok(runtime) => runtime,
-                Err(CredentialRepositoryError::InvalidCredentialData(_))
-                    if pinned_account.is_none() =>
-                {
-                    if affinity.bound_account() == Some(account.id()) {
-                        affinity.escape(AffinityEscapeReason::HardUnavailable);
+            let (account, runtime) =
+                match self.repository.reload_selected_credential(&account).await {
+                    Ok(reloaded) => reloaded,
+                    Err(CredentialRepositoryError::InvalidCredentialData(_))
+                        if pinned_account.is_none() =>
+                    {
+                        if affinity.bound_account() == Some(account.id()) {
+                            affinity.escape(AffinityEscapeReason::HardUnavailable);
+                        }
+                        excluded.insert(account.id().clone());
+                        continue;
                     }
-                    excluded.insert(account.id().clone());
-                    continue;
-                }
-                Err(error) => return Err(error.into()),
-            };
+                    Err(error) => return Err(error.into()),
+                };
             match self
                 .leases
                 .try_acquire(ProviderLeaseRequest::Scheduling(
@@ -853,7 +856,10 @@ impl CodexCredentialSelector {
                         .get_account(account.id())
                         .await
                         .map_err(|source| CredentialSelectionError::Store(Some(source.into())))?;
-                    if current.as_ref() != Some(&account) {
+                    if current
+                        .as_ref()
+                        .is_none_or(|current| !only_quota_observation_advanced(&account, current))
+                    {
                         drop(guard);
                         return Err(CredentialSelectionError::AccountSnapshotChanged);
                     }

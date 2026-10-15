@@ -53,6 +53,27 @@ fn retired_modes_are_rejected_and_custom_ua_is_preserved() {
 }
 
 #[test]
+fn client_version_sync_is_an_explicit_custom_policy() {
+    let raw = "codex_exec/0.153.0 (Mac OS 26.4.1; arm64) xterm-256color (codex_exec; 0.153.0)";
+    let request: UpdateOutboundUserAgentRequest = serde_json::from_value(json!({
+        "mode": "custom-auto-version", "userAgent": raw,
+    }))
+    .unwrap();
+    assert_eq!(
+        ProviderUserAgentOverride::from(request),
+        ProviderUserAgentOverride::CustomAutoVersion {
+            user_agent: raw.to_owned()
+        }
+    );
+    assert!(
+        serde_json::from_value::<UpdateOutboundUserAgentRequest>(
+            json!({"mode":"custom-auto-version"})
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn custom_view_does_not_emit_retired_transport_choices() {
     for user_agent in ["custom-cli".to_owned(), "custom-desktop".to_owned()] {
         let view = OutboundUserAgentView {

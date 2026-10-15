@@ -278,7 +278,7 @@ async fn dashboard_summary_should_derive_first_token_average_from_trend() {
 }
 
 #[tokio::test]
-async fn health_timeline_should_match_legacy_status_precedence_and_thresholds() {
+async fn health_timeline_counts_incomplete_and_preserves_status_precedence() {
     let now = Utc::now();
     let current_slot = quarter_hour_start(now);
     let store = Arc::new(FixtureObservabilityStore::new(observation_range(now)));
@@ -292,8 +292,8 @@ async fn health_timeline_should_match_legacy_status_precedence_and_thresholds() 
                 caller_error_count: 1,
                 ..RequestMetrics::default()
             },
-            HealthStatus::NoData,
-            None,
+            HealthStatus::LowSample,
+            Some(0.0),
         ),
         (
             RequestMetrics {
@@ -318,7 +318,7 @@ async fn health_timeline_should_match_legacy_status_precedence_and_thresholds() 
                 failure_count: 2,
                 ..RequestMetrics::default()
             },
-            HealthStatus::Unstable,
+            HealthStatus::Stable,
             Some(98.0),
         ),
         (

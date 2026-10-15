@@ -114,7 +114,7 @@ use execution::*;
 pub use failure::openai_failure_affects_account_score;
 use failure::*;
 use observation::*;
-pub(crate) use workers::worker_contributions;
+pub(crate) use workers::{cli_version_worker, worker_contributions};
 
 const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
@@ -277,6 +277,11 @@ impl CodexProvider {
             live_registry: Arc::new(CodexLiveRegistry::default()),
             live_gateway: None,
         })
+    }
+
+    pub(crate) fn with_default_http_client(mut self) -> Self {
+        self.client = self.client.with_default_http_client();
+        self
     }
 
     pub(crate) fn with_session_identity(mut self, identity: CodexSessionIdentity) -> Self {
@@ -869,6 +874,11 @@ impl Provider for CodexProvider {
                     .and_then(Value::as_str)
             });
         let client = self.account_exit_client(&context, lease.account(), excel, session)?;
+        let client = if !excel && context.continuation_attempt() == ContinuationAttempt::None {
+            client.with_connection_budget(context.connection_budget().clone())
+        } else {
+            client
+        };
         if let Some(prepared) = upstream_request.excel.as_mut() {
             prepared.exit_lease = client.session_proxy_lease();
         }

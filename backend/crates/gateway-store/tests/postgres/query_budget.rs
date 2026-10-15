@@ -11,6 +11,75 @@ use super::TestDatabase;
 fn query_budget_rejects_an_empty_budget() {
     assert!(ObservabilityQueryBudget::try_new(0, Duration::from_secs(1)).is_err());
     assert!(ObservabilityQueryBudget::try_new(1, Duration::ZERO).is_err());
+    for timeout in [Duration::ZERO, Duration::from_millis(i32::MAX as u64 + 1)] {
+        assert!(
+            ObservabilityQueryBudget::try_new_with_timeout(1, Duration::from_secs(1), timeout)
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn observation_timeout_is_scoped_and_restored_on_reused_connections() {
+    let Some(database) = TestDatabase::create("budget_restore").await else {
+        return;
+    };
+    // Occupy one of the two connections so all checks reuse the same backend.
+    let held = database.pool.acquire().await.unwrap();
+    sqlx::query("set statement_timeout = '50ms'")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    let budget = ObservabilityQueryBudget::try_new_with_timeout(
+        1,
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    for fail in [false, true] {
+        let result = budget
+            .run(
+                &database.pool,
+                "scoped timeout",
+                |mut connection| async move {
+                    let timeout: String = sqlx::query_scalar("show statement_timeout")
+                        .fetch_one(&mut *connection)
+                        .await
+                        .unwrap();
+                    assert_eq!(timeout, "2s");
+                    sqlx::query("select pg_sleep(0.1)")
+                        .execute(&mut *connection)
+                        .await
+                        .unwrap();
+                    if fail {
+                        let mut transaction = connection.begin().await.unwrap();
+                        assert!(
+                            sqlx::query("select 1 / 0")
+                                .execute(&mut *transaction)
+                                .await
+                                .is_err()
+                        );
+                        return Err(StoreError::InvalidData {
+                            entity: "test",
+                            message: "failed query".to_owned(),
+                        });
+                    }
+                    Ok(())
+                },
+            )
+            .await;
+        assert_eq!(result.is_err(), fail);
+        let timeout: String = sqlx::query_scalar("show statement_timeout")
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            timeout, "50ms",
+            "pool reuse must restore the original timeout"
+        );
+    }
+    drop(held);
+    database.close().await;
 }
 
 #[tokio::test]
@@ -206,7 +275,12 @@ async fn observation_execution_deadline_releases_the_connection() {
     let Some(database) = TestDatabase::create("budget_deadline").await else {
         return;
     };
-    let budget = ObservabilityQueryBudget::try_new(1, Duration::from_secs(1)).unwrap();
+    let budget = ObservabilityQueryBudget::try_new_with_timeout(
+        1,
+        Duration::from_secs(1),
+        Duration::from_millis(100),
+    )
+    .unwrap();
     let error = budget
         .run(
             &database.pool,

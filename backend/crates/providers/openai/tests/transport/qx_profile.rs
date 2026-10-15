@@ -9,6 +9,88 @@ const INSTALLATION_ID: &str = "85c64ae8-4b44-4f82-9696-909adef2144c";
 const TURN_METADATA: &str =
     r#"{"installation_id":"85c64ae8-4b44-4f82-9696-909adef2144c","turn_id":"fixture-turn"}"#;
 
+#[test]
+fn client_version_sync_preserves_environment_and_frozen_request_identity() {
+    let profile = test_wire_profile();
+    let ua = "codex_exec/0.153.0 (Mac OS 26.4.1; arm64) xterm-256color (codex_exec; 0.153.0)";
+    profile
+        .apply_user_agent_override(&ProviderUserAgentOverride::CustomAutoVersion {
+            user_agent: ua.to_owned(),
+        })
+        .unwrap();
+    profile.update_cli_version("0.160.0");
+    let frozen = profile.frozen();
+    let snapshot = profile.request_snapshot().unwrap();
+    assert_eq!(
+        profile.snapshot().user_agent(),
+        ua.replace("0.153.0", "0.160.0")
+    );
+    assert_eq!(profile.snapshot().codex_version, "0.160.0");
+    assert_eq!(profile.snapshot().originator, "codex_exec");
+    profile.update_cli_version("0.159.0");
+    profile.update_cli_version("9.0.0-alpha");
+    assert_eq!(profile.snapshot().codex_version, "0.160.0");
+    profile.update_cli_version("0.161.0");
+    assert_eq!(frozen.snapshot().codex_version, "0.160.0");
+    assert_eq!(
+        CodexWireProfileState::from_request_snapshot(&snapshot)
+            .unwrap()
+            .snapshot()
+            .codex_version,
+        "0.160.0"
+    );
+    assert_eq!(
+        profile.settings_snapshot().effective_desktop_user_agent,
+        frozen.settings_snapshot().effective_desktop_user_agent
+    );
+    profile
+        .apply_user_agent_override(&ProviderUserAgentOverride::Custom {
+            user_agent: ua.to_owned(),
+        })
+        .unwrap();
+    assert!(!profile.cli_sync_enabled());
+    assert_eq!(profile.snapshot().user_agent(), ua);
+    for version in ["0.200.0", "0.200.0-alpha.1"] {
+        profile
+            .apply_user_agent_override(&ProviderUserAgentOverride::CustomAutoVersion {
+                user_agent: ua.replace("0.153.0", version),
+            })
+            .unwrap();
+        assert_eq!(profile.snapshot().codex_version, version);
+    }
+}
+
+#[test]
+fn desktop_version_sync_uses_paired_artifact_without_changing_custom_environment() {
+    let profile = CodexWireProfileState::new(
+        CodexWireProfile::parse_user_agent(
+            "Codex Desktop/0.153.4 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.901.51231)",
+        )
+        .unwrap(),
+    );
+    let mut custom = profile.snapshot();
+    custom.os_version = "26.4.1".to_owned();
+    custom.terminal = "xterm-256color".to_owned();
+    profile
+        .apply_user_agent_override(&ProviderUserAgentOverride::CustomAutoVersion {
+            user_agent: custom.user_agent(),
+        })
+        .unwrap();
+    profile.update_cli_version("9.0.0");
+    profile.update_bundled_release(&CodexBundledReleaseProfile {
+        codex_version: "0.160.0".to_owned(),
+        desktop_version: "26.1001.12345".to_owned(),
+        desktop_build: "12345".to_owned(),
+        verified_at: Utc::now(),
+    });
+    let effective = profile.snapshot();
+    assert_eq!(effective.codex_version, "0.160.0");
+    assert_eq!(effective.desktop_version, "26.1001.12345");
+    assert_eq!(effective.os_version, "26.4.1");
+    assert_eq!(effective.terminal, "xterm-256color");
+    assert!(!profile.cli_sync_enabled());
+}
+
 fn select_profile(profile: &CodexWireProfileState, qx: bool) {
     profile
         .apply_user_agent_override(&if qx {
@@ -117,19 +199,30 @@ fn assert_body(body: &Value, websocket: bool, previous: Option<&str>) {
 }
 
 async fn receive_http(stream: &mut TcpStream, user_agent: &str, qx: bool) {
+    receive_http_profile(
+        stream,
+        user_agent,
+        if qx { "codex-tui" } else { "codex_cli_rs" },
+        if qx { "0.146.0" } else { "1.2.3" },
+        qx,
+    )
+    .await;
+}
+
+async fn receive_http_profile(
+    stream: &mut TcpStream,
+    user_agent: &str,
+    originator: &str,
+    version: &str,
+    qx: bool,
+) {
     let raw = read_http_request_with_body(stream).await;
     let head_end = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
     let head = std::str::from_utf8(&raw[..head_end]).unwrap();
     assert!(head.starts_with("POST /codex/responses HTTP/1.1\r\n"));
     assert_eq!(read_header_value(head, "user-agent"), Some(user_agent));
-    assert_eq!(
-        read_header_value(head, "originator"),
-        Some(if qx { "codex-tui" } else { "codex_cli_rs" })
-    );
-    assert_eq!(
-        read_header_value(head, "version"),
-        Some(if qx { "0.146.0" } else { "1.2.3" })
-    );
+    assert_eq!(read_header_value(head, "originator"), Some(originator));
+    assert_eq!(read_header_value(head, "version"), Some(version));
     assert_eq!(read_header_value(head, "accept"), Some("text/event-stream"));
     assert_eq!(
         read_header_value(head, "content-type"),
@@ -566,6 +659,64 @@ async fn safe_ws_http_fallback_freezes_qx_profile_while_next_request_uses_cpr() 
     .await;
     pool.shutdown().await;
     outcome.expect("bounded fallback fixture");
+}
+
+#[tokio::test]
+async fn auto_version_update_keeps_ws_http_fallback_identity_and_updates_next_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let profile = test_wire_profile();
+    let ua = "codex_exec/0.153.0 (Mac OS 26.4.1; arm64) xterm-256color (codex_exec; 0.153.0)";
+    profile
+        .apply_user_agent_override(&ProviderUserAgentOverride::CustomAutoVersion {
+            user_agent: ua.to_owned(),
+        })
+        .unwrap();
+    profile.update_cli_version("0.160.0");
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{}", listener.local_addr().unwrap()),
+        profile.clone(),
+    )
+    .with_websocket_pool(pool.clone());
+    let server = async {
+        let old = ua.replace("0.153.0", "0.160.0");
+        let next = ua.replace("0.153.0", "0.161.0");
+        let (mut opening, _) = listener.accept().await.unwrap();
+        let head = read_http_request(&mut opening).await;
+        assert!(head.starts_with("GET /codex/responses HTTP/1.1\r\n"));
+        assert_eq!(read_header_value(&head, "user-agent"), Some(old.as_str()));
+        assert_eq!(read_header_value(&head, "originator"), Some("codex_exec"));
+        assert_eq!(read_header_value(&head, "version"), Some("0.160.0"));
+        for name in IDENTITY_HEADERS {
+            assert_identity_header(name, read_header_value(&head, name), false);
+        }
+        profile.update_cli_version("0.161.0");
+        let (mut fallback, _) = listener.accept().await.unwrap();
+        receive_http_profile(&mut fallback, &old, "codex_exec", "0.160.0", false).await;
+        let (mut fresh, _) = listener.accept().await.unwrap();
+        receive_http_profile(&mut fresh, &next, "codex_exec", "0.161.0", false).await;
+        drop(opening);
+    };
+    let client = async {
+        let mut request = fixture_request();
+        let response = backend
+            .create_response(&request, identity_context("auto-version-fallback"))
+            .await
+            .unwrap();
+        assert_eq!(response.transport, CodexBackendTransport::HttpSse);
+        request.force_http_sse = true;
+        backend
+            .create_response(&request, identity_context("auto-version-next"))
+            .await
+            .unwrap();
+    };
+    let outcome = timeout(Duration::from_secs(6), async {
+        tokio::join!(server, client)
+    })
+    .await;
+    pool.shutdown().await;
+    outcome.expect("bounded automatic version fallback fixture");
 }
 
 #[tokio::test]

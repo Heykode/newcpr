@@ -37,6 +37,7 @@ function detection(location) {
 function record(id, name, overrides = {}) {
   return {
     id,
+    enabled: true,
     name,
     endpoint: 'http://127.0.0.1:8080',
     hasAuthentication: false,
@@ -109,6 +110,14 @@ function fixture() {
           return ok({ version: 'test', hasUpdate: false, deploymentMode: 'test' })
         if (path === endpoint && method === 'GET')
           return ok({ items: records, page: { page: 1, pageSize: 20, total: records.length, totalPages: 1 } })
+        if (path === `${endpoint}/delete` && method === 'POST') {
+          const index = records.findIndex(item => item.id === body.id)
+          assert(index >= 0)
+          if (body.revision !== records[index].revision)
+            return conflict()
+          records.splice(index, 1)
+          return ok({ configRevision: ++configRevision })
+        }
         if (path === `${endpoint}/probe` && method === 'POST') {
           assert.deepEqual(Object.keys(body).sort(), ['detectLocation', 'proxyUrl'])
           assert.equal(typeof body.detectLocation, 'boolean')
@@ -154,6 +163,15 @@ function fixture() {
               effectiveLocation: previous.autoLocation ? nextDetected?.location ?? null : previous.requestLocation,
             }
             return ok(records[index])
+          }
+          if (Object.hasOwn(body, 'enabled')) {
+            assert.deepEqual(Object.keys(body).sort(), ['enabled', 'id', 'name', 'revision'])
+            if (state.rejectUpdate) {
+              previous.revision++
+              return conflict()
+            }
+            records[index] = { ...previous, enabled: body.enabled, revision: previous.revision + 1 }
+            return ok({ record: records[index], configRevision: ++configRevision })
           }
           assert.deepEqual(Object.keys(body).sort(), ['autoLocation', 'id', 'name', 'requestLocation', 'revision'])
           if (state.rejectUpdate) {
@@ -238,7 +256,15 @@ async function capture(page, output, width, phase, layoutErrors) {
     const failures = []
     if (document.documentElement.scrollWidth > innerWidth)
       failures.push('document overflows viewport')
-    for (const dialog of document.querySelectorAll('[role="dialog"]')) {
+    for (const cell of document.querySelectorAll('[data-column-key="actions"]')) {
+      const bounds = cell.getBoundingClientRect()
+      for (const button of cell.querySelectorAll('button')) {
+        const rect = button.getBoundingClientRect()
+        if (rect.left < bounds.left - 1 || rect.right > bounds.right + 1)
+          failures.push('action button overflows its column')
+      }
+    }
+    for (const dialog of document.querySelectorAll('[role="dialog"], [role="alertdialog"]')) {
       const panel = dialog.getBoundingClientRect()
       if (panel.left < 0 || panel.right > innerWidth || dialog.scrollWidth > dialog.clientWidth + 1)
         failures.push('dialog overflows viewport')
@@ -269,6 +295,10 @@ async function capture(page, output, width, phase, layoutErrors) {
 async function runViewport(page, state, base, output, width) {
   await page.goto(`${base}/proxies`)
   const row = id => page.locator(`tr[data-row-key="${id}"]`)
+  const action = async (id, label) => {
+    await row(id).getByRole('button', { name: '更多代理操作', exact: true }).click()
+    return page.getByRole('button', { name: label, exact: true })
+  }
   const dialog = page.getByRole('dialog')
   const auto = dialog.getByRole('switch', { name: autoLabel, exact: true })
   const manualSwitch = dialog.getByRole('switch', { name: manualLabel, exact: true })
@@ -509,6 +539,42 @@ async function runViewport(page, state, base, output, width) {
   assert.equal(state.mutations('probe').length, 6)
   assert.equal(state.mutations('test').length, 4)
   assert.equal(state.mutations('update').length, 3)
+  state.rejectUpdate = false
+  const target = state.records.find(item => item.id === 'existing-auto')
+  target.accountCount = 2
+  await page.reload()
+  const enablementBefore = structuredClone(target)
+  const confirmation = page.getByRole('alertdialog')
+  await (await action(target.id, '禁用代理')).click()
+  await confirmation.getByText(/后续请求将改为直连/).waitFor()
+  await snapshot('disable-confirmation')
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+  await confirmation.waitFor({ state: 'hidden' })
+  assert.equal(state.mutations('update').length, 3, 'cancel must not change enablement')
+  await (await action(target.id, '禁用代理')).click()
+  await post(page, 'update', confirmation.getByRole('button', { name: '确认', exact: true }))
+  await confirmation.waitFor({ state: 'hidden' })
+  await row(target.id).getByText('已禁用', { exact: true }).waitFor()
+  assert.deepEqual(state.records.find(item => item.id === target.id), { ...enablementBefore, enabled: false, revision: enablementBefore.revision + 1 })
+  await snapshot('disabled-list')
+  await post(page, 'update', await action(target.id, '启用代理'))
+  await row(target.id).getByText('已启用', { exact: true }).waitFor()
+  assert.deepEqual(state.records.find(item => item.id === target.id), { ...enablementBefore, revision: enablementBefore.revision + 2 })
+  state.rejectUpdate = true
+  await (await action(target.id, '禁用代理')).click()
+  assert.equal((await post(page, 'update', confirmation.getByRole('button', { name: '确认', exact: true }))).status(), 409)
+  assert.equal(state.records.find(item => item.id === target.id).enabled, true, 'failed writes cannot change displayed state')
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+  await confirmation.waitFor({ state: 'hidden' })
+  await clearNotices(page)
+  state.rejectUpdate = false
+  await (await action(target.id, '删除代理')).click()
+  await confirmation.getByText(/自动解除 2 个账号/).waitFor()
+  await snapshot('delete-bound-confirmation')
+  await post(page, 'delete', confirmation.getByRole('button', { name: '确认', exact: true }))
+  await row(target.id).waitFor({ state: 'hidden' })
+  assert.equal(state.mutations('delete').length, 1)
+  assert.deepEqual(state.errors, [])
   assert.deepEqual(state.layoutErrors, [], `${width}px layout violations after completed lifecycle`)
 }
 
@@ -550,7 +616,7 @@ async function main() {
       await context.route('**/*', route => state.route(route, base))
       try {
         await runViewport(page, state, base, output, width)
-        process.stdout.write(`PASS ${width}px: default/create/probe/draft-mode-guard/revision/manual/failed/conflict; synthetic APIs only.\n`)
+        process.stdout.write(`PASS ${width}px: create/probe/location/revision/disable/cancel/enable/delete-bound; synthetic APIs only.\n`)
       }
       catch (error) {
         await page.screenshot({ path: `${output}/failure-${width}.png`, fullPage: true })

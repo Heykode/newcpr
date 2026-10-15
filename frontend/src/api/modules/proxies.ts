@@ -37,6 +37,7 @@ export interface DetectedProxyLocation {
 }
 
 export interface OutboundProxyRecord {
+  enabled: boolean
   autoLocation?: boolean
   detectedLocation?: DetectedProxyLocation | null
   effectiveLocation?: RequestLocation | null
@@ -117,7 +118,7 @@ export function createProxy(data: { name: string, proxyUrl: string, autoLocation
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
+export function updateProxy(data: { id: string, revision: number, name: string, enabled?: boolean, proxyUrl?: string, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     method: 'POST',

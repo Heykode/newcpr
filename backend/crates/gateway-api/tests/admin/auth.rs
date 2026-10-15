@@ -336,6 +336,22 @@ async fn login_cookie_should_persist_until_server_expiry_and_remain_revocable() 
             .to_str()
             .unwrap()
             .to_owned();
+        let refresh_cookie = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("cpr_admin_refresh="))
+            .unwrap()
+            .to_owned();
+        assert!(refresh_cookie.contains("Path=/api/admin/auth;"));
+        assert!(refresh_cookie.contains("HttpOnly"));
+        assert_eq!(
+            refresh_cookie
+                .split(';')
+                .any(|part| part.trim() == "Secure"),
+            secure
+        );
         let parts: Vec<_> = cookie.split(';').map(str::trim).collect();
         assert!(parts.contains(&"Path=/"));
         assert!(parts.contains(&"HttpOnly"));
@@ -384,12 +400,42 @@ async fn login_cookie_should_persist_until_server_expiry_and_remain_revocable() 
             Request::builder()
                 .method("POST")
                 .uri("/api/admin/auth/refresh")
-                .header(header::COOKIE, cookie_pair)
+                .header(header::COOKIE, refresh_cookie.split(';').next().unwrap())
                 .body(Body::empty())
                 .unwrap()
         };
+        let logical_id = cookie_pair
+            .split('=')
+            .nth(1)
+            .unwrap()
+            .split('.')
+            .nth(1)
+            .unwrap();
+        fixture
+            .auth
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut(logical_id)
+            .unwrap()
+            .expires_at = Utc::now() - chrono::Duration::seconds(1);
+        let expired = app.clone().oneshot(status_request()).await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(expired.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(body["data"]["authenticated"], false);
         let refreshed = app.clone().oneshot(refresh_request()).await.unwrap();
         assert_eq!(refreshed.status(), StatusCode::OK);
+        let next_refresh_cookie = refreshed
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("cpr_admin_refresh="))
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
         assert!(
             refreshed.headers()[header::SET_COOKIE]
                 .to_str()
@@ -406,12 +452,16 @@ async fn login_cookie_should_persist_until_server_expiry_and_remain_revocable() 
                 Request::builder()
                     .method("POST")
                     .uri("/api/admin/auth/logout")
-                    .header(header::COOKIE, cookie_pair)
+                    .header(header::COOKIE, next_refresh_cookie)
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
+        assert_eq!(
+            logout.headers().get_all(header::SET_COOKIE).iter().count(),
+            2
+        );
         assert!(
             logout.headers()[header::SET_COOKIE]
                 .to_str()
@@ -428,4 +478,44 @@ async fn login_cookie_should_persist_until_server_expiry_and_remain_revocable() 
             serde_json::from_slice(&to_bytes(refreshed.into_body(), 4096).await.unwrap()).unwrap();
         assert_eq!(body["data"]["authenticated"], false);
     }
+}
+
+#[tokio::test]
+async fn logout_audit_failure_still_clears_both_browser_credentials() {
+    use super::AdminTestState;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("logout-audit-failure");
+    fixture.auth.fail_audit(true);
+    let app = gateway_api::admin::auth::router::<AdminTestState>()
+        .with_state(AdminTestState(fixture.services.clone()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/admin/auth/logout")
+                .header(header::COOKIE, "cpr_admin_session=logout-audit-failure")
+                .header(header::ORIGIN, "http://localhost")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(response.status() >= StatusCode::INTERNAL_SERVER_ERROR);
+    let cookies: Vec<_> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .collect();
+    assert_eq!(cookies.len(), 2);
+    assert!(
+        cookies
+            .iter()
+            .all(|cookie| cookie.to_str().unwrap().contains("Max-Age=0"))
+    );
+    assert_eq!(fixture.auth.session_count(), 0);
 }

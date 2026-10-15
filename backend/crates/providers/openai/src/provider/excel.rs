@@ -1356,6 +1356,7 @@ mod tests {
                     max_retries,
                     initial_delay,
                     max_delay,
+                    ..
                 } => {
                     assert_eq!(max_retries.get(), budget);
                     assert_eq!(initial_delay, Duration::from_secs(60));

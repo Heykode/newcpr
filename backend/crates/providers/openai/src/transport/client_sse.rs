@@ -57,8 +57,10 @@ impl CodexBackendClient {
     ) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         Self {
+            connection_budget: None,
             session_proxy: None,
             direct_client: client.clone(),
+            default_direct_client: false,
             response_control: None,
             client,
             websocket_origin_key: websocket_origin_key(&base_url),
@@ -750,6 +752,7 @@ impl CodexBackendClient {
                     self.request_tuning().websocket_stream_idle_timeout_ms,
                 )
             }),
+            self.connection_budget.clone(),
         )
         .await;
         let prepared = match prepared {
@@ -990,6 +993,9 @@ impl CodexBackendClient {
                 )
                 .await
                 .map_err(websocket_exchange_error_to_client_error)?;
+                if let Some(budget) = &client.connection_budget {
+                    budget.complete();
+                }
                 let mut precommit_started_at = None;
                 if requirement.allows_connection_restart()
                     && request.responses_lite.as_deref() == Some("true")
@@ -1185,7 +1191,16 @@ async fn await_websocket_delivery_boundary(
                     break DeliveryBoundary::Ready;
                 }
             }
-            Some(Err(error)) => return Err(error),
+            Some(Err(error)) => {
+                if prelude.is_empty() {
+                    return Err(error);
+                }
+                exchange.body = Box::pin(
+                    futures::stream::iter(prelude.into_iter().map(Ok))
+                        .chain(futures::stream::once(async move { Err(error) })),
+                );
+                return Ok((DeliveryBoundary::Ready, started_at));
+            }
             None => {
                 return Err(CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
                     reason: "stream_eof",
@@ -1204,10 +1219,7 @@ fn is_websocket_lifecycle_prelude(frame: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(frame)
         .ok()
         .is_some_and(|value| {
-            matches!(
-                value.get("type").and_then(serde_json::Value::as_str),
-                Some("response.created" | "response.in_progress")
-            )
+            crate::transport::protocol::responses::is_replaceable_response_prelude(&value)
         })
 }
 

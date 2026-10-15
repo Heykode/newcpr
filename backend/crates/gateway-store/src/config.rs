@@ -37,6 +37,7 @@ pub struct StoreConfig {
 pub struct StorePoolConfig {
     pub max_connections: u32,
     pub acquire_timeout_seconds: u64,
+    pub observability_query_timeout_seconds: u64,
 }
 
 impl Default for StorePoolConfig {
@@ -44,6 +45,7 @@ impl Default for StorePoolConfig {
         Self {
             max_connections: 20,
             acquire_timeout_seconds: 5,
+            observability_query_timeout_seconds: 120,
         }
     }
 }
@@ -55,6 +57,16 @@ impl StorePoolConfig {
                 entity: "store config",
                 message:
                     "pool.max_connections must be at least 2 and acquire timeout must be positive"
+                        .to_owned(),
+            });
+        }
+        if self.observability_query_timeout_seconds == 0
+            || self.observability_query_timeout_seconds > i32::MAX as u64 / 1000
+        {
+            return Err(StoreError::InvalidData {
+                entity: "store config",
+                message:
+                    "observability query timeout must be positive and within PostgreSQL limits"
                         .to_owned(),
             });
         }

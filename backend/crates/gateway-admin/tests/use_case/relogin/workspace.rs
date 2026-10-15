@@ -560,6 +560,27 @@ async fn relogin_highest_new_account_uses_create_only_and_original_mode_remains_
 }
 
 #[tokio::test]
+async fn relogin_uses_direct_for_disabled_proxy_and_restores_enabled_binding() {
+    let proxy = gateway_core::account::OutboundProxy::parse("http://127.0.0.1:8080").unwrap();
+    for enabled in [false, true] {
+        let mut original = free();
+        original.outbound_proxy = Some(proxy.clone());
+        original.outbound_proxy_enabled = enabled;
+        let h = Harness::new(vec![original.clone()]).await;
+        let id = h.import("test@example.invalid").await;
+        highest(&h, &id).await;
+        assert_eq!(
+            *h.provider.relogin_proxies.lock().unwrap(),
+            vec![enabled.then_some(proxy.clone())]
+        );
+        assert_eq!(
+            h.accounts.accounts.lock().unwrap()[0].outbound_proxy,
+            original.outbound_proxy
+        );
+    }
+}
+
+#[tokio::test]
 async fn relogin_highest_defaults_legacy_rows_and_rechecks_claim_without_direct_proxy_fallback() {
     let original = free();
     let h = Harness::new(vec![original.clone()]).await;

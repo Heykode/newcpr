@@ -1,0 +1,13 @@
+{
+  "from_version": "3.24.0",
+  "to_version": "3.25.0",
+  "from_migrations_tree": "113e46d3e329312ff8502f088bb0e414f1858476",
+  "to_migrations_tree": "78fca7595cd897a50968e4dc4b7cdb1f55885536",
+  "added": [
+    "0070_relogin_retry_seconds.sql",
+    "0071_outbound_client_version_sync.sql",
+    "0072_outbound_proxy_enabled.sql"
+  ],
+  "modified_documentation": ["README.md"],
+  "recovery": "manual"
+}

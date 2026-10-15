@@ -13,6 +13,7 @@ pub mod accounts;
 pub mod auth;
 pub mod backups;
 pub mod client_keys;
+mod compression;
 pub mod egress;
 mod extract;
 pub mod group_monitor;
@@ -67,6 +68,11 @@ where
         .route("/api/admin", any(admin_not_found))
         .route("/api/admin/{*path}", any(admin_not_found))
         .layer(middleware::map_response(no_store))
+        .layer(
+            tower_http::compression::CompressionLayer::new()
+                .quality(tower_http::compression::CompressionLevel::Fastest)
+                .compress_when(compression::AdminJson),
+        )
         .layer(middleware::from_fn(record_failure))
 }
 

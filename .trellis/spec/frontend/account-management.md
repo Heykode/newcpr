@@ -61,6 +61,20 @@
 - Verify form/submission regressions and `browser/account-import-template.mjs` with
   synthetic data on desktop/mobile, including manual edits, back/reopen and final payload.
 
+### Batched Document Submission
+
+- Split OpenAI account documents into individual jobs, then submit at most 200
+  entries and 4 MiB per request. Preserve xAI document-level deduplication.
+- Keep successful batch progress and uncertain submission IDs in the open form.
+  A manual retry skips confirmed batches and reuses the uncertain batch payload/ID.
+- Open task progress only after all batches are confirmed and the import form
+  closes. Opening it after each successful batch stacks dialogs when a later
+  response fails. Accepted server jobs remain recoverable through task listing.
+- Cover a 201-account JSON document with a lost second response in both the
+  onboarding unit tests and `browser/import-tasks.mjs`. Reload must recover two
+  tasks without posting credentials. The existing 200-line token input limit
+  remains separate from document batching.
+
 ## Codex Credit Visibility
 
 - Render `quota.credits` in both the account-list usage cell and ordinary quota panel.

@@ -21,6 +21,44 @@ fn classify(status: u16, body: &str) -> CodexFailureCategory {
 }
 
 #[test]
+fn explicit_rejections_bound_replay_and_turn_limits_remain_request_scoped() {
+    for (status, code, safe) in [
+        (429, "turn_rate_limit_exceeded", false),
+        (503, "server_error", true),
+        (500, "server_error", false),
+        (503, "unknown_error", false),
+        (400, "invalid_request_error", false),
+    ] {
+        for phase in [
+            CodexUpstreamSendPhase::BeforePayload,
+            CodexUpstreamSendPhase::AfterPayload,
+            CodexUpstreamSendPhase::Ambiguous,
+        ] {
+            let body = serde_json::json!({"error":{"code":code,"message":"fixture rejection"}})
+                .to_string();
+            let failure = CodexUpstreamFailure::from_response(
+                reqwest::StatusCode::from_u16(status).unwrap(),
+                &body,
+                Some(17),
+                &CodexUpstreamDiagnostics::default(),
+                None,
+                &[],
+                &[],
+                phase,
+            );
+            assert_eq!(
+                failure.replay_is_safe(),
+                safe && phase != CodexUpstreamSendPhase::Ambiguous,
+                "{status} {code} {phase:?}"
+            );
+            if code == "turn_rate_limit_exceeded" {
+                assert_eq!(failure.category(), CodexFailureCategory::TurnRateLimited);
+            }
+        }
+    }
+}
+
+#[test]
 fn capacity_rejections_are_request_scoped_across_http_statuses() {
     for status in [400, 429, 503] {
         for body in [

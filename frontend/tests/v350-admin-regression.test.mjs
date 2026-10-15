@@ -65,6 +65,25 @@ function requestHarness() {
   return { ...api, ...errors, ...actions, messages, response, fail }
 }
 
+test('observability API timeout is scoped and caller cancellation and overrides survive', async () => {
+  for (const module of ['usage', 'dashboard']) {
+    const calls = []
+    const api = load(`api/modules/${module}.ts`, {
+      '../request': async config => calls.push(config),
+      '../constants': { OBSERVABILITY_TIMEOUT_MS: 120000 },
+    })
+    for (const action of Object.values(api)) {
+      await action({})
+      assert.equal(calls.at(-1).timeout, 120000)
+      const signal = new AbortController().signal
+      await action({}, { timeout: 5000, signal, silent: true })
+      assert.equal(calls.at(-1).timeout, 5000)
+      assert.equal(calls.at(-1).signal, signal)
+      assert.equal(calls.at(-1).silent, true)
+    }
+  }
+})
+
 test('API key exit cleanup retains content, removes plaintext after leave and cannot clear a reopened modal', async () => {
   const api = requestHarness()
   const scope = vue.effectScope()
@@ -230,6 +249,7 @@ test('outbound UA automatic refresh remains silent while manual reload errors re
     '@/components/base/BaseToast': { toast: { success: () => {} } },
     '@/utils/async': { errorMessage: error => error.message },
     '../composables/userAgentOsVersion': load('views/settings/composables/userAgentOsVersion.ts'),
+    '../composables/userAgentClientVersion': load('views/settings/composables/userAgentClientVersion.ts'),
     './outbound-user-agent-samples': load('views/settings/components/outbound-user-agent-samples.ts', {
       './outbound-user-agent-samples.json': JSON.parse(readFileSync(source('views/settings/components/outbound-user-agent-samples.json'), 'utf8')),
     }),

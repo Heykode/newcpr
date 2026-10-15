@@ -2613,6 +2613,48 @@ async fn immediate_snapshot_conflict_reloads_facts_before_reserving_capacity() {
 }
 
 #[tokio::test]
+async fn quota_observation_only_update_does_not_restart_selection() {
+    use std::sync::atomic::Ordering;
+    for during_acquire in [false, true] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_original", "fixture");
+        let account = store.account("acct_original").unwrap();
+        let observed = SystemTime::now();
+        store
+            .apply_quota_access(QuotaAccessChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                state: QuotaState::allowed(observed),
+            })
+            .await
+            .unwrap();
+        let changed = Arc::clone(&store);
+        let advance: Box<dyn FnOnce() + Send + Sync> = Box::new(move || {
+            block_on(changed.apply_quota_access(QuotaAccessChange {
+                account_id: account.id().clone(),
+                expected_revision: account.revision(),
+                state: QuotaState::allowed(observed + Duration::from_secs(1)),
+            }))
+            .unwrap();
+        });
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        if during_acquire {
+            *leases.capacity.after_acquire.lock().unwrap() = Some(advance);
+        } else {
+            *store.before_credential_load.lock().unwrap() = Some(advance);
+        }
+        let selector = selector(&store, Arc::clone(&leases));
+        let lease = capacity_select(&selector, &attempt(BTreeSet::new()), None)
+            .await
+            .unwrap();
+        assert_eq!(lease.account_id().as_str(), "acct_original");
+        assert_eq!(leases.requests.lock().unwrap().len(), 1);
+        assert_eq!(store.credential_loads.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
 async fn immediate_snapshot_conflict_is_bounded_without_consuming_a_lease() {
     use std::sync::atomic::Ordering;
     let store = Arc::new(MemoryAccountStore::default());
@@ -3110,6 +3152,305 @@ async fn capacity_wait_fallback_accepts_busy_snapshot_and_busy_without_retry_hin
     }
 }
 
+fn interval_wait_attempt(
+    interval: Duration,
+    tuning: gateway_core::routing::RequestTuning,
+) -> AttemptContext {
+    AttemptContext::new(
+        RequestAttemptContext::new(
+            ModelRequestId::new(format!("req_fallback_interval_{}", uuid::Uuid::new_v4())).unwrap(),
+            ClientApiKeyId::new("key_codex_contract").unwrap(),
+        ),
+        NonZeroU32::MIN,
+        SystemTime::now() + Duration::from_secs(30),
+        AccountSelectionPolicy::new(RotationStrategy::Sticky, NonZeroU32::MIN, interval),
+        AccountAttemptContext::new(BTreeSet::new(), None, None)
+            .with_account_scope(contract_account_scope()),
+        None,
+        CancellationToken::new(),
+    )
+    .with_request_tuning(tuning)
+}
+
+#[tokio::test]
+async fn capacity_wait_fallback_interval_rechecks_and_releases() {
+    use gateway_core::engine::AccountWaitMode;
+    use provider_openai::credential::AccountWaitFailure;
+    use std::sync::atomic::Ordering;
+
+    for scenario in [
+        "ready",
+        "busy",
+        "busy-to-interval",
+        "interval-to-busy",
+        "contention",
+        "disabled",
+        "invalid",
+        "cooldown",
+        "cancel",
+        "full",
+        "timeout",
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_primary", "at-primary");
+        create_account(&store, "acct_other", "at-other");
+        persist_credential_state(
+            &store,
+            &store.account("acct_other").unwrap(),
+            CredentialState::Invalid,
+        );
+        let id = ProviderAccountId::new("acct_primary").unwrap();
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.capacity.enabled.store(true, Ordering::SeqCst);
+        leases.capacity.set_load(
+            "acct_primary",
+            u32::from(matches!(scenario, "busy" | "busy-to-interval")),
+        );
+        leases
+            .capacity
+            .full
+            .store(scenario == "full", Ordering::SeqCst);
+        let started = SystemTime::now();
+        leases
+            .capacity
+            .signals
+            .lock()
+            .unwrap()
+            .get_mut(&id)
+            .unwrap()
+            .last_started_at = (scenario != "busy-to-interval").then_some(started);
+        let cooldowns = Arc::new(MemoryCooldownPort::new());
+        let selector = selector_with_runtime(
+            &store,
+            Arc::clone(&leases),
+            Arc::new(MemorySessionAffinity::default()),
+            Arc::new(AccountFeedbackStats::default()),
+            cooldowns,
+        )
+        .with_account_concurrency(capacity_handle(&["acct_primary", "acct_other"], 1));
+        let interval = Duration::from_millis(250);
+        let attempt = interval_wait_attempt(
+            interval,
+            gateway_core::routing::RequestTuning {
+                account_busy_wait_fallback_max_waiting: 7,
+                account_busy_wait_fallback_timeout_seconds: 1,
+                ..capacity_tuning()
+            },
+        );
+        let selected = capacity_select(&selector, &attempt, None);
+        tokio::pin!(selected);
+        let mut earliest_start = started + interval;
+        if scenario != "full" {
+            tokio::select! {
+                result = &mut selected => panic!("interval must queue ({scenario}): {result:?}"),
+                () = wait_until_queued(&leases) => {}
+            }
+            assert!(
+                leases.requests.lock().unwrap().is_empty(),
+                "no early execution"
+            );
+            match scenario {
+                "busy" => leases.capacity.set_load("acct_primary", 0),
+                "interval-to-busy" => {
+                    leases.capacity.set_load("acct_primary", 1);
+                    tokio::select! {
+                        result = &mut selected => panic!("capacity must remain enforced: {result:?}"),
+                        () = tokio::time::sleep(Duration::from_millis(300)) => {}
+                    }
+                    assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 1);
+                    leases.capacity.set_load("acct_primary", 0);
+                }
+                "contention" | "timeout" | "busy-to-interval" => {
+                    let next_start = SystemTime::now()
+                        + if scenario == "timeout" {
+                            Duration::from_secs(5)
+                        } else {
+                            Duration::from_millis(100)
+                        };
+                    leases
+                        .capacity
+                        .signals
+                        .lock()
+                        .unwrap()
+                        .get_mut(&id)
+                        .unwrap()
+                        .last_started_at = Some(next_start);
+                    earliest_start = next_start + interval;
+                    leases.capacity.set_load("acct_primary", 0);
+                }
+                "disabled" => store.set_enabled(&id, false).await.unwrap(),
+                "invalid" => persist_credential_state(
+                    &store,
+                    &store.account("acct_primary").unwrap(),
+                    CredentialState::Invalid,
+                ),
+                "cooldown" => selector
+                    .record_failure(
+                        &store.account("acct_primary").unwrap(),
+                        CodexAccountFailure::RateLimited {
+                            retry_after: Some(Duration::from_secs(30)),
+                        },
+                        None,
+                    )
+                    .await
+                    .unwrap(),
+                "cancel" => attempt.cancellation().cancel(),
+                _ => {}
+            }
+        }
+        let result = tokio::time::timeout(Duration::from_secs(3), selected)
+            .await
+            .unwrap();
+        match scenario {
+            "cancel" => assert!(matches!(result, Err(CredentialSelectionError::Cancelled))),
+            "full" => assert!(matches!(
+                result,
+                Err(CredentialSelectionError::AccountWait(
+                    AccountWaitFailure::QueueFull
+                ))
+            )),
+            "timeout" => assert!(matches!(
+                result,
+                Err(CredentialSelectionError::AccountWait(
+                    AccountWaitFailure::Timeout
+                ))
+            )),
+            "disabled" | "invalid" | "cooldown" => assert!(matches!(
+                result,
+                Err(CredentialSelectionError::NoEligibleCredential)
+            )),
+            _ => {
+                let lease = result.unwrap();
+                assert_eq!(lease.account_id(), &id);
+                assert!(
+                    SystemTime::now() >= earliest_start,
+                    "must respect the latest interval"
+                );
+                assert_eq!(leases.capacity.signals.lock().unwrap()[&id].in_flight, 1);
+                drop(lease);
+            }
+        }
+        let waits = leases.capacity.waits.lock().unwrap();
+        assert_eq!(
+            waits.len(),
+            1,
+            "{scenario}: do not restart the queue/deadline"
+        );
+        assert_eq!(waits[0].mode(), AccountWaitMode::Fallback);
+        assert_eq!(waits[0].max_waiting().get(), 7);
+        assert!(waits[0].deadline() <= started + Duration::from_secs(2));
+        assert_eq!(
+            leases.capacity.waiting.load(Ordering::SeqCst),
+            0,
+            "{scenario}"
+        );
+        assert_eq!(
+            leases.capacity.signals.lock().unwrap()[&id].in_flight,
+            0,
+            "{scenario}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn capacity_wait_fallback_interval_preserves_ready_priority_and_opt_out() {
+    use std::sync::atomic::Ordering;
+    for waiting in [false, true] {
+        for ready_alternative in [false, true] {
+            if waiting && !ready_alternative {
+                continue;
+            }
+            let store = Arc::new(MemoryAccountStore::default());
+            create_account(&store, "acct_primary", "at-primary");
+            store.set_scheduling("acct_primary", None, AccountWeight::new(90).unwrap());
+            if ready_alternative {
+                create_account(&store, "acct_other", "at-other");
+            }
+            let leases = Arc::new(TestLeaseCoordinator::default());
+            leases.capacity.enabled.store(true, Ordering::SeqCst);
+            leases.capacity.set_load("acct_primary", 0);
+            leases
+                .capacity
+                .signals
+                .lock()
+                .unwrap()
+                .get_mut(&ProviderAccountId::new("acct_primary").unwrap())
+                .unwrap()
+                .last_started_at = Some(SystemTime::now());
+            let selector = selector(&store, Arc::clone(&leases))
+                .with_account_concurrency(capacity_handle(&["acct_primary", "acct_other"], 1));
+            let attempt = interval_wait_attempt(
+                Duration::from_secs(10),
+                gateway_core::routing::RequestTuning {
+                    account_busy_wait_enabled: waiting,
+                    ..capacity_tuning()
+                },
+            );
+            let result = capacity_select(&selector, &attempt, None).await;
+            if ready_alternative {
+                assert_eq!(result.unwrap().account_id().as_str(), "acct_other");
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(CredentialSelectionError::NoEligibleCredential)
+                ));
+            }
+            assert!(leases.capacity.waits.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn capacity_wait_fallback_interval_serializes_a_burst_without_requeueing() {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_primary", "at-primary");
+    let id = ProviderAccountId::new("acct_primary").unwrap();
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.enabled.store(true, Ordering::SeqCst);
+    leases.capacity.set_load("acct_primary", 0);
+    let started = SystemTime::now();
+    leases
+        .capacity
+        .signals
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .last_started_at = Some(started);
+    let selector = selector(&store, Arc::clone(&leases))
+        .with_account_concurrency(capacity_handle(&["acct_primary"], 1));
+    let interval = Duration::from_millis(100);
+    let attempts = (0..4)
+        .map(|_| interval_wait_attempt(interval, capacity_tuning()))
+        .collect::<Vec<_>>();
+    let results = tokio::time::timeout(
+        Duration::from_secs(3),
+        futures::future::join_all(attempts.iter().map(|attempt| async {
+            let lease = capacity_select(&selector, attempt, None).await.unwrap();
+            assert_eq!(lease.account_id(), &id);
+            let acquired_at = leases.capacity.signals.lock().unwrap()[&id]
+                .last_started_at
+                .unwrap();
+            drop(lease);
+            acquired_at
+        })),
+    )
+    .await
+    .unwrap();
+    let mut times = vec![started];
+    times.extend(results);
+    times.sort();
+    assert!(
+        times
+            .windows(2)
+            .all(|pair| pair[1].duration_since(pair[0]).unwrap() >= interval)
+    );
+    assert_eq!(leases.capacity.waits.lock().unwrap().len(), 4);
+    assert_eq!(leases.capacity.waiting.load(Ordering::SeqCst), 0);
+    assert_eq!(leases.capacity.signals.lock().unwrap()[&id].in_flight, 0);
+}
+
 #[tokio::test]
 async fn capacity_wait_never_classifies_non_capacity_blockers_as_busy() {
     use std::sync::atomic::Ordering;
@@ -3118,7 +3459,6 @@ async fn capacity_wait_never_classifies_non_capacity_blockers_as_busy() {
         "invalid",
         "quota",
         "excluded",
-        "interval",
         "cooldown",
         "missing-live",
     ] {
@@ -3137,16 +3477,6 @@ async fn capacity_wait_never_classifies_non_capacity_blockers_as_busy() {
             "quota" => persist_quota_exhaustion(&store, &account, None),
             "excluded" => {
                 exclusions.insert(id.clone());
-            }
-            "interval" => {
-                leases
-                    .capacity
-                    .signals
-                    .lock()
-                    .unwrap()
-                    .get_mut(&id)
-                    .unwrap()
-                    .last_started_at = Some(SystemTime::now() + Duration::from_secs(60));
             }
             "cooldown" => {
                 let recorder = selector_with_runtime(

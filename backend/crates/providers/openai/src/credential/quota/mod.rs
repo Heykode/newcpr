@@ -841,10 +841,7 @@ impl CodexCredentialQuotaService {
                 "service_tier".to_owned(),
                 Value::String("default".to_owned()),
             );
-            body.insert(
-                "reasoning".to_owned(),
-                serde_json::json!({"effort": "none"}),
-            );
+            body.insert("reasoning".to_owned(), serde_json::json!({"effort": "low"}));
             body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
             let request = CodexResponsesRequest::from_body(body);
             let account_client = match self.warmup_client(&client, &account, &request_id) {

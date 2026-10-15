@@ -383,11 +383,11 @@ pub trait AuthStore: Send + Sync {
     -> AdminStoreResult<()>;
 
     async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>>;
-    async fn renew_session(
+    async fn compare_exchange_session(
         &self,
         session_id: &str,
         expected: &AdminSession,
-        expires_at: chrono::DateTime<chrono::Utc>,
+        replacement: Option<&AdminSession>,
     ) -> AdminStoreResult<Option<AdminSession>>;
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;

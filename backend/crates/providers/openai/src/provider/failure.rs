@@ -254,16 +254,18 @@ impl PreCommitClientEvents {
 }
 
 fn is_replaceable_prelude(event: &ProviderEvent) -> bool {
-    event
-        .wire_event()
-        .is_some_and(|wire| match wire.event_type() {
-            Some("codex.response.metadata" | "codex.rate_limits") => true,
-            Some("response.created" | "response.in_progress") => wire
-                .data()
-                .pointer("/response/output")
-                .is_none_or(|output| output.as_array().is_some_and(Vec::is_empty)),
-            _ => false,
-        })
+    event.wire_event().is_some_and(|wire| {
+        if wire.event_type().is_some() {
+            crate::transport::protocol::responses::is_replaceable_response_prelude(wire.data())
+        } else {
+            wire.raw_sse_frame().is_some_and(|frame| {
+                std::str::from_utf8(frame).is_ok_and(|text| {
+                    text.lines()
+                        .all(|line| line.is_empty() || line.starts_with(':'))
+                })
+            })
+        }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -623,21 +625,6 @@ pub(super) fn websocket_client_failure_policy(
         } if *status == reqwest::StatusCode::UPGRADE_REQUIRED => {
             Some(WebSocketFailurePolicy::ImmediateFallback)
         }
-        CodexClientError::Upstream {
-            status,
-            transport: CodexBackendTransport::WebSocket,
-            ..
-        } if status.is_server_error()
-            || matches!(
-                *status,
-                reqwest::StatusCode::REQUEST_TIMEOUT
-                    | reqwest::StatusCode::CONFLICT
-                    | reqwest::StatusCode::TOO_EARLY
-                    | reqwest::StatusCode::TOO_MANY_REQUESTS
-            ) =>
-        {
-            Some(WebSocketFailurePolicy::Budgeted)
-        }
         CodexClientError::WebSocket(error)
             if !error.is_message_too_big()
                 && !matches!(
@@ -972,6 +959,10 @@ pub(super) fn map_client_error(
         return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
     }
     let mut failure = match &error {
+        CodexClientError::ConnectionBudgetExhausted => MappedProviderFailure::plain(
+            provider_error(ProviderErrorKind::Timeout, UpstreamSendState::NotSent)
+                .with_retry_prohibited(),
+        ),
         CodexClientError::Upstream { .. } => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Protocol,
             UpstreamSendState::Sent,
@@ -1023,14 +1014,26 @@ pub(super) fn map_client_error(
             } else {
                 uncertain_state
             };
-            MappedProviderFailure::plain(provider_error(
+            let mut mapped = provider_error(
                 if error.is_timeout() {
                     ProviderErrorKind::Timeout
                 } else {
                     ProviderErrorKind::Transport
                 },
                 send_state,
-            ))
+            );
+            if transient_http_connect(error) {
+                mapped = mapped.with_replay_safe().with_transient_retry_policy(
+                    NonZeroU32::new(2).expect("nonzero retry limit"),
+                    Duration::from_millis(500),
+                    Duration::from_secs(2),
+                    Duration::ZERO,
+                    gateway_core::error::TransientRetryPolicy::RetryThenReturnError,
+                );
+            } else if error.is_connect() || error.is_builder() {
+                mapped = mapped.with_retry_prohibited();
+            }
+            MappedProviderFailure::plain(mapped)
         }
         CodexClientError::WebSocket(error) if error.continuation_unavailable_reason().is_some() => {
             let mut failure = MappedProviderFailure::plain(continuation_replay_required_error(
@@ -1146,7 +1149,13 @@ pub(super) fn map_client_error(
         },
         error => error,
     };
-    failure.error = failure.error.with_source(error);
+    failure.error = if matches!(error, CodexClientError::ConnectionBudgetExhausted) {
+        failure
+            .error
+            .with_source(gateway_core::engine::connection::ConnectionBudgetExhausted)
+    } else {
+        failure.error.with_source(error)
+    };
     failure.observation = observation;
     failure
 }
@@ -1154,6 +1163,11 @@ pub(super) fn map_client_error(
 /// 在消费 transport 错误前提取可持久化事实，不能使用可能携带 URL/凭据的 Display。
 fn client_diagnostic(error: &CodexClientError) -> Option<ProviderDiagnostic> {
     let (stage, code, message) = match error {
+        CodexClientError::ConnectionBudgetExhausted => (
+            "connect",
+            "connection_budget_exhausted",
+            "OpenAI connection recovery budget exhausted".to_owned(),
+        ),
         CodexClientError::WebSocket(error) => return Some(websocket_diagnostic(error)),
         CodexClientError::ErrorBodyRead { status, source, .. } => {
             return Some(
@@ -1448,6 +1462,7 @@ pub(super) fn map_upstream_failure(
 ) -> MappedProviderFailure {
     let category = failure.category();
     let capacity_unavailable = category == CodexFailureCategory::CapacityUnavailable;
+    let server_error_retry = failure.is_retryable_server_error();
     let cyber_policy_failure = failure
         .status
         .is_some_and(|status| status.is_client_error())
@@ -1463,7 +1478,14 @@ pub(super) fn map_upstream_failure(
         provider_error_kind(category)
     };
     let mut error = provider_error(error_kind, send_state);
-    if category == CodexFailureCategory::FlexUnavailable {
+    let replay_safe = failure.replay_is_safe() || cyber_policy_failure;
+    let upgrade_required = failure.send_phase == CodexUpstreamSendPhase::BeforePayload
+        && failure.status == Some(reqwest::StatusCode::UPGRADE_REQUIRED);
+    if matches!(
+        category,
+        CodexFailureCategory::FlexUnavailable | CodexFailureCategory::TurnRateLimited
+    ) || (!replay_safe && continuation_failure.is_none() && !upgrade_required)
+    {
         error = error.with_retry_prohibited();
     }
     error = error.with_raw_upstream_error(RawUpstreamError::new(failure.raw_body.clone()));
@@ -1494,9 +1516,7 @@ pub(super) fn map_upstream_failure(
     if let Some(status) = failure.status {
         error = error.with_status(status.as_u16());
     }
-    if replay_boundary.permits_provider_proof()
-        && (failure.replay_is_safe() || cyber_policy_failure)
-    {
+    if replay_boundary.permits_provider_proof() && replay_safe {
         error = error.with_replay_safe();
     }
     if let Some(continuation_failure) = continuation_failure {
@@ -1510,15 +1530,29 @@ pub(super) fn map_upstream_failure(
     if let Some(retry_after) = failure.retry_after_seconds.map(Duration::from_secs) {
         error = error.with_retry_after(retry_after);
     }
-    if capacity_unavailable && error.replay_is_safe() {
-        let max_delay = Duration::from_secs(8);
-        error = error.with_transient_retry(
-            NonZeroU32::new(3).unwrap_or(NonZeroU32::MIN),
-            failure
-                .retry_after_seconds
-                .map_or(Duration::from_millis(500), Duration::from_secs)
-                .min(max_delay),
+    if (capacity_unavailable || server_error_retry) && error.replay_is_safe() {
+        use gateway_core::error::TransientRetryPolicy;
+        let (retries, max_delay, jitter, policy) = if capacity_unavailable {
+            (
+                3,
+                Duration::from_secs(8),
+                Duration::ZERO,
+                TransientRetryPolicy::RetryThenRotateAccount,
+            )
+        } else {
+            (
+                5,
+                Duration::from_secs(2),
+                crate::jitter::server_error_retry_jitter(crate::jitter::random_u64()),
+                TransientRetryPolicy::RetryThenReturnError,
+            )
+        };
+        error = error.with_transient_retry_policy(
+            NonZeroU32::new(retries).unwrap_or(NonZeroU32::MIN),
+            Duration::from_millis(500),
             max_delay,
+            jitter,
+            policy,
         );
     }
     if let Some(code) = failure.persistable_code() {
@@ -1584,7 +1618,9 @@ pub(super) const fn provider_error_kind(category: CodexFailureCategory) -> Provi
             ProviderErrorKind::PermissionDenied
         }
         CodexFailureCategory::UsageLimitExhausted => ProviderErrorKind::QuotaExhausted,
-        CodexFailureCategory::RateLimited => ProviderErrorKind::RateLimited,
+        CodexFailureCategory::RateLimited | CodexFailureCategory::TurnRateLimited => {
+            ProviderErrorKind::RateLimited
+        }
         CodexFailureCategory::QuotaExhausted => ProviderErrorKind::QuotaExhausted,
         CodexFailureCategory::CloudflareChallenge
         | CodexFailureCategory::CloudflarePathBlocked
@@ -1640,6 +1676,7 @@ pub(super) fn account_failure(
             Some(CodexAccountFailure::CloudflarePathBlocked)
         }
         CodexFailureCategory::ModelUnsupported
+        | CodexFailureCategory::TurnRateLimited
         | CodexFailureCategory::InvalidRequest
         | CodexFailureCategory::PermissionDenied
         | CodexFailureCategory::Timeout
@@ -1722,6 +1759,35 @@ pub(super) fn provider_error(
     send_state: UpstreamSendState,
 ) -> ProviderError {
     ProviderError::new(kind, send_state)
+}
+
+// Only unsent connection failures can recover; certificate/configuration errors cannot.
+fn transient_http_connect(error: &reqwest::Error) -> bool {
+    if !error.is_connect() || error.is_builder() {
+        return false;
+    }
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if cause
+            .downcast_ref::<native_tls::Error>()
+            .is_some_and(|error| error.to_string() != "unexpected EOF")
+            || cause.is::<rustls::Error>()
+        {
+            return false;
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::InvalidData
+            )
+        {
+            return false;
+        }
+        source = cause.source();
+    }
+    true
 }
 
 #[cfg(test)]

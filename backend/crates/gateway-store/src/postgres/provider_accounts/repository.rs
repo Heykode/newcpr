@@ -141,7 +141,8 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
     ) -> StoreResult<Vec<ProviderAccountSummary>> {
         let rows = sqlx::query(
             "select
-                    (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id) as request_location_json,
+                    coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,
                     access_token_expires_at, next_refresh_at, enabled, turn_state_injection_enabled, responses_upstream, excel_models, excel_models_follow_global, excel_cache_creation_as_input, excel_ignore_encrypted_content, request_proxy_source, excel_auto_disable_on_403, excel_403_action, excel_auto_disabled_at, excel_403_warning_at, excel_mode_disabled_at,

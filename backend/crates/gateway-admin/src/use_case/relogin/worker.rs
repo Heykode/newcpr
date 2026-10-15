@@ -255,9 +255,10 @@ impl DefaultReloginService {
                         .collect();
                     if candidates.len() != entry.workspace_targets.len()
                         || candidates.first().is_some_and(|first| {
-                            candidates
-                                .iter()
-                                .any(|account| account.outbound_proxy != first.outbound_proxy)
+                            candidates.iter().any(|account| {
+                                account.effective_outbound_proxy()
+                                    != first.effective_outbound_proxy()
+                            })
                         })
                     {
                         entry.status = ReloginStatus::Failed;
@@ -319,8 +320,9 @@ impl DefaultReloginService {
                                 pool.iter().find(|account| target.matches_account(account))
                             })
                         })
-                        .and_then(|account| account.outbound_proxy.clone())
-                        .or(enrollment_proxy),
+                        .map_or(enrollment_proxy, |account| {
+                            account.effective_outbound_proxy().cloned()
+                        }),
                 };
                 if entry.automatic_job {
                     let now = Utc::now();

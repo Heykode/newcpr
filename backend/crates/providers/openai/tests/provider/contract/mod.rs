@@ -88,6 +88,7 @@ mod request_alignment;
 mod scheduling;
 mod streamed_errors;
 mod timing;
+mod tls_recovery;
 mod turn_affinity;
 mod ws_message_compatibility;
 const CAPTURE_COMPLETED_SSE: &str = concat!(
@@ -6086,8 +6087,8 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
             assert!(error.replay_is_safe());
             assert!(
                 matches!(error.pre_delivery_retry(), Some(PreDeliveryRetry::SameAccountTransientRetry {
-                max_retries, initial_delay, max_delay,
-            }) if max_retries.get() == 3 && initial_delay == Duration::from_secs(8) && max_delay == Duration::from_secs(8))
+                max_retries, initial_delay, max_delay, ..
+            }) if max_retries.get() == 3 && initial_delay == Duration::from_millis(500) && max_delay == Duration::from_secs(8))
             );
             assert!(!provider_openai::openai_failure_affects_account_score(
                 &error

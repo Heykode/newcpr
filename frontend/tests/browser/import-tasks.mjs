@@ -28,6 +28,7 @@ async function main() {
   const stops = []
   const jobs = new Map()
   let loseFirstResponse = true
+  let loseResponseAt = 0
   let failReads = false
   let accountReads = 0
   const emptyPage = { items: [], page: { page: 1, pageSize: 20, total: 0, totalPages: 1 }, configRevision: 1 }
@@ -77,7 +78,7 @@ async function main() {
         })
       }
       data = summarize(jobs.get(body.submissionId))
-      if (loseFirstResponse) {
+      if (loseFirstResponse || submissions.length === loseResponseAt) {
         loseFirstResponse = false
         return route.abort('failed')
       }
@@ -200,9 +201,6 @@ async function main() {
     assert.equal(await stateSwitch.count(), 0)
     await page.getByRole('group', { name: '选择账号平台' }).getByRole('button', { name: 'OpenAI', exact: true }).click()
     await screenshots('import-state-settings', '账号设置')
-    await page.getByRole('button', { name: '继续导入', exact: true }).click()
-    await page.getByRole('radio', { name: 'RT', exact: true }).click()
-    await page.getByRole('textbox', { name: 'Refresh Token', exact: true }).fill('synthetic-first\nsynthetic-second')
     await page.getByRole('button', { name: '管理账号模板', exact: true }).click()
     const templateManager = page.getByRole('dialog', { name: '账号模板', exact: true })
     await templateManager.getByText('Synthetic import template', { exact: true }).waitFor()
@@ -213,9 +211,15 @@ async function main() {
     await templateManager.waitFor({ state: 'hidden' })
     await page.getByRole('combobox', { name: '导入账号模板', exact: true }).click()
     await page.getByRole('option', { name: 'Synthetic import template', exact: true }).click()
-    await page.getByText('保持原代理', { exact: true }).waitFor()
+    assert.match(await page.getByRole('combobox', { name: '出站隧道', exact: true }).textContent(), /保持原设置/)
+    assert.equal(await page.getByRole('spinbutton', { name: '账号调度权重', exact: true }).inputValue(), '23')
+    assert.equal(await page.getByRole('spinbutton', { name: '账号并发限制', exact: true }).inputValue(), '4')
     assert.equal(await page.getByRole('checkbox', { name: /覆盖/ }).count(), 0)
-    await screenshots('import-template-selection', '导入账号')
+    await screenshots('import-template-selection', '账号设置')
+    await page.getByRole('button', { name: '继续导入', exact: true }).click()
+    assert.equal(await page.getByRole('combobox', { name: '导入账号模板', exact: true }).count(), 0)
+    await page.getByRole('radio', { name: 'RT', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Refresh Token', exact: true }).fill('synthetic-first\nsynthetic-second')
     const submit = page.getByRole('button', { name: '创建导入任务', exact: true })
     await submit.evaluate((button) => {
       button.click()
@@ -238,8 +242,12 @@ async function main() {
       { accounts: [{ refreshToken: 'synthetic-second' }] },
     ])
     assert.ok(submissions[0].items.every(item => !Object.hasOwn(item.settings, 'turnStateInjectionEnabled')))
-    for (const item of submissions[0].items)
+    for (const item of submissions[0].items) {
       assert.deepEqual(item.template, { id: 'template-import', revision: 3 })
+      assert.equal(item.templateSettingsOverride, true)
+      assert.equal(item.settings.weight, 23)
+      assert.equal(item.settings.concurrencyLimit, 4)
+    }
     await screenshots('running')
 
     await closeTasks()
@@ -332,6 +340,39 @@ async function main() {
     await page.getByText('暂无导入任务', { exact: true }).waitFor()
     await page.getByText(/完成后保留 1 小时/).waitFor()
     assert.equal(submissions.length, 3, 'lost history must not replay credentials')
+
+    await closeTasks()
+    await page.getByRole('button', { name: '导入账号', exact: true }).click()
+    await page.getByRole('group', { name: '选择账号平台' }).getByRole('button', { name: 'OpenAI', exact: true }).click()
+    await page.getByRole('button', { name: '继续导入', exact: true }).click()
+    await page.getByRole('radio', { name: '账号文件', exact: true }).click()
+    const largeImport = Array.from({ length: 201 }, (_, index) => `synthetic-batch-${index}`)
+    await page.getByRole('dialog', { name: '导入账号', exact: true }).getByRole('textbox').fill(JSON.stringify({
+      accounts: largeImport.map(refreshToken => ({ refreshToken })),
+    }))
+    loseResponseAt = submissions.length + 2
+    await submit.click()
+    await page.waitForFunction(() => {
+      const button = [...document.querySelectorAll('button')].find(button => button.textContent.includes('创建导入任务'))
+      return button && !button.disabled
+    })
+    assert.equal(submissions.length, 5)
+    assert.equal(await page.getByRole('dialog', { name: '导入任务', exact: true }).count(), 0, 'partial submission keeps only the retry form open')
+    assert.deepEqual(submissions.slice(3).map(body => body.items.length), [200, 1])
+    assert.equal(jobs.size, 2, 'both accepted batches survive a lost second response')
+    await submit.click()
+    await page.getByRole('dialog', { name: '导入账号', exact: true }).waitFor({ state: 'hidden' })
+    await page.getByRole('heading', { name: '导入任务', exact: true }).waitFor()
+    assert.equal(submissions.length, 6, 'retry must not submit the confirmed first batch again')
+    assert.deepEqual(submissions[5], submissions[4], 'uncertain batch keeps its ID and payload')
+    assert.equal(jobs.size, 2, 'retry must not create a third server task')
+    assert.deepEqual(submissions.slice(3, 5).flatMap(body => body.items.map(item => item.data.accounts[0].refreshToken)), largeImport)
+    await page.reload()
+    await openTasks()
+    await batches.click()
+    assert.equal(await page.getByRole('option').count(), 2, 'reload recovers both automatically split batches')
+    await page.getByRole('option').filter({ hasText: '200 个条目' }).click()
+    assert.equal(submissions.length, 6, 'reload never resubmits accepted credentials')
     assert.deepEqual(errors, [])
     assert.deepEqual(assetFailures, [])
     assert.deepEqual(unexpected, [])

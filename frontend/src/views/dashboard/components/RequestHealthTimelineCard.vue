@@ -6,7 +6,7 @@ import { gsap } from 'gsap'
 import { computed, nextTick, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
-import { formatHealthCount, healthLegend, healthReliabilityValueClass, healthStatusMeta } from '../constants'
+import { formatHealthCount, healthLegend, healthReliabilityValueClass, healthServiceFailureCount, healthStatusMeta } from '../constants'
 import HealthTimelinePointPopover from './HealthTimelinePointPopover.vue'
 
 const props = defineProps<{
@@ -33,7 +33,7 @@ let anchorXTo: ReturnType<typeof gsap.quickTo> | undefined
 let anchorYTo: ReturnType<typeof gsap.quickTo> | undefined
 
 function observedRequests(point: HealthTimelinePoint) {
-  return point.successRequests + point.failedRequests + point.cancelledRequests + point.callerErrorRequests
+  return point.successRequests + healthServiceFailureCount(point) + point.cancelledRequests + point.callerErrorRequests
 }
 
 function isInteractivePoint(point: HealthTimelinePoint) {
@@ -224,7 +224,7 @@ function releasePointWave() {
 }
 
 function pointAccessibilityLabel(point: HealthTimelinePoint) {
-  const eligibleRequests = point.successRequests + point.failedRequests
+  const eligibleRequests = point.successRequests + healthServiceFailureCount(point)
   return `${point.time}，${healthStatusMeta[point.status].label}，有效请求 ${formatHealthCount(eligibleRequests)}，可用性 ${point.reliabilityDisplay}`
 }
 
@@ -271,7 +271,7 @@ onBeforeUnmount(() => {
         <div class="flex shrink-0 items-center gap-3">
           <strong
             class="font-mono text-sm leading-none font-heavy tabular-nums"
-            :class="healthReliabilityValueClass(timeline.successRequests, timeline.failedRequests)"
+            :class="healthReliabilityValueClass(timeline.successRequests, healthServiceFailureCount(timeline))"
           >
             {{ timeline.reliabilityDisplay }}
           </strong>

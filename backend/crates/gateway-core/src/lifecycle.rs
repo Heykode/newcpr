@@ -1,8 +1,7 @@
 //! Host 与 API 之间的连接注册、drain 与取消契约。
 
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use std::time::{Duration, SystemTime};
 
@@ -10,8 +9,60 @@ use event_listener::Event;
 use futures::future::{BoxFuture, pending};
 use futures_timer::Delay;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestLeaseKind {
+    ClientAdmission,
+    Credential,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseFailure {
+    Lost,
+    RenewalTimedOut,
+    Expired,
+}
+
+/// Stable causes only; never include credentials or infrastructure error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationReason {
+    Requested,
+    Lease {
+        kind: RequestLeaseKind,
+        failure: LeaseFailure,
+    },
+}
+
+impl CancellationReason {
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::Requested => "request was cancelled",
+            Self::Lease {
+                kind: RequestLeaseKind::ClientAdmission,
+                failure,
+            } => match failure {
+                LeaseFailure::Lost => "request was cancelled: client admission lease was lost",
+                LeaseFailure::RenewalTimedOut => {
+                    "request was cancelled: client admission lease renewal timed out"
+                }
+                LeaseFailure::Expired => "request was cancelled: client admission lease expired",
+            },
+            Self::Lease {
+                kind: RequestLeaseKind::Credential,
+                failure,
+            } => match failure {
+                LeaseFailure::Lost => "request was cancelled: credential lease was lost",
+                LeaseFailure::RenewalTimedOut => {
+                    "request was cancelled: credential lease renewal timed out"
+                }
+                LeaseFailure::Expired => "request was cancelled: credential lease expired",
+            },
+        }
+    }
+}
+
 struct CancellationState {
-    cancelled: AtomicBool,
+    reason: OnceLock<CancellationReason>,
     event: Event,
 }
 
@@ -38,13 +89,17 @@ impl CancellationToken {
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(CancellationState {
-            cancelled: AtomicBool::new(false),
+            reason: OnceLock::new(),
             event: Event::new(),
         }))
     }
 
     pub fn cancel(&self) {
-        if self.0.cancelled.swap(true, Ordering::AcqRel) {
+        self.cancel_with_reason(CancellationReason::Requested);
+    }
+
+    pub fn cancel_with_reason(&self, reason: CancellationReason) {
+        if self.0.reason.set(reason).is_err() {
             return;
         }
         self.0.event.notify(usize::MAX);
@@ -52,7 +107,12 @@ impl CancellationToken {
 
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.0.cancelled.load(Ordering::Acquire)
+        self.reason().is_some()
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> Option<CancellationReason> {
+        self.0.reason.get().copied()
     }
 
     pub async fn cancelled(&self) {

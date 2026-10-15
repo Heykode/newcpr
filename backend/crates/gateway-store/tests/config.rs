@@ -25,6 +25,7 @@ fn store_pool_config_keeps_the_public_surface_to_connection_pool_limits() {
     assert_eq!(pool, StorePoolConfig::default());
     assert_eq!(pool.max_connections, 20);
     assert_eq!(pool.acquire_timeout_seconds, 5);
+    assert_eq!(pool.observability_query_timeout_seconds, 120);
     assert_eq!(pool.observability_max_connections(), 16);
     assert_eq!(
         StorePoolConfig {

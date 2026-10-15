@@ -70,6 +70,7 @@ pub(super) fn reusable_websocket_metadata(
     mut metadata: CodexWebSocketConnectionMetadata,
 ) -> CodexWebSocketConnectionMetadata {
     metadata.session_proxy = None;
+    metadata.set_cookie_headers.clear();
     metadata.rate_limit_headers.clear();
     metadata.turn_state = None;
     // 模型报告属于上一轮请求，池中连接不能把它带到下一轮缺失报告的响应。

@@ -2,7 +2,7 @@
 
 ## 1. 范围与证据边界
 
-适用于 OpenAI 正常请求在账号执行并发不足时的可选等待。等待不是 WS socket
+适用于 OpenAI 正常请求在账号执行并发不足或请求间隔未到时的可选等待。等待不是 WS socket
 排队，不是新的调度算法，也不增加执行并发。管理诊断走原 selector 路径；
 不能据此要求 OAuth 刷新、后台额度/目录任务或其他 Provider 自动排队。
 
@@ -69,14 +69,14 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
 
 ## 5. 选择与成功交付
 
-只有全部非容量条件通过且执行并发不足才是 `Busy`。请求间隔、cooldown、
-停用、失效、无额度、越权、模型不支持和业务排除都是 `Blocked`；
-“并发满且间隔未到”不能因检查顺序被误判为可等待。
+只有全部非容量条件通过且执行并发不足才是 `Busy`。请求间隔仍分类为
+`Blocked(RequestInterval)`，仅允许进入既有等待队列，不允许直接执行。
+cooldown、停用、失效、无额度、越权、模型不支持和业务排除仍不可等待。
 
 1. 合格原绑定账号 Busy 时优先 sticky 等待。软亲和另允许请求间隔为唯一阻塞时，
    在原间隔截止前等待；去除间隔后必须 Ready，且截止必须早于现有共享等待预算。
    间隔长于请求或 sticky 窗口时直接重选，不得先启动一个不会使用的等待窗口。
-   不把间隔重新分类为 Busy，fallback 不新增间隔等待。
+   不把间隔重新分类为 Busy；fallback 的间隔等待见下文。
    固定账号（required、Native/ReplayOwner、strict 根线程跟随）也允许使用既有 sticky
    队列等待请求间隔；并发与间隔同时阻塞仍可等待，但停用、额度、权限等其他阻塞不能入队。
    固定账号入队后，间隔被竞争请求延后或账号转 Busy 时继续等，始终受同一共享截止限制，
@@ -88,11 +88,17 @@ Redis key；WS pool 不兼任账号调度器。不新建配置表、第二套粘
    `select_for_capacity_wait` 不证明已经满足“全忙”；Provider 负责完成此判断。
    可选 Preferred 模式先尝试 Ready 候选，不先进入软绑定的 sticky 队列；
    required/native 硬绑定不变，不能借 Preferred 绕过所属账号等待。
-3. fallback 一次只持有一个账号的等待租约。队列满可有界扫描其他 Busy 候选，
+3. fallback 一次只持有一个账号的等待租约。无 Ready 候选时，Core 使用原有排序
+   从 Busy 或仅请求间隔阻塞（可同时并发满）的候选中选择。使用既有 fallback
+   人数上限、共享截止和 Store 原子晋升，间隔未到不算已获取执行槽。
+   排队期间其他请求推迟间隔或占满并发时，继续持有原等待租约和截止，不能重新计时。
+   无法在窗口内满足间隔时，按原等待超时退出；不沿用软 sticky 的提前放弃窗口逻辑。
+   队列满可有界扫描其他 Busy/间隔候选，
    成功入队后固定目标，不承诺严格 FIFO 或其他账号空闲后立即迁移。
 4. 目标失格或终检冲突，先释放所有权再有界重选；当前外层最多三轮。
    lease-race Busy 集与业务排除集分开，不能伪造 `in_flight` 或写入账号失败记录。
-5. 轮询从 100ms 退避至 1s，并加 0..24ms jitter；不能按执行租约 TTL 一次睡数分钟。
+5. 容量轮询从 100ms 退避至 1s，并加 0..24ms jitter；间隔轮询取当前退避和剩余
+   间隔的较小值。不能按执行租约 TTL 一次睡数分钟。
    每次晋升前检查目标资格、排除状态和 live limit。
 
 晋升后 `finish_wait_selection` 再核对完整账号事实、capacity revision、
@@ -257,6 +263,11 @@ API 不为账号排队提前提交 SSE 或发送业务 payload。
 
 ## 请求间隔修复回归
 
+- `credential::contract::capacity_wait_fallback_interval_rechecks_and_releases`
+  覆盖未绑定请求的间隔、并发叠加/切换、竞争推进、队满、超时、取消和账号失格。
+- `capacity_wait_fallback_interval_preserves_ready_priority_and_opt_out` 确认先用 Ready
+  候选，关闭开关不入队；`capacity_wait_fallback_interval_serializes_a_burst_without_requeueing`
+  确认并发突发仍遵守每次真实发送间隔，不重新入队续期。
 - `credential::contract::pinned_interval_wait_preserves_owner_and_releases_on_cancel_or_full`
   覆盖固定账号就绪、取消、队满、停用、间隔推进、并发叠加与共享超时；所有分支等待租约归零。
 - `provider::contract::affinity_modes::strict_child_waits_for_root_request_interval_without_switching_accounts`

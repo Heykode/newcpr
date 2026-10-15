@@ -890,6 +890,15 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {
+                if request.excel.is_none()
+                    && client.has_connection_budget()
+                    && matches!(failure.error.kind(), ProviderErrorKind::Transport | ProviderErrorKind::Timeout)
+                    && failure.error.send_state() == UpstreamSendState::NotSent
+                    && failure.error.replay_is_safe()
+                    && matches!(failure.error.pre_delivery_retry(), Some(gateway_core::error::PreDeliveryRetry::SameAccountTransientRetry { .. }))
+                {
+                    failure.error = failure.error.with_connection_retry(AttemptTransport::Fallback);
+                }
                 super::excel::observe_http_rejection(
                     &selector, &active_account, &mut failure,
                     request.excel.is_some(), allows_account_state_mutation,
@@ -988,18 +997,31 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         }
         if allows_account_state_mutation && request.quality_probe.is_none()
             && !response.set_cookie_headers.is_empty()
-            && let Ok(outcome) = selector
+        {
+            match selector
                 .capture_response_cookies(
                     &active_account,
                     &response_origin,
                     &response.set_cookie_headers,
                 )
                 .await
-                && let Some(revision) = outcome.credential_revision
-                && let Ok(current) = selector.current_account(active_account.id()).await
-                && current.revision().get() == revision
-        {
-            active_account = current;
+            {
+                Ok(outcome) => {
+                    if let Some(revision) = outcome.credential_revision
+                        && let Ok(current) = selector.current_account(active_account.id()).await
+                        && current.revision().get() == revision
+                    {
+                        active_account = current;
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    request_id = %request_id,
+                    account_id = %active_account.id(),
+                    credential_revision = active_account.revision().get(),
+                    error = %error,
+                    "Failed to persist OpenAI response cookies"
+                ),
+            }
         }
         let response_transport = response.transport;
         let websocket_connection_id = response.websocket_connection_id;
@@ -1009,11 +1031,8 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             // opening ID 标识连接，不可作为缺失请求级错误头时的当前请求 ID。
             failure_diagnostics.request_id = None;
         }
-        let failure_set_cookie_headers = if request.quality_probe.is_some() {
-            Vec::new()
-        } else {
-            response.set_cookie_headers.clone()
-        };
+        // Opening cookies were handled above; a later stream failure must not replay them.
+        let failure_set_cookie_headers = Vec::new();
         let mut passive_quota_observation =
             OpenAiPassiveQuotaObservation::new(response.rate_limit_headers, response.rate_limit_observed_at);
         let rate_limit_updates = response.rate_limit_updates;
@@ -1032,10 +1051,11 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             context.request_tuning().stream_prefetch_bytes,
         ).with_upstream_grace_started_at(response.precommit_started_at)
         .with_replayable_prelude(
-            response_transport == CodexBackendTransport::WebSocket
+            request.excel.is_none() && (context.request_tuning().stream_prefetch_bytes == 0
+            || (response_transport == CodexBackendTransport::WebSocket
                 && request.responses_lite.as_deref() == Some("true")
                 && request.downstream_websocket_connection_id.is_some()
-                && context.response_control().is_some(),
+                && context.response_control().is_some())),
         );
         let mut quota_success = false;
         loop {

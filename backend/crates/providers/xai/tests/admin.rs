@@ -719,6 +719,7 @@ fn provider_ports_with_catalog(
 fn account_record(account: &ProviderAccount) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        outbound_proxy_enabled: true,
         effective_excel_models: Default::default(),
         model_access: Default::default(),
         custom_name: None,
