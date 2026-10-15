@@ -21,6 +21,7 @@ use super::{
 pub enum UpdateOutboundUserAgentRequest {
     Default,
     Custom { user_agent: String },
+    CustomAutoVersion { user_agent: String },
 }
 
 impl<'de> Deserialize<'de> for UpdateOutboundUserAgentRequest {
@@ -38,11 +39,13 @@ impl<'de> Deserialize<'de> for UpdateOutboundUserAgentRequest {
         enum Wire {
             Default { user_agent: Option<String> },
             Custom { user_agent: String },
+            CustomAutoVersion { user_agent: String },
         }
 
         match Wire::deserialize(deserializer)? {
             Wire::Default { user_agent: None } => Ok(Self::Default),
             Wire::Custom { user_agent } => Ok(Self::Custom { user_agent }),
+            Wire::CustomAutoVersion { user_agent } => Ok(Self::CustomAutoVersion { user_agent }),
             Wire::Default {
                 user_agent: Some(_),
             } => Err(serde::de::Error::custom(
@@ -57,6 +60,9 @@ impl From<UpdateOutboundUserAgentRequest> for ProviderUserAgentOverride {
         match request {
             UpdateOutboundUserAgentRequest::Default => Self::Default,
             UpdateOutboundUserAgentRequest::Custom { user_agent } => Self::Custom { user_agent },
+            UpdateOutboundUserAgentRequest::CustomAutoVersion { user_agent } => {
+                Self::CustomAutoVersion { user_agent }
+            }
         }
     }
 }
@@ -84,6 +90,9 @@ impl From<OutboundUserAgentView> for OutboundUserAgentSettingsView {
         let (mode, custom_user_agent) = match view.selection {
             ProviderUserAgentOverride::Default => ("default", None),
             ProviderUserAgentOverride::Custom { user_agent } => ("custom", Some(user_agent)),
+            ProviderUserAgentOverride::CustomAutoVersion { user_agent } => {
+                ("custom-auto-version", Some(user_agent))
+            }
         };
         Self {
             mode,

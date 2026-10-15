@@ -79,6 +79,47 @@ fn audit(id: &str) -> AdminAuditEvent {
 }
 
 #[tokio::test]
+async fn automatic_client_version_policy_round_trips_without_replacing_fixed_profiles() {
+    let Some(database) = TestDatabase::create("ua_version_sync").await else {
+        return;
+    };
+    let provider = ProviderKind::new("openai").unwrap();
+    let repository = PgControlPlaneRepository::new(database.pool.clone());
+    let ua =
+        "codex_exec/0.153.0 (Mac OS 26.4.1; arm64) xterm-256color (codex_exec; 0.153.0)".to_owned();
+    for (index, selection) in [
+        ProviderUserAgentOverride::Custom {
+            user_agent: ua.clone(),
+        },
+        ProviderUserAgentOverride::CustomAutoVersion {
+            user_agent: ua.clone(),
+        },
+        ProviderUserAgentOverride::Custom { user_agent: ua },
+        ProviderUserAgentOverride::Default,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        repository
+            .replace_user_agent_override(
+                &provider,
+                selection.clone(),
+                audit(&format!("ua-sync-{index}")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            repository
+                .load_user_agent_override(&provider)
+                .await
+                .unwrap(),
+            selection
+        );
+    }
+    database.close().await;
+}
+
+#[tokio::test]
 async fn cli_user_agent_selection_round_trips_without_normalizing_text() {
     let Some(database) = TestDatabase::create("qx_user_agent").await else {
         return;

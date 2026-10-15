@@ -20,6 +20,52 @@ const sampleModule = load(readFileSync(new URL('../src/views/settings/components
   './outbound-user-agent-samples.json': catalog,
 })
 
+test('client version editor pairs CLI suffixes but preserves Desktop application version', () => {
+  const { withUserAgentClientVersion, userAgentClientVersion } = load(readFileSync(new URL('../src/views/settings/composables/userAgentClientVersion.ts', import.meta.url), 'utf8'), {})
+  const exec = 'codex_exec/0.153.0 (Mac OS 26.4.1; arm64) xterm-256color (codex_exec; 0.153.0)'
+  assert.equal(withUserAgentClientVersion(exec, '0.160.0'), exec.replaceAll('0.153.0', '0.160.0'))
+  assert.equal(withUserAgentClientVersion(cpr, '0.160.0'), cpr.replace('0.153.4', '0.160.0'))
+  assert.equal(userAgentClientVersion(qx), '0.146.0')
+  assert.equal(withUserAgentClientVersion(exec, '0.1.0\r\ninjected'), null)
+})
+
+test('client version sync is opt-in, survives save and pins the effective version when disabled', async () => {
+  const effective = customQx.replace('0.146.0', '0.160.0')
+  const app = harness({ ...view({ mode: 'custom-auto-version', userAgent: customQx }), effectiveUserAgent: effective, coreVersion: '0.160.0' })
+  try {
+    await app.state.load(true)
+    assert.equal(app.state.autoVersion.value, true)
+    assert.equal(app.state.clientVersion.value, '0.160.0')
+    app.state.setAutoVersion(false)
+    assert.equal(app.state.custom.value, effective)
+    app.state.updateClientVersion('0.161.0')
+    await app.state.save()
+    assert.equal(app.requests[0].mode, 'custom')
+    assert.equal(app.requests[0].userAgent, customQx.replace('0.146.0', '0.161.0'))
+    app.state.setAutoVersion(true)
+    await app.state.save()
+    assert.equal(app.requests[1].mode, 'custom-auto-version')
+  }
+  finally { app.stop() }
+})
+
+test('partial client version remains editable and cannot silently save the old value', async () => {
+  const app = harness(view({ mode: 'custom', userAgent: customQx }))
+  try {
+    await app.state.load(true)
+    app.state.updateClientVersion('')
+    assert.equal(app.state.clientVersion.value, '')
+    app.state.updateClientVersion('0.16')
+    assert.equal(app.state.clientVersion.value, '0.16')
+    await app.state.save()
+    assert.equal(app.requests.length, 0)
+    app.state.updateClientVersion('0.161.0')
+    await app.state.save()
+    assert.equal(app.requests[0].userAgent, customQx.replace('0.146.0', '0.161.0'))
+  }
+  finally { app.stop() }
+})
+
 test('OS editor changes only the version and preserves the existing custom UA contract', async () => {
   const app = harness(view({ mode: 'qx-compatible', userAgent: customQx }))
   try {
@@ -102,6 +148,7 @@ function harness(initial = view(), overrides = {}) {
     '@/components/base/BaseCheckbox.vue': {},
     '@/components/base/BaseInput.vue': {},
     '../composables/userAgentOsVersion': load(readFileSync(new URL('../src/views/settings/composables/userAgentOsVersion.ts', import.meta.url), 'utf8'), {}),
+    '../composables/userAgentClientVersion': load(readFileSync(new URL('../src/views/settings/composables/userAgentClientVersion.ts', import.meta.url), 'utf8'), {}),
     '@/components/base/BaseForm/FormItem.vue': {},
     '@/components/base/BaseSelect.vue': {},
     '@/components/base/BaseTextarea.vue': {},

@@ -16,7 +16,7 @@ pub(crate) fn preview(
     profile: &CodexWireProfileState,
     selection: &ProviderUserAgentOverride,
 ) -> Result<OutboundUserAgentView, ProviderAdminError> {
-    let candidate = CodexWireProfileState::new(profile.default_snapshot());
+    let candidate = profile.frozen();
     candidate
         .apply_user_agent_override(selection)
         .map_err(map_error)?;
@@ -39,6 +39,11 @@ fn view(settings: CodexWireProfileSettings) -> OutboundUserAgentView {
         CodexWireProfileOverride::Custom(profile) => ProviderUserAgentOverride::Custom {
             user_agent: profile.user_agent(),
         },
+        CodexWireProfileOverride::CustomAutoVersion(profile) => {
+            ProviderUserAgentOverride::CustomAutoVersion {
+                user_agent: profile.user_agent(),
+            }
+        }
     };
     let profile = settings.effective_profile;
     OutboundUserAgentView {

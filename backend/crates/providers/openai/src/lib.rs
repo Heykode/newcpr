@@ -117,6 +117,11 @@ async fn initialize_with_request_tuning_mode(
     let runtime_policy = ports.runtime_policy();
     let credential_state = ports.credential_state();
     let profile = config.wire_profile_state();
+    let cli_version = transport::profile::cli_version::CodexCliVersionService::new(
+        profile.clone(),
+        ports.artifact_profiles(),
+    )
+    .map_err(|_| OpenAiInitializeError::Transport)?;
     let user_agent_override = runtime_policy
         .load_user_agent_override(&provider_kind)
         .await
@@ -298,7 +303,7 @@ async fn initialize_with_request_tuning_mode(
         Some(runtime) => admin_provider.with_egress_runtime(Arc::clone(runtime)),
         None => admin_provider,
     });
-    let worker_contributions = provider::worker_contributions(
+    let mut worker_contributions = provider::worker_contributions(
         refresh,
         quota,
         catalog,
@@ -308,6 +313,9 @@ async fn initialize_with_request_tuning_mode(
         config.timezone,
     )
     .map_err(|_| OpenAiInitializeError::Worker)?;
+    worker_contributions.push(
+        provider::cli_version_worker(cli_version).map_err(|_| OpenAiInitializeError::Worker)?,
+    );
 
     Ok(ProviderBundle {
         image_relay,

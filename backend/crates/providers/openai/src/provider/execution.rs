@@ -892,6 +892,7 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             Err(mut failure) => {
                 if request.excel.is_none()
                     && client.has_connection_budget()
+                    && matches!(failure.error.kind(), ProviderErrorKind::Transport | ProviderErrorKind::Timeout)
                     && failure.error.send_state() == UpstreamSendState::NotSent
                     && failure.error.replay_is_safe()
                     && matches!(failure.error.pre_delivery_retry(), Some(gateway_core::error::PreDeliveryRetry::SameAccountTransientRetry { .. }))

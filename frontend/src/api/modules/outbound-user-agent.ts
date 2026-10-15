@@ -4,9 +4,10 @@ import request from '../request'
 export type OutboundUserAgentSelection
   = | { mode: 'default' }
     | { mode: 'custom', userAgent: string }
+    | { mode: 'custom-auto-version', userAgent: string }
 
 export interface OutboundUserAgentSettings {
-  mode: 'default' | 'custom'
+  mode: 'default' | 'custom' | 'custom-auto-version'
   customUserAgent: string | null
   defaultUserAgent: string
   effectiveUserAgent: string

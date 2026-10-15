@@ -96,6 +96,19 @@ editing prior entries.
 - Default and custom UA are explicit independent modes. A custom string equal to
   the current default is still custom. Verified release updates change only the
   default profile. Parsing custom text is not artifact or TLS verification.
+- `custom-auto-version` is an explicit opt-in, preserving the original custom
+  environment and persisted UA. Existing custom selections stay pinned. CLI/Exec
+  resolves stable `rust-v` releases every six hours, with bounded fetch, list
+  fallback, no prereleases or version regression and a separate cached version.
+  A failed lookup retains the current profile. Update both CLI version positions;
+  Desktop uses the verified bundled Core/Desktop tuple instead. Never substitute
+  CLI release numbers into the Desktop application version. Freeze the resolved
+  version with the existing request snapshot, including HTTP/WS fallback.
+  Each process reconciles the shared CLI cache without a leader lease, so a
+  local profile cannot remain stale behind another instance. Network checks
+  remain six-hourly; Redis CAS keeps the cached version monotonic.
+  Migration 0071 only expands the allowed mode; it does not rewrite existing
+  selections. Old binaries cannot interpret the new mode once opted in.
 - Desktop artifact scanning follows official CPR `d83d3eb8`: only the nested
   `/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` binary is Core.
   The legacy `/Contents/Resources/codex` path and `codex-cli/bin/codex` launcher
@@ -234,6 +247,10 @@ editing prior entries.
   continuations, retry prohibition and the business replay barrier remain binding.
   Retain the previous connection error when a typed local exhaustion marker
   interrupts the scheduled connection retry; never infer this from upstream text.
+- Converting a transient retry to connection recovery requires a Transport or
+  Timeout error in addition to the unsent/replay-safe checks. A WS opening may
+  return an explicit capacity or server rejection before payload; preserve its
+  business retry policy instead of overwriting it with a connection retry.
 - Shorten only connect_timeout, preserving subsecond time. Never apply this
   window as a whole-response timeout. Production default, account proxy and
   explicit source clients retain their existing TLS, CA and egress builders.

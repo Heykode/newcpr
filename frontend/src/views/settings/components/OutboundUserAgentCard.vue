@@ -19,6 +19,7 @@ import BaseSelect from '@/components/base/BaseSelect.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
+import { userAgentClientVersion, withUserAgentClientVersion } from '../composables/userAgentClientVersion'
 import { userAgentOsVersion, withUserAgentOsVersion } from '../composables/userAgentOsVersion'
 import { sampleSource, userAgentSampleClients, userAgentSampleOptions, userAgentSamples } from './outbound-user-agent-samples'
 
@@ -26,6 +27,7 @@ const settings = ref<OutboundUserAgentSettings | null>(null)
 const preview = ref<OutboundUserAgentSettings | null>(null)
 const useDefault = ref(true)
 const custom = ref('')
+const autoVersion = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const checking = ref(false)
@@ -34,12 +36,18 @@ let revision = 0
 
 const busy = computed(() => loading.value || saving.value || checking.value)
 const displayedInput = computed({
-  get: () => useDefault.value ? settings.value?.defaultUserAgent ?? '' : custom.value,
+  get: () => {
+    if (useDefault.value)
+      return settings.value?.defaultUserAgent ?? ''
+    if (autoVersion.value && settings.value?.mode === 'custom-auto-version' && custom.value === settings.value.customUserAgent)
+      return settings.value.effectiveUserAgent
+    return custom.value
+  },
   set: value => custom.value = value,
 })
 const selection = computed<OutboundUserAgentSelection>(() => useDefault.value
   ? { mode: 'default' }
-  : { mode: 'custom', userAgent: custom.value })
+  : { mode: autoVersion.value ? 'custom-auto-version' : 'custom', userAgent: custom.value })
 const selectedSample = computed(() => useDefault.value
   ? undefined
   : userAgentSamples.find(sample => sample.userAgent === custom.value))
@@ -65,7 +73,7 @@ function applySample(id: string) {
 const osVersion = computed({
   get: () => userAgentOsVersion(displayedInput.value) ?? '',
   set: (value: string) => {
-    const updated = withUserAgentOsVersion(custom.value, value)
+    const updated = withUserAgentOsVersion(displayedInput.value, value)
     if (updated !== null)
       custom.value = updated
   },
@@ -74,18 +82,39 @@ const osVersion = computed({
 function populate(value: OutboundUserAgentSettings) {
   settings.value = value
   useDefault.value = value.mode === 'default'
+  autoVersion.value = value.mode === 'custom-auto-version'
   custom.value = value.customUserAgent ?? value.defaultUserAgent
   preview.value = null
 }
 
-watch([useDefault, custom], () => {
+watch([useDefault, custom, autoVersion], () => {
   error.value = ''
   preview.value = null
 })
 
+const clientVersion = ref('')
+watch(displayedInput, value => clientVersion.value = userAgentClientVersion(value) ?? '', { immediate: true, flush: 'sync' })
+
+function updateClientVersion(value: string) {
+  clientVersion.value = value
+  const updated = withUserAgentClientVersion(custom.value, value)
+  if (updated !== null)
+    custom.value = updated
+}
+
+function setAutoVersion(value: boolean) {
+  if (!value && settings.value?.mode === 'custom-auto-version' && custom.value === settings.value.customUserAgent)
+    custom.value = settings.value.effectiveUserAgent
+  autoVersion.value = value
+}
+
 function validateInput() {
   if (!useDefault.value && !custom.value.trim()) {
     error.value = '请填写完整 UA，或勾选使用默认'
+    return false
+  }
+  if (!useDefault.value && !autoVersion.value && userAgentClientVersion(custom.value) !== null && withUserAgentClientVersion(custom.value, clientVersion.value) === null) {
+    error.value = '请填写完整客户端版本号，例如 0.159.0'
     return false
   }
   return true
@@ -239,6 +268,16 @@ useIntervalFn(() => void load(false, true), 30_000)
     </BaseFormItem>
 
     <div class="mt-3 flex flex-wrap gap-4">
+      <BaseFormItem label="Codex 客户端版本号">
+        <BaseInput
+          :model-value="clientVersion"
+          aria-label="Codex 客户端版本号"
+          :disabled="useDefault || autoVersion || busy || !settings || userAgentClientVersion(displayedInput) === null"
+          maxlength="64"
+          spellcheck="false"
+          @update:model-value="updateClientVersion"
+        />
+      </BaseFormItem>
       <BaseFormItem label="系统版本">
         <BaseInput
           v-model="osVersion"
@@ -249,6 +288,15 @@ useIntervalFn(() => void load(false, true), 30_000)
         />
       </BaseFormItem>
     </div>
+    <BaseCheckbox
+      v-if="!useDefault"
+      class="mt-3"
+      :model-value="autoVersion"
+      label="自动同步客户端版本"
+      show-label
+      :disabled="busy || !settings"
+      @update:model-value="setAutoVersion"
+    />
     <div class="mt-3 flex flex-wrap gap-3">
       <BaseButton :loading="checking" :disabled="busy || !settings" @click="check">
         检查格式并预览

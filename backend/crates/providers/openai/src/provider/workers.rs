@@ -139,6 +139,47 @@ pub(super) fn scheduled_registration(
     )
 }
 
+pub(crate) fn cli_version_worker(
+    service: crate::transport::profile::cli_version::CodexCliVersionService,
+) -> Result<WorkerContribution, WorkerDefinitionError> {
+    let schedule = WorkerSchedule::try_new(
+        Duration::from_secs(60),
+        WORKER_INITIAL_BACKOFF,
+        WORKER_MAXIMUM_BACKOFF,
+        WORKER_LEASE_TTL,
+        WORKER_LEASE_RENEWAL,
+    )?;
+    Ok(WorkerContribution::Registration(
+        WorkerRegistration::try_new(
+            WorkerId::try_new(WorkerKind::QuotaCatalogHealth, "openai-cli-version")?,
+            WorkerRunnable::Scheduled {
+                schedule,
+                // Every instance must publish the shared cache into its local profile.
+                lease: None,
+                task: Box::new(OpenAiCliVersionTask { service }),
+            },
+        )?,
+    ))
+}
+
+struct OpenAiCliVersionTask {
+    service: crate::transport::profile::cli_version::CodexCliVersionService,
+}
+
+impl ScheduledTask for OpenAiCliVersionTask {
+    fn run_cycle(&self, context: WorkerCycleContext) -> BoxFuture<'_, Result<(), WorkerTaskError>> {
+        Box::pin(async move {
+            tokio::select! {
+                () = context.cancellation().cancelled() => {},
+                result = self.service.refresh() => if let Err(reason) = result {
+                    tracing::warn!(reason, "OpenAI CLI version check failed");
+                },
+            }
+            Ok(())
+        })
+    }
+}
+
 pub(super) struct OpenAiOAuthRefreshTask {
     service: Arc<CodexCredentialRefreshService>,
 }

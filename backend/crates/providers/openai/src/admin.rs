@@ -331,6 +331,11 @@ impl ProviderAdmin for OpenAiAdminProvider {
                     label: "版本策略".to_owned(),
                     value: if verified {
                         "跟随官方"
+                    } else if matches!(
+                        selection.mode,
+                        crate::transport::profile::CodexWireProfileOverride::CustomAutoVersion(_)
+                    ) {
+                        "自定义环境，版本自动同步"
                     } else {
                         "固定自定义"
                     }

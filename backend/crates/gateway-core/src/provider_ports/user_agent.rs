@@ -8,6 +8,9 @@ pub enum ProviderUserAgentOverride {
     Custom {
         user_agent: String,
     },
+    CustomAutoVersion {
+        user_agent: String,
+    },
 }
 
 impl ProviderUserAgentOverride {
@@ -15,7 +18,9 @@ impl ProviderUserAgentOverride {
     pub fn custom_user_agent(&self) -> Option<&str> {
         match self {
             Self::Default => None,
-            Self::Custom { user_agent } => Some(user_agent),
+            Self::Custom { user_agent } | Self::CustomAutoVersion { user_agent } => {
+                Some(user_agent)
+            }
         }
     }
 }
