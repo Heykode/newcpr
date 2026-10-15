@@ -110,6 +110,7 @@ fn record(row: PgRow) -> StoreResult<ProxyRecord> {
         return Err(invalid());
     }
     Ok(ProxyRecord {
+        enabled: row.try_get("enabled").map_err(|_| invalid())?,
         auto_location: row.try_get("auto_location").map_err(|_| invalid())?,
         detected_location,
         request_location: row
@@ -264,8 +265,8 @@ pub(crate) async fn resolve_proxy_selection(
             Ok((Some(id), Some(proxy.clone())))
         }
         AccountProxySelection::Saved(id) => {
-            let (value, tested) = sqlx::query_as::<_, (String, Option<bool>)>(
-                "select proxy_url, last_test_success from outbound_proxies where id = $1 for share",
+            let (value, tested, enabled) = sqlx::query_as::<_, (String, Option<bool>, bool)>(
+                "select proxy_url, last_test_success, enabled from outbound_proxies where id = $1 for share",
             )
             .bind(id)
             .fetch_optional(&mut **transaction)
@@ -275,7 +276,7 @@ pub(crate) async fn resolve_proxy_selection(
                 entity: ENTITY,
                 id: id.clone(),
             })?;
-            if tested != Some(true) {
+            if !enabled || tested != Some(true) {
                 return Err(conflict(id));
             }
             Ok((
@@ -484,7 +485,11 @@ impl ProxyStore for PgProxyRepository {
             return Err(store_error(conflict(id)));
         }
         let record = match self.get(id).await {
-            Ok(record) if record.last_test.as_ref().is_some_and(|test| test.success) => record,
+            Ok(record)
+                if record.enabled && record.last_test.as_ref().is_some_and(|test| test.success) =>
+            {
+                record
+            }
             result => {
                 // Complete the unlock before callers can retry a proxy mutation.
                 sqlx::query("select pg_advisory_unlock_shared(hashtextextended($1, 739219))")
@@ -664,7 +669,7 @@ impl ProxyStore for PgProxyRepository {
         }
         let changed = sqlx::query(
             "update outbound_proxies set name = $3, proxy_url = coalesce($4, proxy_url), revision = revision + 1, updated_at = now(),
-             auto_location = coalesce($7, auto_location),
+             auto_location = coalesce($7, auto_location), enabled = coalesce($8, enabled),
              detected_location_json = case when ($4 is not null and $4 <> proxy_url) or ($7 is not null and $7 <> auto_location) then null else detected_location_json end,
              last_location_detection_json = case when ($4 is not null and $4 <> proxy_url) or ($7 is not null and $7 <> auto_location) then '{\"status\":\"notRequested\"}'::jsonb else last_location_detection_json end,
              last_test_at = case when $4 is not null and $4 <> proxy_url then null else last_test_at end,
@@ -681,6 +686,7 @@ impl ProxyStore for PgProxyRepository {
             .bind(command.request_location.is_some())
             .bind(command.request_location.as_ref().and_then(Option::as_ref).map(sqlx::types::Json))
             .bind(command.auto_location)
+            .bind(command.enabled)
             .execute(&mut *transaction).await.map_err(|_| store_error(unavailable()))?;
         if changed.rows_affected() != 1 {
             transaction
@@ -704,7 +710,13 @@ impl ProxyStore for PgProxyRepository {
             context,
             "update",
             &command.id,
-            &["name", "proxy_url", "request_location", "auto_location"],
+            &[
+                "name",
+                "proxy_url",
+                "request_location",
+                "auto_location",
+                "enabled",
+            ],
             revision,
         )
         .await
@@ -736,6 +748,45 @@ impl ProxyStore for PgProxyRepository {
         let config_revision = bump_config_revision_in_transaction(&mut transaction)
             .await
             .map_err(store_error)?;
+        // Serialize new bindings with deletion and commit all unbindings together.
+        let locked: Option<String> = sqlx::query_scalar(
+            "select id from outbound_proxies where id = $1 and revision = $2 for update",
+        )
+        .bind(id)
+        .bind(i64::try_from(revision.get()).map_err(|_| store_error(invalid()))?)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| store_error(unavailable()))?;
+        if locked.is_none() {
+            transaction
+                .rollback()
+                .await
+                .map_err(|_| store_error(unavailable()))?;
+            return Err(store_error(conflict(id)));
+        }
+        let account_ids: Vec<String> = sqlx::query_scalar(
+            "update provider_accounts set outbound_proxy_id = null, outbound_proxy_url = null,
+             updated_at = greatest(now(), updated_at) where outbound_proxy_id = $1 returning id",
+        )
+        .bind(id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| store_error(unavailable()))?;
+        for account_id in account_ids {
+            append_admin_audit_event_in_transaction(
+                &mut transaction,
+                mutation_audit(
+                    context,
+                    "update",
+                    "provider_account",
+                    &account_id,
+                    vec!["outbound_proxy".to_owned()],
+                ),
+                config_revision,
+            )
+            .await
+            .map_err(store_error)?;
+        }
         let result = sqlx::query("delete from outbound_proxies where id = $1 and revision = $2")
             .bind(id)
             .bind(i64::try_from(revision.get()).map_err(|_| store_error(invalid()))?)

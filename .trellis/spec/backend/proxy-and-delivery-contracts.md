@@ -1,5 +1,21 @@
 # Proxy and Responses Delivery Contracts
 
+## Saved Proxy Enablement
+
+- `0072_outbound_proxy_enabled.sql` adds `enabled=true`. Disabling preserves the
+  stored binding and credentials but projects no proxy or proxy location for new
+  requests. Reenabling restores the stored route. Do not disable the account.
+- Admin records retain configured proxies; execution, OAuth and 2FA use
+  `effective_outbound_proxy`. Disabled saved proxies reject new bindings/imports;
+  omitted update fields preserve state. Keep existing connection-test admission.
+- Delete locks the proxy revision after the existing configuration/import locks,
+  clears both account proxy columns and audits every unbinding in one transaction.
+  Stale deletion must not unbind accounts or modify identity/scheduling fields.
+- The ordinary managed pool excludes disabled records on its existing background
+  refresh; preserve managed-source selection, in-flight leases and IPv6 policy.
+- Verify real PostgreSQL roundtrips, API fields, reauthorization/relogin, stale
+  revision conflicts, import locks and browser cancel/failure/restore/delete flows.
+
 ## Upstream WS Message And Opening Compatibility
 
 - New-chain pool profiles include the effective opening beta feature set and

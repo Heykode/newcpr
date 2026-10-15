@@ -597,6 +597,10 @@ time. Observe actual opening duration and its outcome independently.
 
 ## 13. 固定 Rustls 画像与安全依赖
 
+- Rustls 安全基线升级至 0.23.46（上游 7c38aabf）；保留原 features 和 provider。
+  本地 macOS 升级前后各 40 次采样，四条路径的算法、扩展集合、key share、ALPN
+  和稳定扩展内容一致。该记录不代表 Linux 或生产上游验证；发布仍需对应平台验收。
+
 - `ensure_rustls_provider` 是现有进程默认 Rustls provider 的初始化 owner。
   CPR WS、显式 Rustls HTTP helper、共享该 provider 的代理、XAI/Host 等消费者
   均受影响，不能将它描述为 OpenAI 私有配置。宿主预装 provider 必须保留。

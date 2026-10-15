@@ -55,9 +55,9 @@ const proxyOptions = computed(() => [
     : []),
   ...proxies.value.map(proxy => ({
     value: proxy.id,
-    label: `${proxy.name}${proxy.lastTest?.success ? '' : proxy.lastTest ? '（测试失败）' : '（未测试）'}`,
+    label: `${proxy.name}${!proxy.enabled ? '（已禁用）' : proxy.lastTest?.success ? '' : proxy.lastTest ? '（测试失败）' : '（未测试）'}`,
     description: proxy.endpoint,
-    disabled: proxy.lastTest?.success !== true,
+    disabled: !proxy.enabled || proxy.lastTest?.success !== true,
   })),
 ])
 const globalLabel = computed(() => ipv6EgressModes.find(item => item.value === config.value?.defaultMode)?.label)
@@ -160,7 +160,7 @@ function selectMode(value: string) {
       {{ mihomoError ? 'Mihomo 状态读取失败' : !mihomo ? '读取 Mihomo 状态…' : !mihomo.installed ? 'Mihomo 尚未安装' : !mihomo.running ? 'Mihomo 未运行' : `Mihomo 运行中 · ${mihomo.nodeStates.length} 个节点` }}
     </p>
     <p v-if="mode === 'proxy_pool'" class="m-0 text-cp-xs text-cp-text-secondary">
-      {{ loading ? '读取代理列表…' : `已通过测试的代理：${proxies.filter(item => item.lastTest?.success).length}` }}
+      {{ loading ? '读取代理列表…' : `已启用且通过测试的代理：${proxies.filter(item => item.enabled && item.lastTest?.success).length}` }}
     </p>
     <p v-if="mode === 'ipv6' && config" class="m-0 text-cp-xs text-cp-text-secondary">
       可用 IPv6：{{ config.addresses.filter(item => item.enabled).length }}

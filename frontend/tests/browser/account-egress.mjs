@@ -12,6 +12,8 @@ async function main() {
   await mkdir(output, { recursive: true })
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
   const accounts = structuredClone(fixtures)
+  for (const account of accounts)
+    account.quota.credits = null
   accounts[0].requestProxySource = 'mihomo'
   accounts[0].responsesUpstream = 'excel'
   accounts[0].outboundProxyEndpoint = 'http://proxy.example:8080'
@@ -27,6 +29,10 @@ async function main() {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace(/^\/dev/, '')
     const body = request.method() === 'POST' ? request.postDataJSON() : undefined
+    if (path === '/api/admin/accounts/reset-credits/cache' || path === '/api/admin/accounts/reset-credits/batches')
+      return route.fulfill({ json: { code: 200, message: 'ok', data: [] } })
+    if (path === '/api/admin/account-groups/monitor')
+      return route.fulfill({ json: { code: 200, message: 'ok', data: { items: [], generatedAt: new Date().toISOString(), refreshing: false, pendingGroupIds: [] } } })
     let data = null
     if (body && !path.endsWith('/relogin/accounts/query'))
       writes.push({ path, body })
@@ -44,9 +50,10 @@ async function main() {
     }
     else if (path === '/api/admin/proxies') {
       data = { items: [
-        { id: 'proxy-fixture', name: '测试代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } },
-        { id: 'proxy-same-endpoint', name: '同地址不同认证代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } },
-      ], page: { page: 1, pageSize: 200, total: 2, totalPages: 1 } }
+        { id: 'proxy-fixture', enabled: true, name: '测试代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } },
+        { id: 'proxy-same-endpoint', enabled: true, name: '同地址不同认证代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } },
+        { id: 'proxy-disabled', enabled: false, name: '停用出口', endpoint: 'http://proxy.example:8081', lastTest: { success: true } },
+      ], page: { page: 1, pageSize: 200, total: 3, totalPages: 1 } }
     }
     else if (path.endsWith('/proxies/mihomo')) {
       data = { installed: true, running: true, nodeStates: [{ name: 'fixture' }] }
@@ -140,6 +147,7 @@ async function main() {
     assert.match(await dialog.getByRole('combobox', { name: '指定代理', exact: true }).textContent(), /选择已保存的代理/)
     assert.equal(await dialog.getByRole('combobox', { name: 'IPv6 出口策略', exact: true }).count(), 0)
     await dialog.getByRole('combobox', { name: '指定代理', exact: true }).click()
+    assert.equal(await page.getByRole('option', { name: /停用出口（已禁用）/ }).isDisabled(), true)
     await page.getByRole('option', { name: /测试代理/ }).click()
     await choose('IPv6 地址池')
     await ipv6('轮询 IPv6 · 新建连接')

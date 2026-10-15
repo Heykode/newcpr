@@ -3865,6 +3865,7 @@ fn account_list_query() -> AccountListQuery {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        outbound_proxy_enabled: true,
         effective_excel_models: Default::default(),
         model_access: Default::default(),
         custom_name: None,

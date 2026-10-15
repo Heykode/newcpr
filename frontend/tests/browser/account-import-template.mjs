@@ -69,7 +69,7 @@ async function main() {
       if (path === '/api/admin/account-groups')
         return respond(route, { items: [{ id: groupId, name: '模板分组', color: '#FFFFFFFF', enabled: true }], page: { page: 1, totalPages: 1 } })
       if (path === '/api/admin/proxies')
-        return respond(route, { items: [{ id: 'proxy-template', name: '模板代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } }], page: { page: 1, totalPages: 1 } })
+        return respond(route, { items: [{ id: 'proxy-template', enabled: true, name: '模板代理', endpoint: 'http://proxy.example:8080', lastTest: { success: true } }], page: { page: 1, totalPages: 1 } })
       if (path === '/api/admin/ipv6-egress')
         return respond(route, { revision: 1, defaultMode: 'unchanged', addresses: [], accountOverrides: {}, fixedBindings: {} })
       if (path === '/api/admin/accounts/import-tasks') {

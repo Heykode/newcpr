@@ -470,15 +470,21 @@ All endpoints require admin authentication and redact proxy credentials from res
 | `GET` | `/api/admin/proxies/accounts` | `proxyId`、`page`、`pageSize`（1-200）、`search`（账号名称或邮箱） | `{ items, page }` |
 | `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
 | `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl }` | `201 { record, configRevision }` |
-| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl? }` | `{ record, configRevision }` |
+| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, enabled?, proxyUrl? }` | `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/test` | `{ id, revision }` | 最新代理记录 / Proxy record with test result |
 | `POST` | `/api/admin/proxies/probe` | `{ proxyUrl }` | 只探测未保存地址，返回连通性、耗时和出口 IP，不修改代理记录或账号绑定 |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
-`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、
+`record` 包含 `id`、`name`、`enabled`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、
 `lastTestAt`、`lastTest: { success, latencyMs, exitIp, message }`、`createdAt`、`updatedAt`。
 未测试时 `lastTestAt` / `lastTest` 为 `null`。连通性失败返回 HTTP 200 和 `lastTest.success=false`；
-记录版本过期、重复 URL、删除已绑定的代理返回 409，并发测试满载返回 429。
+记录版本过期、重复 URL 返回 409，并发测试满载返回 429。
+
+代理默认启用。省略 `enabled` 保留当前状态；禁用保留连接配置和账号绑定，原本使用该代理的
+后续请求改为直连，且不再使用该代理的地区/时区。重新启用恢复原绑定。禁用代理不可用于新绑定或新授权。
+删除代理在同一事务中解除所有关联账号绑定并写入审计，保留账号凭据、身份和调度参数。
+NewCPR 的托管代理来源保持独立：普通代理池在后台目录刷新后排除禁用节点，不改变正在执行的租约，
+也不改变 Mihomo 来源或 IPv6 配置。
 
 代理列表只返回关联账号数量。关联账号按需查询，每项包含 `id`、`name`、`email`、`provider`、`enabled`、
 `authenticationKind`、`planType`、`planTypeDisplay` 和 `groups: [{ id, name, color, enabled }]`，
@@ -491,7 +497,7 @@ All endpoints require admin authentication and redact proxy credentials from res
 更新省略 `proxyUrl` 保留认证；连接配置改变时清除测试结果并更新所有绑定账号。
 Omit `proxyUrl` to preserve credentials. Connection changes invalidate the previous test and update all bound accounts.
 Tests persist only when the requested revision still matches. Connectivity failures use HTTP 200 with
-`lastTest.success=false`; stale revisions, duplicate URLs and deleting an in-use proxy return 409.
+`lastTest.success=false`; stale revisions and duplicate URLs return 409.
 The test concurrency limit returns 429.
 
 测试固定经代理访问双栈端点 `https://api64.ipify.org?format=json`，超时 15 秒，每进程最多同时测试 4 条。

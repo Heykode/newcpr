@@ -50,6 +50,7 @@ async fn stale_proxy_test_releases_lock_before_next_valid_result() {
     let current = first
         .update(
             UpdateProxy {
+                enabled: None,
                 auto_location: None,
                 test: None,
                 id: created.id.clone(),

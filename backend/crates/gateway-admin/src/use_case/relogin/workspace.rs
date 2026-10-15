@@ -19,9 +19,9 @@ pub(super) fn prepare_queue(
     let targets = if mode == ReloginWorkspaceMode::Highest {
         let matches = matching_accounts(entry, pool);
         if let Some(first) = matches.first()
-            && matches
-                .iter()
-                .any(|account| account.outbound_proxy != first.outbound_proxy)
+            && matches.iter().any(|account| {
+                account.effective_outbound_proxy() != first.effective_outbound_proxy()
+            })
         {
             return Err(AdminError::conflict(
                 "同邮箱账号使用不同代理，请选择原工作区重登",
