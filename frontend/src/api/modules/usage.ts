@@ -1,6 +1,6 @@
 import type { RequestOptions } from '../request'
-import request from '../request'
 import { OBSERVABILITY_TIMEOUT_MS } from '../constants'
+import request from '../request'
 
 export interface UsageTokenDetails {
   inputTokens: number | null

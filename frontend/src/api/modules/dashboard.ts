@@ -1,8 +1,8 @@
 import type { RequestOptions } from '../request'
 import type { AccountQuotaWindow } from './accounts'
 import type { UsageListRecord } from './usage'
-import request from '../request'
 import { OBSERVABILITY_TIMEOUT_MS } from '../constants'
+import request from '../request'
 
 export type DashboardTrendKind = 'usage' | 'latency' | 'errors'
 
