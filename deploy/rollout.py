@@ -1,4 +1,4 @@
-"""Application-only rollout; reviewed upgrades back up before application migrations."""
+"""Application-only rollout with explicit backup policy and reviewed migrations."""
 
 import argparse
 import copy
@@ -69,9 +69,13 @@ class Rollout:
         self.proof = self.selected["proof"]
         self.old_image = request["expected_old_image"]
         self.upgrade = request.get("migration_upgrade")
+        self.skip_backup = request.get("skip_backup", False)
+        if type(self.skip_backup) is not bool:
+            raise ValueError("Backup selection must be boolean")
         self.archive = Path(archive)
         self.compose = Path(self.profile["compose_file"])
-        self.backup = self.compose.parent / ".deployment-backups" / (
+        record_directory = ".deployment-records" if self.skip_backup else ".deployment-backups"
+        self.backup = self.compose.parent / record_directory / (
             time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + str(os.getpid())
         )
         self.samples = []
@@ -156,12 +160,18 @@ class Rollout:
         # The transferred bytes are pinned above; deploy the destination's immutable ID.
         self.compose_digest = digest(self.compose)
         self.backup.mkdir(parents=True, mode=0o700)
-        shutil.copy2(self.compose, self.backup / "compose.yaml")
-        for index, path in enumerate(self.configs):
-            shutil.copy2(path, self.backup / f"config-{index}")
-        if digest(self.backup / "compose.yaml") != self.compose_digest:
-            raise RuntimeError("Compose configuration changed while creating the backup")
-        document = yaml.safe_load((self.backup / "compose.yaml").read_text())
+        if self.skip_backup:
+            source = self.compose.read_bytes()
+            if hashlib.sha256(source).hexdigest() != self.compose_digest:
+                raise RuntimeError("Compose configuration changed during preparation")
+            document = yaml.safe_load(source)
+        else:
+            shutil.copy2(self.compose, self.backup / "compose.yaml")
+            for index, path in enumerate(self.configs):
+                shutil.copy2(path, self.backup / f"config-{index}")
+            if digest(self.backup / "compose.yaml") != self.compose_digest:
+                raise RuntimeError("Compose configuration changed while creating the backup")
+            document = yaml.safe_load((self.backup / "compose.yaml").read_text())
         updated = changed_image(document, self.profile["service"], self.new_image)
         self.pending = temporary_sibling(self.compose)
         self.pending.write_text(yaml.safe_dump(updated, sort_keys=False))
@@ -173,11 +183,12 @@ class Rollout:
         result = self.compose_run("config", "--quiet", file=self.pending)
         if result.returncode:
             raise RuntimeError("Candidate Compose configuration is invalid")
-        rollback = self.backup / "rollback.yaml"
-        rollback.write_text(yaml.safe_dump(
-            changed_image(document, self.profile["service"], self.old_image), sort_keys=False))
-        shutil.copystat(self.compose, rollback)
-        os.chown(rollback, stat.st_uid, stat.st_gid)
+        if not self.skip_backup:
+            rollback = self.backup / "rollback.yaml"
+            rollback.write_text(yaml.safe_dump(
+                changed_image(document, self.profile["service"], self.old_image), sort_keys=False))
+            shutil.copystat(self.compose, rollback)
+            os.chown(rollback, stat.st_uid, stat.st_gid)
         (self.backup / "selected.json").write_text(json.dumps(self.selected, indent=2))
         if self.upgrade:
             import migration_backup
@@ -203,6 +214,7 @@ class Rollout:
                   "tested_commit": self.proof["source_commit"], "image": self.new_image,
                   "previous_image": self.old_image, "version": self.proof["version"],
                   "migrations_changed": self.upgrade is not None,
+                  "backup_mode": "skipped_by_request" if self.skip_backup else "enabled",
                   "egress_before": self.egress_before}
         self.samples.append((time.monotonic(), True))
         monitor = threading.Thread(target=self.monitor)
@@ -211,7 +223,8 @@ class Rollout:
         try:
             os.replace(self.pending, self.compose)
             switched = True
-            print("Prepared image and backups; switching application only.", flush=True)
+            print("Verified image ready; switching application only. Backup mode: "
+                  + result["backup_mode"], flush=True)
             self.up("upgrade.log")
             current = self.ready(self.new_image)
             if self.upgrade:
@@ -240,6 +253,8 @@ class Rollout:
                 # SQLx refuses unknown migrations in the old binary. Never
                 # restart it against a possibly upgraded schema or erase new data.
                 result["status"] = "migration_recovery_required"
+            elif switched and self.skip_backup:
+                result["status"] = "manual_recovery_required"
             elif switched:
                 try:
                     atomic_copy(self.backup / "rollback.yaml", self.compose)
@@ -285,6 +300,7 @@ class Rollout:
                         "image": self.new_image,
                         "previous_image": self.old_image,
                         "migrations_changed": self.upgrade is not None,
+                        "backup_mode": "skipped_by_request" if self.skip_backup else "enabled",
                         "egress_before": self.egress_before,
                     }
                     (self.backup / "preparation.json").write_text(json.dumps(result, indent=2))

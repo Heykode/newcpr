@@ -68,6 +68,8 @@ def prepare(worker):
     container = database_container(worker.old, worker.protected)
     worker.migration_database = container
     check_schema(container, worker.upgrade["before"])
+    if worker.skip_backup:
+        return
     mounts = [mount for mount in worker.old.get("Mounts", [])
               if mount["Destination"] == "/app/.runtime/data" and mount["Type"] == "bind"]
     if len(mounts) != 1:

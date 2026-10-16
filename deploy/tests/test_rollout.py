@@ -190,6 +190,32 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(self.db["Id"], "db-container")
         self.assertEqual(self.config.read_text(), "mode: test\n")
 
+    def test_skip_backup_switches_without_configuration_copies(self):
+        self.request["skip_backup"] = True
+        self.worker = rollout.Rollout(self.request, self.archive)
+        with patch.object(self.worker, "up", side_effect=self.fake_up):
+            self.assertEqual(self.worker.run(), 0)
+        self.assertFalse((self.directory / ".deployment-backups").exists())
+        for name in ("compose.yaml", "rollback.yaml", "config-0", "database.dump", "runtime-data.tar"):
+            self.assertFalse((self.worker.backup / name).exists())
+        result = json.loads((self.worker.backup / "result.json").read_text())
+        self.assertEqual(result["backup_mode"], "skipped_by_request")
+        self.assertEqual(self.config.read_text(), "mode: test\n")
+
+    def test_skip_backup_failure_never_uses_missing_rollback(self):
+        self.request["skip_backup"] = True
+        self.worker = rollout.Rollout(self.request, self.archive)
+        with patch.object(self.worker, "up", side_effect=RuntimeError("failed")) as up:
+            self.assertEqual(self.worker.run(), 1)
+        up.assert_called_once_with("upgrade.log")
+        result = json.loads((self.worker.backup / "result.json").read_text())
+        self.assertEqual(result["status"], "manual_recovery_required")
+
+    def test_skip_backup_requires_boolean(self):
+        for value in ("false", 1, None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                rollout.Rollout({**self.request, "skip_backup": value}, self.archive)
+
     def test_failed_egress_preflight_never_switches(self):
         with patch.object(rollout.egress_check, "verify", side_effect=RuntimeError("egress failed")), \
                 patch.object(self.worker, "up") as up, self.assertRaisesRegex(RuntimeError, "egress"):
