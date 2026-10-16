@@ -56,6 +56,30 @@ class MigrationRolloutTests(unittest.TestCase):
     setUp = test_rollout.RolloutTests.setUp
     fake_up = test_rollout.RolloutTests.fake_up
 
+    def test_no_backup_still_checks_schema_before_and_after_switch(self):
+        self.worker.skip_backup = True
+        self.worker.upgrade = {"before": {"1": "old"}, "after": {"1": "old", "2": "new"}}
+        with patch.object(migration_backup, "database_container", return_value="example-db-1"), \
+                patch.object(migration_backup, "check_schema") as schema, \
+                patch.object(migration_backup, "database_command") as command, \
+                patch.object(migration_backup.tarfile, "open") as archive, \
+                patch.object(self.worker, "up", side_effect=self.fake_up):
+            self.assertEqual(self.worker.run(), 0)
+        self.assertEqual([call.args[1] for call in schema.call_args_list],
+                         [self.worker.upgrade["before"], self.worker.upgrade["before"],
+                          self.worker.upgrade["after"]])
+        command.assert_not_called()
+        archive.assert_not_called()
+
+    def test_no_backup_rejects_wrong_schema_before_switch(self):
+        self.worker.skip_backup = True
+        self.worker.upgrade = {"before": {}, "after": {}}
+        with patch.object(migration_backup, "database_container", return_value="example-db-1"), \
+                patch.object(migration_backup, "check_schema", side_effect=RuntimeError("schema mismatch")), \
+                patch.object(self.worker, "up") as up, self.assertRaisesRegex(RuntimeError, "schema"):
+            self.worker.run()
+        up.assert_not_called()
+
     def test_migration_failure_never_rolls_back_old_image(self):
         self.worker.upgrade = {"before": {}, "after": {}}
         self.worker.migration_database = "example-db-1"

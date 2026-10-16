@@ -298,11 +298,13 @@ class DeployTests(unittest.TestCase):
             git.assert_not_called()
             ssh.assert_not_called()
 
-    def run_mutation(self, *, prepare=False, staged=None, change_request=None,
+    def run_mutation(self, *, prepare=False, staged=None, change_request=None, skip_backup=False,
                      archive_digest=None, server_status=0):
         _, proof, artifact = fixtures()
         selected = {"target_commit": SOURCE, "proof": proof, "artifact": artifact}
         request = {"profile": profile(), "selected": selected, "expected_old_image": "old"}
+        if skip_backup:
+            request["skip_backup"] = True
         if change_request:
             change_request(request)
         remote = "/var/tmp/cpr-deploy.example"
@@ -323,7 +325,8 @@ class DeployTests(unittest.TestCase):
                 patch.object(images, "sha256", return_value=archive_digest or proof["archive_sha256"]), \
                 patch.object(deploy, "ssh", return_value=json.dumps(request) if staged else remote) as ssh, \
                 patch.object(deploy.subprocess, "run", side_effect=command):
-            deploy.run(profile(), SOURCE, not prepare, prepare=prepare, staged=staged)
+            deploy.run(profile(), SOURCE, not prepare, prepare=prepare, staged=staged,
+                       skip_backup=skip_backup)
         return commands, output.getvalue(), download, ssh, ci, security
 
     def test_prepare_invokes_only_server_prepare(self):
@@ -350,10 +353,23 @@ class DeployTests(unittest.TestCase):
         security.assert_called_once_with(REPOSITORY, SOURCE)
 
     def test_prepared_request_mismatch_refuses_transfer_and_switch(self):
-        for field in ("profile", "selected", "expected_old_image", "migration_upgrade"):
+        for field in ("profile", "selected", "expected_old_image", "migration_upgrade", "skip_backup"):
             with self.subTest(field=field), self.assertRaisesRegex(images.Unavailable, "Prepared request"):
                 self.run_mutation(staged="/var/tmp/cpr-deploy.example",
                                   change_request=lambda request: request.update({field: "changed"}))
+
+    def test_skip_backup_is_explicit_and_revalidated_for_staged_apply(self):
+        commands, output, download, _, ci, security = self.run_mutation(
+            staged="/var/tmp/cpr-deploy.example", skip_backup=True)
+        self.assertIn('"backup_mode": "skipped_by_request"', output)
+        self.assertIn('"automatic_image_rollback": false', output)
+        self.assertIn("--apply", shlex.split(commands[-1][-1]))
+        download.assert_not_called()
+        ci.assert_called_once_with(REPOSITORY, SOURCE)
+        security.assert_called_once_with(REPOSITORY, SOURCE)
+        with self.assertRaisesRegex(images.Unavailable, "Prepared request"):
+            self.run_mutation(staged="/var/tmp/cpr-deploy.example", skip_backup=True,
+                              change_request=lambda request: request.pop("skip_backup"))
 
     def test_prepare_rejects_bad_download_or_server_failure(self):
         with self.assertRaisesRegex(images.Unavailable, "checksum"):

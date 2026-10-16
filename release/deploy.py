@@ -140,7 +140,10 @@ def require_target_ci(repository, commit):
         raise images.Unavailable("Latest main CI must succeed before deployment")
 
 
-def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=None):
+def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=None,
+        skip_backup=False):
+    if type(skip_backup) is not bool:
+        raise images.Unavailable("Backup selection must be boolean")
     if (apply and prepare) or (staged is not None and not apply):
         raise images.Unavailable("Use --prepare or --apply; --staged requires --apply")
     if staged is not None and not re.fullmatch(r"/var/tmp/cpr-deploy\.[A-Za-z0-9]+", staged):
@@ -169,7 +172,8 @@ def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=No
         "target_commit": commit, "tested_commit": selected["proof"]["source_commit"],
         "ci_run": selected["proof"]["run_id"], "platform": selected["proof"]["platform"],
         "build_required": False, "migrations_changed": upgrade is not None,
-        "automatic_image_rollback": upgrade is None,
+        "automatic_image_rollback": upgrade is None and not skip_backup,
+        "backup_mode": "skipped_by_request" if skip_backup else "enabled",
     }), flush=True)
     if not apply and not prepare:
         return
@@ -178,6 +182,8 @@ def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=No
         directory = Path(temporary)
         archive = directory / "image.tar.gz"
         request = {"profile": profile, "selected": selected, "expected_old_image": old_id}
+        if skip_backup:
+            request["skip_backup"] = True
         if upgrade:
             request["migration_upgrade"] = upgrade
         if staged is not None:
@@ -186,7 +192,7 @@ def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=No
                 raise images.Unavailable("Prepared request changed; run a new preparation before applying")
             remote = staged
             transfer = []
-            print("Reusing the uploaded image; rechecking and refreshing online backups before switching.",
+            print("Reusing the uploaded image; rechecking the selected deployment policy before switching.",
                   flush=True)
         else:
             print("Downloading and verifying the CI image; the old service stays online.", flush=True)
@@ -209,7 +215,7 @@ def run(profile, commit, apply, migration_plan=None, *, prepare=False, staged=No
             print("Image staged. Preparing online only; application switching is disabled.", flush=True)
         else:
             print("Image staged. Starting locked deployment"
-                  + (" with reviewed migrations and manual recovery." if upgrade
+                  + (" with manual recovery." if upgrade or skip_backup
                      else " with image rollback enabled."), flush=True)
         # Keep SSH alive during graceful drain; never kill it to force a short outage.
         result = subprocess.run([
@@ -235,6 +241,8 @@ def main():
     mode.add_argument("--prepare", action="store_true", help="Stage image and online backups, never switch")
     parser.add_argument("--staged", help="Reuse a prepared server directory with --apply")
     parser.add_argument("--migration-plan", help="Reviewed upgrade name, for example v3.13.0")
+    parser.add_argument("--skip-backup", action="store_true",
+                        help="Explicitly omit backups; failures require manual recovery")
     args = parser.parse_args()
     if not images.SHA.fullmatch(args.commit):
         parser.error("--commit requires the full commit SHA")
@@ -246,7 +254,7 @@ def main():
     try:
         profile = validate_profile(json.loads(profile_path.read_text()))
         run(profile, args.commit, args.apply, args.migration_plan,
-            prepare=args.prepare, staged=args.staged)
+            prepare=args.prepare, staged=args.staged, skip_backup=args.skip_backup)
     except (images.Unavailable, subprocess.SubprocessError, OSError, ValueError, KeyError) as error:
         # Never echo subprocess commands that may contain private deployment paths.
         message = str(error) if isinstance(error, images.Unavailable) else type(error).__name__
