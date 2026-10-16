@@ -2042,6 +2042,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let revision = store
         .delete_accounts(
             DeleteAccounts {
+                delete_relogin: false,
                 account_ids: vec!["acct_terminal_mutation".to_owned()],
             },
             &context,
@@ -2545,6 +2546,7 @@ async fn terminal_admin_delete_removes_enabled_accounts_in_one_transaction() {
     let revision = admin_account_store(&database.pool)
         .delete_accounts(
             DeleteAccounts {
+                delete_relogin: false,
                 account_ids: vec![
                     "acct_enabled_delete_a".to_owned(),
                     "acct_enabled_delete_b".to_owned(),
@@ -3264,6 +3266,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .delete_provider_accounts_admin(DeleteProviderAccounts {
+            delete_relogin: false,
             scope,
             account_ids: vec!["acct_admin_a".to_owned(), "acct_admin_b".to_owned()],
             audit: audit("audit_account_delete", "delete", "provider_accounts"),

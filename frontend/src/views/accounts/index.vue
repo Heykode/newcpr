@@ -18,6 +18,7 @@ import BaseTable from '@/components/base/BaseTable/index.vue'
 import { toast } from '@/components/base/BaseToast'
 import LastUsedAtCell from '@/components/LastUsedAtCell.vue'
 import AccountQualityMonitorBadge from '@/components/quality-ops/AccountQualityMonitorBadge.vue'
+import AccountQualitySetup from '@/components/quality-ops/AccountQualitySetup.vue'
 import QualityTemplateApplyMenu from '@/components/quality-ops/QualityTemplateApplyMenu.vue'
 import ReloginCountCell from '@/components/ReloginCountCell.vue'
 import { useAccountGroupCatalog } from '@/composables/useAccountGroupCatalog'
@@ -50,6 +51,7 @@ import { useAccountEditor } from './composables/useAccountEditor'
 import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountListForecast } from './composables/useAccountListForecast'
 import { useAccountMutations } from './composables/useAccountMutations'
+import { useAccountQuality } from './composables/useAccountQuality'
 import { useAccountRelogin } from './composables/useAccountRelogin'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
@@ -90,6 +92,8 @@ const {
   handlePageSizeChange,
   handleSortChange,
 } = useAccountsQuery()
+
+const { togglingQualityIds, setupOpen: qualitySetupOpen, setupAccount: qualitySetupAccount, toggle: toggleQuality } = useAccountQuality(() => refreshAccountsSilently())
 
 const resetCredits = useBatchResetCredits({ accounts, selectedIds, reload: refreshAccountsSilently })
 const {
@@ -189,6 +193,8 @@ const {
   showCreateModal,
   clearCreate,
   showDeleteModal,
+  deleteRelogin,
+  batchDeleteRelogin,
   deletingCount,
   showSingleDeleteModal,
   showExportModal,
@@ -225,7 +231,7 @@ const {
 } = useAccountMutations({
   accounts,
   selectedIds,
-  reload: options => Promise.all([loadAccounts(options), loadGroups(options)]),
+  reload: options => Promise.all([loadAccounts(options), loadGroups(options), loadReloginAvailability()]),
   replaceAccount,
   onImportTaskCreated: importTaskCreated,
 })
@@ -629,6 +635,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
                 :toggling-excel="togglingExcelAccountIds.has(row.id)"
+                :toggling-quality="togglingQualityIds.has(row.id)"
                 :testing="testingConnectionIds.has(row.id)"
                 :exporting-model-catalog="exportingModelCatalogIds.has(row.id)"
                 :relogin="reloginActions[row.id]"
@@ -641,6 +648,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 @test="openConnectionTest"
                 @export-model-catalog="handleExportModelCatalog"
                 @toggle-excel="handleToggleExcel"
+                @toggle-quality="toggleQuality"
                 @relogin="requestRelogin"
               />
             </template>
@@ -863,6 +871,8 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
       </p>
     </BaseConfirmModal>
 
+    <AccountQualitySetup v-if="qualitySetupAccount" v-model="qualitySetupOpen" :account-id="qualitySetupAccount.id" :account-name="qualitySetupAccount.customName || qualitySetupAccount.email || qualitySetupAccount.id" @applied="void refreshAccountsSilently()" />
+
     <BaseConfirmModal
       v-model="showExportModal"
       title="确认导出敏感信息"
@@ -879,21 +889,22 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
     <BaseConfirmModal
       v-model="showDeleteModal"
       title="确认删除"
-      description="删除后账号不再参与调度，对应质量检测规则和历史也将删除，此操作不可撤销"
       destructive
       confirm-text="确认删除"
       :loading="batchDeleting"
       @confirm="handleBatchDelete"
     >
       <p class="m-0">
-        确定要删除选中的 {{ deletingCount }} 个账号吗？此操作不可撤销
+        确定要删除选中的 {{ deletingCount }} 个账号吗？
       </p>
+      <div class="mt-4">
+        <BaseCheckbox v-model="batchDeleteRelogin" label="同步删除 2FA" show-label :disabled="batchDeleting" />
+      </div>
     </BaseConfirmModal>
 
     <BaseConfirmModal
       v-model="showSingleDeleteModal"
       title="删除账号"
-      description="删除后账号不再参与调度，对应质量检测规则和历史也将删除，此操作不可撤销"
       destructive
       confirm-text="确认删除"
       :loading="deletingAccount"
@@ -910,6 +921,9 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
         }}
         吗？
       </p>
+      <div class="mt-4">
+        <BaseCheckbox v-model="deleteRelogin" label="同步删除 2FA" show-label :disabled="deletingAccount" />
+      </div>
     </BaseConfirmModal>
   </div>
 </template>

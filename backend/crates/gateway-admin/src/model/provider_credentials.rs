@@ -622,6 +622,7 @@ pub struct CredentialMutationResult {
 /// 同一 Provider 管理范围内的 credential 批量删除。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialDeletion {
+    pub delete_relogin: bool,
     pub context: MutationContext,
     pub account_ids: Vec<ProviderAccountId>,
 }

@@ -172,6 +172,11 @@ pub trait ReloginService: Send + Sync {
         revisions: &BTreeMap<String, u64>,
         context: &MutationContext,
     ) -> Result<Vec<ReloginBatchResult>, AdminError>;
+    /// Serializes account/library deletion with login settlement and manual pushes.
+    async fn delete_accounts(
+        &self,
+        command: crate::model::provider_credentials::CredentialDeletion,
+    ) -> Result<crate::model::provider_credentials::CredentialDeletionResult, AdminError>;
     async fn delete(&self, ids: &[String]) -> Result<(), AdminError>;
     async fn automatic(&self, ids: &[String], enabled: bool) -> Result<(), AdminError>;
     async fn workspace(&self, id: &str, workspace: Option<String>) -> Result<(), AdminError>;
@@ -1107,6 +1112,43 @@ impl ReloginService for DefaultReloginService {
             results.push(result(id.clone(), outcome));
         }
         Ok(results)
+    }
+
+    async fn delete_accounts(
+        &self,
+        command: crate::model::provider_credentials::CredentialDeletion,
+    ) -> Result<crate::model::provider_credentials::CredentialDeletionResult, AdminError> {
+        let gate = self.gate.lock().await;
+        let mut emails = Vec::new();
+        for id in &command.account_ids {
+            let details = super::required_credential(
+                self.accounts.as_ref(),
+                self.provider.provider_kind(),
+                id,
+                "OpenAI credential",
+            )
+            .await?;
+            if details.credential.authentication_kind == "oauth"
+                && let Some(email) = details.credential.email
+            {
+                emails.push(email);
+            }
+        }
+        let result = self.openai.delete(command).await;
+        // A publication error can follow a committed delete. Cancel only jobs whose
+        // library entry is now absent; failed transactions keep their existing work.
+        if let Ok(entries) = self.entries().await {
+            for (email, active) in &gate.active {
+                if emails.iter().any(|value| value.eq_ignore_ascii_case(email))
+                    && !entries
+                        .iter()
+                        .any(|entry| entry.email.eq_ignore_ascii_case(email))
+                {
+                    active.cancellation.cancel();
+                }
+            }
+        }
+        result
     }
 
     async fn delete(&self, ids: &[String]) -> Result<(), AdminError> {

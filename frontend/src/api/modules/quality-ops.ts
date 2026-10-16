@@ -71,6 +71,7 @@ export interface QualityGroupUpdate {
 }
 
 export interface QualityMonitoring {
+  detectionMode?: QualityRuleConfig['detectionMode']
   ruleId: string
   revision: number
   enabled: boolean
@@ -166,6 +167,9 @@ export function getQualityRules(options: RequestOptions = {}) {
 export function saveQualityRule(data: { id: string | null, revision: number | null, config: QualityRuleConfig }) {
   return request<QualityRule>({ url: `${base}/save`, method: 'POST', data })
 }
+export function setQualityEnabled(data: { id: string, revision: number, enabled: boolean }) {
+  return request<QualityRule>({ url: `${base}/enabled`, method: 'POST', data, silent: true })
+}
 export function deleteQualityRule(data: { id: string, revision: number }) {
   return request<void>({ url: `${base}/delete`, method: 'POST', data })
 }
@@ -188,7 +192,7 @@ export function saveQualityTemplate(data: { id: string | null, revision: number 
 export function deleteQualityTemplate(data: { id: string, revision: number }) {
   return request<void>({ url: `${base}/templates/delete`, method: 'POST', data })
 }
-export function applyQualityTemplate(data: { id: string, revision: number, targets: QualityTemplateTarget[] }) {
+export function applyQualityTemplate(data: { id: string, revision: number, targets: QualityTemplateTarget[], enable?: boolean }) {
   return request<QualityTemplateApplyResult[]>({ url: `${base}/templates/apply`, method: 'POST', data, silent: true })
 }
 export function getQualityMonitoring(accountIds: string[], options: RequestOptions = {}) {

@@ -445,6 +445,7 @@ async fn durable_devices_survive_delete_reimport_and_repository_reload() {
     assert_device(&repository, "acct_original", "old-device", "new").await;
     repository
         .delete_provider_accounts_admin(DeleteProviderAccounts {
+            delete_relogin: false,
             scope: ProviderAccountAdminScope {
                 provider_kind: "openai".to_owned(),
             },
@@ -941,6 +942,7 @@ async fn shared_admin_store_applies_device_registry_to_create_delete_and_import(
     admin
         .delete_accounts(
             DeleteAccounts {
+                delete_relogin: false,
                 account_ids: vec!["acct_admin_first".to_owned()],
             },
             &context,
@@ -1005,6 +1007,7 @@ async fn device_and_ipv6_history_share_account_transactions_without_crossing_pri
             .expect("egress revision");
     repository
         .delete_provider_accounts_admin(DeleteProviderAccounts {
+            delete_relogin: false,
             scope: ProviderAccountAdminScope {
                 provider_kind: "openai".to_owned(),
             },

@@ -394,6 +394,7 @@ async fn delete_credentials(
     let revision = accounts
         .delete_accounts(
             DeleteAccounts {
+                delete_relogin: command.delete_relogin,
                 account_ids: account_ids
                     .iter()
                     .map(|account_id| account_id.as_str().to_owned())

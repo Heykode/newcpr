@@ -480,3 +480,63 @@ async fn monitoring_tracks_queue_lease_pause_and_deletion_and_fences_old_results
     assert!(store.monitoring(&ids).await.unwrap().is_empty());
     db.close().await;
 }
+
+#[tokio::test]
+async fn first_enable_uses_authoritative_template_and_never_replaces_a_concurrent_rule() {
+    let Some(db) = TestDatabase::create("quality_first_enable").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let mut cfg = config("");
+    cfg.enabled = false;
+    let template = store
+        .save_template(None, None, "Initially paused".into(), cfg, &context())
+        .await
+        .unwrap();
+    let mut forged = template.clone();
+    forged.config.model = "forged-model".into();
+    let selected = target("acct_quality_a", None);
+    let enabled = store
+        .apply_template_enabled(
+            &forged,
+            &selected,
+            Utc::now() + Duration::hours(6),
+            &context(),
+        )
+        .await
+        .unwrap();
+    assert!(enabled.config.enabled);
+    assert!(enabled.next_run_at <= Utc::now());
+    assert_eq!(enabled.config.model, template.config.model);
+    assert_eq!(enabled.source_template.as_ref().unwrap().id, template.id);
+    assert!(
+        !store
+            .template(&template.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .config
+            .enabled,
+        "catalog remains unchanged"
+    );
+    assert!(
+        store
+            .apply_template_enabled(&template, &selected, Utc::now(), &context())
+            .await
+            .is_err()
+    );
+    forged.revision += 1;
+    assert!(
+        store
+            .apply_template_enabled(
+                &forged,
+                &target("acct_quality_b", None),
+                Utc::now(),
+                &context()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(store.rules().await.unwrap().len(), 1);
+    db.close().await;
+}

@@ -149,13 +149,20 @@ impl PgQualityOpsStore {
         if account_ids.is_empty() {
             return Ok(BTreeMap::new());
         }
-        let rows = sqlx::query("select account_id,id,revision,enabled,pending,next_run_at,last_status,last_run_at,last_action,source_template,coalesce(lease_until>now(),false) as running from quality_rules where account_id=any($1::text[])")
+        let rows = sqlx::query("select q.account_id,q.id,q.revision,q.enabled,q.pending,q.next_run_at,q.last_status,
+            q.last_run_at,q.last_action,q.source_template,coalesce(q.lease_until>now(),false) as running,
+            coalesce(q.config->>'detectionMode','answer') as detection_mode
+            from quality_rules q where q.account_id=any($1::text[])")
             .bind(account_ids).fetch_all(&self.pool).await.map_err(unavailable)?;
         rows.iter()
             .map(|row| {
                 Ok((
                     row.try_get("account_id").map_err(unavailable)?,
                     QualityMonitoring {
+                        detection_mode: serde_json::from_value(serde_json::Value::String(
+                            row.try_get("detection_mode").map_err(unavailable)?,
+                        ))
+                        .map_err(unavailable)?,
                         rule_id: row.try_get("id").map_err(unavailable)?,
                         revision: row.try_get("revision").map_err(unavailable)?,
                         enabled: row.try_get("enabled").map_err(unavailable)?,

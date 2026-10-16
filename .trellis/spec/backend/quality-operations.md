@@ -1,5 +1,66 @@
 # Scheduled Quality Checks
 
+## Account Controls And Template Recovery Baselines
+
+### 1. Scope / Trigger
+Account-list switches, first activation from a monitoring template, and ordinary
+account edits while a remediation template owns the account configuration.
+
+### 2. Signatures
+- AdminAuth/no-store `POST /api/admin/quality-ops/enabled` accepts
+  `{id:string,revision:i64,enabled:boolean}` and returns the saved `QualityRule`.
+- `POST /api/admin/quality-ops/templates/apply` additionally accepts optional
+  `enable:boolean` (default false). First activation sends null target ruleId/revision.
+- `QualityMonitoring` includes `detectionMode` for verdict wording. No new table or
+  migration is needed. Restoration actions remain in the existing quality run history.
+- Store `capture_edit_owners(tx, accounts)` and `preserve_edit_owners(tx, owners)`
+  surround ordinary account saves and their audit inside the configuration transaction.
+
+### 3. Contracts
+- Switch writes carry only enabled plus CAS, never a browser's full config snapshot.
+  Enable reuses authoritative config/reference validation and the due-now transition.
+  Pause works even after a remediation template is deleted; atomically cancel leases,
+  pending/running work and streaks, preserving recovery ownership and source metadata.
+- Template application locks and rereads the real template before forcing enabled=true.
+  Do not mutate the template or replace a concurrently created account rule.
+- Capture only template owners whose existing scope and after snapshot still match.
+  After a plain name/cost/unchanged-form save, advance the owner's audit baseline only
+  if all managed settings remain equal. Preserve the serialized scope format and live
+  claim fence; an in-flight check still cannot act using pre-edit evidence.
+- Explicit scheduling intent and optional route/proxy/egress/model/State/Excel patches
+  retain intent fences even for same-value writes. Actual enabled/weight/concurrency/
+  group changes fail the snapshot equality check. Never revive an already-invalid owner.
+- Unchanged group memberships keep created_at: delete only removed IDs, insert missing
+  pairs with ON CONFLICT DO NOTHING. Recovery snapshots must not drift on a no-op save.
+- Read monitoring for the current page in one query. Account badges show lifecycle
+  and verdict only; do not join run history to add unsolicited restoration summaries.
+  A correct verdict is not evidence that configuration restoration succeeded.
+
+### 4. Validation & Error Matrix
+- Missing/invalid enabled body -> 422; invalid id/revision -> 400; stale CAS -> conflict.
+- Stale template/new-rule race -> failed per-account application without overwrite.
+- Owner mismatch -> template_recovery_released; unavailable original references or
+  credential/quota/independent-pause guards -> template_restore_blocked and later retry.
+- Account deletion, rule revision and claim fences retain existing behavior.
+
+### 5. Good / Base / Bad Cases
+- Good: rename after degradation, then a passing round restores original groups/settings.
+- Base: switching monitoring off leaves the account's current remediation in place.
+- Bad: advancing an already-invalid baseline, rebuilding an absent pre-degradation
+  snapshot, or restoring over a deliberate same-value route selection.
+
+### 6. Tests Required
+- Store templates tests cover rename/no-op recovery, true group/weight changes, explicit
+  route intent, prior invalid scope, CAS switch, ownership retention and verdict projection.
+- Rule-template tests cover disabled-template activation, forged snapshots, template
+  revision conflicts and concurrent create-only rule conflicts.
+- API auth/no-store and UI failure/cancellation/mobile flows exercise these contracts.
+
+### 7. Wrong vs Correct
+Wrong: remove audit revision from action_scope or rewrite every group membership.
+Correct: keep claim protection, preserve unchanged memberships and advance only an
+already-valid owner's baseline after a proven irrelevant edit in the same transaction.
+
 ## Pause And Group-Removal Thresholds
 
 - Optional `failureThreshold` (1–100) controls disable_scheduling/remove_groups only.
@@ -411,7 +472,8 @@ scope, cached_account_models for aggregate scopes.
   Record account identity, model and relevant policy scope, including account audit
   revision. Correct native results may close that route only when all still match.
   Manual/preexisting Excel, policy/identity edits, 403 protection and late results
-  must not be overwritten. Never restore the whole template or clear 403 markers.
+  must not be overwritten. Excel-only ownership cannot restore a whole template or
+  clear 403 markers; full template recovery uses its separate template_owner snapshot.
   While ownership matches, degraded rounds do not repeatedly reapply the template.
   Rule model/mode/action/template edits release ownership; frequency or recovery
   checkbox edits preserve it. Closing Excel leaves the rule active for future cycles.
@@ -498,7 +560,11 @@ The regression asserts the reason, verdict, diagnostic and absence of retry inte
 - Reuse `excel_streak` and `excelFailureThreshold` for pure incorrect rounds;
   the shared overload sequence can satisfy the trigger independently. Successful
   template application clears old recovery and records route ownership if it newly
-  enables Excel for a native probe. No whole-template restoration or auto-pause.
+  enables Excel for a native probe. Current template applications record before/after
+  allowlisted settings in template_owner; an opted-in autoRestore can restore those
+  settings after a correct round only while scope/identity/model/after still match.
+  Preserve credentials, fingerprint and independent availability guards. Historic
+  Excel-only owners cannot reconstruct full settings. No automatic rule pause.
 - Historical `QualityRun.config` retains template name, version and settings.
   A binary-only downgrade cannot read the new action; reconcile configs first.
 

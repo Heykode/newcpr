@@ -428,6 +428,7 @@ async fn credential_refresh_racing_deletion_cannot_resurrect_or_replace_the_devi
         .await;
         let late_update = update.clone();
         let delete = DeleteProviderAccounts {
+            delete_relogin: false,
             scope: ProviderAccountAdminScope {
                 provider_kind: "openai".into(),
             },
@@ -592,6 +593,7 @@ async fn a_recreated_local_id_cannot_accept_a_snapshot_of_the_deleted_credential
             // Replace the row after the fast-path snapshot, before its write.
             repository
                 .delete_provider_accounts_admin(DeleteProviderAccounts {
+                    delete_relogin: false,
                     scope: ProviderAccountAdminScope {
                         provider_kind: "openai".into(),
                     },

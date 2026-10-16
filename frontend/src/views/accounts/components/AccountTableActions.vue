@@ -2,7 +2,6 @@
 import type { AccountRow } from '../constants'
 import type { AccountReloginAction } from '@/api/modules/relogin'
 import { ClipboardCheck, Download, KeyRound, MoreHorizontal, Pencil, RefreshCw, RotateCcw, Table2, Trash2, Wifi } from '@lucide/vue'
-import { useRouter } from 'vue-router'
 
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseMenuItem from '@/components/base/BaseMenuItem.vue'
@@ -15,6 +14,7 @@ defineProps<{
   recovering: boolean
   refreshing: boolean
   togglingExcel?: boolean
+  togglingQuality?: boolean
   testing: boolean
   exportingModelCatalog?: boolean
   relogin?: AccountReloginAction
@@ -28,10 +28,10 @@ const emit = defineEmits<{
   refresh: [accountId: string]
   reauthorize: [account: AccountRow]
   toggleExcel: [account: AccountRow, enabled: boolean]
+  toggleQuality: [account: AccountRow]
   relogin: [account: AccountRow]
   exportModelCatalog: [account: AccountRow]
 }>()
-const router = useRouter()
 </script>
 
 <template>
@@ -66,12 +66,6 @@ const router = useRouter()
 
       <template #default="{ close }">
         <div role="group" aria-label="账号操作" class="w-40 p-1.5">
-          <BaseMenuItem @click.stop="(close(), router.push({ path: '/quality-ops', query: { accountId: account.id, create: '1' } }))">
-            <template #icon>
-              <ClipboardCheck class="size-3.5 text-cp-text-quaternary" />
-            </template>
-            质量检测
-          </BaseMenuItem>
           <BaseMenuItem
             :loading="testing"
             :disabled="testing"
@@ -81,6 +75,15 @@ const router = useRouter()
               <Wifi class="size-3.5 text-cp-text-quaternary" />
             </template>
             测试连接
+          </BaseMenuItem>
+          <BaseMenuItem :loading="togglingQuality" :disabled="togglingQuality" @click.stop="(close(), emit('toggleQuality', account))">
+            <template #icon>
+              <ClipboardCheck class="size-3.5 text-cp-text-quaternary" />
+            </template>
+            <span class="inline-flex w-full items-center justify-between gap-2">
+              质量检测开关
+              <span :class="account.qualityMonitoring?.enabled ? 'text-cp-success' : 'text-cp-text-secondary'" class="text-cp-xs">{{ account.qualityMonitoring?.enabled ? '开' : '关' }}</span>
+            </span>
           </BaseMenuItem>
           <BaseMenuItem
             v-if="account.provider === 'openai' && account.responsesUpstream !== 'excel'"

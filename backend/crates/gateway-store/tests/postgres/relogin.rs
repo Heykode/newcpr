@@ -1005,3 +1005,82 @@ async fn relogin_count_sorts_before_pagination_and_list_detail_read_the_same_sta
     }
     database.close().await;
 }
+
+#[tokio::test]
+async fn account_deletion_option_cleans_only_selected_relogin_material_atomically() {
+    use gateway_admin::model::accounts::DeleteAccounts;
+    for mode in ["keep", "shared", "unique", "delete", "missing", "rollback"] {
+        let Some(db) = TestDatabase::create("account_relogin_delete").await else {
+            return;
+        };
+        let repo = PgProviderAccountRepository::new(db.pool.clone());
+        for (id, user) in [
+            ("acct_delete", "user-delete"),
+            ("acct_shared", "user-shared"),
+        ] {
+            let mut row = account(id, user);
+            row.email = Some(if mode == "unique" && id == "acct_shared" {
+                "other@example.invalid".into()
+            } else {
+                "Shared@Example.invalid".into()
+            });
+            repo.insert_provider_account(row).await.unwrap();
+        }
+        if mode != "missing" {
+            sqlx::query("insert into account_relogin_entries(id,email,revision,material) values('entry-shared','shared@example.invalid',1,'{}'),('entry-other','other@example.invalid',1,'{}')")
+                .execute(&db.pool).await.unwrap();
+        }
+        let store = admin_account_store(&db.pool);
+        let mut ids = vec!["acct_delete".into()];
+        if matches!(mode, "delete" | "missing" | "rollback") {
+            ids.push("acct_shared".into());
+        }
+        if mode == "rollback" {
+            ids.push("acct_absent".into());
+        }
+        let result = store
+            .delete_accounts(
+                DeleteAccounts {
+                    account_ids: ids,
+                    delete_relogin: mode != "keep",
+                },
+                &gateway_admin::model::MutationContext {
+                    actor: gateway_admin::model::MutationActor::System,
+                    request_id: "delete-fixture".into(),
+                },
+            )
+            .await;
+        assert_eq!(result.is_err(), mode == "rollback");
+        let exists: bool = sqlx::query_scalar(
+            "select exists(select 1 from provider_accounts where id='acct_delete')",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(exists, mode == "rollback");
+        let shared_account: bool = sqlx::query_scalar(
+            "select exists(select 1 from provider_accounts where id='acct_shared')",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(shared_account, !matches!(mode, "delete" | "missing"));
+        let material: bool = sqlx::query_scalar(
+            "select exists(select 1 from account_relogin_entries where id='entry-shared')",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(material, matches!(mode, "keep" | "shared" | "rollback"));
+        if mode != "missing" {
+            let other: bool = sqlx::query_scalar(
+                "select exists(select 1 from account_relogin_entries where id='entry-other')",
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert!(other);
+        }
+        db.close().await;
+    }
+}

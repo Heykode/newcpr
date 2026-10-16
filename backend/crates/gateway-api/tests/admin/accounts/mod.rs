@@ -2154,6 +2154,26 @@ mod actions {
         }))
         .expect("decode account deletion");
         assert!(request.validate().is_ok());
+        assert!(!request.delete_relogin);
+
+        let with_relogin: AccountDeletionRequest = serde_json::from_value(json!({
+            "provider": "openai",
+            "accountIds": ["acct_1"],
+            "deleteRelogin": true
+        }))
+        .expect("decode opted-in relogin deletion");
+        assert!(with_relogin.validate().is_ok());
+        assert!(with_relogin.delete_relogin);
+        for invalid in [json!(null), json!("true"), json!(1)] {
+            assert!(
+                serde_json::from_value::<AccountDeletionRequest>(json!({
+                    "provider": "openai",
+                    "accountIds": ["acct_1"],
+                    "deleteRelogin": invalid
+                }))
+                .is_err()
+            );
+        }
 
         let duplicate: AccountDeletionRequest = serde_json::from_value(json!({
             "provider": "xai",

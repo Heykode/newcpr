@@ -517,6 +517,7 @@ interface AccountBatchUpdateParam {
 }
 
 interface AccountDeleteParams {
+  deleteRelogin?: boolean
   provider: string
   accountIds: string[]
 }

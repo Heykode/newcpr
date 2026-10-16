@@ -1,5 +1,22 @@
 # Account Management Contracts
 
+## Account Deletion And Shared 2FA Material
+
+- Single/batch confirmation dialogs offer “同步删除 2FA”, reset to unchecked on every
+  open, without an extra explanatory paragraph. Only selected accounts' material is
+  eligible; the backend preserves material still shared by unselected accounts.
+  This does not turn upstream 2FA off. Reuse one option contract on mobile and desktop.
+- Freeze selected accounts and deletion intent at submit; disable duplicate submissions
+  and controls while busy. Send optional deleteRelogin with the existing per-provider
+  deletion batch, never issue separate library requests from the browser.
+- Preserve partial successes across provider batches and remaining selection on failure.
+  Refresh account/group/library availability after confirmed deletion. A refresh failure
+  must not relabel a successful deletion as failed or trigger automatic replay.
+- Persistence, active-worker coordination and rollback tests follow
+  [Optional Material Deletion](../backend/account-relogin.md#optional-material-deletion-with-account-removal).
+- Quality switches and badge results follow
+  [Account Menu Switch](./quality-operations.md#account-menu-switch-and-result-badge).
+
 ## Mobile Account Cards
 
 - Below 768px, render `AccountMobileList` instead of `BaseTable`, never both hidden

@@ -59,10 +59,24 @@ pub trait QualityOpsStore: Send + Sync {
         next: DateTime<Utc>,
         context: &MutationContext,
     ) -> AdminStoreResult<QualityRule>;
+    async fn apply_template_enabled(
+        &self,
+        template: &QualityRuleTemplate,
+        target: &QualityTemplateTarget,
+        next: DateTime<Utc>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRule>;
     async fn monitoring(
         &self,
         account_ids: &[String],
     ) -> AdminStoreResult<std::collections::BTreeMap<String, QualityMonitoring>>;
+    async fn set_enabled(
+        &self,
+        id: &str,
+        revision: i64,
+        enabled: bool,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRule>;
     async fn rules(&self) -> AdminStoreResult<Vec<QualityRule>>;
     async fn save(
         &self,

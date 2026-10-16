@@ -29,6 +29,7 @@ where
         )
         .route("/api/admin/quality-ops/rules", get(rules::<S>))
         .route("/api/admin/quality-ops/save", post(save::<S>))
+        .route("/api/admin/quality-ops/enabled", post(set_enabled::<S>))
         .route("/api/admin/quality-ops/delete", post(delete::<S>))
         .route("/api/admin/quality-ops/run", post(enqueue::<S>))
         .route("/api/admin/quality-ops/runs", get(runs::<S>))
@@ -164,6 +165,8 @@ struct SaveTemplate {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ApplyTemplate {
+    #[serde(default)]
+    enable: bool,
     id: String,
     revision: i64,
     targets: Vec<QualityTemplateTarget>,
@@ -245,10 +248,11 @@ where
     let result = state
         .admin_services()
         .quality_ops()
-        .apply_template(
+        .apply_template_with_enabled(
             &body.id,
             body.revision,
             body.targets,
+            body.enable,
             &auth.context().mutation_context(),
         )
         .await
@@ -410,6 +414,39 @@ where
         .admin_services()
         .quality_ops()
         .detail(&query.id)
+        .await
+        .map_err(map_admin_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetEnabled {
+    id: String,
+    revision: i64,
+    enabled: bool,
+}
+
+async fn set_enabled<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(body): AdminJson<SetEnabled>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let result = state
+        .admin_services()
+        .quality_ops()
+        .set_enabled(
+            &body.id,
+            body.revision,
+            body.enabled,
+            &auth.context().mutation_context(),
+        )
         .await
         .map_err(map_admin_service_error)?;
     Ok(AdminResponse::new(

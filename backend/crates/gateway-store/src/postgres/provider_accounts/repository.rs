@@ -922,6 +922,33 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
         })?;
         let result = async {
             let revision = bump_config_revision_in_transaction(&mut transaction).await?;
+            // Optional policy patches and explicit scheduling actions retain their
+            // intent fences, even when writing the same value. Ordinary full-form
+            // saves may carry unchanged enabled/weight/groups alongside a new name.
+            let preserve_recovery = !command.explicit_scheduling_intent
+                && command.egress_mode.is_none()
+                && command.outbound_proxy.is_none()
+                && command.responses_upstream.is_none()
+                && command.model_access.is_none()
+                && command.turn_state_injection_enabled.is_none()
+                && command.excel_models.is_none()
+                && command.excel_models_follow_global.is_none()
+                && command.excel_cache_creation_as_input.is_none()
+                && command.excel_ignore_encrypted_content.is_none()
+                && command.request_proxy_source.is_none()
+                && command.excel_auto_disable_on_403.is_none()
+                && command.excel_403_action.is_none()
+                && command.excel_recovery.is_none();
+            let recovery_owners = if preserve_recovery {
+                super::super::quality_ops::capture_edit_owners(
+                    &mut transaction,
+                    &command.account_ids,
+                )
+                .await
+                .map_err(|_| postgres_unavailable("read template recovery ownership"))?
+            } else {
+                Vec::new()
+            };
             update_provider_accounts_scheduling_in_transaction(
                 &mut transaction,
                 &command.account_ids,
@@ -970,6 +997,9 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             }
             append_admin_audit_event_in_transaction(&mut transaction, command.audit, revision)
                 .await?;
+            super::super::quality_ops::preserve_edit_owners(&mut transaction, recovery_owners)
+                .await
+                .map_err(|_| postgres_unavailable("preserve template recovery ownership"))?;
             Ok(revision)
         }
         .await;
@@ -1043,6 +1073,28 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
             lock_account_egress_in_transaction(&mut transaction).await?;
             self.archive_deleted_devices(&mut transaction, &command.account_ids)
                 .await?;
+            if command.delete_relogin {
+                // Resolve emails from the authorized accounts in the same deletion transaction.
+                // Keep shared material when an unselected OAuth workspace still uses it.
+                sqlx::query(
+                    "delete from account_relogin_entries e using provider_accounts a
+                    where a.id=any($1::text[]) and a.provider_kind=$2
+                    and a.provider_kind='openai' and a.authentication_kind='oauth'
+                    and lower(e.email)=lower(a.email)
+                    and not exists (
+                        select 1 from provider_accounts other
+                        where other.provider_kind='openai' and other.authentication_kind='oauth'
+                        and lower(other.email)=lower(e.email) and not (other.id=any($1::text[]))
+                    )",
+                )
+                .bind(&command.account_ids)
+                .bind(&command.scope.provider_kind)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| {
+                    postgres_unavailable("delete associated relogin material").with_source(error)
+                })?;
+            }
             delete_provider_accounts_in_transaction(
                 &mut transaction,
                 &command.scope,
@@ -1084,8 +1136,9 @@ async fn replace_account_group_assignments_in_transaction(
             });
         }
     }
-    sqlx::query("delete from account_group_accounts where provider_account_id = any($1::text[])")
+    sqlx::query("delete from account_group_accounts where provider_account_id = any($1::text[]) and not (account_group_id = any($2::text[]))")
         .bind(account_ids)
+        .bind(&group_ids)
         .execute(&mut **transaction)
         .await
         .map_err(|error| {
@@ -1099,7 +1152,8 @@ async fn replace_account_group_assignments_in_transaction(
          (account_group_id, provider_account_id, created_at)
          select group_id, account_id, now()
          from unnest($1::text[]) group_id
-         cross join unnest($2::text[]) account_id",
+         cross join unnest($2::text[]) account_id
+         on conflict (account_group_id, provider_account_id) do nothing",
     )
     .bind(group_ids)
     .bind(account_ids)

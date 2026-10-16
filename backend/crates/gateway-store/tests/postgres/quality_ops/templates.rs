@@ -1132,3 +1132,191 @@ async fn template_overload_is_one_round_and_cannot_bypass_account_protection() {
     assert_eq!(snapshot(&db).await["account"]["weight"], 1);
     db.close().await;
 }
+
+#[tokio::test]
+async fn ordinary_account_edits_preserve_template_recovery_only_for_unchanged_policy() {
+    use gateway_admin::{model::accounts::UpdateAccount, ports::store::AccountStore};
+    use gateway_core::account::AccountWeight;
+    for change in [
+        "name",
+        "unchanged",
+        "weight",
+        "groups",
+        "route",
+        "prior_edit",
+    ] {
+        let Some(db) = TestDatabase::create("quality_edit_restore").await else {
+            return;
+        };
+        let store = setup(&db).await;
+        let template = template(&db).await;
+        let original = snapshot(&db).await;
+        let mut cfg = config("acct_quality_a");
+        cfg.failure_action = QualityFailureAction::ApplyAccountTemplate;
+        cfg.failure_template = Some(template);
+        cfg.auto_restore = true;
+        let rule = store
+            .save(None, None, cfg, Utc::now(), &context())
+            .await
+            .unwrap();
+        scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+        let applied = snapshot(&db).await;
+        if change == "prior_edit" {
+            sqlx::query("insert into admin_audit_events(id,actor_kind,actor_ref,action,entity_kind,entity_ref,config_revision,changed_fields,created_at) values('prior','system','system','update','provider_account','acct_quality_a',999,array['responses_upstream'],now())")
+                .execute(&db.pool).await.unwrap();
+        }
+        let accounts = super::super::admin_account_store(&db.pool);
+        accounts
+            .update_account(
+                UpdateAccount {
+                    account_id: "acct_quality_a".into(),
+                    enabled: true,
+                    concurrency_limit: Some(
+                        gateway_core::account::AccountConcurrencyLimit::new(7).unwrap(),
+                    ),
+                    weight: AccountWeight::new(if change == "weight" { 30 } else { 19 }).unwrap(),
+                    group_ids: if change == "groups" {
+                        Vec::new()
+                    } else {
+                        vec![gateway_core::routing::AccountGroupId::new(GROUP).unwrap()]
+                    },
+                    custom_name: (change == "name").then(|| Some("Renamed account".into())),
+                    purchase_cost: None,
+                    egress_mode: None,
+                    model_access: None,
+                    outbound_proxy: None,
+                    turn_state_injection_enabled: None,
+                    responses_upstream: (change == "route")
+                        .then_some(gateway_core::account::ResponsesUpstream::Excel),
+                    excel_models: None,
+                    excel_models_follow_global: None,
+                    excel_cache_creation_as_input: None,
+                    excel_ignore_encrypted_content: None,
+                    request_proxy_source: None,
+                    excel_auto_disable_on_403: None,
+                    excel_403_action: None,
+                    excel_recovery: None,
+                },
+                &context(),
+            )
+            .await
+            .unwrap();
+        if change != "groups" {
+            assert_eq!(
+                snapshot(&db).await["groups"],
+                applied["groups"],
+                "unchanged memberships retain timestamps"
+            );
+        }
+        let expected = if matches!(change, "name" | "unchanged") {
+            "template_restored"
+        } else {
+            "template_recovery_released"
+        };
+        let run = scheduled_round(&store, &rule, &[QualityVerdict::Correct]).await;
+        assert_eq!(run.action.as_deref(), Some(expected), "{change}");
+        if expected == "template_restored" {
+            let restored = snapshot(&db).await;
+            assert_eq!(restored["groups"], original["groups"]);
+            for key in [
+                "enabled",
+                "weight",
+                "concurrency_limit",
+                "responses_upstream",
+            ] {
+                assert_eq!(restored["account"][key], original["account"][key], "{key}");
+            }
+            if change == "name" {
+                assert_eq!(restored["account"]["custom_name"], "Renamed account");
+            }
+        }
+        db.close().await;
+    }
+}
+
+#[tokio::test]
+async fn quality_switch_cas_preserves_recovery() {
+    let Some(db) = TestDatabase::create("quality_switch_restore").await else {
+        return;
+    };
+    let store = setup(&db).await;
+    let template = template(&db).await;
+    let mut cfg = config("acct_quality_a");
+    cfg.detection_mode = QualityDetectionMode::StateProbe;
+    cfg.failure_action = QualityFailureAction::ApplyAccountTemplate;
+    cfg.failure_template = Some(template);
+    cfg.auto_restore = true;
+    let rule = store
+        .save(None, None, cfg, Utc::now(), &context())
+        .await
+        .unwrap();
+    scheduled_round(&store, &rule, &[QualityVerdict::Incorrect]).await;
+    let owned: Value =
+        sqlx::query_scalar("select recovery->'template_owner' from quality_rules where id=$1")
+            .bind(&rule.id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    store
+        .enqueue(&rule.id, rule.revision, &context())
+        .await
+        .unwrap();
+    let claim = store.claim().await.unwrap().unwrap();
+    let paused = store
+        .set_enabled(&rule.id, rule.revision, false, &context())
+        .await
+        .unwrap();
+    assert!(!paused.running && !paused.pending && !paused.config.enabled);
+    assert!(!store.current(&claim).await.unwrap());
+    assert!(
+        store
+            .set_enabled(&rule.id, rule.revision, true, &context())
+            .await
+            .is_err()
+    );
+    let current: Value =
+        sqlx::query_scalar("select recovery->'template_owner' from quality_rules where id=$1")
+            .bind(&rule.id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(owned, current);
+    let enabled = store
+        .set_enabled(&paused.id, paused.revision, true, &context())
+        .await
+        .unwrap();
+    assert!(enabled.next_run_at <= Utc::now());
+    assert_eq!(
+        enabled.config.failure_template.as_ref().unwrap().revision,
+        1
+    );
+    assert_eq!(
+        scheduled_round(&store, &enabled, &[QualityVerdict::Correct])
+            .await
+            .action
+            .as_deref(),
+        Some("template_restored")
+    );
+    scheduled_round(&store, &enabled, &[QualityVerdict::Correct]).await;
+    let states = store.monitoring(&["acct_quality_a".into()]).await.unwrap();
+    let state = &states["acct_quality_a"];
+    assert_eq!(state.detection_mode, QualityDetectionMode::StateProbe);
+    assert_eq!(state.last_status.as_deref(), Some("correct"));
+    assert!(state.last_action.is_none());
+    sqlx::query("delete from account_relogin_templates")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let paused = store
+        .set_enabled(&enabled.id, enabled.revision, false, &context())
+        .await
+        .unwrap();
+    assert!(!paused.config.enabled, "can pause with deleted template");
+    assert!(
+        store
+            .set_enabled(&paused.id, paused.revision, true, &context())
+            .await
+            .is_err()
+    );
+    db.close().await;
+}

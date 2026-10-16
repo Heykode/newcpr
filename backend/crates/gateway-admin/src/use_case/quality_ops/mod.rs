@@ -272,6 +272,22 @@ impl QualityOpsService {
             .ok_or_else(|| AdminError::unavailable("质量运维存储不可用"))
     }
 
+    pub async fn set_enabled(
+        &self,
+        id: &str,
+        revision: i64,
+        enabled: bool,
+        context: &MutationContext,
+    ) -> Result<QualityRule, AdminError> {
+        if id.is_empty() || id.len() > 128 || revision < 1 {
+            return Err(AdminError::invalid("检测规则或版本不合法"));
+        }
+        self.store()?
+            .set_enabled(id, revision, enabled, context)
+            .await
+            .map_err(|error| map_store_error(error, "quality rule"))
+    }
+
     pub async fn rules(&self) -> Result<Vec<QualityRule>, AdminError> {
         self.store()?
             .rules()
@@ -414,6 +430,18 @@ impl QualityOpsService {
         targets: Vec<QualityTemplateTarget>,
         context: &MutationContext,
     ) -> Result<Vec<QualityTemplateApplyResult>, AdminError> {
+        self.apply_template_with_enabled(id, revision, targets, false, context)
+            .await
+    }
+
+    pub async fn apply_template_with_enabled(
+        &self,
+        id: &str,
+        revision: i64,
+        targets: Vec<QualityTemplateTarget>,
+        enable: bool,
+        context: &MutationContext,
+    ) -> Result<Vec<QualityTemplateApplyResult>, AdminError> {
         validate_monitor_accounts(
             &targets
                 .iter()
@@ -441,10 +469,18 @@ impl QualityOpsService {
             config.account_id.clone_from(&target.account_id);
             let result = async {
                 self.validate_target(&config).await?;
-                self.store()?
-                    .apply_template(&template, &target, next_run(&config, Utc::now())?, context)
-                    .await
-                    .map_err(|error| map_store_error(error, "quality rule"))
+                let next = next_run(&config, Utc::now())?;
+                let store = self.store()?;
+                let result = if enable {
+                    store
+                        .apply_template_enabled(&template, &target, next, context)
+                        .await
+                } else {
+                    store
+                        .apply_template(&template, &target, next, context)
+                        .await
+                };
+                result.map_err(|error| map_store_error(error, "quality rule"))
             }
             .await;
             results.push(match result {
