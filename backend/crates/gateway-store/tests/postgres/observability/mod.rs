@@ -106,6 +106,7 @@ async fn observability_preserves_and_filters_opaque_response_ids() {
 
     let records = repository
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: UsageRecordFilter {
                 response_id: Some(response_id.clone()),
@@ -193,6 +194,7 @@ async fn zero_attempt_errors_remain_filterable_without_inventing_upstream_or_usa
     assert!(detail.attempts.is_empty());
     let usage = repository
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: UsageRecordFilter {
                 request_id: Some("req_observe_failed".to_owned()),
@@ -267,6 +269,7 @@ async fn usage_page_should_always_return_total() {
 
     let page = observability_repository(&database.pool)
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: UsageRecordFilter::default(),
             current_page: 1,
@@ -327,6 +330,7 @@ async fn usage_list_should_resolve_current_custom_names_by_account_id() {
             .expect("update current account custom name");
         let page = store
             .list_usage_records(admin_observability::UsageQuery {
+                record_status: Default::default(),
                 range,
                 filter: admin_observability::UsageFilter::default(),
                 current_page: 1,
@@ -384,6 +388,7 @@ async fn usage_list_should_resolve_current_custom_names_by_account_id() {
         .expect("delete team account");
     let page = store
         .list_usage_records(admin_observability::UsageQuery {
+            record_status: Default::default(),
             range,
             filter: admin_observability::UsageFilter {
                 provider_account_ref: Some("acct_team".to_owned()),
@@ -509,6 +514,7 @@ async fn usage_search_should_match_literal_substring() {
 
     let page = observability_repository(&database.pool)
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: UsageRecordFilter {
                 search: Some("observe_success".to_owned()),
@@ -656,6 +662,7 @@ async fn assert_usage_search_ids(
 ) {
     let page = observability_repository(pool)
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: UsageRecordFilter {
                 search: Some(search.to_owned()),
@@ -707,6 +714,7 @@ async fn usage_search_should_match_client_api_key_prefix() {
     for search in [plaintext_key.as_str(), &plaintext_key[..10]] {
         let page = observability_repository(&database.pool)
             .list_usage_records(UsageRecordQuery {
+                record_status: Default::default(),
                 range,
                 filter: UsageRecordFilter {
                     search: Some(search.to_owned()),
@@ -1620,6 +1628,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
 
     let first_page = store
         .list_usage_records(admin_observability::UsageQuery {
+            record_status: Default::default(),
             range,
             filter: admin_observability::UsageFilter::default(),
             current_page: 1,
@@ -1638,6 +1647,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
 
     let deep_page = store
         .list_usage_records(admin_observability::UsageQuery {
+            record_status: Default::default(),
             range,
             filter: admin_observability::UsageFilter::default(),
             current_page: 129,
@@ -1652,6 +1662,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
 
     let filtered = store
         .list_usage_records(admin_observability::UsageQuery {
+            record_status: Default::default(),
             range,
             filter: admin_observability::UsageFilter {
                 client_api_key_ref: Some("key_observe".to_owned()),
@@ -1680,6 +1691,7 @@ async fn admin_observability_adapter_preserves_utc_queries_metrics_costs_and_det
 
     let other_outcome = store
         .list_usage_records(admin_observability::UsageQuery {
+            record_status: Default::default(),
             range,
             filter: admin_observability::UsageFilter {
                 outcome: Some(
@@ -2126,6 +2138,7 @@ async fn observability_queries_preserve_request_account_cost_and_diagnostic_fact
 
     let usage_page = repository
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: UsageRecordFilter {
                 provider_account_ref: Some("acct_observe".to_owned()),

@@ -102,7 +102,12 @@ impl TestDatabase {
             .connect(&database_url)
             .await
             .expect("connect isolated test schema");
-        migrator.run(&pool).await.expect("apply test migrations");
+        {
+            let mut connection = pool.acquire().await.expect("migration connection");
+            gateway_store::postgres::migrate_schema(&mut connection, migrator)
+                .await
+                .expect("apply test migrations");
+        }
         Some(Self {
             admin,
             pool,
@@ -150,6 +155,16 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     let first = connect_and_migrate(&isolated_url, pool_config)
         .await
         .expect("apply migrations through production migrator");
+    let initial: i64 =
+        sqlx::query_scalar("select max_concurrent_per_account from runtime_settings where id=1")
+            .fetch_one(&first)
+            .await
+            .unwrap();
+    assert_eq!(initial, 5);
+    sqlx::query("update runtime_settings set max_concurrent_per_account=7 where id=1")
+        .execute(&first)
+        .await
+        .unwrap();
     let session_settings = sqlx::query_as::<_, (String, i64, i64, i64)>(
         "select current_setting('application_name'),
                 extract(epoch from current_setting('statement_timeout')::interval)::bigint,
@@ -175,6 +190,12 @@ async fn connect_and_migrate_should_apply_all_migrations_once_and_reopen_cleanly
     let second = connect_and_migrate(&isolated_url, pool_config)
         .await
         .expect("reopen database through production migrator");
+    let saved: i64 =
+        sqlx::query_scalar("select max_concurrent_per_account from runtime_settings where id=1")
+            .fetch_one(&second)
+            .await
+            .unwrap();
+    assert_eq!(saved, 7);
     let migration_count =
         sqlx::query_scalar::<_, i64>("select count(*) from _sqlx_migrations where success")
             .fetch_one(&second)

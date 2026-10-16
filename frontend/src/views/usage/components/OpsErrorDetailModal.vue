@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import type { OpsError } from '@/api'
 
+import { Download } from '@lucide/vue'
 import { computed } from 'vue'
+import { getRequestDiagnosticsBundle } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import { useDownload } from '@/composables/useDownload'
 import { failureClassText } from '../utils/opsErrorPresentation'
 import RequestDiagnosticsPanel from './RequestDiagnosticsPanel.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
@@ -22,6 +26,18 @@ const props = defineProps<{
 }>()
 
 const open = defineModel<boolean>({ default: false })
+const { downloadJson } = useDownload()
+const { loading: exporting, run: runExport } = useAsyncAction()
+
+function download() {
+  const id = props.record?.id
+  if (!id || exporting.value)
+    return
+  return runExport(
+    async () => downloadJson(await getRequestDiagnosticsBundle({ errorId: id }), `diagnostics-${id.replace(/[^\w-]/g, '_')}.json`),
+    { errorText: '导出诊断包失败', minimumMs: 400 },
+  )
+}
 
 const panelClass = 'min-w-0 rounded-cp-card bg-cp-fill-quaternary px-4 py-3.5'
 const panelTitleClass = 'm-0 text-cp-sm leading-none font-heavy text-cp-text-secondary'
@@ -183,6 +199,12 @@ function visibleFields(items: DetailField[]) {
     </template>
 
     <template #footer>
+      <BaseButton v-if="record && !record.requestId" variant="soft" :loading="exporting" @click="download">
+        <template #icon>
+          <Download :size="14" />
+        </template>
+        导出诊断包
+      </BaseButton>
       <BaseButton variant="primary" @click="open = false">
         关闭
       </BaseButton>

@@ -3,7 +3,7 @@ import type { UsageTimeRange } from './composables/useUsageTimeRange'
 import type { UsageFilterParams } from '@/api'
 import { Eye } from '@lucide/vue'
 
-import { computed, watch } from 'vue'
+import { computed, shallowRef, watch } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BasePageHeader from '@/components/base/BasePageHeader.vue'
@@ -38,8 +38,14 @@ const provider = computed({
   set: value => draft.value = { ...draft.value, provider: value },
 })
 const recordViewOptions = [
-  { label: '成功记录', value: 'success' },
+  { label: '请求记录', value: 'success' },
   { label: '错误排查', value: 'errors' },
+]
+const recordStatus = shallowRef<'success' | 'error' | 'all'>('success')
+const recordStatusOptions = [
+  { label: '成功', value: 'success' },
+  { label: '错误', value: 'error' },
+  { label: '全部', value: 'all' },
 ]
 const { timeRange, timeRangeParams, refreshTimeRangeEnd, latestTimeRangeParams }
   = useUsageTimeRange((draft.value.timeRange || 'today') as UsageTimeRange)
@@ -69,6 +75,7 @@ const {
   active: computed(() => recordView.value === 'success'),
   filters,
   provider,
+  recordStatus,
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
@@ -151,8 +158,9 @@ watch(timeRange, () => {
             @refresh="refreshUsageRecords"
           >
             <template #actions>
+              <BaseSegmented v-model="recordStatus" label="请求状态" :options="recordStatusOptions" class="w-48" />
               <BaseTableColumnSettings
-                label="成功记录显示列"
+                label="请求记录显示列"
                 :options="columnOptions"
                 @change="setColumnVisible"
                 @reset="resetColumns"

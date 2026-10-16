@@ -16,6 +16,7 @@ import { formatDuration } from './format'
 
 // Usage 记录的规范化 view model：组件只消费这个形状。
 export interface UsageViewModel {
+  outcome?: string
   id: string
   requestId: string
   clientApiKeyId: string | null

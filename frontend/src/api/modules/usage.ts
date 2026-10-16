@@ -79,6 +79,7 @@ export interface UsageTurnStateSummary {
 }
 
 export interface UsageListRecord {
+  outcome?: string
   clientApiKeyName?: string | null
   id: string
   provider: string | null
@@ -545,7 +546,7 @@ interface PageQuery {
   pageSize: number
 }
 
-type UsagePageQuery = UsageRangeQuery & PageQuery
+type UsagePageQuery = UsageRangeQuery & PageQuery & { recordStatus?: 'success' | 'error' | 'all' }
 
 type OpsErrorPageQuery = UsagePageQuery
 
@@ -582,6 +583,16 @@ export function getOpsErrors(data: OpsErrorPageQuery, options: RequestOptions = 
 export function getUsageRecordDetail(data: UsageDetailQuery, options: RequestOptions = {}) {
   return request<UsageRecordDetail>({
     url: '/api/admin/usage/records/detail',
+    timeout: OBSERVABILITY_TIMEOUT_MS,
+    method: 'GET',
+    params: data,
+    ...options,
+  })
+}
+
+export function getRequestDiagnosticsBundle(data: { requestId: string } | { errorId: string }, options: RequestOptions = {}) {
+  return request<unknown>({
+    url: '/api/admin/usage/diagnostics/export',
     timeout: OBSERVABILITY_TIMEOUT_MS,
     method: 'GET',
     params: data,

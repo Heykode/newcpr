@@ -3,6 +3,7 @@
 pub mod admission;
 pub mod budget;
 mod capacity_wait;
+pub mod client_retry;
 pub mod connection;
 pub mod continuation;
 pub mod coordinator;
@@ -999,15 +1000,23 @@ pub struct GatewayEngine<S: ?Sized> {
     store: Arc<S>,
     providers: provider::ProviderRegistry,
     captures: Option<Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>>,
+    client_retry: Option<Arc<dyn client_retry::ClientRetryStore>>,
 }
 
 impl<S: ?Sized> GatewayEngine<S> {
+    #[must_use]
+    pub fn with_client_retry(mut self, store: Arc<dyn client_retry::ClientRetryStore>) -> Self {
+        self.client_retry = Some(store);
+        self
+    }
+
     #[must_use]
     pub const fn new(store: Arc<S>, providers: provider::ProviderRegistry) -> Self {
         Self {
             store,
             providers,
             captures: None,
+            client_retry: None,
         }
     }
 

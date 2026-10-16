@@ -1,5 +1,30 @@
 use serde_json::{Map, Value};
 
+/// Logical thread/turn identities for retry tracking; never use a cache routing key.
+pub fn codex_client_turn_ids(
+    body: &Map<String, Value>,
+    context: &Map<String, Value>,
+) -> Option<(String, String)> {
+    let field = |name: &str| {
+        client_metadata_string(body, name)
+            .map(str::to_owned)
+            .or_else(|| {
+                [
+                    request_turn_metadata(body),
+                    non_empty_string(context.get("turn_metadata")),
+                ]
+                .into_iter()
+                .flatten()
+                .find_map(|metadata| {
+                    let value: Value = serde_json::from_str(metadata).ok()?;
+                    non_empty_string(value.get(name)).map(str::to_owned)
+                })
+            })
+            .or_else(|| codex_identity_field(body, context, name))
+    };
+    field("thread_id").zip(field("turn_id"))
+}
+
 const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
 const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 const PROACTIVE_MULTI_AGENT_MODE_PREFIX: &str = "Proactive multi-agent delegation is active.";

@@ -373,6 +373,14 @@ docker compose -f deploy/compose.yaml build codex-proxy-rs
 docker compose -f deploy/compose.yaml up -d --no-build --wait
 ```
 
+需要跨临时 BuildKit builder 保留源码编译缓存时，可使用下面的可选构建入口；它只构建镜像，
+不启动服务。缓存导出沿用官方 tar 流方案，校验 crate 和 rlib 后才替换旧缓存；失败不会覆盖
+有效旧缓存。日常 CI/Release 仍直接挂载 Cargo 缓存，不额外复制一次。未承诺此可选路径更快。
+
+```bash
+bash release/build_source_image.sh my-builder /tmp/cpr-buildkit-cache amd64 newcpr:local
+```
+
 仓库维护者发布新版本时必须从干净且已同步上游的分支运行：
 
 ```bash

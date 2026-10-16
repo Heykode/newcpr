@@ -50,6 +50,7 @@ pub struct RuntimeSnapshotData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupData {
+    pub allow_image_generation: bool,
     pub fast_mode: gateway_core::account::FastMode,
     pub id: AccountGroupId,
     pub name: String,
@@ -191,6 +192,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                     SnapshotAccountGroupFacts::new(group.id, group.name, group.enabled)
                         .with_disable_fast(group.disable_fast)
                         .with_fast_mode(group.fast_mode)
+                        .with_image_generation(group.allow_image_generation)
                 })
                 .collect();
             let provider_accounts = data
@@ -436,23 +438,26 @@ async fn load_client_keys(
 async fn load_account_groups(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<SnapshotAccountGroupData>> {
-    let rows = sqlx::query_as::<_, (String, String, bool, bool, String)>(
-        "select id, name, enabled, disable_fast, fast_mode from account_groups order by id",
+    let rows = sqlx::query_as::<_, (String, String, bool, bool, String, bool)>(
+        "select id, name, enabled, disable_fast, fast_mode, allow_image_generation from account_groups order by id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|error| postgres_unavailable("load snapshot account groups").with_source(error))?;
     rows.into_iter()
-        .map(|(id, name, enabled, disable_fast, fast_mode)| {
-            Ok(SnapshotAccountGroupData {
-                fast_mode: gateway_core::account::FastMode::parse(&fast_mode)
-                    .ok_or_else(|| invalid("invalid fast_mode"))?,
-                id: AccountGroupId::new(id).map_err(|_| invalid("invalid account group id"))?,
-                name,
-                enabled,
-                disable_fast,
-            })
-        })
+        .map(
+            |(id, name, enabled, disable_fast, fast_mode, allow_image_generation)| {
+                Ok(SnapshotAccountGroupData {
+                    allow_image_generation,
+                    fast_mode: gateway_core::account::FastMode::parse(&fast_mode)
+                        .ok_or_else(|| invalid("invalid fast_mode"))?,
+                    id: AccountGroupId::new(id).map_err(|_| invalid("invalid account group id"))?,
+                    name,
+                    enabled,
+                    disable_fast,
+                })
+            },
+        )
         .collect()
 }
 

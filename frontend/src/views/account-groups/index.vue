@@ -134,6 +134,11 @@ const { allSelected, indeterminate, selectedRowKeys, toggleSelection, toggleAll 
               <AccountGroupMetricsCell :group="row" kind="accounts" />
             </template>
 
+            <template #allowImageGeneration="{ row }">
+              <span :class="row.allowImageGeneration ? 'text-cp-text-secondary' : 'text-cp-warning-text'">
+                {{ row.allowImageGeneration ? '允许' : '禁止' }}
+              </span>
+            </template>
             <template #fastMode="{ row }">
               <span class="text-cp-xs" :class="row.fastMode === 'enabled' ? 'text-cp-warning-text' : 'text-cp-text-secondary'">
                 {{ row.fastMode === 'enabled' ? '开启' : row.fastMode === 'disabled' ? '关闭' : '默认' }}

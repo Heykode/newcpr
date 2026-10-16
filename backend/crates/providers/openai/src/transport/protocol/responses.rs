@@ -326,7 +326,7 @@ pub fn transport_requirement(request: &CodexResponsesRequest) -> TransportRequir
 
 pub(crate) fn is_replaceable_response_prelude(value: &serde_json::Value) -> bool {
     match value.get("type").and_then(serde_json::Value::as_str) {
-        Some("codex.response.metadata" | "codex.rate_limits") => true,
+        Some("codex.response.metadata" | "response.metadata" | "codex.rate_limits") => true,
         Some("response.created" | "response.in_progress") => value
             .pointer("/response/output")
             .is_none_or(|output| output.as_array().is_some_and(Vec::is_empty)),

@@ -216,7 +216,11 @@ pub async fn initialize(mut config: StoreConfig) -> StoreResult<StoreBundle> {
         ),
         Arc::new(client_key_usage),
     )
-    .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())));
+    .with_budget(Arc::new(postgres::PgClientBudgetStore::new(pool.clone())))
+    .with_client_retry(Arc::new(redis::RedisClientRetryRepository::new(
+        redis_connection.clone(),
+        REDIS_NAMESPACE,
+    )?));
     if let Some((captures, _)) = &capture {
         core_ports = core_ports.with_captures(captures.clone());
     }

@@ -1616,6 +1616,7 @@ dependencies = [
  "gateway-core",
  "gateway-protocol",
  "multer",
+ "regex",
  "secrecy",
  "serde",
  "serde_json",

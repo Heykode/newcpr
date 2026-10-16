@@ -767,6 +767,48 @@ fn disable_fast_uses_bound_groups_and_global_policy_without_changing_scope() {
 }
 
 #[test]
+fn image_generation_policy_includes_disabled_groups_without_expanding_account_scope() {
+    use gateway_core::routing::AccountGroupId;
+    let group = AccountGroupId::new("grp_00000000000000000000000000000001").unwrap();
+    let denied = AccountGroupId::new("grp_00000000000000000000000000000002").unwrap();
+    let account = ProviderAccountId::new("acct_image_policy").unwrap();
+    for allowed in [false, true] {
+        let facts = SnapshotFacts::new(
+            revision(1),
+            revision(1),
+            SnapshotSettingsFacts::new(5, 0, "smart", BTreeMap::new(), None, None),
+            vec![SnapshotClientPolicyFacts::new(
+                ClientApiKeyId::new("key_images").unwrap(),
+                PlaintextClientApiKey::new("sk_images").unwrap(),
+                vec![group.clone(), denied.clone()],
+                RateLimits::unlimited(),
+            )],
+            vec![
+                SnapshotAccountGroupFacts::new(group.clone(), "Enabled".into(), true),
+                SnapshotAccountGroupFacts::new(denied.clone(), "Disabled policy".into(), false)
+                    .with_image_generation(allowed),
+            ],
+            vec![SnapshotProviderAccountFacts::new(account.clone(), "alpha")],
+            vec![SnapshotAccountGroupMemberFacts::new(
+                group.clone(),
+                account.clone(),
+            )],
+        );
+        let snapshot = block_on(
+            RuntimeSnapshotCompiler::new(
+                Arc::new(TestSnapshotStore::new(Ok(facts))),
+                Arc::new(TestCatalog::Unavailable),
+            )
+            .compile(),
+        )
+        .unwrap();
+        let scope = snapshot.client_policies().next().unwrap().account_scope();
+        assert_eq!(scope.allows_image_generation(), allowed);
+        assert!(scope.allows(&account));
+    }
+}
+
+#[test]
 fn fast_modes_merge_without_overriding_global_disable_or_account_scope() {
     use gateway_core::account::FastMode;
     let group_id =

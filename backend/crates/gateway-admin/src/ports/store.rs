@@ -569,6 +569,18 @@ pub type UsageCalculatedBillingStream<'a> =
 /// 用量、趋势、诊断与运维错误的只读能力。
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
+    async fn diagnostic_errors(
+        &self,
+        target: &crate::model::diagnostics::DiagnosticTarget,
+        limit: u16,
+    ) -> AdminStoreResult<Vec<crate::model::observability::OpsError>> {
+        let _ = (target, limit);
+        Err(AdminStoreError::new(
+            AdminStoreErrorKind::Unavailable,
+            "diagnostic errors",
+            "diagnostic export unavailable",
+        ))
+    }
     async fn account_filter_options(
         &self,
         range: TimeRange,

@@ -35,6 +35,7 @@ pub(crate) fn store_usage_query(
     query: admin_observability::UsageQuery,
 ) -> AdminStoreResult<UsageRecordQuery> {
     Ok(UsageRecordQuery {
+        record_status: query.record_status,
         range: store_range(query.range)?,
         filter: store_usage_filter(query.filter),
         current_page: query.current_page,
@@ -431,6 +432,8 @@ pub(crate) fn admin_usage_list_record(
         }
     };
     Ok(admin_observability::UsageListRecord {
+        outcome: admin_observability::RequestOutcome::new(record.outcome)
+            .map_err(|_| observability_error(invalid("invalid request outcome")))?,
         client_api_key_name: record.client_api_key_name,
         id: record.id,
         endpoint: record.endpoint,
@@ -779,6 +782,7 @@ pub(crate) fn usage_list_record_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<UsageListRecord> {
     Ok(UsageListRecord {
+        outcome: get(row, "outcome")?,
         client_api_key_name: get(row, "client_api_key_name")?,
         billing_snapshot_json: get(row, "billing_snapshot_json")?,
         id: get(row, "id")?,

@@ -664,6 +664,7 @@ async fn core_adapter_should_persist_calculated_cost_exactly() {
     );
     let page = observation
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range: ObservabilityRange::new(
                 Utc::now() - Duration::hours(1),
                 Utc::now() + Duration::hours(1),
@@ -943,6 +944,7 @@ async fn core_adapter_should_persist_only_object_provider_observation() {
     );
     let page = observation
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range: ObservabilityRange::new(
                 Utc::now() - Duration::hours(1),
                 Utc::now() + Duration::hours(1),
@@ -2110,6 +2112,7 @@ async fn zero_attempt_failure_does_not_enter_successful_usage_or_cost_aggregates
     assert_eq!(failed.attempts, AttemptMetrics::default());
     let page = repository
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range: zero_attempt_range(&request),
             filter: filter.clone(),
             current_page: 1,

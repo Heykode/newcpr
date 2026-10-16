@@ -11,6 +11,10 @@ where
         .route("/api/admin/dashboard/trend", get(dashboard_trend::<S>))
         .route("/api/admin/usage/records", get(usage_records::<S>))
         .route(
+            "/api/admin/usage/diagnostics/export",
+            get(super::export::download::<S>),
+        )
+        .route(
             "/api/admin/usage/account-options",
             get(account_options::<S>),
         )

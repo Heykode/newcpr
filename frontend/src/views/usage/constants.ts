@@ -21,6 +21,7 @@ export const usageRecordColumns: ConfigurableTableColumn<UsageDisplayRecord>[] =
     format: (value: unknown) => formatProvider(typeof value === 'string' ? value : null),
   },
   { key: 'model', label: '模型', kind: 'custom', size: 'xl' },
+  { key: 'outcome', label: '状态', kind: 'status', size: 'sm' },
   { key: 'reasoningEffort', label: '推理强度', kind: 'status', size: 'lg' },
   { key: 'route', label: '端点', kind: 'mono' },
   { key: 'upstreamTransport', label: '上游', kind: 'status', size: 'md' },

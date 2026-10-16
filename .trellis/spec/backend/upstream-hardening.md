@@ -88,6 +88,28 @@ new chain. Keep the separate Excel replay contract.
 
 ## 4. Validation Matrix
 
+### v3.28.0 Adaptation
+
+Client-turn failure markers are scoped by client key, thread and turn. Keep
+the 300-second TTL, 100ms per-operation budget and atomic compare-delete.
+Only RetryThenReturnError transient retries are suppressed; never convert
+this into account cooldown, client rejection or a transport-recovery limit.
+Preserve capture factories when installing the retry port, in either order.
+
+Group image policy is a frozen client-scope policy. Any bound group's denial
+applies even when the group is disabled for selection. Image input is not image
+generation. Missing update fields preserve the saved value.
+
+Diagnostics export is an authenticated read of saved evidence, redacted only
+at export. Keep ordinary detail views and request forwarding unchanged. Status
+filters must be identical across list/count/minute-page queries and preserve
+quality-check isolation without filtering summary/cost queries.
+
+Initial concurrency changes apply only to fresh installations detected under
+the migration lock. Configuration revisions cannot reliably identify a fresh
+install because historical migrations also increment revisions. Existing
+databases, including manually configured defaults, must retain their values.
+
 | Condition | Required result |
 | --- | --- |
 | Wrong/retired response ID, unknown mode or opaque control | Forward unchanged on the existing socket; upstream validation; no extra admission |

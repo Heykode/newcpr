@@ -120,6 +120,7 @@ impl PgObservabilityRepository {
             ProviderAccountUsageQuery::recent(range, DASHBOARD_ACCOUNT_LIMIT)?
                 .with_hourly_request_buckets()?;
         let recent_query = UsageRecordQuery {
+            record_status: admin_observability::UsageRecordStatus::Success,
             range,
             filter: UsageRecordFilter {
                 outcome: Some("succeeded".to_owned()),
@@ -402,6 +403,16 @@ impl ObservabilityRepository for PgObservabilityRepository {
 
 #[async_trait]
 impl AdminObservabilityStore for PgAdminObservabilityStore {
+    async fn diagnostic_errors(
+        &self,
+        target: &gateway_admin::model::diagnostics::DiagnosticTarget,
+        limit: u16,
+    ) -> AdminStoreResult<Vec<admin_observability::OpsError>> {
+        let target = target.clone();
+        self.repository.query_budget.run(&self.repository.pool, "export diagnostic errors", |mut connection| async move {
+            diagnostic_errors(&mut connection, &target, limit).await
+        }).await.map(|records| records.into_iter().map(admin_ops_error).collect()).map_err(observability_error)
+    }
     async fn account_filter_options(
         &self,
         range: admin_observability::TimeRange,

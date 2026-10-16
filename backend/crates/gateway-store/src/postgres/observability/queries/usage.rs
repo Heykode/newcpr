@@ -137,7 +137,7 @@ pub(crate) fn literal_prefix_pattern(value: &str) -> String {
 }
 
 pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
-    "select mr.id, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
+    "select mr.id, mr.outcome, coalesce(mr.client_api_key_name_snapshot, ck.name) as client_api_key_name, mr.billing_snapshot_json,
             mr.endpoint, mr.client_transport, mr.requested_model_id,
             mr.provider_kind, mr.provider_account_ref,
             mr.provider_account_name_snapshot as provider_account_name,
@@ -216,7 +216,7 @@ pub(crate) async fn list_usage_records(
         let total = if items.len() < usize::from(query.page_size.get()) {
             items.len() as u64
         } else {
-            count_usage_records(&mut transaction, query.range, &query.filter).await?
+            count_usage_records(&mut transaction, &query).await?
         };
         (total, items)
     } else {
@@ -280,7 +280,7 @@ async fn list_usage_record_items_at(
     statement.push_bind(page.range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(page.range.end);
-    push_completed_usage_fact_filter(&mut statement, "mr");
+    push_record_status(&mut statement, query.record_status);
     push_usage_filter(&mut statement, &query.filter, "mr");
     statement.push(if ascending {
         " order by mr.started_at, mr.id limit "
@@ -365,7 +365,7 @@ async fn usage_time_page(
     statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
     statement.push_bind(query.range.end);
-    push_completed_usage_fact_filter(&mut statement, "mr");
+    push_record_status(&mut statement, query.record_status);
     push_usage_filter(&mut statement, &query.filter, "mr");
     statement.push(" group by bucket_start order by bucket_start desc");
     let rows = statement
@@ -383,23 +383,38 @@ async fn usage_time_page(
 
 pub(crate) async fn count_usage_records(
     connection: &mut PgConnection,
-    range: ObservabilityRange,
-    filter: &UsageRecordFilter,
+    query: &UsageRecordQuery,
 ) -> StoreResult<u64> {
     let mut statement = QueryBuilder::<Postgres>::new(
         "select count(*)::bigint from model_requests mr where mr.started_at >= ",
     );
-    statement.push_bind(range.start);
+    statement.push_bind(query.range.start);
     statement.push(" and mr.started_at < ");
-    statement.push_bind(range.end);
-    push_completed_usage_fact_filter(&mut statement, "mr");
-    push_usage_filter(&mut statement, filter, "mr");
+    statement.push_bind(query.range.end);
+    push_record_status(&mut statement, query.record_status);
+    push_usage_filter(&mut statement, &query.filter, "mr");
     let total = statement
         .build_query_scalar::<i64>()
         .fetch_one(&mut *connection)
         .await
         .map_err(|error| postgres_unavailable("count usage records").with_source(error))?;
     to_u64(total)
+}
+
+fn push_record_status(
+    query: &mut QueryBuilder<Postgres>,
+    status: admin_observability::UsageRecordStatus,
+) {
+    use admin_observability::UsageRecordStatus;
+    match status {
+        UsageRecordStatus::Success => push_completed_usage_fact_filter(query, "mr"),
+        UsageRecordStatus::Error | UsageRecordStatus::All => {
+            super::super::super::usage_facts::push_business_request_filter(query, "mr");
+            if status == UsageRecordStatus::Error {
+                query.push(" and mr.outcome in ('failed', 'incomplete')");
+            }
+        }
+    }
 }
 
 pub(crate) async fn usage_record_detail(

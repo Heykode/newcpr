@@ -70,6 +70,8 @@ impl ListAccountGroupsQuery {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateAccountGroupRequest {
+    #[serde(default = "allow_images_default")]
+    allow_image_generation: bool,
     #[serde(default)]
     fast_mode: gateway_core::account::FastMode,
     name: String,
@@ -82,6 +84,7 @@ struct CreateAccountGroupRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateAccountGroupRequest {
+    allow_image_generation: Option<bool>,
     fast_mode: Option<gateway_core::account::FastMode>,
     id: String,
     name: String,
@@ -99,6 +102,7 @@ struct AccountGroupIdRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountGroupView {
+    allow_image_generation: bool,
     fast_mode: gateway_core::account::FastMode,
     id: String,
     name: String,
@@ -141,6 +145,7 @@ struct AccountGroupUsageView {
 impl From<AccountGroupRecord> for AccountGroupView {
     fn from(record: AccountGroupRecord) -> Self {
         Self {
+            allow_image_generation: record.allow_image_generation,
             fast_mode: record.fast_mode,
             id: record.id.to_string(),
             name: record.name,
@@ -279,6 +284,7 @@ where
             .create(
                 &auth.context().mutation_context(),
                 CreateAccountGroup {
+                    allow_image_generation: request.allow_image_generation,
                     fast_mode: request.fast_mode,
                     name: request.name,
                     description: request.description,
@@ -307,6 +313,7 @@ where
             .update(
                 &auth.context().mutation_context(),
                 UpdateAccountGroup {
+                    allow_image_generation: request.allow_image_generation,
                     fast_mode: request.fast_mode,
                     id: group_id(request.id)?,
                     name: request.name,
@@ -402,6 +409,10 @@ fn mutation_response(
 
 fn group_id(value: String) -> Result<AccountGroupId, AdminError> {
     AccountGroupId::new(value).map_err(|_| AdminError::bad_request("账号组 ID 不合法"))
+}
+
+fn allow_images_default() -> bool {
+    true
 }
 
 fn group_color(value: &str) -> Result<AccountGroupColor, AdminError> {

@@ -27,6 +27,7 @@ export interface AccountGroupUsage {
 export type GroupFastMode = 'default' | 'enabled' | 'disabled'
 
 export interface AccountGroup extends AccountGroupRef {
+  allowImageGeneration: boolean
   fastMode: GroupFastMode
   description: string | null
   disableFast: boolean
@@ -67,6 +68,7 @@ interface AccountGroupListParams {
 }
 
 interface AccountGroupCreateParam {
+  allowImageGeneration?: boolean
   fastMode: GroupFastMode
   name: string
   description: string | null
@@ -75,6 +77,7 @@ interface AccountGroupCreateParam {
 }
 
 interface AccountGroupUpdateParam {
+  allowImageGeneration?: boolean
   fastMode?: GroupFastMode
   id: string
   name: string

@@ -178,6 +178,15 @@ impl TraceContext {
         }
         self.record("attempt.failed", json!({
             "kind": error.kind().as_str(), "sendState": format!("{:?}", error.send_state()),
+            "recovery": {
+                "replaySafe": error.replay_is_safe(),
+                "retryProhibited": error.retry_is_prohibited(),
+                "sameAccountCredentialRetry": error.retries_same_account(),
+                "intent": error.pre_delivery_retry().map(|intent| format!("{intent:?}")),
+                "continuationFailure": error.continuation_failure().map(|failure| format!("{failure:?}")),
+                "continuationDisposition": error.continuation_recovery_disposition().map(|disposition| format!("{disposition:?}")),
+                "retryAfterMs": error.retry_after().map(|delay| delay.as_millis()),
+            },
             "diagnostic": error.diagnostic().map(|diagnostic| json!({
                 "stage": diagnostic.stage(), "code": diagnostic.code(), "message": diagnostic.as_str(),
             })),

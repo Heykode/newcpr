@@ -78,6 +78,7 @@ mod generate_compat;
 mod guardian;
 mod identity_isolation;
 mod image_account_eligibility;
+mod metadata_recovery;
 mod native_encrypted_history;
 mod precommit;
 mod quota_continuation;

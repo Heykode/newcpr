@@ -153,9 +153,19 @@ pub struct UsageFilter {
     pub search: Option<String>,
 }
 
+/// 请求列表状态不改变用量汇总与计费事实。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UsageRecordStatus {
+    #[default]
+    Success,
+    Error,
+    All,
+}
+
 /// 用量记录分页查询。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageQuery {
+    pub record_status: UsageRecordStatus,
     pub range: TimeRange,
     pub filter: UsageFilter,
     pub current_page: u32,
@@ -571,6 +581,7 @@ pub struct DashboardObservation {
 /// 使用记录表格的窄读模型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageListRecord {
+    pub outcome: RequestOutcome,
     pub client_api_key_name: Option<String>,
     pub id: String,
     pub endpoint: String,

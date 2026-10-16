@@ -35,6 +35,7 @@ use crate::{
 };
 
 use super::{map_provider_error, map_store_error};
+mod export;
 
 const HEALTH_TIMELINE_SLOT_MINUTES: i64 = 15;
 const HEALTH_TIMELINE_SLOTS: i64 = 24 * 4;
@@ -97,6 +98,10 @@ impl DashboardQueryCache {
 /// API 消费的观测控制面服务。
 #[async_trait]
 pub trait ObservabilityService: Send + Sync {
+    async fn export_diagnostics(
+        &self,
+        target: crate::model::diagnostics::DiagnosticTarget,
+    ) -> Result<crate::model::diagnostics::DiagnosticBundle, AdminError>;
     async fn account_filter_options(
         &self,
         range: TimeRange,
@@ -243,6 +248,12 @@ impl DefaultObservabilityService {
 
 #[async_trait]
 impl ObservabilityService for DefaultObservabilityService {
+    async fn export_diagnostics(
+        &self,
+        target: crate::model::diagnostics::DiagnosticTarget,
+    ) -> Result<crate::model::diagnostics::DiagnosticBundle, AdminError> {
+        self.collect_diagnostics(target).await
+    }
     async fn account_filter_options(
         &self,
         range: TimeRange,
