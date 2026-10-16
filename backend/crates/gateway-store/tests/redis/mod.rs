@@ -1,6 +1,7 @@
 mod artifact_profile;
 mod capacity_wait;
 mod client_admission;
+mod client_retry;
 mod coordination_buffer;
 mod credential_cooldown;
 mod credential_leases;

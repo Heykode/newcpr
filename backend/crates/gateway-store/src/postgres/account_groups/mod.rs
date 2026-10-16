@@ -304,6 +304,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 "description".to_owned(),
                 "disable_fast".to_owned(),
                 "fast_mode".to_owned(),
+                "allow_image_generation".to_owned(),
             ],
         );
         let revision = self
@@ -311,8 +312,8 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 Box::pin(async move {
                     sqlx::query(
                         "insert into account_groups
-                         (id, name, description, color, fast_mode, disable_fast, enabled, created_at, updated_at)
-                         values ($1, $2, $3, $4, $5, $6, true, now(), now())",
+                         (id, name, description, color, fast_mode, disable_fast, allow_image_generation, enabled, created_at, updated_at)
+                         values ($1, $2, $3, $4, $5, $6, $7, true, now(), now())",
                     )
                     .bind(command.id.as_str())
                     .bind(command.name)
@@ -320,6 +321,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     .bind(command.color.as_str())
                     .bind(if command.disable_fast { "disabled" } else { command.fast_mode.as_str() })
                     .bind(command.disable_fast || command.fast_mode == gateway_core::account::FastMode::Disabled)
+                    .bind(command.allow_image_generation)
                     .execute(&mut **transaction)
                     .await
                     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
@@ -351,6 +353,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                 "description".to_owned(),
                 "disable_fast".to_owned(),
                 "fast_mode".to_owned(),
+                "allow_image_generation".to_owned(),
             ],
         );
         let revision = self
@@ -362,7 +365,8 @@ impl AccountGroupStore for PgAccountGroupRepository {
                      fast_mode = case when $5::text is not null then $5
                          when $6::boolean is not null then case when $6 then 'disabled' else 'default' end
                          else fast_mode end,
-                     disable_fast = coalesce($5 = 'disabled', $6, disable_fast), updated_at = now()
+                     disable_fast = coalesce($5 = 'disabled', $6, disable_fast),
+                     allow_image_generation = coalesce($7, allow_image_generation), updated_at = now()
                  where id = $1",
                     )
                     .bind(command.id.as_str())
@@ -371,6 +375,7 @@ impl AccountGroupStore for PgAccountGroupRepository {
                     .bind(command.color.as_str())
                     .bind(command.fast_mode.map(gateway_core::account::FastMode::as_str))
                     .bind(command.disable_fast)
+                    .bind(command.allow_image_generation)
                     .execute(&mut **transaction)
                     .await
                     .map_err(|error| map_group_write_error(error, command.id.as_str()))?;
@@ -538,7 +543,7 @@ async fn load_member_facts<'e>(
 
 fn group_select() -> QueryBuilder<Postgres> {
     QueryBuilder::new(
-        "select g.id, g.name, g.description, g.color, g.enabled, g.disable_fast, g.fast_mode, g.created_at, g.updated_at,
+        "select g.id, g.name, g.description, g.color, g.enabled, g.disable_fast, g.fast_mode, g.allow_image_generation, g.created_at, g.updated_at,
                 coalesce(members.member_count, 0)::bigint as member_count,
                 coalesce(keys.client_key_count, 0)::bigint as client_key_count,
                 coalesce(members.provider_counts, '{}'::jsonb) as provider_counts
@@ -615,6 +620,9 @@ fn group_record(row: &sqlx::postgres::PgRow) -> StoreResult<AccountGroupRecord> 
     let provider_counts = serde_json::from_value::<BTreeMap<String, u64>>(provider_counts)
         .map_err(|_| invalid("invalid provider counts"))?;
     Ok(AccountGroupRecord {
+        allow_image_generation: row
+            .try_get("allow_image_generation")
+            .map_err(|_| invalid("invalid image permission"))?,
         fast_mode: gateway_core::account::FastMode::parse(
             row.try_get("fast_mode")
                 .map_err(|_| invalid("invalid fast_mode"))?,

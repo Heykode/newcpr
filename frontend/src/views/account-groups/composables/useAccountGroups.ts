@@ -21,6 +21,7 @@ import { formatDateTime } from '@/utils/date'
 import { DEFAULT_ACCOUNT_GROUP_COLOR } from '../constants'
 
 export interface AccountGroupFormValue {
+  allowImageGeneration: boolean
   fastMode: GroupFastMode
   name: string
   description: string
@@ -117,6 +118,7 @@ export function useAccountGroups() {
     editingGroup.value = group
     form.value = {
       fastMode: group.fastMode ?? (group.disableFast ? 'disabled' : 'default'),
+      allowImageGeneration: group.allowImageGeneration ?? true,
       name: group.name,
       description: group.description ?? '',
       color: group.color,
@@ -144,11 +146,12 @@ export function useAccountGroups() {
       const description = form.value.description.trim() || null
       const fastMode = form.value.fastMode
       if (editingGroup.value) {
-        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode })
+        await updateAccountGroup({ id: editingGroup.value.id, name, description, color, fastMode, allowImageGeneration: form.value.allowImageGeneration })
       }
       else {
         await createAccountGroup({
           fastMode,
+          allowImageGeneration: form.value.allowImageGeneration,
           name,
           description,
           color,
@@ -320,5 +323,5 @@ export function useAccountGroups() {
 }
 
 function emptyForm(): AccountGroupFormValue {
-  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default', disableFast: false }
+  return { name: '', description: '', color: DEFAULT_ACCOUNT_GROUP_COLOR, fastMode: 'default', disableFast: false, allowImageGeneration: true }
 }

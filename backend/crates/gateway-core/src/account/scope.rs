@@ -247,6 +247,7 @@ impl ClientRoutingScope {
 /// 一次认证随 RuntimeSnapshot 冻结的账号目录与 Key 权限。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrozenAccountScope {
+    allow_image_generation: bool,
     directory: Arc<RuntimeAccountDirectory>,
     client_scope: ClientRoutingScope,
     fast_mode: FastMode,
@@ -255,12 +256,21 @@ pub struct FrozenAccountScope {
 
 impl FrozenAccountScope {
     #[must_use]
+    pub const fn with_image_generation(mut self, allowed: bool) -> Self {
+        self.allow_image_generation = allowed;
+        self
+    }
+    pub const fn allows_image_generation(&self) -> bool {
+        self.allow_image_generation
+    }
+    #[must_use]
     pub const fn new(
         directory: Arc<RuntimeAccountDirectory>,
         client_scope: ClientRoutingScope,
     ) -> Self {
         Self {
             directory,
+            allow_image_generation: true,
             client_scope,
             fast_mode: FastMode::Default,
             quality_model_account: None,

@@ -2,12 +2,12 @@
 import type { OpsError, OpsErrorMetadata } from '@/api'
 import { Download, RefreshCw } from '@lucide/vue'
 import { computed } from 'vue'
+import { getRequestDiagnosticsBundle } from '@/api'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
 import { useRequestDiagnostics } from '../composables/useRequestDiagnostics'
-import { requestDiagnosticsBundle } from '../utils/diagnosticsBundle'
 import RequestCaptureDetails from './RequestCaptureDetails.vue'
 import RequestTransportFailure from './RequestTransportFailure.vue'
 import UsageDetailCodePanel from './UsageDetailCodePanel.vue'
@@ -22,14 +22,14 @@ const events = computed(() => (trace.value?.events ?? []).map(event => ({
   content: JSON.stringify(event.data, null, 2),
 })))
 const selectedError = computed(() => props.errorRecord?.requestId === selectedId.value ? props.errorRecord : undefined)
-const canExport = computed(() => !loading.value && (detail.value?.requestId === selectedId.value || !!selectedError.value))
+const canExport = computed(() => !!selectedId.value)
 
 function download() {
   if (!canExport.value || exporting.value)
     return
-  const bundle = requestDiagnosticsBundle(selectedId.value, detail.value, selectedError.value)
+  const id = selectedId.value
   return runExport(
-    () => downloadJson(bundle, `diagnostics-${selectedId.value.replace(/[^\w-]/g, '_')}.json`),
+    async () => downloadJson(await getRequestDiagnosticsBundle({ requestId: id }), `diagnostics-${id.replace(/[^\w-]/g, '_')}.json`),
     { errorText: '导出诊断包失败', minimumMs: 400 },
   )
 }
@@ -55,7 +55,7 @@ function download() {
           <template #icon>
             <Download :size="14" />
           </template>
-          导出安全诊断包
+          导出诊断包
         </BaseButton>
       </div>
     </div>
@@ -63,17 +63,17 @@ function download() {
       {{ selectedId }}
     </p>
     <p class="mb-3 text-cp-xs leading-relaxed text-cp-text-secondary">
-      诊断包 v2 仅含关联字段、错误分类、尝试与时间线阶段；不含错误原文、正文、用户内容或事件 data。版本与环境需另附，分享前请审阅关联 ID。
+      导出包含关联请求、错误与诊断事实；认证信息自动脱敏，分享前请审阅业务内容。
     </p>
     <p v-if="!loading && !selectedError" class="text-cp-xs leading-relaxed text-cp-text-secondary">
-      当前请求未提供错误详情摘要，导出不会沿用其他请求的错误；可结合尝试记录排查。
+      当前页面没有错误摘要，导出时将重新读取此请求的关联记录。
     </p>
     <p v-if="loading" role="status" class="text-cp-sm text-cp-text-secondary">
       正在加载诊断记录…
     </p>
     <p v-else-if="error" role="alert" class="text-cp-sm text-cp-error-text">
       {{ error }}
-      <span v-if="selectedError">仍可导出本次错误的分类摘要和关联字段，缺失诊断会在包内标明。</span>
+      <span>仍可尝试导出，缺失诊断会在包内标明。</span>
     </p>
     <template v-else-if="detail">
       <p v-if="!detail.attemptsComplete" role="status" class="text-cp-xs leading-relaxed text-cp-warning-text">
@@ -91,7 +91,7 @@ function download() {
       <template v-else>
         <div class="mb-3 grid gap-1 text-cp-xs leading-relaxed">
           <p class="m-0 text-cp-text-secondary">
-            已观测 {{ trace.totalEvents }} 个阶段或事件，展示 {{ events.length }} 条记录。连续增量合并计数；历史事件内容可能未充分脱敏，不会自动导出。
+            已观测 {{ trace.totalEvents }} 个阶段或事件，展示 {{ events.length }} 条记录。
           </p>
           <p v-if="trace.droppedEvents" role="status" class="m-0 text-cp-warning-text">
             达到保存上限，{{ trace.droppedEvents }} 个事件已被淘汰；保留请求开头与最近事件。
@@ -116,7 +116,7 @@ function download() {
           </ol>
         </BaseScrollbar>
         <p class="mt-3 mb-0 text-cp-xs leading-relaxed text-cp-text-secondary">
-          界面中的诊断事实不等于默认导出内容。原始错误或完整报文如确需反馈，请先单独审阅脱敏；可用请求 ID 在服务器日志中检索。
+          诊断包无法补回当时未采集或已经过期的内容。
         </p>
       </template>
     </template>

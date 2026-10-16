@@ -30,6 +30,7 @@ async fn group(pool: &sqlx::PgPool) -> AccountGroupId {
     PgAccountGroupRepository::new(pool.clone())
         .create_account_group(
             NewAccountGroup {
+                allow_image_generation: true,
                 id: id.clone(),
                 name: "Synthetic Alerts".to_owned(),
                 description: None,

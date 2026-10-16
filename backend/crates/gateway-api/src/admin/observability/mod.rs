@@ -14,6 +14,7 @@ use super::{
     WireValidationError, wire::map_admin_service_error,
 };
 
+mod export;
 mod presenter;
 mod query;
 mod routes;

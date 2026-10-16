@@ -511,13 +511,26 @@ pub(super) fn decode_request_object(
     };
     // 下游是否收取完整 JSON 不决定上游传输；Provider 负责规范上游流式请求。
     let protocol_context = request_headers.protocol_context(use_websocket, frame_turn_metadata);
+    let semantics =
+        gateway_protocol::openai::codex_responses_request_semantics(&object, &protocol_context);
+    let client_turn = if object.get("generate").and_then(Value::as_bool) != Some(false)
+        && semantics.request_kind.as_deref() == Some("turn")
+        && !semantics.compact
+    {
+        gateway_protocol::openai::codex::codex_client_turn_ids(&object, &protocol_context)
+            .and_then(|(thread, turn)| gateway_core::operation::ClientTurn::new(thread, turn))
+    } else {
+        None
+    };
 
     let payload = ProtocolPayload::json_object(OPENAI_PROTOCOL, object)
         .map_err(|_| RequestDecodeError::CanonicalContract {
             field: "request".to_owned(),
         })?
         .with_context(protocol_context);
-    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
+    let operation = Operation::Generate(
+        GenerateRequest::from_protocol_payload(payload).with_client_turn(client_turn),
+    );
     Ok(DecodedResponsesRequest {
         operation,
         metadata: ResponsesRequestMetadata {

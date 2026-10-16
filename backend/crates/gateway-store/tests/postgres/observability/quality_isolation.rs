@@ -1,6 +1,43 @@
 use super::*;
 
 #[tokio::test]
+async fn diagnostic_export_targets_exact_ids_without_list_time_window() {
+    use gateway_admin::model::diagnostics::DiagnosticTarget;
+    let Some(db) = TestDatabase::create("diagnostic_targets").await else {
+        return;
+    };
+    seed_observability_facts(&db.pool, Utc::now() - TimeDelta::days(90))
+        .await
+        .unwrap();
+    sqlx::query("insert into ops_events(id,level,component,operation,failure_kind,message,created_at) values('orphan','error','worker','poll','internal','fixture',now() - interval '90 days')")
+        .execute(&db.pool).await.unwrap();
+    let store = admin_observability_store(&db.pool);
+    let target = DiagnosticTarget::Request("req_observe_failed".into());
+    let records = store.diagnostic_errors(&target, 128).await.unwrap();
+    assert!(!records.is_empty());
+    assert!(
+        records
+            .iter()
+            .all(|row| row.request_id.as_deref() == Some("req_observe_failed"))
+    );
+    assert_eq!(store.diagnostic_errors(&target, 1).await.unwrap().len(), 1);
+    let orphan = store
+        .diagnostic_errors(&DiagnosticTarget::Operation("orphan".into()), 128)
+        .await
+        .unwrap();
+    assert_eq!(orphan.len(), 1);
+    assert!(orphan[0].request_id.is_none());
+    assert!(
+        store
+            .diagnostic_errors(&DiagnosticTarget::Request("req_observe_%".into()), 128)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    db.close().await;
+}
+
+#[tokio::test]
 async fn quality_history_is_isolated_from_all_business_projections_without_deleting_audit() {
     let Some(database) = TestDatabase::create("quality_log_isolation").await else {
         return;
@@ -43,6 +80,7 @@ async fn quality_history_is_isolated_from_all_business_projections_without_delet
         .await
         .unwrap();
     let records_query = UsageRecordQuery {
+        record_status: Default::default(),
         range,
         filter: UsageRecordFilter::default(),
         current_page: 1,
@@ -164,6 +202,32 @@ async fn quality_history_is_isolated_from_all_business_projections_without_delet
             .unwrap(),
         trend
     );
+    for status in [
+        admin_observability::UsageRecordStatus::All,
+        admin_observability::UsageRecordStatus::Error,
+    ] {
+        let mut query = records_query.clone();
+        query.record_status = status;
+        let full = repository.list_usage_records(query.clone()).await.unwrap();
+        assert!(full.items.iter().any(|row| row.id == "req_observe_failed"));
+        assert!(full.items.iter().all(|row| !row.id.starts_with("quality_")));
+        if status == admin_observability::UsageRecordStatus::Error {
+            assert!(
+                full.items
+                    .iter()
+                    .all(|row| matches!(row.outcome.as_str(), "failed" | "incomplete"))
+            );
+        } else {
+            assert!(full.items.iter().any(|row| row.id == "req_observe_success"));
+        }
+        query.page_size = ObservabilityPageSize::new(1).unwrap();
+        for (index, expected) in full.items.iter().enumerate() {
+            query.current_page = u32::try_from(index).unwrap() + 1;
+            let page = repository.list_usage_records(query.clone()).await.unwrap();
+            assert_eq!(page.total, full.total);
+            assert_eq!(page.items.as_slice(), std::slice::from_ref(expected));
+        }
+    }
     assert_eq!(
         repository.list_usage_records(records_query).await.unwrap(),
         records

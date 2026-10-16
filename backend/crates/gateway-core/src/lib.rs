@@ -47,6 +47,7 @@ use task::{WorkerContribution, WorkerDefinitionError};
 /// Store 提供给数据面 Core 的封闭能力集合。
 #[derive(Clone)]
 pub struct CoreStorePorts {
+    client_retry: Option<Arc<dyn engine::client_retry::ClientRetryStore>>,
     execution: Arc<dyn ExecutionStore>,
     admissions: Arc<dyn ClientAdmissionPort>,
     admission_recovery: Arc<dyn ClientAdmissionRecoveryPort>,
@@ -60,6 +61,14 @@ pub struct CoreStorePorts {
 }
 
 impl CoreStorePorts {
+    #[must_use]
+    pub fn with_client_retry(
+        mut self,
+        store: Arc<dyn engine::client_retry::ClientRetryStore>,
+    ) -> Self {
+        self.client_retry = Some(store);
+        self
+    }
     #[must_use]
     pub fn new(
         execution: Arc<dyn ExecutionStore>,
@@ -86,6 +95,7 @@ impl CoreStorePorts {
             client_api_key_usage,
             budget: None,
             captures: None,
+            client_retry: None,
         }
     }
 
@@ -199,6 +209,9 @@ pub async fn initialize_with_request_tuning(
     }
     if let Some(captures) = ports.captures {
         service = service.with_captures(captures);
+    }
+    if let Some(store) = ports.client_retry {
+        service = service.with_client_retry(store);
     }
     let service = Arc::new(service);
     let execution: Arc<dyn ExecutionService> = service.clone();

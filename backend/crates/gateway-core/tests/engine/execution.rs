@@ -2651,9 +2651,22 @@ fn start_snapshot() -> RuntimeSnapshot {
 }
 
 fn start_snapshot_with_policy(revision: u64, enabled: bool, limits: RateLimits) -> RuntimeSnapshot {
+    start_snapshot_with_image_policy(revision, enabled, limits, true)
+}
+
+fn start_snapshot_with_image_policy(
+    revision: u64,
+    enabled: bool,
+    limits: RateLimits,
+    allowed: bool,
+) -> RuntimeSnapshot {
     let provider = ProviderKind::new("openai").expect("provider kind");
     let capabilities =
-        ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000));
+        ModelCapabilities::new(BTreeSet::from([OperationKind::Generate]), Some(16_000))
+            .with_feature(
+                gateway_core::operation::Feature::Vision,
+                gateway_core::routing::SupportLevel::Native,
+            );
     RuntimeSnapshot::new(
         ConfigRevision::new(revision).expect("config revision"),
         AccountSelectionPolicy::new(
@@ -2670,7 +2683,12 @@ fn start_snapshot_with_policy(revision: u64, enabled: bool, limits: RateLimits) 
         vec![ClientPolicy::new(
             ClientApiKeyId::new("key_start_test").expect("client API key ID"),
             PlaintextClientApiKey::new("sk_start_test").expect("plaintext client API key"),
-            account_scope(&provider, "acct_start"),
+            Arc::new(
+                account_scope(&provider, "acct_start")
+                    .as_ref()
+                    .clone()
+                    .with_image_generation(allowed),
+            ),
             enabled,
             limits,
         )],
@@ -2687,6 +2705,53 @@ fn probe_operation() -> Operation {
         ProtocolPayload::json_object("openai", body.as_object().expect("request object").clone())
             .expect("OpenAI payload"),
     ))
+}
+
+#[test]
+fn image_policy_rejects_generation_before_admission_but_preserves_image_input() {
+    for transport in [
+        ClientTransport::HttpJson,
+        ClientTransport::HttpSse,
+        ClientTransport::WebSocket,
+    ] {
+        let admissions = Arc::new(Admissions::default());
+        let store = Arc::new(TrackingExecutionStore::default());
+        let service = DefaultExecutionService::new(
+            RuntimeSnapshotHandle::new(start_snapshot_with_image_policy(
+                1,
+                true,
+                RateLimits::unlimited(),
+                false,
+            )),
+            store.clone(),
+            ProviderRegistry::new([Arc::new(FailingProvider) as Arc<dyn Provider>]).unwrap(),
+            admissions.clone(),
+            Arc::new(UnusedCircuits),
+            Arc::new(UnusedContinuation),
+            Arc::new(RecordingClientApiKeyUsage::default()),
+        );
+        let mut start = request(&service, transport);
+        start.operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "openai",
+                json!({"model":"gpt-start", "input":"draw", "tools":[{"type":"image_generation"}]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap(),
+        ));
+        let Err(error) = block_on(service.start(start)) else {
+            panic!("image generation must be denied")
+        };
+        assert_eq!(error.kind(), GatewayErrorKind::PolicyDenied);
+        assert!(admissions.limits.lock().unwrap().is_empty());
+        assert!(!store.touched.load(Ordering::SeqCst));
+        let mut start = request(&service, transport);
+        start.operation = Operation::Generate(GenerateRequest::from_protocol_payload(ProtocolPayload::json_object("openai", json!({"model":"gpt-start", "input":[{"role":"user","content":[{"type":"input_image","image_url":"https://fixture.invalid/image.png"}]}]}).as_object().unwrap().clone()).unwrap()));
+        let started = block_on(service.start(start)).expect("ordinary image input remains allowed");
+        drop(started);
+    }
 }
 
 fn start_operation() -> Operation {

@@ -9,7 +9,9 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use super::client_retry::{ClientRetryGuard, ClientRetryKey};
 use super::observation::ResponseObservation;
+
 use crate::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, NativeContinuationScope, PreviousResponseId,
 };
@@ -36,6 +38,16 @@ use crate::routing::RoutingPlan;
 use futures::future::{BoxFuture, Fuse};
 use futures::{FutureExt, StreamExt, pin_mut, select_biased};
 use futures_timer::Delay;
+
+fn is_return_error_retry(error: &ProviderError) -> bool {
+    matches!(
+        error.pre_delivery_retry(),
+        Some(crate::error::PreDeliveryRetry::SameAccountTransientRetry {
+            policy: crate::error::TransientRetryPolicy::RetryThenReturnError,
+            ..
+        })
+    )
+}
 
 /// Request 级协调器；不会创建或写入 `request_attempts`。
 pub struct AttemptCoordinator<S: ?Sized> {
@@ -201,6 +213,23 @@ where
                 "admissionMs": request.admission_decision_ms,
                 "continuation": format!("{continuation_attempt:?}"),
                 "candidateCount": plan.candidates().len(),
+                "accountPolicy": {
+                    "strategy": plan.account_selection_policy().strategy().as_str(),
+                    "affinity": plan.account_selection_policy().openai_account_affinity().as_str(),
+                    "maxAccountRotations": plan.request_tuning().max_account_switches,
+                    "maxRoutingAttempts": plan.max_attempts().get(),
+                    "maxConcurrentPerAccount": plan.account_selection_policy().max_concurrent_per_account().get(),
+                    "accountBusyWaitEnabled": plan.request_tuning().account_busy_wait_enabled,
+                    "stickyMaxWaiting": plan.request_tuning().account_busy_wait_sticky_max_waiting,
+                    "stickyTimeoutSeconds": plan.request_tuning().account_busy_wait_sticky_timeout_seconds,
+                    "fallbackMaxWaiting": plan.request_tuning().account_busy_wait_fallback_max_waiting,
+                    "fallbackTimeoutSeconds": plan.request_tuning().account_busy_wait_fallback_timeout_seconds,
+                    "requestIntervalMs": plan.account_selection_policy().request_interval().as_millis(),
+                    "sessionAffinityTtlMs": plan.account_selection_policy().openai_session_binding_ttl().as_millis(),
+                    "smartWeights": plan.account_selection_policy().smart_scheduling().weights(),
+                    "preferHigherWeight": plan.account_selection_policy().smart_scheduling().prefer_higher_weight(),
+                },
+                "requiredAccount": account_selection.required_account().map(|account| account.as_str()),
             }),
         );
         let image_generation_requested = operation.image_generation_requested();
@@ -259,6 +288,7 @@ where
             last_retryable_failure_events: Vec::new(),
             provider_attempt_outcomes: Vec::new(),
             pending_terminal_failure: None,
+            client_retry: None,
         };
 
         if session.cancellation.is_cancelled() {
@@ -268,6 +298,26 @@ where
         if deadline.is_elapsed() {
             session.finish_interruption(&EngineError::Deadline).await?;
             return Err(EngineError::Deadline);
+        }
+        if matches!(session.account_selection, AccountSelection::Scheduled(_))
+            && let Some(store) = &self.engine.client_retry
+            && let Operation::Generate(generate) = &session.operation
+            && let Some(turn) = generate.client_turn()
+        {
+            let guard = ClientRetryGuard::load(
+                store.clone(),
+                ClientRetryKey {
+                    client_key_id: session.client_api_key_ref.clone(),
+                    turn: turn.clone(),
+                },
+                session.request_id.clone(),
+            )
+            .await;
+            session.trace.record(
+                "client_retry.loaded",
+                json!({"previousFailure":guard.has_failure()}),
+            );
+            session.client_retry = Some(guard);
         }
         Ok(session)
     }
@@ -387,6 +437,7 @@ pub struct ResponseExecutionSession<S: ?Sized> {
     provider_attempt_outcomes: Vec<ProviderAttemptOutcome>,
     /// 原子失败批次已交给协议层、但尚待下游提交后收敛的原 Provider 错误。
     pending_terminal_failure: Option<PendingTerminalFailure>,
+    client_retry: Option<ClientRetryGuard>,
 }
 
 struct PendingTerminalFailure {
@@ -469,6 +520,7 @@ where
                     error,
                     send_state,
                 } => {
+                    self.record_client_retry_failure(&error).await;
                     self.replay_barrier_reached = true;
                     let requirement = if self.downstream_committed_at.is_some() {
                         CommitRequirement::AlreadyCommitted
@@ -836,6 +888,14 @@ where
                     if !event.has_client_event() {
                         continue;
                     }
+                    if event
+                        .canonical_facts()
+                        .iter()
+                        .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+                        && let Some(guard) = &mut self.client_retry
+                    {
+                        guard.success().await;
+                    }
                     return Ok(PullOutcome::Event(event));
                 }
                 PollBoundary::Item(Some(Err(error))) => {
@@ -1071,6 +1131,14 @@ where
                 Err(error) => {
                     record_trace_error(&attempt_trace, &error);
                     if self.prepare_unavailable_native_continuation_replay(&error) {
+                        attempt_trace.record(
+                            "retry.decided",
+                            json!({
+                                "phase": "prepare", "retryable": true,
+                                "continuationRetry": true,
+                                "accountSwitches": self.account_switches,
+                            }),
+                        );
                         return Ok(Some(PullOutcome::AttemptDiscarded));
                     }
                     if !error.retry_is_prohibited()
@@ -1089,8 +1157,27 @@ where
                         )
                         && self.advance_provider_candidate()
                     {
+                        attempt_trace.record(
+                            "retry.decided",
+                            json!({
+                                "phase": "prepare", "retryable": true,
+                                "advanceProvider": true,
+                                "accountSwitches": self.account_switches,
+                                "accountWaitExhausted": self.account_wait_budget.is_exhausted(),
+                            }),
+                        );
                         return Ok(Some(PullOutcome::AttemptDiscarded));
                     }
+                    attempt_trace.record(
+                        "retry.decided",
+                        json!({
+                            "phase": "prepare", "retryable": false,
+                            "retryProhibited": error.retry_is_prohibited(),
+                            "sendState": format!("{:?}", error.send_state()),
+                            "accountSwitches": self.account_switches,
+                            "accountWaitExhausted": self.account_wait_budget.is_exhausted(),
+                        }),
+                    );
                     if !error.retry_is_prohibited()
                         && matches!(
                             error.kind(),
@@ -1491,6 +1578,11 @@ where
             && attempt_send_state != UpstreamSendState::Ambiguous
             && provider_proved_replay_safe
             && self.routing_attempts < self.plan.max_attempts().get();
+        let suppress_transient_retry = is_return_error_retry(&error)
+            && self
+                .client_retry
+                .as_ref()
+                .is_some_and(ClientRetryGuard::has_failure);
         let transient_retry = match error.pre_delivery_retry() {
             Some(crate::error::PreDeliveryRetry::SameAccountTransientRetry {
                 max_retries,
@@ -1498,7 +1590,7 @@ where
                 max_delay,
                 jitter,
                 ..
-            }) if ordinary_retry => {
+            }) if ordinary_retry && !suppress_transient_retry => {
                 let retries = self
                     .transient_retry_counts
                     .entry(current.metadata.provider_account_id().clone())
@@ -1545,15 +1637,28 @@ where
                 || transport_recovery.is_some());
 
         self.trace.attempt(current.index.get()).record("retry.decided", json!({
+            "phase": "execute",
             "retryable": retryable, "continuationRetry": continuation_retry,
             "sameAccountRetry": same_account_retry, "accountRotationRetry": account_rotation_retry,
             "ordinaryRetry": ordinary_retry, "transportRecovery": transport_recovery.is_some(),
             "transientRetry": transient_retry.is_some(),
+            "clientRetrySuppressed": suppress_transient_retry,
             "connectionRetry": connection_retry_requested,
             "connectionRetries": self.connection_retries,
             "delayMs": transient_retry.or(transport_recovery.map(|(_, delay)| delay)).map(duration_ms),
             "downstreamCommitted": self.response_commit.committed_at().is_some(),
             "replayBarrierReached": self.replay_barrier_reached,
+            "deliveryPending": self.delivery_pending,
+            "providerProvedReplaySafe": provider_proved_replay_safe,
+            "retryProhibited": error.retry_is_prohibited(),
+            "requiredAccount": self.account_selection.required_account().map(|account| account.as_str()),
+            "continuation": format!("{:?}", self.continuation_attempt),
+            "connectionRecoveryAvailable": self.connection_budget.remaining().is_some(),
+            "remainingRoutingAttempts": self.plan.max_attempts().get().saturating_sub(self.routing_attempts),
+            "maxAccountRotations": self.plan.request_tuning().max_account_switches,
+            "accountRotations": self.account_switches,
+            "transientRetriesUsed": self.transient_retry_counts.get(current.metadata.provider_account_id()).copied().unwrap_or_default(),
+            "credentialRecoveryAttempted": self.credential_recovery_attempted_accounts.contains(current.metadata.provider_account_id()),
             "sendState": format!("{attempt_send_state:?}"),
         }));
         if retryable {
@@ -1778,6 +1883,9 @@ where
         if self.is_finalized() {
             return Ok(());
         }
+        if let Some(guard) = &mut self.client_retry {
+            guard.success().await;
+        }
         let completed_at = SystemTime::now();
         self.observation.finish();
         let upstream_request_id = self
@@ -1869,6 +1977,15 @@ where
         Err(provider_engine_error(error))
     }
 
+    async fn record_client_retry_failure(&mut self, error: &ProviderError) {
+        if self.attempts > 0
+            && is_return_error_retry(error)
+            && let Some(guard) = &mut self.client_retry
+        {
+            guard.failure().await;
+        }
+    }
+
     async fn finish_provider_error(&mut self, error: &ProviderError) -> Result<(), EngineError> {
         self.finish_provider_error_with_send_state(
             error,
@@ -1882,6 +1999,7 @@ where
         error: &ProviderError,
         send_state: UpstreamSendState,
     ) -> Result<(), EngineError> {
+        self.record_client_retry_failure(error).await;
         let send_state = self.raise_send_watermark(send_state);
         self.response_commit.finish();
         let outcome = if error.kind() == ProviderErrorKind::Cancelled {

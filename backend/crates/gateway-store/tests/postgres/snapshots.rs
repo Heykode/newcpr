@@ -1241,6 +1241,7 @@ fn attempt(id: &str, count: u32, account_id: &str) -> ModelRequestAttemptStart {
 
 fn usage_query(started_at: DateTime<Utc>, filter: UsageRecordFilter) -> UsageRecordQuery {
     UsageRecordQuery {
+        record_status: Default::default(),
         range: range_around(started_at),
         filter,
         current_page: 1,

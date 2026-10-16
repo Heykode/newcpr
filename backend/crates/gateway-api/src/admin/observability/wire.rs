@@ -87,6 +87,7 @@ pub struct UsageTurnStateSummaryView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageListRecordView {
+    pub outcome: String,
     pub client_api_key_name: Option<String>,
     pub id: String,
     pub provider: Option<String>,

@@ -308,13 +308,46 @@ pub struct GenerateRequest {
 #[derive(Clone, PartialEq)]
 struct GeneratePayload {
     protocol_payload: ProtocolPayload,
+    client_turn: Option<ClientTurn>,
     provider_session_state: Option<ProviderSessionState>,
     quality_probe: Option<quality_probe::QualityProbeStep>,
     excel_recovery_revision: Option<u64>,
     excel_recovery_nonce: Option<String>,
 }
 
+/// Confirmed protocol identities, independent of account and connection routing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientTurn {
+    thread_id: String,
+    turn_id: String,
+}
+
+impl ClientTurn {
+    pub fn new(thread_id: String, turn_id: String) -> Option<Self> {
+        if [&thread_id, &turn_id].iter().any(|value| {
+            value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+        }) {
+            return None;
+        }
+        Some(Self { thread_id, turn_id })
+    }
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+    pub fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+}
+
 impl GenerateRequest {
+    #[must_use]
+    pub fn with_client_turn(mut self, turn: Option<ClientTurn>) -> Self {
+        Arc::make_mut(&mut self.payload).client_turn = turn;
+        self
+    }
+    pub fn client_turn(&self) -> Option<&ClientTurn> {
+        self.payload.client_turn.as_ref()
+    }
     /// 创建携带协议不透明正文的生成请求。
     ///
     /// 完整请求只以原始 wire object 保存；Core 仅局部只读已知字段以推导路由能力，
@@ -324,6 +357,7 @@ impl GenerateRequest {
         Self {
             payload: Arc::new(GeneratePayload {
                 protocol_payload,
+                client_turn: None,
                 provider_session_state: None,
                 quality_probe: None,
                 excel_recovery_revision: None,

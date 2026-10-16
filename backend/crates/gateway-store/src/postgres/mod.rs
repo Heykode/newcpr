@@ -22,6 +22,7 @@ mod egress;
 mod execution;
 mod execution_buffer;
 mod log_cleanup;
+mod migrations;
 mod notifications;
 mod observability;
 mod ops_events;
@@ -46,6 +47,7 @@ pub use egress::*;
 pub use execution::*;
 pub use execution_buffer::*;
 pub use log_cleanup::PgLogCleanupStore;
+pub use migrations::migrate_schema;
 pub use notifications::*;
 pub use observability::*;
 pub use ops_events::*;
@@ -87,7 +89,11 @@ pub async fn connect_and_migrate(
         .map_err(|error| {
             postgres_unavailable("connect PostgreSQL for migrations").with_source(error)
         })?;
-    if let Err(error) = MIGRATOR.run(&migration_pool).await {
+    let migration_result = match migration_pool.acquire().await {
+        Ok(mut connection) => migrate_schema(&mut connection, &MIGRATOR).await,
+        Err(error) => Err(sqlx::migrate::MigrateError::from(error)),
+    };
+    if let Err(error) = migration_result {
         migration_pool.close().await;
         return Err(StoreError::Unavailable {
             backend: StoreBackend::PostgreSql,

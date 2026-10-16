@@ -554,6 +554,7 @@ impl MemoryAccountGroupStore {
             (
                 primary_id.clone(),
                 AccountGroupRecord {
+                    allow_image_generation: true,
                     id: primary_id,
                     name: "Alpha routing".to_owned(),
                     description: Some("Primary traffic".to_owned()),
@@ -577,6 +578,7 @@ impl MemoryAccountGroupStore {
             (
                 secondary_id.clone(),
                 AccountGroupRecord {
+                    allow_image_generation: true,
                     id: secondary_id,
                     name: "Beta routing".to_owned(),
                     description: None,
@@ -770,6 +772,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
             command.fast_mode
         };
         let record = AccountGroupRecord {
+            allow_image_generation: true,
             id: command.id.clone(),
             name: command.name,
             description: command.description,
@@ -1198,6 +1201,27 @@ impl AccountRuntimeStore for UnusedStore {
 
 #[async_trait]
 impl ObservabilityStore for UnusedStore {
+    async fn diagnostic_errors(
+        &self,
+        target: &gateway_admin::model::diagnostics::DiagnosticTarget,
+        limit: u16,
+    ) -> AdminStoreResult<Vec<OpsError>> {
+        use gateway_admin::model::diagnostics::DiagnosticTarget;
+        Ok(self
+            .ops_errors
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|error| match target {
+                DiagnosticTarget::Request(id) => error.request_id.as_ref() == Some(id),
+                DiagnosticTarget::Operation(id) => {
+                    error.source == "ops_event" && error.event_id == *id
+                }
+            })
+            .take(usize::from(limit))
+            .cloned()
+            .collect())
+    }
     async fn dashboard_summary(
         &self,
         range: TimeRange,
@@ -1246,11 +1270,12 @@ impl ObservabilityStore for UnusedStore {
         })
     }
 
-    async fn usage_record_detail(&self, _: &str) -> AdminStoreResult<UsageDetail> {
+    async fn usage_record_detail(&self, request_id: &str) -> AdminStoreResult<UsageDetail> {
         self.usage_detail
             .lock()
             .expect("usage detail")
             .clone()
+            .filter(|detail| detail.request.id == request_id)
             .ok_or_else(|| unavailable("usage detail"))
     }
 

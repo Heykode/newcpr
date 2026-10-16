@@ -51,6 +51,415 @@ use gateway_core::routing::{
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::{Map, Value, json};
 
+mod client_retry {
+    use super::*;
+    use gateway_core::engine::client_retry::{ClientRetryKey, ClientRetryStore};
+    use gateway_core::error::TransientRetryPolicy;
+    use gateway_core::operation::ClientTurn;
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct RetryMarkers {
+        entries: Mutex<BTreeMap<String, ModelRequestId>>,
+        unavailable: bool,
+        stalled: bool,
+    }
+
+    fn retry_marker_key(key: &ClientRetryKey) -> String {
+        format!(
+            "{}/{}/{}",
+            key.client_key_id.as_str(),
+            key.turn.thread_id(),
+            key.turn.turn_id()
+        )
+    }
+
+    impl ClientRetryStore for RetryMarkers {
+        fn load<'a>(
+            &'a self,
+            key: &'a ClientRetryKey,
+        ) -> futures::future::BoxFuture<'a, Result<Option<ModelRequestId>, StoreError>> {
+            Box::pin(async move {
+                if self.stalled {
+                    return futures::future::pending().await;
+                }
+                if self.unavailable {
+                    return Err(StoreError::new(StoreErrorKind::Unavailable));
+                }
+                Ok(self
+                    .entries
+                    .lock()
+                    .unwrap()
+                    .get(&retry_marker_key(key))
+                    .cloned())
+            })
+        }
+
+        fn record_failure<'a>(
+            &'a self,
+            key: &'a ClientRetryKey,
+            version: &'a ModelRequestId,
+            ttl: Duration,
+        ) -> futures::future::BoxFuture<'a, Result<(), StoreError>> {
+            Box::pin(async move {
+                assert_eq!(ttl, Duration::from_secs(300));
+                if self.stalled {
+                    return futures::future::pending().await;
+                }
+                if self.unavailable {
+                    return Err(StoreError::new(StoreErrorKind::Unavailable));
+                }
+                self.entries
+                    .lock()
+                    .unwrap()
+                    .insert(retry_marker_key(key), version.clone());
+                Ok(())
+            })
+        }
+
+        fn clear_failure<'a>(
+            &'a self,
+            key: &'a ClientRetryKey,
+            expected: &'a ModelRequestId,
+        ) -> futures::future::BoxFuture<'a, Result<(), StoreError>> {
+            Box::pin(async move {
+                if self.stalled {
+                    return futures::future::pending().await;
+                }
+                if self.unavailable {
+                    return Err(StoreError::new(StoreErrorKind::Unavailable));
+                }
+                let mut entries = self.entries.lock().unwrap();
+                if entries.get(&retry_marker_key(key)) == Some(expected) {
+                    entries.remove(&retry_marker_key(key));
+                }
+                Ok(())
+            })
+        }
+    }
+
+    fn retry_turn_operation(thread: &str, turn: &str) -> Operation {
+        let Operation::Generate(request) = generate_operation() else {
+            unreachable!()
+        };
+        Operation::Generate(
+            request.with_client_turn(ClientTurn::new(thread.to_owned(), turn.to_owned())),
+        )
+    }
+
+    fn retry_failure() -> Script {
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Unavailable,
+                UpstreamSendState::Sent,
+            )
+            .with_status(503)
+            .with_replay_safe()
+            .with_transient_retry_policy(
+                NonZeroU32::new(5).unwrap(),
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::ZERO,
+                TransientRetryPolicy::RetryThenReturnError,
+            ))],
+        }
+    }
+
+    fn retry_coordinator(
+        scripts: Vec<Script>,
+        markers: Arc<RetryMarkers>,
+    ) -> (AttemptCoordinator<FakeStore>, Arc<ScriptedProvider>) {
+        let provider = Arc::new(ScriptedProvider::new(scripts));
+        let mut registry = ProviderRegistry::builder();
+        registry.register(provider.clone()).unwrap();
+        let engine = GatewayEngine::new(Arc::new(FakeStore::default()), registry.build())
+            .with_client_retry(markers);
+        (AttemptCoordinator::new(engine), provider)
+    }
+
+    fn retry_session(
+        coordinator: &AttemptCoordinator<FakeStore>,
+        id: &str,
+        operation: Operation,
+        client: &str,
+    ) -> gateway_core::engine::ResponseExecutionSession<FakeStore> {
+        let mut request = model_request(&operation, SystemTime::now() + Duration::from_secs(30));
+        request.id = ModelRequestId::new(id).unwrap();
+        request.client_api_key_ref = ClientApiKeyId::new(client).unwrap();
+        block_on(coordinator.start(
+            request,
+            operation.clone(),
+            plan(&operation),
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn client_retry_should_skip_repeated_budget_and_clear_before_completed_delivery() {
+        let markers = Arc::new(RetryMarkers::default());
+        let mut scripts = (0..7).map(|_| retry_failure()).collect::<Vec<_>>();
+        scripts.push(Script::HangingStream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        });
+        scripts.extend([
+            retry_failure(),
+            retry_failure(),
+            Script::Stream {
+                account_id: "acct_first",
+                items: complete_stream(None),
+            },
+        ]);
+        let (coordinator, provider) = retry_coordinator(scripts, markers.clone());
+        let operation = retry_turn_operation("thread", "turn");
+        for (id, expected) in [("req_initial", 6), ("req_retry", 7)] {
+            let mut session = retry_session(&coordinator, id, operation.clone(), "key_client_1");
+            assert!(block_on(session.collect_uncommitted()).is_err());
+            assert_eq!(provider.contexts.lock().unwrap().len(), expected);
+        }
+        let mut recovered = retry_session(
+            &coordinator,
+            "req_recovered",
+            operation.clone(),
+            "key_client_1",
+        );
+        block_on(recovered.next_event()).unwrap().unwrap();
+        block_on(recovered.commit_downstream(Some(200))).unwrap();
+        let completed = block_on(recovered.next_event()).unwrap().unwrap();
+        assert!(completed.into_provider_events().iter().any(|event| {
+            event
+                .canonical_facts()
+                .iter()
+                .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+        }));
+        assert!(markers.entries.lock().unwrap().is_empty());
+        assert!(!recovered.is_finalized());
+        // 输入可以随工具结果改变，正常续请求沿用同轮次但重新获得网关预算
+        let mut followup = retry_session(&coordinator, "req_followup", operation, "key_client_1");
+        block_on(followup.collect_uncommitted()).unwrap();
+        block_on(followup.commit_downstream(Some(200))).unwrap();
+        assert_eq!(provider.contexts.lock().unwrap().len(), 11);
+        block_on(recovered.cancel_and_finalize()).unwrap();
+    }
+
+    #[test]
+    fn client_retry_should_record_atomic_failure_before_delivering_its_events() {
+        let markers = Arc::new(RetryMarkers::default());
+        let (coordinator, provider) = retry_coordinator(
+            vec![
+                Script::Stream {
+                    account_id: "acct_first",
+                    items: vec![
+                        Ok(GatewayEvent::Started(ResponseMeta::new("resp", "gpt-5"))),
+                        Err(
+                            atomic_response_failed("resp", "failed").with_transient_retry_policy(
+                                NonZeroU32::new(5).unwrap(),
+                                Duration::ZERO,
+                                Duration::ZERO,
+                                Duration::ZERO,
+                                TransientRetryPolicy::RetryThenReturnError,
+                            ),
+                        ),
+                    ],
+                },
+                retry_failure(),
+            ],
+            markers.clone(),
+        );
+        let operation = retry_turn_operation("thread", "turn");
+        let mut first = retry_session(
+            &coordinator,
+            "req_atomic",
+            operation.clone(),
+            "key_client_1",
+        );
+        block_on(first.next_event()).unwrap().unwrap();
+        block_on(first.commit_downstream(Some(200))).unwrap();
+        block_on(first.next_event()).unwrap().unwrap();
+        assert_eq!(
+            markers
+                .entries
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .as_str(),
+            "req_atomic"
+        );
+        // 不驱动旧请求 EOF，新请求此时已经必须看到失败标记
+        let mut retry = retry_session(&coordinator, "req_atomic_retry", operation, "key_client_1");
+        assert!(block_on(retry.collect_uncommitted()).is_err());
+        assert_eq!(provider.contexts.lock().unwrap().len(), 2);
+        block_on(first.cancel_and_finalize()).unwrap();
+        assert_eq!(
+            markers
+                .entries
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .as_str(),
+            "req_atomic_retry"
+        );
+    }
+
+    #[test]
+    fn client_retry_late_success_should_keep_a_newer_failure() {
+        let markers = Arc::new(RetryMarkers::default());
+        markers.entries.lock().unwrap().insert(
+            "key_client_1/thread/turn".to_owned(),
+            ModelRequestId::new("req_old").unwrap(),
+        );
+        let (coordinator, _) = retry_coordinator(
+            vec![
+                Script::HangingStream {
+                    account_id: "acct_first",
+                    items: complete_stream(None),
+                },
+                retry_failure(),
+            ],
+            markers.clone(),
+        );
+        let operation = retry_turn_operation("thread", "turn");
+        let mut slow = retry_session(&coordinator, "req_slow", operation.clone(), "key_client_1");
+        block_on(slow.next_event()).unwrap().unwrap();
+        block_on(slow.commit_downstream(Some(200))).unwrap();
+        let mut newer = retry_session(&coordinator, "req_newer", operation, "key_client_1");
+        assert!(block_on(newer.collect_uncommitted()).is_err());
+        block_on(slow.next_event()).unwrap().unwrap();
+        assert_eq!(
+            markers
+                .entries
+                .lock()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .as_str(),
+            "req_newer"
+        );
+        block_on(slow.cancel_and_finalize()).unwrap();
+    }
+
+    #[test]
+    fn client_retry_should_isolate_client_thread_and_turn_and_ignore_missing_identity() {
+        for (client, operation) in [
+            ("key_other", retry_turn_operation("thread", "turn")),
+            ("key_client_1", retry_turn_operation("other", "turn")),
+            ("key_client_1", retry_turn_operation("thread", "other")),
+            ("key_client_1", generate_operation()),
+        ] {
+            let markers = Arc::new(RetryMarkers::default());
+            markers.entries.lock().unwrap().insert(
+                "key_client_1/thread/turn".to_owned(),
+                ModelRequestId::new("req_old").unwrap(),
+            );
+            let (coordinator, provider) = retry_coordinator(
+                vec![
+                    retry_failure(),
+                    Script::Stream {
+                        account_id: "acct_first",
+                        items: complete_stream(None),
+                    },
+                ],
+                markers.clone(),
+            );
+            let mut session = retry_session(&coordinator, "req_distinct", operation, client);
+            block_on(session.collect_uncommitted()).unwrap();
+            block_on(session.commit_downstream(Some(200))).unwrap();
+            assert_eq!(provider.contexts.lock().unwrap().len(), 2);
+            assert_eq!(markers.entries.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn client_retry_store_failure_or_timeout_should_preserve_original_retries_and_error() {
+        for stalled in [false, true] {
+            let markers = Arc::new(RetryMarkers {
+                unavailable: !stalled,
+                stalled,
+                ..Default::default()
+            });
+            let (coordinator, provider) =
+                retry_coordinator((0..6).map(|_| retry_failure()).collect(), markers);
+            let started = std::time::Instant::now();
+            let mut session = retry_session(
+                &coordinator,
+                "req_unavailable",
+                retry_turn_operation("thread", "turn"),
+                "key_client_1",
+            );
+            let Err(EngineError::Provider(error)) = block_on(session.collect_uncommitted()) else {
+                panic!("original upstream failure");
+            };
+            assert_eq!(error.upstream_status(), Some(503));
+            assert_eq!(provider.contexts.lock().unwrap().len(), 6);
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
+    }
+
+    #[test]
+    fn client_retry_should_preserve_other_retry_policies_and_not_mark_their_failures() {
+        for seeded in [false, true] {
+            let markers = Arc::new(RetryMarkers::default());
+            if seeded {
+                markers.entries.lock().unwrap().insert(
+                    "key_client_1/thread/turn".to_owned(),
+                    ModelRequestId::new("req_old").unwrap(),
+                );
+            }
+            let failure = || {
+                ProviderError::new(ProviderErrorKind::RateLimited, UpstreamSendState::Sent)
+                    .with_status(429)
+                    .with_replay_safe()
+                    .with_transient_retry_policy(
+                        NonZeroU32::new(3).unwrap(),
+                        Duration::ZERO,
+                        Duration::ZERO,
+                        Duration::ZERO,
+                        TransientRetryPolicy::RetryThenRotateAccount,
+                    )
+            };
+            let scripts = vec![
+                Script::Stream {
+                    account_id: "acct_first",
+                    items: vec![Err(failure())],
+                },
+                // 已提交输出后的失败直接交回客户端，不应创建或刷新本策略标记
+                Script::Stream {
+                    account_id: "acct_first",
+                    items: vec![
+                        Ok(GatewayEvent::Started(ResponseMeta::new("resp", "gpt-5"))),
+                        Err(failure()),
+                    ],
+                },
+            ];
+            let (coordinator, provider) = retry_coordinator(scripts, markers.clone());
+            let mut session = retry_session(
+                &coordinator,
+                "req_other_policy",
+                retry_turn_operation("thread", "turn"),
+                "key_client_1",
+            );
+            block_on(session.next_event()).unwrap().unwrap();
+            block_on(session.commit_downstream(Some(200))).unwrap();
+            assert!(block_on(session.next_event()).is_err());
+            assert_eq!(provider.contexts.lock().unwrap().len(), 2);
+            let entries = markers.entries.lock().unwrap();
+            assert_eq!(entries.len(), usize::from(seeded));
+            if seeded {
+                assert_eq!(entries.values().next().unwrap().as_str(), "req_old");
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FinalState {
     error_kind: Option<GatewayErrorKind>,

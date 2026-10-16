@@ -61,6 +61,7 @@ async fn usage_search_shared_filters_match_real_facts_and_analytics() {
     let repository = observability_repository(&database.pool);
     let page = repository
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: filter.clone(),
             current_page: 1,
@@ -72,6 +73,7 @@ async fn usage_search_shared_filters_match_real_facts_and_analytics() {
     assert_eq!(page.items[0].id, "req_observe_success");
     let second = repository
         .list_usage_records(UsageRecordQuery {
+            record_status: Default::default(),
             range,
             filter: filter.clone(),
             current_page: 2,

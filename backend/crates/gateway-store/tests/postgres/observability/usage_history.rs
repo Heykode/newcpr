@@ -123,6 +123,7 @@ async fn admitted_key_names_survive_rename_delete_and_remain_searchable() {
         }
         let page = repository
             .list_usage_records(UsageRecordQuery {
+                record_status: Default::default(),
                 range,
                 filter: UsageRecordFilter {
                     search: Some("Original key".to_owned()),
@@ -220,6 +221,7 @@ async fn usage_pagination_keeps_tie_order_filters_and_totals_from_both_ends() {
     ] {
         let page = repository
             .list_usage_records(UsageRecordQuery {
+                record_status: Default::default(),
                 range,
                 filter: filter.clone(),
                 current_page: page_number,
@@ -242,6 +244,7 @@ async fn usage_pagination_keeps_tie_order_filters_and_totals_from_both_ends() {
     for search in ["req_page_001", "absent"] {
         let page = repository
             .list_usage_records(UsageRecordQuery {
+                record_status: Default::default(),
                 range,
                 filter: UsageRecordFilter {
                     search: Some(search.to_owned()),
@@ -298,6 +301,7 @@ async fn usage_time_pages_match_exact_order_across_buckets_and_partial_ranges() 
         for page_number in 1..=(expected.len() / usize::from(page_size) + 3) {
             let page = repository
                 .list_usage_records(UsageRecordQuery {
+                    record_status: Default::default(),
                     range,
                     filter: UsageRecordFilter {
                         model: Some("bucket-model".to_owned()),

@@ -10,6 +10,7 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
+import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { ACCOUNT_GROUP_COLOR_PRESETS } from '../constants'
 
@@ -75,6 +76,7 @@ const description = computed(() => props.group
           :disabled="saving"
         />
       </BaseFormItem>
+      <BaseSwitch v-model="form.allowImageGeneration" label="允许生图" show-label :disabled="saving" />
     </BaseForm>
 
     <template #footer>

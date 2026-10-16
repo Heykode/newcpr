@@ -1,0 +1,9 @@
+{
+  "from_version": "3.25.0",
+  "to_version": "3.26.0",
+  "from_migrations_tree": "78fca7595cd897a50968e4dc4b7cdb1f55885536",
+  "to_migrations_tree": "623850a93da6384632e3f3b0ec455f3a1a6caf4e",
+  "added": ["0073_group_image_generation.sql"],
+  "modified_documentation": ["README.md"],
+  "recovery": "manual"
+}

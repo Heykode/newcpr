@@ -6,6 +6,39 @@ use gateway_api::admin::observability::{
 };
 use serde_json::json;
 
+#[tokio::test]
+async fn request_status_filter_accepts_known_values_and_rejects_unknown_values() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt as _;
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    for (query, expected) in [
+        ("", StatusCode::OK),
+        ("?recordStatus=success", StatusCode::OK),
+        ("?recordStatus=error", StatusCode::OK),
+        ("?recordStatus=all", StatusCode::OK),
+        ("?recordStatus=unknown", StatusCode::BAD_REQUEST),
+    ] {
+        let response = gateway_api::admin::observability::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/admin/usage/records{query}"))
+                    .header("x-request-id", "req_status_filter")
+                    .header(header::COOKIE, "cpr_admin_session=valid-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
 #[test]
 fn dashboard_query_should_parse_terminal_trend_kinds() {
     let query: DashboardQuery = serde_json::from_value(json!({"kind": "errors"})).unwrap();

@@ -881,6 +881,7 @@ async fn monitor_worker_retries_without_page_reads_on_the_next_ten_second_tick_a
 fn group_record() -> AccountGroupRecord {
     let now = Utc::now();
     AccountGroupRecord {
+        allow_image_generation: true,
         id: group_id(),
         name: "Primary".to_owned(),
         description: None,

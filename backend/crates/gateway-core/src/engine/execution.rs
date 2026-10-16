@@ -280,6 +280,8 @@ pub trait ProviderCircuitPort: Send + Sync {
 }
 
 pub struct DefaultExecutionService {
+    client_retry: Option<Arc<dyn super::client_retry::ClientRetryStore>>,
+    captures: Option<Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>>,
     snapshots: RuntimeSnapshotHandle,
     coordinator: Arc<AttemptCoordinator<dyn ExecutionStore>>,
     probe_coordinator: Arc<AttemptCoordinator<dyn ExecutionStore>>,
@@ -295,6 +297,26 @@ pub struct DefaultExecutionService {
 }
 
 impl DefaultExecutionService {
+    #[must_use]
+    pub fn with_client_retry(
+        mut self,
+        store: Arc<dyn super::client_retry::ClientRetryStore>,
+    ) -> Self {
+        self.client_retry = Some(store);
+        self.rebuild_coordinator();
+        self
+    }
+
+    fn rebuild_coordinator(&mut self) {
+        let mut engine = GatewayEngine::new(self.observations.clone(), self.providers.clone());
+        if let Some(captures) = &self.captures {
+            engine = engine.with_captures(captures.clone());
+        }
+        if let Some(store) = &self.client_retry {
+            engine = engine.with_client_retry(store.clone());
+        }
+        self.coordinator = Arc::new(AttemptCoordinator::new(engine));
+    }
     #[must_use]
     pub fn new(
         snapshots: RuntimeSnapshotHandle,
@@ -321,6 +343,8 @@ impl DefaultExecutionService {
             continuation,
             client_api_key_usage,
             budget: None,
+            client_retry: None,
+            captures: None,
         }
     }
 
@@ -335,10 +359,8 @@ impl DefaultExecutionService {
         mut self,
         captures: Arc<dyn crate::diagnostics::request_capture::RequestCaptureFactory>,
     ) -> Self {
-        self.coordinator = Arc::new(AttemptCoordinator::new(
-            GatewayEngine::new(self.observations.clone(), self.providers.clone())
-                .with_captures(captures),
-        ));
+        self.captures = Some(captures);
+        self.rebuild_coordinator();
         self
     }
 
@@ -404,6 +426,15 @@ impl DefaultExecutionService {
             .route_context(request.client.policy.account_scope().provider_kinds())
             .await?;
         let account_scope = Arc::clone(request.client.policy.account_scope());
+        if !account_scope.allows_image_generation()
+            && request.operation.image_generation_requested()
+        {
+            return Err(GatewayError::new(
+                GatewayErrorKind::PolicyDenied,
+                "Image generation is not allowed by the API key's account groups",
+            )
+            .with_client_code("image_generation_disabled"));
+        }
         let plan = match &request.target {
             ExecutionTarget::ProviderEndpoint {
                 provider,

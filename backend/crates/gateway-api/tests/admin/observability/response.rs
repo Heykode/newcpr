@@ -941,7 +941,7 @@ async fn key_model_diagnostics_require_admin_and_project_pagination_and_cost_cov
     }
 }
 
-fn usage_record_with_account(
+pub(super) fn usage_record_with_account(
     id: &str,
     account_id: &str,
     name: &str,
@@ -1087,6 +1087,7 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .lock()
         .expect("usage records")
         .push(UsageListRecord {
+            outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,
             client_api_key_name: Some("test-client".to_owned()),
             id: "request_endpoint".to_owned(),
             endpoint: "/v1/responses".to_owned(),

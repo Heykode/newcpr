@@ -20,6 +20,7 @@ interface UseUsageRecordsTableOptions {
   active: Readonly<Ref<boolean>>
   filters?: Readonly<Ref<UsageFilterParams>>
   provider?: Ref<string>
+  recordStatus?: Readonly<Ref<'success' | 'error' | 'all'>>
 }
 
 type UsageLoadScope = 'all' | 'table'
@@ -109,6 +110,7 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
     loading.value = !background
     try {
       const result = await getUsageRecords({
+        recordStatus: options.recordStatus?.value,
         currentPage: currentPage.value,
         pageSize: pageSize.value,
         ...tableParams,
@@ -282,6 +284,12 @@ export function useUsageRecordsTable(options: UseUsageRecordsTableOptions) {
   watch(diagnosticDimension, () => {
     diagnosticPage.value = 1
     void loadDiagnostics()
+  })
+
+  watch(() => options.recordStatus?.value, () => {
+    resetPagination()
+    if (options.active.value)
+      void loadUsageRecords({ scope: 'table' })
   })
 
   watch(providerQuery, () => {

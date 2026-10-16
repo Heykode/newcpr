@@ -45,6 +45,11 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
     :loading="loading"
     :empty-text="emptyText"
   >
+    <template #outcome="{ row }">
+      <span :class="['failed', 'incomplete'].includes(row.outcome ?? '') ? 'text-cp-error-text' : 'text-cp-text-secondary'">
+        {{ ({ succeeded: '成功', failed: '失败', incomplete: '未完成', running: '进行中', cancelled: '已取消' } as Record<string, string>)[row.outcome ?? 'succeeded'] ?? row.outcome }}
+      </span>
+    </template>
     <template #provider="{ row }">
       <ProviderIconGroup
         :provider="String(row.provider || '')"

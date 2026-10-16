@@ -74,6 +74,7 @@ async function main() {
     }
     for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]]) {
       delete group.fastMode
+      delete group.allowImageGeneration
       group.disableFast = true
       await page.setViewportSize({ width, height })
       await page.goto(url)
@@ -83,6 +84,9 @@ async function main() {
       const dialog = page.getByRole('dialog')
       const fast = dialog.getByRole('combobox', { name: 'Fast 模式', exact: true })
       assert.match(await fast.textContent(), /关闭/u)
+      const images = dialog.getByRole('switch', { name: '允许生图', exact: true })
+      assert.equal(await images.isChecked(), true)
+      await dialog.getByText('允许生图', { exact: true }).click()
       for (const [mode, label] of [['enabled', '开启'], ['disabled', '关闭'], ['default', '默认（跟随客户端）']]) {
         await choose(dialog, label)
         await page.screenshot({ path: `${output}/${name}-${mode}.png` })
@@ -92,9 +96,11 @@ async function main() {
         await dialog.getByRole('button', { name: '保存分组', exact: true }).click()
         await saved
         assert.equal(writes.at(-1).body.fastMode, mode)
+        assert.equal(writes.at(-1).body.allowImageGeneration, false)
         assert.equal(Object.hasOwn(writes.at(-1).body, 'disableFast'), false)
         await page.reload()
         await page.getByRole('button', { name: '编辑分组', exact: true }).click()
+        assert.equal(await images.isChecked(), false)
         assert.match(await fast.textContent(), new RegExp(label.replace(/[()（）]/gu, '.'), 'u'))
       }
       await dialog.getByRole('button', { name: '取消', exact: true }).click()
@@ -102,12 +108,14 @@ async function main() {
       await page.getByRole('button', { name: '创建分组', exact: true }).click()
       await dialog.getByRole('textbox', { name: '分组名称', exact: true }).fill('Created Fast policy')
       assert.match(await fast.textContent(), /默认/u)
+      assert.equal(await images.isChecked(), true)
       await choose(dialog, '开启')
       const created = page.waitForResponse(response => response.url().endsWith('/account-groups/create'))
       await dialog.getByRole('button', { name: '保存分组', exact: true }).click()
       await created
       assert.equal(writes.at(-1).body.fastMode, 'enabled')
       assert.equal(writes.at(-1).body.disableFast, false)
+      assert.equal(writes.at(-1).body.allowImageGeneration, true)
     }
     assert.deepEqual(errors, [])
     assert.deepEqual(unexpected, [])

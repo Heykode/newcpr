@@ -9,14 +9,14 @@ import { pathToFileURL } from 'node:url'
 const tables = [
   {
     id: 'success',
-    tab: '成功记录',
-    settings: '成功记录显示列',
+    tab: '请求记录',
+    settings: '请求记录显示列',
     toolbar: '使用记录筛选与操作',
     refresh: '刷新使用记录',
     storage: 'codex-proxy:table-columns:usage-records',
     hidden: { key: 'model', label: '模型' },
     required: ['账号', '操作'],
-    columns: ['accountEmail', 'provider', 'model', 'reasoningEffort', 'route', 'upstreamTransport', 'clientTransport', 'tokenDetails', 'billing', 'clientApiKeyName', 'latency', 'performance', 'createdAtDisplay', 'clientIp', 'userAgent', 'actions'],
+    columns: ['accountEmail', 'provider', 'model', 'outcome', 'reasoningEffort', 'route', 'upstreamTransport', 'clientTransport', 'tokenDetails', 'billing', 'clientApiKeyName', 'latency', 'performance', 'createdAtDisplay', 'clientIp', 'userAgent', 'actions'],
   },
   {
     id: 'errors',
