@@ -240,6 +240,68 @@ impl AccountGroupStore for FakeGroupStore {
 }
 
 #[tokio::test]
+async fn monitor_new_member_inherits_reference_completed_by_later_peer_in_same_sample() {
+    use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, learning_quota};
+    use gateway_admin::model::{
+        group_monitor::MonitorQuotaPeer,
+        group_monitor_quota::monitor_learning_observations,
+        quota_learning::{QuotaLearningEstimate, QuotaLearningSource},
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let store = FakeAccountStore::new("openai", events.clone());
+    let mut donor = account_record("openai");
+    donor.id = "acct_z_donor".to_owned();
+    donor.plan_type = Some("plus".to_owned());
+    let mut recipient = account_record("openai");
+    recipient.plan_type = Some("plus".to_owned());
+    store.set_accounts(vec![recipient, donor.clone()]);
+    let provider = FakeProviderAdmin::new("openai", events);
+    let quota = learning_quota(Utc::now());
+    let observation =
+        monitor_learning_observations("acct_test", "openai", Some("plus"), &quota, Utc::now())
+            .remove(0);
+    let mut estimate = QuotaLearningEstimate {
+        account_id: "acct_test".to_owned(),
+        window_key: observation.window_key,
+        window_minutes: observation.window_minutes,
+        effective_limit_usd: None,
+        source: QuotaLearningSource::Learning,
+        sample_count: 0,
+    };
+    store.set_learning_estimates(vec![estimate.clone()]);
+    estimate.effective_limit_usd = Some(120.0);
+    estimate.source = QuotaLearningSource::PlanAverage;
+    estimate.sample_count = 1;
+    *store.quota_learning_reference_after.lock().unwrap() =
+        Some((donor.id.clone(), vec![estimate]));
+    provider.set_quota(quota);
+    let services = AdminHarness::new()
+        .accounts(store)
+        .provider(provider)
+        .account_runtime(Arc::new(FakeRuntimeStore::default()))
+        .account_groups(Arc::new(FakeGroupStore {
+            extra_groups: 1,
+            extra_quota_peers: vec![MonitorQuotaPeer {
+                id: donor.id,
+                provider: "openai".to_owned(),
+                plan: Some("plus".to_owned()),
+                created_at: donor.created_at,
+            }],
+            ..Default::default()
+        }))
+        .build()
+        .await;
+    services.group_monitor().sample().await.unwrap();
+    let report = services
+        .group_monitor()
+        .read(vec![group_id()], false)
+        .await
+        .unwrap();
+    assert_eq!(report.items[0].remaining_usd, Some(90.0));
+    assert_eq!(report.items[0].estimated_accounts, 1);
+}
+
+#[tokio::test]
 async fn monitor_reuses_persisted_reference_after_peer_deletion_without_ratio_takeover() {
     use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record};
     use gateway_admin::model::{

@@ -682,6 +682,9 @@ pub(super) struct FakeAccountStore {
     quota_forecast_history: Mutex<QuotaForecastHistory>,
     quota_learning_observations: Mutex<Vec<QuotaLearningObservation>>,
     quota_learning_estimates: Mutex<Vec<QuotaLearningEstimate>>,
+    pub(super) quota_learning_reference_after: Mutex<Option<(String, Vec<QuotaLearningEstimate>)>>,
+    quota_learning_plan_estimates: Mutex<Vec<QuotaLearningEstimate>>,
+    quota_learning_plan_failure: Mutex<bool>,
     quota_learning_failure: Mutex<bool>,
     cumulative_costs: Mutex<BTreeMap<String, Vec<AccountCumulativeCost>>>,
     purchase_costs:
@@ -721,6 +724,9 @@ impl FakeAccountStore {
             quota_forecast_history: Mutex::new(QuotaForecastHistory::default()),
             quota_learning_observations: Mutex::new(Vec::new()),
             quota_learning_estimates: Mutex::new(Vec::new()),
+            quota_learning_reference_after: Mutex::default(),
+            quota_learning_plan_estimates: Mutex::default(),
+            quota_learning_plan_failure: Mutex::new(false),
             quota_learning_failure: Mutex::new(false),
             cumulative_costs: Mutex::new(BTreeMap::new()),
             purchase_costs: Mutex::new(BTreeMap::new()),
@@ -991,7 +997,25 @@ impl AccountStore for FakeAccountStore {
         if *self.quota_learning_failure.lock().unwrap() {
             return Err(store_unavailable());
         }
+        let reference = self.quota_learning_reference_after.lock().unwrap().clone();
+        if let Some((donor, estimates)) = reference
+            && observations
+                .iter()
+                .any(|observation| observation.account_id == donor)
+        {
+            *self.quota_learning_plan_estimates.lock().unwrap() = estimates;
+        }
         Ok(self.quota_learning_estimates.lock().unwrap().clone())
+    }
+
+    async fn load_quota_learning_plan_estimates(
+        &self,
+        _: &[QuotaLearningObservation],
+    ) -> AdminStoreResult<Vec<QuotaLearningEstimate>> {
+        if *self.quota_learning_plan_failure.lock().unwrap() {
+            return Err(store_unavailable());
+        }
+        Ok(self.quota_learning_plan_estimates.lock().unwrap().clone())
     }
 
     async fn list_credentials(
@@ -2861,7 +2885,7 @@ async fn quota_forecast_reads_raw_snapshot_and_limits_usage_to_observation_time(
     assert!(requests[0].rolling_usage.is_none());
 }
 
-fn learning_quota(now: chrono::DateTime<Utc>) -> ProviderQuota {
+pub(super) fn learning_quota(now: chrono::DateTime<Utc>) -> ProviderQuota {
     ProviderQuota {
         credits: None,
         plan_type: Some("future-pro-2027".to_owned()),
@@ -2883,6 +2907,108 @@ fn learning_quota(now: chrono::DateTime<Utc>) -> ProviderQuota {
         }],
         ..empty_quota()
     }
+}
+
+#[tokio::test]
+async fn monitor_batch_inherits_same_round_reference_and_keeps_personal_capacity() {
+    let now = Utc::now();
+    let log = events();
+    let quota = learning_quota(now);
+    let provider = FakeProviderAdmin::new("openai", log.clone());
+    provider.set_quota(quota.clone());
+    let store = FakeAccountStore::new("openai", log);
+    let ids = ["acct_a_new", "acct_b_personal", "acct_z_donor"];
+    store.set_accounts(
+        ids.iter()
+            .map(|id| {
+                let mut account = account_record("openai");
+                account.id = (*id).to_owned();
+                account.created_at = now - TimeDelta::hours(1);
+                account.plan_type = Some("plus".to_owned());
+                account
+            })
+            .collect(),
+    );
+    let observation = gateway_admin::model::group_monitor_quota::monitor_learning_observations(
+        ids[0],
+        "openai",
+        Some("plus"),
+        &quota,
+        now,
+    )
+    .remove(0);
+    let initial = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| QuotaLearningEstimate {
+            account_id: (*id).to_owned(),
+            window_key: observation.window_key.clone(),
+            window_minutes: observation.window_minutes,
+            effective_limit_usd: (index > 0).then_some(200.0),
+            source: if index > 0 {
+                QuotaLearningSource::Personal
+            } else {
+                QuotaLearningSource::Learning
+            },
+            sample_count: 0,
+        })
+        .collect::<Vec<_>>();
+    store.set_learning_estimates(initial.clone());
+    *store.quota_learning_reference_after.lock().unwrap() = Some((
+        ids[2].to_owned(),
+        initial
+            .into_iter()
+            .map(|mut estimate| {
+                estimate.effective_limit_usd = Some(120.0);
+                estimate.source = QuotaLearningSource::PlanAverage;
+                estimate.sample_count = 3;
+                estimate
+            })
+            .collect(),
+    ));
+    let service = accounts_service(provider.clone(), store.clone()).await;
+    let results = service
+        .accounts()
+        .monitor_quotas(
+            ids.iter()
+                .map(|id| ProviderAccountId::new(*id).unwrap())
+                .collect(),
+        )
+        .await
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        results[ids[0]].as_ref().unwrap()[0].remaining_usd,
+        Some(90.0)
+    );
+    assert_eq!(
+        results[ids[1]].as_ref().unwrap()[0].remaining_usd,
+        Some(150.0)
+    );
+    assert!(!results[ids[0]].as_ref().unwrap()[0].low_sample);
+    assert_eq!(store.quota_window_queries().len(), 3);
+    let requests = provider.quota_requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.refresh && request.rolling_usage.is_none())
+    );
+
+    // Rejected observations must not acquire a binding through the second read.
+    store.set_learning_estimates(Vec::new());
+    let rejected = service
+        .accounts()
+        .monitor_quotas(vec![ProviderAccountId::new(ids[0]).unwrap()])
+        .await;
+    assert_eq!(rejected[0].1.as_ref().unwrap()[0].remaining_usd, None);
+
+    *store.quota_learning_plan_failure.lock().unwrap() = true;
+    let failed = service
+        .accounts()
+        .monitor_quotas(vec![ProviderAccountId::new(ids[0]).unwrap()])
+        .await;
+    assert!(failed[0].1.is_err());
 }
 
 #[tokio::test]

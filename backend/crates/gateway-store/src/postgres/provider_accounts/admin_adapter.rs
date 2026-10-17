@@ -898,6 +898,13 @@ impl AccountStore for PgAdminAccountStore {
         super::quota_forecast::load_learning_usage(&self.pool, &self.query_budget, window).await
     }
 
+    async fn load_quota_learning_plan_estimates(
+        &self,
+        observations: &[gateway_admin::model::quota_learning::QuotaLearningObservation],
+    ) -> AdminStoreResult<Vec<gateway_admin::model::quota_learning::QuotaLearningEstimate>> {
+        super::quota_learning::load_plan_estimates(&self.pool, observations).await
+    }
+
     async fn list_credentials(
         &self,
         provider_kind: &ProviderKind,

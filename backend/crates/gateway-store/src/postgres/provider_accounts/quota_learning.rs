@@ -15,6 +15,46 @@ const MIN_PERCENT_DELTA: f64 = 3.0;
 const RESET_JITTER_SECONDS: i64 = 2;
 const RETAINED_SAMPLES: i64 = 3;
 
+pub(super) async fn load_plan_estimates(
+    pool: &PgPool,
+    observations: &[QuotaLearningObservation],
+) -> AdminStoreResult<Vec<QuotaLearningEstimate>> {
+    if observations.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut transaction = pool.begin().await.map_err(unavailable)?;
+    sqlx::query("set transaction isolation level repeatable read, read only")
+        .execute(&mut *transaction)
+        .await
+        .map_err(unavailable)?;
+    sqlx::query("set local statement_timeout = '2s'")
+        .execute(&mut *transaction)
+        .await
+        .map_err(unavailable)?;
+    let mut estimates = Vec::with_capacity(observations.len());
+    for observation in observations
+        .iter()
+        .filter(|observation| valid_observation(observation))
+    {
+        let (effective_limit_usd, sample_count) =
+            load_plan_average(&mut transaction, observation).await?;
+        estimates.push(QuotaLearningEstimate {
+            account_id: observation.account_id.clone(),
+            window_key: observation.window_key.clone(),
+            window_minutes: observation.window_minutes,
+            effective_limit_usd,
+            source: if effective_limit_usd.is_some() {
+                QuotaLearningSource::PlanAverage
+            } else {
+                QuotaLearningSource::Learning
+            },
+            sample_count,
+        });
+    }
+    transaction.commit().await.map_err(unavailable)?;
+    Ok(estimates)
+}
+
 pub(super) async fn record(
     pool: &PgPool,
     observations: &[QuotaLearningObservation],

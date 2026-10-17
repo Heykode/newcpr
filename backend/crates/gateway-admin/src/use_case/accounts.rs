@@ -34,7 +34,10 @@ use crate::{
             forecast_window,
         },
         quota_forecast_sampling::{QuotaForecastPoint, select_forecast_sample},
-        quota_learning::LearnedQuotaWindow,
+        quota_learning::{
+            LearnedQuotaWindow, QuotaLearningEstimate, QuotaLearningObservation,
+            QuotaLearningSource,
+        },
     },
     ports::{
         provider::ProviderAdminRegistry,
@@ -166,6 +169,12 @@ pub trait AccountsService: Send + Sync {
         account_id: &ProviderAccountId,
     ) -> Result<Vec<LearnedQuotaWindow>, AdminError>;
 
+    /// Complete this sample's learning before resolving shared Plan references.
+    async fn monitor_quotas(
+        &self,
+        account_ids: Vec<ProviderAccountId>,
+    ) -> Vec<(String, Result<Vec<LearnedQuotaWindow>, AdminError>)>;
+
     async fn personal_info(
         &self,
         _account_id: &ProviderAccountId,
@@ -225,6 +234,12 @@ pub(crate) struct DefaultAccountsService {
     reset_store: Option<Arc<dyn crate::ports::reset_credits::ResetCreditsStore>>,
     reset_credit_locks:
         Arc<futures::lock::Mutex<BTreeMap<ProviderAccountId, Arc<futures::lock::Mutex<()>>>>>,
+}
+
+struct MonitorQuotaSample {
+    quota: ProviderQuota,
+    observations: Vec<QuotaLearningObservation>,
+    estimates: Vec<QuotaLearningEstimate>,
 }
 
 impl DefaultAccountsService {
@@ -311,6 +326,63 @@ impl DefaultAccountsService {
             .require(&item.account.provider_kind)
             .map_err(|error| map_provider_error(error, "provider account"))?;
         Ok((item, provider))
+    }
+
+    async fn learn_monitor_quota(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Result<MonitorQuotaSample, AdminError> {
+        let (stored, provider) = self.provider_for_account(account_id).await?;
+        let quota = provider
+            .quota(ProviderQuotaRequest {
+                account_id: account_id.clone(),
+                refresh: false,
+                rolling_usage: None,
+            })
+            .await
+            .map_err(|error| map_provider_error(error, "monitor quota snapshot"))?;
+        let mut observations = monitor_learning_observations(
+            account_id.as_str(),
+            stored.account.provider_kind.as_str(),
+            stored.account.plan_type.as_deref(),
+            &quota,
+            Utc::now(),
+        );
+        for observation in &mut observations {
+            let start = (observation.reset_at
+                - Duration::minutes(i64::from(observation.window_minutes)))
+            .max(stored.account.created_at);
+            if start >= observation.observed_at {
+                continue;
+            }
+            let usage = self
+                .accounts
+                .load_quota_learning_usage(&AccountUsageWindowQuery {
+                    account_id: account_id.to_string(),
+                    key: observation.window_key.clone(),
+                    range: TimeRange {
+                        start,
+                        end: observation.observed_at,
+                    },
+                })
+                .await
+                .map_err(|error| map_store_error(error, "monitor aligned usage"))?;
+            // Unknown fees do not erase a positive known subtotal or inherited capacity.
+            observation.observed_cost_usd = (usage.usd.is_finite()
+                && usage.usd >= 0.0
+                && (usage.usd > 0.0 || usage.unavailable_cost_count == 0))
+                .then_some(usage.usd);
+        }
+        let estimates = self
+            .accounts
+            .record_quota_learning(&observations)
+            .await
+            .map_err(|error| map_store_error(error, "monitor quota learning"))?;
+        Ok(MonitorQuotaSample {
+            quota,
+            observations,
+            estimates,
+        })
     }
 
     async fn attach_quota_local_usage(
@@ -1020,53 +1092,61 @@ impl AccountsService for DefaultAccountsService {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<Vec<LearnedQuotaWindow>, AdminError> {
-        let (stored, provider) = self.provider_for_account(account_id).await?;
-        let quota = provider
-            .quota(ProviderQuotaRequest {
-                account_id: account_id.clone(),
-                refresh: false,
-                rolling_usage: None,
+        let sample = self.learn_monitor_quota(account_id).await?;
+        Ok(monitor_learned_windows(
+            &sample.quota,
+            &sample.observations,
+            &sample.estimates,
+        ))
+    }
+
+    async fn monitor_quotas(
+        &self,
+        account_ids: Vec<ProviderAccountId>,
+    ) -> Vec<(String, Result<Vec<LearnedQuotaWindow>, AdminError>)> {
+        let samples = futures::stream::iter(account_ids)
+            .map(|id| async move {
+                let result = self.learn_monitor_quota(&id).await;
+                (id.to_string(), result)
             })
+            .buffer_unordered(2)
+            .collect::<Vec<_>>()
+            .await;
+        // All learning writes have finished. Reuse the sampled windows and costs;
+        // only Plan references need rereading to include donors from this round.
+        futures::stream::iter(samples)
+            .map(|(id, sample)| async move {
+                let result = async {
+                    let mut sample = sample?;
+                    let references = self
+                        .accounts
+                        .load_quota_learning_plan_estimates(&sample.observations)
+                        .await
+                        .map_err(|error| map_store_error(error, "monitor quota references"))?;
+                    for estimate in &mut sample.estimates {
+                        if let Some(reference) = references.iter().find(|reference| {
+                            reference.account_id == estimate.account_id
+                                && reference.window_key == estimate.window_key
+                                && reference.window_minutes == estimate.window_minutes
+                        }) {
+                            estimate.sample_count = reference.sample_count;
+                            if estimate.source != QuotaLearningSource::Personal {
+                                *estimate = reference.clone();
+                            }
+                        }
+                    }
+                    Ok(monitor_learned_windows(
+                        &sample.quota,
+                        &sample.observations,
+                        &sample.estimates,
+                    ))
+                }
+                .await;
+                (id, result)
+            })
+            .buffer_unordered(2)
+            .collect()
             .await
-            .map_err(|error| map_provider_error(error, "monitor quota snapshot"))?;
-        let mut observations = monitor_learning_observations(
-            account_id.as_str(),
-            stored.account.provider_kind.as_str(),
-            stored.account.plan_type.as_deref(),
-            &quota,
-            Utc::now(),
-        );
-        for observation in &mut observations {
-            let start = (observation.reset_at
-                - Duration::minutes(i64::from(observation.window_minutes)))
-            .max(stored.account.created_at);
-            if start >= observation.observed_at {
-                continue;
-            }
-            let usage = self
-                .accounts
-                .load_quota_learning_usage(&AccountUsageWindowQuery {
-                    account_id: account_id.to_string(),
-                    key: observation.window_key.clone(),
-                    range: TimeRange {
-                        start,
-                        end: observation.observed_at,
-                    },
-                })
-                .await
-                .map_err(|error| map_store_error(error, "monitor aligned usage"))?;
-            // Unknown fees do not erase a positive known subtotal or inherited capacity.
-            observation.observed_cost_usd = (usage.usd.is_finite()
-                && usage.usd >= 0.0
-                && (usage.usd > 0.0 || usage.unavailable_cost_count == 0))
-                .then_some(usage.usd);
-        }
-        let estimates = self
-            .accounts
-            .record_quota_learning(&observations)
-            .await
-            .map_err(|error| map_store_error(error, "monitor quota learning"))?;
-        Ok(monitor_learned_windows(&quota, &observations, &estimates))
     }
 
     async fn personal_info(
