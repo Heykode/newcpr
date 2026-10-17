@@ -495,7 +495,6 @@ pub(super) async fn create_response_attempt(
     account_id: &str,
     deadline: Deadline,
     cancellation: &CancellationToken,
-    stream_prefetch_bytes: u64,
 ) -> Result<CodexBackendStreamingResponse, CodexHandshakeAttemptError> {
     if deadline.is_elapsed() {
         return Err(CodexHandshakeAttemptError::Timeout);
@@ -504,11 +503,10 @@ pub(super) async fn create_response_attempt(
         biased;
         _ = cancellation.cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
         _ = deadline.wait() => Err(CodexHandshakeAttemptError::Timeout),
-        response = client.create_response_stream_with_prefetch(
+        response = client.create_response_stream_with_pool_account(
             request,
             request_context,
             Some(account_id),
-            stream_prefetch_bytes,
         ) => response.map_err(CodexHandshakeAttemptError::Client),
     }
 }
@@ -868,7 +866,6 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
             active_account.id().as_str(),
             context.deadline(),
             &cancellation,
-            context.request_tuning().stream_prefetch_bytes,
         )
         .await;
         let websocket_failure_policy = match &response {
@@ -1051,14 +1048,10 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
         let mut pre_commit_events = PreCommitClientEvents::new(
             trace,
             context.request_tuning().stream_prefetch_bytes,
-        ).with_upstream_grace_started_at(response.precommit_started_at)
-        .with_replayable_prelude(
-            request.excel.is_none() && (context.request_tuning().stream_prefetch_bytes == 0
-            || (response_transport == CodexBackendTransport::WebSocket
-                && request.responses_lite.as_deref() == Some("true")
-                && request.downstream_websocket_connection_id.is_some()
-                && context.response_control().is_some())),
-        );
+        )
+        // Native delivery follows upstream CPR: forwarding a replaceable prelude
+        // does not close replay. Excel retains its independent buffered contract.
+        .with_replayable_prelude(request.excel.is_none());
         let mut quota_success = false;
         loop {
             if context.deadline().is_elapsed() {
@@ -1145,8 +1138,9 @@ pub(super) fn cold_response_stream_once(response: ColdResponse) -> EventStream {
                         &mut decoder,
                     )
                     .await;
-                    let observation_event = if rate_limits_changed || metadata_merge.is_some() {
-                        observation_state.observation(None).map(ProviderEvent::observation)
+                    let observation_event = if rate_limits_changed || metadata_merge.is_some()
+                        || response_transport == CodexBackendTransport::WebSocket {
+                        observation_state.observation(Some(&failure.error)).map(ProviderEvent::observation)
                     } else {
                         None
                     };

@@ -25,10 +25,7 @@ use crate::transport::{
     headers::websocket_header_pairs,
     profile::CodexWireProfileState,
     protocol::{
-        responses::{
-            CodexResponsesRequest, ResponsesSseFailure, STREAM_REPLAY_GRACE, TransportRequirement,
-            transport_requirement,
-        },
+        responses::{CodexResponsesRequest, TransportRequirement, transport_requirement},
         websocket::{
             websocket_audit_artifact_from_attempt, websocket_connection_limit_failure,
             websocket_payload_audit_snapshot,
@@ -38,8 +35,8 @@ use crate::transport::{
     response_meta,
     websocket::{
         CodexWebSocketConnection, CodexWebSocketExchangeError, CodexWebSocketPool,
-        CodexWebSocketPoolKey, CodexWebSocketStreamingExchange, WEBSOCKET_FAST_PATH_BUDGET,
-        WebSocketFastPath, WebSocketOriginBreaker, execute_prepared_response_create_request_stream,
+        CodexWebSocketPoolKey, WEBSOCKET_FAST_PATH_BUDGET, WebSocketFastPath,
+        WebSocketOriginBreaker, execute_prepared_response_create_request_stream,
         post_send_ambiguous, prepare_response_create_request_with_pool, websocket_audit_dir,
         write_websocket_audit_artifact_from_env_with_timezone,
     },
@@ -511,7 +508,6 @@ impl CodexBackendClient {
         let body = http_sse_stream(response, Arc::clone(&rate_limit_updates), trace);
         Ok(CodexBackendStreamingResponse {
             body,
-            precommit_started_at: None,
             transport: CodexBackendTransport::HttpSse,
             websocket_connection_id: None,
             turn_state,
@@ -532,39 +528,17 @@ impl CodexBackendClient {
         })
     }
 
-    pub fn create_response_stream_with_pool_account<'a>(
-        &'a self,
-        request: &'a CodexResponsesRequest,
-        context: CodexRequestContext<'a>,
-        pool_account_id: Option<&'a str>,
-    ) -> impl std::future::Future<Output = CodexClientResult<CodexBackendStreamingResponse>> + 'a
-    {
-        // Return the shared future directly, without another large async state.
-        self.create_response_stream_with_prefetch(
-            request,
-            context,
-            pool_account_id,
-            self.request_tuning().stream_prefetch_bytes,
-        )
-    }
-
-    pub(crate) async fn create_response_stream_with_prefetch(
+    pub async fn create_response_stream_with_pool_account(
         &self,
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         pool_account_id: Option<&str>,
-        stream_prefetch_bytes: u64,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let prepared = self
             .prepare_response_transport_with_pool_account(request, context, pool_account_id)
-            .await;
-        self.create_response_stream_with_prepared(
-            request,
-            context,
-            prepared?,
-            stream_prefetch_bytes,
-        )
-        .await
+            .await?;
+        self.create_response_stream_with_prepared(request, context, prepared)
+            .await
     }
 
     /// 在发送 payload 前完成 transport 选择和可取消的 WebSocket opening。
@@ -938,7 +912,6 @@ impl CodexBackendClient {
         request: &CodexResponsesRequest,
         context: CodexRequestContext<'_>,
         prepared: PreparedResponseTransport,
-        stream_prefetch_bytes: u64,
     ) -> CodexClientResult<CodexBackendStreamingResponse> {
         let PreparedResponseTransport {
             requirement,
@@ -996,11 +969,7 @@ impl CodexBackendClient {
                 if let Some(budget) = &client.connection_budget {
                     budget.complete();
                 }
-                let mut precommit_started_at = None;
-                if requirement.allows_connection_restart()
-                    && request.responses_lite.as_deref() == Some("true")
-                    && request.downstream_websocket_connection_id.is_some()
-                {
+                if requirement.allows_connection_restart() {
                     let mut boundary_reached = false;
                     exchange.body = Box::pin(exchange.body.map(move |frame| {
                         let frame = frame?;
@@ -1014,26 +983,6 @@ impl CodexBackendClient {
                         }
                         Ok(frame)
                     }));
-                } else if requirement.allows_connection_restart() {
-                    // Zero releases the first complete event, but an immediate
-                    // connection-limit rejection still precedes delivery.
-                    match await_websocket_delivery_boundary(&mut exchange, stream_prefetch_bytes)
-                        .await
-                    {
-                        Ok((DeliveryBoundary::Ready, started_at)) => {
-                            precommit_started_at = started_at
-                        }
-                        Ok((DeliveryBoundary::ConnectionLimitReached(failure), _)) => {
-                            return Err(CodexClientError::WebSocket(
-                                CodexWebSocketExchangeError::ConnectionLimitReached(failure),
-                            ));
-                        }
-                        Err(error) => {
-                            return Err(websocket_exchange_error_to_client_error(
-                                post_send_ambiguous(error),
-                            ));
-                        }
-                    }
                 }
                 Ok(CodexBackendStreamingResponse {
                     body: Box::pin(
@@ -1047,7 +996,6 @@ impl CodexBackendClient {
                             })
                             .map_err(websocket_exchange_error_to_client_error),
                     ),
-                    precommit_started_at,
                     transport: CodexBackendTransport::WebSocket,
                     websocket_connection_id: Some(exchange.websocket_connection_id),
                     turn_state: exchange.turn_state,
@@ -1139,80 +1087,6 @@ impl CodexBackendClient {
         }
         Ok(parse_codex_model_catalog(&body, etag.as_deref())?)
     }
-}
-
-/// 首个可投递帧前的交付边界结果。
-enum DeliveryBoundary {
-    /// 已越过边界，可开始向下游投递。
-    Ready,
-    /// 首个可投递帧是上游连接寿命限制错误。
-    ConnectionLimitReached(Box<ResponsesSseFailure>),
-}
-
-async fn await_websocket_delivery_boundary(
-    exchange: &mut CodexWebSocketStreamingExchange,
-    max_prefetch_bytes: u64,
-) -> Result<(DeliveryBoundary, Option<Instant>), CodexWebSocketExchangeError> {
-    let mut prelude = Vec::new();
-    let mut prefetched_bytes = 0_u64;
-    let mut started_at: Option<Instant> = None;
-    let boundary = loop {
-        let next = if let Some(started_at) = started_at {
-            if started_at.elapsed() >= STREAM_REPLAY_GRACE {
-                break DeliveryBoundary::Ready;
-            }
-            let deadline = tokio::time::Instant::from_std(started_at + STREAM_REPLAY_GRACE);
-            match tokio::time::timeout_at(deadline, exchange.body.next()).await {
-                Ok(next) => next,
-                Err(_) => break DeliveryBoundary::Ready,
-            }
-        } else {
-            exchange.body.next().await
-        };
-        match next {
-            Some(Ok(frame)) => {
-                let lifecycle = is_websocket_lifecycle_prelude(&frame);
-                let connection_limit_failure = if lifecycle {
-                    None
-                } else {
-                    websocket_connection_limit_failure(&frame)
-                };
-                prefetched_bytes = prefetched_bytes.saturating_add(
-                    super::protocol::websocket::websocket_prefetch_len(&frame) as u64,
-                );
-                prelude.push(frame);
-                if let Some(failure) = connection_limit_failure {
-                    break DeliveryBoundary::ConnectionLimitReached(Box::new(failure));
-                }
-                if lifecycle && max_prefetch_bytes != 0 {
-                    started_at.get_or_insert_with(Instant::now);
-                }
-                if !lifecycle || max_prefetch_bytes == 0 || prefetched_bytes > max_prefetch_bytes {
-                    break DeliveryBoundary::Ready;
-                }
-            }
-            Some(Err(error)) => {
-                if prelude.is_empty() {
-                    return Err(error);
-                }
-                exchange.body = Box::pin(
-                    futures::stream::iter(prelude.into_iter().map(Ok))
-                        .chain(futures::stream::once(async move { Err(error) })),
-                );
-                return Ok((DeliveryBoundary::Ready, started_at));
-            }
-            None => {
-                return Err(CodexWebSocketExchangeError::StreamEndedBeforeTerminal {
-                    reason: "stream_eof",
-                    timeout: None,
-                    last_event_type: None,
-                });
-            }
-        }
-    };
-    let remaining = std::mem::replace(&mut exchange.body, Box::pin(futures::stream::empty()));
-    exchange.body = Box::pin(futures::stream::iter(prelude.into_iter().map(Ok)).chain(remaining));
-    Ok((boundary, started_at))
 }
 
 fn is_websocket_lifecycle_prelude(frame: &[u8]) -> bool {

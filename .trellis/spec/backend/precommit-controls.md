@@ -6,47 +6,86 @@ Selective adaptations of upstream `zyycn/codex-proxy-rs` #301 (`4634d8d`) and
 #304 (`3bf7030`). Do not replace New CPR's identity, account egress, quota
 authority, finite scheduling, Excel repair, or continuation ownership contracts.
 
-## Settings Contract
+## Native Delivery And Timing
 
-- `RequestTuning.stream_prefetch_bytes` / `streamPrefetchBytes` defaults to
-  131072 bytes. The existing JSONB overrides accept omission/null as inheritance.
-- The runtime snapshot resolves the override; an attempt uses its frozen tuning,
-  never the live settings handle while streaming.
-- The Web control displays KiB and converts by exactly 1024. Zero disables
-  additional Provider precommit buffering and the lower new-chain WS lifecycle
-  wait: the first complete parsed client event, including created/in_progress,
-  can be released without waiting for later output or a grace timer. Inspect an
-  immediate first-event connection-limit rejection before delivery so its existing
-  recovery remains available. Native zero-buffer created/empty in_progress and
-  comment-only frames are explicitly replaceable preludes; they do not alone
-  prohibit recovery. Semantic, tool, compaction, unknown and terminal output
-  close the replay barrier. Excel keeps its independent contract.
-  Pass the frozen AttemptContext threshold to transport;
-  standalone client calls snapshot the threshold before opening, not while streaming.
-  A positive value bounds lower WS lifecycle buffering with the same original
-  SSE-frame byte count used by Provider. Replaying that buffered prefix into the
-  Provider does not add a second budget. Transport passes the original grace
-  start time to Provider, so a lower-layer timeout cannot start another 2.5-second
-  wait. Exact continuation ownership and HTTP/Excel transport selection stay intact.
-  This does not bypass parsing, authentication, settlement, account isolation,
-  exact continuation ownership, or nonstream JSON aggregation.
-- Accept nonnegative integral byte values. Backend storage uses `u64`; the Web
-  form rejects numbers it cannot represent exactly. Do not add a product-specific
-  size cap or silently clamp/round a saved value.
-- A positive threshold counts original chunks, not re-encoded events. Release
-  when the count exceeds the configured threshold, at the fixed 2500 ms grace,
-  or immediately on semantic output, terminal or EOF. A last chunk may cross the
-  threshold: this is not a hard memory ceiling or a request rejection limit.
-- Zero must not mark an incomplete, non-client-visible chunk committed. Released
-  business output or a positive-buffer release prohibits transparent replay.
-  Transport heartbeat commitment is recorded separately from this business barrier.
-- Buffering does not create retry attempts. Existing same-account transport
-  budgets, account-switch budgets and the independent HTTP fallback setting
-  remain authoritative. A zero/exhausted transport retry budget with fallback
-  disabled produces no transport retry/fallback intent. Core still requires
-  replay proof and an open business replay barrier before any configured retry.
-- Trace `provider.precommit.released` with reason, prefetchedBytes, limitBytes,
-  and waitMs. No request bodies, credentials, or device identifiers are added.
+Aligned narrowly with official `743a3aba70a4f78f27fb53d80a6e719599d2fe5e`
+(`d814582`, `faf50c2`, `7b8339e`), without importing unrelated upstream code.
+
+- Native HTTP SSE and WebSocket deliver each parsed client event immediately,
+  independent of `stream_prefetch_bytes`. There is no lower WS pre-read or grace
+  clock passed to Provider. This removes local waiting, not upstream generation time.
+- Empty created/in_progress, recognized response metadata and comment-only SSE
+  frames are replaceable preludes. Their delivery does not close Core's replay
+  barrier. Preserve provider replay proof, budgets, cancellation, deadlines and
+  continuation ownership; marking a prelude does not itself authorize a retry.
+- Semantic/tool/compaction output, unknown events and terminals close replay
+  monotonically. A later prelude never reopens it. Preserve raw wire bytes/order
+  and atomic failure handling without duplicating already-forwarded preludes.
+- Restartable WS checks the first non-prelude frame for a connection-limit error
+  while polling the body. The error retains its typed recovery classification.
+  Exact continuations retain their existing ownership and recovery restrictions.
+- Provider first-token timing starts at `response.output_item.added`, matching
+  upstream. First-event, first-text and first-reasoning clocks remain distinct;
+  metadata, content-part-added and terminal-only events do not invent that boundary.
+
+## Excel Settings Contract
+
+- `RequestTuning.stream_prefetch_bytes` / `streamPrefetchBytes` remains compatible
+  and defaults to 131072 bytes. Omission/null inherits; the Web control converts
+  exact KiB by 1024 and explicitly states that only Excel uses this threshold.
+- Excel uses frozen AttemptContext tuning, never a live settings read midstream.
+  Zero releases the first complete client event; positive thresholds count raw
+  chunks and release when exceeded, at a single 2500 ms grace, or immediately on
+  semantic output, terminal or EOF. This is not a request limit or memory ceiling.
+- Incomplete chunks do not commit zero-buffer delivery. Excel released output
+  closes its existing replay boundary. Early failures preserve buffered atomic events.
+- Accept nonnegative integral bytes; reject inexact Web numbers without imposing
+  a product-specific cap or silently rounding/clamping saved settings.
+- Preserve Excel repair/metering, account identity/egress and nonstream aggregation.
+  No database migration, retry budget or transport selection change is required.
+- Trace `provider.precommit.released` retains reason, prefetchedBytes, limitBytes
+  and waitMs; native preludes do not emit buffer-release events. No raw payloads
+  or credentials may enter diagnostic traces.
+
+## Signatures And Error Matrix
+
+`create_response_stream_with_pool_account(request, context, pool_account_id)`
+returns an unbuffered native stream; `precommit_started_at` and the transport
+prefetch parameter are removed. `PreCommitClientEvents::stage` still owns Excel
+buffering and enables immediate native delivery with `with_replayable_prelude(true)`.
+`ProviderEvent::with_replayable_prelude` is evidence consumed by Core's independent
+replay barrier, not an instruction to retry.
+
+| Case | Delivery / retry result |
+| --- | --- |
+| Native empty created then approved overload | Immediate prelude; bounded recovery allowed |
+| Native metadata after text/tool/unknown output | Immediate; replay remains closed |
+| Restartable WS connection-limit after only preludes | Typed body error; preserve raw error, status and request ID |
+| Ambiguous connection loss | Existing no-replay safety remains |
+| Excel positive threshold, below limit | Wait for semantic/terminal/EOF, byte crossing or fixed grace |
+| Native missing output_item.added | No invented provider first-token time; text/reasoning remain available |
+
+Good: first prelude arrives while a oneshot gate holds the next upstream event.
+Base: Excel keeps byte/grace release and atomic failures. Bad: calling an already
+sent prelude committed business output or restarting retries after tool output.
+
+## Required Regression Assertions
+
+- HTTP and WS oneshot fixtures deliver under zero, saved 15 KiB, default and large
+  thresholds before upstream continuation; bytes and order remain intact.
+- Early failure batches exclude already-forwarded preludes. Retry budgets and
+  exact continuation restrictions remain effective; ambiguous/late output is not replayed.
+- Core can recover after HTTP commitment of a replaceable prelude and cannot
+  reopen replay after an unknown event followed by another prelude.
+- WS body-error observations retain current failure status and request ID, while
+  opening diagnostics remain separate.
+- Metadata never starts provider TTFT; output_item.added starts it before content.
+- Excel zero/byte/grace/content/terminal/EOF and early atomic failure behavior stays.
+- Settings save/reload and isolated 1440/390/320 px views preserve exact values.
+
+Wrong: removing only Provider buffering leaves transport waiting before the
+Provider sees the event. Correct: remove native waiting at both layers and keep
+replay eligibility independent from physical response commitment.
 
 ## Quota Error Contract
 

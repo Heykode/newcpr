@@ -39,15 +39,12 @@
 - Preserve text/tool/event order and bytes. If a terminal has additional complete
   documents in the same message, do not forward the tail or return the connection
   to the pool. Never synthesize success or replay a possibly executed request.
-- The frozen prefetch threshold also controls the lower new-chain WS lifecycle
-  wait. Zero releases the first complete event including created/in_progress;
-  positive thresholds count the same SSE-frame bytes as Provider and release on
-  threshold crossing or the shared grace deadline. Carry the original wait start
-  through the streaming response, never restarting a second grace period. Inspect the
-  first event for an explicit connection-limit rejection before returning the
-  stream, and retain this rejection classification while still buffering. After delivery, later failures retain the existing
-  no-replay contract. Do not change exact continuation, warmup, outgoing identity,
-  retry budgets, or Provider semantic-output/terminal release rules.
+- Native WS forwards parsed lifecycle/metadata immediately, regardless of the
+  Excel prefetch setting. Check connection-limit errors at the first non-prelude
+  body frame without pre-reading. Forwarding replaceable preludes leaves the
+  independent replay barrier open; business, unknown and terminal events close
+  it permanently. Preserve retry proof/budgets, cancellation, exact continuation,
+  warmup, outgoing identity and Excel's separate Provider buffering.
 
 ## WebSocket Context Window Boundaries
 

@@ -488,40 +488,24 @@ async fn assert_lifecycle_delivery(prefetch_bytes: u64, updated_prefetch: Option
         .await
         .unwrap()
         .unwrap();
-    let mut response = if prefetch_bytes == 0 {
-        // The upstream cannot send completion until the first event is delivered.
-        let mut response = timeout(Duration::from_secs(1), &mut task)
-            .await
+    // The upstream cannot send completion until the first event is delivered,
+    // regardless of the saved Excel prefetch setting or a concurrent settings update.
+    let mut response = timeout(Duration::from_secs(1), &mut task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let first = timeout(Duration::from_secs(1), response.body.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        std::str::from_utf8(&first)
             .unwrap()
-            .unwrap()
-            .unwrap();
-        let first = timeout(Duration::from_secs(1), response.body.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(
-            std::str::from_utf8(&first)
-                .unwrap()
-                .contains("response.created")
-        );
-        release.send(()).unwrap();
-        response
-    } else {
-        assert!(
-            timeout(Duration::from_millis(200), &mut task)
-                .await
-                .is_err()
-        );
-        release.send(()).unwrap();
-        let mut response = task.await.unwrap().unwrap();
-        assert!(
-            std::str::from_utf8(&response.body.next().await.unwrap().unwrap())
-                .unwrap()
-                .contains("response.created")
-        );
-        response
-    };
+            .contains("response.created")
+    );
+    release.send(()).unwrap();
     while let Some(frame) = response.body.next().await {
         frame.unwrap();
     }
@@ -534,14 +518,14 @@ async fn prefetch_zero_releases_lifecycle_before_further_upstream_events() {
 }
 
 #[tokio::test]
-async fn nonzero_prefetch_holds_lifecycle_below_the_configured_threshold() {
+async fn nonzero_prefetch_does_not_delay_native_lifecycle() {
     for prefetch_bytes in [30 * 1024, 60 * 1024, 120 * 1024, 128 * 1024] {
         assert_lifecycle_delivery(prefetch_bytes, None).await;
     }
 }
 
 #[tokio::test]
-async fn prefetch_policy_is_frozen_before_websocket_opening() {
+async fn prefetch_updates_do_not_delay_native_websocket_opening() {
     for (initial, updated) in [(0, 128 * 1024), (128 * 1024, 0)] {
         assert_lifecycle_delivery(initial, Some(updated)).await;
     }
@@ -566,7 +550,7 @@ async fn assert_connection_limit_before_delivery(prefetch_bytes: u64, send_creat
         }
         socket.send(Message::Text(json!({"type":"error","status":400,"error":{"code":"websocket_connection_limit_reached","type":"invalid_request_error","message":"synthetic expired connection"}}).to_string().into())).await.unwrap();
     });
-    let result = timeout(
+    let mut response = timeout(
         Duration::from_secs(3),
         backend.create_response_stream(
             &request(),
@@ -574,7 +558,20 @@ async fn assert_connection_limit_before_delivery(prefetch_bytes: u64, send_creat
         ),
     )
     .await
+    .unwrap()
     .unwrap();
+    if send_created {
+        let frame = response.body.next().await.unwrap().unwrap();
+        assert!(
+            std::str::from_utf8(&frame)
+                .unwrap()
+                .contains("response.created")
+        );
+    }
+    let result = timeout(Duration::from_secs(1), response.body.next())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(matches!(
         result,
         Err(CodexClientError::WebSocket(

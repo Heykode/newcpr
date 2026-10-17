@@ -71,12 +71,14 @@ pin the same `ExecutionSession::next_event` future: settlement is not
 cancel-safe. Deferred create frames and incoming frames share one bounded
 32-slot budget.
 
-Only explicitly marked replaceable WS preludes (`response.created`, empty
+Only explicitly marked replaceable native HTTP SSE/WS preludes (`response.created`, empty
 `response.in_progress` and protocol metadata) may precede recovery. Unknown
 events, semantic output and terminal failures reach the replay barrier. A prelude
 marker is not replay authorization: preserve provider replay proof, attempt limits,
 hard continuation owners and the prohibition on `UpstreamSendState::Ambiguous`.
-HTTP delivery keeps its original commit boundary and configured prefetch bytes.
+Native events are forwarded immediately regardless of configured prefetch bytes;
+only Excel retains that buffering setting. HTTP response commitment is distinct
+from the monotonic business replay barrier.
 Keep raw WS text separate from raw SSE; never infer success from opaque frames.
 Filter protocol metadata headers in active, settlement and idle phases, retaining
 business fields. Do not expose `codex.rate_limits` to downstream clients.

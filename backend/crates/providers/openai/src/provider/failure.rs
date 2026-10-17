@@ -93,16 +93,16 @@ pub(super) async fn wait_for_replay_grace(deadline: Option<Instant>) {
     }
 }
 
-/// 提交边界前的上游事件预取。
+/// 原生事件即时交付与 Excel 提交前缓冲。
 ///
-/// 原始 chunk 计数而不是重编码后的 event 大小。时间与字节阈值共同限定无感换号
+/// 原生可替换前导立即交付，重放边界独立关闭。Excel 按原始 chunk 计数，
+/// 时间与字节阈值共同限定无感换号
 /// 窗口；任一边界到达都会提交已缓存 wire，不能因网关私有资源规则伪造上游协议
 /// 失败。一旦提交，后续事件不再具备无痕重放资格。
 pub(super) struct PreCommitClientEvents {
     pending: Vec<ProviderEvent>,
     prefetched_bytes: usize,
     replay_grace_started_at: Option<Instant>,
-    upstream_grace_started_at: Option<Instant>,
     committed: bool,
     replayable_prelude: bool,
     max_prefetch_bytes: u64,
@@ -127,17 +127,11 @@ impl PreCommitClientEvents {
             pending: Vec::new(),
             prefetched_bytes: 0,
             replay_grace_started_at: None,
-            upstream_grace_started_at: None,
             committed: false,
             replayable_prelude: false,
             max_prefetch_bytes,
             trace,
         }
-    }
-
-    pub(super) fn with_upstream_grace_started_at(mut self, started_at: Option<Instant>) -> Self {
-        self.upstream_grace_started_at = started_at;
-        self
     }
 
     pub(super) fn with_replayable_prelude(mut self, enabled: bool) -> Self {
@@ -190,11 +184,7 @@ impl PreCommitClientEvents {
             return self.commit_pending(PreCommitReleaseReason::ByteLimit);
         }
         if starts_replay_grace && self.replay_grace_started_at.is_none() {
-            self.replay_grace_started_at = Some(
-                self.upstream_grace_started_at
-                    .take()
-                    .unwrap_or_else(Instant::now),
-            );
+            self.replay_grace_started_at = Some(Instant::now());
         }
         Vec::new()
     }
@@ -1788,6 +1778,105 @@ fn transient_http_connect(error: &reqwest::Error) -> bool {
         source = cause.source();
     }
     true
+}
+
+#[cfg(test)]
+mod excel_buffer_tests {
+    use super::*;
+
+    fn event(kind: &str) -> ProviderEvent {
+        ProviderEvent::wire(
+            ProtocolWireEvent::json(
+                "openai",
+                Some(kind.to_owned()),
+                json!({"type": kind, "response": {"output": []}}),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn excel_keeps_zero_byte_and_grace_release_boundaries() {
+        for (limit, bytes, reason) in [
+            (0, 100, PreCommitReleaseReason::Disabled),
+            (100, 101, PreCommitReleaseReason::ByteLimit),
+            (100, 100, PreCommitReleaseReason::GraceTimeout),
+        ] {
+            let mut delivery = PreCommitClientEvents::new(TraceContext::default(), limit);
+            delivery.observe_chunk(bytes);
+            let mut events = delivery.stage(
+                vec![event("response.created")],
+                ResponseEventSignals::default(),
+                false,
+            );
+            if matches!(reason, PreCommitReleaseReason::GraceTimeout) {
+                assert!(events.is_empty());
+                assert!(!delivery.is_committed());
+                let deadline = delivery
+                    .replay_grace_deadline()
+                    .expect("Excel grace starts on a complete event");
+                delivery.observe_chunk(0);
+                assert!(
+                    delivery
+                        .stage(
+                            vec![event("response.in_progress")],
+                            ResponseEventSignals::default(),
+                            false
+                        )
+                        .is_empty()
+                );
+                assert_eq!(delivery.replay_grace_deadline(), Some(deadline));
+                events = delivery.commit_pending(reason);
+                assert_eq!(events.len(), 2);
+            } else {
+                assert_eq!(events.len(), 1);
+            }
+            assert!(delivery.is_committed());
+            assert!(delivery.replay_grace_deadline().is_none());
+            assert!(events.iter().all(|event| !event.is_replayable_prelude()));
+        }
+    }
+
+    #[test]
+    fn excel_flushes_on_content_terminal_and_eof_and_keeps_early_failure_atomic() {
+        for tail in ["content", "terminal", "eof", "failure"] {
+            let mut delivery = PreCommitClientEvents::new(TraceContext::default(), u64::MAX);
+            delivery.observe_chunk(128);
+            assert!(
+                delivery
+                    .stage(
+                        vec![event("response.created")],
+                        ResponseEventSignals::default(),
+                        false
+                    )
+                    .is_empty()
+            );
+            let events = match tail {
+                "content" => delivery.stage(
+                    vec![event("response.output_text.delta")],
+                    ResponseEventSignals {
+                        semantic_output: true,
+                        ..Default::default()
+                    },
+                    false,
+                ),
+                "terminal" => delivery.stage(
+                    vec![event("response.completed")],
+                    ResponseEventSignals::default(),
+                    true,
+                ),
+                "eof" => delivery.finish(vec![], ResponseEventSignals::default(), false),
+                _ => delivery.take_for_failure(vec![event("error")]),
+            };
+            assert_eq!(
+                events[0].wire_event().unwrap().event_type(),
+                Some("response.created")
+            );
+            assert_eq!(events.len(), if tail == "eof" { 1 } else { 2 });
+            assert_eq!(delivery.is_committed(), tail != "failure");
+            assert!(events.iter().all(|event| !event.is_replayable_prelude()));
+        }
+    }
 }
 
 #[cfg(test)]
