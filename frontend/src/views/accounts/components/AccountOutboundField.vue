@@ -37,6 +37,7 @@ let controller: AbortController | undefined
 const ipv6Options = ipv6EgressModes.filter(item => item.value !== 'unchanged').map(({ value, label }) => ({ value, label }))
 const options = computed(() => [
   ...(mode.value === 'legacy' ? [{ value: 'legacy', label: '保持模板原出口配置' }] : []),
+  ...(mode.value === 'proxy_pool' ? [{ value: 'proxy_pool', label: '普通代理池（原设置）', disabled: true }] : []),
   ...(props.preserve ? [{ value: 'preserve', label: '保持原设置' }] : []),
   ...(props.openai ? [{ value: 'inherit', label: '跟随全局策略' }] : []),
   { value: 'direct', label: '服务器默认直连' },
@@ -44,7 +45,6 @@ const options = computed(() => [
   ...(props.openai
     ? [
         { value: 'mihomo', label: 'Mihomo 会话代理池' },
-        { value: 'proxy_pool', label: '普通代理池' },
         { value: 'ipv6', label: 'IPv6 地址池' },
       ]
     : []),
@@ -158,9 +158,6 @@ function selectMode(value: string) {
     </p>
     <p v-if="mode === 'mihomo'" class="m-0 text-cp-xs text-cp-text-secondary">
       {{ mihomoError ? 'Mihomo 状态读取失败' : !mihomo ? '读取 Mihomo 状态…' : !mihomo.installed ? 'Mihomo 尚未安装' : !mihomo.running ? 'Mihomo 未运行' : `Mihomo 运行中 · ${mihomo.nodeStates.length} 个节点` }}
-    </p>
-    <p v-if="mode === 'proxy_pool'" class="m-0 text-cp-xs text-cp-text-secondary">
-      {{ loading ? '读取代理列表…' : `已启用且通过测试的代理：${proxies.filter(item => item.enabled && item.lastTest?.success).length}` }}
     </p>
     <p v-if="mode === 'ipv6' && config" class="m-0 text-cp-xs text-cp-text-secondary">
       可用 IPv6：{{ config.addresses.filter(item => item.enabled).length }}

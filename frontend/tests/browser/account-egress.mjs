@@ -102,6 +102,7 @@ async function main() {
   const tunnel = () => dialog.getByRole('combobox', { name: '出站隧道', exact: true })
   async function choose(label) {
     await tunnel().click()
+    assert.equal(await page.getByRole('option', { name: '普通代理池', exact: true }).count(), 0)
     await page.getByRole('option', { name: label, exact: true }).click()
   }
   async function ipv6(label) {
@@ -114,6 +115,12 @@ async function main() {
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: width < 500 ? 844 : 1000 })
       await tunnel().scrollIntoViewIfNeeded()
+      await tunnel().click()
+      assert.equal(await page.getByRole('option', { name: '普通代理池', exact: true }).count(), 0)
+      const previousPool = page.getByRole('option', { name: '普通代理池（原设置）', exact: true })
+      if (await previousPool.count())
+        assert.equal(await previousPool.isDisabled(), true)
+      await tunnel().click()
       const policy = dialog.getByRole('combobox', { name: 'IPv6 出口策略', exact: true })
       if (await policy.count())
         await policy.scrollIntoViewIfNeeded()
@@ -193,7 +200,7 @@ async function main() {
       await dialog.waitFor({ state: 'hidden' })
     }
 
-    for (const [mode, label] of [['direct', '服务器默认直连'], ['inherit', '跟随全局策略'], ['proxy_pool', '普通代理池'], ['proxy', '指定代理']]) {
+    for (const [mode, label] of [['direct', '服务器默认直连'], ['inherit', '跟随全局策略'], ['proxy', '指定代理']]) {
       await first().getByRole('button', { name: '编辑账号', exact: true }).click()
       await choose(label)
       if (mode === 'proxy') {
@@ -220,6 +227,31 @@ async function main() {
       for (const key of ['egressMode', 'outboundProxyId', 'requestProxySource'])
         assert.equal(key in writes.at(-1).body, false)
     }
+
+    // Historical pool settings remain readable; unrelated saves must not change egress.
+    accounts[0].requestProxySource = 'proxy_pool'
+    await page.reload()
+    await first().getByRole('button', { name: '编辑账号', exact: true }).click()
+    await page.waitForFunction(() => document.querySelector('[aria-label="出站隧道"]')?.textContent.includes('普通代理池（原设置）'))
+    await layout('edit-previous-pool')
+    await dialog.getByRole('spinbutton', { name: '账号调度权重', exact: true }).fill('5')
+    await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    for (const key of ['egressMode', 'outboundProxyId', 'requestProxySource'])
+      assert.equal(key in writes.at(-1).body, false)
+    assert.equal(accounts[0].requestProxySource, 'proxy_pool')
+
+    // Only an explicit saved-proxy selection replaces the historical pool.
+    await first().getByRole('button', { name: '编辑账号', exact: true }).click()
+    await choose('指定代理')
+    await dialog.getByRole('combobox', { name: '指定代理', exact: true }).click()
+    await page.getByRole('option', { name: /测试代理/ }).click()
+    await layout('edit-specified-proxy')
+    await dialog.getByRole('button', { name: '保存账号设置', exact: true }).click()
+    await dialog.waitFor({ state: 'hidden' })
+    assert.equal(writes.at(-1).body.requestProxySource, 'account')
+    assert.equal(writes.at(-1).body.outboundProxyId, 'proxy-fixture')
+    assert.equal(writes.at(-1).body.egressMode, 'unchanged')
 
     // A read failure leaves unknown routing blank and cannot turn it into direct/IPv6.
     accounts[0].outboundProxyEndpoint = null
@@ -291,7 +323,7 @@ async function main() {
     assert.equal(writes.at(-1).body.settings.clearOutboundProxy, true)
     assert.equal(writes.at(-1).body.outboundProxyId, undefined)
     assert.deepEqual(errors, [])
-    process.stdout.write(`${JSON.stringify({ writes: writes.map(item => item.path), screenshots: 12, errors })}\n`)
+    process.stdout.write(`${JSON.stringify({ writes: writes.map(item => item.path), screenshots: 18, errors })}\n`)
   }
   finally {
     await browser.close()
