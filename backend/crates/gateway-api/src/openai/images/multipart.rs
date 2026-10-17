@@ -204,24 +204,12 @@ fn insert_text_field(
     let text = std::str::from_utf8(data)
         .map_err(|_| FormError::invalid("request", "Text fields must be UTF-8."))?;
     let value = match name {
-        "model" | "prompt" | "size" | "quality" | "response_format" | "background"
-        | "output_format" | "input_fidelity" | "moderation" | "user" => {
-            Value::String(text.to_owned())
-        }
-        "n" | "output_compression" => {
-            let number = text.trim().parse::<u64>().map_err(|_| {
-                FormError::invalid(
-                    "request",
-                    "Numeric form fields must be non-negative integers.",
-                )
-            })?;
-            if (name == "n" && number == 0) || (name == "output_compression" && number > 100) {
-                return Err(FormError::invalid(
-                    "request",
-                    "Numeric form value is out of range.",
-                ));
-            }
-            Value::from(number)
+        "n" | "output_compression" | "partial_images" => {
+            serde_json::from_slice::<serde_json::Number>(data)
+                .map(Value::Number)
+                .map_err(|_| {
+                    FormError::invalid("request", "Numeric form fields must contain JSON numbers.")
+                })?
         }
         "stream" if text.trim() == "false" => Value::Bool(false),
         "stream" => {
@@ -230,12 +218,13 @@ fn insert_text_field(
                 "Image uploads currently support non-streaming responses only.",
             ));
         }
-        _ => {
+        "images" => {
             return Err(FormError::invalid(
-                "request",
-                "This multipart field is not supported by the image-edit adapter.",
+                "images",
+                "Use image files for the images field.",
             ));
         }
+        _ => Value::String(text.to_owned()),
     };
     fields.insert(name.to_owned(), value);
     Ok(())

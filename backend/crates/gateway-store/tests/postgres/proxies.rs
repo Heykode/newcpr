@@ -87,7 +87,9 @@ async fn proxy_disable_projects_direct_and_reenable_restores_unchanged_accounts(
                 test: Some(success()),
                 request_location: Some(location.clone()),
                 name: "Enabled fixture".into(),
-                proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
+                proxy: OutboundProxy::parse("http://127.0.0.1:8080")
+                    .unwrap()
+                    .with_max_websocket_connections(7),
             },
             &context(),
         )
@@ -113,6 +115,7 @@ async fn proxy_disable_projects_direct_and_reenable_restores_unchanged_accounts(
         saved = proxies
             .update(
                 UpdateProxy {
+                    max_websocket_connections: None,
                     enabled: Some(enabled),
                     auto_location: None,
                     test: None,
@@ -177,6 +180,7 @@ async fn proxy_disable_projects_direct_and_reenable_restores_unchanged_accounts(
             proxies
                 .update(
                     UpdateProxy {
+                        max_websocket_connections: None,
                         enabled: Some(!enabled),
                         auto_location: None,
                         test: None,
@@ -272,6 +276,7 @@ async fn proxy_location_updates_preserve_credentials_and_scheduling() {
     let renamed = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -296,6 +301,7 @@ async fn proxy_location_updates_preserve_credentials_and_scheduling() {
     let changed = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -323,6 +329,7 @@ async fn proxy_location_updates_preserve_credentials_and_scheduling() {
     let cleared = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -914,6 +921,7 @@ async fn import_reservation_blocks_proxy_mutations_until_rotated_credentials_are
         .unwrap();
     let reservation = store.reserve_import(&saved.id).await.unwrap();
     let replacement = UpdateProxy {
+        max_websocket_connections: None,
         enabled: None,
         auto_location: None,
         test: None,
@@ -1084,6 +1092,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let renamed = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -1105,6 +1114,7 @@ async fn managed_proxies_persist_bind_update_all_accounts_and_protect_stale_test
     let edited = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,
@@ -1444,6 +1454,7 @@ async fn automatic_location_projects_detected_values_without_rewriting_bound_acc
     let disabled = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: Some(false),
                 test: None,
@@ -1606,6 +1617,7 @@ async fn automatic_location_failures_preserve_only_the_unchanged_exit() {
     let changed = store
         .update(
             UpdateProxy {
+                max_websocket_connections: None,
                 enabled: None,
                 auto_location: None,
                 test: None,

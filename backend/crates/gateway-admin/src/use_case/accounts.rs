@@ -106,6 +106,16 @@ fn apply_current_quota_estimates(quota: &ProviderQuota, report: &mut AccountQuot
 /// 统一账号页消费的服务。
 #[async_trait]
 pub trait AccountsService: Send + Sync {
+    async fn concurrency(
+        &self,
+        _account_id: &ProviderAccountId,
+        _pool: crate::model::accounts::AccountConcurrencyPool,
+        _page: u32,
+        _page_size: u32,
+    ) -> Result<Option<crate::model::accounts::AccountConcurrencyPage>, AdminError> {
+        Ok(None)
+    }
+
     async fn request_turn_state_probe(
         &self,
         _account_id: &ProviderAccountId,
@@ -512,6 +522,23 @@ impl DefaultAccountsService {
 
 #[async_trait]
 impl AccountsService for DefaultAccountsService {
+    async fn concurrency(
+        &self,
+        account_id: &ProviderAccountId,
+        pool: crate::model::accounts::AccountConcurrencyPool,
+        page: u32,
+        page_size: u32,
+    ) -> Result<Option<crate::model::accounts::AccountConcurrencyPage>, AdminError> {
+        if page == 0 || !(1..=100).contains(&page_size) {
+            return Err(AdminError::invalid("并发详情分页参数不合法"));
+        }
+        self.load_account(account_id).await?;
+        self.account_runtime
+            .concurrency(account_id.as_str(), pool, page, page_size)
+            .await
+            .map_err(|error| map_store_error(error, "account concurrency"))
+    }
+
     async fn list(&self, query: AccountListQuery) -> Result<AccountDirectoryPage, AdminError> {
         let runtime = self
             .account_runtime

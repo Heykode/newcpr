@@ -76,16 +76,18 @@ impl HttpProxyProbe {
 
     async fn exit_ip_at(
         &self,
-        proxy: &OutboundProxy,
+        proxy: Option<&OutboundProxy>,
         endpoint: &str,
     ) -> Result<IpAddr, &'static str> {
-        let proxy = reqwest::Proxy::all(proxy.expose_url()).map_err(|_| "代理地址不合法")?;
-        let builder = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .no_proxy()
-            .proxy(proxy)
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(12))
             .redirect(reqwest::redirect::Policy::none());
+        if let Some(proxy) = proxy {
+            builder = builder
+                .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| "代理地址不合法")?);
+        }
         let client = (self.build_client)(builder)?;
         let mut response = client.get(endpoint).send().await.map_err(|error| {
             if error.is_timeout() {
@@ -122,7 +124,7 @@ impl HttpProxyProbe {
 }
 
 impl HttpProxyProbe {
-    async fn test_connection(&self, proxy: &OutboundProxy) -> ProxyTestResult {
+    async fn test_connection(&self, proxy: Option<&OutboundProxy>) -> ProxyTestResult {
         let started = Instant::now();
         let timeout_limit = Duration::from_secs(15);
 
@@ -251,18 +253,19 @@ impl HttpProxyProbe {
 
     async fn location_for_ip(
         &self,
-        proxy: &OutboundProxy,
+        proxy: Option<&OutboundProxy>,
         ip: IpAddr,
     ) -> Result<RequestLocation, &'static str> {
-        let proxy = reqwest::Proxy::all(proxy.expose_url()).map_err(|_| "代理地址不合法")?;
-        let client = (self.build_client)(
-            reqwest::Client::builder()
-                .no_proxy()
-                .proxy(proxy)
-                .connect_timeout(Duration::from_secs(3))
-                .timeout(Duration::from_secs(6))
-                .redirect(reqwest::redirect::Policy::none()),
-        )?;
+        let mut builder = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(6))
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(proxy) = proxy {
+            builder = builder
+                .proxy(reqwest::Proxy::all(proxy.expose_url()).map_err(|_| "代理地址不合法")?);
+        }
+        let client = (self.build_client)(builder)?;
         // Query the measured IP, not a second "my IP" lookup on a rotating proxy.
         let url = format!("{}/{ip}", self.location_endpoint.trim_end_matches('/'));
         let mut response = client
@@ -326,7 +329,7 @@ impl HttpProxyProbe {
 
     async fn detect_location(
         &self,
-        proxy: &OutboundProxy,
+        proxy: Option<&OutboundProxy>,
         result: &ProxyTestResult,
     ) -> ProxyLocationDetection {
         let lookup = async |ip: Option<IpAddr>| match ip {
@@ -357,6 +360,16 @@ impl HttpProxyProbe {
 #[async_trait]
 impl ProxyProbe for HttpProxyProbe {
     async fn test(&self, proxy: &OutboundProxy, detect_location: bool) -> ProxyTestResult {
+        self.probe(Some(proxy), detect_location).await
+    }
+
+    async fn test_direct(&self) -> Option<ProxyTestResult> {
+        Some(self.probe(None, true).await)
+    }
+}
+
+impl HttpProxyProbe {
+    async fn probe(&self, proxy: Option<&OutboundProxy>, detect_location: bool) -> ProxyTestResult {
         let mut result = self.test_connection(proxy).await;
         if detect_location {
             result.location = if result.success {

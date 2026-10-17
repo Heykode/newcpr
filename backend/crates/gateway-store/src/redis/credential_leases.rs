@@ -469,6 +469,73 @@ impl RedisCredentialLeaseRepository {
         Ok(keys)
     }
 
+    pub(super) async fn concurrency_page(
+        &self,
+        account_id: &str,
+        pool: gateway_admin::model::accounts::AccountConcurrencyPool,
+        page: u32,
+        page_size: u32,
+    ) -> StoreResult<gateway_admin::model::accounts::AccountConcurrencyPage> {
+        use gateway_admin::model::accounts::{
+            AccountConcurrencyItem, AccountConcurrencyPage, AccountConcurrencyPool,
+        };
+        if page == 0 || !(1..=100).contains(&page_size) {
+            return Err(invalid("invalid concurrency page"));
+        }
+        let mut keys = self.scheduling_keys(
+            account_id,
+            if matches!(pool, AccountConcurrencyPool::Reserved) {
+                ProviderConcurrencyPool::Reserved
+            } else {
+                ProviderConcurrencyPool::Shared
+            },
+        )?;
+        if matches!(pool, AccountConcurrencyPool::Quality) {
+            keys[0].push_str(":quality");
+        }
+        let script = r#"
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+local total = redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')
+local active = redis.call('ZRANGEBYSCORE', KEYS[1], '(' .. now, '+inf', 'WITHSCORES', 'LIMIT', ARGV[1], ARGV[2])
+local result = {tostring(total)}
+for i = 1, #active, 2 do
+  table.insert(result, active[i + 1])
+  table.insert(result, redis.call('GET', KEYS[1] .. ':detail:' .. active[i]) or '')
+end
+return result
+"#;
+        let mut connection = self.connection.clone();
+        let values: Vec<String> = Script::new(script)
+            .key(&keys[0])
+            .arg(u64::from(page - 1) * u64::from(page_size))
+            .arg(page_size)
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|error| redis_unavailable("read concurrency details").with_source(error))?;
+        let total = values
+            .first()
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(|| invalid("invalid concurrency count"))?;
+        let items = values[1..]
+            .chunks_exact(2)
+            .map(|row| {
+                Ok(AccountConcurrencyItem {
+                    detail: serde_json::from_str(&row[1]).ok(),
+                    expires_at_ms: row[0]
+                        .parse()
+                        .map_err(|_| invalid("invalid lease expiry"))?,
+                })
+            })
+            .collect::<StoreResult<Vec<_>>>()?;
+        Ok(AccountConcurrencyPage {
+            items,
+            total,
+            page,
+            page_size,
+        })
+    }
+
     async fn load_signal(
         &self,
         resource_id: String,

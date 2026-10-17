@@ -7,6 +7,18 @@ import request from '../request'
 export type AccountStatus
   = 'normal' | 'quota_exhausted' | 'rate_limited' | 'disabled' | 'error'
 
+export type AccountConcurrencyPool = 'shared' | 'reserved' | 'quality'
+export interface AccountConcurrencyPage {
+  items: { expiresAtMs: number, detail: { requestId: string, clientKeyId: string, model: string | null, clientIp: string | null, startedAtMs: number } | null }[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export function getAccountConcurrency(data: { accountId: string, pool: AccountConcurrencyPool, page: number, pageSize: number }, options: RequestOptions = {}) {
+  return request<AccountConcurrencyPage | null>({ url: '/api/admin/accounts/concurrency', method: 'GET', params: data, ...options })
+}
+
 export type AccountErrorReason
   = 'account_unverified'
     | 'access_token_expired'

@@ -5057,6 +5057,54 @@ fn transient_backoff_can_be_cancelled_before_the_next_attempt() {
 }
 
 #[test]
+fn final_session_restriction_keeps_original_upstream_error() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let upstream = ProviderError::new(
+        ProviderErrorKind::InvalidRequest,
+        UpstreamSendState::NotSent,
+    )
+    .with_pre_delivery_retry()
+    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+        "original policy message",
+        Some("cyber_policy".into()),
+        None,
+    ));
+    let (coordinator, _, provider) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(upstream)],
+        },
+        Script::Error(
+            ProviderError::new(
+                ProviderErrorKind::SessionPolicyRestricted,
+                UpstreamSendState::NotSent,
+            )
+            .with_retry_prohibited(),
+        ),
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    let EngineError::Provider(error) = block_on(session.collect_uncommitted()).err().unwrap()
+    else {
+        panic!("provider failure expected");
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(
+        error.client_visible_upstream_error().unwrap().message(),
+        "original policy message"
+    );
+    assert_eq!(provider.contexts.lock().unwrap().len(), 2);
+}
+
+#[test]
 fn final_capacity_exhaustion_returns_the_last_retryable_upstream_failure() {
     let operation = generate_operation();
     let route_plan = plan(&operation);

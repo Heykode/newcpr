@@ -14,12 +14,18 @@ const policy = ref<AutoResetPolicy | null>(null)
 const enabled = ref(false)
 const fiveHour = ref(100)
 const sevenDay = ref(100)
+const expiryEnabled = ref(false)
+const expiryLeadMinutes = ref(10)
+const weeklyConditionEnabled = ref(false)
+const maxWeeklyRemainingPercent = ref(0)
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const uncertain = ref(false)
 const saved = ref(false)
-const valid = computed(() => [fiveHour.value, sevenDay.value].every(n => Number.isFinite(n) && (n === 0 || (n >= 0.1 && n <= 100))))
+const valid = computed(() => [fiveHour.value, sevenDay.value].every(n => Number.isFinite(n) && (n === 0 || (n >= 0.1 && n <= 100)))
+  && Number.isInteger(expiryLeadMinutes.value) && expiryLeadMinutes.value >= 1 && expiryLeadMinutes.value <= 1440
+  && (!weeklyConditionEnabled.value || (Number.isInteger(maxWeeklyRemainingPercent.value) && maxWeeklyRemainingPercent.value >= 0 && maxWeeklyRemainingPercent.value <= 100)))
 let controller: AbortController | undefined
 let generation = 0
 function apply(value: AutoResetPolicy) {
@@ -27,6 +33,10 @@ function apply(value: AutoResetPolicy) {
   enabled.value = value.config.enabled
   fiveHour.value = value.config.fiveHourUsedMillis / 1000
   sevenDay.value = value.config.sevenDayUsedMillis / 1000
+  expiryEnabled.value = value.config.expiryEnabled ?? false
+  expiryLeadMinutes.value = value.config.expiryLeadMinutes ?? 10
+  weeklyConditionEnabled.value = value.config.maxWeeklyRemainingPercent != null
+  maxWeeklyRemainingPercent.value = value.config.maxWeeklyRemainingPercent ?? 0
 }
 async function load() {
   const token = ++generation
@@ -62,6 +72,9 @@ async function save() {
       enabled: enabled.value,
       fiveHourUsedMillis: Math.round(fiveHour.value * 1000),
       sevenDayUsedMillis: Math.round(sevenDay.value * 1000),
+      expiryEnabled: expiryEnabled.value,
+      expiryLeadMinutes: expiryLeadMinutes.value,
+      maxWeeklyRemainingPercent: weeklyConditionEnabled.value ? maxWeeklyRemainingPercent.value : null,
     })
     if (token !== generation)
       return
@@ -117,8 +130,12 @@ onBeforeUnmount(() => {
         <span>7 天已用阈值（0 为关闭）</span>
         <BaseNumberInput v-model="sevenDay" label="7 天已用阈值" :min="0" :max="100" :step="0.1" unit="%" :disabled="loading || saving" />
       </div>
+      <BaseSwitch v-model="expiryEnabled" label="到期前自动使用" show-label :disabled="loading || saving" />
+      <BaseNumberInput v-if="expiryEnabled" v-model="expiryLeadMinutes" label="到期提前量" :min="1" :max="1440" :step="1" unit="分钟" :disabled="loading || saving" />
+      <BaseSwitch v-model="weeklyConditionEnabled" label="限制消费时的周剩余额度" show-label :disabled="loading || saving" />
+      <BaseNumberInput v-if="weeklyConditionEnabled" v-model="maxWeeklyRemainingPercent" label="周剩余额度不高于" :min="0" :max="100" :step="1" unit="%" :disabled="loading || saving" />
       <p v-if="!valid" role="alert" class="text-cp-xs text-cp-error">
-        阈值必须为 0 或 0.1% 至 100%。
+        请检查额度阈值、提前分钟数与周剩余额度。
       </p>
       <div class="grid gap-1 text-cp-xs text-cp-text-secondary" role="status">
         <span v-if="policy.checkedAt">最近检查：{{ formatDateTime(policy.checkedAt) }}</span>

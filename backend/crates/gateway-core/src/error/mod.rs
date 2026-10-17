@@ -41,6 +41,8 @@ pub enum ProviderErrorKind {
     AccountCapacityUnavailable,
     /// Provider 已确认当前请求无法选出可用账号。
     NoEligibleAccount,
+    /// 当前会话被先前上游策略拒绝，不能据此判定账号或整个号池故障。
+    SessionPolicyRestricted,
     /// Provider 的账号存储、租约协调或本地凭据数据不可用。
     ProviderInfrastructureUnavailable,
     /// 请求超时。
@@ -73,6 +75,7 @@ impl ProviderErrorKind {
             Self::QuotaExhausted => "quota_exhausted",
             Self::AccountCapacityUnavailable => "account_capacity_unavailable",
             Self::NoEligibleAccount => "no_eligible_account",
+            Self::SessionPolicyRestricted => "session_policy_restricted",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",
             Self::Timeout => "timeout",
             Self::Transport => "transport",
@@ -1167,6 +1170,10 @@ impl GatewayError {
     #[must_use]
     pub fn from_provider(error: &ProviderError) -> Self {
         let gateway = match error.kind() {
+            ProviderErrorKind::SessionPolicyRestricted => Self::new(
+                GatewayErrorKind::InvalidRequest,
+                "session policy excludes all eligible accounts",
+            ),
             ProviderErrorKind::InvalidRequest => {
                 Self::new(GatewayErrorKind::InvalidRequest, "invalid upstream request")
             }

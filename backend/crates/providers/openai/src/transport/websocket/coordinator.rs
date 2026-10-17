@@ -354,6 +354,7 @@ pub(crate) async fn prepare_response_create_request_with_pool(
         .await;
     };
 
+    let key = key.with_proxy_capacity(request.connection().outbound_proxy.as_ref());
     let required_response_id = match request.continuation() {
         WebSocketContinuationRequirement::ConnectionLocal { response_id } => {
             Some(response_id.as_str())
@@ -537,12 +538,39 @@ async fn prepare_pooled_websocket(
     };
     let fast_path_budget = decision_deadline
         .map(|deadline| deadline.saturating_duration_since(connect_lease.started_at()));
+    let proxy_permit = match wait_for_fast_path(
+        connect_lease.started_at(),
+        fast_path_budget,
+        Box::pin(super::pool::proxy_capacity::acquire(
+            request.connection().outbound_proxy.as_ref(),
+            Some(pool),
+        )),
+    )
+    .await
+    {
+        WebSocketFastPath::Ready(Ok(permit)) => permit,
+        WebSocketFastPath::Ready(Err(error)) => {
+            if let Some(permit) = permit {
+                permit.cancel();
+            }
+            connect_lease.failed().await;
+            return Err(error);
+        }
+        WebSocketFastPath::Missed => {
+            if let Some(permit) = permit {
+                permit.cancel();
+            }
+            connect_lease.failed().await;
+            return Ok(WebSocketFastPath::Missed);
+        }
+    };
     let mut waiter = start_pooled_websocket_connect(
         request.connection().clone(),
         pool.clone(),
         connect_lease,
         permit,
         connection_budget,
+        proxy_permit,
     );
     match waiter.wait(fast_path_budget).await? {
         WebSocketFastPath::Ready(handoff) => Ok(WebSocketFastPath::Ready(PreparedWebSocket {
@@ -595,6 +623,7 @@ fn start_pooled_websocket_connect(
     connect_lease: WebSocketPoolConnectLease,
     permit: Option<WebSocketOriginBreakerPermit>,
     connection_budget: Option<gateway_core::engine::connection::ConnectionBudget>,
+    proxy_permit: Option<super::pool::proxy_capacity::ProxyConnectionPermit>,
 ) -> PooledWebSocketConnectWaiter {
     let task_key = connect_lease.key().clone();
     let started_at = connect_lease.started_at();
@@ -629,7 +658,7 @@ fn start_pooled_websocket_connect(
                 return;
             }
             result = async {
-                let connecting = connect_websocket_connection(&connection, keepalive, context, connection_budget.as_ref());
+                let connecting = connect_websocket_connection(&connection, keepalive, context, connection_budget.as_ref(), proxy_permit);
                 tokio::pin!(connecting);
                 // Capacity waiting shortens only the foreground deadline. The opening
                 // owns its full slow-connect budget, even after that caller leaves.
@@ -766,10 +795,19 @@ async fn connect_with_budget(
     context: PumpLogContext,
     connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
 ) -> Result<WebSocketFastPath<(PooledWebSocketConnection, Duration)>, CodexWebSocketExchangeError> {
+    // Keep the nested handshake future off the caller's stack.
     match wait_for_fast_path(
         TokioInstant::now(),
         fast_path_budget,
-        connect_websocket_connection(connection, keepalive, context, connection_budget),
+        Box::pin(async {
+            let permit = Box::pin(super::pool::proxy_capacity::acquire(
+                connection.outbound_proxy.as_ref(),
+                None,
+            ))
+            .await?;
+            connect_websocket_connection(connection, keepalive, context, connection_budget, permit)
+                .await
+        }),
     )
     .await
     {
@@ -783,10 +821,17 @@ async fn connect_websocket_connection(
     keepalive: PumpKeepalive,
     context: PumpLogContext,
     connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
+    proxy_permit: Option<super::pool::proxy_capacity::ProxyConnectionPermit>,
 ) -> Result<(PooledWebSocketConnection, Duration), CodexWebSocketExchangeError> {
     let started_at = Instant::now();
-    let (websocket, response) =
-        connect_pumped_websocket(connection, keepalive, context, connection_budget).await?;
+    let (websocket, response) = connect_pumped_websocket(
+        connection,
+        keepalive,
+        context,
+        connection_budget,
+        proxy_permit,
+    )
+    .await?;
     Ok((
         PooledWebSocketConnection {
             websocket,

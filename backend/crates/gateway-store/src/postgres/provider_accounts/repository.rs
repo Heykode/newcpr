@@ -142,6 +142,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select
                     coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
                     outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, turn_state_binding_revision, has_refresh_token,

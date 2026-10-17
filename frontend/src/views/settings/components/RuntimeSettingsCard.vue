@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { RequestTuning } from '@/api/modules/settings'
-import { ChevronDown, Gauge, Timer, Zap } from '@lucide/vue'
-import { computed, ref } from 'vue'
-import { defaultRequestLocation } from '@/api/modules/proxies'
+import { ChevronDown, Gauge, LocateFixed, Timer, Zap } from '@lucide/vue'
+import { computed, onScopeDispose, ref } from 'vue'
+import { defaultRequestLocation, probeDirectLocation } from '@/api/modules/proxies'
+import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
@@ -33,6 +34,44 @@ const location = computed({
   get: () => requestTuning.value.openaiRequestLocation ?? defaultRequestLocation(),
   set: (value) => { requestTuning.value.openaiRequestLocation = value },
 })
+const detectingLocation = ref(false)
+const locationMessage = ref('')
+let locationController: AbortController | undefined
+onScopeDispose(() => locationController?.abort())
+async function detectLocation() {
+  if (detectingLocation.value)
+    return
+  const controller = new AbortController()
+  locationController = controller
+  const before = JSON.stringify(requestTuning.value.openaiRequestLocation)
+  detectingLocation.value = true
+  locationMessage.value = ''
+  try {
+    const result = await probeDirectLocation({ signal: controller.signal })
+    if (controller.signal.aborted)
+      return
+    if (result.location?.status === 'detected') {
+      if (JSON.stringify(requestTuning.value.openaiRequestLocation) !== before) {
+        locationMessage.value = '地区已编辑，请重新检测'
+        return
+      }
+      location.value = result.location.location
+      locationMessage.value = '已填入检测结果，保存设置后生效'
+    }
+    else {
+      locationMessage.value = result.location?.status === 'conflict'
+        ? 'IPv4 与 IPv6 的时区不一致，请手动选择'
+        : result.location?.status === 'failed' ? result.location.message : result.message
+    }
+  }
+  catch {
+    if (!controller.signal.aborted)
+      locationMessage.value = '出口位置检测失败'
+  }
+  finally {
+    detectingLocation.value = false
+  }
+}
 type NumericTuningKey = {
   [Key in keyof RequestTuning]: RequestTuning[Key] extends number ? Key : never
 }[keyof RequestTuning]
@@ -210,6 +249,17 @@ const tuningValues = {
       <div v-if="requestTuning.openaiLocationOverrideEnabled" class="mt-4 grid gap-4">
         <BaseSwitch v-model="customLocation" label="自定义全局地区（关闭时沿用启动配置）" show-label />
         <RequestLocationFields v-if="customLocation" v-model="location" />
+        <div>
+          <BaseButton size="sm" :loading="detectingLocation" :disabled="disabled" @click="detectLocation">
+            <template #icon>
+              <LocateFixed :size="16" />
+            </template>
+            检测直连出口位置
+          </BaseButton>
+          <p v-if="locationMessage" class="mt-2 text-cp-xs text-cp-text-secondary" role="status">
+            {{ locationMessage }}
+          </p>
+        </div>
       </div>
     </div>
 

@@ -17,7 +17,9 @@ const { outputText } = ts.transpileModule(compiled.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2024 },
 })
 const exports = {}
-runInNewContext(outputText, { exports, require }, { filename: filename.pathname })
+runInNewContext(outputText, { exports, require: id => id === './AccountConcurrencyModal.vue'
+  ? { default: { render: () => null } }
+  : require(id) }, { filename: filename.pathname })
 
 const unknown = '\u2014'
 const maxU32 = 4_294_967_295
@@ -45,7 +47,7 @@ function capacityPart(html, part) {
 
 async function renderCapacity(props) {
   const html = await renderToString(createSSRApp(exports.default, props))
-  const root = html.match(/^<div\b[^>]*>/)?.[0]
+  const root = html.match(/<div\s[^>]*\bdata-account-capacity[^>]*>/)?.[0]
   assert.ok(root, html)
   assert.match(root, /\bdata-account-capacity(?:="")?(?=[\s>])/)
   assert.match(root, /role="group"/)

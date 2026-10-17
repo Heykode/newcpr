@@ -8,12 +8,15 @@ import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { getUsageAccountOptions } from '@/api'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 import UsageEntityFilter from './UsageEntityFilter.vue'
 
 const props = defineProps<{ range: UsageTimeRangeParams, errors: boolean, error?: string }>()
 const model = defineModel<UsageFilterDraft>({ required: true })
 const expanded = ref(false)
+const dateMode = ref('time')
+const dateModeOptions = [{ label: '精确时间', value: 'time' }, { label: '整天', value: 'day' }]
 const accountRoot = ref<HTMLElement>()
 const accountQuery = ref('')
 const accountOpen = ref(false)
@@ -87,6 +90,38 @@ function localTime(key: 'startTime' | 'endTime') {
 function setTime(key: 'startTime' | 'endTime', value: string) {
   set(key, value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : '')
 }
+function calendarDate(key: 'startTime' | 'endTime') {
+  const value = model.value[key]
+  if (!value || !Number.isFinite(Date.parse(value)))
+    return ''
+  const date = new Date(value)
+  if (key === 'endTime' && date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0 && date.getMilliseconds() === 0)
+    date.setDate(date.getDate() - 1)
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+function setDate(key: 'startTime' | 'endTime', value: string) {
+  if (!value)
+    return set(key, '')
+  const date = new Date(`${value}T00:00:00`)
+  if (!Number.isFinite(date.getTime()))
+    return
+  // Advance the calendar date, not a fixed 24 hours, across DST transitions.
+  if (key === 'endTime')
+    date.setDate(date.getDate() + 1)
+  set(key, date.toISOString())
+}
+watch(dateMode, (mode) => {
+  if (mode === 'day') {
+    const start = calendarDate('startTime')
+    const end = calendarDate('endTime')
+    if (start)
+      setDate('startTime', start)
+    if (end)
+      setDate('endTime', end)
+  }
+})
 watchDebounced(accountQuery, () => {
   if (accountOpen.value)
     void loadAccounts()
@@ -214,8 +249,10 @@ const routeOptions = [all, { label: 'Responses', value: '/v1/responses' }, { lab
       <label class="min-w-0"><span class="mb-1 block text-cp-xs text-cp-text-secondary">请求接口</span><BaseSelect class="w-full" :model-value="model.route || ''" :options="routeOptions" aria-label="请求接口" @update:model-value="set('route', $event)" /></label>
       <label v-for="key in (['startTime', 'endTime'] as const)" :key="key" class="min-w-0">
         <span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ key === 'startTime' ? '开始时间' : '结束时间' }}</span>
-        <BaseInput type="datetime-local" :model-value="localTime(key)" :aria-label="key === 'startTime' ? '开始时间' : '结束时间'" @update:model-value="setTime(key, $event)" />
+        <BaseInput v-if="dateMode === 'time'" type="datetime-local" :model-value="localTime(key)" :aria-label="key === 'startTime' ? '开始时间' : '结束时间'" @update:model-value="setTime(key, $event)" />
+        <BaseInput v-else type="date" :model-value="calendarDate(key)" :aria-label="key === 'startTime' ? '开始日期' : '结束日期（含当天）'" @update:model-value="setDate(key, $event)" />
       </label>
+      <div><span class="mb-1 block text-cp-xs text-cp-text-secondary">日期精度</span><BaseSegmented v-model="dateMode" label="日期精度" :options="dateModeOptions" /></div>
       <label v-for="field in textFields" :key="field.key" class="min-w-0">
         <span class="mb-1 block text-cp-xs text-cp-text-secondary">{{ field.label }}</span>
         <BaseInput :type="field.type || 'text'" :min="field.type === 'number' ? 0 : undefined" :model-value="model[field.key] || ''" :placeholder="field.placeholder" :aria-label="field.label" @update:model-value="set(field.key, $event)" />

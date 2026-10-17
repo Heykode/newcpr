@@ -34,6 +34,7 @@ local expires = tonumber(redis.call('ZSCORE', KEYS[1], ARGV[1]) or '0')
 if expires <= now or redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
 local ttl = tonumber(ARGV[2])
 redis.call('ZADD', KEYS[1], 'XX', now + ttl, ARGV[1])
+redis.call('PEXPIRE', KEYS[1] .. ':detail:' .. ARGV[1], ttl)
 if redis.call('PTTL', KEYS[1]) < ttl then redis.call('PEXPIRE', KEYS[1], ttl) end
 return 1
 "#;
@@ -118,6 +119,11 @@ if fence > 9007199254740991 then
   return redis.error_reply('capacity wait fencing token exceeds exact Lua integer range')
 end
 redis.call('ZADD', KEYS[2], execution_deadline, ARGV[1])
+if ARGV[9] ~= '' then
+  local detail = cjson.decode(ARGV[9])
+  detail.startedAtMs = now
+  redis.call('SET', KEYS[2] .. ':detail:' .. ARGV[1], cjson.encode(detail), 'PX', execution_deadline - now)
+end
 if redis.call('PTTL', KEYS[2]) < execution_deadline - now then
   redis.call('PEXPIREAT', KEYS[2], execution_deadline)
 end
@@ -142,6 +148,7 @@ if deadline > now then
 end
 redis.call('ZREM', KEYS[1], ARGV[1])
 redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('DEL', KEYS[2] .. ':detail:' .. ARGV[1])
 redis.call('ZREM', KEYS[4], ARGV[1])
 if redis.call('ZCARD', KEYS[1]) == 0 then
   redis.call('DEL', KEYS[1])
@@ -520,6 +527,12 @@ impl Ownership {
             .arg(u8::from(
                 request.concurrency_pool() == ProviderConcurrencyPool::Reserved,
             ))
+            .arg(
+                request
+                    .detail()
+                    .and_then(|detail| serde_json::to_string(detail).ok())
+                    .unwrap_or_default(),
+            )
             .invoke_async(&mut connection)
             .await
             .map_err(|_| unavailable("acquire account execution capacity"))

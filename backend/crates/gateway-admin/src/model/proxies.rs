@@ -104,6 +104,7 @@ pub struct NewProxy {
 
 #[derive(Debug, Clone)]
 pub struct UpdateProxy {
+    pub max_websocket_connections: Option<u32>,
     pub enabled: Option<bool>,
     pub auto_location: Option<bool>,
     pub test: Option<ProxyTestResult>,
@@ -119,6 +120,16 @@ pub struct UpdateProxy {
 pub struct ProxyMutation {
     pub config_revision: Revision,
     pub record: ProxyRecord,
+}
+
+pub enum ProxyBatchResult<T> {
+    Completed(Result<T, super::AdminError>),
+    Skipped,
+}
+
+pub struct TestProxy {
+    pub id: String,
+    pub revision: Revision,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]

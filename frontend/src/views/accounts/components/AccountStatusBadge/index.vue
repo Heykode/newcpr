@@ -61,11 +61,10 @@ const presentation = computed(() =>
         <span
           v-else
           data-account-status-mark
-          class="inline-flex min-w-16 items-center gap-1.5 rounded-md px-1.5 py-1 text-cp-sm leading-none font-emphasis transition-colors duration-150 motion-reduce:transition-none"
+          class="inline-flex items-center text-cp-sm leading-none font-emphasis transition-colors duration-150 motion-reduce:transition-none"
           :class="[presentation.statusStyle.text, { 'justify-center': align === 'center' }]"
         >
-          <span class="size-1.5 rounded-full" :class="presentation.statusStyle.dot" />
-          <span>{{ presentation.label }}</span>
+          {{ presentation.label }}
         </span>
       </component>
     </template>

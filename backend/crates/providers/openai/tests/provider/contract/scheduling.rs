@@ -1240,6 +1240,61 @@ async fn capacity_wait_provider_opens_websocket_only_after_account_promotion() {
 }
 
 #[tokio::test]
+async fn all_session_policy_exclusions_report_session_restriction_in_both_selection_paths() {
+    use gateway_core::provider_ports::ProviderSessionExclusionPort;
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_scope_old").await;
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    leases.capacity.set_load("acct_scope_old", 1);
+    let exclusions = Arc::new(MemorySessionExclusions::default());
+    let server = local_server().await;
+    let provider =
+        waiting_provider_with_exclusions(&store, leases.clone(), server.uri(), exclusions.clone());
+    let request = || {
+        planned_request(
+            "openai",
+            Operation::Generate(generate_with_session_context(
+                "policy-scope-test",
+                None,
+                None,
+            )),
+        )
+    };
+    let selected = provider.execute(
+        request(),
+        waiting_attempt(context("req_policy_wait", CancellationToken::new())),
+    );
+    tokio::pin!(selected);
+    tokio::select! {
+        result = &mut selected => panic!("must wait: {:?}", result.err()),
+        () = provider_wait_queued(&leases) => {}
+    }
+    let key = exclusions.lookups.lock().unwrap().last().unwrap().clone();
+    exclusions
+        .record_failure(
+            &ProviderKind::new("openai").unwrap(),
+            &key,
+            &ProviderAccountId::new("acct_scope_old").unwrap(),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+    leases.capacity.set_load("acct_scope_old", 0);
+    let error = selected.await.err().expect("session is restricted");
+    assert_eq!(error.kind(), ProviderErrorKind::SessionPolicyRestricted);
+    let error = provider
+        .execute(
+            request(),
+            context("req_policy_now", CancellationToken::new()),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), ProviderErrorKind::SessionPolicyRestricted);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn capacity_wait_provider_reloads_cyber_exclusions_without_losing_frozen_core_exclusions() {
     use gateway_core::provider_ports::ProviderSessionExclusionPort;
     use std::sync::atomic::Ordering;

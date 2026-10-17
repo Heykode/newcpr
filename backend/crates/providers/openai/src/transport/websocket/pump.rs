@@ -57,6 +57,7 @@ pub(crate) const WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct PumpSocket {
     inner: RawWsStream,
+    _proxy_permit: Option<super::pool::proxy_capacity::ProxyConnectionPermit>,
     // Fields drop in declaration order: notify only after the actual socket is destroyed.
     _termination: DropGuard,
 }
@@ -351,6 +352,7 @@ impl PumpedWebSocket {
         keepalive: PumpKeepalive,
         context: PumpLogContext,
         compression_threshold: Option<usize>,
+        proxy_permit: Option<super::pool::proxy_capacity::ProxyConnectionPermit>,
     ) -> Self {
         let (tx_command, rx_command) = mpsc::channel::<PumpCommand>(PUMP_COMMAND_BUFFER);
         let (tx_message, rx_message) = mpsc::channel(PUMP_MESSAGE_BUFFER);
@@ -368,6 +370,7 @@ impl PumpedWebSocket {
         let terminated = CancellationToken::new();
         let inner = PumpSocket {
             inner,
+            _proxy_permit: proxy_permit,
             _termination: terminated.clone().drop_guard(),
         };
         let pump = tokio::spawn(async move {

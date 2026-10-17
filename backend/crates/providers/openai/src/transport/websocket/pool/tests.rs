@@ -240,6 +240,7 @@ async fn connected_with_buffer(
             PumpKeepalive::disabled(),
             PumpLogContext::new(None, None),
             None,
+            None,
         ),
         metadata: CodexWebSocketConnectionMetadata {
             session_proxy: None,

@@ -8,6 +8,34 @@ use wiremock::{
 };
 
 #[tokio::test]
+async fn direct_probe_uses_measured_address_without_proxy_authentication() {
+    let server = MockServer::start().await;
+    Mock::given(path("/exit"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ip":"203.0.113.8"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/geo/203.0.113.8"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(geo("203.0.113.8", "Asia/Tokyo")))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = HttpProxyProbe::new(format!("{}/exit", server.uri()))
+        .with_location_endpoint(format!("{}/geo", server.uri()))
+        .test_direct()
+        .await
+        .unwrap();
+    assert!(result.success);
+    assert!(matches!(
+        result.location,
+        ProxyLocationDetection::Detected { .. }
+    ));
+    for request in server.received_requests().await.unwrap() {
+        assert!(!request.headers.contains_key("proxy-authorization"));
+    }
+}
+
+#[tokio::test]
 async fn proxy_probe_supports_both_proxy_and_exit_address_families() {
     for (listen_address, exit_ip) in [
         ("127.0.0.1:0", "203.0.113.8"),
