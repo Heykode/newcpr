@@ -3012,10 +3012,15 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
                         );
                     }
                 }
-                assert!(
-                    !event.has_client_event(),
-                    "structural events must remain behind the replay boundary"
-                );
+                if event.has_client_event() {
+                    assert_eq!(
+                        event.is_replayable_prelude(),
+                        matches!(
+                            event.wire_event().unwrap().event_type(),
+                            Some("response.created" | "response.in_progress")
+                        )
+                    );
+                }
             }
             Some(Err(error)) => break error,
             None => panic!("WebSocket close must surface a provider error"),
@@ -6258,7 +6263,11 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
                 original
             );
             if !semantic_output {
-                assert!(client_events.is_empty());
+                assert!(
+                    client_events
+                        .iter()
+                        .all(|event| event.is_replayable_prelude())
+                );
             }
             client_events.extend(error.take_atomic_client_events());
             let wire = client_events
@@ -6274,10 +6283,10 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
 }
 
 #[tokio::test]
-async fn ordinary_request_should_hold_created_until_later_failure_can_rotate() {
+async fn ordinary_request_forwards_created_and_preserves_later_failure_recovery() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_first_event_latency").await;
-    let (base_url, release, first_chunk_sent, server) = paused_chunked_sse_server(
+    let (base_url, release, _first_chunk_sent, server) = paused_chunked_sse_server(
         concat!(
             "event: response.created\n",
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_first_event\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\"}}\n\n"
@@ -6298,38 +6307,16 @@ async fn ordinary_request_should_hold_created_until_later_failure_can_rotate() {
         .await
         .expect("prepare provider stream");
 
-    let mut first_chunk_sent = Box::pin(first_chunk_sent);
-    loop {
-        tokio::select! {
-            sent = &mut first_chunk_sent => {
-                sent.expect("first upstream chunk");
-                break;
-            }
-            next = stream.next() => {
-                let event = next
-                    .expect("provider stream must stay open")
-                    .expect("provider event");
-                assert!(!event.has_client_event(), "response.created must remain replayable");
-            }
-        }
-    }
-
-    let exposed = timeout(Duration::from_millis(100), async {
-        loop {
-            let next = stream
-                .next()
-                .await
-                .expect("provider stream must stay open")
-                .expect("provider event");
-            if next.has_client_event() {
-                return next;
-            }
-        }
-    })
-    .await;
-    assert!(
-        exposed.is_err(),
-        "a structural event must not commit the downstream before a later 429"
+    let exposed = timeout(
+        Duration::from_secs(1),
+        precommit::next_client_event(&mut stream),
+    )
+    .await
+    .expect("created must arrive before the error is released");
+    assert!(exposed.is_replayable_prelude());
+    assert_eq!(
+        exposed.wire_event().unwrap().event_type(),
+        Some("response.created")
     );
 
     release.send(()).expect("release second upstream chunk");
@@ -6354,13 +6341,13 @@ async fn ordinary_request_should_hold_created_until_later_failure_can_rotate() {
             .iter()
             .filter_map(|event| event.wire_event()?.event_type())
             .collect::<Vec<_>>(),
-        vec!["response.created", "response.failed"]
+        vec!["response.failed"]
     );
     server.await.expect("chunked SSE server");
 }
 
 #[tokio::test]
-async fn ordinary_request_should_bound_structural_event_replay_grace() {
+async fn ordinary_request_releases_structural_events_without_a_grace_wait() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_bounded_replay_grace").await;
     let (base_url, release, _first_chunk_sent, server) = paused_chunked_sse_server(
@@ -6380,7 +6367,7 @@ async fn ordinary_request_should_bound_structural_event_replay_grace() {
         .await
         .expect("prepare provider stream");
 
-    let first_event = timeout(Duration::from_secs(4), async {
+    let first_event = timeout(Duration::from_secs(1), async {
         loop {
             let event = stream
                 .next()
@@ -6393,7 +6380,7 @@ async fn ordinary_request_should_bound_structural_event_replay_grace() {
         }
     })
     .await
-    .expect("response.created must be released after the bounded grace period");
+    .expect("response.created must be released without waiting for a grace period");
 
     assert_eq!(
         first_event.wire_event().and_then(|wire| wire.event_type()),
@@ -6407,10 +6394,10 @@ async fn ordinary_request_should_bound_structural_event_replay_grace() {
 }
 
 #[tokio::test]
-async fn continuation_should_hold_created_until_semantic_output() {
+async fn continuation_forwards_created_before_semantic_output() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_continuation_prefetch").await;
-    let (base_url, release, first_chunk_sent, server) = paused_chunked_sse_server(
+    let (base_url, release, _first_chunk_sent, server) = paused_chunked_sse_server(
         concat!(
             "event: response.created\n",
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_continuation\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\"}}\n\n"
@@ -6436,52 +6423,29 @@ async fn continuation_should_hold_created_until_semantic_output() {
         .await
         .expect("prepare provider stream");
 
-    let mut first_chunk_sent = Box::pin(first_chunk_sent);
-    loop {
-        tokio::select! {
-            sent = &mut first_chunk_sent => {
-                sent.expect("first upstream chunk");
-                break;
-            }
-            next = stream.next() => {
-                let event = next
-                    .expect("provider stream must stay open")
-                    .expect("provider event");
-                assert!(!event.has_client_event(), "created was exposed before the first chunk barrier");
-            }
-        }
-    }
-
-    let blocked = timeout(Duration::from_millis(100), async {
-        loop {
-            let next = stream
-                .next()
-                .await
-                .expect("provider stream must stay open")
-                .expect("provider event");
-            if next.has_client_event() {
-                return next;
-            }
-        }
-    })
-    .await;
-    assert!(blocked.is_err());
-
-    release.send(()).expect("release semantic output chunk");
-    let first_event = loop {
-        let next = timeout(Duration::from_secs(1), stream.next())
-            .await
-            .expect("semantic output must release the prefetched batch")
-            .expect("provider stream must stay open")
-            .expect("provider event");
-        if next.has_client_event() {
-            break next;
-        }
-    };
+    let first_event = timeout(
+        Duration::from_secs(1),
+        precommit::next_client_event(&mut stream),
+    )
+    .await
+    .expect("continuation prelude must not wait for content");
+    assert!(first_event.is_replayable_prelude());
     assert_eq!(
-        first_event.wire_event().and_then(|wire| wire.event_type()),
+        first_event.wire_event().unwrap().event_type(),
         Some("response.created")
     );
+    release.send(()).expect("release semantic output chunk");
+    let content = timeout(
+        Duration::from_secs(1),
+        precommit::next_client_event(&mut stream),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        content.wire_event().unwrap().event_type(),
+        Some("response.content_part.added")
+    );
+    assert!(!content.is_replayable_prelude());
     while let Some(event) = stream.next().await {
         event.expect("continuation response must complete");
     }
@@ -8215,10 +8179,15 @@ async fn assert_websocket_failure_headers(headers: Value, request_id: Option<&st
         .await
         .expect("prepare");
     let mut observation = None;
+    let mut delivered = Vec::new();
     let mut error = timeout(Duration::from_secs(5), async {
         loop {
             match stream.next().await {
                 Some(Ok(event)) => {
+                    if event.has_client_event() {
+                        assert!(event.is_replayable_prelude());
+                        delivered.push(event.clone());
+                    }
                     if let Some(current) = event.response_observation() {
                         observation = Some(current.clone());
                     }
@@ -8254,7 +8223,9 @@ async fn assert_websocket_failure_headers(headers: Value, request_id: Option<&st
     assert_eq!(error.send_state(), UpstreamSendState::Sent);
     assert!(!error.replay_is_safe());
     assert_eq!(error.raw_upstream_error().expect("raw error").as_str(), raw);
-    let events = error.take_atomic_client_events();
+    assert_eq!(delivered.len(), 1);
+    let mut events = delivered;
+    events.extend(error.take_atomic_client_events());
     let event_type = if reuse { "response.failed" } else { "error" };
     assert_eq!(
         events
@@ -8262,7 +8233,7 @@ async fn assert_websocket_failure_headers(headers: Value, request_id: Option<&st
             .filter_map(|event| event.wire_event()?.event_type())
             .collect::<Vec<_>>(),
         vec!["response.metadata", event_type],
-        "metadata and original failure stay atomically deliverable",
+        "metadata is immediate and original failure is delivered once in order",
     );
     let wire = events
         .iter()

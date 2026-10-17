@@ -51,6 +51,115 @@ use gateway_core::routing::{
 use gateway_core::upstream::{UpstreamSendState, UpstreamTransport};
 use serde_json::{Map, Value, json};
 
+mod replay_preludes {
+    use super::*;
+
+    fn prelude() -> ProviderEvent {
+        ProviderEvent::canonical_with_wire(
+            vec![GatewayEvent::Started(ResponseMeta::new(
+                "response-prelude",
+                "gpt-5",
+            ))],
+            ProtocolWireEvent::json(
+                "openai",
+                Some("response.created".into()),
+                json!({"type":"response.created","response":{"id":"response-prelude","output":[]}}),
+            )
+            .unwrap(),
+        )
+        .with_replayable_prelude()
+    }
+
+    #[test]
+    fn committed_http_response_can_retry_after_only_replaceable_preludes() {
+        for close_barrier in [false, true] {
+            let operation = generate_operation();
+            let route_plan = plan(&operation);
+            let mut items = vec![Ok(prelude())];
+            if close_barrier {
+                items.push(Ok(ProviderEvent::wire(
+                    ProtocolWireEvent::json(
+                        "openai",
+                        Some("response.future_progress".into()),
+                        json!({"type":"response.future_progress"}),
+                    )
+                    .unwrap(),
+                )));
+                // A later prelude cannot reopen a closed replay boundary.
+                items.push(Ok(prelude()));
+            }
+            items.push(Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe()));
+            let (coordinator, store, provider) = coordinator(vec![
+                Script::ObservedStream {
+                    account_id: "acct_first",
+                    items,
+                },
+                Script::Stream {
+                    account_id: "acct_second",
+                    items: complete_stream(None),
+                },
+            ]);
+            let mut session = block_on(coordinator.start(
+                model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+                operation,
+                route_plan,
+                None,
+                None,
+                CancellationToken::new(),
+            ))
+            .unwrap();
+            let first = block_on(session.next_event()).unwrap().unwrap();
+            assert_eq!(
+                first.commit_requirement(),
+                CommitRequirement::CommitBeforeDelivery
+            );
+            block_on(session.commit_downstream(Some(200))).unwrap();
+            if close_barrier {
+                for _ in 0..2 {
+                    assert_eq!(
+                        block_on(session.next_event())
+                            .unwrap()
+                            .unwrap()
+                            .commit_requirement(),
+                        CommitRequirement::AlreadyCommitted
+                    );
+                }
+                assert!(matches!(
+                    block_on(session.next_event()),
+                    Err(EngineError::Provider(_))
+                ));
+                assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+            } else {
+                let mut remaining = Vec::new();
+                while let Some(event) = block_on(session.next_event()).unwrap() {
+                    assert_eq!(
+                        event.commit_requirement(),
+                        CommitRequirement::AlreadyCommitted
+                    );
+                    remaining.extend(event.into_provider_events());
+                }
+                assert_eq!(provider.contexts.lock().unwrap().len(), 2);
+                assert_eq!(
+                    remaining
+                        .iter()
+                        .flat_map(ProviderEvent::canonical_facts)
+                        .filter(|event| matches!(event, GatewayEvent::Completed(_)))
+                        .count(),
+                    1
+                );
+                let state = store.state.lock().unwrap();
+                assert_eq!(state.intermediate_failures, 1);
+                assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+            }
+        }
+    }
+}
+
 mod client_retry {
     use super::*;
     use gateway_core::engine::client_retry::{ClientRetryKey, ClientRetryStore};

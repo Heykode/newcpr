@@ -117,7 +117,7 @@ impl ResponseTimingMetrics {
     }
 }
 
-/// One precommit grace window shared by WS transport and Provider buffering.
+/// Excel Provider precommit grace; native Responses delivery never waits on it.
 pub(crate) const STREAM_REPLAY_GRACE: std::time::Duration = std::time::Duration::from_millis(2_500);
 
 /// 官方 Codex 客户端据此触发完整历史重放的稳定错误码。
@@ -336,8 +336,8 @@ pub(crate) fn is_replaceable_response_prelude(value: &serde_json::Value) -> bool
 
 /// 单个 Responses 事件对计时系统提供的稳定语义信号。
 ///
-/// `output_start` observes the first non-preamble event. Semantic output still
-/// requires content and remains the retry/delivery boundary.
+/// `output_start` observes response.output_item.added. Content clocks remain
+/// separate; delivery/replay additionally checks the replaceable-prelude allowlist.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResponseEventSignals {
     pub protocol_progress: bool,
@@ -349,22 +349,12 @@ pub struct ResponseEventSignals {
 
 /// 从已解析的 Responses 事件提取计时语义。
 ///
-/// First-response timing includes structural output events, but not preamble,
-/// heartbeat, quota or failure events. Content timing remains separate.
+/// First-response timing follows upstream CPR: the first output item added.
+/// First reasoning and first text timing remain independent of this boundary.
 pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> ResponseEventSignals {
     let mut signals = ResponseEventSignals {
         protocol_progress: !matches!(event_type, Some("response.failed" | "error")),
-        output_start: event_type.is_some_and(|kind| {
-            !matches!(
-                kind,
-                "" | "response.created"
-                    | "response.in_progress"
-                    | "keepalive"
-                    | "codex.rate_limits"
-                    | "response.failed"
-                    | "error"
-            )
-        }),
+        output_start: event_type == Some("response.output_item.added"),
         ..ResponseEventSignals::default()
     };
     match event_type {

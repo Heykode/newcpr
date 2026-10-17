@@ -297,8 +297,8 @@ const tuningValues = {
         <h3 class="m-0 text-sm font-medium text-cp-text-secondary sm:col-span-2">
           共享重试与限流（Codex / Excel）
         </h3>
-        <BaseFormItem label="提交前缓冲阈值（KiB）" description="默认 128 KiB；0 关闭额外缓冲，事件解析后立即交给下游。非零时前导事件最多等待 2.5 秒，文字、工具语义输出和终态立即放行；不限制请求大小。">
-          <BaseInput v-model="tuningValues.streamPrefetchKiB.value" aria-label="提交前缓冲阈值（KiB）" type="number" min="0" step="any" />
+        <BaseFormItem label="Excel 提交前缓冲阈值（KiB）" description="仅影响 Excel，默认 128 KiB；0 关闭额外缓冲，非零时前导事件最多等待 2.5 秒，文字、工具输出和终态立即放行。原生 Codex 事件解析后立即下发，不受此项影响。">
+          <BaseInput v-model="tuningValues.streamPrefetchKiB.value" aria-label="Excel 提交前缓冲阈值（KiB）" type="number" min="0" step="any" />
         </BaseFormItem>
         <BaseFormItem label="同账号传输失败重试次数" description="用于 WS 传输恢复和 Excel 可安全重试的首包前错误（含接口 429），范围 0–100；Excel 还受总路由尝试次数限制">
           <BaseInput v-model="tuningValues.websocketMaxRetries.value" aria-label="同账号传输失败重试次数" type="number" />

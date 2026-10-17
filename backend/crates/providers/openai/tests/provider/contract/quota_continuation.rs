@@ -233,7 +233,11 @@ async fn quota_continuation_stream_rejection_only_projects_before_delivery() {
                 );
                 client_events.extend(error.take_atomic_client_events());
                 if native_continuation && !semantic_output {
-                    assert!(client_events.is_empty());
+                    assert!(
+                        client_events
+                            .iter()
+                            .all(|event| event.is_replayable_prelude())
+                    );
                     assert_eq!(
                         error.continuation_recovery_disposition(),
                         Some(ContinuationRecoveryDisposition::ClientReplayRequired)
@@ -261,7 +265,7 @@ async fn quota_continuation_stream_rejection_only_projects_before_delivery() {
 }
 
 #[tokio::test]
-async fn quota_continuation_after_structural_commit_preserves_original_failure() {
+async fn quota_continuation_after_output_item_preserves_original_failure() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let original = json!({
@@ -272,7 +276,7 @@ async fn quota_continuation_after_structural_commit_preserves_original_failure()
         }
     });
     let (base_url, release, _, server) = paused_chunked_sse_server(
-        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_quota\",\"model\":\"gpt-5.4\"}}\n\n".to_owned(),
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_quota\",\"model\":\"gpt-5.4\"}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"content\":[]}}\n\n".to_owned(),
         format!("event: response.failed\ndata: {original}\n\n"),
     )
     .await;
@@ -286,14 +290,18 @@ async fn quota_continuation_after_structural_commit_preserves_original_failure()
         .unwrap();
     timeout(Duration::from_secs(3), async {
         while let Some(event) = stream.next().await {
-            if event.unwrap().has_client_event() {
+            if event
+                .unwrap()
+                .wire_event()
+                .is_some_and(|wire| wire.event_type() == Some("response.output_item.added"))
+            {
                 return;
             }
         }
-        panic!("expected grace commit");
+        panic!("expected output item");
     })
     .await
-    .expect("bounded grace");
+    .expect("bounded delivery");
     release.send(()).unwrap();
     let mut delivered_failure = false;
     let error = loop {

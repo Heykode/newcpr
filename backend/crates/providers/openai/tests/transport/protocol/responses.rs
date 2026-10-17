@@ -377,19 +377,22 @@ fn transport_should_require_websocket_for_store_false_warmup() {
     assert!(transport_requirement(&request).requires_websocket());
 }
 #[test]
-fn structural_response_starts_timing_but_not_semantic_delivery() {
+fn only_output_item_added_starts_first_response_timing() {
+    let signals = response_event_signals(
+        Some("response.output_item.added"),
+        &serde_json::json!({"type":"response.output_item.added"}),
+    );
+    assert!(signals.output_start);
+    assert!(!signals.semantic_output);
+    assert!(!signals.text_output);
+    assert!(!signals.reasoning_output);
     for event in [
-        "response.output_item.added",
         "response.content_part.added",
         "response.completed",
-    ] {
-        let signals = response_event_signals(Some(event), &serde_json::json!({"type":event}));
-        assert!(signals.output_start, "{event}");
-        assert!(!signals.semantic_output, "{event}");
-        assert!(!signals.text_output);
-        assert!(!signals.reasoning_output);
-    }
-    for event in [
+        "response.metadata",
+        "codex.response.metadata",
+        "response.future",
+        "response.output_text.delta",
         "",
         "response.created",
         "response.in_progress",

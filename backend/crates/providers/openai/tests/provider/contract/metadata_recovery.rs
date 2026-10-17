@@ -90,7 +90,7 @@ async fn server_error_503_stream_recovery_requires_replayable_events() {
                     planned_request("openai", operation),
                     context("req_server_error_503", CancellationToken::new()).with_request_tuning(
                         gateway_core::routing::RequestTuning {
-                            stream_prefetch_bytes: 0,
+                            stream_prefetch_bytes: 128 * 1024,
                             ..Default::default()
                         },
                     ),

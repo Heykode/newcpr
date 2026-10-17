@@ -207,10 +207,10 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
-        // The trusted probe logging marker must stay private; test both ordinary
-        // and internal-probe error projection without exporting a logging API.
+        // Keep logging markers and Excel's private delivery state unexported;
+        // these exact inline modules test their contracts without production hooks.
         ("crates/providers/openai", Some("provider/failure.rs"), Item::Mod(module)) => {
-            module.ident == "quality_logging_tests"
+            (module.ident == "quality_logging_tests" || module.ident == "excel_buffer_tests")
                 && module.content.is_some()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
@@ -559,30 +559,32 @@ fn egress_private_tests_require_exact_owner_and_test_only_gate() {
 }
 
 #[test]
-fn quality_logging_tests_require_exact_private_owner_and_inline_test_gate() {
+fn provider_failure_tests_require_exact_private_owner_and_inline_test_gate() {
     let owner = "crates/providers/openai";
     let path = Path::new("provider/failure.rs");
-    let item: Item = syn::parse_str("#[cfg(test)] mod quality_logging_tests {}").unwrap();
-    assert!(is_audited_private_test(owner, path, &item));
-    assert!(!is_audited_private_test("crates/gateway-core", path, &item));
-    assert!(!is_audited_private_test(
-        owner,
-        Path::new("provider/mod.rs"),
-        &item
-    ));
-    for source in [
-        "mod quality_logging_tests {}",
-        "#[cfg(test)] mod quality_logging_tests;",
-        "#[cfg(test)] pub mod quality_logging_tests {}",
-        "#[cfg(test)] pub(crate) mod quality_logging_tests {}",
-        "#[cfg(test)] mod tests {}",
-        "#[cfg(any(test, feature = \"production\"))] mod quality_logging_tests {}",
-        "#[cfg(test)] #[path = \"fixture.rs\"] mod quality_logging_tests {}",
-        "#[cfg_attr(test, path = \"fixture.rs\")] mod quality_logging_tests;",
-        "#[cfg(test)] fn quality_logging_tests() {}",
-    ] {
-        let item: Item = syn::parse_str(source).unwrap();
-        assert!(!is_audited_private_test(owner, path, &item), "{source}");
+    for name in ["quality_logging_tests", "excel_buffer_tests"] {
+        let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name} {{}}")).unwrap();
+        assert!(is_audited_private_test(owner, path, &item));
+        assert!(!is_audited_private_test("crates/gateway-core", path, &item));
+        assert!(!is_audited_private_test(
+            owner,
+            Path::new("provider/mod.rs"),
+            &item
+        ));
+        for source in [
+            format!("mod {name} {{}}"),
+            format!("#[cfg(test)] mod {name};"),
+            format!("#[cfg(test)] pub mod {name} {{}}"),
+            format!("#[cfg(test)] pub(crate) mod {name} {{}}"),
+            "#[cfg(test)] mod tests {}".to_owned(),
+            format!("#[cfg(any(test, feature = \"production\"))] mod {name} {{}}"),
+            format!("#[cfg(test)] #[path = \"fixture.rs\"] mod {name} {{}}"),
+            format!("#[cfg_attr(test, path = \"fixture.rs\")] mod {name};"),
+            format!("#[cfg(test)] fn {name}() {{}}"),
+        ] {
+            let item: Item = syn::parse_str(&source).unwrap();
+            assert!(!is_audited_private_test(owner, path, &item), "{source}");
+        }
     }
 }
 

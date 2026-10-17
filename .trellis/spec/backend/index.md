@@ -18,7 +18,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Reset Credits](./reset-credits.md) | Earliest-expiry batch confirmation, persistent deduplication and unknown-result recovery | Local isolated verification |
 | [Log Cleanup](./log-cleanup.md) | 分类占用、管理员清理、固定边界与任务互斥 | 本地隔离验证 |
 | [Selective Upstream Hardening](./upstream-hardening.md) | Smart defaults, response-local interrupt, catalog sources, refresh and bounded recovery | Local selective adaptation |
-| [Precommit Controls And Quota Diagnostics](./precommit-controls.md) | Configurable byte threshold, zero-buffer semantics, fixed grace, safe error projection and frozen settings | Local regression coverage |
+| [Precommit Controls And Quota Diagnostics](./precommit-controls.md) | Immediate native delivery, independent replay, Excel buffering and first-output timing | Local regression coverage |
 | [Excel Upstream](./excel-upstream.md) | Account-level route, scoped replay, downstream WS and State retirement | Integration verification in progress |
 | [Managed Account Proxies](./mihomo-managed-proxy.md) | Codex/Excel sources, background qualification, session leases and private Mihomo lifecycle | OVH isolated validation |
 | [Quality Operations](./quality-operations.md) | Fixed-account scheduled tests, judgment and leased jobs | Isolated OVH verification |
