@@ -18,6 +18,7 @@ mod policy;
 mod rule_templates;
 mod template_action;
 mod template_recovery;
+pub(crate) use template_recovery::{capture_edit_owners, preserve_edit_owners};
 
 use crate::{
     mutation_audit,
@@ -30,7 +31,7 @@ pub struct PgQualityOpsStore {
 
 enum RuleSource<'a> {
     Independent,
-    Template(&'a QualityRuleTemplate),
+    Template(&'a QualityRuleTemplate, bool),
     Group(&'a QualityGroupRule),
 }
 
@@ -210,7 +211,7 @@ impl PgQualityOpsStore {
         } else {
             None
         };
-        let source = if let RuleSource::Template(expected) = source {
+        let source = if let RuleSource::Template(expected, enable) = source {
             let current = rule_templates::load_locked(&mut tx, &expected.id)
                 .await?
                 .ok_or_else(conflict)?;
@@ -219,6 +220,9 @@ impl PgQualityOpsStore {
             }
             let account_id = config.account_id;
             config = current.config;
+            if enable {
+                config.enabled = true;
+            }
             config.account_id = account_id;
             Some(
                 serde_json::to_value(QualityRuleTemplateRef {
@@ -450,7 +454,26 @@ impl QualityOpsStore for PgQualityOpsStore {
             config,
             next,
             context,
-            RuleSource::Template(template),
+            RuleSource::Template(template, false),
+        )
+        .await
+    }
+    async fn apply_template_enabled(
+        &self,
+        template: &QualityRuleTemplate,
+        target: &QualityTemplateTarget,
+        next: DateTime<Utc>,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRule> {
+        let mut config = template.config.clone();
+        config.account_id.clone_from(&target.account_id);
+        self.save_checked(
+            target.rule_id.as_deref(),
+            target.revision,
+            config,
+            next,
+            context,
+            RuleSource::Template(template, true),
         )
         .await
     }
@@ -460,6 +483,66 @@ impl QualityOpsStore for PgQualityOpsStore {
     ) -> AdminStoreResult<std::collections::BTreeMap<String, QualityMonitoring>> {
         self.account_monitoring(account_ids).await
     }
+    async fn set_enabled(
+        &self,
+        id: &str,
+        revision: i64,
+        enabled: bool,
+        context: &MutationContext,
+    ) -> AdminStoreResult<QualityRule> {
+        if enabled {
+            let row = sqlx::query("select * from quality_rules where id=$1 and revision=$2")
+                .bind(id)
+                .bind(revision)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(unavailable)?
+                .ok_or_else(conflict)?;
+            let mut current = rule(&row)?;
+            current.config.enabled = true;
+            // Reuse reference checks and the existing due-now transition. CAS
+            // rejects any intervening edit before this snapshot can be saved.
+            return self
+                .save_checked(
+                    Some(id),
+                    Some(revision),
+                    current.config,
+                    current.next_run_at,
+                    context,
+                    RuleSource::Independent,
+                )
+                .await;
+        }
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        lock_configuration(&mut tx).await?;
+        // Pausing remains possible even if an old remediation template disappeared.
+        let row = sqlx::query(
+            "update quality_rules set enabled=false,
+            config=jsonb_set(config,'{enabled}','false'), revision=revision+1,
+            pending=false,lease_token=null,lease_until=null,updated_at=now(),
+            recovery=recovery-'excel_streak'-'excel_pass_streak'-'overload_streak'
+            where id=$1 and revision=$2 returning *",
+        )
+        .bind(id)
+        .bind(revision)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?
+        .ok_or_else(conflict)?;
+        sqlx::query(
+            "update quality_runs set status='cancelled',finished_at=now()
+            where rule_id=$1 and status='running'",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        audit(&mut tx, context, "quality_rule.pause", id).await?;
+        let result = rule(&row)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(result)
+    }
+
     async fn rules(&self) -> AdminStoreResult<Vec<QualityRule>> {
         sqlx::query("select * from quality_rules order by updated_at desc")
             .fetch_all(&self.pool)

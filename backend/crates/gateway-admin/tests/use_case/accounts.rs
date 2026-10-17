@@ -660,6 +660,8 @@ impl ProviderAdmin for FakeProviderAdmin {
 }
 
 pub(super) struct FakeAccountStore {
+    pub(super) deletion_library:
+        Mutex<Option<Arc<dyn gateway_admin::ports::relogin::ReloginStore>>>,
     pub(super) recovery_claim:
         Mutex<Option<gateway_admin::model::excel_recovery::ExcelRecoveryClaim>>,
     pub(super) recovery_current: std::sync::atomic::AtomicBool,
@@ -702,6 +704,7 @@ impl FakeAccountStore {
         Arc::new(Self {
             events,
             accounts: Mutex::new(vec![account]),
+            deletion_library: Mutex::default(),
             recovery_claim: Mutex::default(),
             recovery_current: std::sync::atomic::AtomicBool::new(true),
             recovery_results: Mutex::default(),
@@ -1274,12 +1277,48 @@ impl AccountStore for FakeAccountStore {
 
     async fn delete_accounts(
         &self,
-        _: DeleteAccounts,
+        command: DeleteAccounts,
         context: &MutationContext,
     ) -> AdminStoreResult<Revision> {
         self.record("store.delete");
         self.record_context(context);
         self.require_commit()?;
+        let library = self.deletion_library.lock().unwrap().clone();
+        if command.delete_relogin
+            && let Some(library) = library
+        {
+            let emails: Vec<_> = self
+                .accounts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|account| command.account_ids.contains(&account.id))
+                .filter_map(|account| account.email.clone())
+                .collect();
+            let retained_emails: Vec<_> = self
+                .accounts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|account| !command.account_ids.contains(&account.id))
+                .filter_map(|account| account.email.clone())
+                .collect();
+            for entry in library.entries().await? {
+                if emails
+                    .iter()
+                    .any(|email| email.eq_ignore_ascii_case(&entry.email))
+                    && !retained_emails
+                        .iter()
+                        .any(|email| email.eq_ignore_ascii_case(&entry.email))
+                {
+                    library.delete(&entry.id, entry.revision).await?;
+                }
+            }
+        }
+        self.accounts
+            .lock()
+            .unwrap()
+            .retain(|account| !command.account_ids.contains(&account.id));
         Ok(revision(2))
     }
 

@@ -523,6 +523,7 @@ async fn await_quota_requests(provider: &FakeProviderAdmin, expected: usize) {
 
 fn deletion(account_id: &str) -> CredentialDeletion {
     CredentialDeletion {
+        delete_relogin: false,
         context: context("request-openai"),
         account_ids: vec![ProviderAccountId::new(account_id).expect("account ID")],
     }

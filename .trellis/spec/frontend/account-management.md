@@ -1,5 +1,22 @@
 # Account Management Contracts
 
+## Account Deletion And Shared 2FA Material
+
+- Single/batch confirmation dialogs offer “同步删除 2FA”, reset to unchecked on every
+  open, without an extra explanatory paragraph. Only selected accounts' material is
+  eligible; the backend preserves material still shared by unselected accounts.
+  This does not turn upstream 2FA off. Reuse one option contract on mobile and desktop.
+- Freeze selected accounts and deletion intent at submit; disable duplicate submissions
+  and controls while busy. Send optional deleteRelogin with the existing per-provider
+  deletion batch, never issue separate library requests from the browser.
+- Preserve partial successes across provider batches and remaining selection on failure.
+  Refresh account/group/library availability after confirmed deletion. A refresh failure
+  must not relabel a successful deletion as failed or trigger automatic replay.
+- Persistence, active-worker coordination and rollback tests follow
+  [Optional Material Deletion](../backend/account-relogin.md#optional-material-deletion-with-account-removal).
+- Quality switches and badge results follow
+  [Account Menu Switch](./quality-operations.md#account-menu-switch-and-result-badge).
+
 ## Mobile Account Cards
 
 - Below 768px, render `AccountMobileList` instead of `BaseTable`, never both hidden
@@ -154,8 +171,12 @@ Never infer principal identity from email or erase usage while editing a price.
 ## Unified Account Egress
 
 - `AccountOutboundField` is shared by editing, bulk editing, onboarding and templates.
-  It selects one of global inheritance, server direct, saved proxy, Mihomo pool,
-  ordinary pool or IPv6 pool. Excel selects the upstream, independently of egress.
+  It selects one of global inheritance, server direct, saved proxy, Mihomo pool
+  or IPv6 pool. Excel selects the upstream, independently of egress.
+- Ordinary proxy-pool allocation is no longer offered in either egress selector.
+  A saved `proxy_pool` value remains visible as a disabled current-setting option
+  until explicitly changed; never silently convert it to direct or guess a proxy ID.
+  Unrelated edits and historical template drafts retain their existing egress contract.
 - `accountEgressPatch` is the single submission mapping. Preserve omits all egress
   fields; managed pools only change `requestProxySource`. Direct/saved-proxy selections
   restore the account route and disable OpenAI IPv6 overrides. IPv6/global selections

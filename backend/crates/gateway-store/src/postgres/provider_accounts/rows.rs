@@ -413,6 +413,7 @@ pub struct RecoverProviderAccount {
 
 #[derive(Debug, Clone)]
 pub struct DeleteProviderAccounts {
+    pub delete_relogin: bool,
     pub scope: ProviderAccountAdminScope,
     pub account_ids: Vec<String>,
     pub audit: AdminAuditEvent,

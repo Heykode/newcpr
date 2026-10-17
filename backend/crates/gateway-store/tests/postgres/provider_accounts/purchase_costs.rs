@@ -272,6 +272,7 @@ async fn purchase_cost_survives_reimport_delete_quota_reset_and_log_cleanup() {
     assert_eq!(view(&db.pool, "acct_purchase_old").await, before);
     sqlx::query("update provider_accounts set provider_quota_json=null,quota_reset_at=null where id='acct_purchase_old'").execute(&db.pool).await.unwrap();
     repo.delete_provider_accounts_admin(DeleteProviderAccounts {
+        delete_relogin: false,
         scope: ProviderAccountAdminScope {
             provider_kind: "openai".into(),
         },

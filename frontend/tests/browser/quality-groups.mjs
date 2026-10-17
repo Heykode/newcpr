@@ -79,6 +79,8 @@ async function main() {
           rules = []
         return fulfill(route, null)
       }
+      if (path === 'monitoring')
+        return fulfill(route, {})
       if (path === 'rules')
         return rejectRead ? fail(route) : fulfill(route, rules)
       if (path === 'templates' || path === 'runs')
@@ -162,7 +164,8 @@ async function main() {
     await page.goto(`http://127.0.0.1:${port}/accounts`)
     const row = page.locator(`tr[data-row-key="${accounts[0].id}"]`)
     await row.getByRole('button', { name: '更多操作', exact: true }).click()
-    await page.getByRole('button', { name: '质量检测', exact: true }).click()
+    await page.getByRole('button', { name: /质量检测开关/ }).click()
+    await page.getByRole('dialog', { name: '开启质量检测', exact: true }).getByRole('button', { name: '手动配置', exact: true }).click()
     await page.waitForURL(/quality-ops.*create=1/)
     const single = page.getByRole('dialog', { name: '新建检测规则', exact: true })
     await single.getByText('已选 1 项', { exact: true }).waitFor()

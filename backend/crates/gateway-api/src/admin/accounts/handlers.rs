@@ -345,6 +345,13 @@ where
         .into_command(auth.context().mutation_context())
         .map_err(map_wire_error)?;
     let result = match provider {
+        AccountProvider::OpenAi if command.delete_relogin => {
+            state
+                .admin_services()
+                .relogin()
+                .delete_accounts(command)
+                .await
+        }
         AccountProvider::OpenAi => state.admin_services().openai().delete(command).await,
         AccountProvider::Xai => state.admin_services().xai().delete(command).await,
     }

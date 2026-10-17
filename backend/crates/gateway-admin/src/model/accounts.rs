@@ -484,6 +484,7 @@ pub struct AccountConnectionTest {
 /// 账号批量删除命令。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteAccounts {
+    pub delete_relogin: bool,
     pub account_ids: Vec<String>,
 }
 

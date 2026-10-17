@@ -1,5 +1,56 @@
 # Account Relogin Contracts
 
+## Optional Material Deletion With Account Removal
+
+### 1. Scope / Trigger
+Single and batch account removal may explicitly delete shared login-library material.
+
+### 2. Signatures
+- `POST /api/admin/accounts/delete` accepts optional `deleteRelogin:boolean`, default
+  false. Carry it as `delete_relogin` through CredentialDeletion, DeleteAccounts and
+  DeleteProviderAccounts; omit secrets and caller-provided emails from the payload.
+- OpenAI opted-in deletion enters `ReloginService::delete_accounts(CredentialDeletion)`.
+
+### 3. Contracts
+- Resolve authorized OpenAI OAuth accounts' emails server-side. Delete email-matching
+  account_relogin_entries case-insensitively in the account deletion transaction.
+  Missing material is harmless. Preserve the entry whenever an unselected OpenAI
+  OAuth account still uses that email. Delete shared material only when every remaining
+  same-email workspace is selected. Unrelated accounts/emails remain untouched.
+- Hold the existing relogin gate across deletion, matching worker settlement/manual
+  push ordering. Afterward cancel affected active jobs only when their material is
+  absent. Recheck after publication errors because the transaction may have committed.
+  Failed transactions retain jobs/material. Late settlement cannot recreate deleted rows.
+- Audit the opted-in material change without email, password or TOTP contents.
+  Deleting local material does not disable upstream 2FA. No extra upstream calls.
+- This gate inherits the existing single-instance worker constraint; it is not a
+  cross-replica distributed lock.
+
+### 4. Validation & Error Matrix
+- Absent option -> retain material; nonboolean/null -> reject request (422).
+- Missing/wrong-provider account -> complete transaction rollback, no partial cleanup.
+- Post-commit publication error -> propagate uncertainty; reconcile material before
+  cancelling tasks and never blindly replay the account deletion request.
+
+### 5. Good / Base / Bad Cases
+- Good: remove a selected account's unique material; keep shared material for an
+  unselected workspace, or delete it when all same-email workspaces are selected.
+- Base: old clients and unchecked confirmations remove only accounts.
+- Bad: two browser-side delete calls, caller-selected arbitrary emails, or job cancellation
+  before a transaction that later rolls back.
+
+### 6. Tests Required
+- API DTO default/true/invalid-type cases.
+- Isolated Store deletion checks for keep/delete/missing material, shared mixed-case
+  emails with selected/unselected workspaces, unrelated rows and full-batch rollback.
+- Admin active-login deletion rejects late resurrection; failed deletion leaves login live.
+- Frontend default/reset/cancel/dedup, frozen batch intent and partial-provider failure.
+
+### 7. Wrong vs Correct
+Wrong: delete library data first in a separate operation and hope account deletion succeeds.
+Correct: one Store transaction under the relogin service gate, followed by absence-based
+task cancellation and ordinary missing-entry/revision fences.
+
 - Bulk 2FA import and its preview recognize LF, CRLF (one source line), bare CR,
   NEL, Unicode line/paragraph separators, blank lines and per-row BOM padding.
   Email padding and whitespace in Base32 TOTP material may be normalized; password

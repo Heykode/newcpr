@@ -14,6 +14,7 @@ async fn quality_routes_require_auth_and_disable_caching() {
         ("GET", "runs"),
         ("GET", "detail"),
         ("POST", "save"),
+        ("POST", "enabled"),
         ("POST", "delete"),
         ("POST", "run"),
         ("GET", "templates"),

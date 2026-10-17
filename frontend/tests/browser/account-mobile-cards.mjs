@@ -18,7 +18,7 @@ async function main() {
   try {
     await server.listen()
     const base = `http://127.0.0.1:${server.httpServer.address().port}`
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || undefined })
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' })
     page.setDefaultTimeout(15000)
     const rows = structuredClone(mobileAccounts)

@@ -393,6 +393,8 @@ impl From<AccountUpdateResult> for UpdatedAccountData {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountDeletionRequest {
+    #[serde(default)]
+    pub delete_relogin: bool,
     pub provider: String,
     pub account_ids: Vec<String>,
 }
@@ -422,6 +424,7 @@ impl AccountDeletionRequest {
         Ok((
             provider,
             CredentialDeletion {
+                delete_relogin: self.delete_relogin,
                 context,
                 account_ids: self
                     .account_ids

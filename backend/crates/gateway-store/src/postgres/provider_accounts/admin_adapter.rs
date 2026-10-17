@@ -1466,6 +1466,7 @@ impl AccountStore for PgAdminAccountStore {
         };
         self.accounts
             .delete_provider_accounts_admin(DeleteProviderAccounts {
+                delete_relogin: command.delete_relogin,
                 scope,
                 account_ids: command.account_ids,
                 audit: mutation_audit(
@@ -1473,7 +1474,11 @@ impl AccountStore for PgAdminAccountStore {
                     "delete",
                     "provider_account",
                     &audit_target,
-                    Vec::new(),
+                    if command.delete_relogin {
+                        vec!["relogin_material".into()]
+                    } else {
+                        Vec::new()
+                    },
                 ),
             })
             .await

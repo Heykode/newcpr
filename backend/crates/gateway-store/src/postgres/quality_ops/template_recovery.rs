@@ -246,3 +246,58 @@ async fn release(
         .bind(rule).execute(&mut **tx).await.map_err(unavailable)?;
     Ok(())
 }
+
+/// Capture only still-owned templates before an ordinary metadata/form save.
+/// Existing serialized scopes remain valid; do not weaken the live-claim fence.
+pub(crate) async fn capture_edit_owners(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    accounts: &[String],
+) -> AdminStoreResult<Vec<(String, String, Value)>> {
+    let rows = sqlx::query(
+        "select id,account_id,recovery->'template_owner' as owner
+        from quality_rules where account_id=any($1::text[]) and recovery ? 'template_owner'",
+    )
+    .bind(accounts)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    let mut owners = Vec::new();
+    for row in rows {
+        let account: String = row.try_get("account_id").map_err(unavailable)?;
+        let value: Value = row.try_get("owner").map_err(unavailable)?;
+        let owner: Ownership = serde_json::from_value(value).map_err(unavailable)?;
+        if owner.scope == action_scope(tx, &account).await?
+            && owner.after == snapshot(tx, &account).await?
+        {
+            owners.push((
+                row.try_get("id").map_err(unavailable)?,
+                account,
+                owner.after,
+            ));
+        }
+    }
+    Ok(owners)
+}
+
+/// Move the audit baseline only if every owned setting stayed unchanged.
+/// Called after the account audit, within its configuration transaction.
+pub(crate) async fn preserve_edit_owners(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owners: Vec<(String, String, Value)>,
+) -> AdminStoreResult<()> {
+    for (rule, account, before) in owners {
+        if before == snapshot(tx, &account).await? {
+            let scope = action_scope(tx, &account).await?;
+            sqlx::query(
+                "update quality_rules set recovery=jsonb_set(recovery,
+                '{template_owner,scope}', $2) where id=$1 and recovery ? 'template_owner'",
+            )
+            .bind(rule)
+            .bind(scope)
+            .execute(&mut **tx)
+            .await
+            .map_err(unavailable)?;
+        }
+    }
+    Ok(())
+}

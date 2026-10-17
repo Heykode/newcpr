@@ -2193,3 +2193,64 @@ async fn account_relogin_committed_rotation_survives_lost_settlement_without_rep
     assert_eq!(view.relogin_count, Some(1));
     assert_eq!(h.provider.relogin_requests.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn deleting_account_and_library_fences_running_login_without_cancelling_failed_deletes() {
+    use gateway_admin::model::provider_credentials::CredentialDeletion;
+    for mode in ["deleted", "failed", "shared"] {
+        let failed = mode == "failed";
+        let original = account(true);
+        let h = Harness::new(vec![original.clone()]).await;
+        *h.accounts.deletion_library.lock().unwrap() = Some(h.store.clone());
+        let id = h.import("test@example.invalid").await;
+        *h.provider.relogin_delay.lock().unwrap() = std::time::Duration::from_millis(300);
+        let task = h.task.clone();
+        let running = tokio::spawn(async move { task.run_cycle(cycle_context()).await });
+        h.wait_running().await;
+        if mode == "shared" {
+            let mut unselected = original.clone();
+            unselected.id = "acct_unselected".into();
+            unselected.upstream_account_id = Some("workspace-unselected".into());
+            h.accounts.accounts.lock().unwrap().push(unselected);
+        }
+        if failed {
+            h.accounts.fail_next_commit();
+        }
+        let result = h
+            .services
+            .relogin()
+            .delete_accounts(CredentialDeletion {
+                context: context("delete-with-library"),
+                account_ids: vec![
+                    gateway_core::account::ProviderAccountId::new(original.id).unwrap(),
+                ],
+                delete_relogin: true,
+            })
+            .await;
+        assert_eq!(result.is_err(), failed);
+        tokio::time::timeout(std::time::Duration::from_secs(3), running)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if failed || mode == "shared" {
+            assert_eq!(
+                h.row(&id).await.status,
+                ReloginStatus::Ready,
+                "failed delete or retained shared material must not cancel the live job"
+            );
+            if mode == "shared" {
+                let accounts = h.accounts.accounts.lock().unwrap();
+                assert_eq!(accounts.len(), 1);
+                assert_eq!(accounts[0].id, "acct_unselected");
+            }
+        } else {
+            assert!(h.store.entries().await.unwrap().is_empty());
+            assert!(h.accounts.accounts.lock().unwrap().is_empty());
+            assert!(
+                h.accounts.rotation_attempts.lock().unwrap().is_empty(),
+                "late login cannot push deleted material"
+            );
+        }
+    }
+}

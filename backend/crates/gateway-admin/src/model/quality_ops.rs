@@ -196,6 +196,7 @@ pub struct QualityTemplateApplyResult {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityMonitoring {
+    pub detection_mode: QualityDetectionMode,
     pub rule_id: String,
     pub revision: i64,
     pub enabled: bool,

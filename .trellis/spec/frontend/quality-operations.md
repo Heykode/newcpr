@@ -1,5 +1,56 @@
 # Quality Operations UI
 
+## Account Menu Switch And Result Badge
+
+### 1. Scope / Trigger
+Desktop account rows and mobile cards share quality switching and monitoring results.
+
+### 2. Signatures
+- `useAccountQuality` reads `/quality-ops/monitoring` then calls
+  `setQualityEnabled({id,revision,enabled})` using the fresh revision.
+- `AccountQualitySetup` creates from a selected monitoring template using
+  `{id,revision,enable:true,targets:[{accountId,ruleId:null,revision:null}]}`.
+- `AccountQualityMonitorBadge` shares verdict/action labels and semantic colors from
+  `components/quality-ops/presentation.ts` with the full quality page.
+
+### 3. Contracts
+- More menu orders Test Connection first, Quality Switch second, with current on/off.
+  Capture requested intent before reading; synchronous per-account guards coalesce clicks.
+  Refresh real state after success/failure; do not optimistically claim a successful write.
+- An absent rule opens explicit template selection or manual configuration. No automatic
+  template choice. Refresh clears prior selection/catalog; read failure cannot leave stale
+  choices available. Cancel/close/unmount abort reads. Unknown writes require state review,
+  not automatic replay. The drawer blocks close while a mutation is running.
+- Monitoring lifecycle color and latest verdict color are independent. State probe correct
+  is 智商正常 / text-cp-success, incorrect is 智商异常 / text-cp-error. Reuse existing
+  quality-page labels/colors for other states; absent verdict means waiting for first check.
+- Account badges show lifecycle and verdict only. Do not add restoration success,
+  blocked/released summaries or their timestamps to this compact label/tooltip.
+  Restoration details stay in quality history through the shared link. Optional
+  detectionMode tolerates an older API. Override inherited whitespace-nowrap and
+  ignore swipe-selection gestures.
+
+### 4. Validation & Error Matrix
+- Failed monitoring read -> no mutation; CAS conflict -> error plus fresh account state.
+- Failed/empty template catalog -> retry/manual setup, no stale submission.
+- Unknown application outcome -> disable repeat submit until close and status review.
+- Correct result with blocked/released recovery -> show the verdict, never infer restore.
+
+### 5. Good / Base / Bad Cases
+- Good: green normal result beside paused monitoring with a link to detailed history.
+- Base: no quality rule means no badge; existing account health and Excel labels remain.
+- Bad: infer restoration from a correct verdict or overwrite config from an old account row.
+
+### 6. Tests Required
+Node tests cover colors, intent/CAS, dedup, disposal and deletion option handling.
+Browser account-quality-controls covers template failure after success, cancellation,
+first enable, switches/conflicts, single/batch checkbox resets, both themes and 1440/390/320px.
+Retain quality-template/group, Excel and mobile-card browser regressions.
+
+### 7. Wrong vs Correct
+Wrong: use one color for lifecycle and verdict, or post the entire stale rule to toggle it.
+Correct: independently colored verdict text and an enabled-only CAS write after rereading.
+
 ## Editable Model Suggestions
 
 ### Scope / Trigger
@@ -41,8 +92,9 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
   counters. Never claim rollback or replay the POST automatically after uncertainty.
 - Batch delete rereads rule versions before confirmation, freezes those targets,
   removes confirmed successes from selection, and preserves failures for fresh review.
-- Account More -> quality check links by stable accountId; select an existing rule
-  or open a preselected editor. Pagination and missing list items never imply deletion.
+- Account More -> quality switch uses the account controls contract above. Its first-use
+  manual setup links by stable accountId to a preselected editor. Pagination and missing
+  list items never imply deletion.
 - Browser fixtures cover group tabs, status filters, pause/resume, retained children,
   failed reads, partial deletion and account links at 1440/390/320px.
 
@@ -78,7 +130,8 @@ Wrong: enforce predefined selection. Correct: suggestions assist the existing st
   when editing that legacy action; never silently convert a saved rule.
 - Single/bulk edits reuse the existing threshold. `failureTemplate` is opt-in in
   batch patches: preserve per-rule selections when unchecked, reject missing
-  templates for the selected action, and disallow automatic reverse restoration.
+  templates for the selected action. Full-template autoRestore requires explicit opt-in
+  and restores only a still-owned before snapshot; do not infer it from Excel-only recovery.
 - Keep historical template names/revisions from `QualityRun.config`, not today's
   template catalog. A changed/deleted selection remains explicit until reselected;
   catalog failure has retry and aborts on unmount.

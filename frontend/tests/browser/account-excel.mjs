@@ -142,7 +142,7 @@ async function main() {
     const firstAvatar = firstRow.locator('[data-account-avatar]')
     const firstExcelMark = firstRow.locator('[data-account-excel-mark]')
     const warningExcelMark = warningRow.locator('[data-account-excel-mark]')
-    const monitor = warningRow.getByRole('link', { name: '监测中', exact: true })
+    const monitor = warningRow.getByRole('link', { name: /^监测中/ })
     await warningAvatar.waitFor()
     await monitor.waitFor()
     assert.ok((await warningAvatar.getAttribute('title')).includes('HTTP 403'))

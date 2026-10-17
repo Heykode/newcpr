@@ -40,6 +40,12 @@ export function useAccountMutations(options: {
   const selectedAccountsById = new Map<string, AccountRow>()
   const showDeleteModal = ref(false)
   const deletingCount = ref(0)
+  const deleteRelogin = ref(false)
+  const batchDeleteRelogin = ref(false)
+  watch(showDeleteModal, (open) => {
+    if (open)
+      batchDeleteRelogin.value = false
+  }, { flush: 'sync' })
   const showSingleDeleteModal = ref(false)
   const showExportModal = ref(false)
   const pendingDeleteAccount = ref<AccountRow | null>(null)
@@ -86,6 +92,7 @@ export function useAccountMutations(options: {
   )
 
   function requestDeleteAccount(account: AccountRow) {
+    deleteRelogin.value = false
     pendingDeleteAccount.value = account
     showSingleDeleteModal.value = true
   }
@@ -97,13 +104,13 @@ export function useAccountMutations(options: {
 
     await deletingAccountAction.run(
       async () => {
-        await deleteAccountBatch([account])
+        await deleteAccountBatch([account], deleteRelogin.value)
         const remaining = new Set(options.selectedIds.value)
         remaining.delete(account.id)
         options.selectedIds.value = remaining
         showSingleDeleteModal.value = false
-        await loadAccounts()
         toast.success('账号已删除')
+        void loadAccounts().catch(() => undefined)
       },
     )
   }
@@ -112,12 +119,13 @@ export function useAccountMutations(options: {
     if (batchDeleting.value || options.selectedIds.value.size === 0)
       return
 
+    const removeRelogin = batchDeleteRelogin.value
     let deletedCount = 0
     await batchDeletingAction.run(
       async () => {
         const selected = accountsById([...options.selectedIds.value])
         for (const accounts of accountDeletionGroups(selected)) {
-          await deleteAccountBatch(accounts, { silent: true })
+          await deleteAccountBatch(accounts, removeRelogin, { silent: true })
           deletedCount += accounts.length
           const deletedIds = new Set(accounts.map(account => account.id))
           const remaining = new Set(options.selectedIds.value)
@@ -126,8 +134,8 @@ export function useAccountMutations(options: {
           options.selectedIds.value = remaining
         }
         showDeleteModal.value = false
-        await loadAccounts()
         toast.success(`已删除 ${deletedCount} 个账号`)
+        void loadAccounts().catch(() => undefined)
       },
       {
         errorText: false,
@@ -317,12 +325,13 @@ export function useAccountMutations(options: {
     return accounts
   }
 
-  async function deleteAccountBatch(accounts: AccountRow[], options?: RequestOptions) {
+  async function deleteAccountBatch(accounts: AccountRow[], removeRelogin: boolean, options?: RequestOptions) {
     const account = accounts[0]
     if (!account)
       return
     const payload = {
       provider: account.provider,
+      deleteRelogin: removeRelogin,
       accountIds: accounts.map(account => account.id),
     }
     const result = await deleteAccounts(payload, options)
@@ -346,6 +355,8 @@ export function useAccountMutations(options: {
   return {
     ...onboarding,
     showDeleteModal,
+    deleteRelogin,
+    batchDeleteRelogin,
     deletingCount,
     showSingleDeleteModal,
     showExportModal,
