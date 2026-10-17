@@ -93,6 +93,9 @@ async function main() {
         await points.nth(35).hover()
         await page.waitForFunction(() => document.querySelector('[data-health-timeline-popover]')?.textContent.includes('12:35'))
         assert.equal(await original.evaluate(element => element === document.querySelector('[data-health-timeline-popover]')), true, 'cell switches must not remount the panel')
+        await popover.hover()
+        await page.waitForTimeout(500)
+        assert.equal(await popover.isVisible(), true, 'moving into the panel must keep it open')
         for (const index of [0, 94]) {
           await points.nth(index).hover()
           await page.waitForFunction(index => document.querySelector('[data-health-timeline-popover]')?.textContent.includes(`12:${String(index).padStart(2, '0')}`), index)

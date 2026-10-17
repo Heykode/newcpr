@@ -676,6 +676,12 @@ impl CodexCredentialSelector {
                 let Some(selected) = selected else {
                     return Err(if saw_full {
                         CredentialSelectionError::AccountWait(AccountWaitFailure::QueueFull)
+                    } else if session_policy_excludes_all(
+                        state.cyber_policy_scope.as_ref(),
+                        &candidates,
+                        state.pinned.as_ref(),
+                    ) {
+                        CredentialSelectionError::SessionPolicyRestricted
                     } else {
                         CredentialSelectionError::NoEligibleCredential
                     });
@@ -871,6 +877,7 @@ impl CodexCredentialSelector {
             request.attempt.deadline(),
         )
         .with_quality_check(request.attempt.is_quality_check())
+        .with_detail(request.attempt.lease_detail(request.upstream_model))
         .with_cancellation(request.attempt.cancellation().clone())
         .with_concurrency_pool(request.concurrency_pool()))
     }

@@ -136,8 +136,19 @@ pub enum ProviderConcurrencyPool {
 }
 
 /// 请求级账号 lease 的全部中立事实。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderLeaseDetail {
+    pub request_id: String,
+    pub client_key_id: String,
+    pub model: Option<String>,
+    pub client_ip: Option<std::net::IpAddr>,
+    pub started_at_ms: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderSchedulingLeaseRequest {
+    detail: Option<ProviderLeaseDetail>,
     provider_kind: ProviderKind,
     account_id: ProviderAccountId,
     credential_revision: CredentialRevision,
@@ -151,6 +162,14 @@ pub struct ProviderSchedulingLeaseRequest {
 
 impl ProviderSchedulingLeaseRequest {
     #[must_use]
+    pub fn with_detail(mut self, detail: ProviderLeaseDetail) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+    pub fn detail(&self) -> Option<&ProviderLeaseDetail> {
+        self.detail.as_ref()
+    }
+    #[must_use]
     pub fn new(
         provider_kind: ProviderKind,
         account_id: ProviderAccountId,
@@ -161,6 +180,7 @@ impl ProviderSchedulingLeaseRequest {
     ) -> Self {
         Self {
             provider_kind,
+            detail: None,
             account_id,
             credential_revision,
             max_concurrent,

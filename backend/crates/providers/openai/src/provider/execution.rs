@@ -140,7 +140,8 @@ impl CodexProvider {
     ) -> Result<ProviderStream, ProviderError> {
         let image_request =
             crate::transport::excel::image_generation::is_image_path(request.endpoint_path);
-        let image_model = image_request
+        let search_request = request.endpoint_path == CODEX_ALPHA_SEARCH_PATH;
+        let endpoint_model = (image_request || search_request)
             .then(|| observation::endpoint_requested_model_body(&request.body))
             .flatten();
         let selection_started_at = Instant::now();
@@ -171,8 +172,9 @@ impl CodexProvider {
                         request_url: &request.response_origin,
                         attempt: &context,
                         session_affinity: session_affinity.as_ref(),
-                        upstream_model: image_model.as_ref().map(|model| model.as_str()),
+                        upstream_model: endpoint_model.as_ref().map(|model| model.as_str()),
                         image_request,
+                        search_request,
                         requires_oauth: false,
                     })
                     .await

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { HealthTimeline, HealthTimelinePoint } from '../constants'
-import { useEventListener, usePreferredReducedMotion, useResizeObserver } from '@vueuse/core'
+import { usePreferredReducedMotion, useResizeObserver } from '@vueuse/core'
 import { gsap } from 'gsap'
 
-import { computed, nextTick, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, onBeforeUnmount, shallowRef, useTemplateRef, watch } from 'vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BasePopover from '@/components/base/BasePopover.vue'
 import { formatHealthCount, healthLegend, healthReliabilityValueClass, healthServiceFailureCount, healthStatusMeta } from '../constants'
@@ -25,7 +25,6 @@ const preferredMotion = usePreferredReducedMotion()
 const points = computed(() => props.timeline.points)
 
 const activePoint = shallowRef<HealthTimelinePoint>()
-const activeAnchor = shallowRef<HTMLElement | null>(null)
 const popoverOpen = shallowRef(false)
 const highlightedPointTime = shallowRef<string>()
 let wavedCellIndexes = new Set<number>()
@@ -44,11 +43,8 @@ function isActivePoint(point: HealthTimelinePoint) {
   return popoverOpen.value && highlightedPointTime.value === point.time
 }
 
-async function activatePoint(point: HealthTimelinePoint, pointIndex: number, event: Event) {
+function activatePoint(point: HealthTimelinePoint, pointIndex: number, event: Event) {
   if (!(event.currentTarget instanceof HTMLElement))
-    return
-  // 浮层卸载会恢复原焦点，不能把关闭期间的焦点恢复当作再次打开
-  if (event instanceof FocusEvent && !activePoint.value && activeAnchor.value && !event.relatedTarget)
     return
   if (!isInteractivePoint(point)) {
     closePointPopover()
@@ -61,14 +57,7 @@ async function activatePoint(point: HealthTimelinePoint, pointIndex: number, eve
   highlightedPointTime.value = point.time
   animatePointWave(pointIndex)
 
-  // 首次挂载后再打开，让浮层先建立定位监听，后续逐格切换直接更新
-  if (opening) {
-    await nextTick()
-    if (activePoint.value !== point)
-      return
-  }
   positionPointAnchor(anchor, opening)
-  activeAnchor.value = popoverAnchor.value
   popoverOpen.value = true
 }
 
@@ -111,20 +100,13 @@ function stopPointAnchor() {
 }
 
 function closePointPopover() {
-  void resetPointInteraction()
+  popoverOpen.value = false
 }
 
-async function resetPointInteraction() {
+function resetPointInteraction() {
   highlightedPointTime.value = undefined
-  activePoint.value = undefined
   releasePointWave()
   stopPointAnchor()
-  // 锚点保留到浮层卸载完成，避免焦点恢复重新打开气泡或关闭时位置跳变
-  await nextTick()
-  if (!activePoint.value) {
-    popoverOpen.value = false
-    activeAnchor.value = null
-  }
 }
 
 function timelineButtons() {
@@ -229,11 +211,10 @@ function pointAccessibilityLabel(point: HealthTimelinePoint) {
 }
 
 watch(popoverOpen, (open) => {
-  if (!open && activePoint.value)
-    closePointPopover()
+  if (!open)
+    resetPointInteraction()
 })
 
-useEventListener(timelineGrid, 'mouseleave', closePointPopover)
 useResizeObserver(timelineGrid, () => {
   if (!popoverOpen.value || !activePoint.value)
     return
@@ -297,7 +278,6 @@ onBeforeUnmount(() => {
             :class="isInteractivePoint(point) ? 'cursor-pointer' : 'cursor-default'"
             @mouseenter="activatePoint(point, pointIndex, $event)"
             @focus="activatePoint(point, pointIndex, $event)"
-            @blur="closePointPopover"
             @click="activatePoint(point, pointIndex, $event)"
           >
             <span
@@ -315,15 +295,17 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <BasePopover
-          v-if="activePoint"
           ref="pointPopover"
           v-model="popoverOpen"
           placement="top"
           :offset="12"
-          :anchor-element="activeAnchor"
+          :anchor-element="popoverAnchor"
+          :hover-element="timelineGrid"
+          trigger="hover-click"
+          :hover-delay="0"
           :arrow-surface-class="healthPopoverArrowSurfaceClasses"
         >
-          <div data-health-timeline-popover class="w-72 overflow-hidden rounded-cp-lg">
+          <div v-if="activePoint" data-health-timeline-popover class="w-72 overflow-hidden rounded-cp-lg">
             <HealthTimelinePointPopover :point="activePoint" />
           </div>
         </BasePopover>

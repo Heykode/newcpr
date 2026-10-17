@@ -121,6 +121,12 @@ fn opening(pool: &CodexWebSocketPool, key: &CodexWebSocketPoolKey) -> WebSocketP
 }
 
 fn connection() -> (PooledWebSocketConnection, Arc<SocketControl>) {
+    connection_with_proxy_permit(None)
+}
+
+fn connection_with_proxy_permit(
+    permit: Option<super::proxy_capacity::ProxyConnectionPermit>,
+) -> (PooledWebSocketConnection, Arc<SocketControl>) {
     let control = Arc::new(SocketControl::default());
     let connection = PooledWebSocketConnection {
         websocket: PumpedWebSocket::new(
@@ -128,6 +134,7 @@ fn connection() -> (PooledWebSocketConnection, Arc<SocketControl>) {
             PumpKeepalive::disabled(),
             PumpLogContext::new(None, None),
             None,
+            permit,
         ),
         metadata: CodexWebSocketConnectionMetadata {
             session_proxy: None,
@@ -142,6 +149,81 @@ fn connection() -> (PooledWebSocketConnection, Arc<SocketControl>) {
         created_at: tokio::time::Instant::now(),
     };
     (connection, control)
+}
+
+#[tokio::test(start_paused = true)]
+async fn proxy_capacity_waits_for_actual_socket_destruction() {
+    let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+        "http://{}:test@127.0.0.1:8080",
+        uuid::Uuid::new_v4()
+    ))
+    .unwrap()
+    .with_max_websocket_connections(1);
+    let pool = pool();
+    let permit = super::proxy_capacity::acquire(Some(&proxy), Some(&pool))
+        .await
+        .unwrap();
+    let idle_key = key(1).with_proxy_capacity(Some(&proxy));
+    let (connection, control) = connection_with_proxy_permit(permit);
+    let (connection, lease) = opening(&pool, &idle_key)
+        .connected_reserved(connection)
+        .await
+        .unwrap_or_else(|_| panic!("owned slot"));
+    lease.put(*connection).await;
+    let mut waiting = Box::pin(super::proxy_capacity::acquire(Some(&proxy), Some(&pool)));
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    control.close_started.cancelled().await;
+    assert!(!control.destroyed.is_cancelled());
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    control.release_close();
+    let next = waiting.await.unwrap();
+    assert!(control.destroyed.is_cancelled());
+    drop(next);
+    pool.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn proxy_capacity_does_not_evict_busy_or_downstream_bound_connections() {
+    for bound in [false, true] {
+        let proxy = gateway_core::account::OutboundProxy::parse(&format!(
+            "http://{}:test@127.0.0.1:8080",
+            uuid::Uuid::new_v4()
+        ))
+        .unwrap()
+        .with_max_websocket_connections(1);
+        let pool = pool();
+        let permit = super::proxy_capacity::acquire(Some(&proxy), Some(&pool))
+            .await
+            .unwrap();
+        let slot_key = key(1)
+            .with_proxy_capacity(Some(&proxy))
+            .with_downstream_connection_id(if bound { "downstream-owner" } else { "" });
+        let (connection, control) = connection_with_proxy_permit(permit);
+        let (connection, lease) = opening(&pool, &slot_key)
+            .connected_reserved(connection)
+            .await
+            .unwrap_or_else(|_| panic!("owned slot"));
+        let busy = if bound {
+            lease.put(*connection).await;
+            None
+        } else {
+            Some((connection, lease))
+        };
+        let mut waiting = Box::pin(super::proxy_capacity::acquire(Some(&proxy), Some(&pool)));
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+        assert!(!control.close_started.is_cancelled());
+        drop(waiting);
+        control.release_close();
+        if let Some((connection, lease)) = busy {
+            lease.put(*connection).await;
+        }
+        pool.shutdown().await;
+        assert!(control.destroyed.is_cancelled());
+        let next = super::proxy_capacity::acquire(Some(&proxy), None)
+            .await
+            .unwrap();
+        drop(next);
+    }
 }
 
 async fn connected(

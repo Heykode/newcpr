@@ -28,7 +28,8 @@ pub struct CodexWebSocketPoolKey {
     client_scope: String,
     conversation_id: String,
     connection_profile: String,
-    downstream_connection_id: String,
+    pub(super) downstream_connection_id: String,
+    pub(super) proxy_capacity_key: String,
     egress_key: String,
     pub(crate) routing: Option<CodexWebSocketRouting>,
 }
@@ -71,6 +72,13 @@ impl Hash for CodexWebSocketPoolKey {
 }
 
 impl CodexWebSocketPoolKey {
+    pub(crate) fn with_proxy_capacity(
+        mut self,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Self {
+        self.proxy_capacity_key = super::proxy_capacity::key(proxy);
+        self
+    }
     /// 构造连接池 key。
     pub fn new(
         base_url: impl Into<String>,
@@ -84,6 +92,7 @@ impl CodexWebSocketPoolKey {
             conversation_id: conversation_id.into(),
             connection_profile: String::new(),
             downstream_connection_id: String::new(),
+            proxy_capacity_key: String::new(),
             egress_key: String::new(),
             routing: None,
         }

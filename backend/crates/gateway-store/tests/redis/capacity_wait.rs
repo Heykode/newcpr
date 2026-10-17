@@ -29,6 +29,152 @@ use tokio::task::{JoinHandle, JoinSet};
 use uuid::Uuid;
 
 #[tokio::test]
+async fn concurrency_details_follow_real_leases_and_preserve_legacy_occupancy() {
+    use gateway_admin::{
+        model::accounts::AccountConcurrencyPool, ports::store::AccountRuntimeStore,
+    };
+    use gateway_core::provider_ports::ProviderLeaseDetail;
+    use gateway_store::redis::{
+        RedisAdminAccountRuntimeStore, RedisClientAdmissionRepository,
+        RedisCredentialCooldownRepository,
+    };
+    let Some(mut fixture) = Fixture::new().await else {
+        return;
+    };
+    let runtime = RedisAdminAccountRuntimeStore::new(
+        RedisCredentialCooldownRepository::new(fixture.connection.clone(), &fixture.namespace)
+            .unwrap(),
+        fixture.repository.clone(),
+        RedisClientAdmissionRepository::new(fixture.connection.clone(), &fixture.namespace)
+            .unwrap(),
+    );
+    let request = |pool| {
+        ProviderSchedulingLeaseRequest::new(
+            provider(),
+            account("details"),
+            CredentialRevision::new(1).unwrap(),
+            NonZeroU32::new(3).unwrap(),
+            Duration::ZERO,
+            Deadline::default(),
+        )
+        .with_concurrency_pool(pool)
+    };
+    let shared = fast_acquired(
+        fixture
+            .port
+            .try_acquire_scheduling(request(ProviderConcurrencyPool::Shared).with_detail(
+                ProviderLeaseDetail {
+                    request_id: "req_details".into(),
+                    client_key_id: "key_public_id".into(),
+                    model: Some("test-model".into()),
+                    client_ip: Some("127.0.0.1".parse().unwrap()),
+                    started_at_ms: 0,
+                },
+            ))
+            .await
+            .unwrap(),
+    );
+    let legacy = fast_acquired(
+        fixture
+            .port
+            .try_acquire_scheduling(request(ProviderConcurrencyPool::Shared))
+            .await
+            .unwrap(),
+    );
+    let reserved = fast_acquired(
+        fixture
+            .port
+            .try_acquire_scheduling(request(ProviderConcurrencyPool::Reserved))
+            .await
+            .unwrap(),
+    );
+    let quality = fast_acquired(
+        fixture
+            .port
+            .try_acquire_scheduling(
+                request(ProviderConcurrencyPool::Shared).with_quality_check(true),
+            )
+            .await
+            .unwrap(),
+    );
+    let page = runtime
+        .concurrency("acct_details", AccountConcurrencyPool::Shared, 1, 20)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(
+        page.items
+            .iter()
+            .filter(|item| item.detail.is_none())
+            .count(),
+        1
+    );
+    let detail = page
+        .items
+        .iter()
+        .find_map(|item| item.detail.as_ref())
+        .unwrap();
+    assert_eq!(detail.request_id, "req_details");
+    assert!(detail.started_at_ms > 0);
+    assert_eq!(
+        runtime
+            .concurrency("acct_details", AccountConcurrencyPool::Reserved, 1, 20)
+            .await
+            .unwrap()
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        runtime
+            .concurrency("acct_details", AccountConcurrencyPool::Quality, 1, 20)
+            .await
+            .unwrap()
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        runtime
+            .concurrency("acct_details", AccountConcurrencyPool::Shared, 2, 1)
+            .await
+            .unwrap()
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    assert!(
+        runtime
+            .concurrency("acct_details", AccountConcurrencyPool::Shared, 0, 20)
+            .await
+            .is_err()
+    );
+    drop((shared, legacy, reserved, quality));
+    fixture.drain().await;
+    assert_eq!(
+        runtime
+            .concurrency("acct_details", AccountConcurrencyPool::Shared, 1, 20)
+            .await
+            .unwrap()
+            .unwrap()
+            .total,
+        0
+    );
+    let details: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{}:*:detail:*", fixture.namespace))
+        .query_async(&mut fixture.connection)
+        .await
+        .unwrap();
+    assert!(
+        details.is_empty(),
+        "release removes sensitive lease metadata"
+    );
+}
+
+#[tokio::test]
 async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after_loss() {
     let Some(mut fixture) = Fixture::new().await else {
         return;
@@ -54,7 +200,14 @@ async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after
             Deadline::default(),
         )
         .with_cancellation(cancellation.clone())
-        .with_concurrency_pool(pool);
+        .with_concurrency_pool(pool)
+        .with_detail(gateway_core::provider_ports::ProviderLeaseDetail {
+            request_id: "req_renew_details".into(),
+            client_key_id: "key_public_id".into(),
+            model: None,
+            client_ip: None,
+            started_at_ms: 0,
+        });
         let guard = if promote {
             let mut waiter = acquired(
                 fixture
@@ -85,6 +238,18 @@ async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after
             .unwrap();
         assert_eq!(members.len(), 1);
         let token = &members[0];
+        let detail_key = format!("{active}:detail:{token}");
+        let original_detail: String = redis::cmd("GET")
+            .arg(&detail_key)
+            .query_async(&mut fixture.connection)
+            .await
+            .unwrap();
+        redis::cmd("PEXPIRE")
+            .arg(&detail_key)
+            .arg(15_000)
+            .query_async::<i64>(&mut fixture.connection)
+            .await
+            .unwrap();
         let short = timestamp_millis(SystemTime::now() + Duration::from_secs(15));
         redis::cmd("ZADD")
             .arg(&active)
@@ -112,6 +277,21 @@ async fn ordinary_and_promoted_execution_renew_exact_owner_and_fail_closed_after
         })
         .await
         .expect("execution owner renews");
+        let detail_ttl: i64 = redis::cmd("PTTL")
+            .arg(&detail_key)
+            .query_async(&mut fixture.connection)
+            .await
+            .unwrap();
+        assert!(detail_ttl > 500_000, "metadata follows execution renewal");
+        let renewed_detail: String = redis::cmd("GET")
+            .arg(&detail_key)
+            .query_async(&mut fixture.connection)
+            .await
+            .unwrap();
+        assert_eq!(
+            renewed_detail, original_detail,
+            "renewal preserves start time"
+        );
         assert_eq!(fixture.pool_in_flight(id, pool).await, 1);
         assert!(!cancellation.is_cancelled());
         redis::cmd("ZREM")
@@ -1500,7 +1680,7 @@ impl ScriptTarget {
     fn matches(self, args: &[Vec<u8>]) -> bool {
         let (keys, arguments) = match self {
             Self::Enqueue => (4, 4),
-            Self::Execution => (6, 8),
+            Self::Execution => (6, 9),
             Self::Cancel => (4, 2),
         };
         args.get(2)

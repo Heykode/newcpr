@@ -20,6 +20,31 @@ pub use gateway_core::account::{
     QuotaState, resolve_account_status,
 };
 
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountConcurrencyPool {
+    #[default]
+    Shared,
+    Reserved,
+    Quality,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountConcurrencyItem {
+    pub detail: Option<gateway_core::provider_ports::ProviderLeaseDetail>,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountConcurrencyPage {
+    pub items: Vec<AccountConcurrencyItem>,
+    pub total: u64,
+    pub page: u32,
+    pub page_size: u32,
+}
+
 /// 导入时统一应用的账号调度与分组设置；缺省时保留原有导入语义。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountImportSettings {

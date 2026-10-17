@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import AccountConcurrencyModal from './AccountConcurrencyModal.vue'
 
 const props = defineProps<{
+  accountId?: string
   inFlight?: number | null
   effectiveConcurrencyLimit?: number | null
   concurrencyLimit?: number | null
 }>()
+const detailsOpen = ref(false)
 
 const limit = computed(() => props.effectiveConcurrencyLimit ?? props.concurrencyLimit)
 const usedClass = computed(() => {
@@ -23,11 +26,14 @@ const usedClass = computed(() => {
 </script>
 
 <template>
-  <div
+  <component
+    :is="accountId ? 'button' : 'div'"
+    :type="accountId ? 'button' : undefined"
     data-account-capacity
     class="inline-flex min-w-0 max-w-full flex-wrap items-baseline justify-center gap-x-1 rounded-cp-sm bg-cp-fill-quaternary px-1.5 py-1 font-mono text-cp-sm font-normal tabular-nums whitespace-normal text-cp-text-secondary"
-    role="group"
+    :role="accountId ? undefined : 'group'"
     aria-label="账号并发容量"
+    @click.stop="detailsOpen = Boolean(accountId)"
   >
     <span
       data-capacity-used
@@ -47,5 +53,6 @@ const usedClass = computed(() => {
     >
       {{ limit ?? '\u2014' }}
     </span>
-  </div>
+  </component>
+  <AccountConcurrencyModal v-if="accountId && detailsOpen" v-model="detailsOpen" :account-id="accountId" />
 </template>

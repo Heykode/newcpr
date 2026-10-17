@@ -228,7 +228,10 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
         ("crates/providers/openai", Some("transport/websocket/pool/mod.rs"), Item::Mod(module)) => {
-            (module.ident == "tests" || module.ident == "lifecycle_tests")
+            // Proxy permits and weak budget ownership are private pool state.
+            (module.ident == "tests"
+                || module.ident == "lifecycle_tests"
+                || module.ident == "proxy_capacity_tests")
                 && module.content.is_none()
                 && matches!(module.vis, syn::Visibility::Inherited)
         }
@@ -459,7 +462,7 @@ fn private_test_scanner_rejects_macro_hooks_without_rejecting_literal_documentat
 fn private_test_allowlist_requires_exact_owner_name_and_test_only_gate() {
     let owner = "crates/providers/openai";
     let path = Path::new("transport/websocket/pool/mod.rs");
-    for name in ["tests", "lifecycle_tests"] {
+    for name in ["tests", "lifecycle_tests", "proxy_capacity_tests"] {
         let item: Item = syn::parse_str(&format!("#[cfg(test)] mod {name};")).unwrap();
         assert!(is_audited_private_test(owner, path, &item));
         assert!(!is_audited_private_test("crates/gateway-api", path, &item));

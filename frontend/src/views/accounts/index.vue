@@ -584,6 +584,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
 
             <template #capacity="{ row }">
               <AccountCapacityCell
+                :account-id="row.id"
                 :in-flight="row.inFlight"
                 :effective-concurrency-limit="row.effectiveConcurrencyLimit"
                 :concurrency-limit="row.concurrencyLimit"

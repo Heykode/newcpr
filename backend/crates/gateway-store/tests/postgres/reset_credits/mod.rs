@@ -350,6 +350,9 @@ fn evidence(check: &AutoResetCheck) -> AutoResetObservation {
             reset_at: Utc::now() + Duration::hours(1),
         }],
         all_below: false,
+        expiry_triggered: false,
+        inventory: None,
+        weekly_condition_met: true,
     }
 }
 async fn enqueue_auto(
@@ -678,12 +681,87 @@ async fn automatic_zero_thresholds_do_not_claim_checks() {
                 enabled: true,
                 five_hour_used_millis: 0,
                 seven_day_used_millis: 0,
+                ..Default::default()
             },
             &context(),
         )
         .await
         .unwrap();
     assert!(store.claim_auto_check().await.unwrap().is_none());
+    db.close().await;
+}
+
+#[tokio::test]
+async fn expiry_only_policy_persists_plan_and_weekly_condition_blocks_consumption() {
+    use gateway_admin::model::reset_credits::AutoResetInventory;
+    let Some(db) = TestDatabase::create("auto_expiry").await else {
+        return;
+    };
+    let store = auto_setup(&db).await;
+    store
+        .save_auto_policy(
+            "acct_reset_1",
+            1,
+            AutoResetConfig {
+                enabled: true,
+                five_hour_used_millis: 0,
+                seven_day_used_millis: 0,
+                expiry_enabled: true,
+                max_weekly_remaining_percent: Some(20),
+                ..Default::default()
+            },
+            &context(),
+        )
+        .await
+        .unwrap();
+    let check = store.claim_auto_check().await.unwrap().unwrap();
+    let mut observation = evidence(&check);
+    let mut credit = batch(1).items[0].credit.clone().unwrap();
+    credit.expires_at = Some(Utc::now() + Duration::minutes(5));
+    observation.triggered.clear();
+    observation.all_below = true;
+    observation.expiry_triggered = true;
+    observation.weekly_condition_met = false;
+    observation.inventory = Some(AutoResetInventory {
+        checked_at: Utc::now(),
+        credit: Some(credit.clone()),
+    });
+    store
+        .finish_auto_check(&check, Some(observation), Some(credit.clone()), "blocked")
+        .await
+        .unwrap();
+    assert!(store.batches().await.unwrap().is_empty());
+    due(&db).await;
+    // A new store instance sees the cached card after a restart.
+    let store = PgResetCreditsStore(db.pool.clone());
+    let check = store.claim_auto_check().await.unwrap().unwrap();
+    assert_eq!(
+        check
+            .inventory
+            .as_ref()
+            .unwrap()
+            .credit
+            .as_ref()
+            .unwrap()
+            .id,
+        credit.id
+    );
+    let mut observation = evidence(&check);
+    observation.triggered.clear();
+    observation.all_below = true;
+    observation.expiry_triggered = true;
+    store
+        .finish_auto_check(&check, Some(observation), Some(credit.clone()), "expiry")
+        .await
+        .unwrap();
+    let jobs = store.batches().await.unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].items[0].credit.as_ref().unwrap().id, credit.id);
+    due(&db).await;
+    assert!(
+        store.claim_auto_check().await.unwrap().is_none(),
+        "pending job excludes duplicate planning"
+    );
     db.close().await;
 }
 

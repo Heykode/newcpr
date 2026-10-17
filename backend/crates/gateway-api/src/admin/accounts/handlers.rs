@@ -10,6 +10,10 @@ where
     Router::new()
         .merge(import_tasks::router::<S>())
         .route("/api/admin/accounts", get(list_accounts::<S>))
+        .route(
+            "/api/admin/accounts/concurrency",
+            get(account_concurrency::<S>),
+        )
         .route("/api/admin/accounts/detail", get(account_detail::<S>))
         .route("/api/admin/accounts/export", get(export_accounts::<S>))
         .route("/api/admin/accounts/import", post(import_accounts::<S>))
@@ -72,6 +76,38 @@ where
             "/api/admin/accounts/oauth/complete",
             post(complete_account_authorization::<S>),
         )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConcurrencyQuery {
+    account_id: String,
+    #[serde(default)]
+    pool: gateway_admin::model::accounts::AccountConcurrencyPool,
+    page: u32,
+    page_size: u32,
+}
+
+async fn account_concurrency<S>(
+    _auth: AdminAuth,
+    State(state): State<S>,
+    AdminQuery(query): AdminQuery<ConcurrencyQuery>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: AdminSessionState + Send + Sync,
+{
+    let account_id = ProviderAccountId::new(query.account_id)
+        .map_err(|_| AdminError::bad_request("账号 ID 不合法"))?;
+    let result = state
+        .admin_services()
+        .accounts()
+        .concurrency(&account_id, query.pool, query.page, query.page_size)
+        .await
+        .map_err(map_service_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(result),
+    ))
 }
 
 async fn apply_account_template<S>(

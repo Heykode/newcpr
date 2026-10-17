@@ -25,6 +25,70 @@ use crate::{
 
 #[async_trait]
 pub trait ProxiesService: Send + Sync {
+    async fn create_batch(
+        &self,
+        commands: Vec<Result<NewProxy, AdminError>>,
+        context: &MutationContext,
+    ) -> Result<Vec<ProxyBatchResult<ProxyMutation>>, AdminError> {
+        validate_batch_size(commands.len())?;
+        let mut stopped = false;
+        let mut results = Vec::with_capacity(commands.len());
+        for command in commands {
+            if stopped {
+                results.push(ProxyBatchResult::Skipped);
+                continue;
+            }
+            let result = match command {
+                Ok(command) => self.create(command, context).await,
+                Err(error) => Err(error),
+            };
+            stopped = result.as_ref().is_err_and(batch_should_stop);
+            results.push(ProxyBatchResult::Completed(result));
+        }
+        Ok(results)
+    }
+
+    async fn test_batch(
+        &self,
+        commands: Vec<Result<TestProxy, AdminError>>,
+        context: &MutationContext,
+    ) -> Result<Vec<ProxyBatchResult<ProxyRecord>>, AdminError> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        validate_batch_size(commands.len())?;
+        let mut ids = std::collections::HashSet::new();
+        if commands
+            .iter()
+            .filter_map(|command| command.as_ref().ok())
+            .any(|command| !ids.insert(&command.id))
+        {
+            return Err(AdminError::invalid("批量测试不能包含重复代理"));
+        }
+        let stopped = AtomicBool::new(false);
+        Ok(stream::iter(commands)
+            .map(|command| {
+                let stopped = &stopped;
+                async move {
+                    if stopped.load(Ordering::Relaxed) {
+                        return ProxyBatchResult::Skipped;
+                    }
+                    let result = match command {
+                        Ok(command) => self.test(&command.id, command.revision, context).await,
+                        Err(error) => Err(error),
+                    };
+                    if result.as_ref().is_err_and(batch_should_stop) {
+                        stopped.store(true, Ordering::Relaxed);
+                    }
+                    ProxyBatchResult::Completed(result)
+                }
+            })
+            .buffered(2)
+            .collect()
+            .await)
+    }
+
+    async fn probe_direct(&self) -> Result<ProxyTestResult, AdminError> {
+        Err(AdminError::invalid("直连出口检测不可用"))
+    }
     async fn list(&self, query: ProxyListQuery) -> Result<ProxyPage, AdminError>;
     async fn list_accounts(
         &self,
@@ -73,6 +137,24 @@ pub(crate) struct DefaultProxiesService {
     test_slots: Semaphore,
 }
 
+fn validate_batch_size(size: usize) -> Result<(), AdminError> {
+    if !(1..=100).contains(&size) {
+        return Err(AdminError::invalid("一次需要提交 1 至 100 条代理"));
+    }
+    Ok(())
+}
+
+fn batch_should_stop(error: &AdminError) -> bool {
+    matches!(
+        error.kind(),
+        AdminErrorKind::Unauthorized
+            | AdminErrorKind::BadGateway
+            | AdminErrorKind::UpstreamResultUnknown
+            | AdminErrorKind::Unavailable
+            | AdminErrorKind::Internal
+    )
+}
+
 impl DefaultProxiesService {
     pub(crate) fn new(
         store: Arc<dyn ProxyStore>,
@@ -92,6 +174,15 @@ impl DefaultProxiesService {
 
 #[async_trait]
 impl ProxiesService for DefaultProxiesService {
+    async fn probe_direct(&self) -> Result<ProxyTestResult, AdminError> {
+        let _permit = self.test_slots.try_acquire().map_err(|_| {
+            AdminError::new(AdminErrorKind::RateLimited, "出口测试繁忙，请稍后重试")
+        })?;
+        self.probe
+            .test_direct()
+            .await
+            .ok_or_else(|| AdminError::invalid("直连出口检测不可用"))
+    }
     async fn remove_account(
         &self,
         proxy_id: &str,

@@ -125,7 +125,14 @@ fn record(row: PgRow) -> StoreResult<ProxyRecord> {
             &row.try_get::<String, _>("proxy_url")
                 .map_err(|_| invalid())?,
         )
-        .map_err(|_| invalid())?,
+        .map_err(|_| invalid())?
+        .with_max_websocket_connections(
+            u32::try_from(
+                row.try_get::<i64, _>("max_websocket_connections")
+                    .map_err(|_| invalid())?,
+            )
+            .map_err(|_| invalid())?,
+        ),
         revision: AdminRevision::new(
             u64::try_from(row.try_get::<i64, _>("revision").map_err(|_| invalid())?)
                 .map_err(|_| invalid())?,
@@ -592,10 +599,11 @@ impl ProxyStore for PgProxyRepository {
         {
             return Err(store_error(invalid()));
         }
-        sqlx::query("update outbound_proxies set request_location_json = $2, auto_location = $3 where id = $1")
+        sqlx::query("update outbound_proxies set request_location_json = $2, auto_location = $3, max_websocket_connections = $4 where id = $1")
             .bind(&id)
             .bind(command.request_location.as_ref().map(sqlx::types::Json))
             .bind(command.auto_location)
+            .bind(i64::from(command.proxy.max_websocket_connections()))
             .execute(&mut *transaction)
             .await
             .map_err(|_| store_error(unavailable()))?;
@@ -670,6 +678,7 @@ impl ProxyStore for PgProxyRepository {
         let changed = sqlx::query(
             "update outbound_proxies set name = $3, proxy_url = coalesce($4, proxy_url), revision = revision + 1, updated_at = now(),
              auto_location = coalesce($7, auto_location), enabled = coalesce($8, enabled),
+             max_websocket_connections = coalesce($9, max_websocket_connections),
              detected_location_json = case when ($4 is not null and $4 <> proxy_url) or ($7 is not null and $7 <> auto_location) then null else detected_location_json end,
              last_location_detection_json = case when ($4 is not null and $4 <> proxy_url) or ($7 is not null and $7 <> auto_location) then '{\"status\":\"notRequested\"}'::jsonb else last_location_detection_json end,
              last_test_at = case when $4 is not null and $4 <> proxy_url then null else last_test_at end,
@@ -687,6 +696,7 @@ impl ProxyStore for PgProxyRepository {
             .bind(command.request_location.as_ref().and_then(Option::as_ref).map(sqlx::types::Json))
             .bind(command.auto_location)
             .bind(command.enabled)
+            .bind(command.max_websocket_connections.map(i64::from))
             .execute(&mut *transaction).await.map_err(|_| store_error(unavailable()))?;
         if changed.rows_affected() != 1 {
             transaction

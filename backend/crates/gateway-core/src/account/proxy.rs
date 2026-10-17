@@ -4,7 +4,7 @@ use std::fmt;
 use url::Url;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct OutboundProxy(Url);
+pub struct OutboundProxy(Url, u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("invalid outbound proxy; expected http, https, socks5 or socks5h URL with a host and port")]
@@ -25,12 +25,22 @@ impl OutboundProxy {
         {
             return Err(InvalidOutboundProxy);
         }
-        Ok(Self(url))
+        Ok(Self(url, 0))
     }
 
     #[must_use]
     pub fn expose_url(&self) -> &str {
         self.0.as_str()
+    }
+
+    #[must_use]
+    pub fn with_max_websocket_connections(mut self, limit: u32) -> Self {
+        self.1 = limit;
+        self
+    }
+
+    pub const fn max_websocket_connections(&self) -> u32 {
+        self.1
     }
 
     #[must_use]

@@ -63,4 +63,8 @@ pub struct ProxyImportReservation {
 #[async_trait]
 pub trait ProxyProbe: Send + Sync {
     async fn test(&self, proxy: &OutboundProxy, detect_location: bool) -> ProxyTestResult;
+
+    async fn test_direct(&self) -> Option<ProxyTestResult> {
+        None
+    }
 }

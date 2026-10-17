@@ -136,6 +136,45 @@ async fn multipart_normalizes_images_mask_and_numeric_fields_into_existing_json_
 }
 
 #[tokio::test]
+async fn multipart_preserves_extension_fields_and_json_numbers() {
+    let execution = ImageExecution::new();
+    let parts = [
+        Part {
+            name: "image",
+            mime: Some("image/png"),
+            body: PNG,
+        },
+        Part {
+            name: "future_option",
+            mime: None,
+            body: b"preserved",
+        },
+        Part {
+            name: "partial_images",
+            mime: None,
+            body: b"2",
+        },
+        Part {
+            name: "output_compression",
+            mime: None,
+            body: b"75.5",
+        },
+    ];
+    let response = send(
+        Arc::clone(&execution),
+        form(&fields(&parts)),
+        "multipart/form-data; boundary=cpr-test-boundary",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let captured = execution.captured();
+    let body: Value = serde_json::from_slice(&captured[0].body).unwrap();
+    assert_eq!(body["future_option"], "preserved");
+    assert_eq!(body["partial_images"], 2);
+    assert_eq!(body["output_compression"], 75.5);
+}
+
+#[tokio::test]
 async fn multipart_supports_newapi_single_and_indexed_image_fields() {
     for name in ["image", "image[]", "image[0]"] {
         let execution = ImageExecution::new();
@@ -193,7 +232,7 @@ async fn malformed_or_unsupported_uploads_fail_before_selecting_an_account() {
             Part {
                 name: "n",
                 mime: None,
-                body: b"0",
+                body: b"NaN",
             },
         ],
         vec![
@@ -203,7 +242,7 @@ async fn malformed_or_unsupported_uploads_fail_before_selecting_an_account() {
                 body: PNG,
             },
             Part {
-                name: "unknown_option",
+                name: "images",
                 mime: None,
                 body: b"do not drop",
             },

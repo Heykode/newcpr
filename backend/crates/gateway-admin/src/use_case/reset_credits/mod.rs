@@ -270,7 +270,10 @@ impl ResetCreditsService {
                 .map_err(|e| map_store_error(e, "auto reset admission"))?
             {
                 let current = self.fresh_auto_observation(&account_id, &config).await?;
-                if !current.overlaps(&previous.triggered) {
+                if !current.weekly_condition_met
+                    || !(current.overlaps(&previous.triggered)
+                        || (previous.expiry_triggered && config.expiry_due(credit, Utc::now())))
+                {
                     return Ok((
                         ResetItemStatus::Skipped,
                         "额度窗口已恢复或变化，本次未消费".into(),

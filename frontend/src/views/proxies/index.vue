@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { OutboundProxyRecord } from '@/api'
-import { LockKeyhole, MoreHorizontal, Pencil, Plus, Power, RefreshCw, Search, Trash2, Users, Wifi } from '@lucide/vue'
+import { LockKeyhole, MoreHorizontal, Pencil, Plus, Power, RefreshCw, Search, Trash2, Users, Wifi, X } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
-import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
+import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { createProxy, deleteProxy, getProxies, probeProxy, testProxy, updateProxy } from '@/api'
-import { defaultRequestLocation } from '@/api/modules/proxies'
+import { defaultRequestLocation, testProxyBatch } from '@/api/modules/proxies'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseConfirmModal from '@/components/base/BaseConfirmModal.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -22,6 +23,7 @@ import { usePagedQuery } from '@/composables/usePagedQuery'
 import { formatDateTime } from '@/utils/date'
 import ManagedProxyPanel from './components/ManagedProxyPanel.vue'
 import ProxyAccountsModal from './components/ProxyAccountsModal.vue'
+import ProxyBatchCreateModal from './components/ProxyBatchCreateModal.vue'
 import ProxyFormModal from './components/ProxyFormModal.vue'
 import { proxyLocationMessage, proxyTestFeedback } from './utils/location'
 
@@ -35,6 +37,7 @@ const query = usePagedQuery({
 const { items: proxies, loading } = query
 const pagination = computed(() => ({ currentPage: query.page.value, pageSize: query.pageSize.value, total: query.total.value }))
 const columns = defineTableColumns<OutboundProxyRecord>([
+  { key: 'selection', label: '', kind: 'selection' },
   { key: 'identity', label: '代理', kind: 'identity' },
   { key: 'status', label: '状态', kind: 'status' },
   { key: 'exitIp', label: '出口 IP', kind: 'custom', size: 'xl' },
@@ -46,7 +49,7 @@ const columns = defineTableColumns<OutboundProxyRecord>([
 ])
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
-const form = reactive({ name: '', proxyUrl: '', autoLocation: false, locationEnabled: false, location: defaultRequestLocation() })
+const form = reactive({ name: '', proxyUrl: '', maxWebsocketConnections: 0, autoLocation: false, locationEnabled: false, location: defaultRequestLocation() })
 const saveAction = useAsyncAction()
 const { loading: saving } = saveAction
 const deleteAction = useAsyncAction()
@@ -62,19 +65,67 @@ const formTestAction = useAsyncAction()
 const testingForm = computed(() => formTestAction.loading.value || (editing.value !== null && testingIds.value.has(editing.value.id)))
 const showAccounts = shallowRef(false)
 const inspected = shallowRef<OutboundProxyRecord | null>(null)
+const showBatchCreate = ref(false)
+const selected = ref(new Map<string, OutboundProxyRecord>())
+const batchTesting = ref(false)
+const batchResults = ref<string[]>([])
+const allSelected = computed(() => proxies.value.length > 0 && proxies.value.every(proxy => selected.value.has(proxy.id)))
+watch(proxies, (items) => {
+  for (const item of items) {
+    if (selected.value.has(item.id))
+      selected.value.set(item.id, item)
+  }
+})
+function select(proxy: OutboundProxyRecord, value: boolean) {
+  if (value)
+    selected.value.set(proxy.id, proxy)
+  else
+    selected.value.delete(proxy.id)
+}
+function selectPage(value: boolean) {
+  for (const proxy of proxies.value)
+    select(proxy, value)
+}
+async function testSelected() {
+  if (batchTesting.value || !selected.value.size)
+    return
+  if (selected.value.size > 100) {
+    toast.warning('一次最多测试 100 条代理')
+    return
+  }
+  const targets = [...selected.value.values()]
+  batchTesting.value = true
+  batchResults.value = []
+  try {
+    const results = await testProxyBatch(targets.map(({ id, revision }) => ({ id, revision })))
+    batchResults.value = results.map((result, index) => {
+      if (result.status === 'succeeded') {
+        selected.value.set(result.data.id, result.data)
+        return `${targets[index]?.name}：${result.data.lastTest?.success ? '连接成功' : result.data.lastTest?.message || '测试失败'}`
+      }
+      return `${targets[index]?.name}：${result.status === 'failed' ? result.message : '未执行'}`
+    })
+  }
+  catch { batchResults.value = ['批量测试结果未确认，请刷新列表查看'] }
+  finally {
+    batchTesting.value = false
+    await query.execute({ silent: true })
+  }
+}
 
 function openForm(proxy: OutboundProxyRecord | null = null) {
   editing.value = proxy
   form.name = proxy?.name ?? ''
   form.proxyUrl = ''
   form.autoLocation = proxy?.autoLocation ?? false
+  form.maxWebsocketConnections = proxy?.maxWebsocketConnections ?? 0
   form.locationEnabled = Boolean(proxy?.requestLocation)
   form.location = proxy?.requestLocation ? { ...proxy.requestLocation } : defaultRequestLocation()
   showForm.value = true
 }
 
 async function checkProxy(proxy: OutboundProxyRecord) {
-  if (testingIds.value.has(proxy.id) || updatingIds.value.has(proxy.id))
+  if (batchTesting.value || testingIds.value.has(proxy.id) || updatingIds.value.has(proxy.id))
     return
   testingIds.value.add(proxy.id)
   try {
@@ -124,6 +175,10 @@ async function save() {
     return
   const name = form.name.trim()
   const proxyUrl = form.proxyUrl.trim()
+  if (!Number.isInteger(form.maxWebsocketConnections) || form.maxWebsocketConnections < 0 || form.maxWebsocketConnections > 4_294_967_295) {
+    toast.warning('WS 连接上限须为非负整数')
+    return
+  }
   if (!name || (!editing.value && !proxyUrl)) {
     toast.warning('请填写代理名称和连接地址')
     return
@@ -132,8 +187,8 @@ async function save() {
     const requestLocation = form.locationEnabled ? { ...form.location } : null
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
     const result = await (editing.value
-      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, autoLocation: form.autoLocation, requestLocation })
-      : createProxy({ name, proxyUrl, autoLocation: form.autoLocation, requestLocation }))
+      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, maxWebsocketConnections: form.maxWebsocketConnections, autoLocation: form.autoLocation, requestLocation })
+      : createProxy({ name, proxyUrl, maxWebsocketConnections: form.maxWebsocketConnections, autoLocation: form.autoLocation, requestLocation }))
     showForm.value = false
     toast.success('代理已保存')
     if (result.record.autoLocation && result.record.lastTest) {
@@ -189,6 +244,7 @@ async function confirmDelete() {
     return
   await deleteAction.run(async () => {
     await deleteProxy({ id: proxy.id, revision: proxy.revision })
+    selected.value.delete(proxy.id)
     showDelete.value = false
     await query.execute()
     toast.success('代理已删除')
@@ -235,7 +291,20 @@ onMounted(() => void query.execute())
               <Search class="size-4.5 text-cp-text-tertiary" />
             </template>
           </BaseInput>
-          <div class="flex shrink-0 items-center justify-end gap-2 sm:ml-auto">
+          <div class="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:ml-auto">
+            <BaseButton :disabled="!selected.size || testingIds.size > 0 || updatingIds.size > 0" :loading="batchTesting" @click="testSelected">
+              <template #icon>
+                <Wifi class="size-4" />
+              </template>测试所选 ({{ selected.size }})
+            </BaseButton>
+            <BaseIconButton v-if="selected.size" label="清除代理选择" :disabled="batchTesting" @click="selected.clear()">
+              <X class="size-4" />
+            </BaseIconButton>
+            <BaseButton :disabled="batchTesting" @click="showBatchCreate = true">
+              <template #icon>
+                <Plus class="size-4" />
+              </template>批量新增
+            </BaseButton>
             <BaseIconButton label="刷新代理列表" :loading="loading" @click="query.execute()">
               <RefreshCw class="size-4" />
             </BaseIconButton>
@@ -250,7 +319,18 @@ onMounted(() => void query.execute())
       </template>
       <template #body>
         <div class="flex h-full min-h-0 flex-col">
+          <div v-if="batchResults.length" role="status" class="max-h-36 shrink-0 overflow-auto text-cp-xs">
+            <p v-for="(result, index) in batchResults" :key="index">
+              {{ result }}
+            </p>
+          </div>
           <BaseTable class="min-h-0 flex-1" :columns="columns" :rows="proxies" :loading="loading" :empty-text="search.trim() ? '没有找到匹配的代理，请尝试其他名称' : '暂无代理，请点击新增代理添加'">
+            <template #header-selection>
+              <BaseCheckbox :model-value="allSelected" :disabled="batchTesting" label="选择当前页代理" @update:model-value="selectPage" />
+            </template>
+            <template #selection="{ row }">
+              <BaseCheckbox :model-value="selected.has(row.id)" :disabled="batchTesting" :label="`选择 ${row.name}`" @update:model-value="select(row, $event)" />
+            </template>
             <template #identity="{ row }">
               <div class="grid min-w-0 gap-1">
                 <strong class="truncate text-cp text-cp-text" :title="row.name">{{ row.name }}</strong>
@@ -302,27 +382,27 @@ onMounted(() => void query.execute())
             </template>
             <template #actions="{ row }">
               <div class="flex items-center gap-0.5">
-                <BaseIconButton size="sm" label="测试代理" :loading="testingIds.has(row.id)" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="checkProxy(row)">
+                <BaseIconButton size="sm" label="测试代理" :loading="testingIds.has(row.id)" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="checkProxy(row)">
                   <Wifi class="size-3.5 text-cp-link" />
                 </BaseIconButton>
-                <BaseIconButton size="sm" label="编辑代理" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="openForm(row)">
+                <BaseIconButton size="sm" label="编辑代理" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="openForm(row)">
                   <Pencil class="size-3.5 text-cp-link" />
                 </BaseIconButton>
                 <BasePopover placement="bottom-end">
                   <template #trigger="{ open }">
-                    <BaseIconButton size="sm" label="更多代理操作" :aria-expanded="open" :loading="updatingIds.has(row.id)" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)">
+                    <BaseIconButton size="sm" label="更多代理操作" :aria-expanded="open" :loading="updatingIds.has(row.id)" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)">
                       <MoreHorizontal class="size-3.5" />
                     </BaseIconButton>
                   </template>
                   <template #default="{ close }">
                     <div class="w-44 p-1">
-                      <BaseMenuItem :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), toggleEnabled(row))">
+                      <BaseMenuItem :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), toggleEnabled(row))">
                         <template #icon>
                           <Power class="size-3.5" :class="row.enabled ? 'text-cp-warning' : 'text-cp-success'" />
                         </template>
                         {{ row.enabled ? '禁用代理' : '启用代理' }}
                       </BaseMenuItem>
-                      <BaseMenuItem tone="destructive" :disabled="testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), requestDelete(row))">
+                      <BaseMenuItem tone="destructive" :disabled="batchTesting || testingIds.has(row.id) || updatingIds.has(row.id)" @click="(close(), requestDelete(row))">
                         <template #icon>
                           <Trash2 class="size-3.5" />
                         </template>
@@ -343,6 +423,7 @@ onMounted(() => void query.execute())
       v-model="showForm"
       v-model:name="form.name"
       v-model:proxy-url="form.proxyUrl"
+      v-model:max-websocket-connections="form.maxWebsocketConnections"
       v-model:auto-location="form.autoLocation"
       v-model:location-enabled="form.locationEnabled"
       v-model:location="form.location"
@@ -353,6 +434,7 @@ onMounted(() => void query.execute())
       @save="save"
       @test="testConnection"
     />
+    <ProxyBatchCreateModal v-if="showBatchCreate" v-model="showBatchCreate" @created="query.execute({ silent: true })" />
     <BaseConfirmModal v-model="showDelete" title="删除代理" destructive :loading="deleting" @confirm="confirmDelete">
       <p class="m-0">
         确定删除“{{ pendingDelete?.name }}”吗？
