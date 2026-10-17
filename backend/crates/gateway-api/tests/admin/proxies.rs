@@ -26,6 +26,66 @@ fn missing() -> AdminStoreError {
     AdminStoreError::new(AdminStoreErrorKind::NotFound, "proxy", "missing proxy")
 }
 
+#[tokio::test]
+async fn proxy_batches_keep_partial_results_and_never_echo_credentials() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let payload = json!([
+        {"name":"bad","proxyUrl":"ftp://private:credential-marker@proxy.example:80"},
+        {"name":"valid","proxyUrl":"http://private:credential-marker@proxy.example:80","maxWebsocketConnections":7}
+    ]);
+    assert_eq!(
+        request(
+            &fixture,
+            "/api/admin/proxies/create-batch",
+            Some(payload.clone()),
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, response) = request(
+        &fixture,
+        "/api/admin/proxies/create-batch",
+        Some(payload),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["data"][0]["status"], "failed");
+    assert_eq!(response["data"][1]["status"], "succeeded");
+    assert_eq!(
+        response["data"][1]["data"]["record"]["maxWebsocketConnections"],
+        7
+    );
+    assert!(!response.to_string().contains("credential-marker"));
+    assert_eq!(
+        request(
+            &fixture,
+            "/api/admin/proxies/test-batch",
+            Some(json!([
+                {"id":"proxy_test","revision":1},{"id":"proxy_test","revision":1}
+            ])),
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        request(
+            &fixture,
+            "/api/admin/proxies/create-batch",
+            Some(json!([])),
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
 #[async_trait]
 impl ProxyStore for MemoryProxies {
     async fn remove_account(
@@ -163,7 +223,11 @@ impl ProxyStore for MemoryProxies {
             record.auto_location = enabled;
         }
         if let Some(proxy) = command.proxy {
-            record.proxy = proxy;
+            record.proxy =
+                proxy.with_max_websocket_connections(record.proxy.max_websocket_connections());
+        }
+        if let Some(limit) = command.max_websocket_connections {
+            record.proxy = record.proxy.clone().with_max_websocket_connections(limit);
         }
         if let Some(test) = command.test {
             record.detected_location = record.detected_location_after_test(&test);

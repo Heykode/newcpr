@@ -32,6 +32,9 @@ export interface AutoResetConfig {
   enabled: boolean
   fiveHourUsedMillis: number
   sevenDayUsedMillis: number
+  expiryEnabled: boolean
+  expiryLeadMinutes: number
+  maxWeeklyRemainingPercent: number | null
 }
 export interface AutoResetPolicy {
   accountId: string

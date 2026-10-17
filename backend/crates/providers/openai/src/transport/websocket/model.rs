@@ -8,7 +8,7 @@ use crate::transport::protocol::responses::{
 };
 
 /// WebSocket opening 描述。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CodexWebSocketConnection {
     pub(crate) session_proxy: Option<crate::transport::session_proxy::SessionProxyHold>,
     pub(crate) outbound_proxy: Option<gateway_core::account::OutboundProxy>,
@@ -16,6 +16,18 @@ pub struct CodexWebSocketConnection {
     pub(super) endpoint: String,
     pub(super) headers: Vec<(String, String)>,
 }
+
+impl PartialEq for CodexWebSocketConnection {
+    fn eq(&self, other: &Self) -> bool {
+        self.session_proxy == other.session_proxy
+            && self.egress_source == other.egress_source
+            && self.endpoint == other.endpoint
+            && self.headers == other.headers
+            && self.outbound_proxy.as_ref().map(|p| p.expose_url())
+                == other.outbound_proxy.as_ref().map(|p| p.expose_url())
+    }
+}
+impl Eq for CodexWebSocketConnection {}
 
 /// 已构造完成的 Responses WebSocket 请求描述。
 #[derive(Debug, Clone, PartialEq, Eq)]

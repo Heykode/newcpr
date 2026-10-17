@@ -9,6 +9,7 @@ import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
+import BaseNumberInput from '@/components/base/BaseNumberInput.vue'
 import BaseSwitch from '@/components/base/BaseSwitch.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
 import { proxyLocationMessage } from '../utils/location'
@@ -25,6 +26,7 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ required: true })
 const name = defineModel<string>('name', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const maxWebsocketConnections = defineModel<number>('maxWebsocketConnections', { required: true })
 const autoLocation = defineModel<boolean>('autoLocation', { required: true })
 const locationEnabled = defineModel<boolean>('locationEnabled', { required: true })
 const location = defineModel<RequestLocation>('location', { required: true })
@@ -68,6 +70,7 @@ watch(open, (isOpen) => {
         将更新 {{ proxy.accountCount }} 个关联账号的出口。
       </p>
       <BaseSwitch v-model="autoLocation" label="自动出口地区（地区总开关开启时生效）" show-label :disabled="busy" />
+      <BaseNumberInput v-model="maxWebsocketConnections" label="代理 WebSocket 总连接上限（0 不限）" :min="0" :max="4294967295" :step="1" :disabled="busy" />
       <p v-if="autoLocation && proxy?.autoLocation" class="m-0 break-words text-cp-sm text-cp-text-secondary">
         {{ proxyLocationMessage(proxy) }}
       </p>

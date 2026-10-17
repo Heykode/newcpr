@@ -7,6 +7,16 @@ pub struct AutoResetConfig {
     pub enabled: bool,
     pub five_hour_used_millis: u32,
     pub seven_day_used_millis: u32,
+    #[serde(default)]
+    pub expiry_enabled: bool,
+    #[serde(default = "default_expiry_lead_minutes")]
+    pub expiry_lead_minutes: u32,
+    #[serde(default)]
+    pub max_weekly_remaining_percent: Option<u8>,
+}
+
+fn default_expiry_lead_minutes() -> u32 {
+    10
 }
 
 impl Default for AutoResetConfig {
@@ -15,12 +25,22 @@ impl Default for AutoResetConfig {
             enabled: false,
             five_hour_used_millis: 100_000,
             seven_day_used_millis: 100_000,
+            expiry_enabled: false,
+            expiry_lead_minutes: default_expiry_lead_minutes(),
+            max_weekly_remaining_percent: None,
         }
     }
 }
 
 impl AutoResetConfig {
     pub fn validate(&self) -> Result<(), AdminError> {
+        if !(1..=1440).contains(&self.expiry_lead_minutes)
+            || self.max_weekly_remaining_percent.is_some_and(|n| n > 100)
+        {
+            return Err(AdminError::invalid(
+                "到期提前量须为 1 至 1440 分钟，周剩余额度须为 0 至 100%",
+            ));
+        }
         if [self.five_hour_used_millis, self.seven_day_used_millis]
             .into_iter()
             .any(|n| n != 0 && !(100..=100_000).contains(&n))
@@ -85,8 +105,47 @@ impl AutoResetConfig {
             started_at,
             triggered,
             all_below,
+            expiry_triggered: false,
+            inventory: None,
+            weekly_condition_met: self.max_weekly_remaining_percent.is_none_or(|limit| {
+                let windows: Vec<_> = quota
+                    .windows
+                    .iter()
+                    .filter(|window| {
+                        window.window_seconds == Some(604_800)
+                            && window.local_usage_attribution
+                                == QuotaLocalUsageAttribution::AccountWide
+                    })
+                    .collect();
+                windows.len() == 1
+                    && windows[0].used_percent.is_some_and(|used| {
+                        used.is_finite()
+                            && (0.0..=100.0).contains(&used)
+                            && 100.0 - used <= f64::from(limit)
+                            && windows[0].reset_at.is_some_and(|reset| reset > now)
+                    })
+            }),
         })
     }
+
+    pub fn expiry_due(
+        &self,
+        credit: &super::super::provider_credentials::ProviderResetCredit,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.expiry_enabled
+            && credit.expires_at.is_some_and(|at| {
+                at > now
+                    && at <= now + chrono::Duration::minutes(i64::from(self.expiry_lead_minutes))
+            })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoResetInventory {
+    pub checked_at: DateTime<Utc>,
+    pub credit: Option<super::super::provider_credentials::ProviderResetCredit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +163,7 @@ pub struct AutoResetCheck {
     pub policy: AutoResetPolicy,
     pub claim_id: Uuid,
     pub started_at: DateTime<Utc>,
+    pub inventory: Option<AutoResetInventory>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +180,16 @@ pub struct AutoResetObservation {
     pub observed_at: DateTime<Utc>,
     pub triggered: Vec<AutoResetWindow>,
     pub all_below: bool,
+    #[serde(default)]
+    pub expiry_triggered: bool,
+    #[serde(default)]
+    pub inventory: Option<AutoResetInventory>,
+    #[serde(default = "default_weekly_condition")]
+    pub weekly_condition_met: bool,
+}
+
+fn default_weekly_condition() -> bool {
+    true
 }
 
 impl AutoResetObservation {

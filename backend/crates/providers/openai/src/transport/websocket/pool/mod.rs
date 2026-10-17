@@ -4,6 +4,9 @@ mod capacity;
 mod lease;
 #[cfg(test)]
 mod lifecycle_tests;
+pub(crate) mod proxy_capacity;
+#[cfg(test)]
+mod proxy_capacity_tests;
 mod state;
 mod supervisor;
 #[cfg(test)]

@@ -419,7 +419,7 @@ impl ResetCreditsStore for PgResetCreditsStore {
                 && i.status == ResetItemStatus::Running
         }) {
             item.updated_at = Utc::now();
-            sqlx::query("update account_auto_reset_policies p set message=$2 from account_auto_reset_jobs j
+            sqlx::query("update account_auto_reset_policies p set message=$2,inventory=null from account_auto_reset_jobs j
                 where j.request_id=$1 and p.account_id=j.account_id and p.revision=j.policy_revision")
                 .bind(item.redeem_request_id).bind(&item.message).execute(&mut *tx).await.map_err(unavailable)?;
             *current = item;

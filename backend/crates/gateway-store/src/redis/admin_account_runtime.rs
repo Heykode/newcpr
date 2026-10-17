@@ -40,6 +40,20 @@ impl RedisAdminAccountRuntimeStore {
 
 #[async_trait]
 impl AccountRuntimeStore for RedisAdminAccountRuntimeStore {
+    async fn concurrency(
+        &self,
+        account_id: &str,
+        pool: gateway_admin::model::accounts::AccountConcurrencyPool,
+        page: u32,
+        page_size: u32,
+    ) -> AdminStoreResult<Option<gateway_admin::model::accounts::AccountConcurrencyPage>> {
+        self.leases
+            .concurrency_page(account_id, pool, page, page_size)
+            .await
+            .map(Some)
+            .map_err(|error| crate::admin_store_error("account concurrency", error))
+    }
+
     async fn client_in_flight(
         &self,
         client_key_ids: &[String],

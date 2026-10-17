@@ -112,6 +112,7 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
     /// 本端点的上游模型；提供后按账号模型权限过滤候选（如 live 语音）。
     pub upstream_model: Option<&'a str>,
     pub image_request: bool,
+    pub search_request: bool,
     /// 本端点只接受 OAuth 凭据时排除 API Key 账号，避免混合池选中后必然失败。
     pub requires_oauth: bool,
 }
@@ -119,6 +120,7 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
 struct CredentialSelectionInput<'a> {
     upstream_model: Option<&'a str>,
     image_request: bool,
+    search_request: bool,
     requires_oauth: bool,
     request_url: &'a Url,
     attempt: &'a AttemptContext,
@@ -154,6 +156,23 @@ impl CredentialSelectionInput<'_> {
 pub(crate) struct CodexCyberPolicyScope {
     key: ProviderSessionAffinityKey,
     state: Option<ProviderSessionExclusions>,
+}
+
+fn session_policy_excludes_all(
+    scope: Option<&CodexCyberPolicyScope>,
+    candidates: &[AccountCandidate],
+    pinned: Option<&ProviderAccountId>,
+) -> bool {
+    let Some(state) = scope.and_then(|scope| scope.state.as_ref()) else {
+        return false;
+    };
+    let mut effective = candidates
+        .iter()
+        .filter(|candidate| pinned.is_none_or(|id| candidate.account.id() == id));
+    effective.next().is_some_and(|first| {
+        state.excluded_accounts().contains(first.account.id())
+            && effective.all(|candidate| state.excluded_accounts().contains(candidate.account.id()))
+    })
 }
 
 pub struct CodexCredentialSelector {
@@ -386,7 +405,10 @@ impl CodexCredentialSelector {
                     )))
             && (request.attempt.is_diagnostic_required_account()
                 || request.attempt.account_scope().is_some_and(|scope| {
-                    match (request.image_request, request.upstream_model) {
+                    match (
+                        request.image_request || request.search_request,
+                        request.upstream_model,
+                    ) {
                         (_, Some(model)) => scope.allows_model(account.id(), model),
                         (true, None) => {
                             scope.allows(account.id())
@@ -424,6 +446,7 @@ impl CodexCredentialSelector {
         let input = CredentialSelectionInput {
             upstream_model: Some(request.upstream_model),
             image_request: false,
+            search_request: false,
             requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
@@ -443,6 +466,7 @@ impl CodexCredentialSelector {
         let input = CredentialSelectionInput {
             upstream_model: Some(request.upstream_model),
             image_request: false,
+            search_request: false,
             requires_oauth: false,
             request_url: request.request_url,
             attempt: request.attempt,
@@ -464,6 +488,7 @@ impl CodexCredentialSelector {
         let input = CredentialSelectionInput {
             upstream_model: request.upstream_model,
             image_request: request.image_request,
+            search_request: request.search_request,
             requires_oauth: request.requires_oauth,
             request_url: request.request_url,
             attempt: request.attempt,
@@ -791,6 +816,12 @@ impl CodexCredentialSelector {
                     })
                 } else if quota_exhausted {
                     Err(CredentialSelectionError::QuotaExhausted)
+                } else if session_policy_excludes_all(
+                    cyber_policy_scope.as_ref(),
+                    &candidates,
+                    pinned_account.as_ref(),
+                ) {
+                    Err(CredentialSelectionError::SessionPolicyRestricted)
                 } else {
                     Err(CredentialSelectionError::NoEligibleCredential)
                 };
@@ -838,6 +869,7 @@ impl CodexCredentialSelector {
                         request.attempt.deadline(),
                     )
                     .with_cancellation(request.attempt.cancellation().clone())
+                    .with_detail(request.attempt.lease_detail(request.upstream_model))
                     .with_quality_check(quality)
                     .with_concurrency_pool(request.concurrency_pool()),
                 ))
@@ -2065,6 +2097,8 @@ pub enum CredentialSelectionError {
     },
     #[error("no eligible Codex account")]
     NoEligibleCredential,
+    #[error("upstream safety policy temporarily excludes accounts for this session")]
+    SessionPolicyRestricted,
     #[error("all eligible Codex accounts have exhausted their quota")]
     QuotaExhausted,
     #[error("Codex account capacity is unavailable")]

@@ -33,6 +33,7 @@ const props = withDefaults(
     /** 包含 hover 的触发方式打开弹窗的延迟（毫秒）；click 触发不生效。 */
     hoverDelay?: number
     anchorElement?: HTMLElement | null
+    hoverElement?: HTMLElement | null
     animatePosition?: boolean
     /** 箭头贴合不同内容边缘时使用的表面类；字符串表示所有边缘共用。 */
     arrowSurfaceClass?: PopoverArrowSurfaceClass
@@ -44,6 +45,7 @@ const props = withDefaults(
     disabled: false,
     hoverDelay: 400,
     anchorElement: null,
+    hoverElement: null,
     animatePosition: false,
   },
 )
@@ -356,7 +358,10 @@ watch(
   },
 )
 
-onClickOutside(rootRef, closePopover, { ignore: [popoverRef] })
+const externalHover = computed(() => props.hoverElement)
+onClickOutside(rootRef, closePopover, { ignore: [popoverRef, externalHover] })
+useEventListener(externalHover, ['mouseenter', 'focusin'], clearHoverCloseTimer)
+useEventListener(externalHover, ['mouseleave', 'focusout'], handleHoverLeave)
 useEventListener(rootRef, 'click', (event) => {
   event.stopPropagation()
   togglePopover()

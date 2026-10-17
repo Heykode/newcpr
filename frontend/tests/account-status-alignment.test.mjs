@@ -184,8 +184,8 @@ for (const state of states) {
       )
       for (const html of [left, center]) {
         assert.ok(inlineMark(html).includes(state.text), html)
-        assert.ok(html.includes(`size-1.5 rounded-full ${state.dot}`), html)
-        assert.ok(html.includes(`<span>${state.label}</span>`), html)
+        assert.doesNotMatch(html, /size-1\.5 rounded-full/, 'plain status text has no decorative dot')
+        assert.ok(html.includes(`>${state.label}</span>`), html)
         assert.match(html, /data-popover-trigger="hover-click"/)
         assert.match(html, /data-popover-placement="top-start"/)
         assert.ok(html.includes(`data-popover-disabled="${!state.detail}"`), html)

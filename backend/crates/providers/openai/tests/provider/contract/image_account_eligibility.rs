@@ -20,6 +20,91 @@ fn image_scope(id: &str, access: AccountModelAccess) -> Arc<FrozenAccountScope> 
 }
 
 #[tokio::test]
+async fn standalone_search_checks_model_access_without_rewriting_payload() {
+    for (body, access, allowed) in [
+        (
+            &br#"{"model":"gpt-search","commands":{}}"#[..],
+            AccountModelAccess::new(
+                AccountModelAccessMode::Allowlist,
+                vec!["gpt-search".to_owned()],
+            )
+            .unwrap(),
+            true,
+        ),
+        (
+            &br#"{"model":"other","commands":{}}"#[..],
+            AccountModelAccess::new(
+                AccountModelAccessMode::Allowlist,
+                vec!["gpt-search".to_owned()],
+            )
+            .unwrap(),
+            false,
+        ),
+        (
+            &br#"{"commands":{}}"#[..],
+            AccountModelAccess::new(
+                AccountModelAccessMode::Denylist,
+                vec!["gpt-search".to_owned()],
+            )
+            .unwrap(),
+            false,
+        ),
+        (
+            &br#"{"model":"gpt-search","model":"other","commands":{}}"#[..],
+            AccountModelAccess::new(
+                AccountModelAccessMode::Allowlist,
+                vec!["gpt-search".to_owned()],
+            )
+            .unwrap(),
+            false,
+        ),
+        (
+            &br#"{"commands":{},"future":1,"future":2}"#[..],
+            AccountModelAccess::all(),
+            true,
+        ),
+    ] {
+        let store = Arc::new(MemoryAccountStore::default());
+        create_account(&store, "acct_search_access").await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/codex/alpha/search"))
+            .and(body_bytes(body.to_vec()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"output":"ok"})))
+            .expect(u64::from(allowed))
+            .mount(&server)
+            .await;
+        let result = provider_with_base_url(&store, server.uri())
+            .execute(
+                planned_provider_endpoint_request(
+                    "openai",
+                    Operation::Search(StandaloneSearchRequest::from_raw_json(
+                        RawJsonPayload::new("openai", Bytes::from_static(body)).unwrap(),
+                    )),
+                ),
+                context_with_account_scope(
+                    "req_search_access",
+                    CancellationToken::new(),
+                    image_scope("acct_search_access", access),
+                ),
+            )
+            .await;
+        if allowed {
+            let mut stream = result.expect("allowed");
+            while let Some(event) = stream.next().await {
+                event.unwrap();
+            }
+        } else {
+            assert_eq!(
+                result.err().expect("denied").kind(),
+                ProviderErrorKind::NoEligibleAccount
+            );
+        }
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
 async fn free_oauth_account_cannot_send_native_image_request() {
     let store = Arc::new(MemoryAccountStore::default());
     let mut free = profile("acct_free_image");

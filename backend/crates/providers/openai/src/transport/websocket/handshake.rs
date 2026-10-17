@@ -107,11 +107,12 @@ pub(super) async fn connect_pumped_websocket(
     keepalive: PumpKeepalive,
     context: PumpLogContext,
     connection_budget: Option<&gateway_core::engine::connection::ConnectionBudget>,
+    proxy_permit: Option<super::pool::proxy_capacity::ProxyConnectionPermit>,
 ) -> Result<(PumpedWebSocket, WsResponse<Option<Vec<u8>>>), CodexWebSocketExchangeError> {
     let (raw, response) = connect_websocket(connection, connection_budget).await?;
     let compression_threshold = negotiated_compression_threshold(&response);
     Ok((
-        PumpedWebSocket::new(raw, keepalive, context, compression_threshold),
+        PumpedWebSocket::new(raw, keepalive, context, compression_threshold, proxy_permit),
         response,
     ))
 }

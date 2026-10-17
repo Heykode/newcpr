@@ -81,7 +81,7 @@ impl PgResetCreditsStore {
         }
         let identity = Self::identity(&mut tx, id).await?;
         sqlx::query("insert into account_auto_reset_policies(account_id,revision,config,identity) values($1,$2,$3,$4)
-            on conflict(account_id) do update set revision=$2,config=$3,identity=$4,next_check_at=now(),check_claim=null,check_until=null")
+            on conflict(account_id) do update set revision=$2,config=$3,identity=$4,next_check_at=now(),check_claim=null,check_until=null,inventory=null")
             .bind(id).bind(revision+1).bind(encode(&config)?).bind(identity).execute(&mut *tx).await.map_err(unavailable)?;
         Self::audit(&mut tx, context, "reset_credits.auto_policy", id).await?;
         let result = Self::read_auto(&mut tx, id).await?;
@@ -103,7 +103,7 @@ impl PgResetCreditsStore {
         let id: Option<String> = sqlx::query_scalar("select p.account_id from account_auto_reset_policies p
             join provider_accounts a on a.id=p.account_id
             where p.config->>'enabled'='true' and p.next_check_at<=now() and (p.check_until is null or p.check_until<=now())
-            and (p.config->>'fiveHourUsedMillis'<>'0' or p.config->>'sevenDayUsedMillis'<>'0')
+            and (p.config->>'fiveHourUsedMillis'<>'0' or p.config->>'sevenDayUsedMillis'<>'0' or p.config->>'expiryEnabled'='true')
             and a.provider_kind='openai' and a.authentication_kind='oauth' and a.responses_upstream='codex'
             and p.identity=jsonb_build_array(a.provider_kind,a.upstream_user_id,a.upstream_account_id,extract(epoch from a.created_at))
             and not exists(select 1 from account_reset_consumptions c where c.account_id=p.account_id and c.status in ('running','unknown'))
@@ -119,11 +119,19 @@ impl PgResetCreditsStore {
             check_until=now()+interval '120 seconds',next_check_at=now()+interval '60 seconds' where account_id=$1 returning now()")
             .bind(&id).bind(claim_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
         let policy = Self::read_auto(&mut tx, &id).await?;
+        let inventory: Option<Value> = sqlx::query_scalar(
+            "select inventory from account_auto_reset_policies where account_id=$1",
+        )
+        .bind(&id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         Ok(Some(AutoResetCheck {
             policy,
             claim_id,
             started_at,
+            inventory: inventory.map(decode).transpose()?,
         }))
     }
 
@@ -150,6 +158,16 @@ impl PgResetCreditsStore {
         let mut previous: Vec<AutoResetWindow> = decode(last_trigger)?;
         let mut message = message.to_owned();
         if let Some(observation) = observation {
+            if let Some(inventory) = observation.inventory.as_ref() {
+                sqlx::query(
+                    "update account_auto_reset_policies set inventory=$2 where account_id=$1",
+                )
+                .bind(id)
+                .bind(encode(inventory)?)
+                .execute(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+            }
             let blocked: bool = sqlx::query_scalar(
                 "select exists(select 1 from account_reset_consumptions where account_id=$1
                 and (status in ('running','unknown') or updated_at >= $2))",
@@ -165,11 +183,13 @@ impl PgResetCreditsStore {
                 && Utc::now() - observation.observed_at <= Duration::seconds(90);
             if blocked || !fresh {
                 message = "额度观测已失效或有其他重置操作，本次未消费".into();
-            } else if observation.all_below {
+            } else if !observation.weekly_condition_met {
+                message = "周剩余额度高于设定值，本次未消费".into();
+            } else if observation.all_below && !observation.expiry_triggered {
                 previous.clear();
-            } else if observation.overlaps(&previous) {
+            } else if observation.overlaps(&previous) && !observation.expiry_triggered {
                 message = "等待已重置窗口的新用量，未重复消费".into();
-            } else if !observation.triggered.is_empty()
+            } else if (!observation.triggered.is_empty() || observation.expiry_triggered)
                 && let Some(credit) = credit
             {
                 let now = Utc::now();
@@ -242,10 +262,12 @@ impl PgResetCreditsStore {
             || policy.revision != revision
             || !Self::auto_eligible(tx, &id).await?
             || Utc::now() - observation.observed_at > Duration::seconds(90)
-            || observation
-                .triggered
-                .iter()
-                .any(|w| w.reset_at <= Utc::now())
+            || !observation.weekly_condition_met
+            || (!observation.expiry_triggered
+                && observation
+                    .triggered
+                    .iter()
+                    .any(|w| w.reset_at <= Utc::now()))
         {
             return Err(conflict("自动重置授权或额度观测已失效，本次未消费"));
         }

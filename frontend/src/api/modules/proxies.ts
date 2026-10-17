@@ -37,6 +37,7 @@ export interface DetectedProxyLocation {
 }
 
 export interface OutboundProxyRecord {
+  maxWebsocketConnections: number
   enabled: boolean
   autoLocation?: boolean
   detectedLocation?: DetectedProxyLocation | null
@@ -99,6 +100,16 @@ interface ProxyMutation {
   configRevision: number
 }
 
+export type ProxyBatchResult<T> = { status: 'succeeded', data: T } | { status: 'failed', message: string } | { status: 'skipped' }
+
+export function createProxyBatch(data: { name: string, proxyUrl: string }[]) {
+  return request<ProxyBatchResult<ProxyMutation>[]>({ url: '/api/admin/proxies/create-batch', method: 'POST', data, timeout: 0 })
+}
+
+export function testProxyBatch(data: { id: string, revision: number }[]) {
+  return request<ProxyBatchResult<OutboundProxyRecord>[]>({ url: '/api/admin/proxies/test-batch', method: 'POST', data, timeout: 0 })
+}
+
 export function getProxies(params: { page: number, pageSize: number, search?: string }, options: RequestOptions = {}) {
   return request<ProxyPage>({
     url: '/api/admin/proxies',
@@ -108,7 +119,7 @@ export function getProxies(params: { page: number, pageSize: number, search?: st
   })
 }
 
-export function createProxy(data: { name: string, proxyUrl: string, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
+export function createProxy(data: { name: string, proxyUrl: string, maxWebsocketConnections?: number, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/create',
     method: 'POST',
@@ -118,7 +129,7 @@ export function createProxy(data: { name: string, proxyUrl: string, autoLocation
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, enabled?: boolean, proxyUrl?: string, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
+export function updateProxy(data: { id: string, revision: number, name: string, enabled?: boolean, proxyUrl?: string, maxWebsocketConnections?: number, autoLocation?: boolean, requestLocation?: RequestLocation | null }, options: RequestOptions = {}) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     method: 'POST',
@@ -152,6 +163,15 @@ export function probeProxy(data: { proxyUrl: string, detectLocation?: boolean },
     url: '/api/admin/proxies/probe',
     method: 'POST',
     data,
+    timeout: 25000,
+    ...options,
+  })
+}
+
+export function probeDirectLocation(options: RequestOptions = {}) {
+  return request<OutboundProxyTest>({
+    url: '/api/admin/proxies/probe-direct',
+    method: 'POST',
     timeout: 25000,
     ...options,
   })

@@ -1,5 +1,117 @@
 [
   {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 35,
+    "file_sha256": "0659b4b1f1c8a75dc40e868c5f19d3f76435de37a49c8772ebcb65f413e498a1",
+    "line_sha256": "67a2d50bb2845a354154b03afae3748669dd1152f0c944342ec3c3bef3ce984f",
+    "reason": "Manually reviewed batch-create redaction fixture: reserved proxy.example domain and explicit credential-marker, handled by MemoryProxies without a network connection."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 379,
+    "file_sha256": "0659b4b1f1c8a75dc40e868c5f19d3f76435de37a49c8772ebcb65f413e498a1",
+    "line_sha256": "a64a4ebd4745816bca847998941cb69d613488075fddc35523e9618944445362",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 439,
+    "file_sha256": "0659b4b1f1c8a75dc40e868c5f19d3f76435de37a49c8772ebcb65f413e498a1",
+    "line_sha256": "68c0f9074b2a4b0317d8586a6524a6153303a423e298086c96185772796837d3",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 638,
+    "file_sha256": "0659b4b1f1c8a75dc40e868c5f19d3f76435de37a49c8772ebcb65f413e498a1",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 679,
+    "file_sha256": "0659b4b1f1c8a75dc40e868c5f19d3f76435de37a49c8772ebcb65f413e498a1",
+    "line_sha256": "b2d2a8562a4ed48e58c93460d8667865b9a7e1df7b2416d42095ce76b8078f54",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 785,
+    "file_sha256": "0659b4b1f1c8a75dc40e868c5f19d3f76435de37a49c8772ebcb65f413e498a1",
+    "line_sha256": "6ca8102fb3d417f5b9c43b2b86187c41e05688ea3a984cfa48578f057c3e4d93",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-api/tests/admin/proxies.rs",
+    "rule": "authenticated-url",
+    "line": 888,
+    "file_sha256": "0659b4b1f1c8a75dc40e868c5f19d3f76435de37a49c8772ebcb65f413e498a1",
+    "line_sha256": "c36a0dbdd71274dfb45379085d8b6535806e84789a7edb39c1c60e508b0a311b",
+    "reason": "Manually re-reviewed existing synthetic proxy.example credentials in the in-memory admin API and probe fixtures after batch API tests shifted their lines; no production endpoint or credential."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 54,
+    "file_sha256": "5faeddac5c832fe99b7572057b0334ef3f2a3a598732b3b399d021b3c43e12e2",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Manually re-reviewed user/password test credentials against the ephemeral local MockServer; the dynamic address is a loopback test listener."
+  },
+  {
+    "path": "backend/crates/gateway-host/tests/proxy_probe.rs",
+    "rule": "authenticated-url",
+    "line": 223,
+    "file_sha256": "5faeddac5c832fe99b7572057b0334ef3f2a3a598732b3b399d021b3c43e12e2",
+    "line_sha256": "3f38fe650b6ee1a2a780c28e6a85fc7f3944ed5a6d440efba94da0db6a8757b5",
+    "reason": "Manually re-reviewed user/password test credentials against the ephemeral local MockServer; the dynamic address is a loopback test listener."
+  },
+  {
+    "path": "backend/crates/providers/openai/src/transport/websocket/pool/lifecycle_tests.rs",
+    "rule": "authenticated-url",
+    "line": 157,
+    "file_sha256": "cd4c34b28873ccdbdbe9e8f6bfd88d018a2ab00d8fc33e83fc78c0c3ffcb7aac",
+    "line_sha256": "875e8b1086e7a4c097fa37de7f9f09d2077cca7ee7a8d9b5e23bdad3d272880d",
+    "reason": "Manually reviewed newly generated UUID and literal test password on loopback, used as isolated proxy capacity identities in socket lifetime tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/src/transport/websocket/pool/lifecycle_tests.rs",
+    "rule": "authenticated-url",
+    "line": 189,
+    "file_sha256": "cd4c34b28873ccdbdbe9e8f6bfd88d018a2ab00d8fc33e83fc78c0c3ffcb7aac",
+    "line_sha256": "982e19cc84707f4b99caf4f6226319e49b972d6f59e8ad261c0becf13602b301",
+    "reason": "Manually reviewed newly generated UUID and literal test password on loopback, used as isolated proxy capacity identities in socket lifetime tests."
+  },
+  {
+    "path": "backend/crates/providers/openai/src/transport/websocket/pool/proxy_capacity_tests.rs",
+    "rule": "authenticated-url",
+    "line": 8,
+    "file_sha256": "0400bf5ddf6cb6456f1bfd15ebf5bc75be6b626e39fb6246d139dabe8ba3f40a",
+    "line_sha256": "91070a0dbd8054c95d97f545c5ead3fa5b988cf2c0c4c72112db4724ba30e23a",
+    "reason": "Manually reviewed random UUID and literal secret on loopback for in-memory capacity-key separation; these tests do not connect to that proxy."
+  },
+  {
+    "path": "frontend/src/views/proxies/components/ProxyBatchCreateModal.vue",
+    "rule": "authenticated-url",
+    "line": 47,
+    "file_sha256": "725f17dc3ea06f28a348b227bf826637773d1fed653a80494efddf2b0a551115",
+    "line_sha256": "82fc731755364738fe3026f8ee8478ab183ff960daf3b868f0cb739906355777",
+    "reason": "Manually reviewed generic URL syntax placeholder user:password@host:port; no saved value or actual credential."
+  },
+  {
+    "path": "frontend/tests/browser/upstream-v3291.mjs",
+    "rule": "authenticated-url",
+    "line": 114,
+    "file_sha256": "b387d48000dcb51d009e234d0a652b64ac0f6ab44759d410f9dad28ee5f87b3f",
+    "line_sha256": "e4c47e7b6836520a209b8cfff898defec6c2cf9e5417c490b84ac047ec726de5",
+    "reason": "Manually reviewed explicit synthetic credential and reserved proxy.example domain in a browser test whose business API is intercepted; no actual proxy connection."
+  },
+  {
     "path": "backend/crates/gateway-host/src/mihomo/diagnostics.rs",
     "rule": "non-example-ip",
     "line": 301,

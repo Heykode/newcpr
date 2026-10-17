@@ -466,6 +466,7 @@ impl ProviderAccountStateUpdate {
 
 pub(crate) const ACCOUNT_SELECT: &str = "select
             coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
@@ -478,6 +479,7 @@ pub(crate) const ACCOUNT_SELECT: &str = "select
 
 pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
             coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
@@ -492,6 +494,7 @@ pub(crate) const ACCOUNT_SELECT_BY_IDS: &str = "select
 
 pub(crate) const REFRESH_CANDIDATES_SELECT: &str = "select
             coalesce((select enabled from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), true) as outbound_proxy_enabled,
+            coalesce((select max_websocket_connections from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id), 0) as max_websocket_connections,
             (select case when auto_location then detected_location_json -> 'location' else request_location_json end from outbound_proxies where outbound_proxies.id = provider_accounts.outbound_proxy_id and enabled) as request_location_json,
             outbound_proxy_url, id, provider_kind, name, custom_name, email, upstream_user_id,
             upstream_account_id, plan_type, authentication_kind, provider_credentials_json, credential_revision, turn_state_binding_revision,
@@ -648,7 +651,10 @@ pub(crate) fn account_summary_from_row(
         .map(|value| value.0),
         outbound_proxy: get::<Option<String>>(&row, "outbound_proxy_url")?
             .map(|url| {
+                let limit = u32::try_from(get::<i64>(&row, "max_websocket_connections")?)
+                    .map_err(|_| invalid("invalid proxy websocket limit"))?;
                 gateway_core::account::OutboundProxy::parse(&url)
+                    .map(|proxy| proxy.with_max_websocket_connections(limit))
                     .map_err(|_| invalid("invalid outbound proxy"))
             })
             .transpose()?,

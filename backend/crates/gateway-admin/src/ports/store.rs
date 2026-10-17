@@ -342,6 +342,16 @@ pub trait AccountStore: Send + Sync {
 /// 可丢失账号运行态的管理读端口；跨存储编排由 Admin application service 拥有。
 #[async_trait]
 pub trait AccountRuntimeStore: Send + Sync {
+    async fn concurrency(
+        &self,
+        _account_id: &str,
+        _pool: crate::model::accounts::AccountConcurrencyPool,
+        _page: u32,
+        _page_size: u32,
+    ) -> AdminStoreResult<Option<crate::model::accounts::AccountConcurrencyPage>> {
+        Ok(None)
+    }
+
     async fn active_rate_limits(&self) -> AdminStoreResult<AccountRuntimeSnapshot>;
 
     async fn account_runtime(

@@ -4,6 +4,76 @@ use gateway_admin::model::{
     reset_credits::earliest_credit,
 };
 
+#[test]
+fn expiry_policy_is_opt_in_and_legacy_payload_keeps_existing_behavior() {
+    use gateway_admin::model::reset_credits::AutoResetConfig;
+    let legacy: AutoResetConfig = serde_json::from_value(serde_json::json!({
+        "enabled":true,"fiveHourUsedMillis":100000,"sevenDayUsedMillis":100000
+    }))
+    .unwrap();
+    assert!(!legacy.expiry_enabled);
+    assert_eq!(legacy.expiry_lead_minutes, 10);
+    assert_eq!(legacy.max_weekly_remaining_percent, None);
+    let now = Utc::now();
+    let mut credit = card("soon", 1, "codex");
+    credit.expires_at = Some(now + Duration::minutes(5));
+    assert!(!legacy.expiry_due(&credit, now));
+    let mut config = AutoResetConfig {
+        expiry_enabled: true,
+        ..legacy
+    };
+    assert!(config.expiry_due(&credit, now));
+    credit.expires_at = Some(now);
+    assert!(!config.expiry_due(&credit, now));
+    credit.expires_at = None;
+    assert!(!config.expiry_due(&credit, now));
+    for minutes in [0, 1441, u32::MAX] {
+        config.expiry_lead_minutes = minutes;
+        assert!(config.validate().is_err());
+    }
+}
+
+#[test]
+fn weekly_condition_requires_one_fresh_account_window() {
+    use gateway_admin::model::reset_credits::AutoResetConfig;
+    let config = AutoResetConfig {
+        max_weekly_remaining_percent: Some(20),
+        ..Default::default()
+    };
+    let now = Utc::now();
+    let mut quota = automatic_quota(now, 100.0, 80.0);
+    assert!(
+        config
+            .observation(&quota, now, now)
+            .unwrap()
+            .weekly_condition_met
+    );
+    quota.windows[1].used_percent = Some(79.99);
+    assert!(
+        !config
+            .observation(&quota, now, now)
+            .unwrap()
+            .weekly_condition_met
+    );
+    for used in [None, Some(f64::NAN), Some(101.0), Some(-1.0)] {
+        quota.windows[1].used_percent = used;
+        assert!(
+            !config
+                .observation(&quota, now, now)
+                .unwrap()
+                .weekly_condition_met
+        );
+    }
+    quota.windows[1].used_percent = Some(90.0);
+    quota.windows.push(quota.windows[1].clone());
+    assert!(
+        !config
+            .observation(&quota, now, now)
+            .unwrap()
+            .weekly_condition_met
+    );
+}
+
 fn card(id: &str, hours: i64, kind: &str) -> ProviderResetCredit {
     ProviderResetCredit {
         id: id.into(),
@@ -120,6 +190,7 @@ fn automatic_thresholds_are_default_off_exact_and_either_window_can_trigger() {
         enabled: true,
         five_hour_used_millis: 12_345,
         seven_day_used_millis: 100_000,
+        ..Default::default()
     };
     let now = Utc::now();
     let inspect = |short, long| {
@@ -135,6 +206,7 @@ fn automatic_thresholds_are_default_off_exact_and_either_window_can_trigger() {
         enabled: true,
         five_hour_used_millis: 0,
         seven_day_used_millis: 0,
+        ..Default::default()
     };
     assert!(
         config

@@ -238,6 +238,7 @@ where
             engine: Arc::clone(&self.engine),
             request_id,
             client_api_key_ref,
+            client_ip: request.client_ip,
             observation: ResponseObservation::new(timing_started_at),
             budget_prior_attempts_usd: Decimal::ZERO,
             budget_attempt_already_counted: false,
@@ -371,6 +372,7 @@ struct PendingAttemptRetry {
 /// API 只能提交下游 delivery 边界；账号重试、断流终结与
 /// `model_requests` 写回均留在本类型内。
 pub struct ResponseExecutionSession<S: ?Sized> {
+    client_ip: Option<std::net::IpAddr>,
     response_control: super::response_control::ResponseControl,
     engine: Arc<GatewayEngine<S>>,
     request_id: ModelRequestId,
@@ -1060,6 +1062,7 @@ where
         }
         let context = AttemptContext::new(
             RequestAttemptContext::new(self.request_id.clone(), self.client_api_key_ref.clone())
+                .with_client_ip(self.client_ip)
                 .with_connection_budget(self.connection_budget.clone())
                 .with_response_control(Some(self.response_control.clone()))
                 .with_provider_route(Arc::clone(
@@ -1178,13 +1181,14 @@ where
                             "accountWaitExhausted": self.account_wait_budget.is_exhausted(),
                         }),
                     );
-                    if !error.retry_is_prohibited()
-                        && matches!(
-                            error.kind(),
-                            ProviderErrorKind::AccountCapacityUnavailable
-                                | ProviderErrorKind::NoEligibleAccount
-                                | ProviderErrorKind::QuotaExhausted
-                        )
+                    if (error.kind() == ProviderErrorKind::SessionPolicyRestricted
+                        || (!error.retry_is_prohibited()
+                            && matches!(
+                                error.kind(),
+                                ProviderErrorKind::AccountCapacityUnavailable
+                                    | ProviderErrorKind::NoEligibleAccount
+                                    | ProviderErrorKind::QuotaExhausted
+                            )))
                         && let Some(last_failure) = self.last_retryable_failure.take()
                     {
                         if last_failure.kind() == ProviderErrorKind::Unauthorized {
@@ -1200,6 +1204,7 @@ where
                         error.kind(),
                         ProviderErrorKind::AccountCapacityUnavailable
                             | ProviderErrorKind::NoEligibleAccount
+                            | ProviderErrorKind::SessionPolicyRestricted
                             | ProviderErrorKind::QuotaExhausted
                             | ProviderErrorKind::ProviderInfrastructureUnavailable
                     ) && error.send_state() == UpstreamSendState::NotSent)

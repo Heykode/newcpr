@@ -41,18 +41,44 @@ impl ResetCreditsService {
     ) -> Result<(AutoResetObservation, Option<ProviderResetCredit>), AdminError> {
         let id = ProviderAccountId::new(check.policy.account_id.clone())
             .map_err(|_| AdminError::invalid("账号标识不合法"))?;
-        let observation = self
+        let mut observation = self
             .fresh_auto_observation(&id, &check.policy.config)
             .await?;
-        let credit = if observation.triggered.is_empty() {
-            None
-        } else {
+        let needs_inventory = !observation.triggered.is_empty()
+            || (check.policy.config.expiry_enabled
+                && check.inventory.as_ref().is_none_or(|inventory| {
+                    Utc::now() - inventory.checked_at >= chrono::Duration::hours(24)
+                        || inventory.credit.as_ref().is_some_and(|credit| {
+                            credit.expires_at.is_some_and(|at| at <= Utc::now())
+                        })
+                }));
+        let planned = if needs_inventory {
             let context = MutationContext {
                 actor: MutationActor::System,
                 request_id: format!("auto-reset-check-{}", check.claim_id),
             };
             let inventory = self.accounts.reset_credits(&context, id).await?;
-            Some(earliest_credit(&inventory, None, Utc::now())?)
+            let credit = earliest_credit(&inventory, None, Utc::now()).ok();
+            observation.inventory = Some(AutoResetInventory {
+                checked_at: Utc::now(),
+                credit: credit.clone(),
+            });
+            credit
+        } else {
+            check
+                .inventory
+                .as_ref()
+                .and_then(|inventory| inventory.credit.clone())
+        };
+        observation.expiry_triggered = planned
+            .as_ref()
+            .is_some_and(|credit| check.policy.config.expiry_due(credit, Utc::now()));
+        let credit = if observation.weekly_condition_met
+            && (!observation.triggered.is_empty() || observation.expiry_triggered)
+        {
+            planned
+        } else {
+            None
         };
         Ok((observation, credit))
     }
