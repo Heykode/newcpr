@@ -8,7 +8,6 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::{StreamExt as _, stream};
 use gateway_core::{
     account::{AccountStatus, ProviderAccountId, resolve_account_status},
     routing::AccountGroupId,
@@ -157,17 +156,17 @@ impl DefaultGroupMonitorService {
         // Own and deduplicate IDs before crossing the async-trait boundary.
         let mut quota_ids = BTreeSet::new();
         quota_ids.extend(peers.iter().map(|peer| peer.id.clone()));
-        let loaded = stream::iter(quota_ids)
-            .map(|id| async move {
-                let result = match ProviderAccountId::new(id.clone()) {
-                    Ok(account_id) => self.accounts.monitor_quota(&account_id).await,
-                    Err(_) => Err(AdminError::internal("监控账号 ID 不合法")),
-                };
-                (id, result)
-            })
-            .buffer_unordered(2)
-            .collect::<Vec<_>>()
-            .await;
+        let mut account_ids = Vec::with_capacity(quota_ids.len());
+        for id in quota_ids {
+            match ProviderAccountId::new(id.clone()) {
+                Ok(account_id) => account_ids.push(account_id),
+                Err(_) if eligible_ids.contains(&id) => {
+                    return Err(AdminError::internal("监控账号 ID 不合法"));
+                }
+                Err(_) => {}
+            }
+        }
+        let loaded = self.accounts.monitor_quotas(account_ids).await;
         let generated_at = Utc::now();
         let mut quotas = BTreeMap::new();
         for (id, result) in loaded {

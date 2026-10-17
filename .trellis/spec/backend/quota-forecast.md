@@ -8,7 +8,7 @@
   `* 100 / used_percent`，剩余 `max(total-cost, 0)`。有限正数即可，无 $5/3pp/5pp 门槛。
   `window.local_usage` 与原 `usage_window()` 共用归属，不能混合模型桶或历史累计。
 - API `usage.quotaWindow` 投影源窗口及 `estimatedUsd/remainingUsd`，前端不重复计算。
-  列表每 30 秒请求时现算。分组每 10 秒通过 `AccountsService::monitor_quota`
+  列表每 30 秒请求时现算。分组每 10 秒通过 `AccountsService::monitor_quotas`
   读取缓存百分比，并用 `AccountStore::load_quota_learning_usage` 对齐观察时刻的费用；
   不加载健康/累计/Token 预测历史，也不增加上游流量。
 - 详情美元值同样动态计算，Token 配对算法保留。详情缓存 10 秒，打开时 30 秒重读；
@@ -255,6 +255,23 @@ Correct: classify new prewarm requests from the provider's actual
   overlapping scopes, prewarm exclusion and unchanged account/audit/revision rows.
 
 ## 9. Tools-Aligned USD Learning
+
+### 同轮新账号继承
+
+- 范围：新账号先于同类型参考账号完成本轮采样时，不能提前确定无参考。
+- 接口：`AccountsService::monitor_quotas(Vec<ProviderAccountId>)` 保留每账号结果；
+  `AccountStore::load_quota_learning_plan_estimates(&[QuotaLearningObservation])`
+  只读已有 Plan 样本，复用 `load_plan_average`。
+- 合同：先完成全部单账号学习事务，再统一生成窗口。复用本轮缓存与费用，
+  不重复查询消费、不刷新上游、不新增学习表，个人绑定优先。
+- 错误：可选参考账号失败仍忽略；正常成员失败仍使本轮失败。学习拒绝的
+  过时观察没有个人估值条目，后续 Plan 读取不得为其补建条目。
+- 示例：新号先得到无参考，后续旧号学到 120 USD，新号本轮即可继承；
+  已有个人 200 USD 仍为 200 USD；完全无样本仍不可估算。
+- 测试：服务验证同轮继承、个人优先、一次缓存与费用读取；真实 PostgreSQL
+  验证后读得到新样本、维度隔离、读取前后账号学习行不变。
+- 错误做法：对全池重复执行 `monitor_quota`；正确做法：保留已采集数据，
+  只重读持久 Plan 参考。分组 10 秒与列表 30 秒周期不变。
 
 - Reuse `fill_missing_plan_type` / `explicit_plan_type`, cached quota and existing
   bounded inference-fee history. Preserve account subtypes instead of replacing

@@ -231,6 +231,16 @@ pub trait AccountStore: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Read shared Plan references after all accounts in the sample have learned.
+    /// This does not update baselines or create account bindings.
+    async fn load_quota_learning_plan_estimates(
+        &self,
+        observations: &[QuotaLearningObservation],
+    ) -> AdminStoreResult<Vec<QuotaLearningEstimate>> {
+        let _ = observations;
+        Ok(Vec::new())
+    }
+
     async fn list_credentials(
         &self,
         provider_kind: &gateway_core::routing::ProviderKind,

@@ -7,6 +7,64 @@ use gateway_admin::{
 use super::{TestDatabase, admin_account_store};
 
 #[tokio::test]
+async fn quota_learning_rereads_same_round_plan_reference_without_writing_recipient_state() {
+    let Some(database) = TestDatabase::create("quota_learning_same_round").await else {
+        return;
+    };
+    for id in ["acct_new", "acct_donor"] {
+        seed_account(&database.pool, id).await;
+    }
+    let store = admin_account_store(&database.pool);
+    let reset = Utc::now() + Duration::days(6);
+    store
+        .record_quota_learning(&[observation("acct_donor", reset, 0.0, 0.0)])
+        .await
+        .unwrap();
+    let recipient = observation("acct_new", reset, 0.0, 0.0);
+    let first = store
+        .record_quota_learning(std::slice::from_ref(&recipient))
+        .await
+        .unwrap();
+    assert_eq!(first[0].source, QuotaLearningSource::Learning);
+    let before: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(q) from quota_learning_accounts q where provider_account_id = 'acct_new'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    store
+        .record_quota_learning(&[observation("acct_donor", reset, 10.0, 12.0)])
+        .await
+        .unwrap();
+    let mut other_plan = recipient.clone();
+    other_plan.plan_type = "pro".to_owned();
+    let mut other_window = recipient.clone();
+    other_window.window_minutes = 300;
+    let references = store
+        .load_quota_learning_plan_estimates(&[recipient, other_plan, other_window])
+        .await
+        .unwrap();
+    assert_eq!(references[0].effective_limit_usd, Some(120.0));
+    assert_eq!(references[0].source, QuotaLearningSource::PlanAverage);
+    assert_eq!(references[0].sample_count, 1);
+    assert_eq!(references[1].effective_limit_usd, None);
+    assert_eq!(references[2].effective_limit_usd, None);
+    let after: serde_json::Value = sqlx::query_scalar(
+        "select to_jsonb(q) from quota_learning_accounts q where provider_account_id = 'acct_new'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    let samples: i64 = sqlx::query_scalar("select count(*) from quota_learning_plan_samples")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(samples, 1);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn monitor_learning_isolates_legacy_state_and_retains_reference_for_paid_zero_percent() {
     let Some(database) = TestDatabase::create("monitor_learning_namespace").await else {
         return;
