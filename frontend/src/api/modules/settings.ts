@@ -176,11 +176,15 @@ export function deleteAdminApiKey(options: RequestOptions = {}) {
   })
 }
 
-export function getCodexDesktopWindowsDownloads(refresh = false, options: RequestOptions = {}) {
+interface CodexDesktopWindowsDownloadsParams {
+  refresh?: boolean
+}
+
+export function getCodexDesktopWindowsDownloads(data: CodexDesktopWindowsDownloadsParams = {}, options: RequestOptions = {}) {
   return request<CodexDesktopWindowsDownloads>({
     url: '/api/admin/settings/client-downloads/codex-desktop/windows',
     method: 'GET',
-    params: refresh ? { refresh: true } : undefined,
+    params: data.refresh ? { refresh: true } : undefined,
     ...options,
   })
 }

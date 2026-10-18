@@ -96,6 +96,10 @@ export interface DownloadUrlResult {
   expiresInSeconds: number
 }
 
+export interface BackupIdParam {
+  backupId: string
+}
+
 export function getBackupSettings(options: RequestOptions = {}) {
   return request<BackupSettingsView>({
     url: '/api/admin/settings/backups',
@@ -130,11 +134,11 @@ export function updateBackupSchedule(data: UpdateBackupSchedulePayload, options:
   })
 }
 
-export function getBackupRecords(params: BackupRecordsParams, options: RequestOptions = {}) {
+export function getBackupRecords(data: BackupRecordsParams, options: RequestOptions = {}) {
   return request<BackupRecordPage>({
     url: '/api/admin/settings/backups/records',
     method: 'GET',
-    params,
+    params: data,
     ...options,
   })
 }
@@ -147,20 +151,20 @@ export function createBackup(options: RequestOptions = {}) {
   })
 }
 
-export function getBackupDownloadUrl(backupId: string, options: RequestOptions = {}) {
+export function getBackupDownloadUrl(data: BackupIdParam, options: RequestOptions = {}) {
   return request<DownloadUrlResult>({
     url: '/api/admin/settings/backups/download-url',
     method: 'POST',
-    data: { backupId },
+    data,
     ...options,
   })
 }
 
-export function deleteBackup(backupId: string, options: RequestOptions = {}) {
+export function deleteBackup(data: BackupIdParam, options: RequestOptions = {}) {
   return request<BackupRecord>({
     url: '/api/admin/settings/backups/delete',
     method: 'POST',
-    data: { backupId },
+    data,
     ...options,
   })
 }

@@ -432,6 +432,7 @@ onBeforeUnmount(() => {
             :size="isCollapsed ? 'md' : 'sm'"
             label="退出登录"
             variant="destructive"
+            :disabled="authStore.loading || !authStore.isAuthenticated"
             @click="handleLogout"
           >
             <LogOut :size="isCollapsed ? 19 : 18" />

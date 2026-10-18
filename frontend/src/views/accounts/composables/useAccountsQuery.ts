@@ -105,20 +105,16 @@ export function useAccountsQuery() {
   }))
 
   function handlePageChange(page: number) {
-    query.page.value = page
-    void query.execute()
+    void query.execute({ page })
   }
 
   function handlePageSizeChange(pageSize: number) {
-    query.pageSize.value = pageSize
-    query.page.value = 1
-    void query.execute()
+    void query.execute({ page: 1, pageSize })
   }
 
   function handleSortChange(nextSort: BaseTableSort | undefined) {
     sort.value = nextSort
-    query.page.value = 1
-    void query.execute()
+    void query.reloadFromStart()
   }
 
   async function replaceAccount(updated: AccountRow, options: { authoritative?: boolean, previous?: AccountRow } = {}) {
@@ -143,20 +139,17 @@ export function useAccountsQuery() {
   watchDebounced(
     searchQuery,
     () => {
-      query.page.value = 1
-      void query.execute()
+      void query.reloadFromStart()
     },
     { debounce: 250 },
   )
 
   watch([providerQuery, statusQuery, groupQuery], () => {
-    query.page.value = 1
-    void query.execute()
+    void query.reloadFromStart()
   })
 
   watch(planTypeQuery, () => {
-    query.page.value = 1
-    void query.execute()
+    void query.reloadFromStart()
   })
 
   onMounted(() => {

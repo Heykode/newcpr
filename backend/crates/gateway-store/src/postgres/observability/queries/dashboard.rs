@@ -134,6 +134,41 @@ pub(crate) async fn dashboard_totals(
     })
 }
 
+pub(crate) async fn dashboard_card_metrics(
+    connection: &mut PgConnection,
+    range: ObservabilityRange,
+) -> StoreResult<RequestMetrics> {
+    let fact = completed_usage_fact_predicate("mr");
+    let mut query = QueryBuilder::<Postgres>::new(format!(
+        "select count(*)::bigint as request_count,
+                coalesce(sum(input_tokens) filter (where {fact}), 0)::bigint as input_tokens,
+                coalesce(sum(output_tokens) filter (where {fact}), 0)::bigint as output_tokens,
+                coalesce(sum(cached_tokens) filter (where {fact}), 0)::bigint as cached_tokens,
+                coalesce(sum(total_tokens) filter (where {fact}), 0)::bigint as total_tokens
+           from model_requests mr where mr.started_at >= "
+    ));
+    query.push_bind(range.start);
+    query.push(" and mr.started_at < ");
+    query.push_bind(range.end);
+    push_unrecovered_request_filter(&mut query, "mr");
+    push_business_request_filter(&mut query, "mr");
+    let row = query
+        .build()
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| {
+            postgres_unavailable("load dashboard comparison counters").with_source(error)
+        })?;
+    Ok(RequestMetrics {
+        request_count: unsigned(&row, "request_count")?,
+        input_tokens: unsigned(&row, "input_tokens")?,
+        output_tokens: unsigned(&row, "output_tokens")?,
+        cached_tokens: unsigned(&row, "cached_tokens")?,
+        total_tokens: unsigned(&row, "total_tokens")?,
+        ..RequestMetrics::default()
+    })
+}
+
 pub(crate) async fn request_metric_series(
     connection: &mut PgConnection,
     range: ObservabilityRange,

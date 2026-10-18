@@ -204,7 +204,7 @@ test('custom IPv6, UA and runtime APIs forward silent cancellation options witho
   await ua.updateOutboundUserAgent({ mode: 'default' }, options)
   await settings.getSettings(options)
   await settings.updateSettings(tuning, options)
-  await settings.getCodexDesktopWindowsDownloads(true, options)
+  await settings.getCodexDesktopWindowsDownloads({ refresh: true }, options)
   assert.equal(calls.length, 10)
   for (const config of calls) {
     assert.equal(config.silent, true)
@@ -389,6 +389,12 @@ test('quota forecast is loaded only on demand and cannot replace another account
   let refreshes = 0
   const module = load('views/accounts/composables/useAccountQuotaForecast.ts', {
     vue,
+    '@/composables/useRequestState': load('composables/useRequestState.ts', {
+      vue,
+      '@/api/request': load('api/error.ts'),
+      '@/utils/async': load('utils/async.ts'),
+    }),
+    '@/utils/async': load('utils/async.ts'),
     '@/api': {
       getAccountQuotaForecast: (params, options) => new Promise(resolve => pending.push({ ...params, ...options, resolve })),
       refreshAccountQuota: async ({ accountId }) => {

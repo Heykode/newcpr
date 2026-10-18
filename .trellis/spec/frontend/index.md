@@ -14,6 +14,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 
 | Guide | Description | Status |
 |-------|-------------|--------|
+| [分页与昨日比较](./paged-query-and-dashboard.md) | 确认页码、异步失效、独立自然日统计与未知趋势 | v3.29.2 适配 |
 | [Smart Scheduling Settings](../backend/upstream-hardening.md) | Shared Smart/Sticky weights, cloned defaults, save validation and reset | Local selective adaptation |
 | [Excel Settings](./excel-settings.md) | Common/Excel scopes, exact MiB conversion, draft validation and isolated browser checks | Local implementation |
 | [Excel Stream Precommit Settings](../backend/precommit-controls.md) | Excel-only threshold, exact KiB conversion, inherited defaults and save/reload | Isolated desktop/mobile coverage |

@@ -182,6 +182,55 @@ fn external_observability_range_rejects_over_366_days_and_reversed_range() {
 }
 
 #[tokio::test]
+async fn dashboard_comparison_loads_yesterday_outside_the_selected_today_range() {
+    let now = DateTime::parse_from_rfc3339("2026-10-18T04:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let today = china_day_start(now);
+    let range = TimeRange::new(today, now).unwrap();
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.replace_trend(vec![
+        health_metric_point(
+            today - Duration::days(1) - Duration::minutes(15),
+            RequestMetrics {
+                request_count: 999,
+                ..Default::default()
+            },
+        ),
+        health_metric_point(
+            today - Duration::days(1),
+            RequestMetrics {
+                request_count: 7,
+                input_tokens: 100,
+                cached_tokens: 40,
+                total_tokens: 120,
+                ..Default::default()
+            },
+        ),
+        health_metric_point(
+            today,
+            RequestMetrics {
+                request_count: 2,
+                input_tokens: 50,
+                cached_tokens: 10,
+                total_tokens: 60,
+                ..Default::default()
+            },
+        ),
+    ]);
+    let services = observability_services(store).await;
+    let summary = services
+        .observability()
+        .dashboard_summary(range, TrendKind::Usage)
+        .await
+        .unwrap();
+    assert_eq!(summary.today.request_count, 2);
+    assert_eq!(summary.yesterday.request_count, 7);
+    assert_eq!(summary.yesterday.total_tokens, 120);
+    assert_eq!(summary.yesterday.observed_cached_token_rate, Some(0.4));
+}
+
+#[tokio::test]
 async fn health_timeline_should_keep_exactly_china_day_quarter_hour_slots() {
     let now = Utc::now();
     let day_start = china_day_start(now);
@@ -809,7 +858,14 @@ impl ObservabilityStore for FixtureObservabilityStore {
             range,
             totals: Default::default(),
             provider_accounts: AccountPoolMetrics::default(),
-            trend: self.trend.lock().expect("trend").clone(),
+            trend: self
+                .trend
+                .lock()
+                .expect("trend")
+                .iter()
+                .filter(|point| point.bucket_start >= range.start && point.bucket_start < range.end)
+                .cloned()
+                .collect(),
             account_usage: Vec::new(),
             recent_requests: Vec::new(),
         })

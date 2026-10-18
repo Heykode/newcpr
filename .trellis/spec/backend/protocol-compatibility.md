@@ -1,5 +1,22 @@
 # Protocol Compatibility Contracts
 
+## Ordered Request Field Removal
+
+- Responses ingress consumes `type` and the recognized boolean `use_websocket`
+  with `shift_remove`, preserving all remaining JSON object fields in their
+  original order. Window rollover removes only `previous_response_id` the same way.
+- Do not change transport selection, session ownership or account identity while
+  aligning this serialization behavior. Unknown `use_websocket` values retain the
+  existing passthrough contract.
+- OAuth authorization query order follows the pinned official Desktop contract:
+  PKCE fields, then state/scope, then organization/simplified-flow flags. Keep
+  NewCPR's existing values, callback and correlation validation.
+- Unlike the upstream deletion, NewCPR still consumes passive engine timing in
+  diagnostic `providerMetadata.upstreamTimingMetrics`; preserve it. The optional
+  timing header is already absent unless supplied, so do not add default injection.
+- Test frame type at beginning/middle/end, nested unknown-field order and local
+  transport-switch removal, plus the existing ordered OAuth query assertion.
+
 ## Native Effort Alias And Invalid Encrypted History
 
 - Native OAuth Generate maps trimmed `minimal` to `none` after selected-account

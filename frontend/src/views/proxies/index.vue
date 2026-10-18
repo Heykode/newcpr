@@ -197,8 +197,7 @@ async function save() {
         toast[feedback.tone](feedback.message)
     }
     search.value = ''
-    query.page.value = 1
-    await query.execute()
+    await query.reloadFromStart()
   })
 }
 
@@ -252,13 +251,11 @@ async function confirmDelete() {
 }
 
 function setPage(page: number) {
-  query.page.value = page
-  void query.execute()
+  void query.execute({ page })
 }
 
 function setPageSize(size: number) {
-  query.pageSize.value = size
-  setPage(1)
+  void query.execute({ page: 1, pageSize: size })
 }
 
 function clearForm() {
@@ -266,7 +263,7 @@ function clearForm() {
     form.proxyUrl = ''
   }
 }
-watchDebounced(search, () => setPage(1), { debounce: 300 })
+watchDebounced(search, () => query.reloadFromStart(), { debounce: 300 })
 onMounted(() => void query.execute())
 </script>
 
@@ -286,7 +283,7 @@ onMounted(() => void query.execute())
     <BaseCard v-else class="mt-5 flex min-h-0 flex-1 flex-col">
       <template #header>
         <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
-          <BaseInput v-model="search" class="sm:w-80" aria-label="搜索代理" placeholder="搜索代理名称...">
+          <BaseInput v-model="search" class="sm:w-80" aria-label="搜索代理" placeholder="搜索代理名称">
             <template #prefix>
               <Search class="size-4.5 text-cp-text-tertiary" />
             </template>

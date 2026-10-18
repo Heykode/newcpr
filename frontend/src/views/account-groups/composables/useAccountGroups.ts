@@ -257,23 +257,18 @@ export function useAccountGroups() {
   }
 
   function handlePageChange(page: number) {
-    query.page.value = page
-    void query.execute()
+    void query.execute({ page })
   }
 
   function handlePageSizeChange(pageSize: number) {
-    query.pageSize.value = pageSize
-    query.page.value = 1
-    void query.execute()
+    void query.execute({ page: 1, pageSize })
   }
 
   watchDebounced(searchQuery, () => {
-    query.page.value = 1
-    void query.execute()
+    void query.reloadFromStart()
   }, { debounce: 250 })
   watch(statusQuery, () => {
-    query.page.value = 1
-    void query.execute()
+    void query.reloadFromStart()
   })
   function clearForm() {
     if (!showFormModal.value) {

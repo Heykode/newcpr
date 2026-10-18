@@ -480,7 +480,7 @@ pub(super) fn decode_request_object(
     // 仅消费已识别的本地 transport 开关；未知同名值保留给未来上游协议。
     let use_websocket = object.get("use_websocket").and_then(Value::as_bool);
     if use_websocket.is_some() {
-        object.remove("use_websocket");
+        object.shift_remove("use_websocket");
     }
 
     let model = required_non_empty_string(&object, "model", "model")?;
