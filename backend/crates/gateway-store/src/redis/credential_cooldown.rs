@@ -270,7 +270,7 @@ impl RedisCredentialCooldownRepository {
             return Err(invalid("active cooldown index is invalid"));
         }
         let mut rate_limited_until = std::collections::BTreeMap::new();
-        for pair in values.chunks_exact(2) {
+        for pair in values.as_chunks::<2>().0 {
             let until_ms = pair[1]
                 .parse::<i64>()
                 .map_err(|_| invalid("active cooldown expiry is invalid"))?;

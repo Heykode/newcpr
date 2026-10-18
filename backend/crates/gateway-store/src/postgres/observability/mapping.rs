@@ -432,6 +432,8 @@ pub(crate) fn admin_usage_list_record(
         }
     };
     Ok(admin_observability::UsageListRecord {
+        error_code: record.error_code,
+        error_message: record.error_message,
         outcome: admin_observability::RequestOutcome::new(record.outcome)
             .map_err(|_| observability_error(invalid("invalid request outcome")))?,
         client_api_key_name: record.client_api_key_name,
@@ -782,6 +784,8 @@ pub(crate) fn usage_list_record_from_row(
     row: &sqlx::postgres::PgRow,
 ) -> StoreResult<UsageListRecord> {
     Ok(UsageListRecord {
+        error_code: get(row, "error_code")?,
+        error_message: get(row, "error_message")?,
         outcome: get(row, "outcome")?,
         client_api_key_name: get(row, "client_api_key_name")?,
         billing_snapshot_json: get(row, "billing_snapshot_json")?,

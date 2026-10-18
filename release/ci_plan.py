@@ -15,6 +15,7 @@ CONTROL_PATHS = {
     ".github/workflows/ci.yml", ".github/workflows/_quality.yml",
     ".github/workflows/_container.yml", "release/ci_plan.py",
     "release/build_ci_backend.sh", "release/version.yaml", "deploy/Dockerfile",
+    "release/toolchains.rb",
 }
 # Only localized administration/presentation changes use the narrow lane. New
 # production surfaces and request/identity/storage owners remain full by default.

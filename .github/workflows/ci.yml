@@ -65,10 +65,14 @@ jobs:
               - '.github/workflows/_quality.yml'
               - '.github/workflows/_container.yml'
               - 'release/ci_plan.py'
+              - 'release/toolchains.rb'
               - 'release/build_ci_backend.sh'
               - 'deploy/Dockerfile'
             frontend:
               - 'frontend/**'
+              - 'deploy/Dockerfile'
+              - 'backend/rust-toolchain.toml'
+              - 'release/toolchains.rb'
               - '.github/workflows/ci.yml'
               - '.github/workflows/_quality.yml'
             container:
@@ -84,6 +88,7 @@ jobs:
               - 'release/ci_plan.py'
               - 'release/build_ci_backend.sh'
               - 'release/verified_image.py'
+              - 'release/toolchains.rb'
               - 'release/deploy.py'
             deployment:
               - 'deploy/**'

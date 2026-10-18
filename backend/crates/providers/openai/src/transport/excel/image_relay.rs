@@ -143,7 +143,7 @@ struct CapacityPermit {
 
 impl CapacityPermit {
     fn acquire(used: &Arc<AtomicUsize>, amount: usize, limit: usize) -> Option<Self> {
-        used.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+        used.try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
             value.checked_add(amount).filter(|next| *next <= limit)
         })
         .ok()?;

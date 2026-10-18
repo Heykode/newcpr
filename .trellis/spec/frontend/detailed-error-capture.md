@@ -22,3 +22,7 @@
 
 - Capture JSONL adds bounded `diagnostic.evidence` rows and `captureEnd.omissionReasons`.
   Display/export these through the existing lazy text reader; no automatic body fetch on lists.
+
+- Usage error summaries come from final `model_requests.provider_error_code/error_message`, never an earlier retry event. Successful rows show no failure summary or tooltip.
+- Failed/incomplete usage requests open a focused error dialog with the existing full-detail escape and diagnostic panel. Absent legacy attempts must not crash the dialog.
+- Keep search/status controls inside request details and retain the existing table preference key. Closed dialogs must not fetch diagnostics.

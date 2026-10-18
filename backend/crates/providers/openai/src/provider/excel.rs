@@ -1043,7 +1043,7 @@ mod tests {
                 isolate_http_authentication_failure(&mut failure).is_some(),
                 status == 401
             );
-            let mut failure = classify_failure(failure, true);
+            let mut failure = classify_failure(*failure, true);
             apply_initial_retry_policy(&mut failure, 2);
             if status == 429 {
                 assert!(failure.error.replay_is_safe());

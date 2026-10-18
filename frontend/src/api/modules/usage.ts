@@ -79,6 +79,8 @@ export interface UsageTurnStateSummary {
 }
 
 export interface UsageListRecord {
+  errorCode?: string | null
+  errorMessage?: string | null
   outcome?: string
   clientApiKeyName?: string | null
   id: string

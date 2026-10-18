@@ -70,7 +70,7 @@ pub(crate) async fn acquire(
         }
         if capacity
             .used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 if limit != 0 && used >= limit {
                     None
                 } else {

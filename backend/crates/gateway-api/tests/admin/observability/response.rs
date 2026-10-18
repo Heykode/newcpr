@@ -1087,6 +1087,8 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
         .lock()
         .expect("usage records")
         .push(UsageListRecord {
+            error_code: None,
+            error_message: None,
             outcome: gateway_admin::model::observability::RequestOutcome::Succeeded,
             client_api_key_name: Some("test-client".to_owned()),
             id: "request_endpoint".to_owned(),
@@ -1178,6 +1180,12 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
             });
             records.push(image);
         }
+        let mut failed = records[0].clone();
+        failed.id = "final_error_summary".to_owned();
+        failed.outcome = gateway_admin::model::observability::RequestOutcome::Failed;
+        failed.error_code = Some("rate_limit".to_owned());
+        failed.error_message = Some("Final upstream failure".to_owned());
+        records.push(failed);
     }
     let response = observability::router::<AdminTestState>()
         .with_state(fixture.state())
@@ -1198,6 +1206,12 @@ async fn usage_route_should_expose_table_facts_without_detail_payload() {
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage response JSON");
 
     assert_eq!(value["data"]["items"][0]["accountPlanType"], "pro");
+    assert!(value["data"]["items"][0]["errorCode"].is_null());
+    assert_eq!(value["data"]["items"][3]["errorCode"], "rate_limit");
+    assert_eq!(
+        value["data"]["items"][3]["errorMessage"],
+        "Final upstream failure"
+    );
     assert_eq!(value["data"]["items"][0]["accountPlanTypeDisplay"], "Pro");
 
     assert_eq!(

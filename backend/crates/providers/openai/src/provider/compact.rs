@@ -95,7 +95,7 @@ pub(super) async fn collect_excel_compact(
     client: &CodexBackendClient,
     request: &CodexResponsesRequest,
     context: CodexRequestContext<'_>,
-) -> Result<CodexBackendJsonResponse, MappedProviderFailure> {
+) -> Result<CodexBackendJsonResponse, Box<MappedProviderFailure>> {
     let mut response = client
         .create_response_stream_http_sse(request, context)
         .await
@@ -106,16 +106,15 @@ pub(super) async fn collect_excel_compact(
         let chunk = chunk.map_err(map_stream_error)?;
         bytes = bytes.saturating_add(chunk.len());
         if bytes > 16 * 1024 * 1024 {
-            return Err(MappedProviderFailure::plain(compact_error(
+            return Err(Box::new(MappedProviderFailure::plain(compact_error(
                 ProviderErrorKind::Protocol,
                 UpstreamSendState::Sent,
                 "Excel compact response exceeds its size limit",
-            )));
+            ))));
         }
-        validate_compact_events(decoder.push(&chunk), &response.diagnostics)
-            .map_err(|failure| *failure)?;
+        validate_compact_events(decoder.push(&chunk), &response.diagnostics)?;
     }
-    validate_compact_events(decoder.finish(), &response.diagnostics).map_err(|failure| *failure)?;
+    validate_compact_events(decoder.finish(), &response.diagnostics)?;
     let mut completed = request
         .excel
         .as_ref()

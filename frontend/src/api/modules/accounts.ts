@@ -9,7 +9,7 @@ export type AccountStatus
 
 export type AccountConcurrencyPool = 'shared' | 'reserved' | 'quality'
 export interface AccountConcurrencyPage {
-  items: { expiresAtMs: number, detail: { requestId: string, clientKeyId: string, model: string | null, clientIp: string | null, startedAtMs: number } | null }[]
+  items: { leaseId?: string, expiresAtMs: number, detail: { requestId: string, clientKeyId: string, model: string | null, clientIp: string | null, startedAtMs: number } | null }[]
   total: number
   page: number
   pageSize: number

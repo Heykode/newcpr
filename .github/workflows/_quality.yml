@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
-      # Rust 1.97 编译 AWS SDK 调试信息需要更大的 codegen 线程栈。
+      # 编译 AWS SDK 调试信息需要更大的 codegen 线程栈。
       RUST_MIN_STACK: 16777216
     services:
       postgres:
@@ -110,9 +110,14 @@ jobs:
             fi
           fi
 
+      - name: Read build toolchains
+        id: toolchains
+        run: ruby release/toolchains.rb >> "$GITHUB_OUTPUT"
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: ${{ steps.toolchains.outputs.rust }}
           components: rustfmt,clippy
 
       - name: Cache Rust
@@ -185,6 +190,10 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      - name: Read build toolchains
+        id: toolchains
+        run: ruby release/toolchains.rb >> "$GITHUB_OUTPUT"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -193,7 +202,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: ${{ steps.toolchains.outputs.node }}
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
@@ -228,12 +237,14 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Lint GitHub Actions workflows
+        # Pinned actionlint predates GitHub's queue: max; validate that field in publication_test.rb.
         run: >-
           docker run --rm
           --volume "$PWD:/repo"
           --workdir /repo
           rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
           -color
+          -ignore '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'
           .github/workflows/*.yml
 
       - name: Test release platform contracts
@@ -242,5 +253,7 @@ jobs:
           bash -n release/build_ci_backend.sh
           ruby release/tests/platforms_test.rb
           ruby release/tests/publish_test.rb
+          ruby release/tests/publication_test.rb
+          ruby release/tests/toolchains_test.rb
           python3 -m unittest discover -s release/tests -p 'test_ci_*.py' -v
           ruby release/tests/ci_workflows_test.rb

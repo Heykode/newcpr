@@ -963,3 +963,11 @@ replaced by an omission notice: this is not decryption or plaintext recovery.
 Native Codex requests and plaintext-only content remain outside its scope.
 Cover save/readback, opt-in reset, disabled route behavior and 1440/390/320px
 layouts with synthetic fixtures; never enable production accounts for UI QA.
+
+## Concurrency Detail Refresh
+
+- Read ordinary, Guardian reserved and quality pools independently. The UI never changes lease acquisition or release.
+- The fixed-height scroll view fetches pages of 100, bounds each refresh by the first response's total, and deduplicates by lease ID. Missing legacy IDs retain every row.
+- Poll only while the dialog and document are visible. Account/pool changes, dismissal and disposal abort pending reads and invalidate their generation.
+- Publish only a complete refresh; keep the previous snapshot on transient refresh failure. Never turn displayed row counts into scheduling capacity.
+- Test bounded pagination under changing totals, duplicate IDs, stale responses, hidden/closed lifecycle, old-server compatibility and mobile overflow.

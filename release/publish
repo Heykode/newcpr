@@ -5,7 +5,6 @@ APP_NAME="codex-proxy-rs"
 VERSION_FILE="release/version.yaml"
 NOTES_FILE="release/notes.md"
 TAG_PREFIX="v"
-SEMVER='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
 
 usage() {
   cat <<USAGE
@@ -75,8 +74,8 @@ require_command ruby
 
 gh auth status >/dev/null 2>&1 || die "gh authentication is required; run gh auth login first"
 
-version="${1#v}"
-[[ "$version" =~ $SEMVER ]] || die "version must be semver, for example 0.1.4"
+version="$1"
+metadata_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-metadata.rb"
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
 cd "$repo_root"
@@ -100,6 +99,7 @@ if ! git diff --cached --quiet --ignore-submodules -- . ":(exclude)$NOTES_FILE";
   die "index has staged changes outside $NOTES_FILE"
 fi
 
+version="$(ruby "$metadata_script" validate "$version")"
 current_version="$(read_version_key version)"
 current_version="${current_version#v}"
 [[ "$version" != "$current_version" ]] || die "$VERSION_FILE is already $version"
@@ -110,13 +110,6 @@ git ls-files --error-unmatch "$NOTES_FILE" >/dev/null 2>&1 || die "$NOTES_FILE i
 if git diff HEAD --quiet -- "$NOTES_FILE"; then
   die "$NOTES_FILE must contain uncommitted release notes"
 fi
-ruby - "$NOTES_FILE" "$tag" <<'RUBY'
-path, tag = ARGV
-lines = File.readlines(path)
-abort("#{path}: first line must be # #{tag}") unless lines.first&.strip == "# #{tag}"
-abort("#{path}: release notes must not be empty") if lines.drop(1).join.strip.empty?
-RUBY
-
 if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
   die "local tag already exists: $tag"
 fi

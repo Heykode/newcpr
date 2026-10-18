@@ -28,6 +28,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       docker_version: ${{ steps.version.outputs.docker_version }}
       build_time: ${{ steps.version.outputs.build_time }}
+      build_type: ${{ steps.version.outputs.build_type }}
       git_sha: ${{ steps.version.outputs.git_sha }}
       platform_matrix: ${{ steps.version.outputs.platform_matrix }}
       docker_matrix: ${{ steps.version.outputs.docker_matrix }}
@@ -35,6 +36,8 @@ jobs:
       has_non_docker: ${{ steps.version.outputs.has_non_docker }}
       docker_platforms: ${{ steps.version.outputs.docker_platforms }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
+      rust: ${{ steps.toolchains.outputs.rust }}
+      rust_image: ${{ steps.toolchains.outputs.rust_image }}
       prerelease: ${{ steps.version.outputs.prerelease }}
 
     steps:
@@ -49,118 +52,11 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          ruby <<'RUBY' >> "$GITHUB_OUTPUT"
-          require "json"
-          require "open3"
-          require "rubygems"
-          require "time"
-          require "yaml"
+        run: ruby release/release-metadata.rb outputs "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
-          APP_NAME = "codex-proxy-rs"
-          SEMVER = /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z/
-
-          def fail(message)
-            warn(message)
-            exit(1)
-          end
-
-          def require_string(data, key, path)
-            value = data[key]
-            fail("#{path}: #{key} must be a non-empty string") unless value.is_a?(String) && !value.strip.empty?
-            value.strip
-          end
-
-          def version_sort_key(version)
-            Gem::Version.new(version.split("+", 2).first)
-          rescue ArgumentError
-            nil
-          end
-
-          version_path = "release/version.yaml"
-          platforms_path = "release/platforms.yaml"
-          version_data = YAML.load_file(version_path)
-          platforms_data = YAML.load_file(platforms_path)
-
-          version = require_string(version_data, "version", version_path).delete_prefix("v")
-          tag_prefix = "v"
-          expected_tag = "#{tag_prefix}#{version}"
-          release_tag = ENV.fetch("RELEASE_TAG")
-          fail("Release tag #{release_tag} does not match #{version_path} tag #{expected_tag}") unless release_tag == expected_tag
-          fail("#{version_path}: version #{version} is not a valid semver") unless version.match?(SEMVER)
-          notes = File.readlines("release/notes.md")
-          fail("release/notes.md: heading does not match release") unless notes.first&.strip == "# #{release_tag}"
-          fail("release/notes.md: notes must not be empty") if notes.drop(1).join.strip.empty?
-
-          platforms = platforms_data["platforms"]
-          fail("#{platforms_path}: platforms must be a non-empty array") unless platforms.is_a?(Array) && !platforms.empty?
-
-          required_platform_keys = %w[os arch runner target binary archive]
-          seen_platforms = {}
-          docker_platform_jobs = []
-          non_docker_platform_jobs = []
-          docker_platforms = []
-          platforms.each_with_index do |platform, index|
-            fail("#{platforms_path}: platforms[#{index}] must be a table") unless platform.is_a?(Hash)
-            required_platform_keys.each do |key|
-              require_string(platform, key, "#{platforms_path}: platforms[#{index}]")
-            end
-            archive = platform["archive"]
-            fail("#{platforms_path}: platforms[#{index}].archive must be tar.gz") unless archive == "tar.gz"
-            platform_key = "#{platform["os"]}-#{platform["arch"]}"
-            fail("#{platforms_path}: duplicate platform #{platform_key}") if seen_platforms[platform_key]
-            seen_platforms[platform_key] = true
-            platform["artifact"] = "#{APP_NAME}-#{platform_key}"
-            if platform["docker"] == true
-              docker_platform = require_string(platform, "dockerPlatform", "#{platforms_path}: platforms[#{index}]")
-              platform["dockerPlatform"] = docker_platform
-              docker_platform_jobs << platform
-              docker_platforms << docker_platform
-            else
-              non_docker_platform_jobs << platform
-            end
-          end
-
-          fail("#{platforms_path}: at least one platform must set docker = true") if docker_platforms.empty?
-
-          git_sha, status = Open3.capture2("git", "rev-parse", "HEAD")
-          fail("failed to resolve git sha") unless status.success?
-          matrix = JSON.generate({ "include" => platforms })
-          docker_matrix = JSON.generate({ "include" => docker_platform_jobs })
-          non_docker_matrix = JSON.generate({ "include" => non_docker_platform_jobs })
-          current_sort_key = version_sort_key(version)
-          tags, status = Open3.capture2("git", "tag", "--list", "#{tag_prefix}*", "--merged", "HEAD")
-          fail("failed to list git tags") unless status.success?
-          previous_tag = tags
-            .lines
-            .map(&:strip)
-            .reject(&:empty?)
-            .reject { |tag| tag == release_tag }
-            .map do |tag|
-              tag_version = tag.delete_prefix(tag_prefix)
-              next unless tag_version.match?(SEMVER)
-              sort_key = version_sort_key(tag_version)
-              next unless sort_key && current_sort_key && sort_key < current_sort_key
-              [sort_key, tag]
-            end
-            .compact
-            .max_by(&:first)
-            &.last
-
-          puts "tag=#{release_tag}"
-          puts "version=#{version}"
-          # Docker tags forbid "+", so semver build metadata maps to "-" in image tags.
-          puts "docker_version=#{version.tr("+", "-")}"
-          puts "build_time=#{Time.now.utc.iso8601}"
-          puts "git_sha=#{git_sha.strip}"
-          puts "platform_matrix=#{matrix}"
-          puts "docker_matrix=#{docker_matrix}"
-          puts "non_docker_matrix=#{non_docker_matrix}"
-          puts "has_non_docker=#{!non_docker_platform_jobs.empty?}"
-          puts "docker_platforms=#{docker_platforms.join(",")}"
-          puts "previous_tag=#{previous_tag}"
-          puts "prerelease=#{version.split("+", 2).first.include?("-")}"
-          RUBY
+      - name: Read build toolchains
+        id: toolchains
+        run: ruby release/toolchains.rb >> "$GITHUB_OUTPUT"
 
   quality:
     needs: [release-info]
@@ -191,10 +87,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             backend/target
-          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}-${{ needs.release-info.outputs.git_sha }}
+          key: cargo-v3-${{ runner.os }}-${{ matrix.target }}-${{ needs.release-info.outputs.rust_image }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
           restore-keys: |
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
+            cargo-v3-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build binary
         shell: bash
@@ -212,15 +107,16 @@ jobs:
             -v "$HOME/.cargo:/cargo" \
             -v "$PWD/..:/workspace" \
             -w /workspace/backend \
-            rust:1.97-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa \
+            "${RUST_IMAGE}" \
             cargo build --release --locked --target "${{ matrix.target }}" --bin codex-proxy-rs
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "../dist/binaries/${{ matrix.os }}-${{ matrix.arch }}/${{ matrix.binary }}"
         working-directory: backend
         env:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
+          RUST_IMAGE: ${{ needs.release-info.outputs.rust_image }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
-          CPR_BUILD_TYPE: release
+          CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -247,8 +143,9 @@ jobs:
           ref: ${{ needs.release-info.outputs.git_sha }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1a3a6d54512beeaffd394f8d516ca16f2c506a20 # 1.97
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: ${{ needs.release-info.outputs.rust }}
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo
@@ -258,10 +155,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             backend/target
-          key: cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}-${{ needs.release-info.outputs.git_sha }}
+          key: cargo-v3-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
           restore-keys: |
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('backend/Cargo.lock', 'backend/rust-toolchain.toml', 'backend/**/Cargo.toml', 'backend/.cargo/config.toml') }}
-            cargo-v2-${{ runner.os }}-${{ matrix.target }}-
+            cargo-v3-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build binary
         shell: bash
@@ -274,7 +170,7 @@ jobs:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
-          CPR_BUILD_TYPE: release
+          CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -333,80 +229,7 @@ jobs:
 
           print JSON.generate(YAML.load_file("release/platforms.yaml"))
           RUBY
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import shutil
-          import tarfile
-
-          APP_NAME = "codex-proxy-rs"
-
-          def sha256(path: pathlib.Path) -> str:
-              digest = hashlib.sha256()
-              with path.open("rb") as file:
-                  for chunk in iter(lambda: file.read(1024 * 1024), b""):
-                      digest.update(chunk)
-              return digest.hexdigest()
-
-          version = os.environ["VERSION"]
-          platforms = json.loads(pathlib.Path("release-platforms.json").read_text())["platforms"]
-          frontend_dir = pathlib.Path("dist/frontend")
-          binary_artifacts_dir = pathlib.Path("dist/binaries")
-          release_dir = pathlib.Path("dist/release")
-          package_dir = pathlib.Path("package")
-
-          shutil.rmtree(release_dir, ignore_errors=True)
-          release_dir.mkdir(parents=True)
-          config_asset = release_dir / "config.example.yaml"
-          compose_asset = release_dir / "compose.yaml"
-          shutil.copy2("deploy/config.example.yaml", config_asset)
-          compose = pathlib.Path("deploy/compose.yaml").read_text()
-          default_image = "${CPR_IMAGE:-ghcr.io/heykode/newcpr:latest}"
-          if compose.count(default_image) != 1:
-              raise SystemExit("Expected exactly one default application image")
-          # Preserve Compose interpolation, anchors and comments.
-          pinned_image = "${CPR_IMAGE:-ghcr.io/heykode/newcpr:" + version.replace("+", "-") + "}"
-          compose_asset.write_text(compose.replace(default_image, pinned_image))
-          archives = [config_asset, compose_asset]
-
-          for platform in platforms:
-              platform_name = f"{platform['os']}-{platform['arch']}"
-              artifact_name = f"{APP_NAME}-{platform_name}"
-              binary_src = binary_artifacts_dir / artifact_name / platform["binary"]
-              # download-artifact flattens a single match even when a pattern is used.
-              if not binary_src.is_file() and len(platforms) == 1:
-                  binary_src = binary_artifacts_dir / platform["binary"]
-              if not binary_src.is_file():
-                  raise SystemExit(f"Missing binary artifact: {binary_src}")
-
-              shutil.rmtree(package_dir, ignore_errors=True)
-              package_root = package_dir / APP_NAME
-              web_dist = package_root / "web" / "dist"
-              web_dist.mkdir(parents=True)
-
-              binary_dest = package_root / platform["binary"]
-              shutil.copy2(binary_src, binary_dest)
-              binary_dest.chmod(0o755)
-              shutil.copytree(frontend_dir, web_dist, dirs_exist_ok=True)
-              (package_root / "deploy").mkdir()
-              shutil.copy2(config_asset, package_root / "deploy" / config_asset.name)
-
-              archive_name = f"{APP_NAME}_{version}_{platform['os']}_{platform['arch']}.{platform['archive']}"
-              archive_path = release_dir / archive_name
-              if platform["archive"] == "tar.gz":
-                  with tarfile.open(archive_path, "w:gz") as archive:
-                      archive.add(package_root, arcname=APP_NAME)
-              else:
-                  raise SystemExit(f"Unsupported archive format: {platform['archive']}")
-              archives.append(archive_path)
-
-          checksum_path = release_dir / "checksums.txt"
-          with checksum_path.open("w", encoding="utf-8") as file:
-              for archive in archives:
-                  file.write(f"{sha256(archive)}  {archive.name}\n")
-          PY
+          python3 release/package_release.py
 
       - name: Upload release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -539,6 +362,9 @@ jobs:
           retention-days: 1
 
   publish:
+    concurrency:
+      group: release-publication
+      queue: max
     needs: [release-info, package-assets, build-docker-image]
     if: >-
       ${{
@@ -617,16 +443,10 @@ jobs:
             exit 1
           fi
 
-          target_args=(
-            -t "${image}:${DOCKER_VERSION}"
-            -t "${image}:sha-${GIT_SHA}"
-          )
-          if [ "$PRERELEASE" != true ]; then
-            target_args+=(-t "${image}:latest")
-          fi
-          docker buildx imagetools create "${target_args[@]}" "${sources[@]}"
+          candidate="${image}:sha-${GIT_SHA}"
+          docker buildx imagetools create -t "$candidate" "${sources[@]}"
 
-          inspect_output="$(docker buildx imagetools inspect "${image}:${DOCKER_VERSION}")"
+          inspect_output="$(docker buildx imagetools inspect "$candidate")"
           platform_list="$(awk '$1 == "Platform:" { print $2 }' <<< "${inspect_output}")"
           for platform in "${platforms[@]}"; do
             if ! grep -Eq "^${platform}(/|$)" <<< "${platform_list}"; then
@@ -636,38 +456,17 @@ jobs:
             fi
           done
 
-          digest="$(docker buildx imagetools inspect "${image}:${DOCKER_VERSION}" --format '{{ .Manifest.Digest }}')"
+          digest="$(docker buildx imagetools inspect "$candidate" --format '{{ .Manifest.Digest }}')"
           if [ -z "${digest}" ]; then
             echo "missing image digest"
             exit 1
           fi
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
-      - name: Sign app image
-        shell: bash
+      - name: Sign app image digest
         env:
           DIGEST: ${{ steps.manifest.outputs.digest }}
-          DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
-          GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
-          PRERELEASE: ${{ needs.release-info.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-          if [ -z "${DIGEST}" ]; then
-            echo "missing image digest"
-            exit 1
-          fi
-
-          image="${REGISTRY}/${IMAGE_NAME}"
-          tags=("${image}:${DOCKER_VERSION}" "${image}:sha-${GIT_SHA}")
-          if [ "$PRERELEASE" != true ]; then
-            tags+=("${image}:latest")
-          fi
-          images=()
-          for tag in "${tags[@]}"; do
-            images+=("${tag}@${DIGEST}")
-          done
-
-          cosign sign --yes "${images[@]}"
+        run: cosign sign --yes "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
 
       - name: Prepare release description
         shell: bash
@@ -696,15 +495,25 @@ jobs:
         run: |
           ruby -e 'File.write("release-body.md", File.read("release/notes.md").rstrip + "\n\n" + ENV.fetch("INSTALLATION_NOTES"))'
 
-      - name: Publish GitHub Release
+      - name: Upload GitHub Release assets
+        id: release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.release-info.outputs.tag }}
           generate_release_notes: true
           previous_tag: ${{ needs.release-info.outputs.previous_tag }}
           prerelease: ${{ needs.release-info.outputs.prerelease == 'true' }}
-          make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
+          draft: true
+          make_latest: 'false'
           body_path: release-body.md
           fail_on_unmatched_files: true
           files: |
             dist/release/*
+
+      - name: Publish version and advance latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.release-info.outputs.version }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: ruby release/publish-release.rb

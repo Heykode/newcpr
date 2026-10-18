@@ -45,7 +45,7 @@ pub(super) struct Reservation {
 impl Budget {
     fn reserve(self: &Arc<Self>, bytes: usize) -> Option<Reservation> {
         self.0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes).filter(|next| *next <= BUFFER_LIMIT)
             })
             .ok()?;
@@ -139,7 +139,7 @@ impl RequestCaptureFactory for CaptureManager {
         if self
             .shared
             .sessions
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_SESSIONS).then_some(count + 1)
             })
             .is_err()

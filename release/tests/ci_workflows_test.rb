@@ -39,6 +39,10 @@ class CiWorkflowsTest < Minitest::Test
       assert selected?("deployment", path), path
     end
     assert_equal %w[changes container deployment-tools quality validated], CI["jobs"].keys.sort
+    %w[backend frontend container].each do |area|
+      assert selected?(area, 'release/toolchains.rb'), area
+      assert selected?(area, 'deploy/Dockerfile'), area
+    end
   end
 
   def test_other_quality_callers_default_to_full_and_cargo_receives_data_not_shell_code

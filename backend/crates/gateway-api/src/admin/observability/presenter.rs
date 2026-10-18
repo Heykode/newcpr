@@ -272,6 +272,8 @@ pub(crate) fn usage_list_record_view_with_timezone(
         .clone()
         .or_else(|| record.requested_model_id.clone());
     UsageListRecordView {
+        error_code: record.error_code,
+        error_message: record.error_message,
         outcome: record.outcome.as_str().to_owned(),
         client_api_key_name: record.client_api_key_name,
         id: record.id,

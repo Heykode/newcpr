@@ -50,6 +50,11 @@ const emit = defineEmits<{ filter: [value: UsageFilterParams] }>()
         {{ ({ succeeded: '成功', failed: '失败', incomplete: '未完成', running: '进行中', cancelled: '已取消' } as Record<string, string>)[row.outcome ?? 'succeeded'] ?? row.outcome }}
       </span>
     </template>
+    <template #errorMessage="{ row }">
+      <span class="line-clamp-3 whitespace-pre-wrap break-all text-cp-error-text" :title="['failed', 'incomplete'].includes(row.outcome ?? '') ? row.errorMessage || row.errorCode || undefined : undefined">
+        {{ ['failed', 'incomplete'].includes(row.outcome ?? '') ? (row.errorMessage || row.errorCode || '未记录具体错误消息') : '—' }}
+      </span>
+    </template>
     <template #provider="{ row }">
       <ProviderIconGroup
         :provider="String(row.provider || '')"

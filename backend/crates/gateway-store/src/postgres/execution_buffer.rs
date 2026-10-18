@@ -76,7 +76,7 @@ impl ExecutionBufferState {
         });
         if self
             .queued_items
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |items| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |items| {
                 items.checked_add(1).filter(|items| *items <= item_limit)
             })
             .is_err()
@@ -85,7 +85,7 @@ impl ExecutionBufferState {
         }
         let reserved = self
             .queued_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current
                     .checked_add(bytes)
                     .filter(|next| *next <= byte_limit)
@@ -134,7 +134,7 @@ impl ExecutionBufferState {
 }
 
 fn saturating_increment(counter: &AtomicU64, increment: u64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(increment))
     });
 }
