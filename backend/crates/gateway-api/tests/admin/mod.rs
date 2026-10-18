@@ -1238,8 +1238,20 @@ impl ObservabilityStore for UnusedStore {
             .ok_or_else(|| unavailable("dashboard"))
     }
 
-    async fn dashboard_trend(&self, _: TimeRange) -> AdminStoreResult<Vec<RequestMetricPoint>> {
-        Err(unavailable("dashboard trend"))
+    async fn dashboard_trend(&self, range: TimeRange) -> AdminStoreResult<Vec<RequestMetricPoint>> {
+        let observation = self
+            .dashboard_observation
+            .lock()
+            .expect("dashboard observation");
+        let observation = observation
+            .as_ref()
+            .ok_or_else(|| unavailable("dashboard trend"))?;
+        Ok(observation
+            .trend
+            .iter()
+            .filter(|point| point.bucket_start >= range.start && point.bucket_start < range.end)
+            .cloned()
+            .collect())
     }
 
     async fn usage_trend(

@@ -101,14 +101,11 @@ export function useBackupRecords() {
   }
 
   async function changePage(page: number): Promise<void> {
-    paged.page.value = page
-    await paged.execute()
+    await paged.execute({ page })
   }
 
   async function changePageSize(pageSize: number): Promise<void> {
-    paged.pageSize.value = pageSize
-    paged.page.value = 1
-    await paged.execute()
+    await paged.execute({ page: 1, pageSize })
   }
 
   async function create(): Promise<void> {
@@ -131,7 +128,7 @@ export function useBackupRecords() {
       return
     downloadStates.value = { ...downloadStates.value, [record.id]: true }
     try {
-      const result = await getBackupDownloadUrl(record.id)
+      const result = await getBackupDownloadUrl({ backupId: record.id })
       // 预签名 URL 带 S3 的 Content-Disposition，临时 anchor 触发浏览器下载即可。
       const link = document.createElement('a')
       link.href = result.url
@@ -160,7 +157,7 @@ export function useBackupRecords() {
       return
     deleting.value = true
     try {
-      await deleteBackup(target.id)
+      await deleteBackup({ backupId: target.id })
       toast.success('已请求删除备份')
       await paged.execute({ silent: true })
     }

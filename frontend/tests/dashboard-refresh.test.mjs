@@ -42,6 +42,35 @@ function summary(marker) {
   return { trend: { kind: 'usage', points: [] }, usageRecords: [{ marker }] }
 }
 
+test('dashboard comparison hides no-traffic and unknown cache trends', async () => {
+  const view = mountDashboard()
+  const cards = {
+    credentials: { total: '1', totalValue: 1, available: '1', unavailable: '0' },
+    traffic: { todayRequests: '0', todayRequestsValue: 0, yesterdayRequestsValue: 3 },
+    tokens: { todayTokens: '0', todayTokensValue: 0, yesterdayTokensValue: 100, totalBillingAmountUsd: '$0.00' },
+    cache: { todayHitRateValue: null, yesterdayHitRateValue: 0.5 },
+  }
+  try {
+    view.pending[0].resolve({ ...summary('empty'), cards })
+    await setImmediate()
+    assert.ok(view.state.metrics.value.every(card => card.trend === undefined))
+    cards.traffic.todayRequestsValue = 5
+    cards.tokens.todayTokensValue = 200
+    view.autoRefresh()
+    view.pending.at(-1).resolve({ ...summary('traffic'), cards: structuredClone(cards) })
+    await setImmediate()
+    assert.equal(view.state.metrics.value[1].trend.direction, 'up')
+    assert.equal(view.state.metrics.value[2].trend.direction, 'up')
+    assert.equal(view.state.metrics.value[3].trend, undefined)
+    cards.cache.todayHitRateValue = 0
+    view.autoRefresh()
+    view.pending.at(-1).resolve({ ...summary('known-zero'), cards: structuredClone(cards) })
+    await setImmediate()
+    assert.equal(view.state.metrics.value[3].trend.direction, 'down')
+  }
+  finally { view.dispose() }
+})
+
 test('silent dashboard refresh preserves content and deduplicates in-flight summaries', async () => {
   const view = mountDashboard()
   try {

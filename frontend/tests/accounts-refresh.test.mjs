@@ -144,6 +144,41 @@ async function mountLoaded(harness, result = accountResponse()) {
   assert.equal(harness.query.loading.value, false)
 }
 
+test('failed pagination restores the last accepted page and size with its rows', async (t) => {
+  const h = createHarness(t)
+  const initial = accountResponse({ page: 2, total: 100 })
+  await mountLoaded(h, initial)
+  for (const change of [() => h.query.handlePageChange(3), () => h.query.handlePageSizeChange(50)]) {
+    change()
+    assert.equal(h.query.accounts.value, initial.items)
+    h.requests.at(-1).reject(new Error('page unavailable'))
+    await flushRequests()
+    assertResult(h.query, initial)
+  }
+})
+
+test('an older pagination failure cannot roll back a newer page or a filter reset', async (t) => {
+  const h = createHarness(t)
+  await mountLoaded(h, accountResponse({ total: 100 }))
+  h.query.handlePageChange(2)
+  const old = h.requests.at(-1)
+  h.query.handlePageChange(3)
+  const accepted = accountResponse({ page: 3, total: 100 })
+  await h.settle(accepted)
+  old.reject(new Error('stale page failure'))
+  await flushRequests()
+  assertResult(h.query, accepted)
+  h.query.searchQuery.value = 'new filter'
+  await h.flushSearch()
+  assert.equal(h.query.accounts.value.length, 0)
+  assert.equal(h.query.page.value, 1)
+  h.requests.at(-1).reject(new Error('filter unavailable'))
+  await flushRequests()
+  assert.equal(h.query.accounts.value.length, 0)
+  assert.equal(h.query.totalAccounts.value, 0)
+  assert.equal(h.query.page.value, 1)
+})
+
 function assertResult(query, result) {
   assert.equal(query.accounts.value, result.items, 'rows must come from the accepted response')
   assert.equal(query.accountSummary.value, result.summary, 'summary must come from the same response')

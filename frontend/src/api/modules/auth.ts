@@ -54,13 +54,22 @@ export function logout(options: RequestOptions = {}) {
 }
 
 export function changeAdminPassword(
-  data: { currentPassword: string, newPassword: string },
+  data: ChangeAdminPasswordParam,
   options: RequestOptions = {},
 ) {
-  return request<{ message: string }>({
+  return request<ChangeAdminPasswordResponse>({
     url: '/api/admin/auth/password',
     method: 'POST',
     data,
     ...options,
   })
+}
+
+interface ChangeAdminPasswordParam {
+  currentPassword: string
+  newPassword: string
+}
+
+interface ChangeAdminPasswordResponse {
+  message: string
 }

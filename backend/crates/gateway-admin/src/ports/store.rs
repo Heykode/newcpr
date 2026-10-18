@@ -645,6 +645,26 @@ pub trait ObservabilityStore: Send + Sync {
 
     async fn dashboard_trend(&self, range: TimeRange) -> AdminStoreResult<Vec<RequestMetricPoint>>;
 
+    /// Calendar comparison reads counters independently of the selected trend window.
+    async fn dashboard_card_metrics(
+        &self,
+        range: TimeRange,
+    ) -> AdminStoreResult<crate::model::observability::RequestMetrics> {
+        let mut result = crate::model::observability::RequestMetrics::default();
+        for point in self.dashboard_trend(range).await? {
+            if point.bucket_start < range.start || point.bucket_start >= range.end {
+                continue;
+            }
+            let metrics = point.metrics;
+            result.request_count = result.request_count.saturating_add(metrics.request_count);
+            result.input_tokens = result.input_tokens.saturating_add(metrics.input_tokens);
+            result.output_tokens = result.output_tokens.saturating_add(metrics.output_tokens);
+            result.cached_tokens = result.cached_tokens.saturating_add(metrics.cached_tokens);
+            result.total_tokens = result.total_tokens.saturating_add(metrics.total_tokens);
+        }
+        Ok(result)
+    }
+
     async fn usage_trend(
         &self,
         range: TimeRange,

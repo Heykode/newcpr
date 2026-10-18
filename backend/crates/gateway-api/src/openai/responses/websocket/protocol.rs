@@ -47,7 +47,8 @@ pub(super) fn decode_response_create_for_window(
     else {
         return Err(ResponseCreateFrameError::ExpectedObject);
     };
-    match body.remove("type") {
+    // Removing the envelope must not reorder the remaining request fields.
+    match body.shift_remove("type") {
         Some(Value::String(message_type)) if message_type == "response.create" => {}
         _ => return Err(ResponseCreateFrameError::UnsupportedType),
     }
@@ -70,7 +71,7 @@ pub(super) fn decode_response_create_for_window(
         (Some(previous), Some(current)) if previous != current
     );
     if rollover {
-        body.remove("previous_response_id");
+        body.shift_remove("previous_response_id");
     }
     let request = super::super::request::decode_request_object(
         body,

@@ -84,7 +84,7 @@ function clearRemove() {
 <template>
   <BaseModal v-model="open" title="关联账号" :description="description" size="lg" :dismissible="!removing">
     <div class="flex min-h-0 flex-col">
-      <BaseInput v-model="search" class="mb-4 shrink-0 sm:w-80" :disabled="removing" aria-label="搜索关联账号" placeholder="搜索账号名称或邮箱...">
+      <BaseInput v-model="search" class="mb-4 shrink-0 sm:w-80" :disabled="removing" aria-label="搜索关联账号" placeholder="搜索账号名称或邮箱">
         <template #prefix>
           <Search class="size-4.5 text-cp-text-tertiary" />
         </template>

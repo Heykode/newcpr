@@ -592,7 +592,9 @@ export function getUsageRecordDetail(data: UsageDetailQuery, options: RequestOpt
   })
 }
 
-export function getRequestDiagnosticsBundle(data: { requestId: string } | { errorId: string }, options: RequestOptions = {}) {
+type DiagnosticsDownloadParams = { requestId: string } | { errorId: string }
+
+export function getRequestDiagnosticsBundle(data: DiagnosticsDownloadParams, options: RequestOptions = {}) {
   return request<unknown>({
     url: '/api/admin/usage/diagnostics/export',
     timeout: OBSERVABILITY_TIMEOUT_MS,

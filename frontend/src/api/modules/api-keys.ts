@@ -138,8 +138,12 @@ export function enableApiKey(data: ApiKeyIdParam, options: RequestOptions = {}) 
   })
 }
 
+export interface ApiKeyBudgetResetParam extends ApiKeyIdParam {
+  period: ApiKeyBudgetPeriod
+}
+
 export function resetApiKeyBudget(
-  data: ApiKeyIdParam & { period: ApiKeyBudgetPeriod },
+  data: ApiKeyBudgetResetParam,
   options: RequestOptions = {},
 ) {
   return request<ApiKeyMutationResponse>({

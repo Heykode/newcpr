@@ -9,6 +9,27 @@ use super::decode_response_create;
 use super::*;
 
 #[test]
+fn response_create_preserves_json_field_order_when_removing_type() {
+    let expected = r#"{"model":"model-a","stream":true,"input":[],"future_field":{"z":1,"a":2},"client_metadata":{"thread_id":"thread"}}"#;
+    for payload in [
+        r#"{"type":"response.create","model":"model-a","stream":true,"input":[],"future_field":{"z":1,"a":2},"client_metadata":{"thread_id":"thread"}}"#,
+        r#"{"model":"model-a","stream":true,"type":"response.create","input":[],"future_field":{"z":1,"a":2},"client_metadata":{"thread_id":"thread"}}"#,
+        r#"{"model":"model-a","stream":true,"input":[],"future_field":{"z":1,"a":2},"client_metadata":{"thread_id":"thread"},"type":"response.create"}"#,
+        r#"{"use_websocket":true,"type":"response.create","model":"model-a","stream":true,"input":[],"future_field":{"z":1,"a":2},"client_metadata":{"thread_id":"thread"}}"#,
+        r#"{"type":"response.create","model":"model-a","stream":true,"use_websocket":false,"input":[],"future_field":{"z":1,"a":2},"client_metadata":{"thread_id":"thread"}}"#,
+    ] {
+        let decoded = decode_response_create(payload).unwrap();
+        let Operation::Generate(request) = decoded.operation() else {
+            panic!("expected generate operation");
+        };
+        assert_eq!(
+            serde_json::to_string(request.protocol_payload().body()).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn client_retry_identity_should_follow_each_frame_instead_of_handshake_metadata() {
     let mut headers = HeaderMap::new();
     headers.insert(

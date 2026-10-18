@@ -16,7 +16,7 @@ export function useClientDownloads() {
     loading.value = true
     error.value = ''
     try {
-      downloads.value = await getCodexDesktopWindowsDownloads(refresh)
+      downloads.value = await getCodexDesktopWindowsDownloads({ refresh })
     }
     catch (cause: unknown) {
       error.value = errorMessage(cause)

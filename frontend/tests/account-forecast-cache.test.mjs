@@ -18,7 +18,13 @@ function load(path, dependencies, globals = {}) {
   })
   runInNewContext(outputText, {
     exports,
-    require: name => dependencies[name] ?? require(name),
+    require: name => dependencies[name] ?? (name === '@/composables/useRequestState'
+      ? load('../../composables/useRequestState', {
+          vue,
+          '@/api/request': { ApiError: class extends Error {} },
+          '@/utils/async': load('../../utils/async', {}),
+        })
+      : name === '@/utils/async' ? load('../../utils/async', {}) : require(name)),
     AbortController,
     ...globals,
   }, { filename: file.pathname })
@@ -235,7 +241,7 @@ test('modal and list share manual refresh even when the quota reset boundary cha
   for (const pending of h.pending.slice(1))
     pending.resolve(report('a'))
   await refresh
-  assert.equal(modal.error.value, false)
+  assert.equal(modal.error.value, '')
   assert.equal(modal.report.value?.accountId, 'a')
   assert.equal(list.cache.peek('a', h.now())?.accountId, 'a')
   list.cache.invalidate('a')

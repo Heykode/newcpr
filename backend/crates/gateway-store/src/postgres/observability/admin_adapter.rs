@@ -461,6 +461,19 @@ impl AdminObservabilityStore for PgAdminObservabilityStore {
         Ok((admin_dashboard_observation(observation)?, slots))
     }
 
+    async fn dashboard_card_metrics(
+        &self,
+        range: admin_observability::TimeRange,
+    ) -> AdminStoreResult<admin_observability::RequestMetrics> {
+        let range = store_range(range)?;
+        let metrics = self.repository.query_budget.run(
+            &self.repository.pool,
+            "load dashboard comparison counters",
+            |mut connection| async move { dashboard_card_metrics(&mut connection, range).await },
+        ).await.map_err(observability_error)?;
+        admin_request_metrics(metrics)
+    }
+
     async fn dashboard_runtime_slots(
         &self,
         observed_at: DateTime<Utc>,

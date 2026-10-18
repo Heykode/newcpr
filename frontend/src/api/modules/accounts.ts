@@ -15,7 +15,14 @@ export interface AccountConcurrencyPage {
   pageSize: number
 }
 
-export function getAccountConcurrency(data: { accountId: string, pool: AccountConcurrencyPool, page: number, pageSize: number }, options: RequestOptions = {}) {
+interface AccountConcurrencyParams {
+  accountId: string
+  pool: AccountConcurrencyPool
+  page: number
+  pageSize: number
+}
+
+export function getAccountConcurrency(data: AccountConcurrencyParams, options: RequestOptions = {}) {
   return request<AccountConcurrencyPage | null>({ url: '/api/admin/accounts/concurrency', method: 'GET', params: data, ...options })
 }
 
@@ -747,11 +754,15 @@ export function createAccountImportTask(data: CreateAccountImportTaskParam) {
 }
 
 export function getAccountImportTasks(options: RequestOptions = {}) {
-  return request<{ items: AccountImportTask[] }>({
+  return request<AccountImportTaskListResponse>({
     url: '/api/admin/accounts/import-tasks',
     method: 'GET',
     ...options,
   })
+}
+
+interface AccountImportTaskListResponse {
+  items: AccountImportTask[]
 }
 
 export function getAccountImportTask(data: AccountImportTaskIdParam, options: RequestOptions = {}) {
