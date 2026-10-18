@@ -104,6 +104,24 @@ async fn concurrency_details_follow_real_leases_and_preserve_legacy_occupancy() 
         .unwrap();
     assert_eq!(page.total, 2);
     assert_eq!(page.items.len(), 2);
+    assert!(page.items.iter().all(|item| !item.lease_id.is_empty()));
+    assert_ne!(page.items[0].lease_id, page.items[1].lease_id);
+    let repeated = runtime
+        .concurrency("acct_details", AccountConcurrencyPool::Shared, 1, 20)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| &item.lease_id)
+            .collect::<Vec<_>>(),
+        repeated
+            .items
+            .iter()
+            .map(|item| &item.lease_id)
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         page.items
             .iter()

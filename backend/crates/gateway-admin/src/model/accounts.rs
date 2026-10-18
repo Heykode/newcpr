@@ -32,6 +32,7 @@ pub enum AccountConcurrencyPool {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountConcurrencyItem {
+    pub lease_id: String,
     pub detail: Option<gateway_core::provider_ports::ProviderLeaseDetail>,
     pub expires_at_ms: u64,
 }

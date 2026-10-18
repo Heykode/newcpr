@@ -16,6 +16,8 @@ class ReleasePlatformsTest < Minitest::Test
   )
 
   def script(job, step_name, delimiter)
+    return File.read(File.join(ROOT, 'release/release-metadata.rb')) if step_name == 'Read release metadata'
+    return File.read(File.join(ROOT, 'release/package_release.py')) if step_name == 'Package release assets'
     step = JOBS.fetch(job).fetch("steps").find { |item| item["name"] == step_name }
     step.fetch("run").match(/<<'#{delimiter}'[^\n]*\n(.*?)^#{delimiter}$/m)[1]
   end
@@ -44,7 +46,7 @@ class ReleasePlatformsTest < Minitest::Test
   def metadata(dir)
     stdout, stderr, status = Open3.capture3(
       { "RELEASE_TAG" => "v1.0.0" }, "ruby", "-e",
-      script("release-info", "Read release metadata", "RUBY"), chdir: dir
+      script("release-info", "Read release metadata", "RUBY"), "outputs", "v1.0.0", chdir: dir
     )
     [stdout.lines.map { |line| line.strip.split("=", 2) }.to_h, stderr, status]
   end

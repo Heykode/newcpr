@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { UsageTimeRange } from './composables/useUsageTimeRange'
+import type { UsageDisplayRecord } from './utils/records'
 import type { UsageFilterParams } from '@/api'
+import type { ConfigurableTableColumn } from '@/components/base/BaseTable/useTableColumns'
 import { Eye } from '@lucide/vue'
 
 import { computed, shallowRef, watch } from 'vue'
@@ -15,6 +17,7 @@ import { useTableColumns } from '@/components/base/BaseTable/useTableColumns'
 import ProviderFilterSegmented from '@/components/ProviderFilterSegmented.vue'
 import DetailedCaptureControl from './components/DetailedCaptureControl.vue'
 import OpsErrorPanel from './components/OpsErrorPanel.vue'
+import UsageErrorDetailModal from './components/UsageErrorDetailModal.vue'
 import UsageFilters from './components/UsageFilters.vue'
 import UsageInsightsGrid from './components/UsageInsightsGrid.vue'
 import UsageQueryFilters from './components/UsageQueryFilters.vue'
@@ -27,7 +30,6 @@ import { useUsageRecordsTable } from './composables/useUsageRecordsTable'
 import { useUsageTimeRange } from './composables/useUsageTimeRange'
 import { usageRecordColumns, usageTimeRangeOptions } from './constants'
 
-const { visibleColumns, columnOptions, setColumnVisible, resetColumns } = useTableColumns(usageRecordColumns, 'usage-records')
 const { draft, error: filterError, filters, errorFilters } = useUsageFilters()
 const recordView = computed({
   get: () => draft.value.view === 'errors' ? 'errors' : 'success',
@@ -42,6 +44,12 @@ const recordViewOptions = [
   { label: '错误排查', value: 'errors' },
 ]
 const recordStatus = shallowRef<'success' | 'error' | 'all'>('success')
+const recordColumns = computed<ConfigurableTableColumn<UsageDisplayRecord>[]>(() => recordStatus.value === 'success'
+  ? usageRecordColumns
+  : usageRecordColumns.flatMap(column => column.key === 'route'
+      ? [column, { key: 'errorMessage', label: '最终错误', kind: 'custom', size: '4xl', hideable: false }]
+      : [column]))
+const { visibleColumns, columnOptions, setColumnVisible, resetColumns } = useTableColumns(recordColumns, 'usage-records')
 const recordStatusOptions = [
   { label: '成功', value: 'success' },
   { label: '错误', value: 'error' },
@@ -79,6 +87,11 @@ const {
 })
 
 const { showDetailModal, selectedUsageRecord, handleViewDetail } = useUsageRecordDetail()
+const fullDetail = shallowRef(false)
+watch([showDetailModal, () => selectedUsageRecord.value?.requestId], () => {
+  fullDetail.value = false
+})
+const errorDetail = computed(() => !fullDetail.value && ['failed', 'incomplete'].includes(selectedUsageRecord.value?.logicalOutcome ?? ''))
 
 function applyFilter(value: UsageFilterParams) {
   draft.value = {
@@ -215,6 +228,7 @@ watch(timeRange, () => {
       </template>
     </BaseCard>
 
-    <UsageRecordDetailModal v-model="showDetailModal" :record="selectedUsageRecord" />
+    <UsageErrorDetailModal v-if="errorDetail" v-model="showDetailModal" :record="selectedUsageRecord" @full-detail="fullDetail = true" />
+    <UsageRecordDetailModal v-else v-model="showDetailModal" :record="selectedUsageRecord" />
   </div>
 </template>

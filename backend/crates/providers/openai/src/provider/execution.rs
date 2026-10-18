@@ -568,7 +568,7 @@ pub(super) async fn create_json_attempt(
             _ = request.context.cancellation().cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
             _ = request.context.deadline().wait() => Err(CodexHandshakeAttemptError::Timeout),
             response = super::compact::collect_excel_compact(&request.client, excel, request_context) =>
-                response.map_err(|failure| CodexHandshakeAttemptError::Provider(Box::new(failure))),
+                response.map_err(CodexHandshakeAttemptError::Provider),
         };
     }
     tokio::select! {

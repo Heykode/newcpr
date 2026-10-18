@@ -86,6 +86,17 @@ class PublishTest < Minitest::Test
     end
   end
 
+  def test_normalizes_one_tag_prefix_before_creating_metadata_and_refs
+    File.write(File.join(@repo, "release/notes.md"), "# v0.1.1\n\nSynthetic update\n")
+    output, status = publish("vv0.1.1")
+    refute status.success?, output
+    assert_equal "", git("tag", "--list")
+    output, status = publish("v0.1.1")
+    assert status.success?, output
+    assert_equal "v0.1.1\n", git("tag", "--list")
+    assert_equal "version: \"0.1.1\"\n", git("show", "v0.1.1:release/version.yaml")
+  end
+
   def publish(version)
     Open3.capture2e(@env, "bash", SCRIPT, version, chdir: @repo)
   end

@@ -2801,19 +2801,27 @@ async fn websocket_idle_timeout_diagnosis_survives_ambiguous_send_wrapping() {
             .await
             .expect("partial response")
             .expect("valid partial response");
-        if event.has_client_event() {
+        // Native preludes are delivered immediately; start the idle clock only
+        // after the fixture's final data frame has actually been consumed.
+        if event.wire_event().and_then(|wire| wire.event_type())
+            == Some("response.output_text.delta")
+        {
             break;
         }
     }
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(300)).await;
-    let error = loop {
-        match stream.next().await {
-            Some(Ok(_)) => {}
-            Some(Err(error)) => break error,
-            None => panic!("idle timeout must surface a provider error"),
+    let pending_error = tokio::spawn(async move {
+        loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("idle timeout must surface a provider error"),
+            }
         }
-    };
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(300)).await;
+    let error = pending_error.await.expect("idle receive task");
     server.abort();
     assert_eq!(error.send_state(), UpstreamSendState::Ambiguous);
     assert!(!error.replay_is_safe());

@@ -500,6 +500,7 @@ local total = redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')
 local active = redis.call('ZRANGEBYSCORE', KEYS[1], '(' .. now, '+inf', 'WITHSCORES', 'LIMIT', ARGV[1], ARGV[2])
 local result = {tostring(total)}
 for i = 1, #active, 2 do
+  table.insert(result, active[i])
   table.insert(result, active[i + 1])
   table.insert(result, redis.call('GET', KEYS[1] .. ':detail:' .. active[i]) or '')
 end
@@ -518,11 +519,14 @@ return result
             .and_then(|value| value.parse().ok())
             .ok_or_else(|| invalid("invalid concurrency count"))?;
         let items = values[1..]
-            .chunks_exact(2)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|row| {
                 Ok(AccountConcurrencyItem {
-                    detail: serde_json::from_str(&row[1]).ok(),
-                    expires_at_ms: row[0]
+                    lease_id: row[0].clone(),
+                    detail: serde_json::from_str(&row[2]).ok(),
+                    expires_at_ms: row[1]
                         .parse()
                         .map_err(|_| invalid("invalid lease expiry"))?,
                 })
