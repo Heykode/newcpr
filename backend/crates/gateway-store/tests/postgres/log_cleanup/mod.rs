@@ -92,6 +92,15 @@ async fn log_cleanup_is_bounded_and_preserves_accounts_and_billing() {
         store.start(preview, &context()).await.unwrap_err().kind(),
         AdminStoreErrorKind::Conflict
     );
+    // SQLx queues rollback when the conflicting start drops its transaction.
+    // Wait for that control-row lock to be released before asserting batch size;
+    // run_batch intentionally skips a still-locked row and retries later.
+    let mut barrier = db.pool.begin().await.unwrap();
+    sqlx::query("select singleton from log_cleanup_control where singleton for update")
+        .execute(&mut *barrier)
+        .await
+        .unwrap();
+    barrier.commit().await.unwrap();
     store.run_batch().await.unwrap();
     assert_eq!(store.state().await.unwrap().job.unwrap().removed, 500);
     let finished = finish(&store).await;

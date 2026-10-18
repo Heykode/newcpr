@@ -1,0 +1,9 @@
+{
+  "from_version": "3.26.0",
+  "to_version": "3.27.0",
+  "from_migrations_tree": "623850a93da6384632e3f3b0ec455f3a1a6caf4e",
+  "to_migrations_tree": "44c84fff91598af922cc89032b30d1d88af5ec98",
+  "added": ["0074_auto_reset_inventory.sql", "0075_proxy_websocket_capacity.sql"],
+  "modified_documentation": ["README.md"],
+  "recovery": "manual"
+}
