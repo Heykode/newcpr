@@ -24,12 +24,12 @@
     "@vueuse/core": "^15.0.0",
     "axios": "^1.20.0",
     "dayjs": "^1.11.23",
-    "dompurify": "^3.4.15",
+    "dompurify": "^3.4.17",
     "echarts": "^6.1.0",
     "es-toolkit": "^1.52.0",
-    "eventsource-parser": "4.1.0",
+    "eventsource-parser": "4.1.2",
     "gsap": "^3.15.0",
-    "marked": "^18.0.13",
+    "marked": "^18.1.1",
     "pinia": "^4.1.0",
     "pinia-plugin-persistedstate": "^4.7.1",
     "vue": "^3.5.44",
@@ -47,6 +47,6 @@
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
     "vite": "^8.3.4",
-    "vue-tsc": "3.3.11"
+    "vue-tsc": "3.3.13"
   }
 }
