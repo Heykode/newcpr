@@ -48,6 +48,9 @@ async function main() {
     const deletions = []
     let rejectToggle = false
     let failTemplates = false
+    let failMonitoring = false
+    let rejectRuleId = null
+    let heldWrites = null
     const fulfill = (route, data) => route.fulfill({ json: { code: 200, message: 'ok', data } })
     await page.route('**/dev/api/admin/accounts?**', route => fulfill(route, {
       items: accounts.map(account => ({ ...account, qualityMonitoring: states[account.id] ?? null })),
@@ -61,11 +64,15 @@ async function main() {
     await page.route('**/dev/api/admin/quality-ops/**', async (route) => {
       const path = new URL(route.request().url()).pathname.split('/quality-ops/')[1]
       const body = route.request().method() === 'POST' ? route.request().postDataJSON() : null
-      if (path === 'monitoring')
+      if (path === 'monitoring') {
+        if (failMonitoring)
+          return route.fulfill({ status: 503, json: { code: 503, message: '监测读取失败', data: null } })
         return fulfill(route, Object.fromEntries(body.accountIds.filter(id => states[id]).map(id => [id, states[id]])))
+      }
       if (path === 'enabled') {
         writes.push(body)
-        if (rejectToggle)
+        await heldWrites?.promise
+        if (rejectToggle || body.id === rejectRuleId)
           return route.fulfill({ status: 409, json: { code: 409, message: '规则已更新', data: null } })
         const current = Object.values(states).find(state => state.ruleId === body.id)
         assert.equal(body.revision, current.revision)
@@ -91,7 +98,11 @@ async function main() {
     const row = i => page.locator(`[data-row-key="${accounts[i].id}"]`)
     const card = i => page.locator(`[data-account-card="${accounts[i].id}"]`)
     await page.goto(`http://127.0.0.1:${port}/accounts`)
-    await row(0).getByText('智商正常', { exact: true }).waitFor()
+    await row(0).getByText('智商正常', { exact: true }).waitFor({ timeout: 60000 }).catch(async (error) => {
+      await page.screenshot({ path: `${output}/failure.png` })
+      console.error('Page errors:', errors, 'Body:', (await page.locator('body').textContent())?.slice(0, 1600))
+      throw error
+    })
     assert.ok(await row(0).locator('[data-quality-verdict]').evaluate(el => el.classList.contains('text-cp-success')))
     assert.ok(await row(1).locator('[data-quality-verdict]').evaluate(el => el.classList.contains('text-cp-error')))
     await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
@@ -128,6 +139,72 @@ async function main() {
     failTemplates = false
     await setup.getByRole('button', { name: '取消', exact: true }).click()
     assert.equal(states[accounts[2].id], undefined)
+
+    const batchTrigger = page.getByRole('button', { name: '质量检测', exact: true })
+    const batchMenu = page.getByRole('group', { name: '批量质量检测', exact: true })
+    const batchSwitch = async (enabled) => {
+      await batchTrigger.click()
+      await batchMenu.getByRole('button', { name: enabled ? '批量开启' : '批量关闭', exact: true }).click()
+    }
+    const clearNotices = async () => {
+      await page.getByRole('button', { name: /^关闭.*通知$/ }).evaluateAll(buttons => buttons.forEach(button => button.click()))
+    }
+    assert.equal(await batchTrigger.count(), 0)
+    for (const index of [0, 1, 2])
+      await row(index).getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
+    heldWrites = Promise.withResolvers()
+    const beforePause = writes.length
+    await batchSwitch(false)
+    await page.waitForFunction(() => document.querySelector('button[aria-label="质量检测"]')?.disabled)
+    assert.equal(await page.getByRole('button', { name: '监测模板', exact: true }).isDisabled(), true)
+    assert.equal(await page.getByRole('button', { name: '删除选中 (3)', exact: true }).isDisabled(), true)
+    await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
+    assert.equal(await menu.getByRole('button', { name: /质量检测开关/ }).isDisabled(), true)
+    await page.keyboard.press('Escape')
+    heldWrites.resolve()
+    heldWrites = null
+    await row(0).getByText('监测暂停', { exact: true }).waitFor()
+    await row(1).getByText('监测暂停', { exact: true }).waitFor()
+    assert.equal(writes.length - beforePause, 2)
+    assert.equal(states[accounts[2].id], undefined, 'no automatic setup for missing rules')
+    await page.getByText('质量检测已关闭 2 个；1 个未配置，已跳过', { exact: true }).waitFor()
+    await clearNotices()
+
+    // A mixed selection must converge on the requested state, never invert each row.
+    await row(0).getByRole('button', { name: '更多操作', exact: true }).click()
+    await menu.getByRole('button', { name: /质量检测开关/ }).click()
+    await row(0).getByText('监测中', { exact: true }).waitFor()
+    const beforeEnable = writes.length
+    await batchSwitch(true)
+    await row(1).getByText('监测中', { exact: true }).waitFor()
+    assert.deepEqual(writes.slice(beforeEnable).map(write => write.id), ['rule-1'])
+    await page.getByText(/质量检测已开启 2 个；1 个未配置，已跳过；请先应用监测模板/).waitFor()
+    await clearNotices()
+    failMonitoring = true
+    const beforeReadFailure = writes.length
+    await batchSwitch(false)
+    await page.getByText('监测读取失败', { exact: true }).waitFor()
+    assert.equal(writes.length, beforeReadFailure)
+    failMonitoring = false
+    await clearNotices()
+    rejectRuleId = 'rule-1'
+    await batchSwitch(false)
+    await page.getByText('质量检测已关闭 1 个；1 个未配置，已跳过；1 个未完成：规则已更新', { exact: true }).waitFor()
+    await row(0).getByText('监测暂停', { exact: true }).waitFor()
+    await row(1).getByText('监测中', { exact: true }).waitFor()
+    rejectRuleId = null
+    const beforeRetry = writes.length
+    await batchSwitch(false)
+    await row(1).getByText('监测暂停', { exact: true }).waitFor()
+    assert.deepEqual(writes.slice(beforeRetry).map(write => write.id), ['rule-1'])
+    await batchSwitch(true)
+    await row(0).getByText('监测中', { exact: true }).waitFor()
+    await row(1).getByText('监测中', { exact: true }).waitFor()
+    for (const index of [0, 1, 2])
+      await row(index).getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
+    await clearNotices()
+    assert.ok(writes.every(write => Object.keys(write).sort().join(',') === 'enabled,id,revision'))
+
     for (const theme of ['light', 'dark']) {
       await page.setViewportSize({ width: 1440, height: 1000 })
       if (await page.locator('html').getAttribute('data-theme') !== theme) {
@@ -143,6 +220,20 @@ async function main() {
           assert.ok(await card(0).evaluate(el => el.scrollWidth <= el.clientWidth + 1), `card overflow ${width}`)
         const badge = first.getByRole('link', { name: /智商正常/ })
         assert.ok(await badge.evaluate(el => el.scrollWidth <= el.clientWidth + 1), `badge overflow ${width}`)
+        await first.getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
+        const toolbar = page.getByRole('group', { name: '账号筛选与操作', exact: true })
+        assert.ok(await toolbar.evaluate(el => el.scrollWidth <= el.clientWidth + 1), `toolbar overflow ${width}`)
+        await batchTrigger.click()
+        await batchMenu.getByRole('button', { name: '批量开启', exact: true }).waitFor()
+        const menuBox = await batchMenu.boundingBox()
+        assert.ok(menuBox.x >= 0 && menuBox.x + menuBox.width <= width + 1, `batch menu overflow ${width}`)
+        await page.screenshot({ path: `${output}/batch-quality-${theme}-${width}.png`, animations: 'disabled' })
+        await batchMenu.getByRole('button', { name: '批量关闭', exact: true }).click()
+        await first.getByText('监测暂停', { exact: true }).waitFor()
+        await batchSwitch(true)
+        await first.getByText('监测中', { exact: true }).waitFor()
+        await first.getByRole('checkbox', { name: '选择账号', exact: true }).locator('..').click()
+        await clearNotices()
         await page.screenshot({ path: `${output}/accounts-${theme}-${width}.png`, animations: 'disabled' })
         await first.getByRole('button', { name: '删除账号', exact: true }).click()
         const confirm = page.getByRole('alertdialog', { name: '删除账号', exact: true })
@@ -199,7 +290,7 @@ async function main() {
     }
     assert.deepEqual(errors, [])
     assert.deepEqual(external, [])
-    process.stdout.write('PASS account quality controls: colors, concise status, menu order, toggle/CAS failure, first setup, single/batch deletion checkbox, light/dark 1440/390/320px; no external requests\n')
+    process.stdout.write('PASS account quality controls: single/batch switches, mixed states, partial failures, read failure, mutation guards, first setup, deletion, light/dark 1440/390/320px; no external requests\n')
   }
   finally {
     await browser?.close()

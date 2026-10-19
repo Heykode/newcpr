@@ -38,7 +38,7 @@ function quality(t, api, reload = async () => {}) {
     '@/api/modules/quality-ops': api,
     '@/composables/useIdSet': idSet,
     '@/utils/async': { errorMessage: e => e.message },
-    '@/components/base/BaseToast': { toast: { error: s => messages.push(s), success: s => messages.push(s) } },
+    '@/components/base/BaseToast': { toast: { error: s => messages.push(s), success: s => messages.push(s), warning: s => messages.push(s) } },
   })
   const scope = vue.effectScope()
   t.after(() => scope.stop())
@@ -109,6 +109,175 @@ test('disposing during quality read aborts it and prevents a late mutation', asy
   read.resolve({ a: { ruleId: 'r', revision: 1, enabled: true } })
   await pending
   assert.equal(writes, 0)
+})
+
+test('batch quality freezes cross-page selection, deduplicates and only patches differing configured rules', async (t) => {
+  const read = Promise.withResolvers()
+  const reads = []
+  const writes = []
+  let reloads = 0
+  const { state, messages } = quality(t, {
+    getQualityMonitoring: (ids) => {
+      reads.push([...ids])
+      return read.promise
+    },
+    setQualityEnabled: async data => writes.push(data),
+  }, async () => { reloads++ })
+  const ids = ['on-page', 'off-page', 'missing', 'on-page']
+  const first = state.setBatchEnabled(ids, true)
+  ids.splice(0, ids.length, 'unselected')
+  await state.setBatchEnabled(['unselected'], false)
+  await state.toggle({ id: 'on-page', qualityMonitoring: { enabled: true } })
+  assert.equal(reads.length, 1, 'batch and single clicks cannot interleave')
+  assert.equal(state.batchBusy.value, true)
+  read.resolve({
+    'on-page': { ruleId: 'rule-a', revision: 8, enabled: false },
+    'off-page': { ruleId: 'rule-b', revision: 9, enabled: true },
+    'unselected': { ruleId: 'rule-c', revision: 2, enabled: false },
+  })
+  await first
+  assert.deepEqual(reads[0], ['on-page', 'off-page', 'missing'])
+  assert.deepEqual(structuredClone(writes), [{ id: 'rule-a', revision: 8, enabled: true }])
+  assert.ok(messages.some(text => text.includes('已开启 2 个') && text.includes('1 个未配置') && text.includes('监测模板')))
+  assert.equal(reloads, 1)
+  assert.equal(state.batchBusy.value, false)
+})
+
+test('batch quality pauses mixed states, keeps partial failures and rereads before a manual retry', async (t) => {
+  const monitoring = {
+    a: { ruleId: 'r-a', revision: 2, enabled: true },
+    b: { ruleId: 'r-b', revision: 3, enabled: true },
+    c: { ruleId: 'r-c', revision: 4, enabled: false },
+  }
+  const writes = []
+  let rejectB = true
+  let reads = 0
+  const { state, messages } = quality(t, {
+    getQualityMonitoring: async () => {
+      reads++
+      return structuredClone(monitoring)
+    },
+    setQualityEnabled: async (data) => {
+      writes.push(data)
+      if (data.id === 'r-b' && rejectB)
+        throw new Error('规则已更新')
+      const current = Object.values(monitoring).find(rule => rule.ruleId === data.id)
+      assert.equal(data.revision, current.revision)
+      current.enabled = data.enabled
+      current.revision++
+    },
+  })
+  const ids = new Set(['a', 'b', 'c', 'missing'])
+  await state.setBatchEnabled(ids, false)
+  assert.deepEqual(structuredClone(writes), [
+    { id: 'r-a', revision: 2, enabled: false },
+    { id: 'r-b', revision: 3, enabled: false },
+  ])
+  assert.ok(messages.some(text => text.includes('已关闭 2 个') && text.includes('1 个未配置') && text.includes('1 个未完成：规则已更新')))
+  assert.equal(monitoring.b.enabled, true)
+  assert.equal(ids.size, 4, 'selection remains usable for the opposite action')
+  rejectB = false
+  monitoring.b.revision = 10
+  await state.setBatchEnabled(ids, false)
+  assert.equal(reads, 2)
+  assert.deepEqual(structuredClone(writes.slice(2)), [{ id: 'r-b', revision: 10, enabled: false }])
+})
+
+test('batch quality does not write on monitoring failure and distinguishes a refresh failure from a saved switch', async (t) => {
+  let failRead = true
+  let writes = 0
+  const { state, messages } = quality(t, {
+    getQualityMonitoring: async () => {
+      if (failRead)
+        throw new Error('监测状态读取失败')
+      return { a: { ruleId: 'r', revision: 2, enabled: false } }
+    },
+    setQualityEnabled: async () => { writes++ },
+  }, async () => false)
+  await state.setBatchEnabled(['a'], true)
+  assert.equal(writes, 0)
+  assert.ok(messages.includes('监测状态读取失败'))
+  assert.equal(state.batchBusy.value, false)
+  failRead = false
+  messages.length = 0
+  await state.setBatchEnabled(['a'], true)
+  assert.equal(writes, 1)
+  assert.ok(messages.includes('质量检测已开启 1 个'))
+  assert.ok(messages.includes('账号列表刷新失败，请手动刷新核对状态'))
+  assert.ok(!messages.some(text => text.includes('未完成')))
+})
+
+test('batch quality limits concurrent writes and stops unsent work on disposal', async (t) => {
+  const gates = Array.from({ length: 7 }, () => Promise.withResolvers())
+  const monitoring = Object.fromEntries(gates.map((_, i) => [String(i), { ruleId: `r-${i}`, revision: 1, enabled: false }]))
+  const started = Promise.withResolvers()
+  let writes = 0
+  let active = 0
+  let peak = 0
+  let reloads = 0
+  const { state, messages, stop } = quality(t, {
+    getQualityMonitoring: async () => monitoring,
+    setQualityEnabled: async () => {
+      const gate = gates[writes++]
+      peak = Math.max(peak, ++active)
+      if (writes === 4)
+        started.resolve()
+      await gate.promise
+      active--
+    },
+  }, async () => { reloads++ })
+  const pending = state.setBatchEnabled(Object.keys(monitoring), true)
+  await started.promise
+  assert.equal(peak, 4)
+  assert.equal(writes, 4)
+  stop()
+  gates.forEach(gate => gate.resolve())
+  await pending
+  assert.equal(writes, 4, 'unsent mutations stop, accepted writes finish')
+  assert.equal(reloads, 0)
+  assert.deepEqual(messages, [])
+  assert.equal(state.batchBusy.value, false)
+})
+
+test('batch quality rejects empty/oversized selections and waits for single-account setup or switching', async (t) => {
+  let reads = 0
+  const read = Promise.withResolvers()
+  const { state } = quality(t, {
+    getQualityMonitoring: async () => {
+      reads++
+      return read.promise
+    },
+    setQualityEnabled: async () => assert.fail('no write expected'),
+  })
+  await state.setBatchEnabled([], true)
+  await state.setBatchEnabled(Array.from({ length: 1001 }, (_, i) => String(i)), true)
+  state.setupOpen.value = true
+  await state.setBatchEnabled(['a'], true)
+  state.setupOpen.value = false
+  assert.equal(reads, 0)
+  const single = state.toggle({ id: 'a' })
+  await state.setBatchEnabled(['a'], true)
+  assert.equal(reads, 1)
+  read.resolve({})
+  await single
+})
+
+test('disposing during the batch monitoring read aborts it without later writes', async (t) => {
+  const read = Promise.withResolvers()
+  let signal
+  const { state, stop, messages } = quality(t, {
+    getQualityMonitoring: (_ids, options) => {
+      signal = options.signal
+      return read.promise
+    },
+    setQualityEnabled: async () => assert.fail('no write after disposal'),
+  })
+  const pending = state.setBatchEnabled(['a'], true)
+  stop()
+  assert.equal(signal.aborted, true)
+  read.resolve({ a: { ruleId: 'r', revision: 1, enabled: false } })
+  await pending
+  assert.deepEqual(messages, [])
 })
 
 function deletion(t, deleteAccounts) {

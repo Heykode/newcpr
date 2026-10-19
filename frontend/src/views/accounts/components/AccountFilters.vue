@@ -117,7 +117,7 @@ const groupOptions = computed(() => [
     </div>
 
     <div
-      class="grid w-full grid-cols-2 gap-2 xl:flex xl:w-auto xl:flex-wrap xl:shrink-0 xl:self-end xl:items-center xl:justify-end xl:ml-auto"
+      class="grid w-full min-w-0 max-w-full grid-cols-2 gap-2 xl:flex xl:w-auto xl:flex-wrap xl:shrink-0 xl:self-end xl:items-center xl:justify-end xl:ml-auto"
     >
       <slot name="account-templates" />
       <BaseButton

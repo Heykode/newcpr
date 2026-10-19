@@ -36,6 +36,7 @@ import AccountMobileList from './components/AccountMobileList.vue'
 import AccountOverviewCards from './components/AccountOverviewCards.vue'
 import AccountPlanBadge from './components/AccountPlanBadge.vue'
 import AccountPurchaseCell from './components/AccountPurchaseCell.vue'
+import AccountQualityBatchMenu from './components/AccountQualityBatchMenu.vue'
 import AccountQuotaForecastModal from './components/AccountQuotaForecastModal/index.vue'
 import AccountQuotaPanel from './components/AccountQuotaPanel/index.vue'
 import AccountQuotaSummaryCell from './components/AccountQuotaSummaryCell/index.vue'
@@ -93,7 +94,14 @@ const {
   handleSortChange,
 } = useAccountsQuery()
 
-const { togglingQualityIds, setupOpen: qualitySetupOpen, setupAccount: qualitySetupAccount, toggle: toggleQuality } = useAccountQuality(() => refreshAccountsSilently())
+const {
+  togglingQualityIds,
+  batchBusy: batchQualityBusy,
+  setupOpen: qualitySetupOpen,
+  setupAccount: qualitySetupAccount,
+  toggle: toggleQuality,
+  setBatchEnabled: setBatchQualityEnabled,
+} = useAccountQuality(() => refreshAccountsSilently())
 
 const resetCredits = useBatchResetCredits({ accounts, selectedIds, reload: refreshAccountsSilently })
 const {
@@ -469,7 +477,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
           :hide-columns="isMobile"
           :batch-deleting="batchDeleting"
           :exporting-accounts="exportingAccounts"
-          :template-applying="applyingTemplate || applyingQualityTemplate"
+          :template-applying="applyingTemplate || applyingQualityTemplate || batchQualityBusy"
           @delete-selected="showDeleteModal = true"
           @export-selected="handleExportAccounts"
           @create="openCreateAccount"
@@ -489,8 +497,15 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
               <History class="size-4" />
               重置记录{{ resetActiveCount ? ` (${resetActiveCount})` : '' }}
             </BaseButton>
-            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingQualityTemplate" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
-            <QualityTemplateApplyMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingTemplate" @applying="applyingQualityTemplate = $event" @applied="onTemplateApplied" />
+            <AccountTemplateMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingQualityTemplate || batchQualityBusy" @applying="applyingTemplate = $event" @applied="onTemplateApplied" />
+            <QualityTemplateApplyMenu :account-ids="[...selectedIds]" :disabled="batchDeleting || applyingTemplate || batchQualityBusy" @applying="applyingQualityTemplate = $event" @applied="onTemplateApplied" />
+            <AccountQualityBatchMenu
+              v-if="selectedIds.size || batchQualityBusy"
+              :selected-count="selectedIds.size"
+              :disabled="batchDeleting || applyingTemplate || applyingQualityTemplate || togglingQualityIds.size > 0 || qualitySetupOpen"
+              :loading="batchQualityBusy"
+              @change="setBatchQualityEnabled(selectedIds, $event)"
+            />
           </template>
         </AccountFilters>
       </template>
@@ -637,6 +652,7 @@ const { onMouseDown, isDragging, overlayStyle } = useAccountSwipeSelect({
                 :refreshing="refreshingAccountIds.has(row.id)"
                 :toggling-excel="togglingExcelAccountIds.has(row.id)"
                 :toggling-quality="togglingQualityIds.has(row.id)"
+                :quality-disabled="batchQualityBusy"
                 :testing="testingConnectionIds.has(row.id)"
                 :exporting-model-catalog="exportingModelCatalogIds.has(row.id)"
                 :relogin="reloginActions[row.id]"

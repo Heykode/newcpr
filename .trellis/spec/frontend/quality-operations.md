@@ -51,6 +51,30 @@ Retain quality-template/group, Excel and mobile-card browser regressions.
 Wrong: use one color for lifecycle and verdict, or post the entire stale rule to toggle it.
 Correct: independently colored verdict text and an enabled-only CAS write after rereading.
 
+## Account Batch Quality Switch
+
+- Selected accounts expose one `质量检测` dropdown with `批量开启` and `批量关闭`
+  on desktop and mobile. `AccountQualityBatchMenu` emits the desired boolean;
+  `useAccountQuality.setBatchEnabled(accountIds, enabled)` owns the operation.
+- Freeze and deduplicate 1–1000 selected IDs before awaiting; include off-page IDs.
+  Read monitoring once, then send only `{id,revision,enabled}` for rules whose state
+  differs. Keep all detection settings/history and selection; never invert each rule
+  or replace configuration through the template API. Missing rules are skipped,
+  with a short template-setup hint when enabling, without automatic creation.
+- Bound writes to four in flight. Block duplicate batches and single quality switches
+  while pending; disable template application and bulk editing/deletion in the page.
+  Abort reads on disposal and stop queued writes, without cancelling submitted writes.
+- A failed read sends no writes. Conflicts/unknown write results stay unconfirmed and
+  are counted separately; other targets continue. Summarize confirmed target states,
+  missing rules and failures. Do not automatically replay writes. A manual retry rereads
+  versions and skips rules already in the requested state.
+- Refresh real account state once after the operation; a failed refresh must not
+  relabel confirmed writes as failures. Do not trigger the run-now endpoint.
+- Cover mixed states, selection changes, off-page targets, deduplication, CAS errors,
+  missing rules, read/refresh failure, guards, concurrency and disposal in Node tests.
+  Extend `browser/account-quality-controls.mjs` with real toolbar interactions,
+  partial failures and light/dark 1440/390/320px menu bounds and mobile card updates.
+
 ## Editable Model Suggestions
 
 ### Scope / Trigger
