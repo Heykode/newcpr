@@ -361,7 +361,7 @@ onMounted(() => void query.execute())
             </template>
             <template #location="{ row }">
               <div class="grid min-w-0 gap-1">
-                <span class="text-cp-xs text-cp-text-quaternary">{{ row.autoLocation ? '自动' : row.requestLocation ? '手动' : '默认' }}</span>
+                <span class="text-cp-xs text-cp-text-quaternary">{{ row.autoLocation ? '自动' : row.requestLocation ? '自定义' : '默认' }}</span>
                 <span class="truncate text-cp-xs text-cp-text-secondary" :title="proxyLocationMessage(row)">{{ proxyLocationMessage(row) }}</span>
               </div>
             </template>

@@ -180,11 +180,15 @@ pub(crate) struct StoreConnectionConfig {
 impl StoreConnectionConfig {
     fn validate(&self, field: &'static str) -> StoreResult<()> {
         require_nonempty("store config", field, &self.url)?;
-        if self.password.len() != 48 || !self.password.bytes().all(|byte| byte.is_ascii_hexdigit())
+        if !(16..=128).contains(&self.password.len())
+            || self.password.chars().any(char::is_control)
+            || self.password.trim().is_empty()
         {
             return Err(StoreError::InvalidData {
                 entity: "store config",
-                message: format!("{field}.password must be exactly 48 hexadecimal characters"),
+                message: format!(
+                    "{field}.password must be 16 to 128 bytes without control characters and must not be blank"
+                ),
             });
         }
         self.connection_url(field).map(|_| ())
@@ -201,11 +205,146 @@ impl StoreConnectionConfig {
                 message: format!("{field}.url must not contain a password"),
             });
         }
-        url.set_password(Some(&self.password))
+        url.set_password(Some(&self.password.replace('%', "%25")))
             .map_err(|()| StoreError::InvalidData {
                 entity: "store config",
                 message: format!("{field}.url cannot carry credentials"),
             })?;
         Ok(url.to_string())
+    }
+}
+
+#[cfg(test)]
+mod connection_password_tests {
+    use super::*;
+    use ::redis as redis_client;
+
+    #[test]
+    fn passwords_preserve_reserved_and_literal_percent_sequences() {
+        use std::str::FromStr;
+        for password in ["example-password!@:/?#[]%41%25", "a".repeat(128).as_str()] {
+            let database = StoreConnectionConfig {
+                url: "postgres://example@localhost/example".to_owned(),
+                password: password.to_owned(),
+            };
+            database.validate("database").unwrap();
+            let _parsed = sqlx::postgres::PgConnectOptions::from_str(
+                &database.connection_url("database").unwrap(),
+            )
+            .unwrap();
+            let redis = StoreConnectionConfig {
+                url: "redis://localhost/".to_owned(),
+                password: password.to_owned(),
+            };
+            redis.validate("redis").unwrap();
+            redis_client::Client::open(redis.connection_url("redis").unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn password_validation_rejects_short_long_blank_and_control_characters() {
+        for password in [
+            "a".repeat(15),
+            "a".repeat(129),
+            " ".repeat(16),
+            "example-password\n".to_owned(),
+            "example-password\0".to_owned(),
+        ] {
+            let config = StoreConnectionConfig {
+                url: "postgres://example@localhost/example".to_owned(),
+                password,
+            };
+            assert!(config.validate("database").is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn literal_percent_passwords_authenticate_against_real_stores() {
+        let (Ok(database_url), Ok(redis_url)) = (
+            std::env::var("CPR_TEST_DATABASE_URL"),
+            std::env::var("CPR_TEST_REDIS_URL"),
+        ) else {
+            assert!(
+                std::env::var("CI").is_err(),
+                "isolated stores required in CI"
+            );
+            return;
+        };
+        let admin = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        let username = format!("cpr_password_{}", uuid::Uuid::new_v4().simple());
+        let password = "Example%41%25%FFPassword9!";
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE ROLE {username} LOGIN PASSWORD '{password}'"
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        let mut url = url::Url::parse(&database_url).unwrap();
+        url.set_username(&username).unwrap();
+        url.set_password(None).unwrap();
+        let config = StoreConnectionConfig {
+            url: url.to_string(),
+            password: password.to_owned(),
+        };
+        let result = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&config.connection_url("database").unwrap())
+            .await;
+        if let Ok(pool) = &result {
+            pool.close().await;
+        }
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP ROLE {username}")))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        assert!(
+            result.is_ok(),
+            "PostgreSQL must preserve literal percent sequences"
+        );
+
+        let mut redis_admin = redis_client::Client::open(redis_url.as_str())
+            .unwrap()
+            .get_connection_manager()
+            .await
+            .unwrap();
+        redis_client::cmd("ACL")
+            .arg("SETUSER")
+            .arg(&username)
+            .arg("on")
+            .arg(format!(">{password}"))
+            .arg("~*")
+            .arg("+ping")
+            .query_async::<()>(&mut redis_admin)
+            .await
+            .unwrap();
+        let mut url = url::Url::parse(&redis_url).unwrap();
+        url.set_username(&username).unwrap();
+        url.set_password(None).unwrap();
+        let config = StoreConnectionConfig {
+            url: url.to_string(),
+            password: password.to_owned(),
+        };
+        let result = async {
+            let mut connection =
+                redis_client::Client::open(config.connection_url("redis").unwrap())?
+                    .get_multiplexed_async_connection()
+                    .await?;
+            redis_client::cmd("PING")
+                .query_async::<String>(&mut connection)
+                .await
+        }
+        .await;
+        redis_client::cmd("ACL")
+            .arg("DELUSER")
+            .arg(&username)
+            .query_async::<i64>(&mut redis_admin)
+            .await
+            .unwrap();
+        assert_eq!(result.unwrap(), "PONG");
     }
 }

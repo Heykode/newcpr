@@ -64,6 +64,10 @@ use snapshot::{
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
 const PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const QUOTA_RESET_FAST_REFRESH_WINDOW: Duration = Duration::from_secs(5 * 60);
+const QUOTA_RESET_FAST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const QUOTA_RESET_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const EXHAUSTED_QUOTA_RESET_GRACE: Duration = Duration::from_secs(10);
 const QUOTA_RESET_GRACE: Duration = Duration::from_secs(2 * 60);
 /// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限。
 const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
@@ -547,7 +551,7 @@ impl CodexQuotaSchedulingProjection {
         // A reset deadline requests new evidence; it does not restore quota.
         let mut reserved = Vec::new();
         for (account, reset_at) in candidates {
-            if !periodic_quota_refresh_due(&state, account.id(), reset_at, now, refreshed_at) {
+            if !periodic_quota_refresh_due(&state, &account, reset_at, now, refreshed_at) {
                 continue;
             }
             state.last_periodic_refresh_at.insert(
@@ -594,22 +598,34 @@ fn quota_refresh_candidate(
 
 fn periodic_quota_refresh_due(
     state: &CodexQuotaProjectionState,
-    account_id: &ProviderAccountId,
+    account: &ProviderAccount,
     reset_at: Option<SystemTime>,
     now: SystemTime,
     monotonic_now: Instant,
 ) -> bool {
-    state
-        .last_periodic_refresh_at
-        .get(account_id)
-        .is_none_or(|last| {
-            monotonic_now.saturating_duration_since(last.monotonic_at)
-                >= PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL
-                || reset_at
-                    .and_then(|reset| reset.checked_add(QUOTA_RESET_GRACE))
-                    // 已在该边界之后复核过时回到周期重试，避免过期 reset 每轮触发。
-                    .is_some_and(|due_at| last.wall_at < due_at && due_at <= now)
-        })
+    let mut interval = PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL;
+    let grace = if account.quota().is_exhausted() {
+        if let Some(since_reset) = reset_at.and_then(|reset| now.duration_since(reset).ok()) {
+            if since_reset < EXHAUSTED_QUOTA_RESET_GRACE {
+                return false;
+            }
+            interval = if since_reset < QUOTA_RESET_FAST_REFRESH_WINDOW {
+                QUOTA_RESET_FAST_REFRESH_INTERVAL
+            } else {
+                QUOTA_RESET_REFRESH_RETRY_INTERVAL
+            };
+        }
+        EXHAUSTED_QUOTA_RESET_GRACE
+    } else {
+        QUOTA_RESET_GRACE
+    };
+    let Some(last) = state.last_periodic_refresh_at.get(account.id()) else {
+        return true;
+    };
+    monotonic_now.saturating_duration_since(last.monotonic_at) >= interval
+        || reset_at
+            .and_then(|reset| reset.checked_add(grace))
+            .is_some_and(|due_at| last.wall_at < due_at && due_at <= now)
 }
 
 fn insert_projection_entry(
@@ -1687,9 +1703,9 @@ impl CodexCredentialQuotaService {
         } else {
             None
         };
-        if account.quota().is_exhausted()
-            && matches!(authority, QuotaRefreshAuthority::PreserveAccess)
-        {
+        let observe_access =
+            matches!(authority, QuotaRefreshAuthority::ObserveAccess) || snapshot.credits_usable();
+        if account.quota().is_exhausted() && !observe_access {
             if self
                 .store
                 .touch_quota_observation(QuotaObservationTouch {
@@ -1713,14 +1729,15 @@ impl CodexCredentialQuotaService {
                     .with_observed_at(observed_at),
             });
         }
-        let state = match authority {
-            QuotaRefreshAuthority::ObserveAccess => reconcile_refresh(
+        let state = if observe_access {
+            reconcile_refresh(
                 account.quota(),
                 &mut snapshot,
                 previous.as_ref(),
                 &mut object,
-            )?,
-            QuotaRefreshAuthority::PreserveAccess => account.quota(),
+            )?
+        } else {
+            account.quota()
         };
         let snapshot = snapshot.with_quota_state(state);
         if self
@@ -2186,4 +2203,69 @@ fn passive_rate_limit_window(window: RateLimitWindow) -> Map<String, Value> {
         snapshot.insert("reset_at".to_owned(), Value::from(reset_at));
     }
     snapshot
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+
+    #[test]
+    fn reset_polling_grace_fast_retry_and_backoff_preserve_normal_accounts() {
+        let reset = SystemTime::UNIX_EPOCH + Duration::from_secs(1_900_000_000);
+        let mono = Instant::now();
+        for (exhausted, elapsed, last_elapsed, expected) in [
+            (true, 9, None, false),
+            (true, 10, None, true),
+            (true, 39, Some(10), false),
+            (true, 40, Some(10), true),
+            (true, 300, Some(299), false),
+            (true, 599, Some(299), true),
+            (true, 10, Some(0), true),
+            (false, 119, Some(0), false),
+            (false, 120, Some(0), true),
+            (false, 180, Some(120), false),
+            (false, 1920, Some(120), true),
+        ] {
+            let quota = if exhausted {
+                QuotaState::exhausted(
+                    QuotaEvidence::UsageLimitReached,
+                    reset - Duration::from_secs(60),
+                    Some(reset),
+                )
+            } else {
+                QuotaState::allowed(reset)
+            };
+            let account = ProviderAccount::new(
+                ProviderAccountId::new("acct_polling").unwrap(),
+                gateway_core::routing::ProviderKind::new("openai").unwrap(),
+                "polling".to_owned(),
+                Some("synthetic".to_owned()),
+                "oauth".to_owned(),
+                CredentialRevision::new(1).unwrap(),
+                None,
+            )
+            .with_account_facts(true, CredentialState::Ready, quota, None, None);
+            let mut state = CodexQuotaProjectionState::default();
+            if let Some(last) = last_elapsed {
+                state.last_periodic_refresh_at.insert(
+                    account.id().clone(),
+                    CodexQuotaRefreshAttempt {
+                        monotonic_at: mono + Duration::from_secs(last),
+                        wall_at: reset + Duration::from_secs(last),
+                    },
+                );
+            }
+            assert_eq!(
+                periodic_quota_refresh_due(
+                    &state,
+                    &account,
+                    Some(reset),
+                    reset + Duration::from_secs(elapsed),
+                    mono + Duration::from_secs(elapsed)
+                ),
+                expected,
+                "exhausted={exhausted}, elapsed={elapsed}, last={last_elapsed:?}"
+            );
+        }
+    }
 }

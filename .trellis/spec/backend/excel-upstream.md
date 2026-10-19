@@ -232,6 +232,9 @@ the native document; do not change inference cache keys or account selection.
 Sub2API #117 normalization belongs in the native final HTTP/WS body preparation:
 remove only top-level external_web_access from web_search* tool entries. Never
 recurse into function schemas, change identity/fingerprints or apply it to Excel.
+The official search-history repair is the sole exception: its privately tracked
+inserted tool retains `external_web_access=false` through HTTP/WS preparation.
+User-supplied tools cannot opt into that exception through request JSON.
 
 The optional image relay belongs to the provider; Core exposes only a neutral download
 capability and API serves bytes. Default off, HTTPS origin only, no filesystem paths,

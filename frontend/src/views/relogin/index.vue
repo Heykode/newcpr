@@ -4,7 +4,7 @@ import type { ReloginBatchResult, ReloginEntry, ReloginPushSelection, ReloginWor
 import type { Excel403Action } from '@/utils/excel-settings'
 import { CheckCheck, Download, GripVertical, LayoutTemplate, Pause, Play, RefreshCw, Save, Search, Settings2, Trash2, Upload, X } from '@lucide/vue'
 
-import { useNow } from '@vueuse/core'
+import { useIntervalFn, useNow } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   configureRelogin,
@@ -95,7 +95,7 @@ const maxRetries = shallowRef('2')
 const retryIntervalSeconds = shallowRef('30')
 const savedRetrySettings = shallowRef({ maxRetries: 2, retryIntervalSeconds: 30 })
 const retrySettingsError = shallowRef('')
-const now = useNow({ interval: 1000 })
+const now = useNow({ scheduler: callback => useIntervalFn(callback, 1000) })
 const statusOptions = [{ value: '', label: '全部处理状态' }, ...Object.entries({ ...statusLabels, ...recoveryLabels }).map(([value, label]) => ({ value, label })), { value: 'synced', label: '已同步到号池' }]
 const poolOptions = [
   { value: '', label: '全部号池状态' },

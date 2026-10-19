@@ -185,7 +185,7 @@ impl OpenAiResponseObservationState {
     ) -> bool {
         let mut changed = false;
         // First-response timing includes structure; semantic output still owns delivery/retry.
-        if signals.output_start {
+        if signals.response_data {
             changed |= insert_first_timing(&mut self.timings.first_token_ms, started_at);
         }
         if signals.reasoning_output {

@@ -1,5 +1,24 @@
 # Protocol Compatibility Contracts
 
+## Native Search History
+
+Upstream #478 applies only to OAuth native Responses with complete history.
+When input contains `web_search_call` but neither top-level nor historical tools
+declare search, add cached-only `web_search` (`external_web_access=false`). Lite
+uses a separate developer `additional_tools` item before the final compaction
+trigger; ordinary requests append top-level tools. NewCPR has no plugin header
+override, so `responses_lite` is the effective flag.
+
+The inserted top-level tool index is private request state: HTTP/WS parameter
+cleanup preserves only this synthesized cached-only flag. Client-provided search
+options still follow the existing normalization; never accept this marker from JSON.
+
+No existing tools means `tool_choice=none`; existing tools retain their choice,
+including required/function choices. Do not modify native previous-response
+continuations, Excel, malformed tool structures or already-declared search.
+Preserve original history/IDs and idempotence. HTTP/WS capture tests verify the
+wire payload; synthetic success is not proof of a particular production 500 cause.
+
 ## Ordered Request Field Removal
 
 - Responses ingress consumes `type` and the recognized boolean `use_websocket`

@@ -24,9 +24,10 @@ Aligned narrowly with official `743a3aba70a4f78f27fb53d80a6e719599d2fe5e`
 - Restartable WS checks the first non-prelude frame for a connection-limit error
   while polling the body. The error retains its typed recovery classification.
   Exact continuations retain their existing ownership and recovery restrictions.
-- Provider first-token timing starts at `response.output_item.added`, matching
-  upstream. First-event, first-text and first-reasoning clocks remain distinct;
-  metadata, content-part-added and terminal-only events do not invent that boundary.
+- Provider first-token timing follows upstream `91e8105`: first nonempty response
+  data seen by the decoder, before JSON/event classification. SSE whitespace and
+  `[DONE]` do not count; nonempty WS data does. First-event, first-text and
+  first-reasoning remain distinct. This metric never controls delivery/retry.
 
 ## Excel Settings Contract
 
@@ -63,7 +64,7 @@ replay barrier, not an instruction to retry.
 | Restartable WS connection-limit after only preludes | Typed body error; preserve raw error, status and request ID |
 | Ambiguous connection loss | Existing no-replay safety remains |
 | Excel positive threshold, below limit | Wait for semantic/terminal/EOF, byte crossing or fixed grace |
-| Native missing output_item.added | No invented provider first-token time; text/reasoning remain available |
+| Native missing output_item.added | First response data starts timing; text/reasoning remain independent |
 
 Good: first prelude arrives while a oneshot gate holds the next upstream event.
 Base: Excel keeps byte/grace release and atomic failures. Bad: calling an already
@@ -79,7 +80,7 @@ sent prelude committed business output or restarting retries after tool output.
   reopen replay after an unknown event followed by another prelude.
 - WS body-error observations retain current failure status and request ID, while
   opening diagnostics remain separate.
-- Metadata never starts provider TTFT; output_item.added starts it before content.
+- Metadata and opaque data start response timing without inventing text/reasoning.
 - Excel zero/byte/grace/content/terminal/EOF and early atomic failure behavior stays.
 - Settings save/reload and isolated 1440/390/320 px views preserve exact values.
 

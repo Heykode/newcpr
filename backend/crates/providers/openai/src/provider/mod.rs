@@ -769,6 +769,10 @@ impl Provider for CodexProvider {
             );
             crate::transport::request::normalize_reasoning_replay(upstream_request.body_mut());
             if !excel {
+                crate::transport::request::search_history::normalize_search_history(
+                    &mut upstream_request,
+                    context.request_id().as_str(),
+                );
                 crate::transport::request::compatibility::normalize_minimal_effort(
                     &mut upstream_request,
                 );

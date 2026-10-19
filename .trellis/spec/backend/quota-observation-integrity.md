@@ -9,7 +9,9 @@ access clocks by credential revision. Do not add a second scheduler or epoch.
 
 `QuotaRefreshAuthority::PreserveAccess` on a passive failure preserves access and
 does not learn plan changes. Active refresh retains its established recovery
-policy. Successful inference uses `ObserveAccess`: a 100% header is not a denial,
+policy. Active failure-triggered usage readback may restore access when fresh
+explicit credits are usable; passive headers still cannot do so. Successful inference
+uses `ObserveAccess`: a 100% header is not a denial,
 and stale snapshot data must not prevent a real success from restoring access.
 
 Transparent terminal-only responses can lack canonical completion facts. Observe
@@ -37,7 +39,25 @@ For explicit quota exhaustion, accept positive numeric or numeric-string
 checked `resets_in_seconds`. The relative fallback is anchored when the error
 classifier parses the envelope; it is not an exact socket-arrival clock.
 Never convert ordinary Retry-After into a quota reset or a missing reset into
-permanent exhaustion. Periodic recovery and rate-limit policies remain unchanged.
+permanent exhaustion. Exhausted reset checks start after 10 seconds, retry no more
+often than 30 seconds for the first five minutes, then five minutes. Unknown/future
+resets retain the 30-minute fallback; ordinary accounts retain their previous cadence.
+
+## Credits And Reset Recovery
+
+Adapted from upstream #469. `has_credits=true` or `unlimited=true` is sufficient
+only without explicit spend-control exhaustion or a non-subscription limit reason.
+Numeric balance alone is not proof. Preserve all displayed subscription percentages.
+Fresh credits clear recovery markers; never retry the business request because the
+background readback restored access. Credential revision and independent access
+observation fences remain authoritative.
+
+After every recorded exhausted window reset has passed, a fresh explicit allowed
+observation can recover even if displayed usage is still 100%. Unknown resets,
+windows not yet reset, and boundaries older than the latest denial retain the
+existing recovery rules. Duplicate/out-of-order observations cannot advance recovery.
+Test credits depletion, spend/workspace limits, delayed readback after newer denial,
+multiple reset windows and failure throttling on isolated stores.
 
 ## Validation
 

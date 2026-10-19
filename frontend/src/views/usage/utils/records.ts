@@ -295,13 +295,13 @@ export function usageLatencyDetails(record: UsageCommonRecord) {
   const breakdownItems = []
 
   if (firstTokenMs !== null && totalMs !== null && firstTokenMs <= totalMs) {
-    breakdownItems.push({ label: '首字等待', value: formatDuration(firstTokenMs) })
+    breakdownItems.push({ label: '首响应等待', value: formatDuration(firstTokenMs) })
 
     if (firstTextMs !== null && firstTextMs >= firstTokenMs && firstTextMs <= totalMs) {
       const beforeTextMs = firstTextMs - firstTokenMs
       if (beforeTextMs > 0) {
         breakdownItems.push({
-          label: firstReasoningMs === firstTokenMs ? '推理到正文' : '首个输出到正文',
+          label: firstReasoningMs === firstTokenMs ? '推理到正文' : '首响应到正文',
           value: formatDuration(beforeTextMs),
         })
       }
@@ -309,7 +309,7 @@ export function usageLatencyDetails(record: UsageCommonRecord) {
     }
     else {
       breakdownItems.push({
-        label: '首个输出后完成',
+        label: '首响应后完成',
         value: formatDuration(totalMs - firstTokenMs),
       })
     }
@@ -341,8 +341,8 @@ export function usageLatencyDetails(record: UsageCommonRecord) {
   }
 
   return {
-    // SSE 可能先收到生命周期事件而没有文本或推理增量；这不是首字，须保留原始语义。
-    firstOutputLabel: firstTokenMs === null && firstEventMs !== null ? '首事件' : '首字',
+    // 首响应包含协议数据，正文与推理仍使用各自独立的计时。
+    firstOutputLabel: firstTokenMs === null && firstEventMs !== null ? '首事件' : '首响应',
     firstOutputDisplay: formatDuration(firstTokenMs ?? firstEventMs),
     firstOutputSeverity: latencySeverity(firstTokenMs ?? firstEventMs, [10_000, 30_000, 60_000]),
     totalDisplay: formatDuration(totalMs),

@@ -137,6 +137,8 @@ pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
 /// 其余字段是代理控制状态，不进上游 body（原 `#[serde(skip)]` 字段）。
 #[derive(Clone)]
 pub struct CodexResponsesRequest {
+    /// Locally added cached-search declaration; never accepted from client JSON.
+    pub(crate) search_history_tool_index: Option<usize>,
     /// Original effort for diagnostics when the native compatibility alias is applied.
     pub(crate) requested_reasoning_effort: Option<String>,
     pub(crate) quality_probe: Option<gateway_core::operation::quality_probe::QualityProbeStep>,
@@ -336,12 +338,12 @@ pub(crate) fn is_replaceable_response_prelude(value: &serde_json::Value) -> bool
 
 /// 单个 Responses 事件对计时系统提供的稳定语义信号。
 ///
-/// `output_start` observes response.output_item.added. Content clocks remain
+/// `response_data` observes the first nonempty wire data. Content clocks remain
 /// separate; delivery/replay additionally checks the replaceable-prelude allowlist.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResponseEventSignals {
     pub protocol_progress: bool,
-    pub output_start: bool,
+    pub response_data: bool,
     pub semantic_output: bool,
     pub reasoning_output: bool,
     pub text_output: bool,
@@ -349,12 +351,11 @@ pub struct ResponseEventSignals {
 
 /// 从已解析的 Responses 事件提取计时语义。
 ///
-/// First-response timing follows upstream CPR: the first output item added.
+/// First-response timing is set by the wire decoder before event classification.
 /// First reasoning and first text timing remain independent of this boundary.
 pub fn response_event_signals(event_type: Option<&str>, value: &Value) -> ResponseEventSignals {
     let mut signals = ResponseEventSignals {
         protocol_progress: !matches!(event_type, Some("response.failed" | "error")),
-        output_start: event_type == Some("response.output_item.added"),
         ..ResponseEventSignals::default()
     };
     match event_type {
@@ -625,6 +626,7 @@ impl CodexResponsesRequest {
     /// 协议默认值仅由类型化访问器在本地解释，不写回上游正文。
     pub fn from_body(body: Map<String, Value>) -> Self {
         Self {
+            search_history_tool_index: None,
             requested_reasoning_effort: None,
             excel: None,
             quality_probe: None,

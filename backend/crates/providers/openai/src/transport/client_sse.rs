@@ -339,7 +339,7 @@ impl CodexBackendClient {
         } else {
             let mut body = upstream_request.body().clone();
             super::qx_application::project_response_body(&mut body, upstream_request, context);
-            normalize_generate_upstream_body(&mut body);
+            normalize_generate_upstream_body(&mut body, upstream_request.search_history_tool_index);
             body.insert("stream".to_owned(), serde_json::Value::Bool(true));
             body.entry("store")
                 .or_insert(serde_json::Value::Bool(false));

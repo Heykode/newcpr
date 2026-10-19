@@ -4,6 +4,64 @@ const ACCOUNT: &str = "acct_quota_observation";
 const RESET: u64 = 2_000_000_000;
 
 #[tokio::test]
+async fn failure_readback_uses_fresh_credits_without_replaying_the_failed_request() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_provider_contract";
+    create_account(&store, account_id).await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error":{"type":"usage_limit_reached","message":"limit reached","resets_at":RESET}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit":{"allowed":false,"limit_reached":true,
+                "primary_window":{"used_percent":100,"reset_at":RESET}},
+            "credits":{"has_credits":true,"balance":"20"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut stream = provider_with_base_url(&store, server.uri())
+        .execute(
+            planned_request("openai", http_generate_operation()),
+            context("req_credits_readback", CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+    let mut failed = false;
+    while let Some(event) = stream.next().await {
+        if let Err(error) = event {
+            assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+            failed = true;
+            break;
+        }
+    }
+    assert!(failed);
+    timeout(Duration::from_secs(5), async {
+        while store.account(account_id).unwrap().quota().access() != QuotaAccessState::Allowed {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fresh credits recover later requests");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/codex/responses")
+            .count(),
+        1
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn failed_response_headers_do_not_restore_exhausted_access() {
     for streaming in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());

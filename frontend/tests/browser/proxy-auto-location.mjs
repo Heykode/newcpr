@@ -124,10 +124,11 @@ function fixture() {
           return ok(probeResult(body.detectLocation ? { status: 'detected', location: refreshed } : { status: 'notRequested' }))
         }
         if (path === `${endpoint}/create` && method === 'POST') {
-          assert.deepEqual(Object.keys(body).sort(), ['autoLocation', 'name', 'proxyUrl', 'requestLocation'])
+          assert.deepEqual(Object.keys(body).sort(), ['autoLocation', 'maxWebsocketConnections', 'name', 'proxyUrl', 'requestLocation'])
           const item = record(`created-${++nextId}`, body.name, {
             endpoint: body.proxyUrl,
             autoLocation: body.autoLocation,
+            maxWebsocketConnections: body.maxWebsocketConnections,
             requestLocation: structuredClone(body.requestLocation),
             detectedLocation: body.autoLocation ? detection(detected) : null,
             effectiveLocation: structuredClone(body.autoLocation ? detected : body.requestLocation),
@@ -173,7 +174,7 @@ function fixture() {
             records[index] = { ...previous, enabled: body.enabled, revision: previous.revision + 1 }
             return ok({ record: records[index], configRevision: ++configRevision })
           }
-          assert.deepEqual(Object.keys(body).sort(), ['autoLocation', 'id', 'name', 'requestLocation', 'revision'])
+          assert.deepEqual(Object.keys(body).sort(), ['autoLocation', 'id', 'maxWebsocketConnections', 'name', 'requestLocation', 'revision'])
           if (state.rejectUpdate) {
             previous.revision++
             return conflict()
@@ -184,6 +185,7 @@ function fixture() {
             name: body.name,
             revision: previous.revision + 1,
             autoLocation: body.autoLocation,
+            maxWebsocketConnections: body.maxWebsocketConnections,
             requestLocation: structuredClone(body.requestLocation),
             detectedLocation: nextDetected,
             effectiveLocation: body.autoLocation ? nextDetected?.location ?? null : structuredClone(body.requestLocation),
@@ -376,6 +378,7 @@ async function runViewport(page, state, base, output, width) {
   await saveAndClose('create')
   assert.deepEqual(state.mutations('create').at(-1).body, {
     name: 'Default fixture',
+    maxWebsocketConnections: 0,
     proxyUrl: 'http://127.0.0.1:8081',
     autoLocation: false,
     requestLocation: null,
@@ -405,6 +408,7 @@ async function runViewport(page, state, base, output, width) {
   await saveAndClose('create')
   assert.deepEqual(state.mutations('create').at(-1).body, {
     name: 'New auto fixture',
+    maxWebsocketConnections: 0,
     proxyUrl: 'http://127.0.0.1:8082',
     autoLocation: true,
     requestLocation: manual,
@@ -463,6 +467,7 @@ async function runViewport(page, state, base, output, width) {
     id: 'existing-auto',
     revision: 8,
     name: 'Edited auto fixture',
+    maxWebsocketConnections: 0,
     autoLocation: true,
     requestLocation: manualDraft,
   })
@@ -482,17 +487,18 @@ async function runViewport(page, state, base, output, width) {
     id: 'existing-auto',
     revision: 9,
     name: 'Edited auto fixture',
+    maxWebsocketConnections: 0,
     autoLocation: false,
     requestLocation: manualDraft,
   })
-  await locationCell('existing-auto').getByText('手动', { exact: true }).waitFor()
+  await locationCell('existing-auto').getByText('自定义', { exact: true }).waitFor()
   await locationCell('existing-auto').getByText('Lyon · Europe/Paris', { exact: true }).waitFor()
 
   await edit('created-2')
   const oldDetection = structuredClone(state.records.find(item => item.id === 'created-2').detectedLocation)
   state.nextLocation = { status: 'failed', message: failedMessage }
   await post(page, 'test', test)
-  const retainedMessage = `${failedMessage}；保留 Asia/Tokyo`
+  const retainedMessage = failedMessage
   await dialog.getByText(retainedMessage, { exact: true }).waitFor()
   await locationCell('created-2').getByText(retainedMessage, { exact: true }).waitFor()
   const failedNotice = page.getByRole('status').filter({ hasText: `连接成功；${failedMessage}` })
@@ -500,7 +506,7 @@ async function runViewport(page, state, base, output, width) {
   await failedNotice.getByText(`连接成功；${failedMessage}`, { exact: true }).waitFor()
   assert.deepEqual(state.records.find(item => item.id === 'created-2').detectedLocation, oldDetection)
   await assertLocation(dialog, manual, true)
-  await snapshot('failed-retained')
+  await snapshot('failed-hidden-stale-region')
   await clearNotices(page)
 
   state.nextLocation = { status: 'conflict' }

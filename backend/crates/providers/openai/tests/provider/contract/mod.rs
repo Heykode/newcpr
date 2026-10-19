@@ -87,6 +87,7 @@ mod raw_identity;
 mod reasoning_replay;
 mod request_alignment;
 mod scheduling;
+mod search_history;
 mod streamed_errors;
 mod timing;
 mod tls_recovery;

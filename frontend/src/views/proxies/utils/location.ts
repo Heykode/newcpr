@@ -14,14 +14,17 @@ export function proxyLocationMessage(proxy: OutboundProxyRecord): string {
   if (!proxy.autoLocation)
     return proxy.requestLocation ? `${proxy.requestLocation.city} · ${proxy.requestLocation.timezone}` : '继承全局'
   const detected = proxy.detectedLocation
-  const result = proxy.lastTest?.location
-  if (result?.status === 'failed' || result?.status === 'conflict') {
-    const message = locationDetectionMessage(result)
-    return detected ? `${message}；保留 ${detected.location.timezone}` : message
-  }
-  return detected
-    ? `${detected.location.city} · ${detected.location.timezone}`
-    : locationDetectionMessage(result)
+  const test = proxy.lastTest
+  const result = test?.location
+  if (result?.status === 'failed' || result?.status === 'conflict')
+    return locationDetectionMessage(result)
+  if (!test?.success)
+    return test ? '连接测试失败，出口地区不可用' : '尚未识别出口地区'
+  if (detected && test.exitIpv4 === detected.exitIpv4 && test.exitIpv6 === detected.exitIpv6)
+    return `${detected.location.city} · ${detected.location.timezone}`
+  if (detected)
+    return '出口已变化，请重新识别地区'
+  return locationDetectionMessage(result)
 }
 
 export function proxyTestFeedback(result: OutboundProxyTest): { tone: 'success' | 'warning' | 'error', message: string } {

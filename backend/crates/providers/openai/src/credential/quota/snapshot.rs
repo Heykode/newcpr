@@ -116,6 +116,7 @@ pub struct CodexAccountQuotaSnapshot {
     observed_at: SystemTime,
     plan_type: Option<String>,
     credits: Option<CreditsSnapshot>,
+    credits_usable: bool,
     fact: CodexQuotaFact,
     quota: QuotaState,
     windows: Vec<CodexQuotaWindow>,
@@ -147,6 +148,10 @@ impl CodexAccountQuotaSnapshot {
     #[must_use]
     pub fn credits(&self) -> Option<&CreditsSnapshot> {
         self.credits.as_ref()
+    }
+
+    pub(super) const fn credits_usable(&self) -> bool {
+        self.credits_usable
     }
 
     #[must_use]
@@ -343,7 +348,12 @@ pub(crate) fn parse_account_quota_snapshot(
             .cmp(&quota_source_order(right.source()))
             .then_with(|| left.key.cmp(&right.key))
     });
-    let quota = authoritative_quota_state(&object, &windows, observed_at)?;
+    let credits_usable = has_usable_credits(&object);
+    let quota = if credits_usable {
+        QuotaState::allowed(observed_at)
+    } else {
+        authoritative_quota_state(&object, &windows, observed_at)?
+    };
     let recovery = object
         .get(RECOVERY_FIELD)
         .map(|value| serde_json::from_value(value.clone()))
@@ -358,11 +368,31 @@ pub(crate) fn parse_account_quota_snapshot(
             .and_then(Value::as_str)
             .map(str::to_owned),
         credits: object.get("credits").and_then(parse_credits_from_object),
+        credits_usable,
         fact,
         quota,
         windows,
         recovery,
     })
+}
+
+fn has_usable_credits(usage: &Map<String, Value>) -> bool {
+    let Some(credits) = usage.get("credits") else {
+        return false;
+    };
+    let available = credits.get("has_credits").and_then(Value::as_bool) == Some(true)
+        || credits.get("unlimited").and_then(Value::as_bool) == Some(true);
+    let spend_reached = usage
+        .get("spend_control")
+        .and_then(|spend| spend.get("reached"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let other_limit_reached = usage
+        .get("rate_limit_reached_type")
+        .and_then(|reason| reason.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|reason| reason != "rate_limit_reached");
+    available && !spend_reached && !other_limit_reached
 }
 
 fn quota_source_order(source: &str) -> u8 {
