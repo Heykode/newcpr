@@ -18,6 +18,264 @@ use secrecy::SecretString;
 
 use super::TestDatabase;
 
+fn episode_observation(group_id: AccountGroupId, kind: AlertConditionKind) -> AlertObservation {
+    AlertObservation {
+        group_id,
+        group_name: "Synthetic episode".to_owned(),
+        kind,
+        enabled: true,
+        active: true,
+        current_value: Some(1.0),
+        threshold: 20.0,
+        confirmation_seconds: 0,
+        email_recipients: vec!["ops@example.com".to_owned()],
+        bark_enabled: true,
+        bark_level: BarkLevel::Active,
+        bark_sound: None,
+        bark_volume: 5,
+        bark_call: false,
+        summary: "synthetic episode".to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn alternating_conditions_share_an_episode_until_all_recover() {
+    let Some(db) = TestDatabase::create("notification_episode").await else {
+        return;
+    };
+    let group_id = group(&db.pool).await;
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let base = Utc::now();
+    let mut eta = episode_observation(group_id.clone(), AlertConditionKind::Eta);
+    let mut concurrency = episode_observation(group_id.clone(), AlertConditionKind::Concurrency);
+    concurrency.active = false;
+    repository
+        .apply_observations(&[eta.clone(), concurrency.clone()], base)
+        .await
+        .unwrap();
+    let delivered = repository.claim_delivery(base).await.unwrap().unwrap();
+    repository
+        .finish_delivery(&delivered.id, true, None, base)
+        .await
+        .unwrap();
+    let retry = repository.claim_delivery(base).await.unwrap().unwrap();
+    repository
+        .finish_delivery(&retry.id, false, Some("synthetic failure"), base)
+        .await
+        .unwrap();
+    eta.active = false;
+    concurrency.active = true;
+    for second in [10, 20, 30, 40, 50, 60] {
+        repository
+            .apply_observations(
+                &[eta.clone(), concurrency.clone()],
+                base + Duration::seconds(second),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        2
+    );
+    let claimed = repository
+        .claim_delivery(base + Duration::seconds(60))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        claimed.id, retry.id,
+        "the original failed target can retry across condition changes"
+    );
+    repository
+        .finish_delivery(&retry.id, true, None, base + Duration::seconds(60))
+        .await
+        .unwrap();
+    eta.active = true;
+    concurrency.active = false;
+    for second in [70, 80, 90, 100] {
+        repository
+            .apply_observations(
+                &[eta.clone(), concurrency.clone()],
+                base + Duration::seconds(second),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        2
+    );
+    eta.active = false;
+    for second in [110, 120, 130, 140] {
+        repository
+            .apply_observations(
+                &[eta.clone(), concurrency.clone()],
+                base + Duration::seconds(second),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(repository.active_alerts().await.unwrap().is_empty());
+    eta.active = true;
+    repository
+        .apply_observations(&[eta, concurrency], base + Duration::seconds(150))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        4
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn unknown_samples_and_missing_ticks_interrupt_recovery_without_rearming() {
+    let Some(db) = TestDatabase::create("notification_unknown_recovery").await else {
+        return;
+    };
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let base = Utc::now();
+    let mut observation = episode_observation(group(&db.pool).await, AlertConditionKind::Eta);
+    repository
+        .apply_observations(&[observation.clone()], base)
+        .await
+        .unwrap();
+    observation.active = false;
+    for second in [10, 20] {
+        repository
+            .apply_observations(&[observation.clone()], base + Duration::seconds(second))
+            .await
+            .unwrap();
+    }
+    observation.current_value = None;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(30))
+        .await
+        .unwrap();
+    observation.current_value = Some(30.0);
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(40))
+        .await
+        .unwrap();
+    assert_eq!(repository.active_alerts().await.unwrap().len(), 1);
+    // The absent 50-second sample must restart recovery at 60, not finish it at 70.
+    for second in [60, 70, 80] {
+        repository
+            .apply_observations(&[observation.clone()], base + Duration::seconds(second))
+            .await
+            .unwrap();
+        assert_eq!(repository.active_alerts().await.unwrap().len(), 1);
+    }
+    observation.active = true;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(90))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        2
+    );
+    observation.active = false;
+    // A disabled condition with no telemetry does not prevent legitimate recovery.
+    let mut disabled = observation.clone();
+    disabled.kind = AlertConditionKind::Concurrency;
+    disabled.enabled = false;
+    disabled.current_value = None;
+    for second in [100, 110, 120, 130] {
+        repository
+            .apply_observations(
+                &[observation.clone(), disabled.clone()],
+                base + Duration::seconds(second),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(repository.active_alerts().await.unwrap().is_empty());
+    db.close().await;
+}
+
+#[tokio::test]
+async fn concurrent_conditions_deduplicate_destinations_and_keep_groups_independent() {
+    let Some(db) = TestDatabase::create("notification_group_lock").await else {
+        return;
+    };
+    let group_id = group(&db.pool).await;
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let base = Utc::now();
+    let eta = [episode_observation(
+        group_id.clone(),
+        AlertConditionKind::Eta,
+    )];
+    let concurrency = [episode_observation(
+        group_id,
+        AlertConditionKind::Concurrency,
+    )];
+    let (a, b) = tokio::join!(
+        repository.apply_observations(&eta, base),
+        repository.apply_observations(&concurrency, base)
+    );
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        2
+    );
+    let second_group = group(&db.pool).await;
+    let other = episode_observation(second_group, AlertConditionKind::Eta);
+    repository.apply_observations(&[other], base).await.unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        4
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn unknown_observation_restarts_pending_confirmation() {
+    let Some(db) = TestDatabase::create("notification_unknown_confirmation").await else {
+        return;
+    };
+    let repository = PgNotificationRepository::new(db.pool.clone());
+    let base = Utc::now();
+    let mut observation = episode_observation(group(&db.pool).await, AlertConditionKind::Eta);
+    observation.confirmation_seconds = 20;
+    repository
+        .apply_observations(&[observation.clone()], base)
+        .await
+        .unwrap();
+    observation.current_value = None;
+    observation.active = false;
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(10))
+        .await
+        .unwrap();
+    observation.current_value = Some(1.0);
+    observation.active = true;
+    for second in [20, 30] {
+        repository
+            .apply_observations(&[observation.clone()], base + Duration::seconds(second))
+            .await
+            .unwrap();
+        assert!(
+            repository
+                .recent_deliveries(None, 100)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    repository
+        .apply_observations(&[observation], base + Duration::seconds(40))
+        .await
+        .unwrap();
+    assert_eq!(
+        repository.recent_deliveries(None, 100).await.unwrap().len(),
+        2
+    );
+    db.close().await;
+}
+
 fn context() -> MutationContext {
     MutationContext {
         actor: MutationActor::System,
@@ -26,13 +284,13 @@ fn context() -> MutationContext {
 }
 
 async fn group(pool: &sqlx::PgPool) -> AccountGroupId {
-    let id = AccountGroupId::new("grp_99999999999999999999999999999999").unwrap();
+    let id = AccountGroupId::new(format!("grp_{}", uuid::Uuid::now_v7().simple())).unwrap();
     PgAccountGroupRepository::new(pool.clone())
         .create_account_group(
             NewAccountGroup {
                 allow_image_generation: true,
                 id: id.clone(),
-                name: "Synthetic Alerts".to_owned(),
+                name: format!("Synthetic {}", id.as_str()),
                 description: None,
                 color: AccountGroupColor::parse("#2563EBFF").unwrap(),
                 disable_fast: false,
@@ -121,6 +379,7 @@ async fn alert_incident_confirms_once_recovers_and_retries_targets_independently
         group_id: group_id.clone(),
         group_name: "Synthetic Alerts".to_owned(),
         kind: AlertConditionKind::Concurrency,
+        enabled: true,
         active: true,
         current_value: Some(95.0),
         threshold: 90.0,
@@ -135,6 +394,13 @@ async fn alert_incident_confirms_once_recovers_and_retries_targets_independently
     };
     repository
         .apply_observations(std::slice::from_ref(&observation), base)
+        .await
+        .unwrap();
+    repository
+        .apply_observations(
+            std::slice::from_ref(&observation),
+            base + Duration::seconds(10),
+        )
         .await
         .unwrap();
     repository
@@ -223,13 +489,15 @@ async fn alert_incident_confirms_once_recovers_and_retries_targets_independently
 
     let mut recovered = observation.clone();
     recovered.active = false;
-    repository
-        .apply_observations(
-            std::slice::from_ref(&recovered),
-            base + Duration::seconds(90),
-        )
-        .await
-        .unwrap();
+    for second in [90, 100, 110] {
+        repository
+            .apply_observations(
+                std::slice::from_ref(&recovered),
+                base + Duration::seconds(second),
+            )
+            .await
+            .unwrap();
+    }
     repository
         .apply_observations(
             std::slice::from_ref(&recovered),
@@ -241,6 +509,13 @@ async fn alert_incident_confirms_once_recovers_and_retries_targets_independently
         .apply_observations(
             std::slice::from_ref(&observation),
             base + Duration::seconds(121),
+        )
+        .await
+        .unwrap();
+    repository
+        .apply_observations(
+            std::slice::from_ref(&observation),
+            base + Duration::seconds(131),
         )
         .await
         .unwrap();
@@ -319,6 +594,7 @@ async fn concurrent_first_observations_enqueue_only_once_and_recovery_cancels_pe
         group_id: group_id.clone(),
         group_name: "Synthetic".to_owned(),
         kind: AlertConditionKind::QuotaZero,
+        enabled: true,
         active: true,
         current_value: Some(0.0),
         threshold: 0.0,
@@ -347,10 +623,15 @@ async fn concurrent_first_observations_enqueue_only_once_and_recovery_cancels_pe
         2
     );
     observation.active = false;
-    repository
-        .apply_observations(&[observation.clone()], base + Duration::seconds(10))
-        .await
-        .unwrap();
+    for second in [10, 20, 30] {
+        repository
+            .apply_observations(
+                std::slice::from_ref(&observation),
+                base + Duration::seconds(second),
+            )
+            .await
+            .unwrap();
+    }
     repository
         .apply_observations(&[observation.clone()], base + Duration::seconds(40))
         .await
@@ -391,6 +672,7 @@ async fn pending_confirmation_requires_continuous_abnormal_samples() {
         group_id,
         group_name: "Synthetic".to_owned(),
         kind: AlertConditionKind::Concurrency,
+        enabled: true,
         active: true,
         current_value: Some(95.0),
         threshold: 90.0,
@@ -424,6 +706,10 @@ async fn pending_confirmation_requires_continuous_abnormal_samples() {
             .unwrap()
             .is_empty()
     );
+    repository
+        .apply_observations(&[observation.clone()], base + Duration::seconds(30))
+        .await
+        .unwrap();
     repository
         .apply_observations(&[observation], base + Duration::seconds(40))
         .await

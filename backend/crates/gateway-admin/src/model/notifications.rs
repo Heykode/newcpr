@@ -262,6 +262,7 @@ pub struct AlertObservation {
     pub group_id: AccountGroupId,
     pub group_name: String,
     pub kind: AlertConditionKind,
+    pub enabled: bool,
     pub active: bool,
     pub current_value: Option<f64>,
     pub threshold: f64,
