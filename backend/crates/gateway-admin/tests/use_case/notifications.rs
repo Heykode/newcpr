@@ -335,16 +335,12 @@ async fn unknown_values_never_trigger_and_zero_conditions_do() {
     snapshot.remaining_status = "empty";
     snapshot.eligible_accounts = 0;
     let observations = observe(snapshot.clone(), policy.clone(), channels(true)).await;
-    assert!(
-        !observations
-            .iter()
-            .any(|row| row.kind == AlertConditionKind::Concurrency)
-    );
-    assert!(
-        !observations
-            .iter()
-            .any(|row| row.kind == AlertConditionKind::Eta)
-    );
+    for kind in [AlertConditionKind::Concurrency, AlertConditionKind::Eta] {
+        let unknown = observations.iter().find(|row| row.kind == kind).unwrap();
+        assert!(unknown.enabled);
+        assert!(!unknown.active);
+        assert!(unknown.current_value.is_none());
+    }
     assert!(
         observations
             .iter()

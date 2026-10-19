@@ -409,18 +409,16 @@ fn group_observations(
         ),
     ];
     rows.into_iter()
-        .filter_map(|(kind, condition, current, active)| {
+        .map(|(kind, condition, current, active)| {
             let enabled = policy.enabled
                 && condition.enabled
                 && (!email_recipients.is_empty() || bark_enabled);
-            // Missing telemetry is neither a failure nor confirmed recovery.
-            if enabled && current.is_none() {
-                return None;
-            }
-            Some(AlertObservation {
+            // Keep unknown observations so they interrupt confirmation and recovery.
+            AlertObservation {
                 group_id: item.group.id.clone(),
                 group_name: item.group.name.clone(),
                 kind,
+                enabled,
                 active: enabled && active,
                 current_value: current,
                 threshold: condition.threshold,
@@ -432,7 +430,7 @@ fn group_observations(
                 bark_volume: volume,
                 bark_call: call,
                 summary: alert_summary(item, kind, current, condition.threshold),
-            })
+            }
         })
         .collect()
 }

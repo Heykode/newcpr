@@ -19,6 +19,8 @@ use crate::{
     postgres_unavailable,
 };
 
+mod incidents;
+
 #[derive(Clone)]
 pub struct PgNotificationRepository {
     pool: PgPool,
@@ -222,139 +224,7 @@ impl PgNotificationRepository {
         observations: &[AlertObservation],
         now: DateTime<Utc>,
     ) -> StoreResult<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|_| postgres_unavailable("begin group alert observation"))?;
-        let mut ordered: Vec<_> = observations.iter().collect();
-        ordered.sort_by(|a, b| (a.group_id.as_str(), a.kind).cmp(&(b.group_id.as_str(), b.kind)));
-        for observation in ordered {
-            // Materialize the key before locking: SELECT FOR UPDATE cannot lock a missing row.
-            sqlx::query(
-                "insert into account_group_alert_incidents(group_id,condition_kind,updated_at)
-                 values($1,$2,$3) on conflict do nothing",
-            )
-            .bind(observation.group_id.as_str())
-            .bind(observation.kind.as_str())
-            .bind(now)
-            .execute(&mut *tx)
-            .await
-            .map_err(|_| postgres_unavailable("initialize group alert incident"))?;
-            let row = sqlx::query(
-                "select first_active_at,activated_at,recovery_started_at,updated_at
-                 from account_group_alert_incidents where group_id=$1 and condition_kind=$2 for update",
-            )
-            .bind(observation.group_id.as_str())
-            .bind(observation.kind.as_str())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|_| postgres_unavailable("lock group alert incident"))?;
-            if row.as_ref().is_some_and(|row| {
-                row.try_get::<DateTime<Utc>, _>("updated_at")
-                    .is_ok_and(|updated| updated > now)
-            }) {
-                continue;
-            }
-            let interrupted = row.as_ref().is_some_and(|row| {
-                row.try_get::<DateTime<Utc>, _>("updated_at")
-                    .is_ok_and(|updated| now.signed_duration_since(updated).num_seconds() > 30)
-            });
-            let first_active = row
-                .as_ref()
-                .and_then(|row| {
-                    row.try_get::<Option<DateTime<Utc>>, _>("first_active_at")
-                        .ok()
-                })
-                .flatten();
-            let activated = row
-                .as_ref()
-                .and_then(|row| row.try_get::<Option<DateTime<Utc>>, _>("activated_at").ok())
-                .flatten();
-            let recovery = row
-                .as_ref()
-                .and_then(|row| {
-                    row.try_get::<Option<DateTime<Utc>>, _>("recovery_started_at")
-                        .ok()
-                })
-                .flatten();
-            if observation.active {
-                let first = if interrupted && activated.is_none() {
-                    now
-                } else {
-                    first_active.unwrap_or(now)
-                };
-                let should_activate = activated.is_none()
-                    && now.signed_duration_since(first)
-                        >= Duration::seconds(i64::from(observation.confirmation_seconds));
-                sqlx::query(
-                    "insert into account_group_alert_incidents(group_id,condition_kind,first_active_at,activated_at,recovery_started_at,updated_at)
-                     values($1,$2,$3,$4,null,$5)
-                     on conflict(group_id,condition_kind) do update set
-                       first_active_at=excluded.first_active_at,
-                       activated_at=coalesce(account_group_alert_incidents.activated_at,excluded.activated_at),
-                       recovery_started_at=null,updated_at=excluded.updated_at",
-                )
-                .bind(observation.group_id.as_str())
-                .bind(observation.kind.as_str())
-                .bind(first)
-                .bind(should_activate.then_some(now))
-                .bind(now)
-                .execute(&mut *tx)
-                .await
-                .map_err(|_| postgres_unavailable("save group alert incident"))?;
-                if should_activate {
-                    enqueue_observation(&mut tx, observation, now).await?;
-                }
-            } else if first_active.is_some() || activated.is_some() {
-                let recovery_started = if interrupted {
-                    now
-                } else {
-                    recovery.unwrap_or(now)
-                };
-                if activated.is_none()
-                    || now.signed_duration_since(recovery_started) >= Duration::seconds(30)
-                {
-                    sqlx::query(
-                        "update account_group_alert_incidents
-                         set first_active_at=null,activated_at=null,recovery_started_at=null,updated_at=$3
-                         where group_id=$1 and condition_kind=$2",
-                    )
-                    .bind(observation.group_id.as_str())
-                    .bind(observation.kind.as_str())
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|_| postgres_unavailable("clear group alert incident"))?;
-                } else {
-                    sqlx::query(
-                        "update account_group_alert_incidents set recovery_started_at=$3,updated_at=$4
-                         where group_id=$1 and condition_kind=$2",
-                    )
-                    .bind(observation.group_id.as_str())
-                    .bind(observation.kind.as_str())
-                    .bind(recovery_started)
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|_| postgres_unavailable("recover group alert incident"))?;
-                }
-            } else {
-                sqlx::query(
-                    "update account_group_alert_incidents set updated_at=$3
-                     where group_id=$1 and condition_kind=$2",
-                )
-                .bind(observation.group_id.as_str())
-                .bind(observation.kind.as_str())
-                .bind(now)
-                .execute(&mut *tx)
-                .await
-                .map_err(|_| postgres_unavailable("record inactive alert sample"))?;
-            }
-        }
-        tx.commit()
-            .await
-            .map_err(|_| postgres_unavailable("commit group alert observation"))
+        incidents::apply_observations(&self.pool, observations, now).await
     }
 
     pub async fn claim_delivery(
@@ -474,6 +344,10 @@ async fn enqueue_observation(
     now: DateTime<Utc>,
 ) -> StoreResult<()> {
     for recipient in &observation.email_recipients {
+        if incidents::target_enqueued(tx, observation.group_id.as_str(), "email", recipient).await?
+        {
+            continue;
+        }
         let delivery = ClaimedNotificationDelivery {
             id: uuid::Uuid::now_v7().to_string(),
             group_id: Some(observation.group_id.clone()),
@@ -490,7 +364,9 @@ async fn enqueue_observation(
         };
         insert_delivery(&mut **tx, &delivery, now).await?;
     }
-    if observation.bark_enabled {
+    if observation.bark_enabled
+        && !incidents::target_enqueued(tx, observation.group_id.as_str(), "bark", "default").await?
+    {
         let delivery = ClaimedNotificationDelivery {
             id: uuid::Uuid::now_v7().to_string(),
             group_id: Some(observation.group_id.clone()),
