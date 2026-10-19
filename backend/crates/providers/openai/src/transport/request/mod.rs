@@ -2,6 +2,7 @@
 
 pub(crate) mod compatibility;
 mod raw_json;
+pub(crate) mod search_history;
 
 pub use raw_json::scope_raw_json_to_account;
 pub(crate) use raw_json::scope_raw_turn_metadata;
@@ -367,11 +368,21 @@ fn align_web_search_location(tool: &mut Value, location: &CodexRequestLocation) 
 }
 
 /// Normalize only the outbound copy, after account and session identity selection.
-pub(crate) fn normalize_generate_upstream_body(body: &mut Map<String, Value>) {
+pub(crate) fn normalize_generate_upstream_body(
+    body: &mut Map<String, Value>,
+    search_history_tool_index: Option<usize>,
+) {
     // Sub2API #117: native Codex rejects this tool-level option. Do not
     // recursively strip client function schemas, arguments or metadata.
     if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
-        for tool in tools {
+        for (index, tool) in tools.iter_mut().enumerate() {
+            // Preserve only our own cached-only repair, not arbitrary client options.
+            if search_history_tool_index == Some(index)
+                && tool.get("type").and_then(Value::as_str) == Some("web_search")
+                && tool.get("external_web_access").and_then(Value::as_bool) == Some(false)
+            {
+                continue;
+            }
             if let Some(tool) = tool.as_object_mut()
                 && tool
                     .get("type")

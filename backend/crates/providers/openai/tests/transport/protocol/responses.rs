@@ -377,12 +377,12 @@ fn transport_should_require_websocket_for_store_false_warmup() {
     assert!(transport_requirement(&request).requires_websocket());
 }
 #[test]
-fn only_output_item_added_starts_first_response_timing() {
+fn semantic_classification_does_not_invent_wire_response_timing() {
     let signals = response_event_signals(
         Some("response.output_item.added"),
         &serde_json::json!({"type":"response.output_item.added"}),
     );
-    assert!(signals.output_start);
+    assert!(!signals.response_data);
     assert!(!signals.semantic_output);
     assert!(!signals.text_output);
     assert!(!signals.reasoning_output);
@@ -402,6 +402,6 @@ fn only_output_item_added_starts_first_response_timing() {
         "error",
     ] {
         let signals = response_event_signals(Some(event), &serde_json::json!({"type":event}));
-        assert!(!signals.output_start, "{event}");
+        assert!(!signals.response_data, "{event}");
     }
 }

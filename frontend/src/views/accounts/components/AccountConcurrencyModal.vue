@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import type { AccountConcurrencyPool } from '@/api/modules/accounts'
-import { RefreshCw } from '@lucide/vue'
-import { useNow } from '@vueuse/core'
+import { useIntervalFn, useNow } from '@vueuse/core'
 import { ref } from 'vue'
-import BaseIconButton from '@/components/base/BaseIconButton.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { useAccountConcurrency } from '../composables/useAccountConcurrency'
@@ -11,8 +9,8 @@ import { useAccountConcurrency } from '../composables/useAccountConcurrency'
 const props = defineProps<{ accountId: string }>()
 const open = defineModel<boolean>({ default: false })
 const pool = ref<AccountConcurrencyPool>('shared')
-const { data, loading, error, load } = useAccountConcurrency(() => props.accountId, open, pool)
-const now = useNow({ interval: 1000 })
+const { data, loading, error } = useAccountConcurrency(() => props.accountId, open, pool)
+const now = useNow({ scheduler: callback => useIntervalFn(callback, 1000) })
 const options = [{ label: '普通请求', value: 'shared' }, { label: 'Guardian 预留', value: 'reserved' }, { label: '质量检测', value: 'quality' }]
 function time(value: number) {
   return value > 0 ? new Date(value).toLocaleString() : '未知'
@@ -26,9 +24,6 @@ function duration(value: number) {
   <BaseModal v-model="open" title="账号实时并发" size="lg">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <BaseSegmented v-model="pool" label="并发池" :options="options" />
-      <BaseIconButton label="刷新并发详情" :disabled="loading" @click="load">
-        <RefreshCw :size="16" />
-      </BaseIconButton>
     </div>
     <div class="h-96 max-h-[60dvh] overflow-auto" :aria-busy="loading">
       <p v-if="loading && !data" role="status">

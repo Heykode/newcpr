@@ -113,7 +113,7 @@ async fn mount_usage(server: &MockServer, value: serde_json::Value) {
 }
 
 async fn wait_for_reset_grace(reset: i64) {
-    let due = SystemTime::UNIX_EPOCH + Duration::from_secs((reset + 120) as u64);
+    let due = SystemTime::UNIX_EPOCH + Duration::from_secs((reset + 10) as u64);
     if let Ok(remaining) = due.duration_since(SystemTime::now()) {
         tokio::time::sleep(remaining + Duration::from_millis(50)).await;
     }
@@ -127,7 +127,7 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
     let server = MockServer::start().await;
     let service = quota_service_with_base_url(&store, reqwest::Client::new(), server.uri());
     // 使用接近宽限期终点的真实窗口，在数秒内走完两个窗口的调度与落库路径。
-    let short_reset = Utc::now().timestamp() - 115;
+    let short_reset = Utc::now().timestamp() - 5;
     let week_reset = short_reset + 3;
     let usage = |short_used, short_reset, week_used, week_reset| {
         json!({"rate_limit": {
@@ -149,7 +149,7 @@ async fn reset_grace_bypasses_periodic_throttle_once_then_allows_the_next_window
     let requests = server.received_requests().await.expect("requests").len();
 
     assert!(
-        Utc::now().timestamp() < short_reset + 120,
+        Utc::now().timestamp() < short_reset + 10,
         "fixture must precede grace deadline"
     );
     service.synchronize().await.expect("before grace deadline");

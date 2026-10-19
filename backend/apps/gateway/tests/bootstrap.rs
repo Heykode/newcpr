@@ -390,8 +390,17 @@ fn config_loader_should_reject_embedded_database_password() {
 }
 
 #[test]
-fn config_loader_should_reject_non_hex_postgres_password() {
-    assert_rejected(valid_config().replace(POSTGRES_PASSWORD, &"g".repeat(48)));
+fn config_loader_should_reject_short_postgres_password() {
+    assert_rejected(valid_config().replace(POSTGRES_PASSWORD, &"g".repeat(15)));
+}
+
+#[test]
+fn config_loader_accepts_managed_passwords_without_changing_generated_defaults() {
+    parse_config(&valid_config()).expect("existing generated passwords remain valid");
+    let managed = valid_config()
+        .replace(POSTGRES_PASSWORD, "Example%41%25Password9!")
+        .replace(REDIS_PASSWORD, "Example%41%25RedisPass!");
+    parse_config(&managed).expect("managed PostgreSQL and Redis passwords are accepted");
 }
 
 #[test]

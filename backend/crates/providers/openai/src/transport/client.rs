@@ -1391,7 +1391,8 @@ pub(super) async fn read_error_response_body(
 
 pub(super) fn websocket_upstream_request(request: &CodexResponsesRequest) -> CodexResponsesRequest {
     let mut request = request.clone();
-    super::request::normalize_generate_upstream_body(request.body_mut());
+    let search_history_tool_index = request.search_history_tool_index;
+    super::request::normalize_generate_upstream_body(request.body_mut(), search_history_tool_index);
     // 上游通过流式事件执行，下游仍按客户端原来的偏好返回响应。
     if !request.stream() {
         request

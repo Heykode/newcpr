@@ -324,9 +324,7 @@ async fn first_sse_chunk_records_content_on_the_request_clock_for_every_attempt(
             .unwrap();
         let first = first_upstream_timings(&mut stream).await;
         assert!(first.first_event_ms.is_some_and(|value| value >= 3_000));
-        // A content-only stream still records text time, but does not invent
-        // an output_item.added boundary for the provider's first-token metric.
-        assert_eq!(first.first_token_ms, None);
+        assert!(first.first_token_ms.is_some_and(|value| value >= 3_000));
         assert!(first.first_text_ms.is_some_and(|text| text >= 3_000));
         release.send(()).unwrap();
         let final_timings = finish_timings(&mut stream, first).await;

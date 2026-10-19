@@ -153,6 +153,26 @@ fn is_audited_private_test(member: &str, relative: &Path, item: &Item) -> bool {
         return false;
     }
     match (member, relative.to_str(), item) {
+        // Driver credential encoding and scheduler clocks stay private to their owners.
+        ("crates/gateway-store", Some("config.rs"), Item::Mod(module)) => {
+            module.ident == "connection_password_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
+        ("crates/providers/openai", Some("credential/quota/mod.rs"), Item::Mod(module)) => {
+            module.ident == "scheduling_tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
+        (
+            "crates/providers/openai",
+            Some("transport/request/search_history.rs"),
+            Item::Mod(module),
+        ) => {
+            module.ident == "tests"
+                && module.content.is_some()
+                && matches!(module.vis, syn::Visibility::Inherited)
+        }
         ("crates/gateway-host", Some("mihomo/mod.rs"), Item::Mod(module)) => {
             module.ident == "tests"
                 && module.content.is_none()

@@ -49,7 +49,7 @@ const requestActivity = computed(() => requestActivityByBucket(
 
 const viewOptions = [
   { label: '总耗时', value: 'total' },
-  { label: '首字', value: 'firstToken' },
+  { label: '首响应', value: 'firstToken' },
   { label: '平均 TPS', value: 'throughput' },
   { label: '调度', value: 'scheduling' },
 ]
@@ -266,7 +266,7 @@ function formatThroughput(value: number | null) {
           :title="loading ? '正在加载性能数据' : '暂无性能数据'"
           :description="
             activeView === 'firstToken'
-              ? '当前范围没有首字耗时样本'
+              ? '当前范围没有首响应耗时样本'
               : activeView === 'throughput'
                 ? '当前范围没有平均 TPS 样本'
                 : activeView === 'scheduling'

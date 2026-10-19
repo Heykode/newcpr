@@ -9,16 +9,19 @@ const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.Modu
 const { locationDetectionMessage, proxyLocationMessage, proxyTestFeedback } = await import(`data:text/javascript,${encodeURIComponent(compiled)}`)
 const location = { country: 'JP', region: 'Tokyo', city: 'Tokyo', timezone: 'Asia/Tokyo' }
 
-test('location display distinguishes manual, automatic, unavailable and retained results', () => {
+test('location display distinguishes manual, automatic and failed results without stale timezone', () => {
   assert.equal(proxyLocationMessage({}), '继承全局')
   assert.equal(proxyLocationMessage({ requestLocation: location }), 'Tokyo · Asia/Tokyo')
   assert.equal(proxyLocationMessage({ autoLocation: true }), '尚未识别出口地区')
-  assert.equal(proxyLocationMessage({ autoLocation: true, detectedLocation: { location } }), 'Tokyo · Asia/Tokyo')
-  assert.match(proxyLocationMessage({
+  assert.equal(proxyLocationMessage({ autoLocation: true, detectedLocation: { location }, lastTest: { success: true } }), 'Tokyo · Asia/Tokyo')
+  assert.equal(proxyLocationMessage({ autoLocation: true, detectedLocation: { location } }), '尚未识别出口地区')
+  assert.equal(proxyLocationMessage({ autoLocation: true, detectedLocation: { location }, lastTest: { success: false } }), '连接测试失败，出口地区不可用')
+  assert.equal(proxyLocationMessage({ autoLocation: true, detectedLocation: { location, exitIpv4: '192.0.2.1' }, lastTest: { success: true, exitIpv4: '192.0.2.2' } }), '出口已变化，请重新识别地区')
+  assert.equal(proxyLocationMessage({
     autoLocation: true,
     detectedLocation: { location },
     lastTest: { location: { status: 'failed', message: '查询失败' } },
-  }), /查询失败；保留 Asia\/Tokyo/)
+  }), '查询失败')
   assert.equal(proxyLocationMessage({
     autoLocation: true,
     lastTest: { location: { status: 'conflict' } },

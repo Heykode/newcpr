@@ -172,8 +172,8 @@ const textFields: { key: keyof UsageFilterDraft, label: string, placeholder?: st
   { key: 'upstreamStatusCode', label: '上游状态码', type: 'number' },
   { key: 'minLatencyMs', label: '总耗时下限 (ms)', type: 'number' },
   { key: 'maxLatencyMs', label: '总耗时上限 (ms)', type: 'number' },
-  { key: 'minFirstTokenMs', label: '首字下限 (ms)', type: 'number' },
-  { key: 'maxFirstTokenMs', label: '首字上限 (ms)', type: 'number' },
+  { key: 'minFirstTokenMs', label: '首响应下限 (ms)', type: 'number' },
+  { key: 'maxFirstTokenMs', label: '首响应上限 (ms)', type: 'number' },
 ]
 const errorFields: { key: keyof UsageFilterDraft, label: string, placeholder?: string }[] = [
   { key: 'failureKind', label: '错误分类', placeholder: '分类码，例如 request_timeout' },

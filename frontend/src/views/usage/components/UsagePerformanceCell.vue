@@ -15,7 +15,7 @@ const performance = computed(() => usagePerformanceDetails(props.record))
   <div class="grid justify-items-end gap-y-1.5 whitespace-nowrap font-mono text-cp-sm leading-none font-heavy tabular-nums">
     <span class="text-cp-text">{{ performance.throughputDisplay }}</span>
     <span class="text-cp-xs text-cp-text-secondary">
-      <span title="首字时间" class="text-cp-text-quaternary">TTFT</span>
+      <span title="首响应时间" class="text-cp-text-quaternary">TTFT</span>
       {{ performance.firstTokenDisplay }}
     </span>
   </div>

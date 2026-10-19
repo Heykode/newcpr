@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
-use gateway_core::account::{QuotaEvidence, QuotaState};
+use gateway_core::account::{QuotaAccessState, QuotaEvidence, QuotaState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -180,7 +180,7 @@ fn window_reset_recovered(window: &CodexQuotaWindow, previous: Option<DateTime<U
 }
 
 /// 统一手动刷新和 worker 的恢复规则：reset 推进且低用量，或同窗口两次新鲜
-/// 观测确认未触顶。上游 allowed 不参与已耗尽窗口的解除判断。
+/// 观测确认未触顶；耗尽窗口全部到期后也接受新的明确 allowed 或可用点数。
 pub(super) fn reconcile_refresh(
     current: QuotaState,
     refreshed: &mut CodexAccountQuotaSnapshot,
@@ -188,6 +188,19 @@ pub(super) fn reconcile_refresh(
     document: &mut Map<String, Value>,
 ) -> Result<QuotaState, CodexCredentialQuotaError> {
     document.remove(RECOVERY_FIELD);
+    let latest_observed_at = previous
+        .map(CodexAccountQuotaSnapshot::observed_at)
+        .into_iter()
+        .chain(current.observed_at())
+        .max();
+    let fresh = latest_observed_at.is_none_or(|last| {
+        DateTime::<Utc>::from(refreshed.observed_at()).timestamp_micros()
+            > DateTime::<Utc>::from(last).timestamp_micros()
+    });
+    if fresh && refreshed.credits_usable() {
+        refreshed.recovery = None;
+        return Ok(QuotaState::allowed(refreshed.observed_at()));
+    }
     let state = if current.is_exhausted() {
         current
     } else {
@@ -204,12 +217,23 @@ pub(super) fn reconcile_refresh(
     if recovery.pending.is_empty() {
         recovery = QuotaRecovery::new(state, refreshed);
     }
+    let allowed_after_reset = fresh
+        && refreshed.quota().access() == QuotaAccessState::Allowed
+        && !recovery.pending.is_empty()
+        && recovery.pending.values().all(|reset| {
+            reset.is_some_and(|reset| {
+                reset.timestamp_micros() > recovery.exhausted_at_micros
+                    && SystemTime::from(reset) <= refreshed.observed_at()
+            })
+        });
     if current.is_exhausted()
-        && recovery.observe(
-            refreshed,
-            previous.map(CodexAccountQuotaSnapshot::observed_at),
-        )
+        && (allowed_after_reset
+            || recovery.observe(
+                refreshed,
+                previous.map(CodexAccountQuotaSnapshot::observed_at),
+            ))
     {
+        refreshed.recovery = None;
         return Ok(QuotaState::allowed(refreshed.observed_at()));
     }
     let reset_at = recovery

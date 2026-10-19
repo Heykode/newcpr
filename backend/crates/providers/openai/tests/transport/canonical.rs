@@ -78,7 +78,7 @@ fn decoder_should_not_forward_codex_rate_limit_metadata_fixture_as_openai_wire()
 }
 
 #[test]
-fn raw_sse_passthrough_should_drop_rate_limit_control_without_timing_side_effects() {
+fn raw_sse_passthrough_counts_rate_limit_response_without_client_output() {
     let frame = concat!(
         "event: codex.rate_limits\n",
         "data: {\"type\":\"codex.rate_limits\",\"rate_limits\":{\"primary\":{\"used_percent\":90}}}\n\n",
@@ -92,7 +92,7 @@ fn raw_sse_passthrough_should_drop_rate_limit_control_without_timing_side_effect
 
     assert!(events.is_empty());
     assert!(!signals.protocol_progress);
-    assert!(!signals.output_start);
+    assert!(signals.response_data);
     assert!(!signals.semantic_output);
 }
 
@@ -103,11 +103,33 @@ fn decoder_preserves_structural_timing_without_committing_semantic_output() {
         .push(b"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"content\":[]}}\n\n")
         .expect("decode structural timing event");
     let signals = decoder.take_timing_signals();
-    assert!(signals.output_start);
+    assert!(signals.response_data);
     assert!(!signals.semantic_output);
     assert!(!signals.reasoning_output);
     assert!(!signals.text_output);
-    assert!(!decoder.take_timing_signals().output_start);
+    assert!(!decoder.take_timing_signals().response_data);
+}
+
+#[test]
+fn first_response_data_counts_metadata_and_non_json_but_not_empty_sse_or_done() {
+    for (frame, expected) in [
+        ("data: {\"type\":\"response.metadata\"}\n\n", true),
+        ("data: non-json\n\n", true),
+        (": heartbeat\n\n", false),
+        ("data: [DONE]\n\n", false),
+        ("data:   \n\n", false),
+    ] {
+        let mut decoder = CodexCanonicalDecoder::new("fallback").with_raw_sse_passthrough();
+        let _ = decoder.push(frame.as_bytes());
+        let signals = decoder.take_timing_signals();
+        assert_eq!(signals.response_data, expected, "{frame}");
+        assert!(!signals.semantic_output);
+        assert!(!signals.text_output);
+        assert!(!signals.reasoning_output);
+    }
+    let mut decoder = CodexCanonicalDecoder::new("fallback");
+    let _ = decoder.push_websocket(" ");
+    assert!(decoder.take_timing_signals().response_data);
 }
 
 #[test]

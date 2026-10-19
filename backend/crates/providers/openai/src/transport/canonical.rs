@@ -323,6 +323,12 @@ impl CodexCanonicalDecoder {
         raw_sse_frame: Option<RawResponseFrame>,
         output: &mut Vec<ProviderEvent>,
     ) -> Result<(), CodexCanonicalError> {
+        self.timing_signals.response_data |=
+            if matches!(raw_sse_frame, Some(RawResponseFrame::WebSocket(_))) {
+                !event.data.is_empty()
+            } else {
+                !event.data.trim().is_empty() && !event.data.trim().starts_with("[DONE]")
+            };
         if event.data.trim() == "[DONE]"
             && !matches!(raw_sse_frame, Some(RawResponseFrame::WebSocket(_)))
         {
@@ -352,7 +358,7 @@ impl CodexCanonicalDecoder {
             .or_else(|| value.get("type").and_then(Value::as_str));
         if event_type == Some("codex.rate_limits") {
             // HTTP transport has already projected this control frame into local quota facts.
-            // It must not become client output or start first-output timing.
+            // It contributes response timing, but must never become client output.
             return Ok(());
         }
         if event_type == Some("responsesapi.websocket_timing")
@@ -421,7 +427,6 @@ impl CodexCanonicalDecoder {
 
     fn merge_timing_signals(&mut self, signals: ResponseEventSignals) {
         self.timing_signals.protocol_progress |= signals.protocol_progress;
-        self.timing_signals.output_start |= signals.output_start;
         self.timing_signals.semantic_output |= signals.semantic_output;
         self.timing_signals.reasoning_output |= signals.reasoning_output;
         self.timing_signals.text_output |= signals.text_output;

@@ -1,9 +1,11 @@
 //! OpenAI 额度事实边界与展示快照回归。
 
+mod credits;
 mod passive_observation;
 mod plan_sync;
 mod recovery;
 mod refresh_timing;
+mod reset_recovery;
 mod scheduling;
 mod slots;
 mod snapshot;

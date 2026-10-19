@@ -2278,5 +2278,37 @@
     "file_sha256": "e3735f10f825dfb3060c2744bbbd24c91142d40cedc236972a2fc308fc5eefbb",
     "line_sha256": "61848d28dd41e959f480609bf1437a9575194a9527f3a563c1fcb2fd8448783d",
     "reason": "Re-reviewed byte-identical unsigned mock JWT in the bounded token-response parser test; all response credentials are explicit synthetic fixtures."
+  },
+  {
+    "path": ".github/actions/verify-container/action.yml",
+    "rule": "non-example-ip",
+    "line": 25,
+    "file_sha256": "49a1ed0a3e55fb7c125ed95724e49c84172bbd9fc9b1cc52f4c9d1829daccdb5",
+    "line_sha256": "e91b67c47dd54a91fbee8d038b3168c6e86ae25a0b667932e6d9f92888b6fa0e",
+    "reason": "Re-reviewed unchanged GitHub add-mask command after updating the artifact action pin; variable syntax is not an IP address."
+  },
+  {
+    "path": ".github/actions/verify-container/action.yml",
+    "rule": "non-example-ip",
+    "line": 26,
+    "file_sha256": "49a1ed0a3e55fb7c125ed95724e49c84172bbd9fc9b1cc52f4c9d1829daccdb5",
+    "line_sha256": "83ed5c600672427d1c5e544177b158115973f67919b864d561a398e636eac81d",
+    "reason": "Re-reviewed unchanged GitHub add-mask command after updating the artifact action pin; variable syntax is not an IP address."
+  },
+  {
+    "path": ".github/actions/verify-container/action.yml",
+    "rule": "non-example-ip",
+    "line": 27,
+    "file_sha256": "49a1ed0a3e55fb7c125ed95724e49c84172bbd9fc9b1cc52f4c9d1829daccdb5",
+    "line_sha256": "7459927009a8478c4f64506073b43fa785e74aa5027d6a920b732b324b314c12",
+    "reason": "Re-reviewed unchanged GitHub add-mask command after updating the artifact action pin; variable syntax is not an IP address."
+  },
+  {
+    "path": "backend/apps/gateway/tests/bootstrap.rs",
+    "rule": "authenticated-url",
+    "line": 388,
+    "file_sha256": "0032369f8dc5b4edc27b0e4c3e56418fa489518edea49e73d81a2f0f05e24294",
+    "line_sha256": "be871b5bb1fb717424afe768be0a94bd16324aa95d478d8be07e11d0ed234c75",
+    "reason": "Re-reviewed unchanged loopback URL rejection fixture after adding managed-password acceptance coverage; embedded is synthetic parser input, not a connection credential."
   }
 ]
