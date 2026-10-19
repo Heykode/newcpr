@@ -15,6 +15,7 @@ defineProps<{
   refreshing: boolean
   togglingExcel?: boolean
   togglingQuality?: boolean
+  qualityDisabled?: boolean
   testing: boolean
   exportingModelCatalog?: boolean
   relogin?: AccountReloginAction
@@ -76,7 +77,7 @@ const emit = defineEmits<{
             </template>
             测试连接
           </BaseMenuItem>
-          <BaseMenuItem :loading="togglingQuality" :disabled="togglingQuality" @click.stop="(close(), emit('toggleQuality', account))">
+          <BaseMenuItem :loading="togglingQuality" :disabled="togglingQuality || qualityDisabled" @click.stop="(close(), emit('toggleQuality', account))">
             <template #icon>
               <ClipboardCheck class="size-3.5 text-cp-text-quaternary" />
             </template>
